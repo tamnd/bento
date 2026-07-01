@@ -178,6 +178,23 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function sub(s: string, a: number, b: number): string { return s.substring(a, b); }`,
 		},
 		{
+			name:   "trim",
+			golden: "func_trim.golden",
+			// a zero-argument string method, so the parameter list is empty and
+			// the call takes no arguments.
+			src: `export function clean(s: string): string { return s.trim(); }`,
+		},
+		{
+			name:   "trimstart",
+			golden: "func_trimstart.golden",
+			src:    `export function lead(s: string): string { return s.trimStart(); }`,
+		},
+		{
+			name:   "trimend",
+			golden: "func_trimend.golden",
+			src:    `export function tailws(s: string): string { return s.trimEnd(); }`,
+		},
+		{
 			name:   "modulo",
 			golden: "func_modulo.golden",
 			// % on numbers is fmod, not Go's integer remainder, so it lowers to a
