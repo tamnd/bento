@@ -526,6 +526,28 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{2, 3}, {4503599627370496, 2}, {4503599627370497, 2}},
 		},
 		{
+			name: "toUpperCase",
+			// the inputs are the cases where the full mapping diverges from Go's simple
+			// ToUpper: the sharp s expands to SS, a word carries the expansion, a
+			// ligature expands, and the emoji has no case, all of which must match the
+			// engine's toUpperCase.
+			src:  `export function up(s: string): string { return s.toUpperCase(); }`,
+			fn:   "up",
+			ret:  "string",
+			args: [][]any{{"hello"}, {"ß"}, {"straße"}, {"ﬀ"}, {"aπ😀"}},
+		},
+		{
+			name: "toLowerCase",
+			// the trailing-sigma inputs pin the Final_Sigma context, where a word-final
+			// capital sigma lowercases to ς and a non-final one to σ, which Go's simple
+			// ToLower does not do; the dotted capital I expands to i plus a combining
+			// dot.
+			src:  `export function down(s: string): string { return s.toLowerCase(); }`,
+			fn:   "down",
+			ret:  "string",
+			args: [][]any{{"HELLO"}, {"ΟΔΟΣ"}, {"ΣΣ"}, {"İ"}},
+		},
+		{
 			name: "trim",
 			// The inputs carry the exact ECMAScript whitespace set, not just ASCII
 			// spaces: a tab and newlines, a no-break space (U+00A0), and a

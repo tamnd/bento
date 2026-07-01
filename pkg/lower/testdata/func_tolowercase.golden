@@ -1,0 +1,3 @@
+func Down(s value.BStr) value.BStr {
+	return s.ToLowerCase()
+}
