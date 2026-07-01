@@ -277,16 +277,27 @@ func evalTS(t *testing.T, src, fn string, args []float64) float64 {
 // runGo wraps the generated function in a tiny main, compiles and runs it with
 // the Go toolchain, and parses the number it prints. This is the subject: what
 // the emitted Go actually computes, not what we hope it computes.
+//
+// The temporary package is created inside this repository's tree rather than in
+// an isolated temp module, so it compiles under bento's own go.mod and go.sum
+// and links the real value package with no separate require, replace, or module
+// download. That keeps the test fully offline: a throwaway module would need its
+// own go.sum for the runtime import, which a clean CI checkout does not have.
 func runGo(t *testing.T, goSrc string, imports []string, name string, args []float64) float64 {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp(repoRoot(t), "eqrun-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	callArgs := make([]string, len(args))
 	for i, a := range args {
 		callArgs[i] = strconv.FormatFloat(a, 'g', -1, 64)
 	}
 	// The wrapper always prints with fmt; the lowered code adds whatever else it
-	// referenced (math for a % that became math.Mod, and later the value model).
+	// referenced (math for a % that became math.Mod, and the value model for a
+	// string).
 	paths := append([]string{"fmt"}, imports...)
 	var imp strings.Builder
 	imp.WriteString("import (\n")
@@ -299,9 +310,6 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 		imp.String(), goSrc, name, strings.Join(callArgs, ", "),
 	)
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod(t, imports)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -318,37 +326,21 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 	return f
 }
 
-// goMod builds the throwaway module's go.mod. When the lowered code imports a
-// bento runtime package (the value model, for a string program), the module
-// requires bento and replaces it with the working copy on disk, so the generated
-// Go links against the very value.BStr this repo defines rather than a published
-// version. A program that touches no runtime package needs neither line and gets
-// a bare module, so the common numeric case does not pay for a module download.
-func goMod(t *testing.T, imports []string) string {
+// repoRoot returns the absolute path of the repository root. The test runs with
+// its working directory at the package (pkg/lower), so the root is two levels
+// up. The generated program is placed under this root so it builds inside the
+// bento module and can import the runtime with no separate module wiring.
+func repoRoot(t *testing.T) string {
 	t.Helper()
-	needsBento := false
-	for _, p := range imports {
-		if strings.HasPrefix(p, "github.com/tamnd/bento") {
-			needsBento = true
-		}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	var b strings.Builder
-	b.WriteString("module eqtest\n\ngo 1.26\n")
-	if needsBento {
-		// The test runs with its working directory at the package (pkg/lower), so
-		// the repo root is two levels up; the replace needs an absolute path.
-		wd, err := os.Getwd()
-		if err != nil {
-			t.Fatal(err)
-		}
-		root, err := filepath.Abs(filepath.Join(wd, "..", ".."))
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.WriteString("\nrequire github.com/tamnd/bento v0.0.0\n")
-		b.WriteString("\nreplace github.com/tamnd/bento => " + root + "\n")
+	root, err := filepath.Abs(filepath.Join(wd, "..", ".."))
+	if err != nil {
+		t.Fatal(err)
 	}
-	return b.String()
+	return root
 }
 
 // toFloat coerces the engine's native return value to a float64. The quickjs
