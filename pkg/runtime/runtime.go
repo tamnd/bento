@@ -78,11 +78,11 @@ func New(cfg Config) (*Runtime, error) {
 	}
 
 	if err := rt.installHostFuncs(); err != nil {
-		eng.Close()
+		_ = eng.Close()
 		return nil, err
 	}
 	if _, err := eng.Eval("<prelude>", preludeSource); err != nil {
-		eng.Close()
+		_ = eng.Close()
 		return nil, fmt.Errorf("bento: prelude failed: %w", err)
 	}
 	return rt, nil
@@ -148,7 +148,7 @@ func (rt *Runtime) installHostFuncs() error {
 		if fd == 2 {
 			w = rt.stderr
 		}
-		io.WriteString(w, s)
+		_, _ = io.WriteString(w, s)
 		return nil, nil
 	}); err != nil {
 		return err
@@ -199,7 +199,7 @@ func (rt *Runtime) installHostFuncs() error {
 	if err := reg("__bento_exit", func(args []any) (any, error) {
 		code := toInt(arg(args, 0))
 		if f, ok := rt.stdout.(interface{ Sync() error }); ok {
-			f.Sync()
+			_ = f.Sync()
 		}
 		os.Exit(code)
 		return nil, nil

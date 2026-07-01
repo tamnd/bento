@@ -70,7 +70,7 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print the bento version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintf(cmd.OutOrStdout(), "bento %s (commit %s, built %s)\n", Version, Commit, Date)
+			cmd.Printf("bento %s (commit %s, built %s)\n", Version, Commit, Date)
 			return nil
 		},
 	}

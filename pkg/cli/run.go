@@ -52,7 +52,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer rt.Close()
+			defer func() { _ = rt.Close() }()
 
 			return reportUncaught(cmd, rt.RunFile(abs))
 		},
