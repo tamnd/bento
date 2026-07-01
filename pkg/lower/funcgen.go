@@ -562,6 +562,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, ok
 		return "Slice", []argKind{argNumber, argNumber}, 0, true
 	case "substring":
 		return "Substring", []argKind{argNumber, argNumber}, 0, true
+	case "trim":
+		return "Trim", nil, 0, true
+	case "trimStart":
+		return "TrimStart", nil, 0, true
+	case "trimEnd":
+		return "TrimEnd", nil, 0, true
 	default:
 		return "", nil, 0, false
 	}

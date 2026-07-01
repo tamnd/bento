@@ -267,6 +267,34 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"hello", 1, 3}, {"hello", 3, 1}, {"hello", -2, 3}, {"hello", 2, 100}},
 		},
 		{
+			name: "trim",
+			// The inputs carry the exact ECMAScript whitespace set, not just ASCII
+			// spaces: a tab and newlines, a no-break space (U+00A0), and a
+			// zero-width no-break space (U+FEFF), all of which trim removes and
+			// Go's unicode.IsSpace would get wrong. An all-whitespace string trims
+			// to empty and a clean string is unchanged.
+			src:  `export function clean(s: string): string { return s.trim(); }`,
+			fn:   "clean",
+			ret:  "string",
+			args: [][]any{{"  hello  "}, {"\t\n hi \r\n"}, {"\u00a0x\u00a0"}, {"\ufeffy\ufeff"}, {"none"}, {"   "}},
+		},
+		{
+			name: "trimStart",
+			// trimStart removes only the leading run, so trailing whitespace must
+			// survive, which the engine and the emitted Go must agree on.
+			src:  `export function lead(s: string): string { return s.trimStart(); }`,
+			fn:   "lead",
+			ret:  "string",
+			args: [][]any{{"  hi  "}, {" x"}, {"none"}},
+		},
+		{
+			name: "trimEnd",
+			src:  `export function tailws(s: string): string { return s.trimEnd(); }`,
+			fn:   "tailws",
+			ret:  "string",
+			args: [][]any{{"  hi  "}, {"x "}, {"none"}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the

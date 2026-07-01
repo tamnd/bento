@@ -237,6 +237,72 @@ func clampIndex(i float64, length int) int {
 	return int(n)
 }
 
+// Trim removes leading and trailing whitespace, matching String.prototype.trim.
+// The whitespace set is the exact ECMAScript one (WhiteSpace plus
+// LineTerminator, isStringWhiteSpace below), not Go's unicode.IsSpace, which
+// disagrees at the edges (Go counts U+0085 as space and not U+FEFF, JavaScript
+// does the reverse). When nothing is trimmed the receiver is returned unchanged
+// so a string with no surrounding whitespace keeps its backing and allocates
+// nothing.
+func (s BStr) Trim() BStr {
+	u := s.units()
+	i, j := 0, len(u)
+	for i < j && isStringWhiteSpace(u[i]) {
+		i++
+	}
+	for j > i && isStringWhiteSpace(u[j-1]) {
+		j--
+	}
+	if i == 0 && j == len(u) {
+		return s
+	}
+	return FromUTF16(u[i:j])
+}
+
+// TrimStart removes leading whitespace only, matching String.prototype.trimStart,
+// over the same whitespace set as Trim.
+func (s BStr) TrimStart() BStr {
+	u := s.units()
+	i := 0
+	for i < len(u) && isStringWhiteSpace(u[i]) {
+		i++
+	}
+	if i == 0 {
+		return s
+	}
+	return FromUTF16(u[i:])
+}
+
+// TrimEnd removes trailing whitespace only, matching String.prototype.trimEnd,
+// over the same whitespace set as Trim.
+func (s BStr) TrimEnd() BStr {
+	u := s.units()
+	j := len(u)
+	for j > 0 && isStringWhiteSpace(u[j-1]) {
+		j--
+	}
+	if j == len(u) {
+		return s
+	}
+	return FromUTF16(u[:j])
+}
+
+// isStringWhiteSpace reports whether a code unit is trimmed by String.prototype
+// .trim, the union of the ECMAScript WhiteSpace set (tab, vertical tab, form
+// feed, space, no-break space, zero-width no-break space, and the Space_Separator
+// category) and the LineTerminator set (LF, CR, line separator, paragraph
+// separator). Every one of these is in the Basic Multilingual Plane, so a single
+// uint16 test is exact; there is no astral whitespace to miss.
+func isStringWhiteSpace(u uint16) bool {
+	switch u {
+	case 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0,
+		0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+		return true
+	}
+	// U+2000..U+200A are the remaining Space_Separator code points.
+	return u >= 0x2000 && u <= 0x200A
+}
+
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both
 // are strings. It picks the backing form once: if both sides are on the UTF-8
 // fast path the result stays UTF-8 with a single byte copy, and otherwise the

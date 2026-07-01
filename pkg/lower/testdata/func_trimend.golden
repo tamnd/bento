@@ -1,0 +1,3 @@
+func Tailws(s value.BStr) value.BStr {
+	return s.TrimEnd()
+}
