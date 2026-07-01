@@ -1,0 +1,6 @@
+func Between(x float64, lo float64, hi float64) float64 {
+	if x >= lo && x <= hi {
+		return 1
+	}
+	return 0
+}
