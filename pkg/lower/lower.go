@@ -1,0 +1,165 @@
+// Package lower is bento's ahead-of-time type lowering: it turns the resolved,
+// flow-narrowed types the frontend hands it (pkg/frontend) into the Go source
+// the Go toolchain then compiles. It implements 05_type_lowering.md.
+//
+// Lowering is a translation, not a type inference. The frontend already ran the
+// real TypeScript checker, so every type that reaches here is settled, and the
+// partitioner (pkg/partition, 06_compile_vs_interpret.md) already promised the
+// unit is lowerable before handing it over. Lowering's contract in return is
+// that it never emits unsound Go: when it meets a construct it does not render,
+// it reports a NotYetLowerable error rather than guess, and the caller routes
+// that unit to the engine (05_type_lowering.md section 30).
+//
+// This file owns the type renderer: the mapping from one frontend.Type to the
+// Go type expression that represents it, together with the generated named
+// declarations (structs today, tagged unions and vtables in later slices) that
+// the expression refers to. The mapping table is 05_type_lowering.md section
+// 31; each row is a case here or an explicit NotYetLowerable until its slice
+// lands.
+package lower
+
+import (
+	"fmt"
+
+	"github.com/tamnd/bento/pkg/frontend"
+)
+
+// NotYetLowerable is the reason lowering hands a unit back to the partitioner
+// instead of emitting Go. It is not an internal failure: it is the honest edge
+// of the compiled subset (05_type_lowering.md section 30), naming the construct
+// that has no lowering yet so the partitioner can route the unit to the engine
+// and a later slice can grow the covered set.
+type NotYetLowerable struct {
+	// Flags is the coarse classification of the type that could not be lowered,
+	// enough for a diagnostic without holding the type across the boundary.
+	Flags frontend.TypeFlags
+	// Reason is a short human explanation of why this construct is not lowered
+	// yet, phrased as the boundary it hit.
+	Reason string
+}
+
+func (e *NotYetLowerable) Error() string {
+	return fmt.Sprintf("not yet lowerable (flags %v): %s", e.Flags, e.Reason)
+}
+
+// Renderer renders the types of one checked program to Go. It accumulates the
+// named declarations its rendered expressions refer to, so a caller renders a
+// set of types and then emits Decls once. A Renderer is scoped to a single
+// program because it keys generated struct names on the program's structural
+// type identity (05_type_lowering.md section 29), which is only stable within
+// one program.
+type Renderer struct {
+	prog  *frontend.Program
+	decls *declSet
+}
+
+// NewRenderer builds a renderer over a checked program.
+func NewRenderer(prog *frontend.Program) *Renderer {
+	return &Renderer{prog: prog, decls: newDeclSet()}
+}
+
+// RenderType returns the Go type expression that represents t, registering any
+// named declarations it needs (a struct for an object shape) into the renderer.
+// It returns a NotYetLowerable error for a construct whose slice has not landed,
+// which is the section 30 handoff, never a silent wrong answer.
+func (r *Renderer) RenderType(t frontend.Type) (string, error) {
+	// The zero Type carries no flags. It stands for a position with no value,
+	// such as a statement or a void return, and has no slot representation, so
+	// asking for its type expression is a caller error, not a lowering gap.
+	if t.Flags == 0 {
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "no type at this position (void or statement)"}
+	}
+
+	switch {
+	case t.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+		// any and unknown have no static shape, so a value computed on them is
+		// dynamic by definition and runs on the engine (section 30). A lone any
+		// that only crosses the boundary boxes into value.Value, which is the
+		// boxing-boundary slice, not this one.
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "any or unknown is dynamic; it boxes at the boundary"}
+
+	case t.Flags&frontend.TypeNumber != 0:
+		// number is IEEE-754 double, so float64 (D14, section 3). Integer
+		// refinement to int32/int64 is a later slice and only ever narrows the
+		// representation, never the observable number type.
+		return "float64", nil
+
+	case t.Flags&frontend.TypeBigInt != 0:
+		// bigint is arbitrary precision, so *big.Int; no fixed-width Go integer
+		// is correct (section 4).
+		return "*big.Int", nil
+
+	case t.Flags&frontend.TypeString != 0:
+		// string is a sequence of UTF-16 code units, so the bento string type
+		// bstr, never Go string, which would be UTF-8 (section 5).
+		return "bstr", nil
+
+	case t.Flags&frontend.TypeBoolean != 0:
+		// The one clean mapping (section 6).
+		return "bool", nil
+
+	case t.Flags&frontend.TypeSymbol != 0:
+		// A symbol is a unique opaque value whose whole purpose is identity, so
+		// a pointer whose identity is the symbol's identity (section 8).
+		return "*value.Symbol", nil
+
+	case t.Flags&frontend.TypeObject != 0:
+		// TypeObject covers both arrays and fixed-shape objects in the frontend
+		// vocabulary. An element type means it is an array; otherwise it is an
+		// object shape that lowers to a struct.
+		if elem, ok := r.prog.ElementType(t); ok {
+			return r.renderArray(elem)
+		}
+		return r.renderObject(t)
+
+	case t.Flags&frontend.TypeUnion != 0:
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "union lowering (tagged struct) lands in a later slice"}
+
+	case t.Flags&frontend.TypeLiteral != 0:
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "literal and closed-union tag lowering lands in a later slice"}
+
+	case t.Flags&frontend.TypeEnum != 0:
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "enum lowering lands in a later slice"}
+
+	case t.Flags&frontend.TypeIntersection != 0:
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "intersection lowering (merged struct) lands in a later slice"}
+
+	case t.Flags&frontend.TypeTypeParameter != 0:
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "type parameter needs monomorphization, a later slice"}
+
+	default:
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "no lowering for this type"}
+	}
+}
+
+// renderArray lowers an array type. The default is the Array[T] header from the
+// value model (section 11), which carries the JavaScript array semantics a bare
+// Go slice lacks: an assignable .length, holes, and the sparse-array edges. The
+// bare []T fast path is an optimization the partitioner unlocks only when it has
+// proven the array dense and in-range, which is a later slice, so the correct
+// default here is the header.
+func (r *Renderer) renderArray(elem frontend.Type) (string, error) {
+	inner, err := r.RenderType(elem)
+	if err != nil {
+		return "", err
+	}
+	return "*value.Array[" + inner + "]", nil
+}
+
+// renderObject lowers a fixed-shape object type to a pointer to a generated Go
+// struct (section 12). Objects are pointers because JavaScript objects have
+// reference identity and === is reference equality, which Go pointer identity
+// gives exactly. The struct itself is registered in the decl set, interned by
+// the type's structural identity so the same shape yields the same Go type.
+func (r *Renderer) renderObject(t frontend.Type) (string, error) {
+	name, err := r.decls.internStruct(r, t)
+	if err != nil {
+		return "", err
+	}
+	return "*" + name, nil
+}
+
+// Decls returns the generated declarations the rendered types referred to, in a
+// stable first-seen order, each a gofmt-clean Go declaration. A caller emits
+// them once alongside the lowered functions that use them.
+func (r *Renderer) Decls() []Decl { return r.decls.emit() }

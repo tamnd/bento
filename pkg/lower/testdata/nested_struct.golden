@@ -1,0 +1,8 @@
+type ObjLabelOrigin struct {
+	Origin *ObjXY
+	Label  bstr
+}
+type ObjXY struct {
+	X float64
+	Y float64
+}

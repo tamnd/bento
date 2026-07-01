@@ -124,14 +124,15 @@ func TestDeclaredTypeAtReportsNarrowing(t *testing.T) {
 	}
 }
 
-// TestLoadBlockedUntilRealAdapter documents the upstream block: with no public
-// typescript-go API, Load returns a clear error rather than a nil-checker crash.
-func TestLoadBlockedUntilRealAdapter(t *testing.T) {
-	_, err := Load(LoadOptions{Dir: "."})
-	if err == nil {
-		t.Fatal("Load succeeded, but no real adapter should be available yet")
+// TestLoadRealAdapterIsAvailable pins the post-fork reality: a real, checker-
+// backed adapter is always constructible, so Load never returns
+// ErrRealAdapterUnavailable. The remaining precondition is an explicit root set,
+// which TestLoadRequiresRoots covers.
+func TestLoadRealAdapterIsAvailable(t *testing.T) {
+	if !adapter.RealAdapterAvailable() {
+		t.Fatal("RealAdapterAvailable is false, but the fork pins a revision")
 	}
-	if err != ErrRealAdapterUnavailable {
-		t.Errorf("Load error = %v, want ErrRealAdapterUnavailable", err)
+	if _, err := Load(LoadOptions{Dir: "."}); err == ErrRealAdapterUnavailable {
+		t.Error("Load reported the real adapter unavailable, but the fork is wired in")
 	}
 }
