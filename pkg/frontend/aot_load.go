@@ -2,20 +2,27 @@ package frontend
 
 import (
 	"errors"
+	"os"
 
 	"github.com/tamnd/bento/pkg/frontend/adapter"
+	"github.com/tamnd/bento/pkg/resolve"
 )
 
-// ErrRealAdapterUnavailable reports that no real typescript-go-backed checker
-// can be constructed in this build. typescript-go keeps its checker, binder, and
-// parser under internal/ as of mid-2026, so there is no public API to drive and
-// no revision to pin (see pkg/frontend/adapter/version.go). The partitioner and
-// lowering are developed against adapter.NewFake until the upstream API lands in
-// TypeScript 7.1 or a bento fork exposes it through a public shim; at that point
-// Load builds a real Program and this error goes away.
+// ErrRealAdapterUnavailable reports that no real typescript-go-backed checker can
+// be constructed in this build. It is a defensive guard only: bento consumes
+// typescript-go through the tamnd/typescript fork, whose public shim exposes the
+// checker, so the real adapter is always available and RealAdapterAvailable
+// returns true (see pkg/frontend/adapter/version.go). The error remains so a
+// build that somehow dropped the pin fails loudly rather than nil-crashing.
 var ErrRealAdapterUnavailable = errors.New(
-	"frontend: real typescript-go adapter unavailable (upstream API is internal until TS 7.1); " +
-		"use frontend.Wrap with a supplied adapter for now")
+	"frontend: real typescript-go adapter unavailable (no fork revision pinned); " +
+		"use frontend.Wrap with a supplied adapter")
+
+// ErrNoRoots reports that Load was called with no entry files. tsconfig include
+// discovery, which fills the root set from the project when none is given, is a
+// later slice; until then a caller names its roots explicitly.
+var ErrNoRoots = errors.New(
+	"frontend: Load requires at least one root file (tsconfig include discovery is a later slice)")
 
 // FileSystem replaces the real file system for a load. A nil FileSystem reads
 // through the OS. Tests and the bundler feed virtual modules through it.
@@ -65,8 +72,58 @@ func Load(opts LoadOptions) (*Program, error) {
 	if !adapter.RealAdapterAvailable() {
 		return nil, ErrRealAdapterUnavailable
 	}
-	// When a real adapter exists, this path resolves the tsconfig into
-	// CompilerOptions and a root set, builds the host over opts.FS or the OS,
-	// calls adapter.BuildProgram, and returns Wrap(realAdapter, handle).
-	return nil, ErrRealAdapterUnavailable
+	if len(opts.Roots) == 0 {
+		return nil, ErrNoRoots
+	}
+
+	fs := opts.FS
+	if fs == nil {
+		fs = osFileSystem{}
+	}
+
+	cwd := opts.Dir
+	if cwd == "" {
+		if wd, err := os.Getwd(); err == nil {
+			cwd = wd
+		} else {
+			cwd = "/"
+		}
+	}
+
+	host := &loadHost{
+		fs:       fs,
+		resolver: resolve.New(resolve.Options{FS: fsForResolver(fs), Dev: true}),
+		cwd:      cwd,
+	}
+
+	co := adapter.CompilerOptions{Strict: true}
+	applyOverrides(&co, opts.Overrides)
+
+	a := adapter.NewReal()
+	h, err := a.BuildProgram(opts.Roots, co, host)
+	if err != nil {
+		return nil, err
+	}
+	return Wrap(a, h), nil
+}
+
+// applyOverrides folds the caller's compiler-option overrides onto the base
+// options. A nil override pointer leaves the base value in place, so a caller
+// changes only what it names.
+func applyOverrides(co *adapter.CompilerOptions, ov ConfigOverrides) {
+	if ov.Strict != nil {
+		co.Strict = *ov.Strict
+	}
+	if ov.SkipLibCheck != nil {
+		co.SkipLibCheck = *ov.SkipLibCheck
+	}
+	if ov.AllowJS != nil {
+		co.AllowJS = *ov.AllowJS
+	}
+	if ov.CheckJS != nil {
+		co.CheckJS = *ov.CheckJS
+	}
+	if ov.Paths != nil {
+		co.Paths = ov.Paths
+	}
 }
