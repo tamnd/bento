@@ -164,6 +164,22 @@ func mapKind(k shim.Kind) NodeKind {
 		return NodeYieldExpression
 	case shim.KindSpreadElement:
 		return NodeSpreadElement
+	case shim.KindParenthesizedExpression:
+		return NodeParenthesizedExpression
+	case shim.KindNumericLiteral:
+		return NodeNumericLiteral
+	case shim.KindStringLiteral:
+		return NodeStringLiteral
+	case shim.KindBigIntLiteral:
+		return NodeBigIntLiteral
+	case shim.KindNoSubstitutionTemplateLiteral:
+		return NodeNoSubstitutionTemplateLiteral
+	case shim.KindTrueKeyword:
+		return NodeTrueKeyword
+	case shim.KindFalseKeyword:
+		return NodeFalseKeyword
+	case shim.KindNullKeyword:
+		return NodeNullKeyword
 	default:
 		return NodeUnknown
 	}
