@@ -794,6 +794,10 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		// concat takes any number of string arguments, so it is variadic over a
 		// single repeating string kind and has no upper bound.
 		return "ConcatN", []argKind{argString}, 0, true, true
+	case "toUpperCase":
+		return "ToUpperCase", nil, 0, false, true
+	case "toLowerCase":
+		return "ToLowerCase", nil, 0, false, true
 	case "trim":
 		return "Trim", nil, 0, false, true
 	case "trimStart":
