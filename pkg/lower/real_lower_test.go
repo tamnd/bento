@@ -2,6 +2,7 @@ package lower
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -135,6 +136,30 @@ func TestRealObjectRendersToStructPointer(t *testing.T) {
 	decls := r.Decls()
 	if len(decls) != 1 {
 		t.Fatalf("got %d decls, want 1", len(decls))
+	}
+}
+
+// TestRealStringLiteralUnionRenders drives the enum lowering from a real compile:
+// a value typed as a closed union of string literals lowers to a generated
+// integer tag enum, and the enum type plus its const block is emitted. This is
+// the section 10 rule holding against the checker's own union type, not a fake.
+func TestRealStringLiteralUnionRenders(t *testing.T) {
+	r, got, err := renderReal(t, `const x: "circle" | "rect" = "circle";`)
+	if err != nil {
+		t.Fatalf("RenderType(string-literal union): %v", err)
+	}
+	if want := "LitCircleRect"; got != want {
+		t.Errorf("RenderType = %q, want %q", got, want)
+	}
+	decls := r.Decls()
+	if len(decls) != 1 {
+		t.Fatalf("got %d decls, want 1", len(decls))
+	}
+	if !strings.Contains(decls[0].Source, "type LitCircleRect uint8") {
+		t.Errorf("enum decl missing the tag type:\n%s", decls[0].Source)
+	}
+	if !strings.Contains(decls[0].Source, "LitCircleRectCircle LitCircleRect = iota") {
+		t.Errorf("enum decl missing the first tag const:\n%s", decls[0].Source)
 	}
 }
 

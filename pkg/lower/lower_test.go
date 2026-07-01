@@ -188,6 +188,62 @@ func TestDistinctShapesShareBaseNameGetSuffix(t *testing.T) {
 	}
 }
 
+// TestStringLiteralUnionRendersToEnum pins section 10: a closed union of string
+// literals lowers to a small integer tag enum named from its members, and the
+// generated type plus its const block is emitted once. The members are given out
+// of sorted order to prove tag assignment is by value, not by checker order.
+func TestStringLiteralUnionRendersToEnum(t *testing.T) {
+	f := adapter.NewFake()
+	shape := f.Union(f.StringLit("rect"), f.StringLit("circle"))
+
+	r, got, err := renderOf(t, shape)
+	if err != nil {
+		t.Fatalf("RenderType(union) error: %v", err)
+	}
+	if want := "LitCircleRect"; got != want {
+		t.Errorf("RenderType(union) = %q, want %q", got, want)
+	}
+	decls := r.Decls()
+	if len(decls) != 1 {
+		t.Fatalf("got %d decls, want 1", len(decls))
+	}
+	checkGolden(t, "string_enum.golden", decls[0].Source)
+}
+
+// TestSameStringUnionInternsToOneEnum pins that the same set of string literals,
+// surfaced as one type identity, lowers to one enum, so a type used in two places
+// does not emit its enum twice.
+func TestSameStringUnionInternsToOneEnum(t *testing.T) {
+	f := adapter.NewFake()
+	dir := f.Union(f.StringLit("north"), f.StringLit("south"))
+	pair := f.Object(f.Prop("from", dir), f.Prop("to", dir))
+
+	r, _, err := renderOf(t, pair)
+	if err != nil {
+		t.Fatalf("RenderType(pair) error: %v", err)
+	}
+	names := map[string]int{}
+	for _, d := range r.Decls() {
+		names[d.Name]++
+	}
+	if names["LitNorthSouth"] != 1 {
+		t.Errorf("LitNorthSouth emitted %d times, want exactly 1 (interned)", names["LitNorthSouth"])
+	}
+}
+
+// TestNonIdentifierStringUnionHandsBack pins that a string-literal union whose
+// member is not a Go identifier has no clean tag name yet, so it hands back
+// rather than invent one.
+func TestNonIdentifierStringUnionHandsBack(t *testing.T) {
+	f := adapter.NewFake()
+	u := f.Union(f.StringLit("north"), f.StringLit("due east"))
+	_, _, err := renderOf(t, u)
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderType(union with a spaced member) err = %v, want a *NotYetLowerable", err)
+	}
+}
+
 // TestUnlowerableConstructsHandBack pins the section 30 contract: a construct
 // whose slice has not landed returns a NotYetLowerable error, never a wrong Go
 // type.

@@ -113,10 +113,14 @@ func (r *Renderer) RenderType(t frontend.Type) (string, error) {
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "union lowering (tagged struct) lands in a later slice"}
+		return r.renderUnion(t)
 
 	case t.Flags&frontend.TypeLiteral != 0:
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "literal and closed-union tag lowering lands in a later slice"}
+		// A lone literal type (a bare "circle" or 42 outside a union) lowers to
+		// its widened base and so is caught by the primitive cases above, which
+		// run first because a string literal also carries TypeString. Reaching
+		// here means a literal with no base flag bento renders yet.
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "literal type with no lowerable base"}
 
 	case t.Flags&frontend.TypeEnum != 0:
 		return "", &NotYetLowerable{Flags: t.Flags, Reason: "enum lowering lands in a later slice"}
