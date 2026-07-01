@@ -134,6 +134,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]float64{{0}, {4}, {10}},
 		},
 		{
+			name: "modulo",
+			src:  "export function rem(a: number, b: number): number { return a % b; }",
+			// fmod keeps the sign of the dividend and works on fractions, so the
+			// cases cover negative dividends and a non-integer operand, where a
+			// naive integer remainder would diverge from JavaScript.
+			fn:   "rem",
+			args: [][]float64{{7, 3}, {-7, 3}, {7, -3}, {5.5, 2}, {10, 10}},
+		},
+		{
 			name: "logical",
 			src: `export function between(x: number, lo: number, hi: number): number {
   if (x >= lo && x <= hi) {
@@ -162,14 +171,14 @@ export function hypotSq(a: number, b: number): number {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			goSrc := lowerToGo(t, tc.src)
+			goSrc, imports := lowerToGo(t, tc.src)
 			goName, ok := exportedField(tc.fn)
 			if !ok {
 				t.Fatalf("entry %q is not a Go identifier", tc.fn)
 			}
 			for _, args := range tc.args {
 				want := evalTS(t, tc.src, tc.fn, args)
-				got := runGo(t, goSrc, goName, args)
+				got := runGo(t, goSrc, imports, goName, args)
 				if got != want {
 					t.Errorf("%s(%v): generated Go = %v, TypeScript = %v", tc.fn, args, got, want)
 				}
@@ -183,7 +192,7 @@ export function hypotSq(a: number, b: number): number {
 // functions (not just the entry) lets a case call a helper or recurse. A
 // hand-back here is a test failure: every equivalence case is inside the
 // lowerable subset by construction.
-func lowerToGo(t *testing.T, src string) string {
+func lowerToGo(t *testing.T, src string) (string, []string) {
 	t.Helper()
 	prog := compile(t, src)
 	var fns []frontend.Node
@@ -209,7 +218,7 @@ func lowerToGo(t *testing.T, src string) string {
 		b.WriteString(f)
 		b.WriteByte('\n')
 	}
-	return b.String()
+	return b.String(), r.Imports()
 }
 
 // evalTS transpiles the TypeScript to JavaScript, evaluates it in the engine,
@@ -252,7 +261,7 @@ func evalTS(t *testing.T, src, fn string, args []float64) float64 {
 // runGo wraps the generated function in a tiny main, compiles and runs it with
 // the Go toolchain, and parses the number it prints. This is the subject: what
 // the emitted Go actually computes, not what we hope it computes.
-func runGo(t *testing.T, goSrc, name string, args []float64) float64 {
+func runGo(t *testing.T, goSrc string, imports []string, name string, args []float64) float64 {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -260,9 +269,18 @@ func runGo(t *testing.T, goSrc, name string, args []float64) float64 {
 	for i, a := range args {
 		callArgs[i] = strconv.FormatFloat(a, 'g', -1, 64)
 	}
+	// The wrapper always prints with fmt; the lowered code adds whatever else it
+	// referenced (math for a % that became math.Mod, and later the value model).
+	paths := append([]string{"fmt"}, imports...)
+	var imp strings.Builder
+	imp.WriteString("import (\n")
+	for _, p := range paths {
+		imp.WriteString("\t\"" + p + "\"\n")
+	}
+	imp.WriteString(")")
 	main := fmt.Sprintf(
-		"package main\n\nimport \"fmt\"\n\n%s\nfunc main() {\n\tfmt.Printf(\"%%g\\n\", %s(%s))\n}\n",
-		goSrc, name, strings.Join(callArgs, ", "),
+		"package main\n\n%s\n\n%s\nfunc main() {\n\tfmt.Printf(\"%%g\\n\", %s(%s))\n}\n",
+		imp.String(), goSrc, name, strings.Join(callArgs, ", "),
 	)
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
 		t.Fatal(err)

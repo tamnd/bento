@@ -543,6 +543,23 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "assignment used as a value is a later slice"}
 	}
 
+	// Remainder on numbers is the one arithmetic operator that is not a Go binary
+	// operator: JavaScript % is fmod (a floating remainder that keeps the sign of
+	// the dividend), which Go spells math.Mod, not the integer-only % token. It is
+	// handled here, before the operator table, so the number path can emit a call.
+	if opText == "%" && r.isNumber(left) && r.isNumber(right) {
+		l, err := r.lowerExpr(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport("math")
+		return &ast.CallExpr{Fun: sel("math", "Mod"), Args: []ast.Expr{l, rr}}, nil
+	}
+
 	goOp, err := r.binaryOp(opText, left, right)
 	if err != nil {
 		return nil, err
@@ -598,9 +615,10 @@ func (r *Renderer) isBool(n frontend.Node) bool {
 // The arithmetic operators whose float64 semantics match JavaScript's number
 // semantics are here, along with the relational and strict-equality operators,
 // which compare two float64 the same way in both languages (=== on numbers is Go
-// ==, !== is !=). Left out on purpose: %, which is fmod on JS numbers and not
-// Go's remainder; the bitwise operators, which coerce to int32 first; and loose
-// == and !=, whose coercion has no direct Go spelling. Each is a later slice.
+// ==, !== is !=). Not here because they are not a Go binary token: %, which is
+// fmod and lowers to a math.Mod call in binaryExpr. Left out on purpose: the
+// bitwise operators, which coerce to int32 first, and loose == and !=, whose
+// coercion has no direct Go spelling. Each is a later slice.
 func numericBinaryOp(tsOp string) (token.Token, bool) {
 	switch tsOp {
 	case "+":
