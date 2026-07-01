@@ -82,7 +82,9 @@ __bento_defineModule("http", function (module, exports, require) {
       this._startPump();
     }
     _startPump() {
-      if (this._pumpStarted) return;
+      // A client response has no reqId: its body is pushed eagerly by Go, so
+      // there is nothing to pump on demand.
+      if (this._pumpStarted || this._reqId == null) return;
       this._pumpStarted = true;
       __bento_http_resume(this._reqId);
     }
@@ -264,6 +266,137 @@ __bento_defineModule("http", function (module, exports, require) {
     return new Server(opts, handler);
   }
 
+  // Client ids are minted here rather than by Go, since JavaScript has to register
+  // the request before the round trip so the dispatch callbacks can find it.
+  const clientRequests = Object.create(null); // clientId -> ClientRequest
+  let nextClientId = 1;
+
+  // normalizeClientOptions accepts every http.request calling shape: a url string,
+  // a URL, an options object, or a url plus an options object. It yields a plain
+  // { method, url, headers } the request path builds on.
+  function normalizeClientOptions(input, extra) {
+    let opts = {};
+    if (typeof input === "string") {
+      opts = urlToOptions(input);
+    } else if (input && typeof input.href === "string") {
+      opts = urlToOptions(input.href);
+    } else if (input && typeof input === "object") {
+      opts = Object.assign({}, input);
+    }
+    if (extra && typeof extra === "object") opts = Object.assign(opts, extra);
+
+    const protocol = opts.protocol || "http:";
+    const hostname = opts.hostname || opts.host || "localhost";
+    const port = opts.port ? ":" + opts.port : "";
+    const path = opts.path || "/";
+    const url = opts.url || protocol + "//" + hostname + port + path;
+    return { method: (opts.method || "GET").toUpperCase(), url: url, headers: opts.headers || {} };
+  }
+
+  function urlToOptions(href) {
+    return { url: href };
+  }
+
+  // ClientRequest is the writable side of an outbound request. Body writes are
+  // buffered and flushed to Go on end, which then streams the response back.
+  class ClientRequest extends stream.Writable {
+    constructor(input, extra, callback) {
+      super();
+      if (typeof extra === "function") {
+        callback = extra;
+        extra = undefined;
+      }
+      const opts = normalizeClientOptions(input, extra);
+      this._id = nextClientId++;
+      clientRequests[this._id] = this;
+      this.method = opts.method;
+      this._url = opts.url;
+      this._headers = Object.create(null);
+      this._bodyChunks = [];
+      this._response = null;
+      for (const key in opts.headers) this.setHeader(key, opts.headers[key]);
+      if (callback) this.once("response", callback);
+    }
+    setHeader(name, value) {
+      this._headers[String(name).toLowerCase()] = { name: name, value: value };
+      return this;
+    }
+    getHeader(name) {
+      const h = this._headers[String(name).toLowerCase()];
+      return h ? h.value : undefined;
+    }
+    removeHeader(name) {
+      delete this._headers[String(name).toLowerCase()];
+    }
+    _write(chunk, encoding, callback) {
+      this._bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding || "utf8"));
+      callback();
+    }
+    _final(callback) {
+      const body = Buffer.concat(this._bodyChunks);
+      __bento_http_clientSend(
+        this._id,
+        this.method,
+        this._url,
+        JSON.stringify(headersToWire(this._headers)),
+        body.length ? body.toString("base64") : ""
+      );
+      callback();
+    }
+    abort() {
+      this.destroy();
+    }
+    setTimeout(_msecs, callback) {
+      if (callback) this.on("timeout", callback);
+      return this;
+    }
+  }
+
+  function request(input, extra, callback) {
+    return new ClientRequest(input, extra, callback);
+  }
+
+  function get(input, extra, callback) {
+    const req = request(input, extra, callback);
+    req.end();
+    return req;
+  }
+
+  globalThis.__bento_http_dispatchClientResponse = function (id, infoJSON) {
+    const req = clientRequests[id];
+    if (!req) return;
+    const info = JSON.parse(infoJSON);
+    const res = new IncomingMessage(null, info);
+    res.statusCode = info.statusCode;
+    res.statusMessage = info.statusMessage;
+    res.httpVersion = info.httpVersion;
+    req._response = res;
+    req.emit("response", res);
+  };
+
+  globalThis.__bento_http_dispatchClientData = function (id, b64) {
+    const req = clientRequests[id];
+    if (!req || !req._response) return;
+    req._response.push(Buffer.from(b64, "base64"));
+  };
+
+  globalThis.__bento_http_dispatchClientEnd = function (id) {
+    const req = clientRequests[id];
+    if (!req) return;
+    if (req._response) {
+      req._response.complete = true;
+      req._response.push(null);
+    }
+    delete clientRequests[id];
+  };
+
+  globalThis.__bento_http_dispatchClientError = function (id, message) {
+    const req = clientRequests[id];
+    if (!req) return;
+    req.emit("error", new Error(message));
+    delete clientRequests[id];
+  };
+
   // The Go bridge calls these globals on the loop goroutine. They are the inbound
   // half of the protocol: server lifecycle plus per-request body events.
   globalThis.__bento_http_dispatchListening = function (serverId, port, address) {
@@ -329,6 +462,9 @@ __bento_defineModule("http", function (module, exports, require) {
     Server: Server,
     ServerResponse: ServerResponse,
     IncomingMessage: IncomingMessage,
+    ClientRequest: ClientRequest,
     createServer: createServer,
+    request: request,
+    get: get,
   };
 });
