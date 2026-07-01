@@ -77,6 +77,7 @@ func (h *httpBridge) hostFuncs() map[string]HostFunc {
 		"__bento_http_writeHead":    h.writeHead,
 		"__bento_http_write":        h.write,
 		"__bento_http_end":          h.end,
+		"__bento_http_clientSend":   h.clientSend,
 	}
 }
 

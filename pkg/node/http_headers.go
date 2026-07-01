@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +23,38 @@ type requestInfo struct {
 	RemotePort    int            `json:"remotePort"`
 }
 
+// responseInfo is the client response metadata handed to JavaScript when a
+// client request gets its headers back. It mirrors requestInfo on the response
+// side so the same IncomingMessage builds from it.
+type responseInfo struct {
+	StatusCode    int            `json:"statusCode"`
+	StatusMessage string         `json:"statusMessage"`
+	HTTPVersion   string         `json:"httpVersion"`
+	Headers       map[string]any `json:"headers"`
+	RawHeaders    []string       `json:"rawHeaders"`
+}
+
+// translateHeaders turns Go's header map into the Node shape: names lowercase,
+// duplicates joined with ", ", and set-cookie kept as an array since it must not
+// be folded. It also returns the flat rawHeaders list. Go's header map does not
+// preserve wire order, so rawHeaders order is best effort, a documented gap.
+func translateHeaders(h http.Header) (map[string]any, []string) {
+	headers := make(map[string]any, len(h))
+	raw := make([]string, 0, len(h)*2)
+	for name, values := range h {
+		lower := strings.ToLower(name)
+		if lower == "set-cookie" {
+			headers[lower] = append([]string(nil), values...)
+		} else {
+			headers[lower] = strings.Join(values, ", ")
+		}
+		for _, v := range values {
+			raw = append(raw, name, v)
+		}
+	}
+	return headers, raw
+}
+
 // buildRequestInfo snapshots a Go request into the JSON envelope IncomingMessage
 // is built from. Header translation follows Node: names lowercase, duplicates
 // joined with ", ", and set-cookie kept as an array since it must not be folded.
@@ -37,19 +70,7 @@ func buildRequestInfo(r *http.Request) string {
 		}
 	}
 
-	headers := make(map[string]any, len(r.Header))
-	raw := make([]string, 0, len(r.Header)*2)
-	for name, values := range r.Header {
-		lower := strings.ToLower(name)
-		if lower == "set-cookie" {
-			headers[lower] = append([]string(nil), values...)
-		} else {
-			headers[lower] = strings.Join(values, ", ")
-		}
-		for _, v := range values {
-			raw = append(raw, name, v)
-		}
-	}
+	headers, raw := translateHeaders(r.Header)
 
 	info := requestInfo{
 		Method:        r.Method,
@@ -61,6 +82,21 @@ func buildRequestInfo(r *http.Request) string {
 		RawHeaders:    raw,
 		RemoteAddress: host,
 		RemotePort:    port,
+	}
+	return jsonString(info)
+}
+
+// buildResponseInfo snapshots a Go client response into the JSON envelope the
+// client-side IncomingMessage is built from.
+func buildResponseInfo(resp *http.Response) string {
+	headers, raw := translateHeaders(resp.Header)
+	message := strings.TrimSpace(strings.TrimPrefix(resp.Status, strconv.Itoa(resp.StatusCode)))
+	info := responseInfo{
+		StatusCode:    resp.StatusCode,
+		StatusMessage: message,
+		HTTPVersion:   strings.TrimPrefix(resp.Proto, "HTTP/"),
+		Headers:       headers,
+		RawHeaders:    raw,
 	}
 	return jsonString(info)
 }

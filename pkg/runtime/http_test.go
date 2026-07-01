@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,6 +160,82 @@ func TestHTTPServerStreamsAndSetsMultipleCookies(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("loop did not exit (output %q)", out.String())
+	}
+}
+
+// runToEnd runs a bento script that settles on its own (no long-lived server) and
+// returns its stdout. It fails if the loop does not drain within the deadline.
+func runToEnd(t *testing.T, script string) string {
+	t.Helper()
+	var out bytes.Buffer
+	rt, err := New(Config{Argv: []string{"bento", "c.ts"}, BentoVersion: "test", Stdout: &out, Stderr: &out})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		runErr := rt.RunString("c.ts", script)
+		_ = rt.Close()
+		done <- runErr
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v (output %q)", err, out.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("script did not settle (output %q)", out.String())
+	}
+	return out.String()
+}
+
+func TestHTTPClientGet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Origin", "test-server")
+		w.WriteHeader(203)
+		_, _ = io.WriteString(w, "got "+r.Method+" "+r.URL.Path)
+	}))
+	defer srv.Close()
+
+	script := fmt.Sprintf(`
+		const http = require("http");
+		http.get(%q, (res) => {
+			let body = "";
+			res.on("data", (c) => { body += c.toString(); });
+			res.on("end", () => {
+				console.log(res.statusCode + " " + res.headers["x-origin"] + " " + body);
+			});
+		});
+	`, srv.URL+"/hello")
+
+	out := strings.TrimSpace(runToEnd(t, script))
+	if out != "203 test-server got GET /hello" {
+		t.Errorf("client output = %q, want %q", out, "203 test-server got GET /hello")
+	}
+}
+
+func TestHTTPClientPostBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, "ct="+r.Header.Get("Content-Type")+" echo="+string(body))
+	}))
+	defer srv.Close()
+
+	script := fmt.Sprintf(`
+		const http = require("http");
+		const req = http.request(%q, { method: "POST", headers: { "Content-Type": "application/json" } }, (res) => {
+			let body = "";
+			res.on("data", (c) => { body += c.toString(); });
+			res.on("end", () => { console.log(body); });
+		});
+		req.write("{\"k\":1}");
+		req.end();
+	`, srv.URL+"/submit")
+
+	out := strings.TrimSpace(runToEnd(t, script))
+	want := `ct=application/json echo={"k":1}`
+	if out != want {
+		t.Errorf("client output = %q, want %q", out, want)
 	}
 }
 
