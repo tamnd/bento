@@ -21,6 +21,7 @@ package lower
 import (
 	"fmt"
 	"go/ast"
+	"sort"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -50,13 +51,35 @@ func (e *NotYetLowerable) Error() string {
 // type identity (05_type_lowering.md section 29), which is only stable within
 // one program.
 type Renderer struct {
-	prog  *frontend.Program
-	decls *declSet
+	prog    *frontend.Program
+	decls   *declSet
+	imports map[string]bool
 }
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet()}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}}
+}
+
+// requireImport records that the Go the renderer has emitted refers to a
+// package, so a caller assembling a file adds the import. Lowering emits
+// qualified names (math.Mod, and later value.*) as it goes, and the set of
+// packages those names need is only known after the body is lowered, so it is
+// gathered here rather than declared up front.
+func (r *Renderer) requireImport(path string) {
+	r.imports[path] = true
+}
+
+// Imports returns the import paths the emitted Go refers to, sorted so the
+// output is deterministic. A caller writes one import per path into the file it
+// assembles around the rendered declarations.
+func (r *Renderer) Imports() []string {
+	paths := make([]string, 0, len(r.imports))
+	for p := range r.imports {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // RenderType returns the Go type expression that represents t, registering any
