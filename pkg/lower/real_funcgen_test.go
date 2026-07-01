@@ -147,6 +147,19 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function find(s: string, sub: string): number { return s.indexOf(sub); }`,
 		},
 		{
+			name:   "indexof_pos",
+			golden: "func_indexof_pos.golden",
+			// indexOf with the optional start position, which lowers to the variadic
+			// IndexOf with a second argument the source supplied.
+			src: `export function findFrom(s: string, sub: string, from: number): number { return s.indexOf(sub, from); }`,
+		},
+		{
+			name:   "lastindexof",
+			golden: "func_lastindexof.golden",
+			// lastIndexOf takes the same string-then-optional-number shape as indexOf.
+			src: `export function findLast(s: string, sub: string): number { return s.lastIndexOf(sub); }`,
+		},
+		{
 			name:   "includes",
 			golden: "func_includes.golden",
 			// a string-arg method returning a boolean, so the whole function is
