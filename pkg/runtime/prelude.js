@@ -383,6 +383,49 @@
   g.module = { exports: {}, id: ".", loaded: false };
   g.exports = g.module.exports;
 
+  // ---- native ES module interop -----------------------------------------
+  // When a program runs as a real ES module, native imports of builtins, JSON,
+  // data: URLs, and CommonJS files come back through __bento_esmShim. The Go
+  // module host hands us the require specifier; we require it once, stash the
+  // live exports in a slot the generated module reads, and return ES module
+  // source that re-exports it. The default export is the whole exports object
+  // and each own key that is a legal identifier becomes a named export, so both
+  // `import x from` and `import { y } from` work against a CommonJS dependency.
+  const esmSlots = Object.create(null);
+  g.__bentoEsmSlots = esmSlots;
+
+  // Reserved words cannot be named exports even though they are valid property
+  // keys, so a dependency with a `default` or `class` key still exports the rest.
+  const reservedWords = new Set([
+    "default", "break", "case", "catch", "class", "const", "continue",
+    "debugger", "delete", "do", "else", "enum", "export", "extends", "false",
+    "finally", "for", "function", "if", "import", "in", "instanceof", "new",
+    "null", "return", "super", "switch", "this", "throw", "true", "try",
+    "typeof", "var", "void", "while", "with", "yield", "let", "await",
+  ]);
+  const identPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+  g.__bento_esmShim = function (spec) {
+    const m = g.require(spec);
+    esmSlots[spec] = m;
+    const lit = JSON.stringify(spec);
+    let src = "const __m = globalThis.__bentoEsmSlots[" + lit + "];\nexport default __m;\n";
+    if (m && (typeof m === "object" || typeof m === "function")) {
+      const names = [];
+      const consider = (k) => {
+        if (reservedWords.has(k) || names.indexOf(k) >= 0) return;
+        if (!identPattern.test(k)) return;
+        names.push(k);
+      };
+      Object.keys(m).forEach(consider);
+      Object.getOwnPropertyNames(m).forEach(consider);
+      for (const k of names) {
+        src += "export const " + k + " = __m[" + JSON.stringify(k) + "];\n";
+      }
+    }
+    return src;
+  };
+
   // ---- structured clone / microtask helpers used by common libraries ----
   if (typeof g.structuredClone !== "function") {
     g.structuredClone = function (v) { return JSON.parse(JSON.stringify(v)); };

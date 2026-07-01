@@ -19,6 +19,7 @@ func (f *fakeEngine) EvalModule(string, string) error        { return nil }
 func (f *fakeEngine) Register(string, engine.HostFunc) error { return nil }
 func (f *fakeEngine) DrainMicrotasks() (int, error)          { return 0, nil }
 func (f *fakeEngine) SetModuleLoader(engine.ModuleLoader)    {}
+func (f *fakeEngine) SetModuleHost(engine.ModuleHost)        {}
 func (f *fakeEngine) Interrupt()                             {}
 func (f *fakeEngine) Close() error                           { return nil }
 func (f *fakeEngine) Call(fn string, args ...any) (any, error) {

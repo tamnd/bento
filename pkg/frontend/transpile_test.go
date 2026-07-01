@@ -1,6 +1,7 @@
 package frontend
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,23 @@ func TestTranspileSyntaxError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bad.ts") {
 		t.Errorf("error should name the file, got: %v", err)
+	}
+}
+
+func TestTranspileTopLevelAwait(t *testing.T) {
+	// Top-level await cannot be expressed as CommonJS, so Transpile flags it for
+	// the caller to reroute to the native ES module path.
+	src := `const v = await Promise.resolve(1); console.log(v);`
+	_, err := Transpile(src, Options{Filename: "tla.mjs"})
+	if err == nil {
+		t.Fatal("expected top-level await to fail CommonJS transpile")
+	}
+	if !errors.Is(err, ErrTopLevelAwait) {
+		t.Errorf("error should be ErrTopLevelAwait, got: %v", err)
+	}
+	// The same source transpiles cleanly as an ES module, where await is legal.
+	if _, err := TranspileESM(src, Options{Filename: "tla.mjs"}); err != nil {
+		t.Errorf("ESM transpile of top-level await: %v", err)
 	}
 }
 
