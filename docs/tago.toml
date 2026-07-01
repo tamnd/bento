@@ -1,0 +1,10 @@
+title       = "bento"
+baseURL     = "https://bento.tamnd.com/"
+description = "bento is a TypeScript runtime built in Go, a Bun alternative. It runs your existing Node.js and Bun code unchanged, compiles typed TypeScript to Go for speed, and lets you import any Go library straight from TypeScript. Pure Go, zero cgo, one static binary."
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/bento"
