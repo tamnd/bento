@@ -79,7 +79,7 @@ func wrapSymbol(s *shim.Symbol) SymbolHandle {
 	return rSymbol{s: s}
 }
 
-func nodeOf(h NodeHandle) *shim.Node     { return h.(rNode).n }
+func nodeOf(h NodeHandle) *shim.Node { return h.(rNode).n }
 func typeOfHandle(h TypeHandle) *shim.Type {
 	if h == nil {
 		return nil
@@ -115,11 +115,10 @@ func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Ho
 	}
 
 	shimOpts := shim.Options{RootFiles: roots, Loose: !opts.Strict}
-	imports := map[string][]ResolvedImportInfo{}
 
 	for {
 		p := shim.Compile(files, shimOpts)
-		imports = map[string][]ResolvedImportInfo{}
+		imports := map[string][]ResolvedImportInfo{}
 		added := false
 		for _, sf := range p.SourceFiles() {
 			name := sf.FileName()
