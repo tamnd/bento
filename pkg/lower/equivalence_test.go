@@ -18,18 +18,28 @@ import (
 // same function two ways and checks the answers match. The reference is the
 // TypeScript itself, transpiled to JavaScript and executed by bento's engine;
 // the subject is the Go the lowerer emits, compiled and run by the Go toolchain.
-// A case passes only when both produce the same number for the same arguments,
+// A case passes only when both produce the same result for the same arguments,
 // so a mistranslation in the mapping table shows up as a diverging result rather
 // than passing silently. This is the "TypeScript and generated Go are identical"
 // guarantee the directive asks for, mechanized.
+//
+// Arguments and results are typed, not just numbers: a tuple element is a Go
+// float64, string, or bool, and the case names the return kind, so a function
+// that takes and returns strings is exercised with real strings and its UTF-16
+// value.BStr result is compared against the engine's JavaScript string. Both
+// sides reduce their result to one canonical string, and the case passes when
+// those strings are equal.
 
 // equivCase is one function exercised with several argument tuples. The source
-// defines one exported function; the calls drive it with concrete numbers.
+// defines the exported functions; fn is the one the calls drive. Each tuple
+// element is a float64, string, or bool. ret names the return kind ("number",
+// "string", or "boolean"); an empty ret means number, the common case.
 type equivCase struct {
 	name string
 	src  string
 	fn   string
-	args [][]float64
+	ret  string
+	args [][]any
 }
 
 // TestTSAndGeneratedGoAgree runs each case through both execution paths and
@@ -45,25 +55,25 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "identity",
 			src:  "export function identity(x: number): number { return x; }",
 			fn:   "identity",
-			args: [][]float64{{0}, {42}, {-7}, {3.5}},
+			args: [][]any{{0}, {42}, {-7}, {3.5}},
 		},
 		{
 			name: "add",
 			src:  "export function add(a: number, b: number): number { return a + b; }",
 			fn:   "add",
-			args: [][]float64{{1, 2}, {-3, 3}, {0.1, 0.2}, {1e6, 1}},
+			args: [][]any{{1, 2}, {-3, 3}, {0.1, 0.2}, {1e6, 1}},
 		},
 		{
 			name: "arithmetic",
 			src:  "export function mix(a: number, b: number): number { return (a + b) * a - b / 2; }",
 			fn:   "mix",
-			args: [][]float64{{2, 4}, {5, 10}, {-1, -2}, {1.5, 0.5}},
+			args: [][]any{{2, 4}, {5, 10}, {-1, -2}, {1.5, 0.5}},
 		},
 		{
 			name: "keywordParam",
 			src:  "export function pick(type: number): number { return type; }",
 			fn:   "pick",
-			args: [][]float64{{9}, {-4}},
+			args: [][]any{{9}, {-4}},
 		},
 		{
 			name: "loop",
@@ -81,7 +91,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
   return total;
 }`,
 			fn:   "score",
-			args: [][]float64{{0}, {1}, {3}, {5}, {10}},
+			args: [][]any{{0}, {1}, {3}, {5}, {10}},
 		},
 		{
 			name: "factorial",
@@ -95,7 +105,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
   return acc;
 }`,
 			fn:   "fact",
-			args: [][]float64{{0}, {1}, {5}, {10}},
+			args: [][]any{{0}, {1}, {5}, {10}},
 		},
 		{
 			name: "branch",
@@ -108,7 +118,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
   return x;
 }`,
 			fn:   "clamp",
-			args: [][]float64{{-5}, {0}, {42}, {100}, {250}},
+			args: [][]any{{-5}, {0}, {42}, {100}, {250}},
 		},
 		{
 			name: "recursion",
@@ -119,7 +129,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
   return fib(n - 1) + fib(n - 2);
 }`,
 			fn:   "fib",
-			args: [][]float64{{0}, {1}, {7}, {12}},
+			args: [][]any{{0}, {1}, {7}, {12}},
 		},
 		{
 			name: "forLoopNegate",
@@ -131,7 +141,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
   return -t;
 }`,
 			fn:   "negsum",
-			args: [][]float64{{0}, {4}, {10}},
+			args: [][]any{{0}, {4}, {10}},
 		},
 		{
 			name: "stringLength",
@@ -139,15 +149,41 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// units). .length must report code units, so the whole string is
 			// "a" (1) + emoji (2) + "b" (1) = 4. A Go len() over UTF-8 bytes would
 			// say 6, so this proves the emitted Go runs the real value.BStr and
-			// gets the JavaScript answer, matched against quickjs. No arguments,
-			// because the harness passes numbers; string arguments are a later
-			// slice once the harness carries typed argument tuples.
+			// gets the JavaScript answer, matched against quickjs.
 			src: `export function width(): number {
   let s = "a" + "😀" + "b";
   return s.length;
 }`,
 			fn:   "width",
-			args: [][]float64{{}},
+			args: [][]any{{}},
+		},
+		{
+			name: "greet",
+			// A string argument in and a string result out: concatenation with a
+			// real value, including an astral emoji, must round-trip through the
+			// value model and read back identically to what quickjs produced.
+			src:  `export function greet(name: string): string { return "Hello, " + name; }`,
+			fn:   "greet",
+			ret:  "string",
+			args: [][]any{{"World"}, {"😀"}, {""}, {"a b c"}},
+		},
+		{
+			name: "stringEq",
+			// === on two strings compares by UTF-16 code unit and returns a real
+			// boolean, so the case pairs equal, unequal, empty, and astral inputs.
+			src:  `export function same(a: string, b: string): boolean { return a === b; }`,
+			fn:   "same",
+			ret:  "boolean",
+			args: [][]any{{"x", "x"}, {"x", "y"}, {"", ""}, {"😀", "😀"}, {"😀", "😁"}},
+		},
+		{
+			name: "stringNeq",
+			// !== is the negation, exercised over the same shapes so the emitted
+			// !value.Equal matches JavaScript's inequality point for point.
+			src:  `export function diff(a: string, b: string): boolean { return a !== b; }`,
+			fn:   "diff",
+			ret:  "boolean",
+			args: [][]any{{"x", "x"}, {"x", "y"}, {"", ""}, {"😀", "😀"}},
 		},
 		{
 			name: "modulo",
@@ -156,7 +192,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// cases cover negative dividends and a non-integer operand, where a
 			// naive integer remainder would diverge from JavaScript.
 			fn:   "rem",
-			args: [][]float64{{7, 3}, {-7, 3}, {7, -3}, {5.5, 2}, {10, 10}},
+			args: [][]any{{7, 3}, {-7, 3}, {7, -3}, {5.5, 2}, {10, 10}},
 		},
 		{
 			name: "logical",
@@ -170,7 +206,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
   return 0;
 }`,
 			fn:   "between",
-			args: [][]float64{{5, 0, 10}, {-1, 0, 10}, {11, 0, 10}, {0, 0, 10}, {10, 0, 10}},
+			args: [][]any{{5, 0, 10}, {-1, 0, 10}, {11, 0, 10}, {0, 0, 10}, {10, 0, 10}},
 		},
 		{
 			name: "crossCall",
@@ -181,7 +217,7 @@ export function hypotSq(a: number, b: number): number {
   return square(a) + square(b);
 }`,
 			fn:   "hypotSq",
-			args: [][]float64{{3, 4}, {0, 0}, {-2, 5}},
+			args: [][]any{{3, 4}, {0, 0}, {-2, 5}},
 		},
 	}
 
@@ -193,10 +229,10 @@ export function hypotSq(a: number, b: number): number {
 				t.Fatalf("entry %q is not a Go identifier", tc.fn)
 			}
 			for _, args := range tc.args {
-				want := evalTS(t, tc.src, tc.fn, args)
-				got := runGo(t, goSrc, imports, goName, args)
+				want := evalTS(t, tc.src, tc.fn, tc.ret, args)
+				got := runGo(t, goSrc, imports, goName, tc.ret, args)
 				if got != want {
-					t.Errorf("%s(%v): generated Go = %v, TypeScript = %v", tc.fn, args, got, want)
+					t.Errorf("%s(%v): generated Go = %s, TypeScript = %s", tc.fn, args, got, want)
 				}
 			}
 		})
@@ -238,9 +274,9 @@ func lowerToGo(t *testing.T, src string) (string, []string) {
 }
 
 // evalTS transpiles the TypeScript to JavaScript, evaluates it in the engine,
-// and calls the function with the given arguments, returning the number the
-// engine produced. This is the reference: the source's own runtime meaning.
-func evalTS(t *testing.T, src, fn string, args []float64) float64 {
+// and calls the function with the given arguments, returning the canonical form
+// of the result. This is the reference: the source's own runtime meaning.
+func evalTS(t *testing.T, src, fn, ret string, args []any) string {
 	t.Helper()
 	// The engine evaluates the transpiled source as a global script, so the
 	// function must stay a top-level declaration rather than a module export;
@@ -261,29 +297,25 @@ func evalTS(t *testing.T, src, fn string, args []float64) float64 {
 	}
 	callArgs := make([]any, len(args))
 	for i, a := range args {
-		callArgs[i] = a
+		callArgs[i] = engineArg(a)
 	}
 	res, err := eng.Call(fn, callArgs...)
 	if err != nil {
 		t.Fatalf("Call %s: %v", fn, err)
 	}
-	f, ok := toFloat(res)
-	if !ok {
-		t.Fatalf("engine returned %T (%v), want a number", res, res)
-	}
-	return f
+	return canonResult(t, ret, res)
 }
 
 // runGo wraps the generated function in a tiny main, compiles and runs it with
-// the Go toolchain, and parses the number it prints. This is the subject: what
-// the emitted Go actually computes, not what we hope it computes.
+// the Go toolchain, and returns the canonical form of what it printed. This is
+// the subject: what the emitted Go actually computes, not what we hope it does.
 //
 // The temporary package is created inside this repository's tree rather than in
 // an isolated temp module, so it compiles under bento's own go.mod and go.sum
 // and links the real value package with no separate require, replace, or module
 // download. That keeps the test fully offline: a throwaway module would need its
 // own go.sum for the runtime import, which a clean CI checkout does not have.
-func runGo(t *testing.T, goSrc string, imports []string, name string, args []float64) float64 {
+func runGo(t *testing.T, goSrc string, imports []string, name, ret string, args []any) string {
 	t.Helper()
 	dir, err := os.MkdirTemp(repoRoot(t), "eqrun-")
 	if err != nil {
@@ -293,11 +325,13 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 
 	callArgs := make([]string, len(args))
 	for i, a := range args {
-		callArgs[i] = strconv.FormatFloat(a, 'g', -1, 64)
+		callArgs[i] = goArg(a)
 	}
 	// The wrapper always prints with fmt; the lowered code adds whatever else it
 	// referenced (math for a % that became math.Mod, and the value model for a
-	// string).
+	// string). A string argument names value.FromGoString, but the value import
+	// is already present whenever a string crosses the signature, so no extra
+	// import is needed here.
 	paths := append([]string{"fmt"}, imports...)
 	var imp strings.Builder
 	imp.WriteString("import (\n")
@@ -305,9 +339,10 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 		imp.WriteString("\t\"" + p + "\"\n")
 	}
 	imp.WriteString(")")
+	call := fmt.Sprintf("%s(%s)", name, strings.Join(callArgs, ", "))
 	main := fmt.Sprintf(
-		"package main\n\n%s\n\n%s\nfunc main() {\n\tfmt.Printf(\"%%g\\n\", %s(%s))\n}\n",
-		imp.String(), goSrc, name, strings.Join(callArgs, ", "),
+		"package main\n\n%s\n\n%s\nfunc main() {\n\t%s\n}\n",
+		imp.String(), goSrc, goPrint(ret, call),
 	)
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
 		t.Fatal(err)
@@ -319,11 +354,98 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 	if err != nil {
 		t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- output ---\n%s", err, main, out)
 	}
-	f, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-	if err != nil {
-		t.Fatalf("parse go output %q: %v", out, err)
+	return canonOutput(t, ret, strings.TrimSpace(string(out)))
+}
+
+// engineArg converts a case argument to the value the engine wants. Numbers in
+// the case tables are written as untyped Go constants (an int like 42), so they
+// are widened to float64 here to match JavaScript's single number type; strings
+// and booleans pass through.
+func engineArg(a any) any {
+	switch v := a.(type) {
+	case int:
+		return float64(v)
+	default:
+		return v
 	}
-	return f
+}
+
+// goArg renders a case argument as the Go expression that reproduces it in the
+// generated program. A number is a numeric constant (untyped, so it takes the
+// float64 parameter type), a string is a value.BStr built from a Go literal, and
+// a boolean is a Go boolean literal.
+func goArg(a any) string {
+	switch v := a.(type) {
+	case int:
+		return strconv.Itoa(v)
+	case float64:
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	case string:
+		return "value.FromGoString(" + strconv.Quote(v) + ")"
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// goPrint returns the statement that prints the call result in the wrapper,
+// chosen by return kind: a number prints with %g, a string prints its Go-quoted
+// UTF-8 form after decoding the value.BStr, and a boolean prints true or false.
+func goPrint(ret, call string) string {
+	switch ret {
+	case "string":
+		return fmt.Sprintf("fmt.Printf(\"%%q\\n\", (%s).ToGoString())", call)
+	case "boolean":
+		return fmt.Sprintf("fmt.Printf(\"%%t\\n\", %s)", call)
+	default:
+		return fmt.Sprintf("fmt.Printf(\"%%g\\n\", %s)", call)
+	}
+}
+
+// canonResult reduces the engine's native return value to the canonical string
+// the two sides compare on, using the case's declared return kind so a number, a
+// string, and a boolean each get one unambiguous spelling.
+func canonResult(t *testing.T, ret string, res any) string {
+	t.Helper()
+	switch ret {
+	case "string":
+		s, ok := res.(string)
+		if !ok {
+			t.Fatalf("engine returned %T (%v), want a string", res, res)
+		}
+		return strconv.Quote(s)
+	case "boolean":
+		b, ok := res.(bool)
+		if !ok {
+			t.Fatalf("engine returned %T (%v), want a boolean", res, res)
+		}
+		return strconv.FormatBool(b)
+	default:
+		f, ok := toFloat(res)
+		if !ok {
+			t.Fatalf("engine returned %T (%v), want a number", res, res)
+		}
+		return strconv.FormatFloat(f, 'g', -1, 64)
+	}
+}
+
+// canonOutput reduces the generated program's printed line to the same canonical
+// form canonResult produces, so the two are compared as equal strings. The
+// string and boolean prints are already canonical; a number is reparsed and
+// reformatted so its spelling matches the engine side exactly.
+func canonOutput(t *testing.T, ret, out string) string {
+	t.Helper()
+	switch ret {
+	case "string", "boolean":
+		return out
+	default:
+		f, err := strconv.ParseFloat(out, 64)
+		if err != nil {
+			t.Fatalf("parse go output %q: %v", out, err)
+		}
+		return strconv.FormatFloat(f, 'g', -1, 64)
+	}
 }
 
 // repoRoot returns the absolute path of the repository root. The test runs with

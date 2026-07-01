@@ -1,0 +1,3 @@
+func Diff(a value.BStr, b value.BStr) bool {
+	return !a.Equal(b)
+}
