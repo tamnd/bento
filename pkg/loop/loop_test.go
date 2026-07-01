@@ -66,6 +66,71 @@ func TestClearTimerCancels(t *testing.T) {
 	}
 }
 
+func TestPostRunsTaskOnLoop(t *testing.T) {
+	// A task posted from another goroutine runs on the loop goroutine. A handle
+	// reference keeps the loop alive until the task arrives, then the task drops
+	// the reference so the loop can exit.
+	f := &fakeEngine{}
+	l := New(f)
+	l.AddRef()
+
+	ran := make(chan struct{})
+	go func() {
+		l.Post(func() {
+			close(ran)
+			l.Unref()
+		})
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- l.Run() }()
+
+	select {
+	case <-ran:
+	case <-time.After(time.Second):
+		t.Fatal("posted task never ran")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("loop should exit after the last ref drops")
+	}
+}
+
+func TestPostWakesLoopWaitingOnTimer(t *testing.T) {
+	// A task posted while the loop waits on a far-off timer runs promptly rather
+	// than after the timer's full delay.
+	f := &fakeEngine{}
+	l := New(f)
+	l.AddTimer(1, 10_000, false) // ten seconds away
+
+	ran := make(chan struct{})
+	go func() {
+		l.Post(func() {
+			close(ran)
+			l.ClearTimer(1)
+			l.Stop()
+		})
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- l.Run() }()
+
+	select {
+	case <-ran:
+	case <-time.After(time.Second):
+		t.Fatal("post did not wake the loop before the timer")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("loop should stop after the task")
+	}
+}
+
 func TestEmptyLoopReturns(t *testing.T) {
 	f := &fakeEngine{}
 	l := New(f)
