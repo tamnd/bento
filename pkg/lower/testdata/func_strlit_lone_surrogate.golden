@@ -1,0 +1,3 @@
+func S() value.BStr {
+	return value.FromUTF16([]uint16{0xd83d})
+}
