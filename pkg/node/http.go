@@ -82,6 +82,7 @@ func (h *httpBridge) hostFuncs() map[string]HostFunc {
 		"__bento_http_createServer": h.createServer,
 		"__bento_http_listen":       h.listen,
 		"__bento_http_listenTLS":    h.listenTLS,
+		"__bento_http_listenH2":     h.listenH2,
 		"__bento_http_close":        h.close,
 		"__bento_http_resume":       h.resume,
 		"__bento_http_writeHead":    h.writeHead,
@@ -134,8 +135,18 @@ func (h *httpBridge) listen(args []any) (any, error) {
 // by the plain and TLS listen paths; for TLS the listener passed in is already
 // wrapped so Serve accepts connections that have completed the handshake.
 func (h *httpBridge) serveListener(srv *httpServer, id int64, ln net.Listener) {
-	srv.ln = ln
 	gosrv := &http.Server{Handler: h.handler(id)}
+	h.runServer(srv, id, ln, gosrv, func() error { return gosrv.Serve(ln) })
+}
+
+// runServer records the bound listener and server, announces listening, and runs
+// the given serve loop on a pool goroutine. The serve closure is what differs
+// between transports: plain http calls Serve, https wraps the listener, and http2
+// calls ServeTLS so net/http negotiates h2 over ALPN. Everything after the accept
+// loop returns (loop unref, error and close dispatch) is identical, so it lives
+// here once.
+func (h *httpBridge) runServer(srv *httpServer, id int64, ln net.Listener, gosrv *http.Server, serve func() error) {
+	srv.ln = ln
 	srv.gosrv = gosrv
 
 	bound := ln.Addr().(*net.TCPAddr)
@@ -143,7 +154,7 @@ func (h *httpBridge) serveListener(srv *httpServer, id int64, ln net.Listener) {
 	h.emit("__bento_http_dispatchListening", id, int64(bound.Port), bound.IP.String())
 
 	h.pool(func() {
-		serveErr := gosrv.Serve(ln)
+		serveErr := serve()
 		h.mu.Lock()
 		delete(h.servers, id)
 		h.mu.Unlock()
