@@ -360,6 +360,14 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{-1, 0}, {-1, 1}, {256, 2}, {8, 1}},
 		},
 		{
+			name: "bitNot",
+			// ~x is -(x+1) on the coerced integer, so the cases cover positive,
+			// negative, zero, and a fraction that must truncate first.
+			src:  `export function inv(x: number): number { return ~x; }`,
+			fn:   "inv",
+			args: [][]any{{0}, {5}, {-1}, {6.9}, {-6.9}},
+		},
+		{
 			name: "bitCoerceFraction",
 			// a fractional operand must truncate before the bitwise op, the ToInt32
 			// step, so 6.9 & 3 is 6 & 3, not a float operation.

@@ -273,6 +273,14 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function nan(x: number): boolean { return Number.isNaN(x); }`,
 		},
 		{
+			name:   "bit_not",
+			golden: "func_bit_not.golden",
+			// ~ is the unary bitwise operator, so it uses the same ToInt32 coercion
+			// as the binary bitwise operators: float64(^value.ToInt32(x)), not a Go
+			// ^ on the float64.
+			src: `export function inv(x: number): number { return ~x; }`,
+		},
+		{
 			name:   "trim",
 			golden: "func_trim.golden",
 			// a zero-argument string method, so the parameter list is empty and
