@@ -238,6 +238,35 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"hello", "he"}, {"hello", "lo"}, {"hello", ""}, {"hi", "hello"}, {"😀x", "😀"}},
 		},
 		{
+			name: "slice2",
+			// slice with both bounds over a BMP receiver, covering an interior
+			// range, the full string, negative-from-end bounds, an empty result
+			// when start is at or past end, and an end past the length.
+			src:  `export function sl(s: string, a: number, b: number): string { return s.slice(a, b); }`,
+			fn:   "sl",
+			ret:  "string",
+			args: [][]any{{"hello", 1, 3}, {"hello", 0, 5}, {"hello", -3, -1}, {"hello", 3, 1}, {"hello", 2, 100}},
+		},
+		{
+			name: "slice1",
+			// slice with a single bound proves the optional-argument arity end to
+			// end: a positive start, a negative start, and a start past the end.
+			src:  `export function tail(s: string, a: number): string { return s.slice(a); }`,
+			fn:   "tail",
+			ret:  "string",
+			args: [][]any{{"hello", 0}, {"hello", 2}, {"hello", -2}, {"hello", 10}},
+		},
+		{
+			name: "substring",
+			// substring differs from slice at the edges: negatives become 0 and a
+			// start past end swaps, so the cases pin both behaviors against the
+			// engine.
+			src:  `export function sub(s: string, a: number, b: number): string { return s.substring(a, b); }`,
+			fn:   "sub",
+			ret:  "string",
+			args: [][]any{{"hello", 1, 3}, {"hello", 3, 1}, {"hello", -2, 3}, {"hello", 2, 100}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the

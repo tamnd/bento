@@ -149,6 +149,94 @@ func matchAt(hay, needle []uint16, i int) bool {
 	return true
 }
 
+// Slice returns the substring between two code-unit indices, matching
+// String.prototype.slice. Both arguments are optional (start defaults to 0, end
+// to the length), which is why the method is variadic: the lowered call passes
+// exactly the arguments the source did, and the count selects the defaults. A
+// negative index counts from the end, an index past the end clamps to the end,
+// and a start at or after the end yields the empty string. Working on the
+// code-unit view means a slice can land between the halves of an astral
+// character and return a lone surrogate, exactly as JavaScript does.
+func (s BStr) Slice(args ...float64) BStr {
+	start, end := 0, s.lengthU16
+	if len(args) >= 1 {
+		start = relIndex(args[0], s.lengthU16)
+	}
+	if len(args) >= 2 {
+		end = relIndex(args[1], s.lengthU16)
+	}
+	if start >= end {
+		return BStr{}
+	}
+	return s.sub(start, end)
+}
+
+// Substring returns the substring between two code-unit indices, matching
+// String.prototype.substring. It differs from Slice in its edge handling: a
+// negative or NaN argument becomes 0 rather than counting from the end, and if
+// start is greater than end the two are swapped rather than yielding the empty
+// string. It is variadic for the same reason Slice is.
+func (s BStr) Substring(args ...float64) BStr {
+	start, end := 0, s.lengthU16
+	if len(args) >= 1 {
+		start = clampIndex(args[0], s.lengthU16)
+	}
+	if len(args) >= 2 {
+		end = clampIndex(args[1], s.lengthU16)
+	}
+	if start > end {
+		start, end = end, start
+	}
+	return s.sub(start, end)
+}
+
+// sub returns the code units in [start, end) as a new string. The caller has
+// already clamped both bounds into [0, length] and ordered them, so the slice is
+// always valid. It goes through FromUTF16 because a substring can split an astral
+// pair into a lone surrogate that the UTF-8 backing could not hold.
+func (s BStr) sub(start, end int) BStr {
+	return FromUTF16(s.units()[start:end])
+}
+
+// toInteger applies the JavaScript ToInteger coercion an index argument gets: NaN
+// becomes 0 and every other value truncates toward zero.
+func toInteger(n float64) float64 {
+	if math.IsNaN(n) {
+		return 0
+	}
+	return math.Trunc(n)
+}
+
+// relIndex resolves a slice index that may be negative: after ToInteger, a
+// negative index counts back from the end and clamps at 0, and a positive index
+// clamps at the length. This is the String.prototype.slice index rule.
+func relIndex(i float64, length int) int {
+	n := toInteger(i)
+	l := float64(length)
+	if n < 0 {
+		if n += l; n < 0 {
+			n = 0
+		}
+	} else if n > l {
+		n = l
+	}
+	return int(n)
+}
+
+// clampIndex resolves a substring index, which has no negative-from-end rule: a
+// negative or NaN index becomes 0 and a large one clamps at the length. This is
+// the String.prototype.substring index rule.
+func clampIndex(i float64, length int) int {
+	n := toInteger(i)
+	l := float64(length)
+	if n < 0 {
+		n = 0
+	} else if n > l {
+		n = l
+	}
+	return int(n)
+}
+
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both
 // are strings. It picks the backing form once: if both sides are on the UTF-8
 // fast path the result stays UTF-8 with a single byte copy, and otherwise the

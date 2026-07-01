@@ -159,6 +159,25 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function starts(s: string, p: string): boolean { return s.startsWith(p); }`,
 		},
 		{
+			name:   "slice2",
+			golden: "func_slice2.golden",
+			// slice with both arguments; the Go method is variadic but the call
+			// passes exactly the two the source wrote.
+			src: `export function sl(s: string, a: number, b: number): string { return s.slice(a, b); }`,
+		},
+		{
+			name:   "slice1",
+			golden: "func_slice1.golden",
+			// slice with one argument exercises the optional-argument arity: the
+			// same variadic method, called with a single index.
+			src: `export function tail(s: string, a: number): string { return s.slice(a); }`,
+		},
+		{
+			name:   "substring",
+			golden: "func_substring.golden",
+			src:    `export function sub(s: string, a: number, b: number): string { return s.substring(a, b); }`,
+		},
+		{
 			name:   "modulo",
 			golden: "func_modulo.golden",
 			// % on numbers is fmod, not Go's integer remainder, so it lowers to a

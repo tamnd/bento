@@ -1,0 +1,3 @@
+func Sl(s value.BStr, a float64, b float64) value.BStr {
+	return s.Slice(a, b)
+}

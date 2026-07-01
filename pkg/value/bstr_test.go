@@ -205,3 +205,66 @@ func TestSearchMethods(t *testing.T) {
 		t.Error("StartsWith with a longer prefix = true, want false")
 	}
 }
+
+// TestSlice pins String.prototype.slice: interior ranges, defaulted arguments
+// through the variadic arity, negative-from-end bounds, an empty result when
+// start reaches end, and a slice that lands between the halves of an astral
+// character and returns a lone surrogate.
+func TestSlice(t *testing.T) {
+	h := FromGoString("hello")
+	cases := []struct {
+		name string
+		args []float64
+		want string
+	}{
+		{"interior", []float64{1, 3}, "el"},
+		{"noArgsWholeString", nil, "hello"},
+		{"oneArgTail", []float64{2}, "llo"},
+		{"negativeFromEnd", []float64{-3, -1}, "ll"},
+		{"startPastEndEmpty", []float64{3, 1}, ""},
+		{"endPastLengthClamps", []float64{2, 100}, "llo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := h.Slice(tc.args...).ToGoString(); got != tc.want {
+				t.Errorf("Slice(%v) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+
+	// "a😀b" has units a(0) high(1) low(2) b(3). Slicing [1,2) is the lone high
+	// surrogate; [1,3) is the whole emoji.
+	astral := FromGoString("a😀b")
+	half := astral.Slice(1, 2)
+	if u := half.units(); len(u) != 1 || u[0] != 0xD83D {
+		t.Errorf("Slice(1,2) units = %v, want [0xD83D]", u)
+	}
+	if got := astral.Slice(1, 3).ToGoString(); got != "😀" {
+		t.Errorf("Slice(1,3) = %q, want the emoji", got)
+	}
+}
+
+// TestSubstring pins String.prototype.substring, whose edges differ from slice:
+// a negative or NaN argument becomes 0, and a start past end swaps rather than
+// yielding the empty string.
+func TestSubstring(t *testing.T) {
+	h := FromGoString("hello")
+	cases := []struct {
+		name string
+		args []float64
+		want string
+	}{
+		{"interior", []float64{1, 3}, "el"},
+		{"swappedWhenStartAfterEnd", []float64{3, 1}, "el"},
+		{"negativeBecomesZero", []float64{-2, 3}, "hel"},
+		{"endPastLengthClamps", []float64{2, 100}, "llo"},
+		{"oneArgToEnd", []float64{2}, "llo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := h.Substring(tc.args...).ToGoString(); got != tc.want {
+				t.Errorf("Substring(%v) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}
