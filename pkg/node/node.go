@@ -186,6 +186,9 @@ func InstallNet(eng engine.Engine, loop LoopHost) error {
 	if err := installHTTP(eng, loop); err != nil {
 		return fmt.Errorf("node: install http: %w", err)
 	}
+	if err := installDNS(eng, loop); err != nil {
+		return fmt.Errorf("node: install dns: %w", err)
+	}
 	return nil
 }
 
