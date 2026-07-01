@@ -1004,6 +1004,27 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return eq, nil
 	}
 
+	// The relational operators on two strings order them by UTF-16 code unit, the
+	// Abstract Relational Comparison, which value.BStr.Compare implements as a
+	// three-way result. A Go relational operator on the struct would not compile,
+	// and comparing the UTF-8 views with Go's < would misorder any string past the
+	// BMP. So each operator lowers to a comparison of Compare against zero: a < b is
+	// a.Compare(b) < 0, and so on. Handled before the operator table so the string
+	// path emits the method call.
+	if relOp, ok := relationalToken(opText); ok && r.isString(left) && r.isString(right) {
+		l, err := r.lowerExpr(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		cmp := &ast.CallExpr{Fun: &ast.SelectorExpr{X: l, Sel: ident("Compare")}, Args: []ast.Expr{rr}}
+		return &ast.BinaryExpr{X: cmp, Op: relOp, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}}, nil
+	}
+
 	// Remainder on numbers is the one arithmetic operator that is not a Go binary
 	// operator: JavaScript % is fmod (a floating remainder that keeps the sign of
 	// the dividend), which Go spells math.Mod, not the integer-only % token. It is
@@ -1045,6 +1066,25 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// relationalToken maps a TypeScript relational operator to the Go comparison
+// token that has the same meaning against a three-way compare result: a < b is
+// Compare(a, b) < 0, and the other three follow the same shape. Only the four
+// ordering operators are here; equality is not relational and lowers separately.
+func relationalToken(op string) (token.Token, bool) {
+	switch op {
+	case "<":
+		return token.LSS, true
+	case "<=":
+		return token.LEQ, true
+	case ">":
+		return token.GTR, true
+	case ">=":
+		return token.GEQ, true
+	default:
+		return token.ILLEGAL, false
+	}
 }
 
 // bitwiseOp maps a TypeScript bitwise operator to the Go token that computes it

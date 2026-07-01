@@ -1,0 +1,3 @@
+func Before(a value.BStr, b value.BStr) bool {
+	return a.Compare(b) < 0
+}

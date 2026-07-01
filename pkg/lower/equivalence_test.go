@@ -186,6 +186,37 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"x", "x"}, {"x", "y"}, {"", ""}, {"😀", "😀"}},
 		},
 		{
+			name: "stringLess",
+			// < orders by code unit; returning the operator result directly makes the
+			// case discriminating, so the harness would catch an ordering that merely
+			// stayed self-consistent. The inputs cover a straight less-than, its
+			// reverse, equal strings, a prefix before its extension, uppercase below
+			// lowercase, and the astral case where the leading surrogate D83D orders
+			// below the BMP letter z.
+			src:  `export function lt(a: string, b: string): boolean { return a < b; }`,
+			fn:   "lt",
+			ret:  "boolean",
+			args: [][]any{{"a", "b"}, {"b", "a"}, {"x", "x"}, {"ab", "abc"}, {"Z", "a"}, {"😀", "z"}},
+		},
+		{
+			name: "stringLessEqual",
+			// <= differs from < only on equal strings, so the equal pair is the case
+			// that separates them.
+			src:  `export function le(a: string, b: string): boolean { return a <= b; }`,
+			fn:   "le",
+			ret:  "boolean",
+			args: [][]any{{"a", "b"}, {"b", "a"}, {"x", "x"}, {"ab", "abc"}},
+		},
+		{
+			name: "stringGreaterEqual",
+			// > and >= are the mirror, carried by the same Compare against zero with
+			// the flipped token; one case pins both together.
+			src:  `export function ge(a: string, b: string): boolean { return (a > b) || (a >= b); }`,
+			fn:   "ge",
+			ret:  "boolean",
+			args: [][]any{{"b", "a"}, {"a", "b"}, {"x", "x"}, {"abc", "ab"}},
+		},
+		{
 			name: "charCodeAt",
 			// A string in and a number out through a method call. The cases cover
 			// in-range indices, an out-of-range index and a negative one (both NaN

@@ -98,6 +98,35 @@ func TestConcatMixedBacking(t *testing.T) {
 	}
 }
 
+// TestCompare pins the code-unit ordering behind the string relational
+// operators: a shorter prefix orders first, equal strings compare zero, ASCII
+// orders by byte, and the astral case is the one where a code-unit compare
+// diverges from a code-point compare. The emoji U+1F600 is stored as the
+// surrogate pair D83D DE00, whose first unit D83D is below the BMP character
+// U+E000, so "" orders after the emoji by code unit even though its code
+// point is lower.
+func TestCompare(t *testing.T) {
+	cases := []struct {
+		a, b BStr
+		want int
+	}{
+		{FromGoString("a"), FromGoString("b"), -1},
+		{FromGoString("b"), FromGoString("a"), 1},
+		{FromGoString("abc"), FromGoString("abc"), 0},
+		{FromGoString("ab"), FromGoString("abc"), -1},
+		{FromGoString("abc"), FromGoString("ab"), 1},
+		{FromGoString(""), FromGoString("a"), -1},
+		{FromGoString("Z"), FromGoString("a"), -1}, // uppercase orders below lowercase
+		{FromGoString("😀"), FromGoString(""), -1},
+		{FromGoString(""), FromGoString("😀"), 1},
+	}
+	for _, c := range cases {
+		if got := c.a.Compare(c.b); got != c.want {
+			t.Errorf("%q.Compare(%q) = %d, want %d", c.a.ToGoString(), c.b.ToGoString(), got, c.want)
+		}
+	}
+}
+
 // TestConcatN pins String.prototype.concat over its argument arities: no
 // arguments returns the receiver, several arguments join in order, and a
 // surrogate-backed argument still forces the code-unit result the way a plain
