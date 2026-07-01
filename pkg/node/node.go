@@ -72,6 +72,25 @@ func HostFuncs() map[string]HostFunc {
 	return out
 }
 
+// Builtins lists the base names of the Node core modules bento ships, derived
+// from the embedded module files. The resolver uses this set to classify a bare
+// or node: specifier as a builtin, so it stays in lockstep with what actually
+// loads: adding a js/<name>.js file makes <name> resolvable with no other edit.
+func Builtins() []string {
+	entries, err := fs.ReadDir(jsFiles, "js")
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if name := e.Name(); strings.HasSuffix(name, ".js") {
+			names = append(names, strings.TrimSuffix(name, ".js"))
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // Source concatenates the embedded module files in a stable order so the loaded
 // program is deterministic. Order does not affect behavior because factories
 // are lazy, but a stable bundle keeps stack traces and caching predictable.
