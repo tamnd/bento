@@ -1,0 +1,3 @@
+func StartsAt(s value.BStr, p value.BStr, at float64) bool {
+	return s.StartsWith(p, at)
+}

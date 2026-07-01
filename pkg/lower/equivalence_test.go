@@ -256,6 +256,33 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"hello", "he"}, {"hello", "lo"}, {"hello", ""}, {"hi", "hello"}, {"😀x", "😀"}},
 		},
 		{
+			name: "endsWith",
+			// the suffix companion, covering a real suffix, a non-suffix, the empty
+			// suffix, a suffix longer than the string, and an astral suffix.
+			src:  `export function ends(s: string, p: string): boolean { return s.endsWith(p); }`,
+			fn:   "ends",
+			ret:  "boolean",
+			args: [][]any{{"hello", "lo"}, {"hello", "he"}, {"hello", ""}, {"hi", "hello"}, {"x😀", "😀"}},
+		},
+		{
+			name: "startsWithPos",
+			// startsWith with the position: the prefix must begin at it, so a prefix
+			// that matches at 0 fails at a later position and matches at its own.
+			src:  `export function startsAt(s: string, p: string, at: number): boolean { return s.startsWith(p, at); }`,
+			fn:   "startsAt",
+			ret:  "boolean",
+			args: [][]any{{"abcabc", "abc", 3}, {"abcabc", "abc", 1}, {"abcabc", "bc", 1}, {"abc", "", 99}},
+		},
+		{
+			name: "endsWithPos",
+			// endsWith with the end position: the window ends there, so a prefix of the
+			// string reads as a suffix of the shortened window.
+			src:  `export function endsAt(s: string, p: string, at: number): boolean { return s.endsWith(p, at); }`,
+			fn:   "endsAt",
+			ret:  "boolean",
+			args: [][]any{{"hello", "hell", 4}, {"hello", "lo", 4}, {"hello", "hel", 3}},
+		},
+		{
 			name: "slice2",
 			// slice with both bounds over a BMP receiver, covering an interior
 			// range, the full string, negative-from-end bounds, an empty result

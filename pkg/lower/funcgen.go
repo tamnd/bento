@@ -711,9 +711,11 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, ok
 	case "lastIndexOf":
 		return "LastIndexOf", []argKind{argString, argNumber}, 1, true
 	case "includes":
-		return "Includes", []argKind{argString}, 1, true
+		return "Includes", []argKind{argString, argNumber}, 1, true
 	case "startsWith":
-		return "StartsWith", []argKind{argString}, 1, true
+		return "StartsWith", []argKind{argString, argNumber}, 1, true
+	case "endsWith":
+		return "EndsWith", []argKind{argString, argNumber}, 1, true
 	case "slice":
 		return "Slice", []argKind{argNumber, argNumber}, 0, true
 	case "substring":
