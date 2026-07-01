@@ -1,41 +1,69 @@
 package frontend
 
-import "testing"
+import (
+	"testing"
 
-import "github.com/tamnd/bento/pkg/frontend/adapter"
+	"github.com/tamnd/bento/pkg/frontend/adapter"
+)
 
-// TestProgramQueriesOverFake builds a small typed program by hand through the
-// fake adapter and drives every query the partitioner and lowering rely on. It
-// proves the frontend vocabulary round-trips: handles go in, bento value types
-// come out, and the structural queries reach the shapes a real checker would
-// report. When the real typescript-go adapter lands behind the same interface,
-// this same surface answers the same way.
-func TestProgramQueriesOverFake(t *testing.T) {
-	f := adapter.NewFake()
+// loadOne compiles src as /m.ts through the real checker and fails on any type
+// error, so a test that reaches its queries knows the program was well typed.
+func loadOne(t *testing.T, src string) *Program {
+	t.Helper()
+	prog, err := Load(LoadOptions{
+		Dir:   "/",
+		Roots: []string{"/m.ts"},
+		FS:    mapFS{files: map[string]string{"/m.ts": src}},
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, d := range prog.Diagnostics() {
+		if d.Category == CategoryError {
+			t.Fatalf("unexpected type error: %s", d.Message)
+		}
+	}
+	return prog
+}
 
-	num := f.Prim(TypeNumber)
-	str := f.Prim(TypeString)
-	point := f.Object(f.Prop("x", num), f.Prop("y", num))
+// collectKind gathers every node of a kind, depth first, in source order.
+func collectKind(p *Program, nodes []Node, kind NodeKind, out *[]Node) {
+	for _, n := range nodes {
+		if n.Kind() == kind {
+			*out = append(*out, n)
+		}
+		collectKind(p, p.Children(n), kind, out)
+	}
+}
 
-	// A use of `p.x` inside the body narrowed to number, and a union-typed
-	// identifier, both children of the function so a consumer reaches them by
-	// walking the body, the real partitioner/lowering path.
-	use := f.Node(adapter.NodePropertyAccessExpression, num)
-	un := f.Node(adapter.NodeIdentifier, f.Union(str, num))
-	fn := f.Func("dist", f.Sig([]adapter.ParamInfo{f.Param("p", point)}, num), use, un)
+// firstOfKind returns the first node of a kind anywhere under nodes.
+func firstOfKind(t *testing.T, p *Program, nodes []Node, kind NodeKind) Node {
+	t.Helper()
+	var out []Node
+	collectKind(p, nodes, kind, &out)
+	if len(out) == 0 {
+		t.Fatalf("no node of kind %v found", kind)
+	}
+	return out[0]
+}
 
-	a, handle := f.Program(fn)
-	p := Wrap(a, handle)
+// TestProgramQueriesOverRealCompile drives every query the partitioner and
+// lowering rely on over a real checked program, proving the frontend vocabulary
+// round-trips against the checker's own answers: handles go in, bento value
+// types come out, and the structural queries reach the real shapes.
+func TestProgramQueriesOverRealCompile(t *testing.T) {
+	p := loadOne(t, "export function dist(p: { x: number; y: number }, tag: string | number): number { const q = p.x; return q; }\n")
 
 	roots := p.SourceFiles()
 	if len(roots) != 1 {
 		t.Fatalf("SourceFiles = %d roots, want 1", len(roots))
 	}
-	if k := roots[0].Kind(); k != NodeFunctionDeclaration {
-		t.Fatalf("root kind = %v, want function declaration", k)
+	fn := firstOfKind(t, p, roots, NodeFunctionDeclaration)
+	if fn.Kind() != NodeFunctionDeclaration {
+		t.Fatalf("no function declaration found under the source file")
 	}
 
-	sym, ok := p.SymbolAt(roots[0])
+	sym, ok := p.SymbolAt(fn)
 	if !ok {
 		t.Fatal("SymbolAt returned no symbol for the function")
 	}
@@ -46,21 +74,21 @@ func TestProgramQueriesOverFake(t *testing.T) {
 		t.Errorf("symbol flags = %b, want SymbolFunction set", sym.Flags)
 	}
 
-	sig, ok := p.SignatureAt(roots[0])
+	sig, ok := p.SignatureAt(fn)
 	if !ok {
 		t.Fatal("SignatureAt returned no signature")
 	}
-	if len(sig.Params) != 1 || sig.Params[0].Name != "p" {
-		t.Fatalf("signature params = %+v, want one param named p", sig.Params)
+	if len(sig.Params) != 2 || sig.Params[0].Name != "p" || sig.Params[1].Name != "tag" {
+		t.Fatalf("signature params = %+v, want p and tag", sig.Params)
 	}
-	if sig.MinArgs != 1 {
-		t.Errorf("MinArgs = %d, want 1", sig.MinArgs)
+	if sig.MinArgs != 2 {
+		t.Errorf("MinArgs = %d, want 2", sig.MinArgs)
 	}
 	if sig.Return.Flags&TypeNumber == 0 {
 		t.Errorf("return flags = %b, want TypeNumber set", sig.Return.Flags)
 	}
 	if sig.Params[0].Type.Flags&TypeObject == 0 {
-		t.Errorf("param type flags = %b, want TypeObject set", sig.Params[0].Type.Flags)
+		t.Errorf("param p type flags = %b, want TypeObject set", sig.Params[0].Type.Flags)
 	}
 
 	props := p.Properties(sig.Params[0].Type)
@@ -73,54 +101,55 @@ func TestProgramQueriesOverFake(t *testing.T) {
 		}
 	}
 
-	// Walk the body the way a consumer does, then query the wrapped nodes.
-	body := p.Children(roots[0])
-	if len(body) != 2 {
-		t.Fatalf("body = %d nodes, want 2", len(body))
-	}
-
-	// The narrowed type at the first use is number.
-	if got := p.TypeAt(body[0]); got.Flags&TypeNumber == 0 {
-		t.Errorf("TypeAt(use) flags = %b, want number", got.Flags)
-	}
-
-	// The union identifier round-trips through UnionMembers.
-	members := p.UnionMembers(p.TypeAt(body[1]))
+	// The union parameter round-trips through UnionMembers.
+	members := p.UnionMembers(sig.Params[1].Type)
 	if len(members) != 2 {
 		t.Fatalf("union members = %d, want 2", len(members))
 	}
-	if members[0].Flags&TypeString == 0 || members[1].Flags&TypeNumber == 0 {
-		t.Errorf("union members = %b,%b, want string,number", members[0].Flags, members[1].Flags)
+	strFirst := members[0].Flags&TypeString != 0 && members[1].Flags&TypeNumber != 0
+	numFirst := members[0].Flags&TypeNumber != 0 && members[1].Flags&TypeString != 0
+	if !strFirst && !numFirst {
+		t.Errorf("union members = %b,%b, want string and number in some order", members[0].Flags, members[1].Flags)
+	}
+
+	// The property access p.x inside the body carries the number type.
+	pa := firstOfKind(t, p, p.Children(fn), NodePropertyAccessExpression)
+	if pa.Kind() != NodePropertyAccessExpression {
+		t.Fatal("no property access expression found in the body")
+	}
+	if got := p.TypeAt(pa); got.Flags&TypeNumber == 0 {
+		t.Errorf("TypeAt(p.x) flags = %b, want number", got.Flags)
 	}
 }
 
 // TestDeclaredTypeAtReportsNarrowing proves the partitioner can tell a narrowed
 // use from its declared type, which is how it decides a union parameter is still
-// lowerable when every branch narrows to a concrete type.
+// lowerable when a guard narrows it to a concrete type. The checker narrows x to
+// number inside the typeof guard while its declared type stays string | number.
 func TestDeclaredTypeAtReportsNarrowing(t *testing.T) {
-	f := adapter.NewFake()
-	num := f.Prim(TypeNumber)
-	str := f.Prim(TypeString)
+	p := loadOne(t, "export function f(x: string | number): number { if (typeof x === \"number\") { return x; } return 0; }\n")
+	fn := firstOfKind(t, p, p.SourceFiles(), NodeFunctionDeclaration)
 
-	// A narrowed view: the value is number here, but its declared type is
-	// string | number.
-	narrowed := f.Prim(TypeNumber)
-	narrowed.Declared = f.Union(str, num)
-	use := f.Node(adapter.NodeIdentifier, narrowed)
+	var idents []Node
+	collectKind(p, []Node{fn}, NodeIdentifier, &idents)
 
-	a, handle := f.Program(f.Func("f", f.Sig(nil, num), use))
-	p := Wrap(a, handle)
-
-	body := p.Children(p.SourceFiles()[0])
-	declared, narrow, ok := p.DeclaredTypeAt(body[0])
-	if !ok {
-		t.Fatal("DeclaredTypeAt reported no type")
+	found := false
+	for _, id := range idents {
+		sym, ok := p.SymbolAt(id)
+		if !ok || sym.Name != "x" {
+			continue
+		}
+		declared, narrow, ok := p.DeclaredTypeAt(id)
+		if !ok {
+			continue
+		}
+		// The narrowed use inside the guard: declared union, narrowed to number.
+		if declared.Flags&TypeUnion != 0 && narrow.Flags&TypeNumber != 0 && narrow.Flags&TypeUnion == 0 {
+			found = true
+		}
 	}
-	if declared.Flags&TypeUnion == 0 {
-		t.Errorf("declared flags = %b, want union", declared.Flags)
-	}
-	if narrow.Flags&TypeNumber == 0 {
-		t.Errorf("narrowed flags = %b, want number", narrow.Flags)
+	if !found {
+		t.Fatal("no narrowed use of x reported number against a declared union")
 	}
 }
 

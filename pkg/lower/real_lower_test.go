@@ -2,15 +2,21 @@ package lower
 
 import (
 	"errors"
+	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
+var update = flag.Bool("update", false, "rewrite testdata golden files")
+
 // realFS is an in-memory FileSystem for compiling a single snippet through the
-// real checker. It is the lower package's own copy because frontend's test
-// helper is unexported.
+// real checker. Every lowering test drives the renderer from a real compile,
+// which is what proves the mapping table holds against the checker's own types
+// rather than a hand-built stand-in.
 type realFS struct{ files map[string]string }
 
 func (m realFS) ReadFile(path string) (string, bool) { s, ok := m.files[path]; return s, ok }
@@ -29,11 +35,9 @@ func (m realFS) DirectoryExists(path string) bool {
 	return false
 }
 
-// typeOfDecl compiles src as /m.ts and returns the type of the first variable
-// declaration's name, the type the renderer lowers. Driving the renderer from a
-// real compile is what proves the mapping table holds against the checker's own
-// types, not a hand-built stand-in.
-func typeOfDecl(t *testing.T, src string) (*frontend.Program, frontend.Type) {
+// compile loads src as /m.ts through the real checker and fails on any type
+// error, so a test that reaches the renderer knows the program was well typed.
+func compile(t *testing.T, src string) *frontend.Program {
 	t.Helper()
 	prog, err := frontend.Load(frontend.LoadOptions{
 		Dir:   "/",
@@ -48,26 +52,34 @@ func typeOfDecl(t *testing.T, src string) (*frontend.Program, frontend.Type) {
 			t.Fatalf("unexpected type error in snippet: %s", d.Message)
 		}
 	}
-	decl := findKind(prog, prog.SourceFiles(), frontend.NodeVariableDeclaration)
-	if decl == nil {
+	return prog
+}
+
+// typeOfDecl compiles src and returns the type of the first variable
+// declaration's name, the type the renderer lowers.
+func typeOfDecl(t *testing.T, src string) (*frontend.Program, frontend.Type) {
+	t.Helper()
+	prog := compile(t, src)
+	var decls []frontend.Node
+	collectKind(prog, prog.SourceFiles(), frontend.NodeVariableDeclaration, &decls)
+	if len(decls) == 0 {
 		t.Fatal("no variable declaration in snippet")
 	}
-	name := prog.Children(decl)[0]
+	name := prog.Children(decls[0])[0]
 	return prog, prog.TypeAt(name)
 }
 
-func findKind(prog *frontend.Program, nodes []frontend.Node, kind frontend.NodeKind) frontend.Node {
+// collectKind gathers every node of a kind, depth first, in source order.
+func collectKind(prog *frontend.Program, nodes []frontend.Node, kind frontend.NodeKind, out *[]frontend.Node) {
 	for _, n := range nodes {
 		if n.Kind() == kind {
-			return n
+			*out = append(*out, n)
 		}
-		if got := findKind(prog, prog.Children(n), kind); got != nil {
-			return got
-		}
+		collectKind(prog, prog.Children(n), kind, out)
 	}
-	return nil
 }
 
+// renderReal renders the type of the first variable declaration in src.
 func renderReal(t *testing.T, src string) (*Renderer, string, error) {
 	t.Helper()
 	prog, ty := typeOfDecl(t, src)
@@ -76,8 +88,29 @@ func renderReal(t *testing.T, src string) (*Renderer, string, error) {
 	return r, got, err
 }
 
-// TestRealPrimitivesRender pins the primitive mappings against the real checker:
-// each annotated primitive lowers to its Go counterpart.
+// renderEachDecl renders the type of every top-level variable declaration in
+// source order through one renderer, so an interning or naming test can see how
+// several shapes in one program share (or do not share) generated declarations.
+func renderEachDecl(t *testing.T, src string) (*Renderer, []string) {
+	t.Helper()
+	prog := compile(t, src)
+	var decls []frontend.Node
+	collectKind(prog, prog.SourceFiles(), frontend.NodeVariableDeclaration, &decls)
+	r := NewRenderer(prog)
+	got := make([]string, 0, len(decls))
+	for _, d := range decls {
+		name := prog.Children(d)[0]
+		s, err := r.RenderType(prog.TypeAt(name))
+		if err != nil {
+			t.Fatalf("RenderType: %v", err)
+		}
+		got = append(got, s)
+	}
+	return r, got
+}
+
+// TestRealPrimitivesRender pins the section 3 to 8 primitive mappings against the
+// real checker: each annotated primitive lowers to its Go counterpart.
 func TestRealPrimitivesRender(t *testing.T) {
 	cases := []struct {
 		name, src, want string
@@ -102,8 +135,7 @@ func TestRealPrimitivesRender(t *testing.T) {
 }
 
 // TestRealArrayRenders pins that a real number[] lowers to the Array header and a
-// real string[][] nests it, the same rule the fake test asserts, now against the
-// checker's own array types.
+// real string[][] nests it (section 11), against the checker's own array types.
 func TestRealArrayRenders(t *testing.T) {
 	_, got, err := renderReal(t, "const x: number[] = [];")
 	if err != nil {
@@ -123,26 +155,78 @@ func TestRealArrayRenders(t *testing.T) {
 }
 
 // TestRealObjectRendersToStructPointer proves a real inferred object type lowers
-// to a pointer to a generated struct with one declaration, the fixed-shape rule
-// of section 12 holding against the checker's structural type.
+// to a pointer to a generated struct with exported fields in a stable order
+// (section 12), pinned by a golden.
 func TestRealObjectRendersToStructPointer(t *testing.T) {
 	r, got, err := renderReal(t, "const x = { x: 1, y: 2 };")
 	if err != nil {
 		t.Fatalf("RenderType(point): %v", err)
 	}
-	if got == "" || got[0] != '*' {
-		t.Fatalf("RenderType(point) = %q, want a pointer to a struct", got)
+	if want := "*ObjXY"; got != want {
+		t.Errorf("RenderType(point) = %q, want %q", got, want)
 	}
 	decls := r.Decls()
 	if len(decls) != 1 {
 		t.Fatalf("got %d decls, want 1", len(decls))
 	}
+	checkGolden(t, "point_struct.golden", decls[0].Source)
+}
+
+// TestRealObjectFieldTypesLower proves a nested object field lowers to a pointer
+// to its own generated struct and a primitive field to its Go type, pinned by a
+// golden over both declarations.
+func TestRealObjectFieldTypesLower(t *testing.T) {
+	r, got, err := renderReal(t, `const x = { origin: { x: 1, y: 2 }, label: "s" };`)
+	if err != nil {
+		t.Fatalf("RenderType(shape): %v", err)
+	}
+	if want := "*ObjLabelOrigin"; got != want {
+		t.Errorf("RenderType(shape) = %q, want %q", got, want)
+	}
+	decls := r.Decls()
+	if len(decls) != 2 {
+		t.Fatalf("got %d decls, want 2 (the outer shape and the nested point)", len(decls))
+	}
+	var all strings.Builder
+	for _, d := range decls {
+		all.WriteString(d.Source)
+	}
+	checkGolden(t, "nested_struct.golden", all.String())
+}
+
+// TestRealSameShapeInternsToOneStruct pins the interning rule of section 12: one
+// object type used in two fields, so both fields share a single type identity,
+// lowers to one Go struct, not two.
+func TestRealSameShapeInternsToOneStruct(t *testing.T) {
+	r, _ := renderEachDecl(t, "type Point = { x: number; y: number };\ndeclare const pair: { a: Point; b: Point };")
+	names := map[string]int{}
+	for _, d := range r.Decls() {
+		names[d.Name]++
+	}
+	if names["ObjXY"] != 1 {
+		t.Errorf("ObjXY emitted %d times, want exactly 1 (interned)", names["ObjXY"])
+	}
+}
+
+// TestRealDistinctShapesShareBaseNameGetSuffix pins the collision rule of section
+// 29: two different shapes that derive the same base name get distinct Go names.
+func TestRealDistinctShapesShareBaseNameGetSuffix(t *testing.T) {
+	r, _ := renderEachDecl(t, "declare const outer: { a: { x: number }; b: { x: string } };")
+	seen := map[string]bool{}
+	for _, d := range r.Decls() {
+		if seen[d.Name] {
+			t.Fatalf("duplicate generated name %q", d.Name)
+		}
+		seen[d.Name] = true
+	}
+	if !seen["ObjX"] || !seen["ObjX_2"] {
+		t.Errorf("want both ObjX and ObjX_2, got names %v", seen)
+	}
 }
 
 // TestRealStringLiteralUnionRenders drives the enum lowering from a real compile:
-// a value typed as a closed union of string literals lowers to a generated
-// integer tag enum, and the enum type plus its const block is emitted. This is
-// the section 10 rule holding against the checker's own union type, not a fake.
+// a closed union of string literals lowers to a generated integer tag enum plus
+// its const block (section 10), pinned by a golden.
 func TestRealStringLiteralUnionRenders(t *testing.T) {
 	r, got, err := renderReal(t, `const x: "circle" | "rect" = "circle";`)
 	if err != nil {
@@ -155,11 +239,29 @@ func TestRealStringLiteralUnionRenders(t *testing.T) {
 	if len(decls) != 1 {
 		t.Fatalf("got %d decls, want 1", len(decls))
 	}
-	if !strings.Contains(decls[0].Source, "type LitCircleRect uint8") {
-		t.Errorf("enum decl missing the tag type:\n%s", decls[0].Source)
+	checkGolden(t, "string_enum.golden", decls[0].Source)
+}
+
+// TestRealSameStringUnionInternsToOneEnum pins that one string-literal union type
+// used in two fields lowers to one enum, not two.
+func TestRealSameStringUnionInternsToOneEnum(t *testing.T) {
+	r, _ := renderEachDecl(t, "type Dir = \"north\" | \"south\";\ndeclare const d: { from: Dir; to: Dir };")
+	names := map[string]int{}
+	for _, d := range r.Decls() {
+		names[d.Name]++
 	}
-	if !strings.Contains(decls[0].Source, "LitCircleRectCircle LitCircleRect = iota") {
-		t.Errorf("enum decl missing the first tag const:\n%s", decls[0].Source)
+	if names["LitNorthSouth"] != 1 {
+		t.Errorf("LitNorthSouth emitted %d times, want exactly 1 (interned)", names["LitNorthSouth"])
+	}
+}
+
+// TestRealNonIdentifierStringUnionHandsBack pins that a string-literal union whose
+// member is not a Go identifier has no clean tag name yet, so it hands back.
+func TestRealNonIdentifierStringUnionHandsBack(t *testing.T) {
+	_, _, err := renderReal(t, `const x: "north" | "due east" = "north";`)
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderType(union with a spaced member) err = %v, want a *NotYetLowerable", err)
 	}
 }
 
@@ -180,5 +282,48 @@ func TestRealUnlowerableHandsBack(t *testing.T) {
 				t.Fatalf("RenderType(%s) err = %v, want *NotYetLowerable", tc.name, err)
 			}
 		})
+	}
+}
+
+// TestRealOptionalPropertyHandsBack pins that an optional property is not
+// lowerable until the optional tagged type lands, so the whole object hands back.
+func TestRealOptionalPropertyHandsBack(t *testing.T) {
+	_, _, err := renderReal(t, "declare const x: { host: string; port?: number };")
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderType(object with optional) err = %v, want a *NotYetLowerable", err)
+	}
+}
+
+// TestRealNonIdentifierPropertyHandsBack pins that a property name Go cannot spell
+// belongs in the side table, not a field, so the object hands back for now.
+func TestRealNonIdentifierPropertyHandsBack(t *testing.T) {
+	_, _, err := renderReal(t, `declare const x: { "has space": number };`)
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderType(object with non-identifier key) err = %v, want a *NotYetLowerable", err)
+	}
+}
+
+// checkGolden compares got against the named golden file, rewriting it under
+// -update.
+func checkGolden(t *testing.T, name, got string) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *update {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden %s: %v (run with -update to create)", name, err)
+	}
+	if got != string(want) {
+		t.Errorf("golden %s mismatch:\n--- got ---\n%s\n--- want ---\n%s", name, got, want)
 	}
 }

@@ -6,14 +6,14 @@
 // when upstream renames a function or reshapes a type, exactly one package in
 // bento changes.
 //
-// As of mid-2026 typescript-go exposes no public programmatic API at all: its
-// checker, binder, and parser packages are under internal/, so no other module
-// can import them. The real adapter is therefore blocked upstream until the
-// stable API lands in TypeScript 7.1 (or bento ships a fork with a public shim).
-// Until then the interface below is the stable seam every downstream pass codes
-// against, and FakeAdapter (fake.go) is a working second implementation used by
-// the partitioner and lowering tests, exactly the substitutability this design
-// exists to provide.
+// Upstream typescript-go keeps its checker, binder, and parser under internal/,
+// so no other module can import them. Rather than wait for the stable TypeScript
+// 7.1 API, bento consumes a fork (tamnd/typescript) that adds one additive
+// shim/ package re-exporting those internals; the fork diff stays additive so it
+// rebases cleanly. RealAdapter (real.go) is the sole implementation, built over
+// that shim at a pinned revision. The interface below is the stable seam every
+// downstream pass codes against, and it is the only path: there is no test
+// double, so partitioner and lowering tests all drive the real checker.
 package adapter
 
 // ProgramHandle is an opaque handle to a built program. No typescript-go type
