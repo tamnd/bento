@@ -239,8 +239,14 @@ __bento_defineModule("http", function (module, exports, require) {
         if (args.length >= 2 && typeof args[1] === "string") host = args[1];
       }
       if (cb) this.once("listening", cb);
-      __bento_http_listen(this._id, port, host);
+      this._bind(port, host);
       return this;
+    }
+    // _bind is the transport hook listen calls once it has a port and host. The
+    // plain server binds TCP; https.Server overrides it to bind TLS with the same
+    // server id, so it reuses this whole class unchanged.
+    _bind(port, host) {
+      __bento_http_listen(this._id, port, host);
     }
     address() {
       return this._address;

@@ -72,6 +72,7 @@ func (h *httpBridge) hostFuncs() map[string]HostFunc {
 	return map[string]HostFunc{
 		"__bento_http_createServer": h.createServer,
 		"__bento_http_listen":       h.listen,
+		"__bento_http_listenTLS":    h.listenTLS,
 		"__bento_http_close":        h.close,
 		"__bento_http_resume":       h.resume,
 		"__bento_http_writeHead":    h.writeHead,
@@ -113,6 +114,15 @@ func (h *httpBridge) listen(args []any) (any, error) {
 		h.emit("__bento_http_dispatchServerError", id, errCode(err), err.Error())
 		return nil, nil
 	}
+	h.serveListener(srv, id, ln)
+	return nil, nil
+}
+
+// serveListener wires a bound listener into the server record, takes a loop
+// reference, announces listening, and serves on a pool goroutine. It is shared
+// by the plain and TLS listen paths; for TLS the listener passed in is already
+// wrapped so Serve accepts connections that have completed the handshake.
+func (h *httpBridge) serveListener(srv *httpServer, id int64, ln net.Listener) {
 	srv.ln = ln
 	gosrv := &http.Server{Handler: h.handler(id)}
 	srv.gosrv = gosrv
@@ -135,7 +145,6 @@ func (h *httpBridge) listen(args []any) (any, error) {
 		}
 		h.emit("__bento_http_dispatchClose", id)
 	})
-	return nil, nil
 }
 
 // handler is the Go http.Handler for one server. It registers the exchange,
