@@ -69,6 +69,9 @@ func Install(eng engine.Engine) error {
 // (js/http.js and friends), so this only has to register the Go host functions.
 // The loop must be the same one the runtime pumps.
 func InstallNet(eng engine.Engine, loop LoopHost) error {
+	if err := installNet(eng, loop); err != nil {
+		return fmt.Errorf("node: install net: %w", err)
+	}
 	if err := installHTTP(eng, loop); err != nil {
 		return fmt.Errorf("node: install http: %w", err)
 	}
