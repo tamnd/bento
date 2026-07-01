@@ -96,6 +96,18 @@ func TestRenderFuncGoldens(t *testing.T) {
 }`,
 		},
 		{
+			name:   "logical",
+			golden: "func_logical.golden",
+			// && and || on boolean operands map to Go's short-circuit operators,
+			// so a compound range check lowers to one Go condition.
+			src: `export function between(x: number, lo: number, hi: number): number {
+  if (x >= lo && x <= hi) {
+    return 1;
+  }
+  return 0;
+}`,
+		},
+		{
 			name:   "for_loop",
 			golden: "func_for.golden",
 			// a C-style for becomes a Go block holding the let declaration and a

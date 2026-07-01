@@ -134,6 +134,20 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]float64{{0}, {4}, {10}},
 		},
 		{
+			name: "logical",
+			src: `export function between(x: number, lo: number, hi: number): number {
+  if (x >= lo && x <= hi) {
+    return 1;
+  }
+  if (x < lo || x > hi) {
+    return -1;
+  }
+  return 0;
+}`,
+			fn:   "between",
+			args: [][]float64{{5, 0, 10}, {-1, 0, 10}, {11, 0, 10}, {0, 0, 10}, {10, 0, 10}},
+		},
+		{
 			name: "crossCall",
 			src: `export function square(x: number): number {
   return x * x;
