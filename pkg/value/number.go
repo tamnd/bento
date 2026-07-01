@@ -41,6 +41,47 @@ func ToInt32(n float64) int32 {
 	return int32(ToUint32(n))
 }
 
+// Round rounds a number to the nearest integer, Math.round. It is not math.Round:
+// JavaScript breaks a tie by rounding toward +Infinity (Math.round(2.5) is 3 and
+// Math.round(-2.5) is -2), where Go's math.Round rounds a tie away from zero
+// (math.Round(-2.5) is -3). Rounding down and then bumping when the fraction
+// reaches one half gives the +Infinity tie-break directly, and it avoids the
+// floor(x+0.5) trap where a value just under one half like 0.49999999999999994
+// adds up to 1.0 and rounds the wrong way. NaN and the infinities pass through.
+// A result of zero keeps the sign of x, so Math.round(-0.4) stays -0 like the
+// specification requires.
+func Round(x float64) float64 {
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return x
+	}
+	f := math.Floor(x)
+	r := f
+	if x-f >= 0.5 {
+		r = f + 1
+	}
+	if r == 0 && math.Signbit(x) {
+		return math.Copysign(0, -1)
+	}
+	return r
+}
+
+// Sign returns the sign of a number, Math.sign: 1 for a positive number, -1 for a
+// negative one, and the argument itself for zero or NaN. Go has no math.Sign, and
+// returning x for the zero and NaN cases is what keeps the signed zeros and NaN
+// flowing through unchanged the way the specification asks.
+func Sign(x float64) float64 {
+	if math.IsNaN(x) {
+		return x
+	}
+	if x > 0 {
+		return 1
+	}
+	if x < 0 {
+		return -1
+	}
+	return x
+}
+
 // maxSafeInteger is 2^53 - 1, Number.MAX_SAFE_INTEGER: the largest integer that
 // has no other double sharing its bits, so integers up to it round-trip exactly.
 const maxSafeInteger = 9007199254740991.0

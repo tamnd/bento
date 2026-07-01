@@ -533,7 +533,7 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 // receiver is not lowered, since Math is a namespace, not a value: it becomes the
 // math package qualifier.
 func (r *Renderer) mathCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
-	goName, arity, ok := mathMethod(method)
+	pkg, goName, arity, ok := mathMethod(method)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "Math." + method + " is a later slice"}
 	}
@@ -550,6 +550,10 @@ func (r *Renderer) mathCall(method string, argNodes []frontend.Node) (ast.Expr, 
 			return nil, err
 		}
 		args = append(args, lowered)
+	}
+	if pkg == valuePkg {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
 	}
 	r.requireImport("math")
 	return &ast.CallExpr{Fun: sel("math", goName), Args: args}, nil
@@ -600,35 +604,41 @@ func numberMethod(name string) (goName string, ok bool) {
 	}
 }
 
-// mathMethod maps a JavaScript Math method to the Go math function that computes
-// the same value, with the argument count. Only the methods whose float64
-// semantics match JavaScript's number semantics exactly are here: floor, ceil,
-// trunc, abs, and sqrt are IEEE operations that agree bit for bit, and pow, min,
-// and max fold two numbers with the same NaN and signed-zero rules. Left out on
-// purpose: round, whose half-way rule rounds toward +Infinity where Go rounds
-// away from zero; sign, which has no direct Go function; and the transcendental
-// functions (sin, log, exp), whose last-bit results are not guaranteed identical
-// across two libm implementations. Each is a later slice.
-func mathMethod(name string) (goName string, arity int, ok bool) {
+// mathMethod maps a JavaScript Math method to the Go function that computes the
+// same value, with the package it lives in and the argument count. Most map
+// straight onto the Go math package: floor, ceil, trunc, abs, and sqrt are IEEE
+// operations that agree bit for bit, and pow, min, and max fold two numbers with
+// the same NaN and signed-zero rules. round and sign map to the value package
+// instead, because JavaScript's rules differ from Go's: Math.round breaks a tie
+// toward +Infinity where math.Round rounds away from zero, and Go has no math.Sign
+// at all, so value.Round and value.Sign carry the exact semantics. Left out on
+// purpose: the transcendental functions (sin, log, exp), whose last-bit results
+// are not guaranteed identical across two libm implementations. Each is a later
+// slice.
+func mathMethod(name string) (pkg, goName string, arity int, ok bool) {
 	switch name {
 	case "floor":
-		return "Floor", 1, true
+		return "math", "Floor", 1, true
 	case "ceil":
-		return "Ceil", 1, true
+		return "math", "Ceil", 1, true
 	case "trunc":
-		return "Trunc", 1, true
+		return "math", "Trunc", 1, true
 	case "abs":
-		return "Abs", 1, true
+		return "math", "Abs", 1, true
 	case "sqrt":
-		return "Sqrt", 1, true
+		return "math", "Sqrt", 1, true
 	case "pow":
-		return "Pow", 2, true
+		return "math", "Pow", 2, true
 	case "min":
-		return "Min", 2, true
+		return "math", "Min", 2, true
 	case "max":
-		return "Max", 2, true
+		return "math", "Max", 2, true
+	case "round":
+		return valuePkg, "Round", 1, true
+	case "sign":
+		return valuePkg, "Sign", 1, true
 	default:
-		return "", 0, false
+		return "", "", 0, false
 	}
 }
 
