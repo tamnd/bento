@@ -334,6 +334,23 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{3, 7}, {7, 3}, {4, 4}, {-1, -5}},
 		},
 		{
+			name: "mathRound",
+			// the half-way inputs are where JavaScript and Go's math.Round disagree:
+			// 2.5 rounds to 3 both ways, but -2.5 rounds to -2 in JavaScript (toward
+			// +Infinity) and -3 in Go, so this case fails unless value.Round is used.
+			src:  `export function rnd(x: number): number { return Math.round(x); }`,
+			fn:   "rnd",
+			args: [][]any{{2.5}, {-2.5}, {2.4}, {-2.6}, {0}},
+		},
+		{
+			name: "mathSign",
+			// sign over positive, negative, and zero; the zero passes through so both
+			// sides print the same, and the nonzero cases give the constant one.
+			src:  `export function sgn(x: number): number { return Math.sign(x); }`,
+			fn:   "sgn",
+			args: [][]any{{5}, {-5}, {0}, {0.001}, {-0.001}},
+		},
+		{
 			name: "bitAndOrXor",
 			// the three logical bitwise operators over positive, negative (which
 			// exercises the two's-complement ToInt32 wrap), and zero operands.

@@ -69,6 +69,69 @@ func TestNumberPredicates(t *testing.T) {
 
 // TestToInt32 pins the ECMAScript ToInt32 coercion: the same steps as ToUint32
 // but a value at or above 2^31 reads back as its negative two's-complement form.
+// TestRound pins Math.round: nearest integer with a tie broken toward +Infinity,
+// the tricky just-under-one-half value staying down, and a zero result keeping the
+// sign of the input.
+func TestRound(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want float64
+	}{
+		{2.5, 3},
+		{-2.5, -2}, // tie rounds toward +Infinity, not away from zero
+		{2.4, 2},
+		{-2.4, -2},
+		{2.6, 3},
+		{-2.6, -3},
+		{0.49999999999999994, 0}, // just under one half must not round up
+		{0.5, 1},
+		{-0.5, 0}, // returns -0, checked for sign below
+	}
+	for _, c := range cases {
+		if got := Round(c.in); got != c.want {
+			t.Errorf("Round(%v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+	if got := Round(-0.4); !math.Signbit(got) || got != 0 {
+		t.Errorf("Round(-0.4) = %v, want -0", got)
+	}
+	if got := Round(-0.5); !math.Signbit(got) || got != 0 {
+		t.Errorf("Round(-0.5) = %v, want -0", got)
+	}
+	if got := Round(math.NaN()); !math.IsNaN(got) {
+		t.Errorf("Round(NaN) = %v, want NaN", got)
+	}
+	if got := Round(math.Inf(1)); !math.IsInf(got, 1) {
+		t.Errorf("Round(+Inf) = %v, want +Inf", got)
+	}
+}
+
+// TestSign pins Math.sign: one for positive, minus one for negative, and the
+// argument itself for the zeros and NaN, which keeps the signed zeros intact.
+func TestSign(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want float64
+	}{
+		{3, 1},
+		{-3, -1},
+		{0.0001, 1},
+		{-0.0001, -1},
+		{0, 0},
+	}
+	for _, c := range cases {
+		if got := Sign(c.in); got != c.want {
+			t.Errorf("Sign(%v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+	if got := Sign(math.Copysign(0, -1)); !math.Signbit(got) || got != 0 {
+		t.Errorf("Sign(-0) = %v, want -0", got)
+	}
+	if got := Sign(math.NaN()); !math.IsNaN(got) {
+		t.Errorf("Sign(NaN) = %v, want NaN", got)
+	}
+}
+
 func TestToInt32(t *testing.T) {
 	cases := []struct {
 		in   float64
