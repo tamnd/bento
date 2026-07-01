@@ -34,6 +34,9 @@ type httpBridge struct {
 	// raw connection is adopted here so the upgrade event can hand JavaScript a
 	// real net.Socket, which is what the ws package targets.
 	net *netBridgeState
+	// agents holds the http.Client per Agent id; connection pooling lives in each
+	// client's Transport. Id 0 is the implicit default client.
+	agents map[int64]*http.Client
 }
 
 // httpServer is one bound listener and its Go server. gosrv and ln are set once
@@ -64,6 +67,7 @@ func installHTTP(eng engine.Engine, loop LoopHost, net *netBridgeState) error {
 		servers:   map[int64]*httpServer{},
 		exchanges: map[int64]*httpExchange{},
 		net:       net,
+		agents:    map[int64]*http.Client{},
 	}
 	for name, fn := range h.hostFuncs() {
 		if err := eng.Register(name, fn); err != nil {
@@ -84,6 +88,8 @@ func (h *httpBridge) hostFuncs() map[string]HostFunc {
 		"__bento_http_write":        h.write,
 		"__bento_http_end":          h.end,
 		"__bento_http_clientSend":   h.clientSend,
+		"__bento_http_createAgent":  h.createAgent,
+		"__bento_http_closeAgent":   h.closeAgent,
 	}
 }
 

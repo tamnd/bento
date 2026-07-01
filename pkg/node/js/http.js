@@ -3,7 +3,7 @@
 // or Hono app. The Go side (pkg/node/http.go) owns the real listener and drives
 // this module through the __bento_http_dispatch* globals defined here; this side
 // drives the response back through the __bento_http_* host functions. The client
-// (http.request / http.get) and http.Agent land in a later slice.
+// (http.request / http.get) and http.Agent connection pooling are here too.
 
 __bento_defineModule("http", function (module, exports, require) {
   "use strict";
@@ -296,11 +296,41 @@ __bento_defineModule("http", function (module, exports, require) {
     const port = opts.port ? ":" + opts.port : "";
     const path = opts.path || "/";
     const url = opts.url || protocol + "//" + hostname + port + path;
-    return { method: (opts.method || "GET").toUpperCase(), url: url, headers: opts.headers || {} };
+    return { method: (opts.method || "GET").toUpperCase(), url: url, headers: opts.headers || {}, agent: opts.agent };
   }
 
   function urlToOptions(href) {
     return { url: href };
+  }
+
+  // Agent is Node's connection pool. It carries the keepAlive and socket-count
+  // options onto Go's http.Transport, where the actual pooling lives. Requests
+  // name their agent; without one they use globalAgent, which keeps connections
+  // alive like modern Node.
+  let nextAgentId = 1;
+  class Agent {
+    constructor(options) {
+      this.options = options || {};
+      this._id = nextAgentId++;
+      __bento_http_createAgent(this._id, JSON.stringify(this.options));
+    }
+    destroy() {
+      __bento_http_closeAgent(this._id);
+    }
+  }
+
+  const globalAgent = new Agent({ keepAlive: true });
+  // agent:false means one-off connections with no keep-alive; a single shared
+  // agent with keepAlive off serves them, created lazily.
+  let noKeepAliveAgent = null;
+
+  function agentIdFor(agent) {
+    if (agent === false) {
+      if (!noKeepAliveAgent) noKeepAliveAgent = new Agent({ keepAlive: false });
+      return noKeepAliveAgent._id;
+    }
+    if (agent instanceof Agent) return agent._id;
+    return globalAgent._id;
   }
 
   // ClientRequest is the writable side of an outbound request. Body writes are
@@ -320,6 +350,7 @@ __bento_defineModule("http", function (module, exports, require) {
       this._headers = Object.create(null);
       this._bodyChunks = [];
       this._response = null;
+      this._agentId = agentIdFor(opts.agent);
       for (const key in opts.headers) this.setHeader(key, opts.headers[key]);
       if (callback) this.once("response", callback);
     }
@@ -345,7 +376,8 @@ __bento_defineModule("http", function (module, exports, require) {
         this.method,
         this._url,
         JSON.stringify(headersToWire(this._headers)),
-        body.length ? body.toString("base64") : ""
+        body.length ? body.toString("base64") : "",
+        this._agentId
       );
       callback();
     }
@@ -488,6 +520,8 @@ __bento_defineModule("http", function (module, exports, require) {
     ServerResponse: ServerResponse,
     IncomingMessage: IncomingMessage,
     ClientRequest: ClientRequest,
+    Agent: Agent,
+    globalAgent: globalAgent,
     createServer: createServer,
     request: request,
     get: get,
