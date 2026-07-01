@@ -102,8 +102,8 @@ func (r *Renderer) resultFields(ret frontend.Type) (*ast.FieldList, error) {
 	return &ast.FieldList{List: []*ast.Field{{Type: rt}}}, nil
 }
 
-// blockOf finds the function's body block and lowers its statements. A function
-// with no body (an overload signature or a declare) is not a lowerable unit.
+// blockOf finds the function's body block and lowers it. A function with no body
+// (an overload signature or a declare) is not a lowerable unit.
 func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
 	var block frontend.Node
 	for _, c := range r.prog.Children(fn) {
@@ -114,6 +114,13 @@ func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
 	if block == nil {
 		return nil, &NotYetLowerable{Reason: "function has no body block (declare or overload)"}
 	}
+	return r.lowerBlock(block)
+}
+
+// lowerBlock lowers a block node's statements to a Go block. It is used for the
+// function body and for the arms of the control-flow statements, so a nested
+// block lowers the same way the top-level one does.
+func (r *Renderer) lowerBlock(block frontend.Node) (*ast.BlockStmt, error) {
 	stmts, err := r.lowerStatements(r.prog.Children(block))
 	if err != nil {
 		return nil, err
@@ -134,24 +141,193 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 	return out, nil
 }
 
-// lowerStatement lowers one statement. The covered set is small on purpose: a
-// return, with or without a value. The rest of the statement forms land in
-// later slices, each handing back until then.
+// lowerStatement lowers one statement. The covered set is the straight-line and
+// control-flow forms a numeric body is built from: a return, a local variable
+// declaration, an assignment, an if, and a while. The rest land in later slices,
+// each handing back until then.
 func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 	switch n.Kind() {
 	case frontend.NodeReturnStatement:
-		kids := r.prog.Children(n)
-		if len(kids) == 0 {
-			return &ast.ReturnStmt{}, nil
-		}
-		expr, err := r.lowerExpr(kids[0])
-		if err != nil {
-			return nil, err
-		}
-		return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
+		return r.lowerReturn(n)
+	case frontend.NodeVariableStatement:
+		return r.lowerVarStatement(n)
+	case frontend.NodeExpressionStatement:
+		return r.lowerExprStatement(n)
+	case frontend.NodeIfStatement:
+		return r.lowerIf(n)
+	case frontend.NodeWhileStatement:
+		return r.lowerWhile(n)
 	default:
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	}
+}
+
+// lowerReturn lowers a return, with or without a value.
+func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 {
+		return &ast.ReturnStmt{}, nil
+	}
+	expr, err := r.lowerExpr(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
+}
+
+// lowerVarStatement lowers a const or let statement to Go var declarations, one
+// per binding. Both const and let become a Go var, because a Go const cannot
+// hold a runtime float64 initializer and TypeScript already forbids reassigning
+// a const, so the mutability distinction is enforced upstream, not here. The Go
+// type is always written explicitly from the checker's inferred type rather than
+// left to :=, because a bare integer literal would infer Go int where the source
+// means float64. A binding with no initializer, or one carrying a type
+// annotation node this slice does not read yet, hands back.
+func (r *Renderer) lowerVarStatement(n frontend.Node) (ast.Stmt, error) {
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	if len(decls) == 0 {
+		return nil, &NotYetLowerable{Reason: "variable statement has no binding"}
+	}
+	specs := make([]ast.Spec, 0, len(decls))
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) != 2 {
+			return nil, &NotYetLowerable{Reason: "variable binding with a type annotation or no initializer is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(kids[0]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "variable name is not a Go identifier"}
+		}
+		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
+		if err != nil {
+			return nil, err
+		}
+		init, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, &ast.ValueSpec{
+			Names:  []*ast.Ident{ident(name)},
+			Type:   typ,
+			Values: []ast.Expr{init},
+		})
+	}
+	return &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: specs}}, nil
+}
+
+// collectVarDecls gathers the variable declarations inside a variable statement.
+// They sit one level down under the declaration list, which bento does not name,
+// so the walk descends through it.
+func collectVarDecls(prog *frontend.Program, n frontend.Node, out *[]frontend.Node) {
+	for _, c := range prog.Children(n) {
+		if c.Kind() == frontend.NodeVariableDeclaration {
+			*out = append(*out, c)
+			continue
+		}
+		collectVarDecls(prog, c, out)
+	}
+}
+
+// lowerExprStatement lowers an expression used as a statement. The only form
+// covered is an assignment to a local, which the checker exposes as a binary
+// expression with an "=" operator; a call or other expression statement is a
+// later slice.
+func (r *Renderer) lowerExprStatement(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodeBinaryExpression {
+		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment is a later slice"}
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, &NotYetLowerable{Reason: "compound or non-assignment expression statement is a later slice"}
+	}
+	if parts[0].Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "assignment to a non-identifier target is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(parts[0]))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "assignment target is not a Go identifier"}
+	}
+	rhs, err := r.lowerExpr(parts[2])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(name)},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{rhs},
+	}, nil
+}
+
+// lowerIf lowers an if, with an optional else that is itself a block or a
+// chained else-if. The condition must be a boolean expression, so a truthy
+// number or object condition (JavaScript coercion) hands back until the truthy
+// slice lands.
+func (r *Renderer) lowerIf(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) < 2 {
+		return nil, &NotYetLowerable{Reason: "if statement did not expose a condition and body"}
+	}
+	cond, err := r.lowerCondition(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	if kids[1].Kind() != frontend.NodeBlock {
+		return nil, &NotYetLowerable{Reason: "if body that is not a block is a later slice"}
+	}
+	body, err := r.lowerBlock(kids[1])
+	if err != nil {
+		return nil, err
+	}
+	stmt := &ast.IfStmt{Cond: cond, Body: body}
+	if len(kids) >= 3 {
+		els, err := r.lowerArm(kids[2])
+		if err != nil {
+			return nil, err
+		}
+		stmt.Else = els
+	}
+	return stmt, nil
+}
+
+// lowerArm lowers one arm of an if: a block, or a chained if for an else-if.
+func (r *Renderer) lowerArm(n frontend.Node) (ast.Stmt, error) {
+	switch n.Kind() {
+	case frontend.NodeBlock:
+		return r.lowerBlock(n)
+	case frontend.NodeIfStatement:
+		return r.lowerIf(n)
+	default:
+		return nil, &NotYetLowerable{Reason: "if arm that is not a block or else-if is a later slice"}
+	}
+}
+
+// lowerWhile lowers a while to a Go for with only a condition, Go's spelling of
+// the same loop. The condition must be boolean, as for an if.
+func (r *Renderer) lowerWhile(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || kids[1].Kind() != frontend.NodeBlock {
+		return nil, &NotYetLowerable{Reason: "while statement did not expose a condition and block body"}
+	}
+	cond, err := r.lowerCondition(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.lowerBlock(kids[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ForStmt{Cond: cond, Body: body}, nil
+}
+
+// lowerCondition lowers a control-flow condition, requiring it to be typed
+// boolean so the emitted Go is a real bool and not a coerced number.
+func (r *Renderer) lowerCondition(n frontend.Node) (ast.Expr, error) {
+	if !r.isBool(n) {
+		return nil, &NotYetLowerable{Reason: "non-boolean condition needs JavaScript truthiness, a later slice"}
+	}
+	return r.lowerExpr(n)
 }
 
 // lowerExpr lowers one expression node to a Go expression. It covers the leaves
@@ -180,6 +356,12 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeNumericLiteral:
 		return r.numericLiteral(n)
 
+	case frontend.NodeTrueKeyword:
+		return ident("true"), nil
+
+	case frontend.NodeFalseKeyword:
+		return ident("false"), nil
+
 	case frontend.NodeBinaryExpression:
 		return r.binaryExpr(n)
 
@@ -206,24 +388,30 @@ func (r *Renderer) numericLiteral(n frontend.Node) (ast.Expr, error) {
 	return &ast.BasicLit{Kind: kind, Value: text}, nil
 }
 
-// binaryExpr lowers a binary expression. The operands must both be numbers for
-// now: the arithmetic operators map directly on float64, while + on strings is
-// concatenation of a different type and the relational and equality operators
-// yield booleans, each its own later slice. The children are left, operator,
-// right, the shape the frontend exposes for a binary node.
+// binaryExpr lowers a binary expression whose operands are both numbers: the
+// arithmetic operators map directly on float64 and the relational and equality
+// operators map to Go comparisons that yield bool. The operands are guarded to
+// number because + on strings is a different-typed concatenation and === on
+// objects is reference identity, each its own later slice. An assignment (the
+// "=" operator) is a statement form and is handled there, so as a value it hands
+// back. The children are left, operator, right, the shape the frontend exposes.
 func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
 	if len(kids) != 3 {
 		return nil, &NotYetLowerable{Reason: "binary expression did not expose left, operator, right"}
 	}
 	left, op, right := kids[0], kids[1], kids[2]
+	opText := r.prog.Text(op)
+	if opText == "=" {
+		return nil, &NotYetLowerable{Reason: "assignment used as a value is a later slice"}
+	}
 
 	if !r.isNumber(left) || !r.isNumber(right) {
 		return nil, &NotYetLowerable{Reason: "binary operator on non-number operands is a later slice"}
 	}
-	goOp, ok := numericBinaryOp(r.prog.Text(op))
+	goOp, ok := numericBinaryOp(opText)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "binary operator " + r.prog.Text(op) + " on numbers is a later slice"}
+		return nil, &NotYetLowerable{Reason: "binary operator " + opText + " on numbers is a later slice"}
 	}
 
 	l, err := r.lowerExpr(left)
@@ -243,10 +431,19 @@ func (r *Renderer) isNumber(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&frontend.TypeNumber != 0
 }
 
-// numericBinaryOp maps a TypeScript numeric operator token to its Go token. Only
-// the operators whose float64 semantics match JavaScript's number semantics are
-// here: %, which is fmod on JS numbers and does not apply to Go float64, and the
-// bitwise operators, which coerce to int32 first, are later slices.
+// isBool reports whether the checker types n as boolean, the guard that keeps a
+// control-flow condition a real Go bool rather than a coerced value.
+func (r *Renderer) isBool(n frontend.Node) bool {
+	return r.prog.TypeAt(n).Flags&frontend.TypeBoolean != 0
+}
+
+// numericBinaryOp maps a TypeScript operator on number operands to its Go token.
+// The arithmetic operators whose float64 semantics match JavaScript's number
+// semantics are here, along with the relational and strict-equality operators,
+// which compare two float64 the same way in both languages (=== on numbers is Go
+// ==, !== is !=). Left out on purpose: %, which is fmod on JS numbers and not
+// Go's remainder; the bitwise operators, which coerce to int32 first; and loose
+// == and !=, whose coercion has no direct Go spelling. Each is a later slice.
 func numericBinaryOp(tsOp string) (token.Token, bool) {
 	switch tsOp {
 	case "+":
@@ -257,6 +454,18 @@ func numericBinaryOp(tsOp string) (token.Token, bool) {
 		return token.MUL, true
 	case "/":
 		return token.QUO, true
+	case "<":
+		return token.LSS, true
+	case "<=":
+		return token.LEQ, true
+	case ">":
+		return token.GTR, true
+	case ">=":
+		return token.GEQ, true
+	case "===":
+		return token.EQL, true
+	case "!==":
+		return token.NEQ, true
 	default:
 		return token.ILLEGAL, false
 	}

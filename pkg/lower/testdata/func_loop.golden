@@ -1,0 +1,13 @@
+func Score(n float64) float64 {
+	var total float64 = 0
+	var i float64 = 1
+	for i <= n {
+		if i == 3 {
+			total = total + 10
+		} else {
+			total = total + i
+		}
+		i = i + 1
+	}
+	return total
+}
