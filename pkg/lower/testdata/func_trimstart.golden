@@ -1,0 +1,3 @@
+func Lead(s value.BStr) value.BStr {
+	return s.TrimStart()
+}

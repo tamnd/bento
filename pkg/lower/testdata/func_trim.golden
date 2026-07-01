@@ -1,0 +1,3 @@
+func Clean(s value.BStr) value.BStr {
+	return s.Trim()
+}

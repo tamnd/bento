@@ -244,6 +244,42 @@ func TestSlice(t *testing.T) {
 	}
 }
 
+// TestTrim pins the trim family against the exact ECMAScript whitespace set,
+// including a no-break space and a zero-width no-break space that Go's
+// unicode.IsSpace classifies differently, and checks that TrimStart and TrimEnd
+// touch only their own end.
+func TestTrim(t *testing.T) {
+	if got := FromGoString("  hi  ").Trim().ToGoString(); got != "hi" {
+		t.Errorf("Trim spaces = %q, want \"hi\"", got)
+	}
+	if got := FromGoString("\t\n hi \r\n").Trim().ToGoString(); got != "hi" {
+		t.Errorf("Trim tabs/newlines = %q, want \"hi\"", got)
+	}
+	if got := FromGoString("\u00a0x\u00a0").Trim().ToGoString(); got != "x" {
+		t.Errorf("Trim no-break space = %q, want \"x\"", got)
+	}
+	if got := FromGoString("\ufeffy\ufeff").Trim().ToGoString(); got != "y" {
+		t.Errorf("Trim zero-width no-break space = %q, want \"y\"", got)
+	}
+	if got := FromGoString("   ").Trim().ToGoString(); got != "" {
+		t.Errorf("Trim all whitespace = %q, want empty", got)
+	}
+	if got := FromGoString("none").Trim().ToGoString(); got != "none" {
+		t.Errorf("Trim clean string = %q, want \"none\"", got)
+	}
+	// U+0085 (NEL) is whitespace to Go but not to JavaScript trim, so it must
+	// survive; this is the divergence the custom predicate exists to avoid.
+	if got := FromGoString("\u0085z").Trim().ToGoString(); got != "\u0085z" {
+		t.Errorf("Trim NEL = %q, want it kept (JavaScript does not trim NEL)", got)
+	}
+	if got := FromGoString("  hi  ").TrimStart().ToGoString(); got != "hi  " {
+		t.Errorf("TrimStart = %q, want \"hi  \"", got)
+	}
+	if got := FromGoString("  hi  ").TrimEnd().ToGoString(); got != "  hi" {
+		t.Errorf("TrimEnd = %q, want \"  hi\"", got)
+	}
+}
+
 // TestSubstring pins String.prototype.substring, whose edges differ from slice:
 // a negative or NaN argument becomes 0, and a start past end swaps rather than
 // yielding the empty string.
