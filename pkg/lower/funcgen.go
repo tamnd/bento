@@ -615,6 +615,29 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: sel("value", "Concat"), Args: []ast.Expr{l, rr}}, nil
 	}
 
+	// === and !== on two strings compare by UTF-16 code unit, which is what
+	// JavaScript string equality does and what value.BStr.Equal implements. A Go
+	// == on the struct would compare backing fields instead and call two strings
+	// unequal when one is UTF-8 backed and the other UTF-16 backed but they hold
+	// the same code units. Handled before the operator table so the string path
+	// emits the method call, negated for !==.
+	if (opText == "===" || opText == "!==") && r.isString(left) && r.isString(right) {
+		l, err := r.lowerExpr(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		eq := &ast.CallExpr{Fun: &ast.SelectorExpr{X: l, Sel: ident("Equal")}, Args: []ast.Expr{rr}}
+		if opText == "!==" {
+			return &ast.UnaryExpr{Op: token.NOT, X: eq}, nil
+		}
+		return eq, nil
+	}
+
 	// Remainder on numbers is the one arithmetic operator that is not a Go binary
 	// operator: JavaScript % is fmod (a floating remainder that keeps the sign of
 	// the dividend), which Go spells math.Mod, not the integer-only % token. It is
