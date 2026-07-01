@@ -28,6 +28,20 @@ type HostFunc func(args []any) (any, error)
 // engines that support native ES modules. Returning an error rejects the import.
 type ModuleLoader func(specifier string) (string, error)
 
+// ModuleHost resolves and loads ES modules for the engine's native import. It
+// splits the two questions a linker asks: Normalize turns a specifier as written
+// into a canonical, stable module name, and Load returns the ES module source
+// for that name. Keeping them separate lets the host key its own caches on the
+// canonical name and lets the engine dedupe a module reached by two specifiers.
+type ModuleHost interface {
+	// Normalize resolves the specifier as written in the module named referrer
+	// to a canonical, absolute module name. referrer is the empty string for the
+	// entry module. The returned name is what Load later receives.
+	Normalize(referrer, specifier string) (string, error)
+	// Load returns the ES module source for a canonical name from Normalize.
+	Load(name string) (string, error)
+}
+
 // Engine is a JavaScript realm that bento can evaluate code in.
 //
 // Method names follow the shape of the underlying quickjs API so backends stay
@@ -59,9 +73,15 @@ type Engine interface {
 	// queued microtasks) to completion and reports how many jobs ran.
 	DrainMicrotasks() (int, error)
 
-	// SetModuleLoader installs the resolver used by EvalModule and by native
-	// import statements.
+	// SetModuleLoader installs a source-only resolver used by EvalModule and by
+	// native import statements. It is the simple form for backends and callers
+	// that do not need custom specifier normalization.
 	SetModuleLoader(loader ModuleLoader)
+
+	// SetModuleHost installs a resolver that both normalizes specifiers and loads
+	// module source. A nil host removes any custom module resolution. It takes
+	// precedence over SetModuleLoader when both are set.
+	SetModuleHost(host ModuleHost)
 
 	// Interrupt requests that a running evaluation stop as soon as possible.
 	// It is safe to call from another goroutine.
