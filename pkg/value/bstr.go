@@ -81,6 +81,24 @@ func (s BStr) CharCodeAt(i float64) float64 {
 	return float64(s.units()[int(i)])
 }
 
+// CharAt returns the one-code-unit string at index i, matching
+// String.prototype.charAt. The index is coerced to an integer the same way
+// CharCodeAt coerces it, and an index outside [0, length) yields the empty
+// string rather than a panic. The single code unit may be a lone surrogate (half
+// of an astral character), so the result is built from the raw unit through
+// FromUTF16, which preserves a surrogate that FromGoString could not, keeping
+// charAt(0) of an astral character the exact high surrogate JavaScript returns.
+func (s BStr) CharAt(i float64) BStr {
+	if math.IsNaN(i) {
+		i = 0
+	}
+	i = math.Trunc(i)
+	if i < 0 || i >= float64(s.lengthU16) {
+		return BStr{}
+	}
+	return FromUTF16([]uint16{s.units()[int(i)]})
+}
+
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both
 // are strings. It picks the backing form once: if both sides are on the UTF-8
 // fast path the result stays UTF-8 with a single byte copy, and otherwise the
