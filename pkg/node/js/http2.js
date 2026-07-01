@@ -13,6 +13,8 @@ __bento_defineModule("http2", function (module, exports, require) {
   "use strict";
 
   const http = require("http");
+  const stream = require("stream");
+  const EventEmitter = require("events");
 
   // pemString accepts a cert or key as a string or Buffer, the two shapes callers
   // get from reading a file, and hands Go a plain PEM string. It matches https.
@@ -23,10 +25,117 @@ __bento_defineModule("http2", function (module, exports, require) {
     return String(value);
   }
 
-  // Http2SecureServer is the compatibility server. It is an http.Server whose bind
-  // hook advertises h2 over TLS, so the whole request, response, and close path is
-  // inherited and only the transport underneath changes. A request handler passed
-  // to createSecureServer becomes the "request" listener, exactly as in http.
+  // Http2Session is the connection object behind a stream. On a net/http h2 server
+  // each stream arrives as its own handler invocation, so bento does not thread a
+  // real per-connection session through; a lightweight session gives the stream a
+  // socket, close, and the EventEmitter surface code reaches for. The core client
+  // slice, which owns the connection explicitly, carries the full session state.
+  class Http2Session extends EventEmitter {
+    constructor(socket) {
+      super();
+      this.socket = socket || {};
+      this.encrypted = true;
+      this.destroyed = false;
+      this.closed = false;
+    }
+    close(cb) {
+      if (cb) this.once("close", cb);
+      if (this.closed) return;
+      this.closed = true;
+      this.emit("close");
+    }
+    destroy(err) {
+      this.destroyed = true;
+      if (err) this.emit("error", err);
+      this.close();
+    }
+    ref() {
+      return this;
+    }
+    unref() {
+      return this;
+    }
+  }
+
+  // buildH2Headers rebuilds the request headers in HTTP/2 shape: the ordinary
+  // headers plus the request pseudo-headers a stream handler expects to read.
+  function buildH2Headers(req) {
+    const h = Object.assign(Object.create(null), req.headers);
+    h[":method"] = req.method;
+    h[":path"] = req.url;
+    h[":scheme"] = "https";
+    h[":authority"] = req.headers[":authority"] || req.headers.host || req.headers.authority;
+    return h;
+  }
+
+  // Http2Stream is one HTTP/2 stream as a Duplex, the shape everything streaming in
+  // this runtime shares. On the server it wraps the compat request (its readable
+  // body) and response (its writable side), so respond maps onto writeHead and the
+  // writable end maps onto the response end. Reading the stream pumps the request
+  // body through as data events, same as any other readable here.
+  class Http2Stream extends stream.Duplex {
+    constructor(req, res) {
+      super();
+      this._req = req;
+      this._res = res;
+      this._pumped = false;
+      this.id = 0;
+      this.sentHeaders = undefined;
+      this.session = new Http2Session(res.socket);
+      req.on("error", (err) => this.destroy(err));
+    }
+    _read() {
+      if (this._pumped) return;
+      this._pumped = true;
+      this._req.on("data", (chunk) => this.push(chunk));
+      this._req.on("end", () => this.push(null));
+    }
+    _write(chunk, encoding, callback) {
+      this._res.write(chunk, encoding, callback);
+    }
+    _final(callback) {
+      this._res.end();
+      callback();
+    }
+    // respond sends the response headers. The :status pseudo-header becomes the
+    // status code and the rest become ordinary headers; other pseudo-headers are
+    // dropped since they are not valid on a response. endStream closes the send
+    // side immediately, for a headers-only response.
+    respond(headers, options) {
+      const h = headers || {};
+      let status = 200;
+      const rest = {};
+      for (const key in h) {
+        if (key === ":status") status = h[key] | 0;
+        else if (key.charCodeAt(0) === 58) continue; // ":" pseudo-header
+        else rest[key] = h[key];
+      }
+      this._res.writeHead(status, rest);
+      this.sentHeaders = h;
+      if (options && options.endStream) this.end();
+      return this;
+    }
+    close(code, cb) {
+      if (typeof code === "function") {
+        cb = code;
+        code = 0;
+      }
+      if (cb) this.once("close", cb);
+      this.end();
+      this.session.close();
+    }
+    setTimeout(_msecs, callback) {
+      if (callback) this.on("timeout", callback);
+      return this;
+    }
+  }
+
+  // Http2SecureServer serves both http2 APIs over one h2 transport. The
+  // compatibility API is inherited from http.Server: a request handler becomes the
+  // "request" listener and sees (req, res) unchanged. The core API is layered on
+  // top: whenever a "stream" listener is attached, each request is also surfaced as
+  // an Http2Stream with its HTTP/2 headers, so server.on("stream") works exactly as
+  // in Node. A given request is answered through one API or the other.
   class Http2SecureServer extends http.Server {
     constructor(options, handler) {
       if (typeof options === "function") {
@@ -37,6 +146,13 @@ __bento_defineModule("http2", function (module, exports, require) {
       options = options || {};
       this._tlsKey = pemString(options.key);
       this._tlsCert = pemString(options.cert);
+      // Bridge the compat request into a stream event for the core API. This only
+      // fires when someone is listening for streams, so a pure compat server is
+      // untouched.
+      super.on("request", (req, res) => {
+        if (this.listenerCount("stream") === 0) return;
+        this.emit("stream", new Http2Stream(req, res), buildH2Headers(req), 0);
+      });
     }
     _bind(port, host) {
       __bento_http_listenH2(this._id, port, host, this._tlsCert, this._tlsKey);
@@ -93,6 +209,8 @@ __bento_defineModule("http2", function (module, exports, require) {
 
   module.exports = {
     constants: constants,
+    Http2Session: Http2Session,
+    Http2Stream: Http2Stream,
     Http2SecureServer: Http2SecureServer,
     createSecureServer: createSecureServer,
   };
