@@ -1,0 +1,3 @@
+func CodeAt(s value.BStr, i float64) float64 {
+	return s.CharCodeAt(i)
+}

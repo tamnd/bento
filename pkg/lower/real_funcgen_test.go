@@ -125,6 +125,14 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function diff(a: string, b: string): boolean { return a !== b; }`,
 		},
 		{
+			name:   "charcode",
+			golden: "func_charcode.golden",
+			// s.charCodeAt(i) is a method call on a string receiver, so it lowers
+			// to the value.BStr CharCodeAt method rather than a plain function
+			// call or an index expression.
+			src: `export function codeAt(s: string, i: number): number { return s.charCodeAt(i); }`,
+		},
+		{
 			name:   "modulo",
 			golden: "func_modulo.golden",
 			// % on numbers is fmod, not Go's integer remainder, so it lowers to a
