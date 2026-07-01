@@ -522,13 +522,16 @@ func (r *Renderer) numericLiteral(n frontend.Node) (ast.Expr, error) {
 	return &ast.BasicLit{Kind: kind, Value: text}, nil
 }
 
-// binaryExpr lowers a binary expression whose operands are both numbers: the
-// arithmetic operators map directly on float64 and the relational and equality
-// operators map to Go comparisons that yield bool. The operands are guarded to
-// number because + on strings is a different-typed concatenation and === on
-// objects is reference identity, each its own later slice. An assignment (the
-// "=" operator) is a statement form and is handled there, so as a value it hands
-// back. The children are left, operator, right, the shape the frontend exposes.
+// binaryExpr lowers a binary expression on two operands of the same primitive
+// type. On two numbers the arithmetic operators map directly on float64 and the
+// relational and equality operators map to Go comparisons that yield bool. On
+// two booleans the short-circuit && and || map to Go's &&/||, which evaluate in
+// the same order and short-circuit the same way, and === / !== map to Go
+// ==/!=. The operand types are guarded because + on strings is a different-typed
+// concatenation and === on objects is reference identity, each its own later
+// slice. An assignment (the "=" operator) is a statement form and is handled
+// there, so as a value it hands back. The children are left, operator, right,
+// the shape the frontend exposes.
 func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
 	if len(kids) != 3 {
@@ -540,12 +543,9 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "assignment used as a value is a later slice"}
 	}
 
-	if !r.isNumber(left) || !r.isNumber(right) {
-		return nil, &NotYetLowerable{Reason: "binary operator on non-number operands is a later slice"}
-	}
-	goOp, ok := numericBinaryOp(opText)
-	if !ok {
-		return nil, &NotYetLowerable{Reason: "binary operator " + opText + " on numbers is a later slice"}
+	goOp, err := r.binaryOp(opText, left, right)
+	if err != nil {
+		return nil, err
 	}
 
 	l, err := r.lowerExpr(left)
@@ -557,6 +557,29 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// binaryOp picks the Go operator for a TypeScript binary operator given its
+// operand types. It dispatches on the operand types so a number path and a
+// boolean path stay separate and each guards its own sound operator set; mixed
+// or non-primitive operands hand back for a later slice.
+func (r *Renderer) binaryOp(opText string, left, right frontend.Node) (token.Token, error) {
+	switch {
+	case r.isNumber(left) && r.isNumber(right):
+		goOp, ok := numericBinaryOp(opText)
+		if !ok {
+			return token.ILLEGAL, &NotYetLowerable{Reason: "binary operator " + opText + " on numbers is a later slice"}
+		}
+		return goOp, nil
+	case r.isBool(left) && r.isBool(right):
+		goOp, ok := booleanBinaryOp(opText)
+		if !ok {
+			return token.ILLEGAL, &NotYetLowerable{Reason: "binary operator " + opText + " on booleans is a later slice"}
+		}
+		return goOp, nil
+	default:
+		return token.ILLEGAL, &NotYetLowerable{Reason: "binary operator on mixed or non-primitive operands is a later slice"}
+	}
 }
 
 // isNumber reports whether the checker types n as number, the guard that keeps
@@ -596,6 +619,28 @@ func numericBinaryOp(tsOp string) (token.Token, bool) {
 		return token.GTR, true
 	case ">=":
 		return token.GEQ, true
+	case "===":
+		return token.EQL, true
+	case "!==":
+		return token.NEQ, true
+	default:
+		return token.ILLEGAL, false
+	}
+}
+
+// booleanBinaryOp maps a TypeScript operator on boolean operands to its Go
+// token. The short-circuit && and || carry over directly: Go evaluates the left
+// operand first and skips the right on the same condition JavaScript does, and
+// with both operands typed boolean the result is boolean in both languages, so
+// there is no truthiness gap to bridge. Strict === / !== on two booleans are Go
+// == / !=. Left out on purpose: loose == and !=, whose coercion has no direct Go
+// spelling, a later slice.
+func booleanBinaryOp(tsOp string) (token.Token, bool) {
+	switch tsOp {
+	case "&&":
+		return token.LAND, true
+	case "||":
+		return token.LOR, true
 	case "===":
 		return token.EQL, true
 	case "!==":
