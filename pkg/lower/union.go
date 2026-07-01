@@ -1,6 +1,8 @@
 package lower
 
 import (
+	"go/ast"
+	"go/token"
 	"sort"
 	"strings"
 
@@ -18,22 +20,26 @@ import (
 // renderUnion lowers a union type to the Go type that represents it. Today it
 // covers only the closed string-literal union; every other union hands back so
 // the partitioner routes the unit to the engine rather than get a wrong Go type.
-func (r *Renderer) renderUnion(t frontend.Type) (string, error) {
+func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 	members := r.prog.UnionMembers(t)
 	values := make([]string, 0, len(members))
 	for _, m := range members {
 		lit, ok := r.prog.LiteralValue(m)
 		if !ok || lit.Kind != frontend.LiteralString {
-			return "", &NotYetLowerable{Flags: t.Flags, Reason: "union with a non-string-literal member needs the tagged sum struct, a later slice"}
+			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union with a non-string-literal member needs the tagged sum struct, a later slice"}
 		}
 		values = append(values, lit.Str)
 	}
 	if len(values) == 0 {
 		// A union the checker reports with no members is degenerate (never), which
 		// has no value representation to render.
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "union with no members has no lowering"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union with no members has no lowering"}
 	}
-	return r.decls.internStringEnum(t.Identity(), values)
+	name, err := r.decls.internStringEnum(t.Identity(), values)
+	if err != nil {
+		return nil, err
+	}
+	return ident(name), nil
 }
 
 // internStringEnum returns the Go enum type name for a closed string-literal
@@ -93,29 +99,41 @@ func enumVariantNames(values []string) ([]string, error) {
 	return out, nil
 }
 
-// renderStringEnum renders the enum declaration: an unsigned integer tag type and
-// the const block that names each tag, the first at iota so the rest follow. The
-// tag names are the enum type name concatenated with each variant, which keeps
-// them unique across enums without a package-level collision. The result is run
-// through go/format so it is gofmt-clean, matching the struct path.
+// renderStringEnum builds the enum declaration as go/ast nodes: an unsigned
+// integer tag type and the const block that names each tag, the first at iota so
+// the rest follow. The tag names are the enum type name concatenated with each
+// variant, which keeps them unique across enums without a package-level
+// collision. Both declarations are printed through the gofmt-mode printer, so the
+// result is gofmt-clean, matching the struct path.
 func renderStringEnum(name string, variants []string) (string, error) {
-	var b strings.Builder
-	b.WriteString("type ")
-	b.WriteString(name)
-	b.WriteString(" uint8\n\n")
-	b.WriteString("const (\n")
-	for i, variant := range variants {
-		b.WriteString("\t")
-		b.WriteString(name)
-		b.WriteString(variant)
-		if i == 0 {
-			b.WriteString(" ")
-			b.WriteString(name)
-			b.WriteString(" = iota")
-		}
-		b.WriteString("\n")
+	typeDecl := &ast.GenDecl{
+		Tok:   token.TYPE,
+		Specs: []ast.Spec{&ast.TypeSpec{Name: ident(name), Type: ident("uint8")}},
 	}
-	b.WriteString(")\n")
 
-	return formatDecl(b.String())
+	// Lparen is set so the const block always prints in its parenthesized group
+	// form, even for a single-member enum, matching the const ( ... ) shape.
+	constDecl := &ast.GenDecl{Tok: token.CONST, Lparen: token.Pos(1), Rparen: token.Pos(1)}
+	for i, variant := range variants {
+		spec := &ast.ValueSpec{Names: []*ast.Ident{ident(name + variant)}}
+		if i == 0 {
+			// The first tag pins the underlying type and starts the iota run that
+			// the rest of the block inherits by omitting a value.
+			spec.Type = ident(name)
+			spec.Values = []ast.Expr{ident("iota")}
+		}
+		constDecl.Specs = append(constDecl.Specs, spec)
+	}
+
+	typeSrc, err := printDecl(typeDecl)
+	if err != nil {
+		return "", err
+	}
+	constSrc, err := printDecl(constDecl)
+	if err != nil {
+		return "", err
+	}
+	// A blank line separates the tag type from its const block, the shape a
+	// developer expects to read.
+	return strings.TrimRight(typeSrc, "\n") + "\n\n" + constSrc, nil
 }

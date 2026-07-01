@@ -20,6 +20,7 @@ package lower
 
 import (
 	"fmt"
+	"go/ast"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -63,11 +64,25 @@ func NewRenderer(prog *frontend.Program) *Renderer {
 // It returns a NotYetLowerable error for a construct whose slice has not landed,
 // which is the section 30 handoff, never a silent wrong answer.
 func (r *Renderer) RenderType(t frontend.Type) (string, error) {
+	expr, err := r.typeExpr(t)
+	if err != nil {
+		return "", err
+	}
+	return printExpr(expr)
+}
+
+// typeExpr is the mapping table itself: one frontend.Type to the go/ast node for
+// the Go type that represents it. It composes nodes rather than text, so an array
+// wraps its already-built element node and a pointer wraps its pointee, and it
+// returns a NotYetLowerable for a construct whose slice has not landed, which is
+// the section 30 handoff, never a silent wrong answer. RenderType prints whatever
+// it returns.
+func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	// The zero Type carries no flags. It stands for a position with no value,
 	// such as a statement or a void return, and has no slot representation, so
 	// asking for its type expression is a caller error, not a lowering gap.
 	if t.Flags == 0 {
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "no type at this position (void or statement)"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no type at this position (void or statement)"}
 	}
 
 	switch {
@@ -76,32 +91,32 @@ func (r *Renderer) RenderType(t frontend.Type) (string, error) {
 		// dynamic by definition and runs on the engine (section 30). A lone any
 		// that only crosses the boundary boxes into value.Value, which is the
 		// boxing-boundary slice, not this one.
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "any or unknown is dynamic; it boxes at the boundary"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "any or unknown is dynamic; it boxes at the boundary"}
 
 	case t.Flags&frontend.TypeNumber != 0:
 		// number is IEEE-754 double, so float64 (D14, section 3). Integer
 		// refinement to int32/int64 is a later slice and only ever narrows the
 		// representation, never the observable number type.
-		return "float64", nil
+		return ident("float64"), nil
 
 	case t.Flags&frontend.TypeBigInt != 0:
 		// bigint is arbitrary precision, so *big.Int; no fixed-width Go integer
 		// is correct (section 4).
-		return "*big.Int", nil
+		return star(sel("big", "Int")), nil
 
 	case t.Flags&frontend.TypeString != 0:
 		// string is a sequence of UTF-16 code units, so the bento string type
 		// bstr, never Go string, which would be UTF-8 (section 5).
-		return "bstr", nil
+		return ident("bstr"), nil
 
 	case t.Flags&frontend.TypeBoolean != 0:
 		// The one clean mapping (section 6).
-		return "bool", nil
+		return ident("bool"), nil
 
 	case t.Flags&frontend.TypeSymbol != 0:
 		// A symbol is a unique opaque value whose whole purpose is identity, so
 		// a pointer whose identity is the symbol's identity (section 8).
-		return "*value.Symbol", nil
+		return star(sel("value", "Symbol")), nil
 
 	case t.Flags&frontend.TypeObject != 0:
 		// TypeObject covers both arrays and fixed-shape objects in the frontend
@@ -120,19 +135,19 @@ func (r *Renderer) RenderType(t frontend.Type) (string, error) {
 		// its widened base and so is caught by the primitive cases above, which
 		// run first because a string literal also carries TypeString. Reaching
 		// here means a literal with no base flag bento renders yet.
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "literal type with no lowerable base"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "literal type with no lowerable base"}
 
 	case t.Flags&frontend.TypeEnum != 0:
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "enum lowering lands in a later slice"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "enum lowering lands in a later slice"}
 
 	case t.Flags&frontend.TypeIntersection != 0:
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "intersection lowering (merged struct) lands in a later slice"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "intersection lowering (merged struct) lands in a later slice"}
 
 	case t.Flags&frontend.TypeTypeParameter != 0:
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "type parameter needs monomorphization, a later slice"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "type parameter needs monomorphization, a later slice"}
 
 	default:
-		return "", &NotYetLowerable{Flags: t.Flags, Reason: "no lowering for this type"}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no lowering for this type"}
 	}
 }
 
@@ -142,12 +157,12 @@ func (r *Renderer) RenderType(t frontend.Type) (string, error) {
 // bare []T fast path is an optimization the partitioner unlocks only when it has
 // proven the array dense and in-range, which is a later slice, so the correct
 // default here is the header.
-func (r *Renderer) renderArray(elem frontend.Type) (string, error) {
-	inner, err := r.RenderType(elem)
+func (r *Renderer) renderArray(elem frontend.Type) (ast.Expr, error) {
+	inner, err := r.typeExpr(elem)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return "*value.Array[" + inner + "]", nil
+	return star(index(sel("value", "Array"), inner)), nil
 }
 
 // renderObject lowers a fixed-shape object type to a pointer to a generated Go
@@ -155,12 +170,12 @@ func (r *Renderer) renderArray(elem frontend.Type) (string, error) {
 // reference identity and === is reference equality, which Go pointer identity
 // gives exactly. The struct itself is registered in the decl set, interned by
 // the type's structural identity so the same shape yields the same Go type.
-func (r *Renderer) renderObject(t frontend.Type) (string, error) {
+func (r *Renderer) renderObject(t frontend.Type) (ast.Expr, error) {
 	name, err := r.decls.internStruct(r, t)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return "*" + name, nil
+	return star(ident(name)), nil
 }
 
 // Decls returns the generated declarations the rendered types referred to, in a
