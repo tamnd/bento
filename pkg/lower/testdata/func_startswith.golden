@@ -1,0 +1,3 @@
+func Starts(s value.BStr, p value.BStr) bool {
+	return s.StartsWith(p)
+}

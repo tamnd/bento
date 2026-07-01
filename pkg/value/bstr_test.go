@@ -166,3 +166,42 @@ func TestCharAt(t *testing.T) {
 		}
 	}
 }
+
+// TestSearchMethods pins IndexOf, Includes, and StartsWith, including the
+// code-unit index of a match after an astral character (the emoji is two units,
+// so "b" in "a😀b" is at index 3, not 2) and the empty-search rule that matches
+// at 0.
+func TestSearchMethods(t *testing.T) {
+	s := FromGoString("a😀b")
+	if got := s.IndexOf(FromGoString("b")); got != 3 {
+		t.Errorf("IndexOf(\"b\") = %v, want 3 (code units, past the surrogate pair)", got)
+	}
+	if got := s.IndexOf(FromGoString("a")); got != 0 {
+		t.Errorf("IndexOf(\"a\") = %v, want 0", got)
+	}
+	if got := s.IndexOf(FromGoString("z")); got != -1 {
+		t.Errorf("IndexOf(\"z\") = %v, want -1", got)
+	}
+	if got := s.IndexOf(FromGoString("")); got != 0 {
+		t.Errorf("IndexOf(\"\") = %v, want 0", got)
+	}
+	if !s.Includes(FromGoString("😀")) {
+		t.Error("Includes(emoji) = false, want true")
+	}
+	if s.Includes(FromGoString("z")) {
+		t.Error("Includes(\"z\") = true, want false")
+	}
+	if !s.StartsWith(FromGoString("a😀")) {
+		t.Error("StartsWith(\"a😀\") = false, want true")
+	}
+	if s.StartsWith(FromGoString("😀")) {
+		t.Error("StartsWith(\"😀\") = true, want false")
+	}
+	if !s.StartsWith(FromGoString("")) {
+		t.Error("StartsWith(\"\") = false, want true")
+	}
+	// A prefix longer than the string is not a prefix.
+	if FromGoString("hi").StartsWith(FromGoString("hello")) {
+		t.Error("StartsWith with a longer prefix = true, want false")
+	}
+}

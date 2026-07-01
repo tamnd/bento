@@ -140,6 +140,25 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function at(s: string, i: number): string { return s.charAt(i); }`,
 		},
 		{
+			name:   "indexof",
+			golden: "func_indexof.golden",
+			// a string method that takes a string argument, so the argument-kind
+			// guard admits it where the number-arg methods would reject it.
+			src: `export function find(s: string, sub: string): number { return s.indexOf(sub); }`,
+		},
+		{
+			name:   "includes",
+			golden: "func_includes.golden",
+			// a string-arg method returning a boolean, so the whole function is
+			// bool-typed.
+			src: `export function has(s: string, sub: string): boolean { return s.includes(sub); }`,
+		},
+		{
+			name:   "startswith",
+			golden: "func_startswith.golden",
+			src:    `export function starts(s: string, p: string): boolean { return s.startsWith(p); }`,
+		},
+		{
 			name:   "modulo",
 			golden: "func_modulo.golden",
 			// % on numbers is fmod, not Go's integer remainder, so it lowers to a

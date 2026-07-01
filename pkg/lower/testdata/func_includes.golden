@@ -1,0 +1,3 @@
+func Has(s value.BStr, sub value.BStr) bool {
+	return s.Includes(sub)
+}

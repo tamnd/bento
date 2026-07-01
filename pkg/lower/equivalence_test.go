@@ -213,6 +213,31 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"abc", 0}, {"abc", 1}, {"abc", 2}, {"abc", 3}, {"abc", -1}},
 		},
 		{
+			name: "indexOf",
+			// Two strings in, a number out, through a method that takes a string
+			// argument. The cases cover a hit at the start, in the middle, a miss
+			// (-1), the empty search (0), and a search inside an astral character
+			// so the code-unit index matches JavaScript rather than a rune index.
+			src:  `export function find(s: string, sub: string): number { return s.indexOf(sub); }`,
+			fn:   "find",
+			args: [][]any{{"hello", "he"}, {"hello", "lo"}, {"hello", "z"}, {"hello", ""}, {"a😀b", "b"}},
+		},
+		{
+			name: "includes",
+			// The boolean companion of indexOf over the same shapes.
+			src:  `export function has(s: string, sub: string): boolean { return s.includes(sub); }`,
+			fn:   "has",
+			ret:  "boolean",
+			args: [][]any{{"hello", "ell"}, {"hello", "z"}, {"hello", ""}, {"a😀b", "😀"}},
+		},
+		{
+			name: "startsWith",
+			src:  `export function starts(s: string, p: string): boolean { return s.startsWith(p); }`,
+			fn:   "starts",
+			ret:  "boolean",
+			args: [][]any{{"hello", "he"}, {"hello", "lo"}, {"hello", ""}, {"hi", "hello"}, {"😀x", "😀"}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the

@@ -99,6 +99,56 @@ func (s BStr) CharAt(i float64) BStr {
 	return FromUTF16([]uint16{s.units()[int(i)]})
 }
 
+// IndexOf returns the code-unit index of the first occurrence of search in s,
+// or -1 if it does not occur, matching String.prototype.indexOf (without the
+// optional start position, a later slice). The search is code-unit-wise over the
+// UTF-16 view so it agrees with JavaScript on astral text and lone surrogates,
+// and an empty search string matches at 0 the way JavaScript defines it. The
+// result is a float64 because it is a JavaScript number.
+func (s BStr) IndexOf(search BStr) float64 {
+	hay, needle := s.units(), search.units()
+	if len(needle) == 0 {
+		return 0
+	}
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		if matchAt(hay, needle, i) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// Includes reports whether search occurs anywhere in s, matching
+// String.prototype.includes. It is defined in terms of IndexOf, so it shares the
+// code-unit search and the empty-string-matches rule.
+func (s BStr) Includes(search BStr) bool {
+	return s.IndexOf(search) >= 0
+}
+
+// StartsWith reports whether s begins with prefix, matching
+// String.prototype.startsWith (without the optional position). It compares code
+// units so it agrees with JavaScript on astral text, and a prefix longer than s
+// is trivially not a prefix.
+func (s BStr) StartsWith(prefix BStr) bool {
+	hay, needle := s.units(), prefix.units()
+	if len(needle) > len(hay) {
+		return false
+	}
+	return matchAt(hay, needle, 0)
+}
+
+// matchAt reports whether needle appears in hay starting at index i. The caller
+// guarantees i+len(needle) <= len(hay), so the inner loop needs no bound check
+// beyond the slice itself.
+func matchAt(hay, needle []uint16, i int) bool {
+	for j := range needle {
+		if hay[i+j] != needle[j] {
+			return false
+		}
+	}
+	return true
+}
+
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both
 // are strings. It picks the backing form once: if both sides are on the UTF-8
 // fast path the result stays UTF-8 with a single byte copy, and otherwise the
