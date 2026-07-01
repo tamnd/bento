@@ -153,23 +153,48 @@ func (s BStr) LastIndexOf(search BStr, position ...float64) float64 {
 	return -1
 }
 
-// Includes reports whether search occurs anywhere in s, matching
-// String.prototype.includes. It is defined in terms of IndexOf, so it shares the
-// code-unit search and the empty-string-matches rule.
-func (s BStr) Includes(search BStr) bool {
-	return s.IndexOf(search) >= 0
+// Includes reports whether search occurs at or after an optional start position,
+// matching String.prototype.includes. It is defined in terms of IndexOf, so it
+// shares the code-unit search, the optional position, and the empty-string rule
+// (an empty search is found at the clamped position, so Includes returns true).
+func (s BStr) Includes(search BStr, position ...float64) bool {
+	return s.IndexOf(search, position...) >= 0
 }
 
-// StartsWith reports whether s begins with prefix, matching
-// String.prototype.startsWith (without the optional position). It compares code
-// units so it agrees with JavaScript on astral text, and a prefix longer than s
-// is trivially not a prefix.
-func (s BStr) StartsWith(prefix BStr) bool {
+// StartsWith reports whether s has prefix starting at an optional position,
+// matching String.prototype.startsWith. The position is optional, so the method
+// is variadic; it is clamped into [0, length] and the prefix is matched there. It
+// compares code units so it agrees with JavaScript on astral text, and a prefix
+// that would run past the end is not a match.
+func (s BStr) StartsWith(prefix BStr, position ...float64) bool {
 	hay, needle := s.units(), prefix.units()
-	if len(needle) > len(hay) {
+	start := 0
+	if len(position) >= 1 {
+		start = clampIndex(position[0], len(hay))
+	}
+	if start+len(needle) > len(hay) {
 		return false
 	}
-	return matchAt(hay, needle, 0)
+	return matchAt(hay, needle, start)
+}
+
+// EndsWith reports whether s has suffix ending at an optional end position,
+// matching String.prototype.endsWith. Where startsWith takes the index the match
+// begins at, endsWith takes the index it ends at, which defaults to the length;
+// the suffix is matched in the window that ends there. The end position is clamped
+// into [0, length], and a suffix longer than that window is not a match. It
+// compares code units so it agrees with JavaScript on astral text.
+func (s BStr) EndsWith(suffix BStr, endPosition ...float64) bool {
+	hay, needle := s.units(), suffix.units()
+	end := len(hay)
+	if len(endPosition) >= 1 {
+		end = clampIndex(endPosition[0], len(hay))
+	}
+	start := end - len(needle)
+	if start < 0 {
+		return false
+	}
+	return matchAt(hay, needle, start)
 }
 
 // matchAt reports whether needle appears in hay starting at index i. The caller

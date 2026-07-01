@@ -1,0 +1,3 @@
+func Ends(s value.BStr, p value.BStr) bool {
+	return s.EndsWith(p)
+}
