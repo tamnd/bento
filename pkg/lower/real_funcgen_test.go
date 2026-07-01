@@ -133,6 +133,13 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function codeAt(s: string, i: number): number { return s.charCodeAt(i); }`,
 		},
 		{
+			name:   "charat",
+			golden: "func_charat.golden",
+			// s.charAt(i) is a string-returning string method, so it lowers to the
+			// value.BStr CharAt method and the whole function returns value.BStr.
+			src: `export function at(s: string, i: number): string { return s.charAt(i); }`,
+		},
+		{
 			name:   "modulo",
 			golden: "func_modulo.golden",
 			// % on numbers is fmod, not Go's integer remainder, so it lowers to a

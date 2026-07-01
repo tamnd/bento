@@ -524,6 +524,8 @@ func stringMethod(name string) (goName string, arity int, ok bool) {
 	switch name {
 	case "charCodeAt":
 		return "CharCodeAt", 1, true
+	case "charAt":
+		return "CharAt", 1, true
 	default:
 		return "", 0, false
 	}

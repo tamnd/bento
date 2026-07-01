@@ -1,0 +1,3 @@
+func At(s value.BStr, i float64) value.BStr {
+	return s.CharAt(i)
+}
