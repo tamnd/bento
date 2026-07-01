@@ -69,16 +69,6 @@ func typeOfDecl(t *testing.T, src string) (*frontend.Program, frontend.Type) {
 	return prog, prog.TypeAt(name)
 }
 
-// findKind returns the first node of a kind, depth first.
-func findKind(prog *frontend.Program, nodes []frontend.Node, kind frontend.NodeKind) frontend.Node {
-	var out []frontend.Node
-	collectKind(prog, nodes, kind, &out)
-	if len(out) == 0 {
-		return nil
-	}
-	return out[0]
-}
-
 // collectKind gathers every node of a kind, depth first, in source order.
 func collectKind(prog *frontend.Program, nodes []frontend.Node, kind frontend.NodeKind, out *[]frontend.Node) {
 	for _, n := range nodes {
