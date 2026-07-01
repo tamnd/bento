@@ -103,6 +103,21 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function greet(name: string): string { return "Hello, " + name; }`,
 		},
 		{
+			name:   "strlit_escapes",
+			golden: "func_strlit_escapes.golden",
+			// a literal whose escapes decode to a valid Go string becomes
+			// value.FromGoString of the decoded text, so \n and \t are real control
+			// characters and \u{1F600} is the emoji in the emitted Go literal.
+			src: `export function s(): string { return "tab\tand\nemoji \u{1F600}"; }`,
+		},
+		{
+			name:   "strlit_lone_surrogate",
+			golden: "func_strlit_lone_surrogate.golden",
+			// a literal whose \u escape names a lone surrogate cannot be a Go string,
+			// so it lowers to value.FromUTF16 of the raw code units.
+			src: `export function s(): string { return "\uD83D"; }`,
+		},
+		{
 			name:   "strlen",
 			golden: "func_strlen.golden",
 			// .length on a string is the UTF-16 code-unit count, the value.BStr

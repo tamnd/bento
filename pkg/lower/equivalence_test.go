@@ -503,6 +503,18 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"  hi  "}, {"x "}, {"none"}},
 		},
 		{
+			name: "strlitEscapes",
+			// a literal carrying control-character escapes, a \x hex escape, and a
+			// braced \u{...} code point (the emoji): the compiler decodes them to code
+			// units at lower time, and the engine decodes them at parse time, so the
+			// two returned strings must match. A zero-argument function, so the one
+			// call passes no arguments.
+			src:  `export function lit(): string { return "tab\tnl\nhex\x41 emoji\u{1F600}"; }`,
+			fn:   "lit",
+			ret:  "string",
+			args: [][]any{{}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the
