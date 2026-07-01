@@ -96,6 +96,13 @@ func TestRenderFuncGoldens(t *testing.T) {
 }`,
 		},
 		{
+			name:   "modulo",
+			golden: "func_modulo.golden",
+			// % on numbers is fmod, not Go's integer remainder, so it lowers to a
+			// math.Mod call rather than a Go % operator.
+			src: "export function rem(a: number, b: number): number { return a % b; }",
+		},
+		{
 			name:   "logical",
 			golden: "func_logical.golden",
 			// && and || on boolean operands map to Go's short-circuit operators,
@@ -148,9 +155,6 @@ func TestRenderFuncVoidReturn(t *testing.T) {
 // NotYetLowerable rather than wrong or incomplete Go.
 func TestRenderFuncHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
-		// % is fmod on JS numbers, not Go's integer remainder, so it waits for
-		// its own slice.
-		{"modulo", "export function m(a: number, b: number): number { return a % b; }"},
 		// + on strings is concatenation of a different type.
 		{"stringConcat", "export function c(a: string, b: string): string { return a + b; }"},
 		// a truthy number condition needs JavaScript coercion, not a Go bool.
