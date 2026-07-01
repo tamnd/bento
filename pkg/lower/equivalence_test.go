@@ -65,6 +65,51 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "pick",
 			args: [][]float64{{9}, {-4}},
 		},
+		{
+			name: "loop",
+			src: `export function score(n: number): number {
+  let total = 0;
+  let i = 1;
+  while (i <= n) {
+    if (i === 3) {
+      total = total + 10;
+    } else {
+      total = total + i;
+    }
+    i = i + 1;
+  }
+  return total;
+}`,
+			fn:   "score",
+			args: [][]float64{{0}, {1}, {3}, {5}, {10}},
+		},
+		{
+			name: "factorial",
+			src: `export function fact(n: number): number {
+  let acc = 1;
+  let i = 2;
+  while (i <= n) {
+    acc = acc * i;
+    i = i + 1;
+  }
+  return acc;
+}`,
+			fn:   "fact",
+			args: [][]float64{{0}, {1}, {5}, {10}},
+		},
+		{
+			name: "branch",
+			src: `export function clamp(x: number): number {
+  if (x < 0) {
+    return 0;
+  } else if (x > 100) {
+    return 100;
+  }
+  return x;
+}`,
+			fn:   "clamp",
+			args: [][]float64{{-5}, {0}, {42}, {100}, {250}},
+		},
 	}
 
 	for _, tc := range cases {
