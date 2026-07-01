@@ -110,11 +110,49 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "clamp",
 			args: [][]float64{{-5}, {0}, {42}, {100}, {250}},
 		},
+		{
+			name: "recursion",
+			src: `export function fib(n: number): number {
+  if (n < 2) {
+    return n;
+  }
+  return fib(n - 1) + fib(n - 2);
+}`,
+			fn:   "fib",
+			args: [][]float64{{0}, {1}, {7}, {12}},
+		},
+		{
+			name: "forLoopNegate",
+			src: `export function negsum(n: number): number {
+  let t = 0;
+  for (let i = 1; i <= n; i = i + 1) {
+    t = t + i;
+  }
+  return -t;
+}`,
+			fn:   "negsum",
+			args: [][]float64{{0}, {4}, {10}},
+		},
+		{
+			name: "crossCall",
+			src: `export function square(x: number): number {
+  return x * x;
+}
+export function hypotSq(a: number, b: number): number {
+  return square(a) + square(b);
+}`,
+			fn:   "hypotSq",
+			args: [][]float64{{3, 4}, {0, 0}, {-2, 5}},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			goName, goSrc := lowerToGo(t, tc.src)
+			goSrc := lowerToGo(t, tc.src)
+			goName, ok := exportedField(tc.fn)
+			if !ok {
+				t.Fatalf("entry %q is not a Go identifier", tc.fn)
+			}
 			for _, args := range tc.args {
 				want := evalTS(t, tc.src, tc.fn, args)
 				got := runGo(t, goSrc, goName, args)
@@ -126,18 +164,38 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 	}
 }
 
-// lowerToGo compiles the snippet and lowers its first function, returning the Go
-// function name and its generated source. A hand-back here is a test failure:
-// every equivalence case is inside the lowerable subset by construction.
-func lowerToGo(t *testing.T, src string) (name, goSrc string) {
+// lowerToGo compiles the snippet and lowers every top-level function plus any
+// generated type declarations, returning the combined Go source. Lowering all
+// functions (not just the entry) lets a case call a helper or recurse. A
+// hand-back here is a test failure: every equivalence case is inside the
+// lowerable subset by construction.
+func lowerToGo(t *testing.T, src string) string {
 	t.Helper()
-	prog, fn := firstFunc(t, src)
-	r := NewRenderer(prog)
-	decl, err := r.RenderFunc(fn)
-	if err != nil {
-		t.Fatalf("RenderFunc: %v", err)
+	prog := compile(t, src)
+	var fns []frontend.Node
+	collectKind(prog, prog.SourceFiles(), frontend.NodeFunctionDeclaration, &fns)
+	if len(fns) == 0 {
+		t.Fatal("no function declaration in snippet")
 	}
-	return decl.Name, decl.Source
+	r := NewRenderer(prog)
+	funcs := make([]string, 0, len(fns))
+	for _, fn := range fns {
+		decl, err := r.RenderFunc(fn)
+		if err != nil {
+			t.Fatalf("RenderFunc: %v", err)
+		}
+		funcs = append(funcs, decl.Source)
+	}
+	var b strings.Builder
+	for _, d := range r.Decls() { // struct and enum decls the functions referenced
+		b.WriteString(d.Source)
+		b.WriteByte('\n')
+	}
+	for _, f := range funcs {
+		b.WriteString(f)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // evalTS transpiles the TypeScript to JavaScript, evaluates it in the engine,
@@ -149,7 +207,7 @@ func evalTS(t *testing.T, src, fn string, args []float64) float64 {
 	// function must stay a top-level declaration rather than a module export;
 	// dropping the export keyword keeps identical runtime behavior without
 	// pulling in a CommonJS module scope the bare Eval does not provide.
-	global := strings.Replace(src, "export ", "", 1)
+	global := strings.ReplaceAll(src, "export ", "")
 	js, err := frontend.Transpile(global, frontend.Options{Filename: "m.ts"})
 	if err != nil {
 		t.Fatalf("Transpile: %v", err)
