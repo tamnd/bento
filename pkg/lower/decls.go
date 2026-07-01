@@ -139,11 +139,18 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property) (stri
 	}
 	b.WriteString("}\n")
 
-	formatted, err := format.Source([]byte(b.String()))
+	return formatDecl(b.String())
+}
+
+// formatDecl runs one generated top-level declaration through go/format so it is
+// gofmt-clean, which section 2 requires so a developer reading a stack trace
+// sees legible Go. A format failure means the emitted text is not valid Go,
+// which is a lowering bug rather than a source-driven boundary, so it surfaces
+// as a NotYetLowerable naming the offending source rather than crashing.
+func formatDecl(src string) (string, error) {
+	formatted, err := format.Source([]byte(src))
 	if err != nil {
-		// A format failure means the emitted text is not valid Go, which is a
-		// lowering bug, not a source-driven boundary; surface it as one.
-		return "", &NotYetLowerable{Reason: "generated struct did not format: " + err.Error()}
+		return "", &NotYetLowerable{Reason: "generated declaration did not format: " + err.Error()}
 	}
 	return string(formatted), nil
 }

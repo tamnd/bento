@@ -1,0 +1,121 @@
+package lower
+
+import (
+	"sort"
+	"strings"
+
+	"github.com/tamnd/bento/pkg/frontend"
+)
+
+// This file lowers union types (05_type_lowering.md sections 9 and 10). It lands
+// the closed string-literal union first: a union whose every member is a string
+// literal is a closed, compile-time-known set of strings, so it lowers to a
+// small integer tag enum rather than carrying a full bstr, and the comparisons
+// the source writes against those literals become integer compares (section 10).
+// The general tagged sum struct of section 9, for unions of unlike member types,
+// is a later slice, so a union with any non-string-literal member hands back.
+
+// renderUnion lowers a union type to the Go type that represents it. Today it
+// covers only the closed string-literal union; every other union hands back so
+// the partitioner routes the unit to the engine rather than get a wrong Go type.
+func (r *Renderer) renderUnion(t frontend.Type) (string, error) {
+	members := r.prog.UnionMembers(t)
+	values := make([]string, 0, len(members))
+	for _, m := range members {
+		lit, ok := r.prog.LiteralValue(m)
+		if !ok || lit.Kind != frontend.LiteralString {
+			return "", &NotYetLowerable{Flags: t.Flags, Reason: "union with a non-string-literal member needs the tagged sum struct, a later slice"}
+		}
+		values = append(values, lit.Str)
+	}
+	if len(values) == 0 {
+		// A union the checker reports with no members is degenerate (never), which
+		// has no value representation to render.
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "union with no members has no lowering"}
+	}
+	return r.decls.internStringEnum(t.Identity(), values)
+}
+
+// internStringEnum returns the Go enum type name for a closed string-literal
+// union, generating the type and its tag constants the first time it sees the
+// set and reusing the name after. Like the struct interner it keys on the
+// union's structural identity so the same set of literals shares one enum, and
+// it sorts the member values so the tag assignment (the iota order) and the
+// generated name are independent of the order the checker lists the union.
+func (d *declSet) internStringEnum(id int, values []string) (string, error) {
+	if name, ok := d.nameByIdentity[id]; ok {
+		return name, nil
+	}
+
+	sorted := append([]string(nil), values...)
+	sort.Strings(sorted)
+
+	variants, err := enumVariantNames(sorted)
+	if err != nil {
+		return "", err
+	}
+
+	name := d.reserve("Lit" + strings.Join(variants, ""))
+	d.nameByIdentity[id] = name
+
+	body, err := renderStringEnum(name, variants)
+	if err != nil {
+		delete(d.nameByIdentity, id)
+		delete(d.used, name)
+		d.order = d.order[:len(d.order)-1]
+		return "", err
+	}
+	d.source[name] = body
+	return name, nil
+}
+
+// enumVariantNames turns each string-literal value into the exported Go name of
+// its tag constant. A value that is not spelled as a Go identifier (a space, a
+// leading digit, punctuation) has no clean constant name; the mangled name table
+// that would carry it is a later slice, so such a set hands back rather than
+// invent a name. Two values that capitalize to the same identifier get a numeric
+// suffix so every tag in one enum stays distinct.
+func enumVariantNames(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	used := map[string]bool{}
+	for _, v := range values {
+		variant, ok := exportedField(v)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "string-literal union member is not an identifier; the mangled name table is a later slice"}
+		}
+		base := variant
+		for n := 2; used[variant]; n++ {
+			variant = base + itoa(n)
+		}
+		used[variant] = true
+		out = append(out, variant)
+	}
+	return out, nil
+}
+
+// renderStringEnum renders the enum declaration: an unsigned integer tag type and
+// the const block that names each tag, the first at iota so the rest follow. The
+// tag names are the enum type name concatenated with each variant, which keeps
+// them unique across enums without a package-level collision. The result is run
+// through go/format so it is gofmt-clean, matching the struct path.
+func renderStringEnum(name string, variants []string) (string, error) {
+	var b strings.Builder
+	b.WriteString("type ")
+	b.WriteString(name)
+	b.WriteString(" uint8\n\n")
+	b.WriteString("const (\n")
+	for i, variant := range variants {
+		b.WriteString("\t")
+		b.WriteString(name)
+		b.WriteString(variant)
+		if i == 0 {
+			b.WriteString(" ")
+			b.WriteString(name)
+			b.WriteString(" = iota")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(")\n")
+
+	return formatDecl(b.String())
+}
