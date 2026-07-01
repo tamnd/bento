@@ -172,6 +172,20 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function starts(s: string, p: string): boolean { return s.startsWith(p); }`,
 		},
 		{
+			name:   "endswith",
+			golden: "func_endswith.golden",
+			// the suffix companion of startsWith, the same string-then-optional-number
+			// shape.
+			src: `export function ends(s: string, p: string): boolean { return s.endsWith(p); }`,
+		},
+		{
+			name:   "startswith_pos",
+			golden: "func_startswith_pos.golden",
+			// startsWith with the optional position, which lowers to the variadic
+			// StartsWith with the second argument the source supplied.
+			src: `export function startsAt(s: string, p: string, at: number): boolean { return s.startsWith(p, at); }`,
+		},
+		{
 			name:   "slice2",
 			golden: "func_slice2.golden",
 			// slice with both arguments; the Go method is variadic but the call

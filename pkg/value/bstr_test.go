@@ -206,6 +206,54 @@ func TestSearchMethods(t *testing.T) {
 	}
 }
 
+// TestEndsWith pins String.prototype.endsWith: the suffix is matched in the window
+// that ends at the optional end position (defaulting to the length), so an end
+// position shorter than the string checks a prefix window, and a suffix past the
+// astral character keeps the code-unit indexing.
+func TestEndsWith(t *testing.T) {
+	s := FromGoString("hello")
+	cases := []struct {
+		suffix string
+		pos    []float64
+		want   bool
+	}{
+		{"lo", nil, true},
+		{"he", nil, false},
+		{"hell", []float64{4}, true}, // window ends at 4, so "hell"
+		{"lo", []float64{4}, false},  // "lo" does not end at index 4
+		{"", nil, true},              // the empty suffix ends everywhere
+		{"hello world", nil, false},  // a suffix longer than the string
+	}
+	for _, c := range cases {
+		if got := s.EndsWith(FromGoString(c.suffix), c.pos...); got != c.want {
+			t.Errorf("EndsWith(%q, %v) = %v, want %v", c.suffix, c.pos, got, c.want)
+		}
+	}
+	// code units: the emoji ends the string at its low-surrogate boundary.
+	if !FromGoString("a😀").EndsWith(FromGoString("😀")) {
+		t.Error("EndsWith(emoji) = false, want true")
+	}
+}
+
+// TestSearchPositions pins the optional position on startsWith and includes: a
+// startsWith position moves where the prefix must begin, and an includes position
+// skips a match that lies before it.
+func TestSearchPositions(t *testing.T) {
+	s := FromGoString("abcabc")
+	if !s.StartsWith(FromGoString("abc"), 3) {
+		t.Error("StartsWith(\"abc\", 3) = false, want true")
+	}
+	if s.StartsWith(FromGoString("abc"), 1) {
+		t.Error("StartsWith(\"abc\", 1) = true, want false")
+	}
+	if s.Includes(FromGoString("a"), 4) {
+		t.Error("Includes(\"a\", 4) = true, want false")
+	}
+	if !s.Includes(FromGoString("a"), 3) {
+		t.Error("Includes(\"a\", 3) = false, want true")
+	}
+}
+
 // TestIndexOfPosition pins the optional start position on indexOf: the scan
 // begins at the clamped position, so a match before it is skipped, and the empty
 // search returns the clamped position rather than always 0.
