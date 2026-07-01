@@ -46,6 +46,9 @@ const bootstrap = `
   if (typeof globalThis.Request === "undefined") globalThis.Request = fetchMod.Request;
   if (typeof globalThis.Response === "undefined") globalThis.Response = fetchMod.Response;
 
+  var wsMod = require("websocket");
+  if (typeof globalThis.WebSocket === "undefined") globalThis.WebSocket = wsMod.WebSocket;
+
   // TextEncoder/TextDecoder are the canonical utf8 codec. Buffer's utf8 paths
   // delegate here when these globals exist, so the encoders must implement utf8
   // directly rather than routing back through Buffer, or the two recurse into a
@@ -191,6 +194,9 @@ func InstallNet(eng engine.Engine, loop LoopHost) error {
 	}
 	if err := installDgram(eng, loop); err != nil {
 		return fmt.Errorf("node: install dgram: %w", err)
+	}
+	if err := installWS(eng, loop); err != nil {
+		return fmt.Errorf("node: install websocket: %w", err)
 	}
 	return nil
 }
