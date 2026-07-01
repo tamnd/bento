@@ -189,6 +189,9 @@ func InstallNet(eng engine.Engine, loop LoopHost) error {
 	if err := installDNS(eng, loop); err != nil {
 		return fmt.Errorf("node: install dns: %w", err)
 	}
+	if err := installDgram(eng, loop); err != nil {
+		return fmt.Errorf("node: install dgram: %w", err)
+	}
 	return nil
 }
 
