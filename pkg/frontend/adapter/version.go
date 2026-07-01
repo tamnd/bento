@@ -4,12 +4,12 @@ package adapter
 // and tested against. Moving it is a deliberate act with a full frontend test
 // run behind it, per 04_frontend_typescript_go.md section 3.
 //
-// It is unset while the real adapter is blocked: typescript-go keeps its
-// checker, binder, and parser under internal/ as of mid-2026, so there is no
-// package to import and nothing to pin yet. When the stable API lands (TS 7.1,
-// or a bento fork that re-exports the internal packages through a public shim),
-// this becomes the locked sha and Revision on the real adapter returns it.
-const PinnedRevision = ""
+// bento consumes typescript-go through the tamnd/typescript fork, which adds a
+// public shim package over the compiler's internal checker, binder, and parser
+// (upstream keeps them under internal/). This sha is that fork's commit, wired
+// into go.mod with a replace directive; RealAdapter is built and tested against
+// it, and Revision returns it.
+const PinnedRevision = "1034b608e6e88fdb10575a7f6b1858538c5702af"
 
 // RealAdapterAvailable reports whether a real typescript-go-backed adapter can
 // be constructed in this build. It is false until the upstream API is importable
