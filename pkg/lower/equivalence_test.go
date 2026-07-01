@@ -339,6 +339,16 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"5", 3, "0"}, {"5", 6, "ab"}, {"abc", 2, "0"}, {"abc", 5, ""}},
 		},
 		{
+			name: "concatMethod",
+			// s.concat(a, b) joins three strings in order; the cases cover an empty
+			// receiver, empty arguments, and a multi-byte character so the code-unit
+			// join is exercised, all of which must match the engine's concat.
+			src:  `export function j(s: string, a: string, b: string): string { return s.concat(a, b); }`,
+			fn:   "j",
+			ret:  "string",
+			args: [][]any{{"a", "b", "c"}, {"", "x", ""}, {"π", "😀", "z"}},
+		},
+		{
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.

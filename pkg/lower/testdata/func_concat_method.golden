@@ -1,0 +1,3 @@
+func Join(s value.BStr, a value.BStr, b value.BStr) value.BStr {
+	return s.ConcatN(a, b)
+}

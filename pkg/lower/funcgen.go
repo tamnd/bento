@@ -508,11 +508,11 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
-	goName, params, minArgs, ok := stringMethod(method)
+	goName, params, minArgs, variadic, ok := stringMethod(method)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " is a later slice"}
 	}
-	if len(argNodes) < minArgs || len(argNodes) > len(params) {
+	if len(argNodes) < minArgs || (!variadic && len(argNodes) > len(params)) {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " with this argument count is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
@@ -521,7 +521,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
 	for i, a := range argNodes {
-		if !r.argHasKind(a, params[i]) {
+		// A variadic method repeats its last argument kind for every argument past
+		// the declared list, so concat's trailing string arguments all check as
+		// strings.
+		idx := i
+		if idx >= len(params) {
+			idx = len(params) - 1
+		}
+		kind := params[idx]
+		if !r.argHasKind(a, kind) {
 			return nil, &NotYetLowerable{Reason: "string method ." + method + " with an argument of the wrong type is a later slice"}
 		}
 		lowered, err := r.lowerExpr(a)
@@ -758,38 +766,42 @@ func (r *Renderer) argHasKind(n frontend.Node, k argKind) bool {
 // so the guard admits one or two arguments and still checks each against its
 // declared kind. A call always passes exactly the arguments the source wrote, so
 // the emitted call form is the same whether the method is variadic or not.
-func stringMethod(name string) (goName string, params []argKind, minArgs int, ok bool) {
+func stringMethod(name string) (goName string, params []argKind, minArgs int, variadic bool, ok bool) {
 	switch name {
 	case "charCodeAt":
-		return "CharCodeAt", []argKind{argNumber}, 1, true
+		return "CharCodeAt", []argKind{argNumber}, 1, false, true
 	case "charAt":
-		return "CharAt", []argKind{argNumber}, 1, true
+		return "CharAt", []argKind{argNumber}, 1, false, true
 	case "indexOf":
-		return "IndexOf", []argKind{argString, argNumber}, 1, true
+		return "IndexOf", []argKind{argString, argNumber}, 1, false, true
 	case "lastIndexOf":
-		return "LastIndexOf", []argKind{argString, argNumber}, 1, true
+		return "LastIndexOf", []argKind{argString, argNumber}, 1, false, true
 	case "includes":
-		return "Includes", []argKind{argString, argNumber}, 1, true
+		return "Includes", []argKind{argString, argNumber}, 1, false, true
 	case "startsWith":
-		return "StartsWith", []argKind{argString, argNumber}, 1, true
+		return "StartsWith", []argKind{argString, argNumber}, 1, false, true
 	case "endsWith":
-		return "EndsWith", []argKind{argString, argNumber}, 1, true
+		return "EndsWith", []argKind{argString, argNumber}, 1, false, true
 	case "slice":
-		return "Slice", []argKind{argNumber, argNumber}, 0, true
+		return "Slice", []argKind{argNumber, argNumber}, 0, false, true
 	case "substring":
-		return "Substring", []argKind{argNumber, argNumber}, 0, true
+		return "Substring", []argKind{argNumber, argNumber}, 0, false, true
 	case "padStart":
-		return "PadStart", []argKind{argNumber, argString}, 1, true
+		return "PadStart", []argKind{argNumber, argString}, 1, false, true
 	case "padEnd":
-		return "PadEnd", []argKind{argNumber, argString}, 1, true
+		return "PadEnd", []argKind{argNumber, argString}, 1, false, true
+	case "concat":
+		// concat takes any number of string arguments, so it is variadic over a
+		// single repeating string kind and has no upper bound.
+		return "ConcatN", []argKind{argString}, 0, true, true
 	case "trim":
-		return "Trim", nil, 0, true
+		return "Trim", nil, 0, false, true
 	case "trimStart":
-		return "TrimStart", nil, 0, true
+		return "TrimStart", nil, 0, false, true
 	case "trimEnd":
-		return "TrimEnd", nil, 0, true
+		return "TrimEnd", nil, 0, false, true
 	default:
-		return "", nil, 0, false
+		return "", nil, 0, false, false
 	}
 }
 

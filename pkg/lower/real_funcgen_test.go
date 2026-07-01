@@ -241,6 +241,14 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function padr(s: string, n: number, p: string): string { return s.padEnd(n, p); }`,
 		},
 		{
+			name:   "concat_method",
+			golden: "func_concat_method.golden",
+			// s.concat(a, b) is the variadic concat method, not the + operator, so it
+			// lowers to the value.BStr ConcatN method with every argument passed
+			// through; the variadic arity admits the two string arguments.
+			src: `export function join(s: string, a: string, b: string): string { return s.concat(a, b); }`,
+		},
+		{
 			name:   "math_floor",
 			golden: "func_math_floor.golden",
 			// Math.floor is a call on the global Math namespace, so the receiver is

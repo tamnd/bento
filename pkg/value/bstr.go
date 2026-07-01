@@ -439,6 +439,21 @@ func Concat(a, b BStr) BStr {
 	return BStr{utf16: units, lengthU16: len(units)}
 }
 
+// ConcatN returns the receiver followed by every argument in order, the lowering
+// of str.concat(a, b, ...). It stays on the UTF-8 fast path while the receiver and
+// every argument seen so far are UTF-8, appending bytes; the first argument that
+// carries a raw code-unit backing switches the whole result to the code-unit form
+// so a lone surrogate survives, matching how Concat picks a backing. With no
+// arguments it returns the receiver unchanged, which is what concat() with no
+// arguments does.
+func (s BStr) ConcatN(rest ...BStr) BStr {
+	out := s
+	for _, r := range rest {
+		out = Concat(out, r)
+	}
+	return out
+}
+
 // Equal reports whether a and b are the same string, code unit for code unit,
 // which is JavaScript string === and == on two strings. When both are on the
 // UTF-8 fast path the bytes compare directly, since equal UTF-8 means equal code
