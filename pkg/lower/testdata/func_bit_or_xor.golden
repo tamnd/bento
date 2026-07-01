@@ -1,0 +1,3 @@
+func Mix(a float64, b float64, c float64) float64 {
+	return float64(value.ToInt32((float64(value.ToInt32(a) | value.ToInt32(b)))) ^ value.ToInt32(c))
+}

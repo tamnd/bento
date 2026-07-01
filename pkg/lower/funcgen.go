@@ -858,6 +858,16 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: sel("math", "Mod"), Args: []ast.Expr{l, rr}}, nil
 	}
 
+	// The bitwise operators on numbers do not work on float64: JavaScript coerces
+	// each operand to a 32-bit integer, operates, and turns the result back into a
+	// number. So they cannot be a plain Go operator on the float64 values; they
+	// wrap the operands in value.ToInt32/ToUint32 and the result in a float64 cast.
+	// Handled here, before the operator table, so the number path can emit that
+	// form rather than a bare Go bitwise operator that would reject a float.
+	if goOp, shift, unsignedLeft, ok := bitwiseOp(opText); ok && r.isNumber(left) && r.isNumber(right) {
+		return r.bitwiseExpr(goOp, shift, unsignedLeft, left, right)
+	}
+
 	goOp, err := r.binaryOp(opText, left, right)
 	if err != nil {
 		return nil, err
@@ -872,6 +882,70 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// bitwiseOp maps a TypeScript bitwise operator to the Go token that computes it
+// on the coerced integers, and reports how the operands are coerced. shift is
+// true for the three shift operators, whose right operand is a shift count masked
+// to five bits rather than a second full operand. unsignedLeft is true only for
+// the unsigned right shift >>>, whose left operand is coerced with ToUint32 so Go
+// does a logical shift and the result is non-negative; every other operator
+// coerces the left operand with ToInt32. Arithmetic-versus-logical right shift is
+// carried entirely by the operand's signedness, since Go's >> is arithmetic on a
+// signed type and logical on an unsigned one, exactly matching >> and >>>.
+func bitwiseOp(op string) (goOp token.Token, shift, unsignedLeft, ok bool) {
+	switch op {
+	case "&":
+		return token.AND, false, false, true
+	case "|":
+		return token.OR, false, false, true
+	case "^":
+		return token.XOR, false, false, true
+	case "<<":
+		return token.SHL, true, false, true
+	case ">>":
+		return token.SHR, true, false, true
+	case ">>>":
+		return token.SHR, true, true, true
+	default:
+		return token.ILLEGAL, false, false, false
+	}
+}
+
+// bitwiseExpr lowers a bitwise expression on two numbers. The operands are
+// coerced with value.ToInt32 (or ToUint32 for the left operand of >>>), the Go
+// bitwise operator runs on the integers, and the result is cast back to float64
+// because a JavaScript bitwise result is a number. For a shift, the right operand
+// is a count masked to the low five bits (value.ToUint32(r) & 31), the ECMAScript
+// rule that a shift by 32 is a shift by 0.
+func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left, right frontend.Node) (ast.Expr, error) {
+	l, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, err
+	}
+	rr, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	leftConv := "ToInt32"
+	if unsignedLeft {
+		leftConv = "ToUint32"
+	}
+	lx := &ast.CallExpr{Fun: sel("value", leftConv), Args: []ast.Expr{l}}
+	var inner ast.Expr
+	if shift {
+		count := &ast.ParenExpr{X: &ast.BinaryExpr{
+			X:  &ast.CallExpr{Fun: sel("value", "ToUint32"), Args: []ast.Expr{rr}},
+			Op: token.AND,
+			Y:  &ast.BasicLit{Kind: token.INT, Value: "31"},
+		}}
+		inner = &ast.BinaryExpr{X: lx, Op: goOp, Y: count}
+	} else {
+		rx := &ast.CallExpr{Fun: sel("value", "ToInt32"), Args: []ast.Expr{rr}}
+		inner = &ast.BinaryExpr{X: lx, Op: goOp, Y: rx}
+	}
+	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}, nil
 }
 
 // binaryOp picks the Go operator for a TypeScript binary operator given its

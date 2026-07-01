@@ -1,0 +1,3 @@
+func Shr(a float64, b float64) float64 {
+	return float64(value.ToInt32(a) >> (value.ToUint32(b) & 31))
+}
