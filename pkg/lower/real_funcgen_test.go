@@ -199,6 +199,32 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function padr(s: string, n: number, p: string): string { return s.padEnd(n, p); }`,
 		},
 		{
+			name:   "math_floor",
+			golden: "func_math_floor.golden",
+			// Math.floor is a call on the global Math namespace, so the receiver is
+			// not lowered to a value; it becomes the math package qualifier and the
+			// call is math.Floor.
+			src: `export function fl(x: number): number { return Math.floor(x); }`,
+		},
+		{
+			name:   "math_pow",
+			golden: "func_math_pow.golden",
+			// a two-argument Math method lowers to a two-argument math function.
+			src: `export function power(a: number, b: number): number { return Math.pow(a, b); }`,
+		},
+		{
+			name:   "math_max",
+			golden: "func_math_max.golden",
+			src:    `export function bigger(a: number, b: number): number { return Math.max(a, b); }`,
+		},
+		{
+			name:   "math_nested",
+			golden: "func_math_nested.golden",
+			// Math calls compose: the argument to one is the result of another, so
+			// the whole expression lowers to nested math calls.
+			src: `export function d(a: number, b: number): number { return Math.sqrt(Math.abs(a - b)); }`,
+		},
+		{
 			name:   "trim",
 			golden: "func_trim.golden",
 			// a zero-argument string method, so the parameter list is empty and
@@ -285,6 +311,10 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		{"generic", "export function id<T>(x: T): T { return x; }"},
 		// an optional parameter needs the optional tagged type.
 		{"optionalParam", "export function o(a: number, b?: number): number { return a; }"},
+		// a locally shadowed Math is a value receiver, not the global namespace, so
+		// its method must not lower to the Go math package; it hands back as an
+		// unlowered non-string receiver instead of silently becoming math.Floor.
+		{"shadowedMath", "export function m(x: number): number { const Math = { floor: (n: number): number => n }; return Math.floor(x); }"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
