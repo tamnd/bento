@@ -178,6 +178,27 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function sub(s: string, a: number, b: number): string { return s.substring(a, b); }`,
 		},
 		{
+			name:   "padstart2",
+			golden: "func_padstart2.golden",
+			// padStart with both a number and a string argument exercises the
+			// mixed argument-kind guard: arg 0 must be a number and arg 1 a string,
+			// where the number-only methods would reject the string.
+			src: `export function pad(s: string, n: number, p: string): string { return s.padStart(n, p); }`,
+		},
+		{
+			name:   "padstart1",
+			golden: "func_padstart1.golden",
+			// padStart with only the length argument exercises the optional pad
+			// string: the same variadic Go method, called without the pad, which
+			// then defaults to a space.
+			src: `export function padsp(s: string, n: number): string { return s.padStart(n); }`,
+		},
+		{
+			name:   "padend2",
+			golden: "func_padend2.golden",
+			src:    `export function padr(s: string, n: number, p: string): string { return s.padEnd(n, p); }`,
+		},
+		{
 			name:   "trim",
 			golden: "func_trim.golden",
 			// a zero-argument string method, so the parameter list is empty and

@@ -267,6 +267,33 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"hello", 1, 3}, {"hello", 3, 1}, {"hello", -2, 3}, {"hello", 2, 100}},
 		},
 		{
+			name: "padStart2",
+			// padStart with an explicit pad string: a target longer than the
+			// string pads and repeats-then-truncates the pad, a target not longer
+			// leaves the string alone, and an empty pad string is a no-op.
+			src:  `export function pad(s: string, n: number, p: string): string { return s.padStart(n, p); }`,
+			fn:   "pad",
+			ret:  "string",
+			args: [][]any{{"5", 3, "0"}, {"5", 1, "0"}, {"5", 6, "ab"}, {"abc", 5, ""}, {"abc", -2, "0"}},
+		},
+		{
+			name: "padStart1",
+			// padStart with no pad argument defaults to a space, the optional-arg
+			// path over a mixed number-then-string signature.
+			src:  `export function padsp(s: string, n: number): string { return s.padStart(n); }`,
+			fn:   "padsp",
+			ret:  "string",
+			args: [][]any{{"7", 4}, {"7", 1}, {"hi", 5}},
+		},
+		{
+			name: "padEnd2",
+			// padEnd appends the filler instead of prepending it; same rules.
+			src:  `export function padr(s: string, n: number, p: string): string { return s.padEnd(n, p); }`,
+			fn:   "padr",
+			ret:  "string",
+			args: [][]any{{"5", 3, "0"}, {"5", 6, "ab"}, {"abc", 2, "0"}, {"abc", 5, ""}},
+		},
+		{
 			name: "trim",
 			// The inputs carry the exact ECMAScript whitespace set, not just ASCII
 			// spaces: a tab and newlines, a no-break space (U+00A0), and a

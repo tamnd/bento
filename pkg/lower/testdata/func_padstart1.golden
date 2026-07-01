@@ -1,0 +1,3 @@
+func Padsp(s value.BStr, n float64) value.BStr {
+	return s.PadStart(n)
+}

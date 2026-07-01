@@ -1,0 +1,3 @@
+func Padr(s value.BStr, n float64, p value.BStr) value.BStr {
+	return s.PadEnd(n, p)
+}
