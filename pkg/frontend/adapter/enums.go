@@ -137,6 +137,17 @@ const (
 	NodeAwaitExpression
 	NodeYieldExpression
 	NodeSpreadElement
+	NodeParenthesizedExpression
+
+	// Literals and keyword-valued expressions, the leaves lowering reads a
+	// constant from.
+	NodeNumericLiteral
+	NodeStringLiteral
+	NodeBigIntLiteral
+	NodeNoSubstitutionTemplateLiteral
+	NodeTrueKeyword
+	NodeFalseKeyword
+	NodeNullKeyword
 
 	// Constructs the partitioner treats as hard blockers when present.
 	NodeWithStatement

@@ -492,6 +492,8 @@ func (a *RealAdapter) SpanOf(n NodeHandle) (start, end int, file string) {
 	return node.Pos(), node.End(), shim.FileName(node)
 }
 
+func (a *RealAdapter) TextOf(n NodeHandle) string { return shim.NodeText(nodeOf(n)) }
+
 func (a *RealAdapter) FileKindOf(file string) FileKind {
 	switch {
 	case strings.HasSuffix(file, ".d.ts"):
