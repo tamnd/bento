@@ -533,11 +533,11 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 // receiver is not lowered, since Math is a namespace, not a value: it becomes the
 // math package qualifier.
 func (r *Renderer) mathCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
-	pkg, goName, arity, ok := mathMethod(method)
+	pkg, goName, minArity, maxArity, ok := mathMethod(method)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "Math." + method + " is a later slice"}
 	}
-	if len(argNodes) != arity {
+	if len(argNodes) < minArity || (maxArity >= 0 && len(argNodes) > maxArity) {
 		return nil, &NotYetLowerable{Reason: "Math." + method + " with this argument count is a later slice"}
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
@@ -605,40 +605,42 @@ func numberMethod(name string) (goName string, ok bool) {
 }
 
 // mathMethod maps a JavaScript Math method to the Go function that computes the
-// same value, with the package it lives in and the argument count. Most map
-// straight onto the Go math package: floor, ceil, trunc, abs, and sqrt are IEEE
-// operations that agree bit for bit, and pow, min, and max fold two numbers with
-// the same NaN and signed-zero rules. round and sign map to the value package
-// instead, because JavaScript's rules differ from Go's: Math.round breaks a tie
-// toward +Infinity where math.Round rounds away from zero, and Go has no math.Sign
-// at all, so value.Round and value.Sign carry the exact semantics. Left out on
-// purpose: the transcendental functions (sin, log, exp), whose last-bit results
-// are not guaranteed identical across two libm implementations. Each is a later
-// slice.
-func mathMethod(name string) (pkg, goName string, arity int, ok bool) {
+// same value, with the package it lives in and the accepted argument count as a
+// [minArity, maxArity] range (maxArity of -1 means unbounded). Most map straight
+// onto the Go math package: floor, ceil, trunc, abs, and sqrt are IEEE operations
+// that agree bit for bit, and pow folds two numbers with the same NaN and
+// signed-zero rules. min and max map to the value package because JavaScript lets
+// them take any number of arguments where math.Min and math.Max take exactly two,
+// so value.MinN and value.MaxN fold a whole argument list with the same identity,
+// NaN, and signed-zero rules. round and sign also map to value: Math.round breaks
+// a tie toward +Infinity where math.Round rounds away from zero, and Go has no
+// math.Sign at all. Left out on purpose: the transcendental functions (sin, log,
+// exp), whose last-bit results are not guaranteed identical across two libm
+// implementations. Each is a later slice.
+func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok bool) {
 	switch name {
 	case "floor":
-		return "math", "Floor", 1, true
+		return "math", "Floor", 1, 1, true
 	case "ceil":
-		return "math", "Ceil", 1, true
+		return "math", "Ceil", 1, 1, true
 	case "trunc":
-		return "math", "Trunc", 1, true
+		return "math", "Trunc", 1, 1, true
 	case "abs":
-		return "math", "Abs", 1, true
+		return "math", "Abs", 1, 1, true
 	case "sqrt":
-		return "math", "Sqrt", 1, true
+		return "math", "Sqrt", 1, 1, true
 	case "pow":
-		return "math", "Pow", 2, true
+		return "math", "Pow", 2, 2, true
 	case "min":
-		return "math", "Min", 2, true
+		return valuePkg, "MinN", 0, -1, true
 	case "max":
-		return "math", "Max", 2, true
+		return valuePkg, "MaxN", 0, -1, true
 	case "round":
-		return valuePkg, "Round", 1, true
+		return valuePkg, "Round", 1, 1, true
 	case "sign":
-		return valuePkg, "Sign", 1, true
+		return valuePkg, "Sign", 1, 1, true
 	default:
-		return "", "", 0, false
+		return "", "", 0, 0, false
 	}
 }
 

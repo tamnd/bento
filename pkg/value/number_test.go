@@ -132,6 +132,42 @@ func TestSign(t *testing.T) {
 	}
 }
 
+// TestMinMaxN pins the variadic Math.min and Math.max: the no-argument identities
+// (+Infinity and -Infinity), the single-argument passthrough, ordinary folds over
+// several arguments, the signed-zero order, and NaN propagation.
+func TestMinMaxN(t *testing.T) {
+	if got := MinN(); !math.IsInf(got, 1) {
+		t.Errorf("MinN() = %v, want +Inf", got)
+	}
+	if got := MaxN(); !math.IsInf(got, -1) {
+		t.Errorf("MaxN() = %v, want -Inf", got)
+	}
+	if got := MinN(5); got != 5 {
+		t.Errorf("MinN(5) = %v, want 5", got)
+	}
+	if got := MinN(3, 1, 2); got != 1 {
+		t.Errorf("MinN(3, 1, 2) = %v, want 1", got)
+	}
+	if got := MaxN(3, 1, 2); got != 3 {
+		t.Errorf("MaxN(3, 1, 2) = %v, want 3", got)
+	}
+	// signed zeros: min keeps -0, max keeps +0.
+	negZero := math.Copysign(0, -1)
+	if got := MinN(negZero, 0); !math.Signbit(got) || got != 0 {
+		t.Errorf("MinN(-0, 0) = %v, want -0", got)
+	}
+	if got := MaxN(negZero, 0); math.Signbit(got) || got != 0 {
+		t.Errorf("MaxN(-0, 0) = %v, want +0", got)
+	}
+	// any NaN argument makes the whole result NaN.
+	if got := MinN(1, math.NaN(), 2); !math.IsNaN(got) {
+		t.Errorf("MinN(1, NaN, 2) = %v, want NaN", got)
+	}
+	if got := MaxN(1, math.NaN(), 2); !math.IsNaN(got) {
+		t.Errorf("MaxN(1, NaN, 2) = %v, want NaN", got)
+	}
+}
+
 func TestToInt32(t *testing.T) {
 	cases := []struct {
 		in   float64

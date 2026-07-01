@@ -242,7 +242,16 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{
 			name:   "math_max",
 			golden: "func_math_max.golden",
-			src:    `export function bigger(a: number, b: number): number { return Math.max(a, b); }`,
+			// Math.max takes any number of arguments, so it lowers to the variadic
+			// value.MaxN rather than the two-argument math.Max.
+			src: `export function bigger(a: number, b: number): number { return Math.max(a, b); }`,
+		},
+		{
+			name:   "math_min3",
+			golden: "func_math_min3.golden",
+			// three arguments, which the old two-argument arity would have handed
+			// back; value.MinN takes the whole list.
+			src: `export function least(a: number, b: number, c: number): number { return Math.min(a, b, c); }`,
 		},
 		{
 			name:   "math_nested",
