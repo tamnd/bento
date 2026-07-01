@@ -466,6 +466,16 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{3, 2}, {1, 0}, {0, 0}},
 		},
 		{
+			name: "globalIsNaNIsFinite",
+			// the bare global isNaN and isFinite over x / y, covering a finite result,
+			// an infinity (1/0), and a NaN (0/0). On a number argument these coerce to
+			// nothing, so they must agree with the engine's coercing globals.
+			src:  `export function g(x: number, y: number): boolean { return isNaN(x / y) || isFinite(x / y); }`,
+			fn:   "g",
+			ret:  "boolean",
+			args: [][]any{{3, 2}, {1, 0}, {0, 0}},
+		},
+		{
 			name: "numberIsSafeInteger",
 			// x * y lets a case exceed the safe-integer range: 9007199254740992 is
 			// 2^53, an integer that is not safe, so the harness pins the boundary.
