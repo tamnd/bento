@@ -334,6 +334,40 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{3, 7}, {7, 3}, {4, 4}, {-1, -5}},
 		},
 		{
+			name: "bitAndOrXor",
+			// the three logical bitwise operators over positive, negative (which
+			// exercises the two's-complement ToInt32 wrap), and zero operands.
+			src:  `export function b(a: number, c: number): number { return (a & c) | (a ^ c); }`,
+			fn:   "b",
+			args: [][]any{{12, 10}, {-1, 255}, {0, 0}, {-8, 3}},
+		},
+		{
+			name: "bitShifts",
+			// left and arithmetic-right shift, including a negative left operand so
+			// the sign propagation of >> is checked, and a count above 31 to pin the
+			// five-bit mask.
+			src:  `export function sh(a: number, n: number): number { return (a << n) >> n; }`,
+			fn:   "sh",
+			args: [][]any{{1, 4}, {-1, 2}, {255, 1}, {1, 33}},
+		},
+		{
+			name: "bitUnsignedShift",
+			// >>> is the operator that most visibly differs from a signed shift:
+			// -1 >>> 0 is 4294967295, not -1, so the ToUint32 coercion is what makes
+			// the emitted Go agree with the engine.
+			src:  `export function us(a: number, n: number): number { return a >>> n; }`,
+			fn:   "us",
+			args: [][]any{{-1, 0}, {-1, 1}, {256, 2}, {8, 1}},
+		},
+		{
+			name: "bitCoerceFraction",
+			// a fractional operand must truncate before the bitwise op, the ToInt32
+			// step, so 6.9 & 3 is 6 & 3, not a float operation.
+			src:  `export function f(a: number, c: number): number { return a & c; }`,
+			fn:   "f",
+			args: [][]any{{6.9, 3}, {-6.9, 3}},
+		},
+		{
 			name: "trim",
 			// The inputs carry the exact ECMAScript whitespace set, not just ASCII
 			// spaces: a tab and newlines, a no-break space (U+00A0), and a

@@ -225,6 +225,41 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function d(a: number, b: number): number { return Math.sqrt(Math.abs(a - b)); }`,
 		},
 		{
+			name:   "bit_and",
+			golden: "func_bit_and.golden",
+			// & on numbers is not a Go & on float64; each operand coerces through
+			// value.ToInt32, the operator runs on the ints, and the result casts
+			// back to float64.
+			src: `export function band(a: number, b: number): number { return a & b; }`,
+		},
+		{
+			name:   "bit_or_xor",
+			golden: "func_bit_or_xor.golden",
+			// | and ^ compose the same way, so a nested expression pins both in one
+			// golden.
+			src: `export function mix(a: number, b: number, c: number): number { return (a | b) ^ c; }`,
+		},
+		{
+			name:   "bit_shl",
+			golden: "func_bit_shl.golden",
+			// << masks the shift count to five bits through value.ToUint32, so the
+			// right operand lowers differently from the left.
+			src: `export function shl(a: number, b: number): number { return a << b; }`,
+		},
+		{
+			name:   "bit_shr",
+			golden: "func_bit_shr.golden",
+			// >> is an arithmetic shift, carried by the signed ToInt32 left operand.
+			src: `export function shr(a: number, b: number): number { return a >> b; }`,
+		},
+		{
+			name:   "bit_ushr",
+			golden: "func_bit_ushr.golden",
+			// >>> is a logical shift: the left operand coerces with ToUint32 so Go's
+			// >> on an unsigned type is logical and the result is non-negative.
+			src: `export function ushr(a: number, b: number): number { return a >>> b; }`,
+		},
+		{
 			name:   "trim",
 			golden: "func_trim.golden",
 			// a zero-argument string method, so the parameter list is empty and
