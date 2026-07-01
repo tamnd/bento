@@ -190,6 +190,14 @@ type Type struct {
 	id    typeID
 }
 
+// Identity returns a small integer stable within one Program that is equal for
+// two Type values naming the same underlying type. It is enough to break cycles
+// when a consumer walks a recursive type (an object whose field type refers back
+// to itself) without exposing the typescript-go type object. Two Type values
+// from different programs may share an id, so use it only within one program's
+// traversal.
+func (t Type) Identity() int { return int(t.id) }
+
 // Symbol is bento's view of a bound declaration. Identity is by the opaque id,
 // so two Symbol values name the same symbol when their ids are equal.
 type Symbol struct {
