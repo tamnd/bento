@@ -21,6 +21,7 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/loop"
 	"github.com/tamnd/bento/pkg/node"
+	"github.com/tamnd/bento/pkg/resolve"
 )
 
 //go:embed prelude.js
@@ -46,12 +47,13 @@ type Config struct {
 
 // Runtime is a live JavaScript host bound to one engine and loop.
 type Runtime struct {
-	cfg     Config
-	eng     engine.Engine
-	loop    *loop.Loop
-	stdout  io.Writer
-	stderr  io.Writer
-	started time.Time
+	cfg      Config
+	eng      engine.Engine
+	loop     *loop.Loop
+	resolver *resolve.Resolver
+	stdout   io.Writer
+	stderr   io.Writer
+	started  time.Time
 }
 
 // New builds a runtime and its global environment. Close must be called when
@@ -70,12 +72,13 @@ func New(cfg Config) (*Runtime, error) {
 	}
 
 	rt := &Runtime{
-		cfg:     cfg,
-		eng:     eng,
-		loop:    loop.New(eng),
-		stdout:  cfg.Stdout,
-		stderr:  cfg.Stderr,
-		started: time.Now(),
+		cfg:      cfg,
+		eng:      eng,
+		loop:     loop.New(eng),
+		resolver: newResolver(),
+		stdout:   cfg.Stdout,
+		stderr:   cfg.Stderr,
+		started:  time.Now(),
 	}
 
 	if err := rt.installHostFuncs(); err != nil {
@@ -132,11 +135,17 @@ func (rt *Runtime) RunString(name, source string) error {
 	return rt.loop.Run()
 }
 
-// evalEntry runs the entry module's transpiled code in the global scope. The
-// prelude already provides module, exports, and require, so CommonJS output runs
-// directly.
+// evalEntry runs the entry module's transpiled code through the prelude's module
+// wrapper so it gets its own module record and a require bound to its directory.
+// The entry path is made absolute so relative imports and the module cache key on
+// a stable identity, matching how Node keys __filename.
 func (rt *Runtime) evalEntry(path, code string) error {
-	if _, err := rt.eng.Eval(filepath.Base(path), code); err != nil {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	dir := filepath.Dir(abs)
+	if _, err := rt.eng.Call("__bento_runEntry", abs, code, dir); err != nil {
 		return err
 	}
 	return nil
@@ -197,6 +206,15 @@ func (rt *Runtime) installHostFuncs() error {
 
 	if err := reg("__bento_hrtime", func(args []any) (any, error) {
 		return float64(time.Since(rt.started).Nanoseconds()), nil
+	}); err != nil {
+		return err
+	}
+
+	if err := reg("__bento_loadModule", func(args []any) (any, error) {
+		spec := toString(arg(args, 0))
+		parentPath := toString(arg(args, 1))
+		parentFormat := toString(arg(args, 2))
+		return rt.loadModule(spec, parentPath, parentFormat), nil
 	}); err != nil {
 		return err
 	}

@@ -213,14 +213,16 @@
   g.process = process;
 
   // ---- module system ----------------------------------------------------
-  // Two registries back require(). `resolved` holds already-built exports for
+  // Three registries back require(). `resolved` holds already-built exports for
   // eagerly registered modules and the cache of native modules that have run.
   // `factories` holds native core modules as functions that build their exports
-  // lazily on first require, matching Node's own lazy core loading. The full
-  // on-disk resolver lands in a later milestone; user file resolution plugs in
-  // through __bento_resolveHook when it arrives.
+  // lazily on first require, matching Node's own lazy core loading. `userCache`
+  // holds on-disk modules keyed by their realpath, so a file required twice runs
+  // once. User resolution and loading go through the __bento_loadModule host
+  // bridge, which drives the Go resolver and transpiler.
   const resolved = new Map();
   const factories = new Map();
+  const userCache = Object.create(null);
 
   function withNodePrefix(name, set) {
     set(name);
@@ -263,19 +265,121 @@
     return err;
   }
 
-  g.require = function (spec) {
-    const found = loadNative(spec);
-    if (found !== undefined) return found;
-    throw moduleNotFound(spec);
-  };
-  g.require.resolve = function (spec) {
-    if (resolved.has(spec) || factories.has(spec)) return spec;
-    throw moduleNotFound(spec);
-  };
-  g.require.cache = {};
+  // dirnameOf returns the directory portion of a path, a plain string helper used
+  // when the host does not supply a directory (data: modules and the like).
+  function dirnameOf(p) {
+    const i = p.lastIndexOf("/");
+    if (i < 0) return ".";
+    return i === 0 ? "/" : p.slice(0, i);
+  }
 
-  // A single top-level module record for the entry file. The real module system
-  // gives each file its own record; this is enough to run one entry point.
+  // compileModule wraps transpiled CommonJS source in the classic Node module
+  // wrapper via the Function constructor, so exports, require, module, __filename,
+  // and __dirname are the module's own locals rather than shared globals.
+  function compileModule(code, filename) {
+    try {
+      return new Function("exports", "require", "module", "__filename", "__dirname", code);
+    } catch (e) {
+      if (e instanceof Error) e.message = filename + ": " + e.message;
+      throw e;
+    }
+  }
+
+  // loadUserModule runs an on-disk (or data:) module the host already resolved
+  // and, for code, transpiled. The record is cached before the body runs so a
+  // circular require sees the partial exports, exactly as Node does.
+  function loadUserModule(info) {
+    const cached = userCache[info.path];
+    if (cached) return cached.exports;
+
+    const record = {
+      id: info.path,
+      filename: info.path,
+      exports: {},
+      loaded: false,
+      format: info.format || "commonjs",
+    };
+    userCache[info.path] = record;
+
+    try {
+      if (info.kind === "json") {
+        record.exports = JSON.parse(info.source);
+        record.loaded = true;
+        return record.exports;
+      }
+      const fn = compileModule(info.code, info.path);
+      const dir = info.dir || dirnameOf(info.path);
+      fn.call(record.exports, record.exports, requireFrom(info.path, record.format), record, info.path, dir);
+      record.loaded = true;
+      return record.exports;
+    } catch (e) {
+      // A module that throws while loading must not leave a poisoned half-built
+      // entry behind; a later require should try again from scratch.
+      delete userCache[info.path];
+      throw e;
+    }
+  }
+
+  // requireFrom builds a require function bound to one module's path and format,
+  // so relative specifiers resolve against that module's directory. Core modules
+  // win first (Node core always beats a same-named package), then the host
+  // resolver handles files, packages, and data: URLs.
+  function requireFrom(parentPath, parentFormat) {
+    function req(spec) {
+      const native = loadNative(spec);
+      if (native !== undefined) return native;
+
+      const info = JSON.parse(__bento_loadModule(spec, parentPath || "", parentFormat || "commonjs"));
+      if (!info.ok) {
+        const err = new Error(info.message || "Cannot find module '" + spec + "'");
+        err.code = info.errCode || "MODULE_NOT_FOUND";
+        throw err;
+      }
+      if (info.kind === "builtin") {
+        const mod = loadNative(info.path);
+        if (mod !== undefined) return mod;
+        throw moduleNotFound(spec);
+      }
+      return loadUserModule(info);
+    }
+    req.resolve = function (spec) {
+      if (resolved.has(spec) || factories.has(spec)) return spec;
+      const info = JSON.parse(__bento_loadModule(spec, parentPath || "", parentFormat || "commonjs"));
+      if (!info.ok) throw moduleNotFound(spec);
+      return info.path;
+    };
+    req.cache = userCache;
+    return req;
+  }
+
+  // The default require is bound to the current directory. The entry module and
+  // each user module get their own directory-bound require through requireFrom.
+  g.require = requireFrom("", "commonjs");
+
+  // __bento_runEntry runs the transpiled entry file through the same module
+  // wrapper as any other module, giving it its own record and a require bound to
+  // its directory. The runtime calls this once per program.
+  g.__bento_runEntry = function (filename, code, dir) {
+    const record = {
+      id: ".",
+      filename: filename,
+      exports: {},
+      loaded: false,
+      format: "commonjs",
+    };
+    userCache[filename] = record;
+    const fn = compileModule(code, filename);
+    // Keep the well-known globals pointing at the entry so scripts that read a
+    // bare module or exports at top level still see the running module.
+    g.module = record;
+    g.exports = record.exports;
+    fn.call(record.exports, record.exports, requireFrom(filename, "commonjs"), record, filename, dir);
+    record.loaded = true;
+    g.exports = record.exports;
+  };
+
+  // A top-level module record for code that reads module/exports before the
+  // entry runs. __bento_runEntry replaces it with the real entry record.
   g.module = { exports: {}, id: ".", loaded: false };
   g.exports = g.module.exports;
 
