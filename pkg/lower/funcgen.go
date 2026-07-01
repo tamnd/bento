@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -157,6 +158,8 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerIf(n)
 	case frontend.NodeWhileStatement:
 		return r.lowerWhile(n)
+	case frontend.NodeForStatement:
+		return r.lowerFor(n)
 	default:
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	}
@@ -186,8 +189,15 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 func (r *Renderer) lowerVarStatement(n frontend.Node) (ast.Stmt, error) {
 	var decls []frontend.Node
 	collectVarDecls(r.prog, n, &decls)
+	return r.varDeclStmt(decls)
+}
+
+// varDeclStmt builds a Go var declaration statement from a set of variable
+// declaration nodes. It is shared by a const/let statement and a for-loop
+// initializer, so both spell a binding the same way.
+func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	if len(decls) == 0 {
-		return nil, &NotYetLowerable{Reason: "variable statement has no binding"}
+		return nil, &NotYetLowerable{Reason: "variable declaration has no binding"}
 	}
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
@@ -238,9 +248,17 @@ func (r *Renderer) lowerExprStatement(n frontend.Node) (ast.Stmt, error) {
 	if len(kids) != 1 || kids[0].Kind() != frontend.NodeBinaryExpression {
 		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment is a later slice"}
 	}
-	parts := r.prog.Children(kids[0])
+	return r.lowerAssign(kids[0])
+}
+
+// lowerAssign lowers a binary "=" expression to a Go assignment statement. It is
+// shared by an assignment used as a statement and a for-loop's post clause. The
+// target must be a local identifier; assigning to a property or an element is a
+// later slice.
+func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
+	parts := r.prog.Children(bin)
 	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
-		return nil, &NotYetLowerable{Reason: "compound or non-assignment expression statement is a later slice"}
+		return nil, &NotYetLowerable{Reason: "compound or non-assignment expression is a later slice"}
 	}
 	if parts[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "assignment to a non-identifier target is a later slice"}
@@ -258,6 +276,45 @@ func (r *Renderer) lowerExprStatement(n frontend.Node) (ast.Stmt, error) {
 		Tok: token.ASSIGN,
 		Rhs: []ast.Expr{rhs},
 	}, nil
+}
+
+// lowerFor lowers a C-style for to Go. The classic three-clause form maps almost
+// directly, but Go forbids a var declaration in a for's init clause, so a
+// let-initialized loop is emitted as a Go block holding the declaration followed
+// by a for with an empty init: the loop variable keeps its block scope and its
+// float64 type, which a := init would lose to int inference. Only the full
+// declare-condition-increment-block shape is covered; an omitted clause or an
+// expression initializer hands back.
+func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 4 || kids[3].Kind() != frontend.NodeBlock {
+		return nil, &NotYetLowerable{Reason: "only a for with a declaration, condition, increment, and block body is lowered yet"}
+	}
+
+	var decls []frontend.Node
+	collectVarDecls(r.prog, kids[0], &decls)
+	if len(decls) == 0 {
+		return nil, &NotYetLowerable{Reason: "for loop without a let/const initializer is a later slice"}
+	}
+	initDecl, err := r.varDeclStmt(decls)
+	if err != nil {
+		return nil, err
+	}
+	cond, err := r.lowerCondition(kids[1])
+	if err != nil {
+		return nil, err
+	}
+	post, err := r.lowerAssign(kids[2])
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.lowerBlock(kids[3])
+	if err != nil {
+		return nil, err
+	}
+
+	loop := &ast.ForStmt{Cond: cond, Post: post, Body: body}
+	return &ast.BlockStmt{List: []ast.Stmt{initDecl, loop}}, nil
 }
 
 // lowerIf lowers an if, with an optional else that is itself a block or a
@@ -365,8 +422,85 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeBinaryExpression:
 		return r.binaryExpr(n)
 
+	case frontend.NodeCallExpression:
+		return r.callExpr(n)
+
+	case frontend.NodePrefixUnaryExpression:
+		return r.prefixUnary(n)
+
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
+	}
+}
+
+// callExpr lowers a call to a top-level function. The callee must be an
+// identifier that resolves to a function symbol, lowered to the same exported Go
+// name RenderFunc gives the declaration, so a call and its target agree. Calling
+// a local closure, a method, or a value is a later slice. Arguments lower
+// positionally; a spread or a defaulted or omitted argument hands back.
+func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "call to a non-identifier callee is a later slice"}
+	}
+	sym, ok := r.prog.SymbolAt(kids[0])
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
+	}
+	args := make([]ast.Expr, 0, len(kids)-1)
+	for _, a := range kids[1:] {
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: ident(name), Args: args}, nil
+}
+
+// prefixUnary lowers a prefix unary expression. The operator is not a child
+// node, so it is read as the part of the node's text before the operand.
+// Negation on a number and logical not on a boolean map to their Go unary
+// operators, and a unary plus on a number is the no-op it is in both languages,
+// so the operand passes through. The increment and decrement operators mutate
+// their operand and are a later slice.
+func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 1 {
+		return nil, &NotYetLowerable{Reason: "prefix expression did not expose a single operand"}
+	}
+	operand := kids[0]
+	op := strings.TrimSpace(strings.TrimSuffix(r.prog.Text(n), r.prog.Text(operand)))
+	switch op {
+	case "-":
+		if !r.isNumber(operand) {
+			return nil, &NotYetLowerable{Reason: "unary minus on a non-number is a later slice"}
+		}
+		x, err := r.lowerExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.UnaryExpr{Op: token.SUB, X: x}, nil
+	case "+":
+		if !r.isNumber(operand) {
+			return nil, &NotYetLowerable{Reason: "unary plus on a non-number is a later slice"}
+		}
+		return r.lowerExpr(operand)
+	case "!":
+		if !r.isBool(operand) {
+			return nil, &NotYetLowerable{Reason: "logical not on a non-boolean needs truthiness, a later slice"}
+		}
+		x, err := r.lowerExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.UnaryExpr{Op: token.NOT, X: x}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "prefix operator " + op + " is a later slice"}
 	}
 }
 

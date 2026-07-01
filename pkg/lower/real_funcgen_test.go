@@ -83,6 +83,32 @@ func TestRenderFuncGoldens(t *testing.T) {
   return total;
 }`,
 		},
+		{
+			name:   "recursion",
+			golden: "func_fib.golden",
+			// a self-recursive call resolves to the same exported Go name the
+			// declaration gets, so the call and its target agree.
+			src: `export function fib(n: number): number {
+  if (n < 2) {
+    return n;
+  }
+  return fib(n - 1) + fib(n - 2);
+}`,
+		},
+		{
+			name:   "for_loop",
+			golden: "func_for.golden",
+			// a C-style for becomes a Go block holding the let declaration and a
+			// for with an empty init, so the loop variable keeps its float64
+			// type; the return negates with a unary minus.
+			src: `export function negsum(n: number): number {
+  let t = 0;
+  for (let i = 1; i <= n; i = i + 1) {
+    t = t + i;
+  }
+  return -t;
+}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,8 +143,10 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		{"stringConcat", "export function c(a: string, b: string): string { return a + b; }"},
 		// a truthy number condition needs JavaScript coercion, not a Go bool.
 		{"truthyCond", "export function t(a: number): number { if (a) { return 1; } return 0; }"},
-		// a string-keyed for-of and other loops beyond while are later slices.
-		{"forLoop", "export function s(n: number): number { let t = 0; for (let i = 0; i < n; i = i + 1) { t = t + i; } return t; }"},
+		// a for-of over an iterable is a later slice.
+		{"forOf", "export function s(xs: number[]): number { let t = 0; for (const x of xs) { t = t + x; } return t; }"},
+		// prefix increment mutates its operand, a later slice.
+		{"prefixIncr", "export function p(a: number): number { let b = a; ++b; return b; }"},
 		// a generic function needs monomorphization first.
 		{"generic", "export function id<T>(x: T): T { return x; }"},
 		// an optional parameter needs the optional tagged type.
