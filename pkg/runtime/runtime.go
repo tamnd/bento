@@ -20,6 +20,7 @@ import (
 	"github.com/tamnd/bento/pkg/engine"
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/loop"
+	"github.com/tamnd/bento/pkg/node"
 )
 
 //go:embed prelude.js
@@ -84,6 +85,10 @@ func New(cfg Config) (*Runtime, error) {
 	if _, err := eng.Eval("<prelude>", preludeSource); err != nil {
 		_ = eng.Close()
 		return nil, fmt.Errorf("bento: prelude failed: %w", err)
+	}
+	if err := node.Install(eng); err != nil {
+		_ = eng.Close()
+		return nil, fmt.Errorf("bento: node layer failed: %w", err)
 	}
 	return rt, nil
 }
