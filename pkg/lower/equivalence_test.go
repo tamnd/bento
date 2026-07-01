@@ -198,6 +198,21 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"abc", 0}, {"abc", 1}, {"abc", 2}, {"abc", 3}, {"abc", -1}, {"😀", 0}, {"😀", 1}},
 		},
 		{
+			name: "charAt",
+			// A string in and a string out through a method call. In-range indices
+			// return the one-character string, and out-of-range and negative
+			// indices return the empty string, which JavaScript charAt does and
+			// value.BStr.CharAt matches. The receiver is a BMP string so every
+			// result round-trips through UTF-8 cleanly; the lone-surrogate case an
+			// astral receiver produces is pinned in the value package unit test
+			// instead, where it is checked code unit for code unit rather than
+			// through a lossy string comparison.
+			src:  `export function at(s: string, i: number): string { return s.charAt(i); }`,
+			fn:   "at",
+			ret:  "string",
+			args: [][]any{{"abc", 0}, {"abc", 1}, {"abc", 2}, {"abc", 3}, {"abc", -1}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the

@@ -129,3 +129,40 @@ func TestCharCodeAt(t *testing.T) {
 		}
 	}
 }
+
+// TestCharAt pins String.prototype.charAt: an in-range index returns the
+// one-code-unit string, an out-of-range or negative index returns the empty
+// string, and charAt of an astral character returns a lone surrogate half, a
+// one-unit string that is not valid UTF-8 but is exactly what JavaScript
+// returns. The surrogate case is checked by code unit, not by a Go string
+// comparison, because the whole point is that it does not round-trip through
+// UTF-8.
+func TestCharAt(t *testing.T) {
+	s := FromGoString("a😀") // 'a' (1 unit), emoji (2 units, a surrogate pair)
+
+	if got := s.CharAt(0); got.ToGoString() != "a" {
+		t.Errorf("CharAt(0) = %q, want \"a\"", got.ToGoString())
+	}
+
+	high := s.CharAt(1)
+	if high.Length() != 1 {
+		t.Errorf("CharAt(1) Length = %v, want 1", high.Length())
+	}
+	if u := high.units(); len(u) != 1 || u[0] != 0xD83D {
+		t.Errorf("CharAt(1) units = %v, want [0xD83D] (high surrogate)", u)
+	}
+	low := s.CharAt(2)
+	if u := low.units(); len(u) != 1 || u[0] != 0xDE00 {
+		t.Errorf("CharAt(2) units = %v, want [0xDE00] (low surrogate)", u)
+	}
+	// The two halves rejoin to the original emoji, so the split is exact.
+	if rejoined := Concat(high, low); rejoined.ToGoString() != "😀" {
+		t.Errorf("rejoined halves = %q, want the emoji", rejoined.ToGoString())
+	}
+
+	for _, idx := range []float64{-1, 3, 100} {
+		if got := s.CharAt(idx); got.Length() != 0 {
+			t.Errorf("CharAt(%v) = %q, want empty string", idx, got.ToGoString())
+		}
+	}
+}
