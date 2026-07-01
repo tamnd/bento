@@ -21,7 +21,7 @@ func run(t *testing.T, source string) (string, string) {
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 	if err := rt.RunString("test.ts", source); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestMicrotaskAndTimerOrder(t *testing.T) {
 	iSync := strings.Index(out, "sync")
 	iMicro := strings.Index(out, "micro")
 	iTimer := strings.Index(out, "timer")
-	if !(iSync < iMicro && iMicro < iTimer) {
+	if iSync >= iMicro || iMicro >= iTimer {
 		t.Errorf("ordering wrong, want sync<micro<timer, got:\n%s", out)
 	}
 }
@@ -96,7 +96,7 @@ func TestRequireUnknownThrows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 	err = rt.RunString("t.ts", `require("nope-not-real")`)
 	if err == nil {
 		t.Fatal("expected require of unknown module to throw")

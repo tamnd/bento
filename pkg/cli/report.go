@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -24,7 +23,7 @@ func reportUncaught(cmd *cobra.Command, err error) error {
 	}
 	var ex *engine.Exception
 	if errors.As(err, &ex) {
-		fmt.Fprintln(cmd.ErrOrStderr(), ex.Display())
+		cmd.PrintErrln(ex.Display())
 		return errSilent
 	}
 	return err

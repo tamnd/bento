@@ -2,8 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"fmt"
-	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -33,16 +31,15 @@ func newReplCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer rt.Close()
+			defer func() { _ = rt.Close() }()
 
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "bento %s repl, engine %s. Ctrl-D to exit.\n", Version, rt.Engine().Name())
+			cmd.Printf("bento %s repl, engine %s. Ctrl-D to exit.\n", Version, rt.Engine().Name())
 
 			in := bufio.NewScanner(cmd.InOrStdin())
 			for {
-				fmt.Fprint(out, "> ")
+				cmd.Print("> ")
 				if !in.Scan() {
-					fmt.Fprintln(out)
+					cmd.Println()
 					return nil
 				}
 				line := strings.TrimSpace(in.Text())
@@ -52,7 +49,7 @@ func newReplCmd() *cobra.Command {
 				if line == ".exit" {
 					return nil
 				}
-				evalLine(out, rt, line)
+				evalLine(cmd, rt, line)
 			}
 		},
 	}
@@ -60,22 +57,24 @@ func newReplCmd() *cobra.Command {
 	return cmd
 }
 
-func evalLine(out io.Writer, rt *runtime.Runtime, line string) {
+// evalLine transpiles and runs one REPL line, printing either the error or the
+// completion value. Errors are shown and swallowed so the session continues.
+func evalLine(cmd *cobra.Command, rt *runtime.Runtime, line string) {
 	res, err := frontend.Transpile(line, frontend.Options{Filename: "repl.ts"})
 	if err != nil {
-		fmt.Fprintln(out, err)
+		cmd.Println(err)
 		return
 	}
 	v, err := rt.Engine().Eval("repl", res.Code)
 	if err != nil {
-		fmt.Fprintln(out, err)
+		cmd.Println(err)
 		return
 	}
 	if _, err := rt.Engine().DrainMicrotasks(); err != nil {
-		fmt.Fprintln(out, err)
+		cmd.Println(err)
 		return
 	}
 	if v != nil {
-		fmt.Fprintf(out, "%v\n", v)
+		cmd.Printf("%v\n", v)
 	}
 }

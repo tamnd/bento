@@ -13,7 +13,7 @@ func newTestEngine(t *testing.T) engine.Engine {
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	t.Cleanup(func() { eng.Close() })
+	t.Cleanup(func() { _ = eng.Close() })
 	return eng
 }
 
@@ -85,10 +85,12 @@ func TestHostFuncRoundTrip(t *testing.T) {
 func TestMicrotaskDrain(t *testing.T) {
 	eng := newTestEngine(t)
 	var seen any
-	eng.Register("__set", func(args []any) (any, error) {
+	if err := eng.Register("__set", func(args []any) (any, error) {
 		seen = args[0]
 		return nil, nil
-	})
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
 	if _, err := eng.Eval("t", `Promise.resolve(41).then(v => __set(v + 1))`); err != nil {
 		t.Fatalf("eval: %v", err)
 	}
