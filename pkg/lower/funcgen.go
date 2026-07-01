@@ -458,6 +458,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if kids[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "call to a non-identifier callee is a later slice"}
 	}
+	// A bare call to an ambient global function (isNaN, isFinite) is not a call to
+	// a user binding, so it routes to the global-function lowering before the
+	// user-function path, which would otherwise reject it.
+	if goName, ok := globalFn(r.prog.Text(kids[0])); ok && r.isAmbientGlobal(kids[0]) {
+		return r.globalFnCall(goName, kids[0], kids[1:])
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
 		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
@@ -652,7 +658,18 @@ func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok boo
 // source-file declaration is correctly excluded and its methods do not lower to
 // the Go math package.
 func (r *Renderer) isGlobalRef(n frontend.Node, name string) bool {
-	if n.Kind() != frontend.NodeIdentifier || r.prog.Text(n) != name {
+	if r.prog.Text(n) != name {
+		return false
+	}
+	return r.isAmbientGlobal(n)
+}
+
+// isAmbientGlobal reports whether n resolves to a symbol declared only in .d.ts
+// library files, the test that separates an ambient global from a user binding
+// that shadows the same name. isGlobalRef adds a name check on top; the bare
+// global-function path uses this directly, having already matched the name.
+func (r *Renderer) isAmbientGlobal(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeIdentifier {
 		return false
 	}
 	sym, ok := r.prog.SymbolAt(n)
@@ -669,6 +686,44 @@ func (r *Renderer) isGlobalRef(n frontend.Node, name string) bool {
 		}
 	}
 	return true
+}
+
+// globalFn maps a bare global function name to the value function that implements
+// it. Only the two number predicates are here: the global isNaN and isFinite
+// coerce their argument to a number and then test it, so on an argument that
+// already types as number they are exactly value.NumberIsNaN and
+// value.NumberIsFinite, the same functions Number.isNaN and Number.isFinite use.
+// The global parseInt and parseFloat, which parse a string, are a later slice.
+func globalFn(name string) (goName string, ok bool) {
+	switch name {
+	case "isNaN":
+		return "NumberIsNaN", true
+	case "isFinite":
+		return "NumberIsFinite", true
+	default:
+		return "", false
+	}
+}
+
+// globalFnCall lowers a bare call to an ambient global function. The covered
+// functions take one number and return a boolean, so the argument count must be
+// one and the argument must type as number; anything else hands back rather than
+// emitting a call whose coercion this slice does not model. calleeNode is the
+// callee identifier, used only for its position in the error.
+func (r *Renderer) globalFnCall(goName string, calleeNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	name := r.prog.Text(calleeNode)
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: name + " with this argument count is a later slice"}
+	}
+	if !r.isNumber(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: name + " on a non-number argument is a later slice"}
+	}
+	arg, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
 }
 
 // argKind names the primitive type a string method expects for one argument, so

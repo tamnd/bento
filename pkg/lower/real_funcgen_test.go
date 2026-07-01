@@ -358,6 +358,20 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src:    `export function nan(x: number): boolean { return Number.isNaN(x); }`,
 		},
 		{
+			name:   "global_isnan",
+			golden: "func_global_isnan.golden",
+			// the bare global isNaN, not the Number static one, so the callee is a
+			// plain identifier. On a number argument it coerces to nothing, so it
+			// lowers to the same value.NumberIsNaN predicate.
+			src: `export function nan(x: number): boolean { return isNaN(x); }`,
+		},
+		{
+			name:   "global_isfinite",
+			golden: "func_global_isfinite.golden",
+			// the bare global isFinite lowers to value.NumberIsFinite the same way.
+			src: `export function fin(x: number): boolean { return isFinite(x); }`,
+		},
+		{
 			name:   "bit_not",
 			golden: "func_bit_not.golden",
 			// ~ is the unary bitwise operator, so it uses the same ToInt32 coercion

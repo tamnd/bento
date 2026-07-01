@@ -1,0 +1,3 @@
+func Nan(x float64) bool {
+	return value.NumberIsNaN(x)
+}
