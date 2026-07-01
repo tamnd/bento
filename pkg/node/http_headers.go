@@ -118,6 +118,17 @@ func decodeHeaderPairs(s string) [][2]string {
 	return out
 }
 
+// httpTokenListHas reports whether a comma-separated header value contains a
+// token, case-insensitively. Connection: keep-alive, Upgrade is one such list.
+func httpTokenListHas(header, token string) bool {
+	for part := range strings.SplitSeq(header, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
+}
+
 // errCode maps a listen error to a Node error code where the cause is clear, so
 // EADDRINUSE and EACCES surface with the code Node programs branch on.
 func errCode(err error) string {
