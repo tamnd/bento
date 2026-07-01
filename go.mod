@@ -6,6 +6,7 @@ require (
 	github.com/charmbracelet/fang v1.0.0
 	github.com/evanw/esbuild v0.28.1
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/net v0.56.0
 	modernc.org/quickjs v0.20.0
 )
 
@@ -39,7 +40,7 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 	modernc.org/libc v1.73.5 // indirect
 	modernc.org/libquickjs v0.12.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

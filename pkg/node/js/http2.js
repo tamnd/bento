@@ -163,6 +163,205 @@ __bento_defineModule("http2", function (module, exports, require) {
     return new Http2SecureServer(options, handler);
   }
 
+  // Client sessions and streams are keyed by the ids JavaScript mints, since it
+  // has to register them before Go dials or round-trips so the dispatch callbacks
+  // find their target.
+  const clientSessions = Object.create(null); // sessionId -> ClientHttp2Session
+  const clientStreams = Object.create(null); // streamId -> ClientHttp2Stream
+  let nextSessionId = 1;
+  let nextStreamId = 1;
+
+  // ClientHttp2Stream is one outbound stream as a Duplex. Its writable side buffers
+  // the request body and hands it to Go on end, which round-trips it on the session
+  // and streams the response back as a "response" event then data and end, the same
+  // readable shape as an http client response.
+  class ClientHttp2Stream extends stream.Duplex {
+    constructor(session, headers) {
+      super();
+      this._session = session;
+      this._headers = headers;
+      this._id = nextStreamId++;
+      this._bodyChunks = [];
+      this._sent = false;
+      this.session = session;
+      this.id = this._id;
+      this.sentHeaders = headers;
+      clientStreams[this._id] = this;
+    }
+    _read() {}
+    _write(chunk, encoding, callback) {
+      this._bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding || "utf8"));
+      callback();
+    }
+    _final(callback) {
+      this._flush();
+      callback();
+    }
+    _flush() {
+      if (this._sent) return;
+      this._sent = true;
+      // The session dispatches immediately if connected, or queues until the
+      // connect event, so ending a request before connect resolves still works.
+      this._session._send(this);
+    }
+    close(code, cb) {
+      if (typeof code === "function") {
+        cb = code;
+      }
+      if (cb) this.once("close", cb);
+      this.destroy();
+    }
+    setTimeout(_msecs, callback) {
+      if (callback) this.on("timeout", callback);
+      return this;
+    }
+  }
+
+  // ClientHttp2Session is one client connection to an authority. request opens a
+  // stream on it; requests made before the connect event resolves are queued and
+  // flushed once the session is up, so calling session.request right after connect
+  // works without waiting.
+  class ClientHttp2Session extends EventEmitter {
+    constructor(authority, options) {
+      super();
+      this._id = nextSessionId++;
+      this._connected = false;
+      this._closed = false;
+      this._pending = [];
+      this.socket = {};
+      this.encrypted = true;
+      clientSessions[this._id] = this;
+      __bento_http2_connect(this._id, authority, JSON.stringify(options || {}));
+    }
+    request(headers, options) {
+      const stream = new ClientHttp2Stream(this, headers || {});
+      if (options && options.endStream) {
+        // A body-less request ends its writable side right away.
+        queueMicrotask(() => stream.end());
+      }
+      return stream;
+    }
+    // _send is the stream's hand-off point. Once the session is connected the
+    // request goes to Go at once; before that it waits in the queue drained by the
+    // connect dispatch.
+    _send(stream) {
+      if (this._closed) {
+        stream.emit("error", new Error("session is closed"));
+        return;
+      }
+      if (this._connected) {
+        this._dispatch(stream);
+      } else {
+        this._pending.push(stream);
+      }
+    }
+    _dispatch(stream) {
+      const body = Buffer.concat(stream._bodyChunks);
+      __bento_http2_request(
+        this._id,
+        stream._id,
+        JSON.stringify(headersToPairs(stream._headers)),
+        body.length ? body.toString("base64") : ""
+      );
+    }
+    close(cb) {
+      if (cb) this.once("close", cb);
+      if (this._closed) return;
+      this._closed = true;
+      __bento_http2_closeSession(this._id);
+      delete clientSessions[this._id];
+      this.emit("close");
+    }
+    destroy(err) {
+      if (err) this.emit("error", err);
+      this.close();
+    }
+    ref() {
+      return this;
+    }
+    unref() {
+      return this;
+    }
+  }
+
+  function connect(authority, options, listener) {
+    if (typeof options === "function") {
+      listener = options;
+      options = undefined;
+    }
+    const session = new ClientHttp2Session(authority, options);
+    if (listener) session.once("connect", listener);
+    return session;
+  }
+
+  // headersToPairs flattens a headers object into the [name, value] pairs the Go
+  // side reads, keeping pseudo-headers (":method" and friends) in place. An array
+  // value becomes one pair per element, matching multi-valued headers.
+  function headersToPairs(headers) {
+    const pairs = [];
+    for (const key in headers) {
+      const value = headers[key];
+      if (Array.isArray(value)) {
+        for (const v of value) pairs.push([String(key), String(v)]);
+      } else {
+        pairs.push([String(key), String(value)]);
+      }
+    }
+    return pairs;
+  }
+
+  globalThis.__bento_http2_dispatchConnect = function (sessionId) {
+    const session = clientSessions[sessionId];
+    if (!session) return;
+    session._connected = true;
+    session.emit("connect", session, session.socket);
+    const pending = session._pending;
+    session._pending = [];
+    for (const stream of pending) session._dispatch(stream);
+  };
+
+  globalThis.__bento_http2_dispatchSessionError = function (sessionId, message) {
+    const session = clientSessions[sessionId];
+    if (!session) return;
+    const err = new Error(message);
+    session.emit("error", err);
+    const pending = session._pending;
+    session._pending = [];
+    for (const stream of pending) stream.emit("error", err);
+    delete clientSessions[sessionId];
+  };
+
+  globalThis.__bento_http2_dispatchResponse = function (streamId, infoJSON) {
+    const stream = clientStreams[streamId];
+    if (!stream) return;
+    const info = JSON.parse(infoJSON);
+    // Rebuild the HTTP/2 response headers: the ordinary headers plus the :status
+    // pseudo-header the response event carries.
+    const headers = Object.assign(Object.create(null), info.headers || {});
+    headers[":status"] = info.statusCode;
+    stream.emit("response", headers, 0);
+  };
+
+  globalThis.__bento_http2_dispatchData = function (streamId, b64) {
+    const stream = clientStreams[streamId];
+    if (!stream) return;
+    stream.push(Buffer.from(b64, "base64"));
+  };
+
+  globalThis.__bento_http2_dispatchEnd = function (streamId) {
+    const stream = clientStreams[streamId];
+    if (!stream) return;
+    stream.push(null);
+    delete clientStreams[streamId];
+  };
+
+  globalThis.__bento_http2_dispatchStreamError = function (streamId, message) {
+    const stream = clientStreams[streamId];
+    if (!stream) return;
+    stream.emit("error", new Error(message));
+    delete clientStreams[streamId];
+  };
+
   // constants mirrors the subset of node:http2 constants real code reaches for:
   // the request and response pseudo-headers, common header names, and the settings
   // and error codes. The full nghttp2 table is large; this covers the practical
@@ -212,6 +411,9 @@ __bento_defineModule("http2", function (module, exports, require) {
     Http2Session: Http2Session,
     Http2Stream: Http2Stream,
     Http2SecureServer: Http2SecureServer,
+    ClientHttp2Session: ClientHttp2Session,
+    ClientHttp2Stream: ClientHttp2Stream,
     createSecureServer: createSecureServer,
+    connect: connect,
   };
 });

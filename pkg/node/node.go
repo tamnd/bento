@@ -199,6 +199,9 @@ func InstallNet(eng engine.Engine, loop LoopHost) error {
 	if err := installWS(eng, loop); err != nil {
 		return fmt.Errorf("node: install websocket: %w", err)
 	}
+	if err := installHTTP2Client(eng, loop); err != nil {
+		return fmt.Errorf("node: install http2 client: %w", err)
+	}
 	return nil
 }
 
