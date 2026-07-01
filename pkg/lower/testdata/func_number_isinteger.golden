@@ -1,0 +1,3 @@
+func IsInt(x float64) bool {
+	return value.NumberIsInteger(x)
+}
