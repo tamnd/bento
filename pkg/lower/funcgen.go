@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -794,14 +795,14 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 	}
 }
 
-// stringLiteral lowers a string literal to a value.BStr built from its Go-string
-// form. The literal's code-unit content is its source text with the quotes
-// stripped, which for a literal with no backslash escapes is exactly the runtime
-// string, so it is re-quoted as a Go string literal and wrapped in
-// value.FromGoString. A literal that carries an escape sequence hands back: the
-// escape grammars of the two languages differ in the corners (a JavaScript
-// \uXXXX surrogate escape has no Go spelling), so decoding them soundly is its
-// own slice rather than a guess here.
+// stringLiteral lowers a string literal to a value.BStr. The literal's runtime
+// content is not its source text: the source carries backslash escapes, so it is
+// decoded into UTF-16 code units first (decodeJSString). A content that decodes to
+// valid UTF-16 becomes a Go string literal wrapped in value.FromGoString, the
+// common case. A content that decodes to a lone surrogate, which a \u escape can
+// name and which no Go string can hold, is emitted as a raw []uint16 wrapped in
+// value.FromUTF16 so the surrogate survives. A content that does not decode (a
+// malformed escape) hands back.
 func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
 	text := r.prog.Text(n)
 	if len(text) < 2 {
@@ -811,13 +812,30 @@ func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
 	if (quote != '"' && quote != '\'') || text[len(text)-1] != quote {
 		return nil, &NotYetLowerable{Reason: "unusual string literal quoting is a later slice"}
 	}
-	inner := text[1 : len(text)-1]
-	if strings.ContainsRune(inner, '\\') {
-		return nil, &NotYetLowerable{Reason: "string literal with escape sequences needs the escape-decoding slice"}
+	units, ok := decodeJSString(text[1 : len(text)-1])
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "string literal has a malformed escape sequence"}
 	}
 	r.requireImport(valuePkg)
-	lit := &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(inner)}
+	if hasLoneSurrogate(units) {
+		return &ast.CallExpr{Fun: sel("value", "FromUTF16"), Args: []ast.Expr{uint16SliceLit(units)}}, nil
+	}
+	lit := &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(string(utf16.Decode(units)))}
 	return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{lit}}, nil
+}
+
+// uint16SliceLit builds the AST for a []uint16{...} composite literal of the given
+// code units, each written as a hex constant so a reader sees the code units the
+// way the string tables do.
+func uint16SliceLit(units []uint16) ast.Expr {
+	elts := make([]ast.Expr, len(units))
+	for i, u := range units {
+		elts[i] = &ast.BasicLit{Kind: token.INT, Value: "0x" + strconv.FormatUint(uint64(u), 16)}
+	}
+	return &ast.CompositeLit{
+		Type: &ast.ArrayType{Elt: ident("uint16")},
+		Elts: elts,
+	}
 }
 
 // propertyAccess lowers a member expression. The only member this slice covers

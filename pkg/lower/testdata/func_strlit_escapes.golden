@@ -1,0 +1,3 @@
+func S() value.BStr {
+	return value.FromGoString("tab\tand\nemoji 😀")
+}
