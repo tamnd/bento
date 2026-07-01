@@ -1,6 +1,10 @@
 package frontend
 
-import "github.com/tamnd/bento/pkg/frontend/adapter"
+import (
+	"sync"
+
+	"github.com/tamnd/bento/pkg/frontend/adapter"
+)
 
 // Program is bento's typed-program handle. It wraps an adapter.TSAdapter and an
 // opaque program handle, and turns the adapter's handle-returning calls into the
@@ -21,8 +25,11 @@ type symbolID int
 
 // interner assigns a stable small id to each distinct handle and maps back.
 // Handles compare by interface identity, which for the adapter's pointer-backed
-// handles is pointer identity, exactly what we want.
+// handles is pointer identity, exactly what we want. The mutex makes intern and
+// lookup safe under concurrent queries, which the partitioner relies on because
+// Pass A classifies units in parallel (06_compile_vs_interpret.md section 4.2).
 type interner[H comparable] struct {
+	mu    sync.Mutex
 	ids   map[H]int
 	items []H
 }
@@ -32,6 +39,8 @@ func newInterner[H comparable]() *interner[H] {
 }
 
 func (in *interner[H]) intern(h H) int {
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	if id, ok := in.ids[h]; ok {
 		return id
 	}
@@ -42,6 +51,8 @@ func (in *interner[H]) intern(h H) int {
 }
 
 func (in *interner[H]) lookup(id int) H {
+	in.mu.Lock()
+	defer in.mu.Unlock()
 	return in.items[id]
 }
 
