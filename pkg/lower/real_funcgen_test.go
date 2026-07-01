@@ -110,6 +110,21 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function width(a: string, b: string): number { return (a + b).length; }`,
 		},
 		{
+			name:   "streq",
+			golden: "func_streq.golden",
+			// === on two strings compares by UTF-16 code unit, the value.BStr
+			// Equal method, not a Go == on the struct, which would compare
+			// backing fields and misjudge two equal strings backed differently.
+			src: `export function same(a: string, b: string): boolean { return a === b; }`,
+		},
+		{
+			name:   "strneq",
+			golden: "func_strneq.golden",
+			// !== is the negation of the same Equal call, so it lowers to a Go
+			// unary not over value.BStr.Equal rather than a struct !=.
+			src: `export function diff(a: string, b: string): boolean { return a !== b; }`,
+		},
+		{
 			name:   "modulo",
 			golden: "func_modulo.golden",
 			// % on numbers is fmod, not Go's integer remainder, so it lowers to a
