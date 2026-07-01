@@ -49,13 +49,11 @@ func TestNoTypeScriptGoLeak(t *testing.T) {
 	}
 }
 
-// TestAdaptersSatisfyInterface is a compile-time guarantee that both the real
-// checker-backed adapter and the fake are full TSAdapters. The real adapter is
-// the runtime path; the fake survives only as a deterministic test double for
-// unit tests that do not need a full compile.
-func TestAdaptersSatisfyInterface(t *testing.T) {
+// TestRealAdapterSatisfiesInterface is a compile-time guarantee that the real
+// checker-backed adapter is a full TSAdapter. It is the only implementation:
+// every test drives the real fork, so there is no second double to keep in sync.
+func TestRealAdapterSatisfiesInterface(t *testing.T) {
 	var _ TSAdapter = (*RealAdapter)(nil)
-	var _ TSAdapter = (*FakeAdapter)(nil)
 	if !RealAdapterAvailable() {
 		t.Error("RealAdapterAvailable is false, but a fork revision is pinned")
 	}
