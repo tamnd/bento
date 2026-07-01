@@ -8,6 +8,7 @@ require (
 	github.com/microsoft/typescript-go v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/net v0.56.0
+	golang.org/x/text v0.38.0
 	modernc.org/quickjs v0.20.0
 )
 
@@ -44,7 +45,6 @@ require (
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
 	modernc.org/libc v1.73.5 // indirect
 	modernc.org/libquickjs v0.12.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

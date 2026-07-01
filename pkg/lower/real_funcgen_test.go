@@ -401,6 +401,19 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function inv(x: number): number { return ~x; }`,
 		},
 		{
+			name:   "touppercase",
+			golden: "func_touppercase.golden",
+			// a zero-argument string-returning method that lowers to the value.BStr
+			// ToUpperCase method, the full Unicode uppercase mapping rather than Go's
+			// simple one.
+			src: `export function up(s: string): string { return s.toUpperCase(); }`,
+		},
+		{
+			name:   "tolowercase",
+			golden: "func_tolowercase.golden",
+			src:    `export function down(s: string): string { return s.toLowerCase(); }`,
+		},
+		{
 			name:   "trim",
 			golden: "func_trim.golden",
 			// a zero-argument string method, so the parameter list is empty and
