@@ -22,7 +22,7 @@ func wsEchoServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("Sec-WebSocket-Key")
 		h := sha1.New()
-		io.WriteString(h, key+"258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+		_, _ = io.WriteString(h, key+"258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
 		accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
 		hj, ok := w.(http.Hijacker)
@@ -35,13 +35,13 @@ func wsEchoServer(t *testing.T) *httptest.Server {
 			t.Errorf("hijack: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		resp := "HTTP/1.1 101 Switching Protocols\r\n" +
 			"Upgrade: websocket\r\nConnection: Upgrade\r\n" +
 			"Sec-WebSocket-Accept: " + accept + "\r\n\r\n"
-		io.WriteString(buf, resp)
-		buf.Flush()
+		_, _ = io.WriteString(buf, resp)
+		_ = buf.Flush()
 
 		for {
 			opcode, payload, err := wsReadServer(buf.Reader)
@@ -50,7 +50,7 @@ func wsEchoServer(t *testing.T) *httptest.Server {
 			}
 			switch opcode {
 			case 0x8: // close: echo it and stop
-				wsWriteServer(conn, 0x8, payload)
+				_ = wsWriteServer(conn, 0x8, payload)
 				return
 			case 0x1, 0x2: // text or binary: echo back
 				if err := wsWriteServer(conn, opcode, payload); err != nil {
