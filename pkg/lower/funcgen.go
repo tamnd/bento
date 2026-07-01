@@ -491,11 +491,11 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
-	goName, arity, ok := stringMethod(method)
+	goName, params, ok := stringMethod(method)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " is a later slice"}
 	}
-	if len(argNodes) != arity {
+	if len(argNodes) != len(params) {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " with this argument count is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
@@ -503,9 +503,9 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		return nil, err
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
-	for _, a := range argNodes {
-		if !r.isNumber(a) {
-			return nil, &NotYetLowerable{Reason: "string method ." + method + " with a non-number argument is a later slice"}
+	for i, a := range argNodes {
+		if !r.argHasKind(a, params[i]) {
+			return nil, &NotYetLowerable{Reason: "string method ." + method + " with an argument of the wrong type is a later slice"}
 		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
@@ -516,18 +516,47 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
 }
 
+// argKind names the primitive type a string method expects for one argument, so
+// methodCall guards each argument against the checker's type before lowering it.
+type argKind int
+
+const (
+	argNumber argKind = iota
+	argString
+)
+
+// argHasKind reports whether the checker types n as the primitive the method
+// expects at that position, the guard that keeps a mistyped argument out of a
+// method call rather than emitting Go that would not compile or would coerce.
+func (r *Renderer) argHasKind(n frontend.Node, k argKind) bool {
+	switch k {
+	case argString:
+		return r.isString(n)
+	default:
+		return r.isNumber(n)
+	}
+}
+
 // stringMethod maps a JavaScript string method to the value.BStr method that
-// implements it and the number of arguments it takes. Only charCodeAt is covered
-// so far; slice, substring, indexOf, and the rest are follow-up slices, each
-// mapping to a value.BStr method with the same JavaScript semantics.
-func stringMethod(name string) (goName string, arity int, ok bool) {
+// implements it and the primitive kind of each argument it takes. The argument
+// kinds let methodCall guard a string-taking method (indexOf) apart from a
+// number-taking one (charCodeAt). Methods with optional or variadic arguments
+// (slice, substring) are a follow-up slice that gives this table arity ranges;
+// every method here has a fixed argument list.
+func stringMethod(name string) (goName string, params []argKind, ok bool) {
 	switch name {
 	case "charCodeAt":
-		return "CharCodeAt", 1, true
+		return "CharCodeAt", []argKind{argNumber}, true
 	case "charAt":
-		return "CharAt", 1, true
+		return "CharAt", []argKind{argNumber}, true
+	case "indexOf":
+		return "IndexOf", []argKind{argString}, true
+	case "includes":
+		return "Includes", []argKind{argString}, true
+	case "startsWith":
+		return "StartsWith", []argKind{argString}, true
 	default:
-		return "", 0, false
+		return "", nil, false
 	}
 }
 
