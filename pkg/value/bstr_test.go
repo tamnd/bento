@@ -280,6 +280,49 @@ func TestTrim(t *testing.T) {
 	}
 }
 
+// TestPad pins String.prototype.padStart and padEnd: the pad repeats and
+// truncates to the exact fill length, a target no longer than the string and an
+// absent or empty pad are no-ops, and the default pad is a space.
+func TestPad(t *testing.T) {
+	if got := FromGoString("5").PadStart(3, FromGoString("0")).ToGoString(); got != "005" {
+		t.Errorf("PadStart repeat = %q, want \"005\"", got)
+	}
+	if got := FromGoString("5").PadStart(6, FromGoString("ab")).ToGoString(); got != "ababa5" {
+		t.Errorf("PadStart truncated pad = %q, want \"ababa5\"", got)
+	}
+	if got := FromGoString("5").PadStart(1, FromGoString("0")).ToGoString(); got != "5" {
+		t.Errorf("PadStart short target = %q, want \"5\"", got)
+	}
+	if got := FromGoString("5").PadStart(-2, FromGoString("0")).ToGoString(); got != "5" {
+		t.Errorf("PadStart negative target = %q, want \"5\"", got)
+	}
+	if got := FromGoString("abc").PadStart(5, FromGoString("")).ToGoString(); got != "abc" {
+		t.Errorf("PadStart empty pad = %q, want \"abc\"", got)
+	}
+	if got := FromGoString("7").PadStart(4).ToGoString(); got != "   7" {
+		t.Errorf("PadStart default pad = %q, want \"   7\"", got)
+	}
+	if got := FromGoString("5").PadEnd(3, FromGoString("0")).ToGoString(); got != "500" {
+		t.Errorf("PadEnd repeat = %q, want \"500\"", got)
+	}
+	if got := FromGoString("5").PadEnd(6, FromGoString("ab")).ToGoString(); got != "5ababa" {
+		t.Errorf("PadEnd truncated pad = %q, want \"5ababa\"", got)
+	}
+	if got := FromGoString("7").PadEnd(4).ToGoString(); got != "7   " {
+		t.Errorf("PadEnd default pad = %q, want \"7   \"", got)
+	}
+	// The pad is copied by code unit, so truncating in the middle of an astral pad
+	// emits a lone surrogate, exactly as JavaScript does. "😀" is two code units,
+	// so padding "x" to length 2 with it takes the high surrogate alone.
+	got := FromGoString("x").PadStart(2, FromGoString("😀"))
+	if got.Length() != 2 {
+		t.Fatalf("PadStart astral pad length = %v, want 2", got.Length())
+	}
+	if u := got.CharCodeAt(0); u != 0xD83D {
+		t.Errorf("PadStart astral pad first unit = %04X, want D83D (lone high surrogate)", uint16(u))
+	}
+}
+
 // TestSubstring pins String.prototype.substring, whose edges differ from slice:
 // a negative or NaN argument becomes 0, and a start past end swaps rather than
 // yielding the empty string.

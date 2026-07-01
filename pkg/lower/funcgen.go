@@ -543,9 +543,11 @@ func (r *Renderer) argHasKind(n frontend.Node, k argKind) bool {
 // string-taking method (indexOf) apart from a number-taking one (charCodeAt).
 // minArgs below len(params) marks the trailing arguments optional: slice and
 // substring take zero, one, or two numbers, and their Go methods are variadic so
-// one signature covers every arity, the count selecting the defaults. A call
-// still passes exactly the arguments the source wrote, so the emitted call form
-// is the same whether the method is variadic or not.
+// one signature covers every arity, the count selecting the defaults. The kinds
+// need not all match: padStart takes a required number then an optional string,
+// so the guard admits one or two arguments and still checks each against its
+// declared kind. A call always passes exactly the arguments the source wrote, so
+// the emitted call form is the same whether the method is variadic or not.
 func stringMethod(name string) (goName string, params []argKind, minArgs int, ok bool) {
 	switch name {
 	case "charCodeAt":
@@ -562,6 +564,10 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, ok
 		return "Slice", []argKind{argNumber, argNumber}, 0, true
 	case "substring":
 		return "Substring", []argKind{argNumber, argNumber}, 0, true
+	case "padStart":
+		return "PadStart", []argKind{argNumber, argString}, 1, true
+	case "padEnd":
+		return "PadEnd", []argKind{argNumber, argString}, 1, true
 	case "trim":
 		return "Trim", nil, 0, true
 	case "trimStart":
