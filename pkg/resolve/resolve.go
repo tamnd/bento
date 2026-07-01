@@ -199,6 +199,8 @@ func (r *Resolver) Resolve(specifier string, parent *Module) (Resolved, error) {
 		return resolveData(rest, specifier)
 	case classGo:
 		return resolveGo(rest, specifier)
+	case classImports:
+		return r.resolveImports(specifier, parent)
 	case classUnsupported:
 		return Resolved{}, &ResolveError{
 			Code:      "ERR_UNSUPPORTED_ESM_URL_SCHEME",
