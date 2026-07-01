@@ -1,0 +1,3 @@
+func Find(s value.BStr, sub value.BStr) float64 {
+	return s.IndexOf(sub)
+}
