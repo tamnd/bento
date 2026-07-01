@@ -1,0 +1,3 @@
+func Tail(s value.BStr, a float64) value.BStr {
+	return s.Slice(a)
+}
