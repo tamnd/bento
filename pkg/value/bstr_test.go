@@ -1,6 +1,9 @@
 package value
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // TestLengthCodeUnits pins that Length reports UTF-16 code units, not bytes or
 // runes: an astral character is one rune but two code units, exactly what
@@ -92,5 +95,37 @@ func TestConcatMixedBacking(t *testing.T) {
 	}
 	if got.utf16 == nil {
 		t.Error("a surrogate-backed side should force the code-unit result")
+	}
+}
+
+// TestCharCodeAt pins String.prototype.charCodeAt: in-range indices return the
+// UTF-16 code unit, an out-of-range or negative index returns NaN, a fractional
+// index truncates, and an astral character reads back as its two surrogate
+// halves rather than one code point.
+func TestCharCodeAt(t *testing.T) {
+	s := FromGoString("aπ😀") // 'a' (1 unit), 'π' (1 unit), emoji (2 units) = 4 units
+	cases := []struct {
+		name string
+		idx  float64
+		want float64
+	}{
+		{"ascii", 0, 0x61},
+		{"bmp", 1, 0x3C0},
+		{"highSurrogate", 2, 0xD83D},
+		{"lowSurrogate", 3, 0xDE00},
+		{"fractionTruncates", 0.9, 0x61},
+		{"nanIsZero", math.NaN(), 0x61},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := s.CharCodeAt(tc.idx); got != tc.want {
+				t.Errorf("CharCodeAt(%v) = %v, want %v", tc.idx, got, tc.want)
+			}
+		})
+	}
+	for _, idx := range []float64{-1, 4, 100} {
+		if got := s.CharCodeAt(idx); !math.IsNaN(got) {
+			t.Errorf("CharCodeAt(%v) = %v, want NaN", idx, got)
+		}
 	}
 }

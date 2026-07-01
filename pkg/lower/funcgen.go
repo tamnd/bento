@@ -446,7 +446,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 // positionally; a spread or a defaulted or omitted argument hands back.
 func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
-	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+	if len(kids) == 0 {
+		return nil, &NotYetLowerable{Reason: "call expression exposed no callee"}
+	}
+	// A member callee (s.charCodeAt(...)) is a method call, not a plain function
+	// call; the string methods are the only ones covered so far.
+	if kids[0].Kind() == frontend.NodePropertyAccessExpression {
+		return r.methodCall(kids[0], kids[1:])
+	}
+	if kids[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "call to a non-identifier callee is a later slice"}
 	}
 	sym, ok := r.prog.SymbolAt(kids[0])
@@ -466,6 +474,59 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: ident(name), Args: args}, nil
+}
+
+// methodCall lowers a call whose callee is a member expression. The only
+// receivers covered so far are strings, whose methods map to value.BStr methods,
+// so the receiver must type as string and the method must be one bento maps.
+// Every string method covered here takes number arguments, so a non-number
+// argument hands back rather than mistyping the Go call. A method on any other
+// receiver, or an unmapped string method, is its own later slice.
+func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 {
+		return nil, &NotYetLowerable{Reason: "method callee did not expose a receiver and a method name"}
+	}
+	recvNode, method := kids[0], r.prog.Text(kids[1])
+	if !r.isString(recvNode) {
+		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
+	}
+	goName, arity, ok := stringMethod(method)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "string method ." + method + " is a later slice"}
+	}
+	if len(argNodes) != arity {
+		return nil, &NotYetLowerable{Reason: "string method ." + method + " with this argument count is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		if !r.isNumber(a) {
+			return nil, &NotYetLowerable{Reason: "string method ." + method + " with a non-number argument is a later slice"}
+		}
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+}
+
+// stringMethod maps a JavaScript string method to the value.BStr method that
+// implements it and the number of arguments it takes. Only charCodeAt is covered
+// so far; slice, substring, indexOf, and the rest are follow-up slices, each
+// mapping to a value.BStr method with the same JavaScript semantics.
+func stringMethod(name string) (goName string, arity int, ok bool) {
+	switch name {
+	case "charCodeAt":
+		return "CharCodeAt", 1, true
+	default:
+		return "", 0, false
+	}
 }
 
 // prefixUnary lowers a prefix unary expression. The operator is not a child

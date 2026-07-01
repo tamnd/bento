@@ -12,7 +12,10 @@
 // section 5, 10_value_model section 5.4).
 package value
 
-import "unicode/utf16"
+import (
+	"math"
+	"unicode/utf16"
+)
 
 // BStr is a JavaScript string: a sequence of UTF-16 code units. It keeps two
 // coherent views. Most strings are valid UTF-8 (they came from source, JSON, or
@@ -58,6 +61,24 @@ func FromUTF16(units []uint16) BStr {
 // of a number without a conversion at the use site.
 func (s BStr) Length() float64 {
 	return float64(s.lengthU16)
+}
+
+// CharCodeAt returns the UTF-16 code unit at index i as a number, matching
+// String.prototype.charCodeAt. The index is coerced to an integer the way
+// JavaScript does (NaN becomes 0, a fraction truncates toward zero), and an
+// index outside [0, length) yields NaN, not a zero or a panic. The result is a
+// float64 because the code unit is a JavaScript number and JavaScript has no
+// character type. The range test is done on the float before the int conversion
+// so a huge index cannot overflow int on the way in.
+func (s BStr) CharCodeAt(i float64) float64 {
+	if math.IsNaN(i) {
+		i = 0
+	}
+	i = math.Trunc(i)
+	if i < 0 || i >= float64(s.lengthU16) {
+		return math.NaN()
+	}
+	return float64(s.units()[int(i)])
 }
 
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both
