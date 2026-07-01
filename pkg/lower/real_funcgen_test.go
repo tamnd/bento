@@ -63,6 +63,26 @@ func TestRenderFuncGoldens(t *testing.T) {
 			// its declaration and its use, and stay consistent between them.
 			src: "export function pick(type: number): number { return type; }",
 		},
+		{
+			name:   "loop",
+			golden: "func_loop.golden",
+			// exercises local var declarations, a while loop, an if/else, a
+			// relational and a strict-equality condition, and assignment, so a
+			// whole control-flow body is pinned as one golden.
+			src: `export function score(n: number): number {
+  let total = 0;
+  let i = 1;
+  while (i <= n) {
+    if (i === 3) {
+      total = total + 10;
+    } else {
+      total = total + i;
+    }
+    i = i + 1;
+  }
+  return total;
+}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,10 +115,10 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		{"modulo", "export function m(a: number, b: number): number { return a % b; }"},
 		// + on strings is concatenation of a different type.
 		{"stringConcat", "export function c(a: string, b: string): string { return a + b; }"},
-		// a relational operator yields a boolean, a later slice.
-		{"relational", "export function lt(a: number, b: number): boolean { return a < b; }"},
-		// a local variable declaration is not lowered yet.
-		{"localVar", "export function d(a: number): number { const b = a; return b; }"},
+		// a truthy number condition needs JavaScript coercion, not a Go bool.
+		{"truthyCond", "export function t(a: number): number { if (a) { return 1; } return 0; }"},
+		// a string-keyed for-of and other loops beyond while are later slices.
+		{"forLoop", "export function s(n: number): number { let t = 0; for (let i = 0; i < n; i = i + 1) { t = t + i; } return t; }"},
 		// a generic function needs monomorphization first.
 		{"generic", "export function id<T>(x: T): T { return x; }"},
 		// an optional parameter needs the optional tagged type.
