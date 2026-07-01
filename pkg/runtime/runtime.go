@@ -98,6 +98,10 @@ func New(cfg Config) (*Runtime, error) {
 		_ = eng.Close()
 		return nil, fmt.Errorf("bento: node layer failed: %w", err)
 	}
+	if err := node.InstallNet(eng, rt.loop); err != nil {
+		_ = eng.Close()
+		return nil, fmt.Errorf("bento: node networking failed: %w", err)
+	}
 	// Route native ES module imports through the resolver. The CommonJS path
 	// never triggers this; it only fires when a program runs as a real module.
 	eng.SetModuleHost(moduleHost{rt: rt})

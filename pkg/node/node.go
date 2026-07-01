@@ -63,6 +63,18 @@ func Install(eng engine.Engine) error {
 	return nil
 }
 
+// InstallNet wires the networking modules that need the event loop: their host
+// functions do blocking I/O on pool goroutines and post results back to the loop.
+// It runs after Install, which has already evaluated the JavaScript factories
+// (js/http.js and friends), so this only has to register the Go host functions.
+// The loop must be the same one the runtime pumps.
+func InstallNet(eng engine.Engine, loop LoopHost) error {
+	if err := installHTTP(eng, loop); err != nil {
+		return fmt.Errorf("node: install http: %w", err)
+	}
+	return nil
+}
+
 // HostFuncs returns every Go host function the node layer installs. The fs and
 // os functions live in their own files; this gathers them into one map.
 func HostFuncs() map[string]HostFunc {
