@@ -488,6 +488,11 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		return nil, &NotYetLowerable{Reason: "method callee did not expose a receiver and a method name"}
 	}
 	recvNode, method := kids[0], r.prog.Text(kids[1])
+	// Math.floor(x) and friends are calls on the global Math namespace, not a
+	// value receiver, so they lower to the Go math package rather than a method.
+	if r.isGlobalRef(recvNode, "Math") {
+		return r.mathCall(method, argNodes)
+	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
@@ -514,6 +519,93 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+}
+
+// mathCall lowers a call on the global Math namespace to the matching function in
+// the Go math package. Every Math method covered here takes numbers and returns a
+// number, so the argument count must match exactly and each argument must type as
+// number; anything else hands back rather than emitting a mistyped call. The
+// receiver is not lowered, since Math is a namespace, not a value: it becomes the
+// math package qualifier.
+func (r *Renderer) mathCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	goName, arity, ok := mathMethod(method)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Math." + method + " is a later slice"}
+	}
+	if len(argNodes) != arity {
+		return nil, &NotYetLowerable{Reason: "Math." + method + " with this argument count is a later slice"}
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		if !r.isNumber(a) {
+			return nil, &NotYetLowerable{Reason: "Math." + method + " with a non-number argument is a later slice"}
+		}
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	r.requireImport("math")
+	return &ast.CallExpr{Fun: sel("math", goName), Args: args}, nil
+}
+
+// mathMethod maps a JavaScript Math method to the Go math function that computes
+// the same value, with the argument count. Only the methods whose float64
+// semantics match JavaScript's number semantics exactly are here: floor, ceil,
+// trunc, abs, and sqrt are IEEE operations that agree bit for bit, and pow, min,
+// and max fold two numbers with the same NaN and signed-zero rules. Left out on
+// purpose: round, whose half-way rule rounds toward +Infinity where Go rounds
+// away from zero; sign, which has no direct Go function; and the transcendental
+// functions (sin, log, exp), whose last-bit results are not guaranteed identical
+// across two libm implementations. Each is a later slice.
+func mathMethod(name string) (goName string, arity int, ok bool) {
+	switch name {
+	case "floor":
+		return "Floor", 1, true
+	case "ceil":
+		return "Ceil", 1, true
+	case "trunc":
+		return "Trunc", 1, true
+	case "abs":
+		return "Abs", 1, true
+	case "sqrt":
+		return "Sqrt", 1, true
+	case "pow":
+		return "Pow", 2, true
+	case "min":
+		return "Min", 2, true
+	case "max":
+		return "Max", 2, true
+	default:
+		return "", 0, false
+	}
+}
+
+// isGlobalRef reports whether n is a reference to the ambient global named name,
+// like Math, rather than a user binding that happens to share the name. It checks
+// the identifier text and then requires every declaration of the resolved symbol
+// to live in a .d.ts library file, so a local `const Math = ...` that adds a
+// source-file declaration is correctly excluded and its methods do not lower to
+// the Go math package.
+func (r *Renderer) isGlobalRef(n frontend.Node, name string) bool {
+	if n.Kind() != frontend.NodeIdentifier || r.prog.Text(n) != name {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(n)
+	if !ok {
+		return false
+	}
+	decls := r.prog.Declarations(sym)
+	if len(decls) == 0 {
+		return false
+	}
+	for _, d := range decls {
+		if d.File().Kind != frontend.FileDTS {
+			return false
+		}
+	}
+	return true
 }
 
 // argKind names the primitive type a string method expects for one argument, so

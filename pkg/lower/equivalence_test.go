@@ -294,6 +294,46 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"5", 3, "0"}, {"5", 6, "ab"}, {"abc", 2, "0"}, {"abc", 5, ""}},
 		},
 		{
+			name: "mathFloor",
+			// Math.floor over positive, negative, and already-integer inputs, where
+			// floor differs from truncation on the negative fraction.
+			src:  `export function fl(x: number): number { return Math.floor(x); }`,
+			fn:   "fl",
+			args: [][]any{{3.7}, {-3.2}, {5}, {-0.5}},
+		},
+		{
+			name: "mathCeilTruncAbs",
+			// three one-argument methods composed, so the whole chain is checked at
+			// once: ceil then abs of a trunc, covering the sign handling each does.
+			src:  `export function c(x: number): number { return Math.ceil(Math.abs(Math.trunc(x))); }`,
+			fn:   "c",
+			args: [][]any{{3.9}, {-3.9}, {0}},
+		},
+		{
+			name: "mathSqrt",
+			// perfect squares so the result is exact on both sides, since IEEE sqrt
+			// is correctly rounded and deterministic.
+			src:  `export function r(x: number): number { return Math.sqrt(x); }`,
+			fn:   "r",
+			args: [][]any{{4}, {9}, {2}, {0}},
+		},
+		{
+			name: "mathPow",
+			// integer and power-of-two exponents, whose results are exact so the two
+			// pow implementations cannot diverge in the last bit.
+			src:  `export function p(a: number, b: number): number { return Math.pow(a, b); }`,
+			fn:   "p",
+			args: [][]any{{2, 10}, {5, 3}, {2, -2}, {9, 0}},
+		},
+		{
+			name: "mathMinMax",
+			// min and max fold two numbers; the cases cover the ordinary order, the
+			// reversed order, and equal values.
+			src:  `export function mm(a: number, b: number): number { return Math.max(a, Math.min(a, b)); }`,
+			fn:   "mm",
+			args: [][]any{{3, 7}, {7, 3}, {4, 4}, {-1, -5}},
+		},
+		{
 			name: "trim",
 			// The inputs carry the exact ECMAScript whitespace set, not just ASCII
 			// spaces: a tab and newlines, a no-break space (U+00A0), and a
