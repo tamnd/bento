@@ -13,7 +13,6 @@ __bento_defineModule("net", function (module, exports, require) {
 
   const servers = Object.create(null); // serverId -> Server
   const sockets = Object.create(null); // connId -> Socket
-  let nextConnId = 1;
 
   // Socket is a Duplex over one connection id. Reads arrive as pushed data and
   // writes are queued to Go in order. Both inbound (server) and outbound (connect)
@@ -92,11 +91,13 @@ __bento_defineModule("net", function (module, exports, require) {
       if (typeof args[1] === "string") host = args[1];
     }
 
-    const socket = new Socket(nextConnId++);
+    // Go mints and returns the connection id so it never collides with a
+    // server-accepted or tls connection.
+    const connId = __bento_net_connect(port | 0, host);
+    const socket = new Socket(connId);
     socket._connecting = true;
-    sockets[socket._connId] = socket;
+    sockets[connId] = socket;
     if (listener) socket.once("connect", listener);
-    __bento_net_connect(socket._connId, port | 0, host);
     return socket;
   }
 
