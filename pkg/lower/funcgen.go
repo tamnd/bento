@@ -491,11 +491,11 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
-	goName, params, ok := stringMethod(method)
+	goName, params, minArgs, ok := stringMethod(method)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " is a later slice"}
 	}
-	if len(argNodes) != len(params) {
+	if len(argNodes) < minArgs || len(argNodes) > len(params) {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " with this argument count is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
@@ -538,25 +538,32 @@ func (r *Renderer) argHasKind(n frontend.Node, k argKind) bool {
 }
 
 // stringMethod maps a JavaScript string method to the value.BStr method that
-// implements it and the primitive kind of each argument it takes. The argument
-// kinds let methodCall guard a string-taking method (indexOf) apart from a
-// number-taking one (charCodeAt). Methods with optional or variadic arguments
-// (slice, substring) are a follow-up slice that gives this table arity ranges;
-// every method here has a fixed argument list.
-func stringMethod(name string) (goName string, params []argKind, ok bool) {
+// implements it, the primitive kind of each argument, and the minimum number of
+// arguments a call must supply. The argument kinds let methodCall guard a
+// string-taking method (indexOf) apart from a number-taking one (charCodeAt).
+// minArgs below len(params) marks the trailing arguments optional: slice and
+// substring take zero, one, or two numbers, and their Go methods are variadic so
+// one signature covers every arity, the count selecting the defaults. A call
+// still passes exactly the arguments the source wrote, so the emitted call form
+// is the same whether the method is variadic or not.
+func stringMethod(name string) (goName string, params []argKind, minArgs int, ok bool) {
 	switch name {
 	case "charCodeAt":
-		return "CharCodeAt", []argKind{argNumber}, true
+		return "CharCodeAt", []argKind{argNumber}, 1, true
 	case "charAt":
-		return "CharAt", []argKind{argNumber}, true
+		return "CharAt", []argKind{argNumber}, 1, true
 	case "indexOf":
-		return "IndexOf", []argKind{argString}, true
+		return "IndexOf", []argKind{argString}, 1, true
 	case "includes":
-		return "Includes", []argKind{argString}, true
+		return "Includes", []argKind{argString}, 1, true
 	case "startsWith":
-		return "StartsWith", []argKind{argString}, true
+		return "StartsWith", []argKind{argString}, 1, true
+	case "slice":
+		return "Slice", []argKind{argNumber, argNumber}, 0, true
+	case "substring":
+		return "Substring", []argKind{argNumber, argNumber}, 0, true
 	default:
-		return "", nil, false
+		return "", nil, 0, false
 	}
 }
 
