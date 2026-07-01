@@ -23,6 +23,7 @@ func init() {
 type Engine struct {
 	vm     *qjs.VM
 	loader engine.ModuleLoader
+	host   engine.ModuleHost
 }
 
 func newEngine() (*Engine, error) {
@@ -82,15 +83,32 @@ func (e *Engine) DrainMicrotasks() (int, error) {
 	return n, nil
 }
 
-// SetModuleLoader installs the resolver used for native module imports.
+// SetModuleLoader installs the source-only resolver used for native module
+// imports. It relies on quickjs's default specifier normalization.
 func (e *Engine) SetModuleLoader(loader engine.ModuleLoader) {
 	e.loader = loader
 	if loader == nil {
+		e.vm.SetModuleLoader(nil, nil)
 		return
 	}
 	e.vm.SetModuleLoader(
 		func(_ *qjs.VM, name string) (string, error) { return loader(name) },
 		nil,
+	)
+}
+
+// SetModuleHost installs a resolver that both normalizes specifiers and loads
+// module source, wiring quickjs's custom normalize and load callbacks. It is how
+// the runtime routes native ES imports through the bento resolver.
+func (e *Engine) SetModuleHost(host engine.ModuleHost) {
+	e.host = host
+	if host == nil {
+		e.vm.SetModuleLoader(nil, nil)
+		return
+	}
+	e.vm.SetModuleLoader(
+		func(_ *qjs.VM, name string) (string, error) { return host.Load(name) },
+		func(_ *qjs.VM, base, name string) (string, error) { return host.Normalize(base, name) },
 	)
 }
 

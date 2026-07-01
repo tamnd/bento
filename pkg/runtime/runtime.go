@@ -10,6 +10,7 @@ package runtime
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,6 +55,10 @@ type Runtime struct {
 	stdout   io.Writer
 	stderr   io.Writer
 	started  time.Time
+	// esmEntry is the absolute path of the entry when it runs as a native ES
+	// module. The engine names the entry module "<eval>", so its own relative
+	// imports are anchored here instead.
+	esmEntry string
 }
 
 // New builds a runtime and its global environment. Close must be called when
@@ -93,6 +98,9 @@ func New(cfg Config) (*Runtime, error) {
 		_ = eng.Close()
 		return nil, fmt.Errorf("bento: node layer failed: %w", err)
 	}
+	// Route native ES module imports through the resolver. The CommonJS path
+	// never triggers this; it only fires when a program runs as a real module.
+	eng.SetModuleHost(moduleHost{rt: rt})
 	return rt, nil
 }
 
@@ -112,24 +120,28 @@ func (rt *Runtime) RunFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("bento: read %s: %w", path, err)
 	}
-	res, err := frontend.Transpile(string(src), frontend.Options{Filename: path})
-	if err != nil {
-		return err
-	}
-	if err := rt.evalEntry(path, res.Code); err != nil {
-		return err
-	}
-	return rt.loop.Run()
+	return rt.runEntry(path, string(src))
 }
 
 // RunString transpiles and runs source as if it were the named entry file. It is
 // used by the REPL and by eval flags.
 func (rt *Runtime) RunString(name, source string) error {
-	res, err := frontend.Transpile(source, frontend.Options{Filename: name})
+	return rt.runEntry(name, source)
+}
+
+// runEntry runs one entry program. It takes the CommonJS path by default, which
+// is faster and covers most code, and falls back to the native ES module path
+// only when the source uses top-level await, which CommonJS cannot express. Both
+// paths end by pumping the event loop until the program settles.
+func (rt *Runtime) runEntry(path, source string) error {
+	res, err := frontend.Transpile(source, frontend.Options{Filename: path})
 	if err != nil {
+		if errors.Is(err, frontend.ErrTopLevelAwait) {
+			return rt.runESMEntry(path, source)
+		}
 		return err
 	}
-	if err := rt.evalEntry(name, res.Code); err != nil {
+	if err := rt.evalEntry(path, res.Code); err != nil {
 		return err
 	}
 	return rt.loop.Run()

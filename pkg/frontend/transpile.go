@@ -8,12 +8,19 @@
 package frontend
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
 )
+
+// ErrTopLevelAwait reports that a source uses top-level await, which cannot be
+// represented in the CommonJS output format. The runtime catches this and runs
+// the module through the native ES module path instead, where top-level await is
+// legal. It is returned by Transpile, wrapped, so callers test with errors.Is.
+var ErrTopLevelAwait = errors.New("top-level await requires the ES module format")
 
 // Result is the outcome of transpiling one source file.
 type Result struct {
@@ -52,10 +59,54 @@ func Transpile(source string, opts Options) (Result, error) {
 	})
 
 	if len(res.Errors) > 0 {
+		if hasTopLevelAwait(res.Errors) {
+			return Result{}, fmt.Errorf("transpile %s: %w", displayName(opts.Filename), ErrTopLevelAwait)
+		}
 		return Result{}, fmt.Errorf("transpile %s:\n%s", displayName(opts.Filename), formatMessages(res.Errors))
 	}
 
 	return Result{Code: string(res.Code)}, nil
+}
+
+// TranspileESM converts one TypeScript or JavaScript file to ES module output,
+// preserving import and export statements and top-level await so the engine can
+// link and run it natively. It is the path for modules the CommonJS format
+// cannot express.
+func TranspileESM(source string, opts Options) (Result, error) {
+	loader := loaderFor(opts.Filename)
+
+	sourcemap := api.SourceMapNone
+	if opts.SourceMap {
+		sourcemap = api.SourceMapInline
+	}
+
+	res := api.Transform(source, api.TransformOptions{
+		Loader:     loader,
+		Format:     api.FormatESModule,
+		Target:     api.ES2022,
+		Platform:   api.PlatformNeutral,
+		Sourcefile: displayName(opts.Filename),
+		Sourcemap:  sourcemap,
+	})
+
+	if len(res.Errors) > 0 {
+		return Result{}, fmt.Errorf("transpile %s:\n%s", displayName(opts.Filename), formatMessages(res.Errors))
+	}
+
+	return Result{Code: string(res.Code)}, nil
+}
+
+// hasTopLevelAwait reports whether the transform failed specifically because the
+// source uses top-level await, which esbuild cannot lower to CommonJS. The text
+// is stable across esbuild versions ("Top-level await is currently not supported
+// with the \"cjs\" output format").
+func hasTopLevelAwait(msgs []api.Message) bool {
+	for _, m := range msgs {
+		if strings.Contains(m.Text, "Top-level await") {
+			return true
+		}
+	}
+	return false
 }
 
 // loaderFor picks the esbuild loader from a file extension. Unknown extensions

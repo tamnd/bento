@@ -15,6 +15,7 @@ func (s *stubEngine) Call(string, ...any) (any, error) { return nil, nil }
 func (s *stubEngine) Register(string, HostFunc) error  { return nil }
 func (s *stubEngine) DrainMicrotasks() (int, error)    { return 0, nil }
 func (s *stubEngine) SetModuleLoader(ModuleLoader)     {}
+func (s *stubEngine) SetModuleHost(ModuleHost)         {}
 func (s *stubEngine) Interrupt()                       {}
 func (s *stubEngine) Close() error                     { return nil }
 
