@@ -98,6 +98,29 @@ func TestConcatMixedBacking(t *testing.T) {
 	}
 }
 
+// TestConcatN pins String.prototype.concat over its argument arities: no
+// arguments returns the receiver, several arguments join in order, and a
+// surrogate-backed argument still forces the code-unit result the way a plain
+// Concat does.
+func TestConcatN(t *testing.T) {
+	base := FromGoString("a")
+	if got := base.ConcatN(); got.ToGoString() != "a" || got.Length() != 1 {
+		t.Errorf("ConcatN() = %q len %v, want \"a\" len 1", got.ToGoString(), got.Length())
+	}
+	if got := base.ConcatN(FromGoString("b"), FromGoString("c"), FromGoString("d")); got.ToGoString() != "abcd" {
+		t.Errorf("ConcatN(b, c, d) = %q, want \"abcd\"", got.ToGoString())
+	}
+	// A surrogate-backed argument keeps the lone surrogate and moves the whole
+	// result off the fast path.
+	got := base.ConcatN(FromUTF16([]uint16{0xD83D}))
+	if got.Length() != 2 {
+		t.Errorf("ConcatN with a surrogate arg Length = %v, want 2", got.Length())
+	}
+	if got.utf16 == nil {
+		t.Error("a surrogate-backed argument should force the code-unit result")
+	}
+}
+
 // TestCharCodeAt pins String.prototype.charCodeAt: in-range indices return the
 // UTF-16 code unit, an out-of-range or negative index returns NaN, a fractional
 // index truncates, and an astral character reads back as its two surrogate
