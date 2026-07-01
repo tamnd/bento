@@ -239,6 +239,54 @@ func TestHTTPClientPostBody(t *testing.T) {
 	}
 }
 
+func TestNetEchoServerAndClient(t *testing.T) {
+	port := freePort(t)
+	// A bento TCP echo server and a bento client talking to it in one script. The
+	// client sends a line, the server echoes it back uppercased, the client prints
+	// the reply and both sides close so the loop drains.
+	script := fmt.Sprintf(`
+		const net = require("net");
+		const server = net.createServer((socket) => {
+			socket.on("data", (chunk) => {
+				socket.write(chunk.toString().toUpperCase());
+				socket.end();
+			});
+		});
+		server.listen(%d, () => {
+			const client = net.connect(%d, "127.0.0.1", () => {
+				client.write("ping");
+			});
+			let reply = "";
+			client.on("data", (chunk) => { reply += chunk.toString(); });
+			client.on("end", () => {
+				console.log(reply);
+				server.close();
+			});
+		});
+	`, port, port)
+
+	out := strings.TrimSpace(runToEnd(t, script))
+	if out != "PING" {
+		t.Errorf("net echo output = %q, want %q", out, "PING")
+	}
+}
+
+func TestNetClientConnectionRefused(t *testing.T) {
+	port := freePort(t)
+	// Nothing is listening on the port, so connect must surface an error event
+	// rather than hang the loop.
+	script := fmt.Sprintf(`
+		const net = require("net");
+		const client = net.connect(%d, "127.0.0.1");
+		client.on("error", (err) => { console.log("error: " + (err.code || "ECONN")); });
+	`, port)
+
+	out := strings.TrimSpace(runToEnd(t, script))
+	if !strings.HasPrefix(out, "error:") {
+		t.Errorf("expected an error line, got %q", out)
+	}
+}
+
 func TestHTTPServerReadsRequestBody(t *testing.T) {
 	port := freePort(t)
 	script := fmt.Sprintf(`
