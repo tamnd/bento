@@ -1,3 +1,3 @@
 func Bigger(a float64, b float64) float64 {
-	return math.Max(a, b)
+	return value.MaxN(a, b)
 }

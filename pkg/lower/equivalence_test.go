@@ -379,6 +379,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{3, 7}, {7, 3}, {4, 4}, {-1, -5}},
 		},
 		{
+			name: "mathMin3",
+			// three arguments through the variadic Math.min, which the two-argument
+			// lowering could not do; the cases put the smallest first, middle, and
+			// last so the fold order does not matter.
+			src:  `export function m3(a: number, b: number, c: number): number { return Math.min(a, b, c); }`,
+			fn:   "m3",
+			args: [][]any{{1, 2, 3}, {2, 1, 3}, {3, 2, 1}, {5, 5, 5}},
+		},
+		{
 			name: "mathRound",
 			// the half-way inputs are where JavaScript and Go's math.Round disagree:
 			// 2.5 rounds to 3 both ways, but -2.5 rounds to -2 in JavaScript (toward

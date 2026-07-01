@@ -82,6 +82,31 @@ func Sign(x float64) float64 {
 	return x
 }
 
+// MinN returns the smallest of its arguments, Math.min, which takes any number of
+// arguments rather than exactly two. The identity is +Infinity, so Math.min() with
+// no arguments is +Infinity, and folding with math.Min carries the JavaScript
+// rules for free: math.Min propagates NaN (any NaN argument makes the result NaN)
+// and orders the signed zeros so Math.min(-0, +0) is -0.
+func MinN(nums ...float64) float64 {
+	r := math.Inf(1)
+	for _, n := range nums {
+		r = math.Min(r, n)
+	}
+	return r
+}
+
+// MaxN returns the largest of its arguments, Math.max, the mirror of MinN. Its
+// identity is -Infinity, so Math.max() with no arguments is -Infinity, and
+// math.Max carries the same NaN propagation and signed-zero order, so
+// Math.max(-0, +0) is +0.
+func MaxN(nums ...float64) float64 {
+	r := math.Inf(-1)
+	for _, n := range nums {
+		r = math.Max(r, n)
+	}
+	return r
+}
+
 // maxSafeInteger is 2^53 - 1, Number.MAX_SAFE_INTEGER: the largest integer that
 // has no other double sharing its bits, so integers up to it round-trip exactly.
 const maxSafeInteger = 9007199254740991.0
