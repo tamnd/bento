@@ -1,0 +1,3 @@
+func FindLast(s value.BStr, sub value.BStr) float64 {
+	return s.LastIndexOf(sub)
+}

@@ -99,18 +99,53 @@ func (s BStr) CharAt(i float64) BStr {
 	return FromUTF16([]uint16{s.units()[int(i)]})
 }
 
-// IndexOf returns the code-unit index of the first occurrence of search in s,
-// or -1 if it does not occur, matching String.prototype.indexOf (without the
-// optional start position, a later slice). The search is code-unit-wise over the
-// UTF-16 view so it agrees with JavaScript on astral text and lone surrogates,
-// and an empty search string matches at 0 the way JavaScript defines it. The
+// IndexOf returns the code-unit index of the first occurrence of search at or
+// after an optional start position, or -1 if it does not occur, matching
+// String.prototype.indexOf. The position is optional, so the method is variadic:
+// the lowered call passes exactly the arguments the source did. A position is run
+// through the substring clamp (ToInteger, then into [0, length], with NaN going to
+// 0), and the scan begins there. The search is code-unit-wise over the UTF-16 view
+// so it agrees with JavaScript on astral text and lone surrogates, and an empty
+// search string matches at the clamped position the way JavaScript defines it. The
 // result is a float64 because it is a JavaScript number.
-func (s BStr) IndexOf(search BStr) float64 {
+func (s BStr) IndexOf(search BStr, position ...float64) float64 {
 	hay, needle := s.units(), search.units()
-	if len(needle) == 0 {
-		return 0
+	start := 0
+	if len(position) >= 1 {
+		start = clampIndex(position[0], len(hay))
 	}
-	for i := 0; i+len(needle) <= len(hay); i++ {
+	if len(needle) == 0 {
+		return float64(start)
+	}
+	for i := start; i+len(needle) <= len(hay); i++ {
+		if matchAt(hay, needle, i) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// LastIndexOf returns the code-unit index of the last occurrence of search that
+// begins at or before an optional position, or -1 if it does not occur, matching
+// String.prototype.lastIndexOf. It scans backward, so it reports the greatest
+// matching index rather than the least. The position defaults to the end and,
+// unlike indexOf, a NaN position also means the end (the specification coerces a
+// missing or NaN position to +Infinity here), so only a real number narrows the
+// window. An empty search string matches at the clamped position. The search is
+// code-unit-wise so it agrees with JavaScript on astral text and lone surrogates.
+func (s BStr) LastIndexOf(search BStr, position ...float64) float64 {
+	hay, needle := s.units(), search.units()
+	start := len(hay)
+	if len(position) >= 1 && !math.IsNaN(position[0]) {
+		start = clampIndex(position[0], len(hay))
+	}
+	if len(needle) == 0 {
+		return float64(start)
+	}
+	if start > len(hay)-len(needle) {
+		start = len(hay) - len(needle)
+	}
+	for i := start; i >= 0; i-- {
 		if matchAt(hay, needle, i) {
 			return float64(i)
 		}

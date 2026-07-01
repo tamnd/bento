@@ -223,6 +223,24 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"hello", "he"}, {"hello", "lo"}, {"hello", "z"}, {"hello", ""}, {"a😀b", "b"}},
 		},
 		{
+			name: "indexOfFrom",
+			// indexOf with the start position: a match before the position is skipped,
+			// a match exactly at it counts, a position past the end gives -1 for a
+			// non-empty search and the length for the empty search.
+			src:  `export function findFrom(s: string, sub: string, from: number): number { return s.indexOf(sub, from); }`,
+			fn:   "findFrom",
+			args: [][]any{{"abcabc", "a", 1}, {"abcabc", "c", 2}, {"abcabc", "a", 4}, {"abc", "", 99}, {"abc", "a", -5}},
+		},
+		{
+			name: "lastIndexOf",
+			// lastIndexOf reports the greatest matching index, so it differs from
+			// indexOf on a string with two matches; the cases cover the two-match
+			// string, a miss, the empty search, and an astral character.
+			src:  `export function findLast(s: string, sub: string): number { return s.lastIndexOf(sub); }`,
+			fn:   "findLast",
+			args: [][]any{{"abcabc", "a"}, {"abcabc", "c"}, {"hello", "z"}, {"hello", ""}, {"a😀b", "b"}},
+		},
+		{
 			name: "includes",
 			// The boolean companion of indexOf over the same shapes.
 			src:  `export function has(s: string, sub: string): boolean { return s.includes(sub); }`,
