@@ -225,6 +225,19 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function d(a: number, b: number): number { return Math.sqrt(Math.abs(a - b)); }`,
 		},
 		{
+			name:   "math_round",
+			golden: "func_math_round.golden",
+			// Math.round does not lower to math.Round: JavaScript breaks a tie toward
+			// +Infinity, so the call goes to value.Round which carries that rule.
+			src: `export function rnd(x: number): number { return Math.round(x); }`,
+		},
+		{
+			name:   "math_sign",
+			golden: "func_math_sign.golden",
+			// Go has no math.Sign, so Math.sign lowers to value.Sign.
+			src: `export function sgn(x: number): number { return Math.sign(x); }`,
+		},
+		{
 			name:   "bit_and",
 			golden: "func_bit_and.golden",
 			// & on numbers is not a Go & on float64; each operand coerces through
