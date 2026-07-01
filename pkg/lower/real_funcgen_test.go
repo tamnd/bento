@@ -140,6 +140,19 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function diff(a: string, b: string): boolean { return a !== b; }`,
 		},
 		{
+			name:   "strlt",
+			golden: "func_strlt.golden",
+			// < on two strings is not a Go operator on the struct: it orders by UTF-16
+			// code unit through value.BStr.Compare, so it lowers to Compare(a, b) < 0.
+			src: `export function before(a: string, b: string): boolean { return a < b; }`,
+		},
+		{
+			name:   "strge",
+			golden: "func_strge.golden",
+			// >= lowers to the same Compare call against zero with the matching Go token.
+			src: `export function notBefore(a: string, b: string): boolean { return a >= b; }`,
+		},
+		{
 			name:   "charcode",
 			golden: "func_charcode.golden",
 			// s.charCodeAt(i) is a method call on a string receiver, so it lowers

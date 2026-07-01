@@ -454,6 +454,35 @@ func (s BStr) ConcatN(rest ...BStr) BStr {
 	return out
 }
 
+// Compare returns -1, 0, or 1 as a orders before, equal to, or after b, comparing
+// code unit by code unit, which is how JavaScript's relational operators (<, <=,
+// >, >=) order two strings (the Abstract Relational Comparison over the UTF-16
+// views). The comparison is on code units, not code points or runes, so it matches
+// JavaScript even where a Go string < would differ: an astral character sits above
+// U+E000..U+FFFF in code-point order but its leading surrogate (U+D800..U+DBFF)
+// orders below them, and JavaScript compares the surrogate. The shorter string
+// orders first when it is a prefix of the longer.
+func (a BStr) Compare(b BStr) int {
+	ua, ub := a.units(), b.units()
+	n := min(len(ub), len(ua))
+	for i := range n {
+		if ua[i] != ub[i] {
+			if ua[i] < ub[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case len(ua) < len(ub):
+		return -1
+	case len(ua) > len(ub):
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Equal reports whether a and b are the same string, code unit for code unit,
 // which is JavaScript string === and == on two strings. When both are on the
 // UTF-8 fast path the bytes compare directly, since equal UTF-8 means equal code
