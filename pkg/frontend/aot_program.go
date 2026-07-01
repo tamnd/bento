@@ -57,9 +57,10 @@ func (in *interner[H]) lookup(id int) H {
 }
 
 // Wrap builds a Program over a given adapter and program handle. Load uses it
-// with the real adapter; tests use it with adapter.NewFake, which is the whole
-// point of the adapter being an interface. It is the single constructor for a
-// Program so the interners are always initialized.
+// with the real adapter, the only implementation; taking an interface keeps the
+// typescript-go coupling behind the adapter package rather than leaking it here.
+// It is the single constructor for a Program so the interners are always
+// initialized.
 func Wrap(a adapter.TSAdapter, h adapter.ProgramHandle) *Program {
 	return &Program{
 		adapter: a,
