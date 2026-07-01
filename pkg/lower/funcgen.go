@@ -707,7 +707,9 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, ok
 	case "charAt":
 		return "CharAt", []argKind{argNumber}, 1, true
 	case "indexOf":
-		return "IndexOf", []argKind{argString}, 1, true
+		return "IndexOf", []argKind{argString, argNumber}, 1, true
+	case "lastIndexOf":
+		return "LastIndexOf", []argKind{argString, argNumber}, 1, true
 	case "includes":
 		return "Includes", []argKind{argString}, 1, true
 	case "startsWith":

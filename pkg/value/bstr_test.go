@@ -206,6 +206,60 @@ func TestSearchMethods(t *testing.T) {
 	}
 }
 
+// TestIndexOfPosition pins the optional start position on indexOf: the scan
+// begins at the clamped position, so a match before it is skipped, and the empty
+// search returns the clamped position rather than always 0.
+func TestIndexOfPosition(t *testing.T) {
+	s := FromGoString("abcabc")
+	cases := []struct {
+		search string
+		pos    []float64
+		want   float64
+	}{
+		{"a", nil, 0},
+		{"a", []float64{1}, 3},  // the first "a" is before the start
+		{"a", []float64{4}, -1}, // no "a" at or after index 4
+		{"c", []float64{2}, 2},  // a match exactly at the start counts
+		{"", []float64{2}, 2},   // empty search returns the clamped position
+		{"", []float64{99}, 6},  // a position past the end clamps to length
+		{"a", []float64{-5}, 0}, // a negative position clamps to 0
+	}
+	for _, c := range cases {
+		if got := s.IndexOf(FromGoString(c.search), c.pos...); got != c.want {
+			t.Errorf("IndexOf(%q, %v) = %v, want %v", c.search, c.pos, got, c.want)
+		}
+	}
+}
+
+// TestLastIndexOf pins lastIndexOf: it reports the greatest matching index, the
+// optional position narrows the window from the right, a NaN or missing position
+// means the end, and an astral character keeps the code-unit indexing.
+func TestLastIndexOf(t *testing.T) {
+	s := FromGoString("abcabc")
+	cases := []struct {
+		search string
+		pos    []float64
+		want   float64
+	}{
+		{"a", nil, 3},          // the last "a", not the first
+		{"a", []float64{2}, 0}, // only the "a" at or before index 2
+		{"c", nil, 5},
+		{"z", nil, -1},
+		{"", nil, 6},                    // empty search returns the length
+		{"", []float64{2}, 2},           // empty search returns the clamped position
+		{"a", []float64{math.NaN()}, 3}, // NaN position means the end, so the last "a"
+	}
+	for _, c := range cases {
+		if got := s.LastIndexOf(FromGoString(c.search), c.pos...); got != c.want {
+			t.Errorf("LastIndexOf(%q, %v) = %v, want %v", c.search, c.pos, got, c.want)
+		}
+	}
+	// code units: "b" in "a😀b" is at index 3, past the surrogate pair.
+	if got := FromGoString("a😀b").LastIndexOf(FromGoString("b")); got != 3 {
+		t.Errorf("LastIndexOf(\"b\") = %v, want 3", got)
+	}
+}
+
 // TestSlice pins String.prototype.slice: interior ranges, defaulted arguments
 // through the variadic arity, negative-from-end bounds, an empty result when
 // start reaches end, and a slice that lands between the halves of an astral
