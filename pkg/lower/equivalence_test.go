@@ -515,6 +515,16 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{}},
 		},
 		{
+			name: "numLiterals",
+			// the numeric-literal forms this slice lowers: hex, binary, and octal
+			// integers, an underscore-separated decimal, and an exponent. The compiler
+			// emits each as the Go literal for the same value and the engine parses the
+			// same source, so their sum must agree. A zero-argument function.
+			src:  `export function n(): number { return 0xFF + 0b1010 + 0o17 + 1_000 + 1.5e2; }`,
+			fn:   "n",
+			args: [][]any{{}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the
