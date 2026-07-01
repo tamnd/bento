@@ -186,6 +186,18 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"x", "x"}, {"x", "y"}, {"", ""}, {"😀", "😀"}},
 		},
 		{
+			name: "charCodeAt",
+			// A string in and a number out through a method call. The cases cover
+			// in-range indices, an out-of-range index and a negative one (both NaN
+			// in JavaScript, which the value model returns and the harness compares
+			// as "NaN" on both sides), and the two surrogate halves of an astral
+			// character, where charCodeAt(0) and charCodeAt(1) are the high and low
+			// code units, not one code point.
+			src:  `export function codeAt(s: string, i: number): number { return s.charCodeAt(i); }`,
+			fn:   "codeAt",
+			args: [][]any{{"abc", 0}, {"abc", 1}, {"abc", 2}, {"abc", 3}, {"abc", -1}, {"😀", 0}, {"😀", 1}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the
