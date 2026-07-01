@@ -37,7 +37,7 @@ type netConn struct {
 	prefix string
 }
 
-func installNet(eng engine.Engine, loop LoopHost) error {
+func installNet(eng engine.Engine, loop LoopHost) (*netBridgeState, error) {
 	n := &netBridgeState{
 		netBridge: netBridge{eng: eng, loop: loop},
 		servers:   map[int64]net.Listener{},
@@ -47,10 +47,10 @@ func installNet(eng engine.Engine, loop LoopHost) error {
 	maps.Copy(funcs, n.tlsHostFuncs())
 	for name, fn := range funcs {
 		if err := eng.Register(name, fn); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return n, nil
 }
 
 func (n *netBridgeState) hostFuncs() map[string]HostFunc {
