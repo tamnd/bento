@@ -1,0 +1,3 @@
+func Fin(x float64) bool {
+	return value.NumberIsFinite(x)
+}
