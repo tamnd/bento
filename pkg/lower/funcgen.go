@@ -758,6 +758,21 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		return &ast.UnaryExpr{Op: token.NOT, X: x}, nil
+	case "~":
+		// Bitwise NOT is the unary member of the bitwise family: it coerces its
+		// operand to a 32-bit integer, complements it, and returns the result as a
+		// number, so it lowers to float64(^value.ToInt32(x)), the same coercion the
+		// binary bitwise operators use, not a Go ^ on the float64.
+		if !r.isNumber(operand) {
+			return nil, &NotYetLowerable{Reason: "bitwise not on a non-number is a later slice"}
+		}
+		x, err := r.lowerExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		conv := &ast.CallExpr{Fun: sel("value", "ToInt32"), Args: []ast.Expr{x}}
+		return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{&ast.UnaryExpr{Op: token.XOR, X: conv}}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "prefix operator " + op + " is a later slice"}
 	}
