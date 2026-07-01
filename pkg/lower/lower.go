@@ -26,6 +26,11 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
+// valuePkg is the import path of the shared value model, the package that
+// defines value.BStr and the other runtime value types the emitted Go refers
+// to. Doc 05 section 2 fixes that emitted Go imports the runtime by real path.
+const valuePkg = "github.com/tamnd/bento/pkg/value"
+
 // NotYetLowerable is the reason lowering hands a unit back to the partitioner
 // instead of emitting Go. It is not an internal failure: it is the honest edge
 // of the compiled subset (05_type_lowering.md section 30), naming the construct
@@ -129,8 +134,11 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 
 	case t.Flags&frontend.TypeString != 0:
 		// string is a sequence of UTF-16 code units, so the bento string type
-		// bstr, never Go string, which would be UTF-8 (section 5).
-		return ident("bstr"), nil
+		// value.BStr, never Go string, which would be UTF-8 (section 5). Doc 05
+		// writes it as a bare bstr, but that is shorthand: the type lives in the
+		// value package and is referenced by its real import path (section 2).
+		r.requireImport(valuePkg)
+		return sel("value", "BStr"), nil
 
 	case t.Flags&frontend.TypeBoolean != 0:
 		// The one clean mapping (section 6).

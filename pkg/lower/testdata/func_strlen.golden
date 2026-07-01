@@ -1,0 +1,3 @@
+func Width(a value.BStr, b value.BStr) float64 {
+	return (value.Concat(a, b)).Length()
+}

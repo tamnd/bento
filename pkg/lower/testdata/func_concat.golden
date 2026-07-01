@@ -1,0 +1,3 @@
+func Greet(name value.BStr) value.BStr {
+	return value.Concat(value.FromGoString("Hello, "), name)
+}

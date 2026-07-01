@@ -117,7 +117,7 @@ func TestRealPrimitivesRender(t *testing.T) {
 	}{
 		{"number", "const x: number = 1;", "float64"},
 		{"bigint", "const x: bigint = 1n;", "*big.Int"},
-		{"string", "const x: string = \"s\";", "bstr"},
+		{"string", "const x: string = \"s\";", "value.BStr"},
 		{"boolean", "const x: boolean = true;", "bool"},
 		{"symbol", "const x: symbol = Symbol();", "*value.Symbol"},
 	}
@@ -149,7 +149,7 @@ func TestRealArrayRenders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderType(string[][]): %v", err)
 	}
-	if want := "*value.Array[*value.Array[bstr]]"; got != want {
+	if want := "*value.Array[*value.Array[value.BStr]]"; got != want {
 		t.Errorf("RenderType(string[][]) = %q, want %q", got, want)
 	}
 }

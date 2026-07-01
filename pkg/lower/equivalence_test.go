@@ -134,6 +134,22 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]float64{{0}, {4}, {10}},
 		},
 		{
+			name: "stringLength",
+			// The literal holds an astral character (one rune, two UTF-16 code
+			// units). .length must report code units, so the whole string is
+			// "a" (1) + emoji (2) + "b" (1) = 4. A Go len() over UTF-8 bytes would
+			// say 6, so this proves the emitted Go runs the real value.BStr and
+			// gets the JavaScript answer, matched against quickjs. No arguments,
+			// because the harness passes numbers; string arguments are a later
+			// slice once the harness carries typed argument tuples.
+			src: `export function width(): number {
+  let s = "a" + "😀" + "b";
+  return s.length;
+}`,
+			fn:   "width",
+			args: [][]float64{{}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the
@@ -285,7 +301,7 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module eqtest\n\ngo 1.26\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod(t, imports)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -300,6 +316,39 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 		t.Fatalf("parse go output %q: %v", out, err)
 	}
 	return f
+}
+
+// goMod builds the throwaway module's go.mod. When the lowered code imports a
+// bento runtime package (the value model, for a string program), the module
+// requires bento and replaces it with the working copy on disk, so the generated
+// Go links against the very value.BStr this repo defines rather than a published
+// version. A program that touches no runtime package needs neither line and gets
+// a bare module, so the common numeric case does not pay for a module download.
+func goMod(t *testing.T, imports []string) string {
+	t.Helper()
+	needsBento := false
+	for _, p := range imports {
+		if strings.HasPrefix(p, "github.com/tamnd/bento") {
+			needsBento = true
+		}
+	}
+	var b strings.Builder
+	b.WriteString("module eqtest\n\ngo 1.26\n")
+	if needsBento {
+		// The test runs with its working directory at the package (pkg/lower), so
+		// the repo root is two levels up; the replace needs an absolute path.
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := filepath.Abs(filepath.Join(wd, "..", ".."))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString("\nrequire github.com/tamnd/bento v0.0.0\n")
+		b.WriteString("\nreplace github.com/tamnd/bento => " + root + "\n")
+	}
+	return b.String()
 }
 
 // toFloat coerces the engine's native return value to a float64. The quickjs
