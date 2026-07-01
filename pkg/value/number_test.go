@@ -33,6 +33,40 @@ func TestToUint32(t *testing.T) {
 	}
 }
 
+// TestNumberPredicates pins Number.isNaN, isFinite, isInteger, and
+// isSafeInteger over the values that separate them: NaN, an infinity, a whole
+// number, a fraction, and an integer just past the safe range.
+func TestNumberPredicates(t *testing.T) {
+	cases := []struct {
+		in                            float64
+		nan, finite, integer, safeInt bool
+	}{
+		{0, false, true, true, true},
+		{5, false, true, true, true},
+		{-5, false, true, true, true},
+		{3.5, false, true, false, false},
+		{math.NaN(), true, false, false, false},
+		{math.Inf(1), false, false, false, false},
+		{math.Inf(-1), false, false, false, false},
+		{maxSafeInteger, false, true, true, true},
+		{maxSafeInteger + 2, false, true, true, false}, // integer but not safe
+	}
+	for _, c := range cases {
+		if got := NumberIsNaN(c.in); got != c.nan {
+			t.Errorf("NumberIsNaN(%v) = %v, want %v", c.in, got, c.nan)
+		}
+		if got := NumberIsFinite(c.in); got != c.finite {
+			t.Errorf("NumberIsFinite(%v) = %v, want %v", c.in, got, c.finite)
+		}
+		if got := NumberIsInteger(c.in); got != c.integer {
+			t.Errorf("NumberIsInteger(%v) = %v, want %v", c.in, got, c.integer)
+		}
+		if got := NumberIsSafeInteger(c.in); got != c.safeInt {
+			t.Errorf("NumberIsSafeInteger(%v) = %v, want %v", c.in, got, c.safeInt)
+		}
+	}
+}
+
 // TestToInt32 pins the ECMAScript ToInt32 coercion: the same steps as ToUint32
 // but a value at or above 2^31 reads back as its negative two's-complement form.
 func TestToInt32(t *testing.T) {

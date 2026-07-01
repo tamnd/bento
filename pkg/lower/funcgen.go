@@ -493,6 +493,11 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Math") {
 		return r.mathCall(method, argNodes)
 	}
+	// Number.isInteger(x) and friends are static calls on the global Number, which
+	// lower to value package predicates.
+	if r.isGlobalRef(recvNode, "Number") {
+		return r.numberCall(method, argNodes)
+	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
@@ -548,6 +553,51 @@ func (r *Renderer) mathCall(method string, argNodes []frontend.Node) (ast.Expr, 
 	}
 	r.requireImport("math")
 	return &ast.CallExpr{Fun: sel("math", goName), Args: args}, nil
+}
+
+// numberCall lowers a static call on the global Number namespace to the matching
+// predicate in the value package. Each covered method takes one number and
+// returns a boolean, so the argument count must be one and the argument must type
+// as number; anything else hands back. Like Math, the Number receiver is not
+// lowered to a value, since it is a namespace, not a runtime object.
+func (r *Renderer) numberCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	goName, ok := numberMethod(method)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Number." + method + " is a later slice"}
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Number." + method + " with this argument count is a later slice"}
+	}
+	if !r.isNumber(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Number." + method + " on a non-number argument is a later slice"}
+	}
+	arg, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// numberMethod maps a JavaScript Number static predicate to the value function
+// that implements it. Only the non-coercing predicates are here: isNaN, isFinite,
+// isInteger, and isSafeInteger, whose meaning on a number argument is exact.
+// Number.parseFloat and parseInt, which parse a string, are a later slice, as is
+// the Number(x) coercion call, which is a call on Number itself rather than a
+// static method.
+func numberMethod(name string) (goName string, ok bool) {
+	switch name {
+	case "isNaN":
+		return "NumberIsNaN", true
+	case "isFinite":
+		return "NumberIsFinite", true
+	case "isInteger":
+		return "NumberIsInteger", true
+	case "isSafeInteger":
+		return "NumberIsSafeInteger", true
+	default:
+		return "", false
+	}
 }
 
 // mathMethod maps a JavaScript Math method to the Go math function that computes

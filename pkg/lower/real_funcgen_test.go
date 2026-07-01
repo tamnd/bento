@@ -260,6 +260,19 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function ushr(a: number, b: number): number { return a >>> b; }`,
 		},
 		{
+			name:   "number_isinteger",
+			golden: "func_number_isinteger.golden",
+			// Number.isInteger is a static call on the global Number namespace, so
+			// it lowers to the value.NumberIsInteger predicate and the function
+			// returns bool.
+			src: `export function isInt(x: number): boolean { return Number.isInteger(x); }`,
+		},
+		{
+			name:   "number_isnan",
+			golden: "func_number_isnan.golden",
+			src:    `export function nan(x: number): boolean { return Number.isNaN(x); }`,
+		},
+		{
 			name:   "trim",
 			golden: "func_trim.golden",
 			// a zero-argument string method, so the parameter list is empty and

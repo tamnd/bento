@@ -368,6 +368,34 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{6.9, 3}, {-6.9, 3}},
 		},
 		{
+			name: "numberIsInteger",
+			// the argument is x / y so the cases can reach a fraction (7/2), a whole
+			// number (6/2), and a non-finite value (1/0 is Infinity), all of which
+			// Number.isInteger must judge the same way the engine does.
+			src:  `export function ii(x: number, y: number): boolean { return Number.isInteger(x / y); }`,
+			fn:   "ii",
+			ret:  "boolean",
+			args: [][]any{{6, 2}, {7, 2}, {1, 0}, {-4, 2}},
+		},
+		{
+			name: "numberIsFiniteNaN",
+			// isFinite and isNaN over the same x / y, covering a finite result, an
+			// infinity (1/0), and a NaN (0/0).
+			src:  `export function fn(x: number, y: number): boolean { return Number.isFinite(x / y) || Number.isNaN(x / y); }`,
+			fn:   "fn",
+			ret:  "boolean",
+			args: [][]any{{3, 2}, {1, 0}, {0, 0}},
+		},
+		{
+			name: "numberIsSafeInteger",
+			// x * y lets a case exceed the safe-integer range: 9007199254740992 is
+			// 2^53, an integer that is not safe, so the harness pins the boundary.
+			src:  `export function si(x: number, y: number): boolean { return Number.isSafeInteger(x * y); }`,
+			fn:   "si",
+			ret:  "boolean",
+			args: [][]any{{2, 3}, {4503599627370496, 2}, {4503599627370497, 2}},
+		},
+		{
 			name: "trim",
 			// The inputs carry the exact ECMAScript whitespace set, not just ASCII
 			// spaces: a tab and newlines, a no-break space (U+00A0), and a
