@@ -113,7 +113,7 @@ func evalTS(t *testing.T, src, fn string, args []float64) float64 {
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	if _, err := eng.Eval("m.js", js.Code); err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
