@@ -303,6 +303,65 @@ func isStringWhiteSpace(u uint16) bool {
 	return u >= 0x2000 && u <= 0x200A
 }
 
+// PadStart pads the front of s with pad until the result is targetLength code
+// units long, matching String.prototype.padStart. targetLength is coerced to an
+// integer JavaScript-style (NaN becomes 0, a fraction truncates), and if it is
+// not longer than s the receiver is returned unchanged, which also covers a
+// negative target. The pad string is optional and defaults to a single space;
+// an explicitly empty pad string produces no filler, so the receiver comes back
+// unchanged. The filler is the pad repeated and then truncated to the exact fill
+// length on the code-unit view, so truncating in the middle of an astral pad can
+// emit a lone surrogate, exactly as JavaScript does.
+func (s BStr) PadStart(targetLength float64, pad ...BStr) BStr {
+	return s.padTo(targetLength, pad, true)
+}
+
+// PadEnd pads the end of s with pad until the result is targetLength code units
+// long, matching String.prototype.padEnd. It shares every rule with PadStart and
+// differs only in appending the filler after s rather than before it.
+func (s BStr) PadEnd(targetLength float64, pad ...BStr) BStr {
+	return s.padTo(targetLength, pad, false)
+}
+
+// padTo is the shared body of PadStart and PadEnd; atStart selects which side the
+// filler goes on. The out slice is freshly allocated and owned here, so it backs
+// the result directly without the defensive copy FromUTF16 would add.
+func (s BStr) padTo(targetLength float64, pad []BStr, atStart bool) BStr {
+	if toInteger(targetLength) <= float64(s.lengthU16) {
+		return s
+	}
+	target := int(toInteger(targetLength))
+	pu := padUnits(pad)
+	if len(pu) == 0 {
+		return s
+	}
+	fillLen := target - s.lengthU16
+	filler := make([]uint16, 0, fillLen)
+	for len(filler) < fillLen {
+		filler = append(filler, pu...)
+	}
+	filler = filler[:fillLen]
+	out := make([]uint16, 0, target)
+	if atStart {
+		out = append(out, filler...)
+		out = append(out, s.units()...)
+	} else {
+		out = append(out, s.units()...)
+		out = append(out, filler...)
+	}
+	return BStr{utf16: out, lengthU16: len(out)}
+}
+
+// padUnits returns the code units the pad argument contributes: the caller's pad
+// string when one was passed, or a single space (U+0020), the default pad
+// String.prototype.padStart and padEnd use when the argument is absent.
+func padUnits(pad []BStr) []uint16 {
+	if len(pad) == 0 {
+		return []uint16{0x20}
+	}
+	return pad[0].units()
+}
+
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both
 // are strings. It picks the backing form once: if both sides are on the UTF-8
 // fast path the result stays UTF-8 with a single byte copy, and otherwise the
