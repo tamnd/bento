@@ -1,7 +1,8 @@
 package lower
 
 import (
-	"go/format"
+	"go/ast"
+	"go/token"
 	"sort"
 	"strings"
 
@@ -104,15 +105,14 @@ func (d *declSet) emit() []Decl {
 	return out
 }
 
-// renderStructBody renders one struct declaration: a field per property, in the
-// source declaration order the frontend preserves so layout is stable (section
-// 29). The result is run through go/format so it is gofmt-clean, which section 2
-// requires so a developer reading a stack trace sees legible Go.
+// renderStructBody builds one struct declaration as go/ast nodes: a field per
+// property, in the source declaration order the frontend preserves so layout is
+// stable (section 29). Each field's type is the node typeExpr already built for
+// it, nested directly rather than spliced as text. The declaration is printed
+// through the gofmt-mode printer, so it is gofmt-clean, which section 2 requires
+// so a developer reading a stack trace sees legible Go.
 func renderStructBody(r *Renderer, name string, props []frontend.Property) (string, error) {
-	var b strings.Builder
-	b.WriteString("type ")
-	b.WriteString(name)
-	b.WriteString(" struct {\n")
+	fields := &ast.FieldList{}
 	for _, p := range props {
 		if p.Optional {
 			// An optional property is T | undefined plus a presence bit, which
@@ -127,32 +127,24 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property) (stri
 			// is a later slice.
 			return "", &NotYetLowerable{Flags: p.Type.Flags, Reason: "non-identifier property name belongs in the object side table"}
 		}
-		goType, err := r.RenderType(p.Type)
+		goType, err := r.typeExpr(p.Type)
 		if err != nil {
 			return "", err
 		}
-		b.WriteString("\t")
-		b.WriteString(field)
-		b.WriteString(" ")
-		b.WriteString(goType)
-		b.WriteString("\n")
+		fields.List = append(fields.List, &ast.Field{
+			Names: []*ast.Ident{ident(field)},
+			Type:  goType,
+		})
 	}
-	b.WriteString("}\n")
 
-	return formatDecl(b.String())
-}
-
-// formatDecl runs one generated top-level declaration through go/format so it is
-// gofmt-clean, which section 2 requires so a developer reading a stack trace
-// sees legible Go. A format failure means the emitted text is not valid Go,
-// which is a lowering bug rather than a source-driven boundary, so it surfaces
-// as a NotYetLowerable naming the offending source rather than crashing.
-func formatDecl(src string) (string, error) {
-	formatted, err := format.Source([]byte(src))
-	if err != nil {
-		return "", &NotYetLowerable{Reason: "generated declaration did not format: " + err.Error()}
+	decl := &ast.GenDecl{
+		Tok: token.TYPE,
+		Specs: []ast.Spec{&ast.TypeSpec{
+			Name: ident(name),
+			Type: &ast.StructType{Fields: fields},
+		}},
 	}
-	return string(formatted), nil
+	return printDecl(decl)
 }
 
 // structBaseName derives the deterministic base name of an object struct from
