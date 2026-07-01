@@ -423,6 +423,25 @@ __bento_defineModule("http", function (module, exports, require) {
     server.emit("request", req, res);
   };
 
+  globalThis.__bento_http_dispatchUpgrade = function (serverId, reqId, infoJSON, connId, headB64) {
+    const server = servers[serverId];
+    if (!server) return;
+    const info = JSON.parse(infoJSON);
+    const req = new IncomingMessage(reqId, info);
+    // The hijacked connection is a real net.Socket keyed by connId; the ws
+    // package writes the 101 response and frames over it directly.
+    const socket = require("net")._adopt(connId, info);
+    req.socket = socket;
+    req.connection = socket;
+    const head = Buffer.from(headB64 || "", "base64");
+    if (server.listenerCount("upgrade") > 0) {
+      server.emit("upgrade", req, socket, head);
+    } else {
+      // No handler: refuse the upgrade and close, matching Node.
+      socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    }
+  };
+
   globalThis.__bento_http_dispatchData = function (reqId, b64) {
     const req = requests[reqId];
     if (!req) return;

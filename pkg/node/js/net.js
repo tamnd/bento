@@ -145,6 +145,16 @@ __bento_defineModule("net", function (module, exports, require) {
     return new Server(options, connectionListener);
   }
 
+  // _adopt wraps a connection id that another module (http, on an upgrade) has
+  // already registered with the Go net bridge, so writes, reads, and close route
+  // through the same net machinery. It is not part of the public net surface.
+  function _adopt(connId, info) {
+    const socket = new Socket(connId);
+    if (info) socket._applyInfo(info);
+    sockets[connId] = socket;
+    return socket;
+  }
+
   globalThis.__bento_net_dispatchListening = function (serverId, port, address) {
     const server = servers[serverId];
     if (!server) return;
@@ -220,5 +230,6 @@ __bento_defineModule("net", function (module, exports, require) {
     createServer: createServer,
     connect: connect,
     createConnection: connect,
+    _adopt: _adopt,
   };
 });

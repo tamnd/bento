@@ -30,6 +30,10 @@ type httpBridge struct {
 	nextID    atomic.Int64
 	servers   map[int64]*httpServer
 	exchanges map[int64]*httpExchange
+	// net owns the connection registry. An Upgrade request is hijacked and its
+	// raw connection is adopted here so the upgrade event can hand JavaScript a
+	// real net.Socket, which is what the ws package targets.
+	net *netBridgeState
 }
 
 // httpServer is one bound listener and its Go server. gosrv and ln are set once
@@ -54,11 +58,12 @@ type httpExchange struct {
 
 // installHTTP registers the http host functions against an engine and loop. It is
 // called from InstallNet; the js/http.js factory supplies the JavaScript half.
-func installHTTP(eng engine.Engine, loop LoopHost) error {
+func installHTTP(eng engine.Engine, loop LoopHost, net *netBridgeState) error {
 	h := &httpBridge{
 		netBridge: netBridge{eng: eng, loop: loop},
 		servers:   map[int64]*httpServer{},
 		exchanges: map[int64]*httpExchange{},
+		net:       net,
 	}
 	for name, fn := range h.hostFuncs() {
 		if err := eng.Register(name, fn); err != nil {
@@ -154,6 +159,10 @@ func (h *httpBridge) serveListener(srv *httpServer, id int64, ln net.Listener) {
 func (h *httpBridge) handler(serverID int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := h.nextID.Add(1)
+		if isUpgrade(r) {
+			h.handleUpgrade(serverID, reqID, w, r)
+			return
+		}
 		ex := &httpExchange{id: reqID, w: w, r: r, done: make(chan struct{})}
 		h.mu.Lock()
 		h.exchanges[reqID] = ex
@@ -166,6 +175,44 @@ func (h *httpBridge) handler(serverID int64) http.Handler {
 		delete(h.exchanges, reqID)
 		h.mu.Unlock()
 	})
+}
+
+// isUpgrade reports whether a request asks to switch protocols, the trigger for
+// the upgrade event that WebSocket servers (and the ws package) ride on.
+func isUpgrade(r *http.Request) bool {
+	return httpTokenListHas(r.Header.Get("Connection"), "upgrade") && r.Header.Get("Upgrade") != ""
+}
+
+// handleUpgrade hijacks the connection and hands JavaScript a net.Socket over it
+// plus the request and any bytes already read past the headers. Once hijacked the
+// Go http server no longer owns the connection, so returning from the handler is
+// correct: the net bridge owns the socket's lifetime from here, exactly as if the
+// connection had come in through net.connect.
+func (h *httpBridge) handleUpgrade(serverID, reqID int64, w http.ResponseWriter, r *http.Request) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		h.emit("__bento_http_dispatchServerError", serverID, "", "connection is not hijackable")
+		return
+	}
+	conn, brw, err := hj.Hijack()
+	if err != nil {
+		h.emit("__bento_http_dispatchServerError", serverID, errCode(err), err.Error())
+		return
+	}
+
+	// Any bytes buffered past the request headers are the upgrade head, which the
+	// ws package expects as a separate buffer; the socket stream starts after them.
+	head := []byte{}
+	if n := brw.Reader.Buffered(); n > 0 {
+		head = make([]byte, n)
+		_, _ = brw.Read(head)
+	}
+
+	connID := h.net.nextID.Add(1)
+	nc := h.net.adopt(connID, conn, "__bento_net_", true)
+	h.net.startPumps(nc)
+
+	h.emit("__bento_http_dispatchUpgrade", serverID, reqID, buildRequestInfo(r), connID, base64.StdEncoding.EncodeToString(head))
 }
 
 // resume starts the one-shot body pump for a request. The handler triggers it the
