@@ -103,6 +103,14 @@ func (f *Fake) Array(elem *FakeType) *FakeType {
 	return &FakeType{Flags: TypeObject, Elem: elem}
 }
 
+// StringLit builds a string-literal type, the checker's view of a type whose one
+// value is v. It carries both TypeString and TypeLiteral like the real checker,
+// and a LiteralValue so LiteralOf answers, which is what the closed-union enum
+// lowering reads.
+func (f *Fake) StringLit(v string) *FakeType {
+	return &FakeType{Flags: TypeString | TypeLiteral, Literal: &LiteralValue{Kind: LiteralString, Str: v}}
+}
+
 // Prop is a small helper to build a PropertyInfo.
 func (f *Fake) Prop(name string, t *FakeType) PropertyInfo {
 	return PropertyInfo{Name: name, Type: t}
