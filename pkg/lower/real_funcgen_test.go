@@ -96,6 +96,20 @@ func TestRenderFuncGoldens(t *testing.T) {
 }`,
 		},
 		{
+			name:   "concat",
+			golden: "func_concat.golden",
+			// string is value.BStr, a string literal is value.FromGoString, and +
+			// on two strings is value.Concat, not a Go + which would be UTF-8.
+			src: `export function greet(name: string): string { return "Hello, " + name; }`,
+		},
+		{
+			name:   "strlen",
+			golden: "func_strlen.golden",
+			// .length on a string is the UTF-16 code-unit count, the value.BStr
+			// Length method, a float64 that matches the number type .length has.
+			src: `export function width(a: string, b: string): number { return (a + b).length; }`,
+		},
+		{
 			name:   "modulo",
 			golden: "func_modulo.golden",
 			// % on numbers is fmod, not Go's integer remainder, so it lowers to a
@@ -155,8 +169,6 @@ func TestRenderFuncVoidReturn(t *testing.T) {
 // NotYetLowerable rather than wrong or incomplete Go.
 func TestRenderFuncHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
-		// + on strings is concatenation of a different type.
-		{"stringConcat", "export function c(a: string, b: string): string { return a + b; }"},
 		// a truthy number condition needs JavaScript coercion, not a Go bool.
 		{"truthyCond", "export function t(a: number): number { if (a) { return 1; } return 0; }"},
 		// a for-of over an iterable is a later slice.

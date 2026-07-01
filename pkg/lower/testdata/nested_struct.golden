@@ -1,6 +1,6 @@
 type ObjLabelOrigin struct {
 	Origin *ObjXY
-	Label  bstr
+	Label  value.BStr
 }
 type ObjXY struct {
 	X float64

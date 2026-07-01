@@ -413,6 +413,12 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeNumericLiteral:
 		return r.numericLiteral(n)
 
+	case frontend.NodeStringLiteral:
+		return r.stringLiteral(n)
+
+	case frontend.NodePropertyAccessExpression:
+		return r.propertyAccess(n)
+
 	case frontend.NodeTrueKeyword:
 		return ident("true"), nil
 
@@ -504,6 +510,54 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 	}
 }
 
+// stringLiteral lowers a string literal to a value.BStr built from its Go-string
+// form. The literal's code-unit content is its source text with the quotes
+// stripped, which for a literal with no backslash escapes is exactly the runtime
+// string, so it is re-quoted as a Go string literal and wrapped in
+// value.FromGoString. A literal that carries an escape sequence hands back: the
+// escape grammars of the two languages differ in the corners (a JavaScript
+// \uXXXX surrogate escape has no Go spelling), so decoding them soundly is its
+// own slice rather than a guess here.
+func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
+	text := r.prog.Text(n)
+	if len(text) < 2 {
+		return nil, &NotYetLowerable{Reason: "string literal source too short to lower"}
+	}
+	quote := text[0]
+	if (quote != '"' && quote != '\'') || text[len(text)-1] != quote {
+		return nil, &NotYetLowerable{Reason: "unusual string literal quoting is a later slice"}
+	}
+	inner := text[1 : len(text)-1]
+	if strings.ContainsRune(inner, '\\') {
+		return nil, &NotYetLowerable{Reason: "string literal with escape sequences needs the escape-decoding slice"}
+	}
+	r.requireImport(valuePkg)
+	lit := &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(inner)}
+	return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{lit}}, nil
+}
+
+// propertyAccess lowers a member expression. The only member this slice covers
+// is .length on a string, which is the code-unit count and lowers to the
+// value.BStr Length method, a float64 that matches the number type the checker
+// gives .length. Every other property (a field of a lowered object, a method
+// call, .length on an array) is its own later slice and hands back.
+func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return nil, &NotYetLowerable{Reason: "property access did not expose an object and a property name"}
+	}
+	obj, nameNode := kids[0], kids[1]
+	prop := r.prog.Text(nameNode)
+	if r.isString(obj) && prop == "length" {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Length")}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
+}
+
 // numericLiteral lowers a number literal. number is float64, so the literal is
 // emitted as a Go floating constant; a plain decimal integer or fraction maps
 // directly, while an exotic form (hex, binary, separators, exponent edge cases)
@@ -541,6 +595,24 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	opText := r.prog.Text(op)
 	if opText == "=" {
 		return nil, &NotYetLowerable{Reason: "assignment used as a value is a later slice"}
+	}
+
+	// + on two strings is concatenation of a UTF-16 string, not a Go string +,
+	// which would be UTF-8, and not a Go operator at all since bstr is a struct.
+	// It lowers to value.Concat, which picks the wider backing form and copies
+	// once (section 5). It is handled before the operator table so the string path
+	// emits a call rather than reaching the number/bool dispatch.
+	if opText == "+" && r.isString(left) && r.isString(right) {
+		l, err := r.lowerExpr(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Concat"), Args: []ast.Expr{l, rr}}, nil
 	}
 
 	// Remainder on numbers is the one arithmetic operator that is not a Go binary
@@ -609,6 +681,13 @@ func (r *Renderer) isNumber(n frontend.Node) bool {
 // control-flow condition a real Go bool rather than a coerced value.
 func (r *Renderer) isBool(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&frontend.TypeBoolean != 0
+}
+
+// isString reports whether the checker types n as string, the guard that routes
+// + to value.Concat and .length to value.BStr.Length rather than to a number or
+// object path.
+func (r *Renderer) isString(n frontend.Node) bool {
+	return r.prog.TypeAt(n).Flags&frontend.TypeString != 0
 }
 
 // numericBinaryOp maps a TypeScript operator on number operands to its Go token.

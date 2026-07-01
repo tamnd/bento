@@ -134,6 +134,22 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]float64{{0}, {4}, {10}},
 		},
 		{
+			name: "stringLength",
+			// The literal holds an astral character (one rune, two UTF-16 code
+			// units). .length must report code units, so the whole string is
+			// "a" (1) + emoji (2) + "b" (1) = 4. A Go len() over UTF-8 bytes would
+			// say 6, so this proves the emitted Go runs the real value.BStr and
+			// gets the JavaScript answer, matched against quickjs. No arguments,
+			// because the harness passes numbers; string arguments are a later
+			// slice once the harness carries typed argument tuples.
+			src: `export function width(): number {
+  let s = "a" + "😀" + "b";
+  return s.length;
+}`,
+			fn:   "width",
+			args: [][]float64{{}},
+		},
+		{
 			name: "modulo",
 			src:  "export function rem(a: number, b: number): number { return a % b; }",
 			// fmod keeps the sign of the dividend and works on fractions, so the
@@ -261,16 +277,27 @@ func evalTS(t *testing.T, src, fn string, args []float64) float64 {
 // runGo wraps the generated function in a tiny main, compiles and runs it with
 // the Go toolchain, and parses the number it prints. This is the subject: what
 // the emitted Go actually computes, not what we hope it computes.
+//
+// The temporary package is created inside this repository's tree rather than in
+// an isolated temp module, so it compiles under bento's own go.mod and go.sum
+// and links the real value package with no separate require, replace, or module
+// download. That keeps the test fully offline: a throwaway module would need its
+// own go.sum for the runtime import, which a clean CI checkout does not have.
 func runGo(t *testing.T, goSrc string, imports []string, name string, args []float64) float64 {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp(repoRoot(t), "eqrun-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	callArgs := make([]string, len(args))
 	for i, a := range args {
 		callArgs[i] = strconv.FormatFloat(a, 'g', -1, 64)
 	}
 	// The wrapper always prints with fmt; the lowered code adds whatever else it
-	// referenced (math for a % that became math.Mod, and later the value model).
+	// referenced (math for a % that became math.Mod, and the value model for a
+	// string).
 	paths := append([]string{"fmt"}, imports...)
 	var imp strings.Builder
 	imp.WriteString("import (\n")
@@ -285,9 +312,6 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module eqtest\n\ngo 1.26\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	cmd := exec.Command("go", "run", ".")
 	cmd.Dir = dir
@@ -300,6 +324,23 @@ func runGo(t *testing.T, goSrc string, imports []string, name string, args []flo
 		t.Fatalf("parse go output %q: %v", out, err)
 	}
 	return f
+}
+
+// repoRoot returns the absolute path of the repository root. The test runs with
+// its working directory at the package (pkg/lower), so the root is two levels
+// up. The generated program is placed under this root so it builds inside the
+// bento module and can import the runtime with no separate module wiring.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.Abs(filepath.Join(wd, "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 // toFloat coerces the engine's native return value to a float64. The quickjs
