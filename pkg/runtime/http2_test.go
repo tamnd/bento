@@ -68,6 +68,47 @@ func TestHTTP2SecureServerCompat(t *testing.T) {
 	}
 }
 
+// TestHTTP2ClientRoundTrip drives the core client against the core server, both
+// bento, in one script: http2.connect opens a session, session.request opens a
+// stream, and the server answers on its own stream event. It proves the client
+// session, the request stream as a duplex, the response event with its :status
+// pseudo-header, and the body all ride one multiplexed h2 connection.
+func TestHTTP2ClientRoundTrip(t *testing.T) {
+	port := freePort(t)
+	certPEM, keyPEM := selfSignedPEM(t)
+	script := fmt.Sprintf(`
+		const http2 = require("http2");
+		const server = http2.createSecureServer({ key: %s, cert: %s });
+		server.on("stream", (stream, headers) => {
+			let body = "";
+			stream.on("data", (chunk) => { body += chunk.toString(); });
+			stream.on("end", () => {
+				stream.respond({ ":status": 200, "content-type": "text/plain" });
+				stream.end("pong:" + headers[":path"] + ":" + body);
+			});
+		});
+		server.listen(%d, () => {
+			const client = http2.connect("https://127.0.0.1:%d", { rejectUnauthorized: false });
+			const req = client.request({ ":method": "POST", ":path": "/ping" });
+			let status = 0;
+			let reply = "";
+			req.on("response", (h) => { status = h[":status"]; });
+			req.on("data", (chunk) => { reply += chunk.toString(); });
+			req.on("end", () => {
+				console.log(status + " " + reply);
+				client.close();
+				server.close();
+			});
+			req.end("hi");
+		});
+	`, jsQuote(keyPEM), jsQuote(certPEM), port, port)
+
+	out := strings.TrimSpace(runToEnd(t, script))
+	if out != "200 pong:/ping:hi" {
+		t.Errorf("h2 round trip = %q, want %q", out, "200 pong:/ping:hi")
+	}
+}
+
 // TestHTTP2ServerStreamEvent drives the core API: server.on("stream") with
 // stream.respond and the stream as a Duplex. The handler reads the request body
 // off the stream, responds with a :status pseudo-header, and echoes the body back
