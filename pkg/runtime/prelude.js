@@ -213,26 +213,66 @@
   g.process = process;
 
   // ---- module system ----------------------------------------------------
-  // A minimal registry so require() has a home. The node core layer and the
-  // real resolver land in later milestones; for now this gives a clear error
-  // for anything not yet built in and lets code that never imports run cleanly.
-  const builtins = new Map();
+  // Two registries back require(). `resolved` holds already-built exports for
+  // eagerly registered modules and the cache of native modules that have run.
+  // `factories` holds native core modules as functions that build their exports
+  // lazily on first require, matching Node's own lazy core loading. The full
+  // on-disk resolver lands in a later milestone; user file resolution plugs in
+  // through __bento_resolveHook when it arrives.
+  const resolved = new Map();
+  const factories = new Map();
+
+  function withNodePrefix(name, set) {
+    set(name);
+    if (name.indexOf("node:") === 0) {
+      set(name.slice(5));
+    } else {
+      set("node:" + name);
+    }
+  }
+
+  // Eagerly register a fully built module object under its name (and the
+  // node: alias). Used for modules that are cheap and always present.
   g.__bento_registerModule = function (name, exportsObj) {
-    builtins.set(name, exportsObj);
-    if (name.indexOf("node:") !== 0) builtins.set("node:" + name, exportsObj);
+    withNodePrefix(name, (n) => resolved.set(n, exportsObj));
   };
-  g.require = function (spec) {
-    if (builtins.has(spec)) return builtins.get(spec);
+
+  // Register a native core module as a factory. The factory runs at most once,
+  // on first require, and receives (module, exports, require) like a CommonJS
+  // module so core modules can require one another.
+  g.__bento_defineModule = function (name, factory) {
+    withNodePrefix(name, (n) => factories.set(n, factory));
+  };
+
+  function loadNative(spec) {
+    if (resolved.has(spec)) return resolved.get(spec);
+    const factory = factories.get(spec);
+    if (!factory) return undefined;
+    const mod = { exports: {}, id: spec, loaded: false };
+    // Register before running so cyclic core requires see the partial exports.
+    withNodePrefix(spec, (n) => resolved.set(n, mod.exports));
+    factory(mod, mod.exports, g.require);
+    mod.loaded = true;
+    withNodePrefix(spec, (n) => resolved.set(n, mod.exports));
+    return mod.exports;
+  }
+
+  function moduleNotFound(spec) {
     const err = new Error("Cannot find module '" + spec + "'");
     err.code = "MODULE_NOT_FOUND";
-    throw err;
+    return err;
+  }
+
+  g.require = function (spec) {
+    const found = loadNative(spec);
+    if (found !== undefined) return found;
+    throw moduleNotFound(spec);
   };
   g.require.resolve = function (spec) {
-    if (builtins.has(spec)) return spec;
-    const err = new Error("Cannot find module '" + spec + "'");
-    err.code = "MODULE_NOT_FOUND";
-    throw err;
+    if (resolved.has(spec) || factories.has(spec)) return spec;
+    throw moduleNotFound(spec);
   };
+  g.require.cache = {};
 
   // A single top-level module record for the entry file. The real module system
   // gives each file its own record; this is enough to run one entry point.
