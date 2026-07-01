@@ -40,6 +40,12 @@ const bootstrap = `
   if (typeof globalThis.URL === "undefined") globalThis.URL = url.URL;
   if (typeof globalThis.URLSearchParams === "undefined") globalThis.URLSearchParams = url.URLSearchParams;
 
+  var fetchMod = require("fetch");
+  if (typeof globalThis.fetch === "undefined") globalThis.fetch = fetchMod.fetch;
+  if (typeof globalThis.Headers === "undefined") globalThis.Headers = fetchMod.Headers;
+  if (typeof globalThis.Request === "undefined") globalThis.Request = fetchMod.Request;
+  if (typeof globalThis.Response === "undefined") globalThis.Response = fetchMod.Response;
+
   // TextEncoder/TextDecoder are the canonical utf8 codec. Buffer's utf8 paths
   // delegate here when these globals exist, so the encoders must implement utf8
   // directly rather than routing back through Buffer, or the two recurse into a
