@@ -49,3 +49,32 @@ func exportedField(name string) (string, bool) {
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes), true
 }
+
+// goKeywords is the set of reserved words a local name cannot spell in Go. A
+// TypeScript parameter or local named "type" or "range" is a legal identifier
+// there but not here, so localName appends an underscore to keep the same name
+// unexported without colliding with the grammar.
+var goKeywords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true, "continue": true,
+	"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,
+	"func": true, "go": true, "goto": true, "if": true, "import": true,
+	"interface": true, "map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true, "var": true,
+}
+
+// localName maps a TypeScript parameter or local identifier to its Go spelling.
+// A local stays unexported, so the name is preserved verbatim except when it
+// spells a Go keyword, which takes a trailing underscore. A name that is not a
+// legal Go identifier (a string-keyed binding, say) reports ok=false so the
+// caller hands the construct back rather than emitting an unsound reference. The
+// mapping is a pure function of the name, so a parameter and every reference to
+// it mangle identically without threading any shared table.
+func localName(name string) (string, bool) {
+	if !isGoIdent(name) {
+		return "", false
+	}
+	if goKeywords[name] {
+		return name + "_", true
+	}
+	return name, true
+}

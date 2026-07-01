@@ -181,6 +181,10 @@ type TSAdapter interface {
 	KindOf(n NodeHandle) NodeKind
 	ChildrenOf(n NodeHandle) []NodeHandle
 	SpanOf(n NodeHandle) (start, end int, file string)
+	// TextOf returns a node's own source text without leading trivia, so lowering
+	// reads an identifier name, a literal, or an operator token straight from the
+	// checked source.
+	TextOf(n NodeHandle) string
 	FileKindOf(file string) FileKind
 
 	// Revision is the pinned typescript-go commit this adapter was built

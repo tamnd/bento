@@ -1,0 +1,3 @@
+func Noop(x float64) {
+	return
+}

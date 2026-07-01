@@ -166,6 +166,12 @@ func (p *Program) Children(n Node) []Node {
 	return out
 }
 
+// Text returns n's own source text with no leading trivia, the identifier name,
+// literal, or operator token lowering emits into the generated Go.
+func (p *Program) Text(n Node) string {
+	return p.adapter.TextOf(p.unwrapNode(n))
+}
+
 // TypeAt returns the type of the expression at n, with flow narrowing applied at
 // n's exact position. This is the query the partitioner runs on every parameter,
 // local, and return, and the query lowering runs on every expression.

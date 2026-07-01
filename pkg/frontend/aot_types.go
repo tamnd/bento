@@ -94,6 +94,16 @@ const (
 	NodeAwaitExpression          = adapter.NodeAwaitExpression
 	NodeYieldExpression          = adapter.NodeYieldExpression
 	NodeSpreadElement            = adapter.NodeSpreadElement
+	NodeParenthesizedExpression  = adapter.NodeParenthesizedExpression
+
+	// Literals and keyword-valued expressions.
+	NodeNumericLiteral                = adapter.NodeNumericLiteral
+	NodeStringLiteral                 = adapter.NodeStringLiteral
+	NodeBigIntLiteral                 = adapter.NodeBigIntLiteral
+	NodeNoSubstitutionTemplateLiteral = adapter.NodeNoSubstitutionTemplateLiteral
+	NodeTrueKeyword                   = adapter.NodeTrueKeyword
+	NodeFalseKeyword                  = adapter.NodeFalseKeyword
+	NodeNullKeyword                   = adapter.NodeNullKeyword
 
 	NodeWithStatement = adapter.NodeWithStatement
 )
