@@ -860,22 +860,19 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
 }
 
-// numericLiteral lowers a number literal. number is float64, so the literal is
-// emitted as a Go floating constant; a plain decimal integer or fraction maps
-// directly, while an exotic form (hex, binary, separators, exponent edge cases)
-// hands back until the numeric-parsing slice normalizes it.
+// numericLiteral lowers a number literal. number is float64, and a well-formed
+// JavaScript literal denotes the same float64 whether it is written in decimal,
+// hex, binary, or octal, with digit separators, or with an exponent, so
+// decodeNumericLiteral validates the value and returns the cleaned Go literal for
+// it. A BigInt or a value that overflows to Infinity is not a float64 this slice
+// lowers and hands back.
 func (r *Renderer) numericLiteral(n frontend.Node) (ast.Expr, error) {
 	text := r.prog.Text(n)
-	if !isPlainDecimal(text) {
-		return nil, &NotYetLowerable{Reason: "numeric literal " + text + " needs the number-parsing slice"}
+	value, kind, ok := decodeNumericLiteral(text)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "numeric literal " + text + " is not a finite number this slice lowers"}
 	}
-	kind := token.INT
-	for i := 0; i < len(text); i++ {
-		if text[i] == '.' {
-			kind = token.FLOAT
-		}
-	}
-	return &ast.BasicLit{Kind: kind, Value: text}, nil
+	return &ast.BasicLit{Kind: kind, Value: value}, nil
 }
 
 // binaryExpr lowers a binary expression on two operands of the same primitive
@@ -1173,28 +1170,4 @@ func kindName(k frontend.NodeKind) string {
 	default:
 		return "kind#" + strconv.Itoa(int(k))
 	}
-}
-
-// isPlainDecimal reports whether text is a plain base-ten integer or fraction
-// with no sign, separators, exponent, or radix prefix, the numeric forms that
-// map straight to a Go floating constant.
-func isPlainDecimal(text string) bool {
-	if text == "" {
-		return false
-	}
-	dots := 0
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		switch {
-		case c >= '0' && c <= '9':
-		case c == '.':
-			dots++
-		default:
-			return false
-		}
-	}
-	if dots > 1 {
-		return false
-	}
-	return text != "."
 }

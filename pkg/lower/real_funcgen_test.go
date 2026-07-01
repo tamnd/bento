@@ -289,6 +289,27 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function sgn(x: number): number { return Math.sign(x); }`,
 		},
 		{
+			name:   "num_hex",
+			golden: "func_num_hex.golden",
+			// a hexadecimal integer literal is a number like any other, so it lowers to
+			// the same hex spelling as a Go int constant, added as a float64.
+			src: `export function mask(x: number): number { return x + 0xFF; }`,
+		},
+		{
+			name:   "num_separators",
+			golden: "func_num_separators.golden",
+			// underscore digit separators are stripped, so the emitted Go literal is
+			// the same value with no separators.
+			src: `export function big(): number { return 1_000_000; }`,
+		},
+		{
+			name:   "num_exponent",
+			golden: "func_num_exponent.golden",
+			// an exponent literal carries the .eE that marks it a Go float constant, so
+			// it stays a float literal in the emitted code.
+			src: `export function milli(): number { return 1.5e-3; }`,
+		},
+		{
 			name:   "bit_and",
 			golden: "func_bit_and.golden",
 			// & on numbers is not a Go & on float64; each operand coerces through
