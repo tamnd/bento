@@ -26,6 +26,9 @@ func (h *httpBridge) clientSend(args []any) (any, error) {
 			body = decoded
 		}
 	}
+	// Agent id 0 is the default keep-alive client; any other id names an Agent
+	// whose Transport holds the connection pool.
+	client := h.clientFor(int64(intArg(args, 5)))
 
 	// The request holds the loop open until it settles. AddRef runs here on the
 	// loop goroutine; the matching Unref is posted back from the pool goroutine.
@@ -46,7 +49,7 @@ func (h *httpBridge) clientSend(args []any) (any, error) {
 			req.Header.Add(p[0], p[1])
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			h.emit("__bento_http_dispatchClientError", id, err.Error())
 			return
