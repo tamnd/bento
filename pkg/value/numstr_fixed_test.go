@@ -21,8 +21,8 @@ func TestNumberToFixed(t *testing.T) {
 		{1, 0, "1"},
 		{1, 3, "1.000"},
 		{1.5, 0, "2"},
-		{0.5, 0, "1"},   // exact tie rounds up
-		{2.5, 0, "3"},   // exact tie rounds up
+		{0.5, 0, "1"},      // exact tie rounds up
+		{2.5, 0, "3"},      // exact tie rounds up
 		{1.005, 2, "1.00"}, // nearest double is below 1.005
 		{1.255, 2, "1.25"}, // nearest double is below 1.255
 		{123.456, 2, "123.46"},

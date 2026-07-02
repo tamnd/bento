@@ -152,7 +152,7 @@ func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) st
 	case t.Flags&frontend.TypeObject != 0:
 		id := t.Identity()
 		if depth, ok := seen[id]; ok {
-			return "@" + itoa(len(seen) - depth)
+			return "@" + itoa(len(seen)-depth)
 		}
 		if elem, ok := prog.ElementType(t); ok {
 			return "[]" + structuralKey(prog, elem, seen)
