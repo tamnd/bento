@@ -608,6 +608,24 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{1, 2}, {2, 1}},
 		},
 		{
+			name: "parseIntString",
+			// parseInt(s) with no radix: base 10 with 0x detection. The inputs cover a
+			// trailing tail, a signed value with whitespace, the 0x prefix, a leading
+			// zero (which is not legacy octal), a fraction stopped at the point, and the
+			// non-numeric NaN case, all of which must agree with value.ParseInt.
+			src:  `export function pi(s: string): number { return parseInt(s); }`,
+			fn:   "pi",
+			args: [][]any{{"42px"}, {"  -17  "}, {"0x1F"}, {"010"}, {"3.9"}, {"abc"}, {""}},
+		},
+		{
+			name: "parseIntRadix",
+			// parseInt(s, r) with an explicit radix: binary, octal, hex (with and without
+			// the prefix), base 36, and the out-of-range radix that is NaN.
+			src:  `export function pi(s: string, r: number): number { return parseInt(s, r); }`,
+			fn:   "pi",
+			args: [][]any{{"101", 2}, {"777", 8}, {"ff", 16}, {"0x1F", 16}, {"0x1F", 10}, {"zz", 36}, {"10", 1}},
+		},
+		{
 			name: "parseFloatString",
 			// parseFloat(s) reads the longest decimal prefix and ignores the rest. The
 			// inputs cover a bare number, a trailing tail, a leading-whitespace trim, the

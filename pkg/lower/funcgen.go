@@ -485,6 +485,11 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "parseFloat" && r.isAmbientGlobal(kids[0]) {
 		return r.parseFloatCall(kids[1:])
 	}
+	// parseInt takes an optional radix, so it has its own lowering rather than the
+	// single-argument coercion shape, but routes the same way before the user path.
+	if r.prog.Text(kids[0]) == "parseInt" && r.isAmbientGlobal(kids[0]) {
+		return r.parseIntCall(kids[1:])
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
 		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
@@ -862,6 +867,37 @@ func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{lowered}}, nil
+}
+
+// parseIntCall lowers parseInt(s) and parseInt(s, radix) to value.ParseInt. The
+// first argument must be a string; the optional second must be a number and
+// becomes the radix, while an omitted radix lowers to the literal 0, which
+// value.ParseInt treats (as the specification does) the same as an omitted
+// argument. A different arity or an argument of the wrong type hands back.
+func (r *Renderer) parseIntCall(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) < 1 || len(argNodes) > 2 {
+		return nil, &NotYetLowerable{Reason: "parseInt with this argument count is a later slice"}
+	}
+	if !r.isString(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "parseInt on a non-string argument is a later slice"}
+	}
+	str, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	// The radix argument, or the literal 0 when it is omitted.
+	var radix ast.Expr = &ast.BasicLit{Kind: token.FLOAT, Value: "0"}
+	if len(argNodes) == 2 {
+		if !r.isNumber(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "parseInt with a non-number radix is a later slice"}
+		}
+		radix, err = r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ParseInt"), Args: []ast.Expr{str, radix}}, nil
 }
 
 // argKind names the primitive type a string method expects for one argument, so
