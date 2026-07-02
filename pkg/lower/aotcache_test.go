@@ -64,6 +64,21 @@ func cacheDisabled() bool {
 	return strings.EqualFold(os.Getenv("BENTO_AOT_TESTCACHE"), "off")
 }
 
+// skipIfShort turns off the two slow paths in this package: the tests that shell
+// out to `go run` to build a generated program and the tests that spin the
+// JavaScript engine to evaluate the reference source. Everything else here, the
+// golden pins and the type-render checks, is pure Go and stays on under -short,
+// so a quick loop or a CI job that only needs the render layer runs in seconds.
+// The behavioral equivalence proof, which is what actually links a binary and
+// runs the engine, is exercised by the full suite a developer runs before a push
+// and by the dedicated equivalence CI job, both of which leave -short unset.
+func skipIfShort(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping go-run and engine equivalence under -short")
+	}
+}
+
 // aotCacheDir is where recorded outputs live. It sits under the user cache
 // directory so it survives across runs and never lands in the repository tree;
 // a machine without one falls back to the temp directory.

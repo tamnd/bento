@@ -294,6 +294,7 @@ func TestRenderFuncGoldens(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, got, err := renderFunc(t, readTS(t, tc.file))
 			if err != nil {
 				t.Fatalf("RenderFunc(%s): %v", tc.name, err)
@@ -340,6 +341,7 @@ func TestRenderFuncHandsBack(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, _, err := renderFunc(t, tc.src)
 			var nyl *NotYetLowerable
 			if !errors.As(err, &nyl) {
