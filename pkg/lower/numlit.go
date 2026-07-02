@@ -59,6 +59,49 @@ func decodeNumericLiteral(text string) (value string, kind token.Token, ok bool)
 	return clean, kind, true
 }
 
+// numericLiteralValue decodes a JavaScript numeric literal's source text to the
+// float64 it denotes, for a caller that needs the value itself rather than the Go
+// literal, such as reading a radix argument at compile time. It mirrors
+// decodeNumericLiteral's grammar (the radix-prefixed integers, the underscore
+// separators, and the decimal forms) and rejects the same non-finite and BigInt
+// cases, so the two stay in step on what counts as a lowerable number.
+func numericLiteralValue(text string) (float64, bool) {
+	if text == "" || strings.HasSuffix(text, "n") {
+		return 0, false
+	}
+	clean := strings.ReplaceAll(text, "_", "")
+	if clean == "" {
+		return 0, false
+	}
+	if len(clean) >= 2 && clean[0] == '0' {
+		base := 0
+		switch clean[1] {
+		case 'x', 'X':
+			base = 16
+		case 'b', 'B':
+			base = 2
+		case 'o', 'O':
+			base = 8
+		}
+		if base != 0 {
+			i, ok := new(big.Int).SetString(clean[2:], base)
+			if !ok {
+				return 0, false
+			}
+			f, _ := new(big.Float).SetInt(i).Float64()
+			if math.IsInf(f, 0) {
+				return 0, false
+			}
+			return f, true
+		}
+	}
+	v, err := strconv.ParseFloat(clean, 64)
+	if err != nil || math.IsInf(v, 0) || math.IsNaN(v) {
+		return 0, false
+	}
+	return v, true
+}
+
 // radixIsFinite reports whether the base-n integer written as digits names a value
 // that fits a finite float64. It parses through a big.Int so a very long run of
 // digits does not overflow an intermediate integer, then checks the float64 the

@@ -1040,6 +1040,55 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 // returns the primitive itself, so it lowers to the receiver expression
 // unchanged. Any other method on a primitive receiver is a later slice.
 func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	// number.toString(radix) is the one primitive method with an argument this
+	// slice covers. The radix must be a literal in 2..36 so no RangeError can fire
+	// (a bad radix throws, which waits on the exception machinery, and a dynamic
+	// radix cannot be range-checked at compile time). A radix of 10 is the same
+	// coercion String(x) runs, so it routes through stringify; any other radix
+	// lowers to value.NumberToStringRadix with the literal folded in.
+	if method == "toString" && len(argNodes) == 1 && r.isNumber(recvNode) {
+		radix, ok := r.literalIntArg(argNodes[0], 2, 36)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "number toString with a non-literal or out-of-range radix is a later slice"}
+		}
+		if radix == 10 {
+			return r.stringify(recvNode)
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "NumberToStringRadix"),
+			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(radix)}},
+		}, nil
+	}
+	// number.toFixed(digits) formats with a fixed number of fraction digits. The
+	// digit count must be a literal in 0..100 for the same reason the radix must:
+	// a count outside that range throws a RangeError, and a dynamic count cannot be
+	// range-checked at compile time. An omitted count means zero. It lowers to
+	// value.NumberToFixed, which rounds the exact double the way the specification
+	// does.
+	if method == "toFixed" && len(argNodes) <= 1 && r.isNumber(recvNode) {
+		digits := 0
+		if len(argNodes) == 1 {
+			d, ok := r.literalIntArg(argNodes[0], 0, 100)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "number toFixed with a non-literal or out-of-range digit count is a later slice"}
+			}
+			digits = d
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "NumberToFixed"),
+			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(digits)}},
+		}, nil
+	}
 	if len(argNodes) != 0 {
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " with arguments is a later slice"}
 	}
@@ -1051,6 +1100,28 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 	default:
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " is a later slice"}
 	}
+}
+
+// literalIntArg reads a numeric-literal argument whose ToInteger value lands in
+// [lo, hi], returning that integer. It is the shared compile-time guard for the
+// number formatting methods whose argument must be in a fixed range or throw: a
+// toString radix in 2..36 and a toFixed digit count in 0..100. A non-literal
+// argument (which cannot be checked at compile time) or a literal that truncates
+// outside the range returns false, so the caller hands back rather than emit a
+// call that could throw a RangeError with no handler in place.
+func (r *Renderer) literalIntArg(n frontend.Node, lo, hi int) (int, bool) {
+	if n.Kind() != frontend.NodeNumericLiteral {
+		return 0, false
+	}
+	v, ok := numericLiteralValue(r.prog.Text(n))
+	if !ok {
+		return 0, false
+	}
+	i := int(v) // ToInteger truncates toward zero.
+	if i < lo || i > hi {
+		return 0, false
+	}
+	return i, true
 }
 
 // numberMethod maps a JavaScript Number static predicate to the value function

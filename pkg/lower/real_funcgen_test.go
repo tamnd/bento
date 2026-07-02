@@ -259,6 +259,10 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_index", file: "func_array_index"},
 		// + where one operand is a string is concatenation with coercion: a number operand becomes value.NumberToString and a boolean operand value.BoolToString before value.Concat, so a mixed "n=" + n + " even=" + even chain lowers without reaching the number/bool operator dispatch.
 		{name: "concat_coerce", file: "func_concat_coerce"},
+		// number.toString(radix) with a literal radix lowers to value.NumberToStringRadix folding the radix in, radix 16 and 2 taking that path and a bare toString() routing through the same NumberToString the radix-10 coercion uses.
+		{name: "number_radix", file: "func_number_radix"},
+		// number.toFixed(digits) with a literal digit count lowers to value.NumberToFixed folding the count in, so a fixed-point format at zero, two, and four fraction digits is emitted over a fractional value.
+		{name: "number_fixed", file: "func_number_fixed"},
 		// map over a concise-body arrow lowers to the value.Array Map method taking a Go function literal, the arrow's parameter typed from the checker and its body returning the element type.
 		{name: "array_map", file: "func_array_map"},
 		// filter over a concise-body arrow lowers to the value.Array Filter method, the callback returning a bool with no same-type restriction.

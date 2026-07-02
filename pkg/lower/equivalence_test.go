@@ -736,6 +736,27 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		// same ToString, and the escapes must cook identically, or the strings diverge.
 		{name: "templateNosub", file: "eq_template_nosub", fn: "f", ret: "string", args: [][]any{{}}},
 		{
+			// number.toString(radix) with a literal radix: radix 16 and 2 through
+			// value.NumberToStringRadix and a bare toString() through the radix-10
+			// path, compared against the engine over an integer masked to a byte so
+			// the digits and the sign stay in the covered range.
+			name: "numberRadix",
+			file: "eq_number_radix",
+			fn:   "radices",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {255}, {128}, {-1}},
+		},
+		{
+			// number.toFixed(digits) with a literal count at zero, two, and four
+			// fraction digits over a fractional value, compared against the engine so
+			// the exact-double rounding (ties up, not to even) is proven identical.
+			name: "numberFixed",
+			file: "eq_number_fixed",
+			fn:   "money",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {5}, {100}, {-3}},
+		},
+		{
 			// + concatenation that coerces a number and a boolean operand to a string,
 			// the same ToString the template path runs, so a mixed "n=" + n + " even=" +
 			// even chain is compared against the engine over an integer, a negative, and
