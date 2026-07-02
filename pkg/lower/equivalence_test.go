@@ -1018,6 +1018,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {2}, {3}, {5}, {-1}},
 		},
 		{
+			// an object literal is built with a shorthand and a keyed property, then two
+			// of its fields are read back, so the composite-literal construction and the
+			// struct-field read both run through the engine against TypeScript.
+			name: "objectLiteral",
+			file: "eq_object_literal",
+			fn:   "box",
+			args: [][]any{{0, 0}, {1, 2}, {3, 4}, {-2, 5}, {0.5, 1.5}},
+		},
+		{
 			// map over an arrow scales each element by the argument, then the mapped
 			// array is summed, so the callback ran through the engine on every
 			// element rather than only being constructed.

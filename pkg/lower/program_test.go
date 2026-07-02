@@ -69,6 +69,7 @@ func TestRenderProgramGoldens(t *testing.T) {
 		{"sumLoop", "prog_sum_loop", "prog_sum_loop.golden"},
 		{"funcArea", "prog_func_area", "prog_func_area.golden"},
 		{"stdoutWrite", "prog_stdout_write", "prog_stdout_write.golden"},
+		{"object", "prog_object", "prog_object.golden"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,6 +92,7 @@ func TestProgramTSAndGoAgree(t *testing.T) {
 		{"sumLoop", "prog_sum_loop"},
 		{"funcArea", "prog_func_area"},
 		{"stdoutWrite", "prog_stdout_write"},
+		{"object", "prog_object"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,0 +1,19 @@
+package main
+
+import (
+	"github.com/tamnd/bento/pkg/value"
+)
+
+type ObjHeightWidth struct {
+	Width  float64
+	Height float64
+}
+
+func Box(w float64, h float64) float64 {
+	var r *ObjHeightWidth = &ObjHeightWidth{Width: w, Height: h}
+	return r.Width * r.Height
+}
+func main() {
+	value.ConsoleLog(value.NumberToString(Box(3, 4)))
+	value.ConsoleLog(value.NumberToString(Box(5, 6)))
+}

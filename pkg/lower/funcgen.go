@@ -637,6 +637,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeElementAccessExpression:
 		return r.elementAccess(n)
 
+	case frontend.NodeObjectLiteralExpression:
+		return r.objectLiteral(n)
+
 	case frontend.NodeArrowFunction:
 		return r.arrowFunc(n)
 
@@ -1872,6 +1875,29 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return nil, &NotYetLowerable{Reason: "Number." + prop + " as a value is a later slice"}
 	}
+	// A plain read o.k on a fixed-shape object lowers to the Go struct field the
+	// shape's property interns to. The field name comes from the same exportedField
+	// mapping and the same internStruct registration the object literal and the
+	// type renderer use, so a read and the value it reads agree on the field. A
+	// shape that does not lower (an optional property, say) hands back through
+	// internStruct rather than reading a field that was never declared.
+	objType := r.prog.TypeAt(obj)
+	if objType.Flags&frontend.TypeObject != 0 {
+		if _, isArray := r.prog.ElementType(objType); !isArray {
+			field, ok := exportedField(prop)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "property name ." + prop + " is not a Go identifier"}
+			}
+			if _, err := r.decls.internStruct(r, objType); err != nil {
+				return nil, err
+			}
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.SelectorExpr{X: recv, Sel: ident(field)}, nil
+		}
+	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
 }
 
@@ -2362,6 +2388,74 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
+}
+
+// objectLiteral lowers an object literal { k: v, ... } to a composite literal
+// that builds a pointer to the generated struct the object's shape interns to.
+// The struct name comes from the same internStruct path a variable annotated
+// with this shape takes, so a literal and a binding of the same shape produce
+// the same Go type and structural assignability becomes Go assignability
+// (05_type_lowering section 12). Each property lowers to a keyed field, so the
+// literal's declaration order need not match the struct's field order. Only the
+// plain identifier-keyed forms are covered: a computed or string key belongs in
+// the object side table, a spread copies another object's own fields, and a
+// method or accessor is a function member, each its own later slice, so any of
+// them hands back rather than emit a wrong or partial struct.
+func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "object literal whose type is not an object shape is a later slice"}
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return nil, &NotYetLowerable{Reason: "object literal typed as an array is a later slice"}
+	}
+	// internStruct registers the struct and reports the name; a shape that does
+	// not lower (an optional property, a non-identifier field) hands back here, so
+	// the literal never builds a struct the type side would refuse to declare.
+	name, err := r.decls.internStruct(r, t)
+	if err != nil {
+		return nil, err
+	}
+	props := r.prog.Children(n)
+	elts := make([]ast.Expr, 0, len(props))
+	for _, p := range props {
+		if p.Kind() != frontend.NodeUnknown {
+			// A method, getter, or setter member is a function property, which the
+			// frontend names its own kind rather than a property assignment.
+			return nil, &NotYetLowerable{Reason: "object literal with a method or accessor member is a later slice"}
+		}
+		kids := r.prog.Children(p)
+		var keyNode, valNode frontend.Node
+		switch len(kids) {
+		case 1:
+			// A shorthand { x } is { x: x }: the single child is both the key and the
+			// value reference. A spread { ...o } is also a single-child member, but
+			// its text opens with the spread token, so it routes to the handback.
+			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
+				return nil, &NotYetLowerable{Reason: "object spread in a literal is a later slice"}
+			}
+			keyNode, valNode = kids[0], kids[0]
+		case 2:
+			keyNode, valNode = kids[0], kids[1]
+		default:
+			return nil, &NotYetLowerable{Reason: "object literal member with an unexpected shape is a later slice"}
+		}
+		if keyNode.Kind() != frontend.NodeIdentifier {
+			// A computed [k] key or a string/numeric key does not become a struct
+			// field; it belongs in the object side table, a later slice.
+			return nil, &NotYetLowerable{Reason: "object literal with a non-identifier key is a later slice"}
+		}
+		field, ok := exportedField(r.prog.Text(keyNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
+		}
+		val, err := r.lowerExpr(valNode)
+		if err != nil {
+			return nil, err
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+	}
+	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, nil
 }
 
 // arrayMethodCall lowers a method call on an array receiver to a value.Array

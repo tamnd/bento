@@ -31,15 +31,29 @@ type Decl struct {
 // The identity is only stable within one program, which is why a Renderer, and
 // so a declSet, is scoped to one program.
 type declSet struct {
-	// nameByIdentity maps a type's structural identity to the struct name it was
-	// assigned, so a second render of the same shape reuses the first name and
-	// so a recursive shape can refer to its own name mid-construction.
+	// nameByIdentity maps a checker type id to the struct name it was assigned. It
+	// is a fast path and the cycle breaker: an id is recorded before a shape's
+	// fields are rendered, so a field that refers back to the same type object
+	// resolves to the reserved name instead of recursing forever.
 	nameByIdentity map[int]string
+	// nameBySig maps a shape's structural signature to its struct name. The checker
+	// hands out a distinct type id for each object type object, including a fresh
+	// literal type that is structurally identical to the widened type of the
+	// binding it initializes, so keying on the id alone would emit two structs for
+	// one shape and a literal of type ObjXY_2 would not assign to a binding of type
+	// ObjXY. Keying on the structural signature collapses those to one struct,
+	// which is what makes structural assignability become Go assignability.
+	nameBySig map[string]string
 	// source holds each generated declaration's gofmt-clean text, keyed by name.
 	// A name maps to an empty string while its struct is still being built,
 	// which is how a self-referential shape is broken: the name is reserved
 	// before its fields are rendered.
 	source map[string]string
+	// node holds each generated declaration as its go/ast node, keyed by name, so
+	// the program assembler can splice the struct types into the one ast.File it
+	// prints rather than reparse their text. It carries the same declarations
+	// source does, in the same order the order slice records.
+	node map[string]ast.Decl
 	// order is the names in first-seen order, so emission is stable.
 	order []string
 	// used records every assigned name so a second shape that derives the same
@@ -50,7 +64,9 @@ type declSet struct {
 func newDeclSet() *declSet {
 	return &declSet{
 		nameByIdentity: map[int]string{},
+		nameBySig:      map[string]string{},
 		source:         map[string]string{},
+		node:           map[string]ast.Decl{},
 		used:           map[string]bool{},
 	}
 }
@@ -65,22 +81,106 @@ func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
 	if name, ok := d.nameByIdentity[id]; ok {
 		return name, nil
 	}
+	// Dedupe by structural signature before reserving a name, so a fresh object
+	// literal type and the widened binding type it initializes, which the checker
+	// gives distinct ids, share the one struct. The signature is computed from the
+	// shape without reserving a name, so a shape seen a second time under a new id
+	// reuses the first struct rather than emitting a numbered twin.
+	sig := structuralKey(r.prog, t, map[int]int{})
+	if name, ok := d.nameBySig[sig]; ok {
+		d.nameByIdentity[id] = name
+		return name, nil
+	}
 
 	props := r.prog.Properties(t)
 	name := d.reserve(structBaseName(props))
 	d.nameByIdentity[id] = name
+	d.nameBySig[sig] = name
 
-	body, err := renderStructBody(r, name, props)
+	decl, err := renderStructBody(r, name, props)
 	if err != nil {
 		// Roll the reservation back so a later, lowerable use of a shape that
 		// happens to share this base name is not pushed to a suffix by a failure.
 		delete(d.nameByIdentity, id)
+		delete(d.nameBySig, sig)
+		delete(d.used, name)
+		d.order = d.order[:len(d.order)-1]
+		return "", err
+	}
+	body, err := printDecl(decl)
+	if err != nil {
+		delete(d.nameByIdentity, id)
+		delete(d.nameBySig, sig)
 		delete(d.used, name)
 		d.order = d.order[:len(d.order)-1]
 		return "", err
 	}
 	d.source[name] = body
+	d.node[name] = decl
 	return name, nil
+}
+
+// structuralKey builds a string that is equal for two types with the same
+// structure and different for two types with a different structure, so the decl
+// set can intern object structs by shape rather than by the checker's per type
+// object id. It walks the type tree, keying a primitive by its flag, an array by
+// its element, an object by its sorted property name and value keys, and a union
+// by its sorted member keys. A type it does not break down structurally keys by
+// its id, so two such types never collide (each stays its own struct) at the cost
+// of not sharing one when they happen to match. The seen map records the depth at
+// which each type id was entered, so a cycle keys by that relative depth and two
+// isomorphic recursive shapes still produce equal keys.
+func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) string {
+	if t.Flags == 0 {
+		return "void"
+	}
+	switch {
+	case t.Flags&frontend.TypeNumber != 0:
+		return "num"
+	case t.Flags&frontend.TypeString != 0:
+		return "str"
+	case t.Flags&frontend.TypeBoolean != 0:
+		return "bool"
+	case t.Flags&frontend.TypeBigInt != 0:
+		return "big"
+	case t.Flags&frontend.TypeSymbol != 0:
+		return "sym"
+	case t.Flags&frontend.TypeUndefined != 0:
+		return "undef"
+	case t.Flags&frontend.TypeNull != 0:
+		return "null"
+	case t.Flags&frontend.TypeObject != 0:
+		id := t.Identity()
+		if depth, ok := seen[id]; ok {
+			return "@" + itoa(len(seen) - depth)
+		}
+		if elem, ok := prog.ElementType(t); ok {
+			return "[]" + structuralKey(prog, elem, seen)
+		}
+		seen[id] = len(seen)
+		props := prog.Properties(t)
+		parts := make([]string, 0, len(props))
+		for _, p := range props {
+			opt := ""
+			if p.Optional {
+				opt = "?"
+			}
+			parts = append(parts, p.Name+opt+":"+structuralKey(prog, p.Type, seen))
+		}
+		sort.Strings(parts)
+		delete(seen, id)
+		return "{" + strings.Join(parts, ";") + "}"
+	case t.Flags&frontend.TypeUnion != 0:
+		members := prog.UnionMembers(t)
+		parts := make([]string, 0, len(members))
+		for _, m := range members {
+			parts = append(parts, structuralKey(prog, m, seen))
+		}
+		sort.Strings(parts)
+		return "(" + strings.Join(parts, "|") + ")"
+	default:
+		return "#" + itoa(t.Identity())
+	}
 }
 
 // reserve picks a unique name from a base, appending _2, _3, and so on when the
@@ -105,31 +205,43 @@ func (d *declSet) emit() []Decl {
 	return out
 }
 
+// emitNodes returns the generated declarations as their go/ast nodes in
+// first-seen order, so the program assembler can splice them into the single
+// ast.File it prints alongside the lowered functions that refer to them.
+func (d *declSet) emitNodes() []ast.Decl {
+	out := make([]ast.Decl, 0, len(d.order))
+	for _, name := range d.order {
+		out = append(out, d.node[name])
+	}
+	return out
+}
+
 // renderStructBody builds one struct declaration as go/ast nodes: a field per
 // property, in the source declaration order the frontend preserves so layout is
 // stable (section 29). Each field's type is the node typeExpr already built for
-// it, nested directly rather than spliced as text. The declaration is printed
-// through the gofmt-mode printer, so it is gofmt-clean, which section 2 requires
-// so a developer reading a stack trace sees legible Go.
-func renderStructBody(r *Renderer, name string, props []frontend.Property) (string, error) {
+// it, nested directly rather than spliced as text. It returns the declaration
+// node itself so the caller can both print it (for the decl-source table) and
+// splice it into the assembled program file, keeping one gofmt-clean node as the
+// single source of truth (section 2).
+func renderStructBody(r *Renderer, name string, props []frontend.Property) (*ast.GenDecl, error) {
 	fields := &ast.FieldList{}
 	for _, p := range props {
 		if p.Optional {
 			// An optional property is T | undefined plus a presence bit, which
 			// lowers to the section 9 optional type. That type is a later slice,
 			// so a shape with an optional property is not lowerable yet.
-			return "", &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property needs the optional tagged type, a later slice"}
+			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property needs the optional tagged type, a later slice"}
 		}
 		field, ok := exportedField(p.Name)
 		if !ok {
 			// A non-identifier property name (a space, a numeric key) belongs in
 			// the object's symbol/string side table, not a struct field, which
 			// is a later slice.
-			return "", &NotYetLowerable{Flags: p.Type.Flags, Reason: "non-identifier property name belongs in the object side table"}
+			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "non-identifier property name belongs in the object side table"}
 		}
 		goType, err := r.typeExpr(p.Type)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		fields.List = append(fields.List, &ast.Field{
 			Names: []*ast.Ident{ident(field)},
@@ -137,14 +249,13 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property) (stri
 		})
 	}
 
-	decl := &ast.GenDecl{
+	return &ast.GenDecl{
 		Tok: token.TYPE,
 		Specs: []ast.Spec{&ast.TypeSpec{
 			Name: ident(name),
 			Type: &ast.StructType{Fields: fields},
 		}},
-	}
-	return printDecl(decl)
+	}, nil
 }
 
 // structBaseName derives the deterministic base name of an object struct from

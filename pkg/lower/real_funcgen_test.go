@@ -263,6 +263,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "number_radix", file: "func_number_radix"},
 		// number.toFixed(digits) with a literal digit count lowers to value.NumberToFixed folding the count in, so a fixed-point format at zero, two, and four fraction digits is emitted over a fractional value.
 		{name: "number_fixed", file: "func_number_fixed"},
+		// an object literal lowers to a composite literal building a pointer to the interned struct the shape maps to, a shorthand property and a keyed property both becoming keyed fields, and a later o.field read lowers to the matching Go struct field.
+		{name: "object_literal", file: "func_object_literal"},
 		// map over a concise-body arrow lowers to the value.Array Map method taking a Go function literal, the arrow's parameter typed from the checker and its body returning the element type.
 		{name: "array_map", file: "func_array_map"},
 		// filter over a concise-body arrow lowers to the value.Array Filter method, the callback returning a bool with no same-type restriction.

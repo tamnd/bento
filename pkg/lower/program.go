@@ -79,6 +79,10 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	if paths := r.Imports(); len(paths) > 0 {
 		file.Decls = append(file.Decls, importDecl(paths))
 	}
+	// The generated struct types the functions and the main body referred to are
+	// collected after lowering, since interning happens as a use is lowered, and
+	// emitted before the functions, the conventional Go order of types then code.
+	file.Decls = append(file.Decls, r.DeclNodes()...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
 

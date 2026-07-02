@@ -213,3 +213,8 @@ func (r *Renderer) renderObject(t frontend.Type) (ast.Expr, error) {
 // stable first-seen order, each a gofmt-clean Go declaration. A caller emits
 // them once alongside the lowered functions that use them.
 func (r *Renderer) Decls() []Decl { return r.decls.emit() }
+
+// DeclNodes returns the same generated declarations as their go/ast nodes, in
+// the same first-seen order, so the program assembler can splice them into the
+// one file it prints rather than reparse the text Decls returns.
+func (r *Renderer) DeclNodes() []ast.Decl { return r.decls.emitNodes() }
