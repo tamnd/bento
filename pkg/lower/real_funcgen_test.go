@@ -279,6 +279,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "opt_pop_drain", file: "func_opt_pop_drain"},
 		// a binding of an optional (T | undefined) is a value.Opt[T] variable, so this pins the union-to-Opt type lowering in the const declaration alongside the !== undefined presence test.
 		{name: "opt_pop_has", file: "func_opt_pop_has"},
+		// inside a !== undefined guard the checker narrows the optional binding to its inner T, so a read of it there unwraps with .Get() (the stored value pulled out of the option), while the guard condition itself still tests the bare Opt.
+		{name: "opt_narrow", file: "func_opt_narrow"},
 		// s.repeat(n) lowers to the value.BStr Repeat method taking the count as a number, the count coerced and range-checked at runtime by the method the way String.prototype.repeat is.
 		{name: "repeat", file: "func_repeat"},
 		// s.split(sep) lowers to the value.BStr Split method returning *value.Array[value.BStr], the pieces the string separator cuts, so a chained join has an array to fold.

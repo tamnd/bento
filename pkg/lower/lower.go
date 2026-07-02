@@ -78,6 +78,14 @@ type Renderer struct {
 	// specialized locals do not leak into another. A nil map (the default) specializes
 	// nothing, so a body with no eligible local lowers exactly as before.
 	int32Locals map[string]bool
+	// optLocals is the set of local names in the body currently being lowered that
+	// are declared with an optional type (T | undefined, lowered to value.Opt[T]).
+	// It is computed once per body by optLocalsOf and, like int32Locals, saved and
+	// restored around each body. A read of one of these locals at a point the checker
+	// narrowed to T (past a presence guard) unwraps with .Get(), the only place the
+	// stored T is pulled out of the option; a read where the type is still optional
+	// keeps the bare Opt value. A nil map (the default) unwraps nothing.
+	optLocals map[string]bool
 	// strBuilders is the list of reusable value.StrBuilder variables the current
 	// body needs, one per template or number-interpolated concatenation site the
 	// lowerer chose to build through a builder. A var declaration for each is hoisted
