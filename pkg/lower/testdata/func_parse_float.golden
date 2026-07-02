@@ -1,0 +1,3 @@
+func Pf(s value.BStr) float64 {
+	return value.ParseFloat(s)
+}

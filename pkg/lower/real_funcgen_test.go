@@ -372,6 +372,13 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function ok(b: boolean): boolean { return Boolean(b); }`,
 		},
 		{
+			name:   "parse_float",
+			golden: "func_parse_float.golden",
+			// parseFloat(s) reads the longest decimal prefix of a string, which lowers
+			// to value.ParseFloat, the lenient parse distinct from Number().
+			src: `export function pf(s: string): number { return parseFloat(s); }`,
+		},
+		{
 			name:   "num_hex",
 			golden: "func_num_hex.golden",
 			// a hexadecimal integer literal is a number like any other, so it lowers to

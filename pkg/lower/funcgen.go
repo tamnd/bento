@@ -480,6 +480,11 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Boolean" && r.isAmbientGlobal(kids[0]) {
 		return r.booleanCoercion(kids[1:])
 	}
+	// parseFloat is a bare ambient global that reads a number from the front of a
+	// string, so it routes like the coercions before the user path.
+	if r.prog.Text(kids[0]) == "parseFloat" && r.isAmbientGlobal(kids[0]) {
+		return r.parseFloatCall(kids[1:])
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
 		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
@@ -837,6 +842,26 @@ func (r *Renderer) booleanCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	default:
 		return nil, &NotYetLowerable{Reason: "Boolean() on this argument type is a later slice"}
 	}
+}
+
+// parseFloatCall lowers parseFloat(s) over a string argument to value.ParseFloat,
+// the lenient prefix parse. It takes exactly one string argument; a different
+// arity, or a non-string argument (which parseFloat would coerce to a string
+// first, running that conversion), hands back.
+func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "parseFloat with this argument count is a later slice"}
+	}
+	arg := argNodes[0]
+	if !r.isString(arg) {
+		return nil, &NotYetLowerable{Reason: "parseFloat on a non-string argument is a later slice"}
+	}
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{lowered}}, nil
 }
 
 // argKind names the primitive type a string method expects for one argument, so
