@@ -161,9 +161,57 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerWhile(n)
 	case frontend.NodeForStatement:
 		return r.lowerFor(n)
+	case frontend.NodeForOfStatement:
+		return r.lowerForOf(n)
 	default:
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	}
+}
+
+// lowerForOf lowers for (const x of arr) over an array to a Go range loop,
+// for _, x := range arr.Elems(). Ranging the backing slice visits the elements
+// in order, which is exactly what the array iterator does for a dense array, so
+// no index arithmetic or bounds check is emitted. Only the array case is
+// covered: iterating a string, a Map, a Set, or a general iterable is a later
+// slice, and a destructured or already-declared loop variable hands back. The
+// loop variable takes the element type from the range, so no explicit type is
+// written for it.
+func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 3 || kids[2].Kind() != frontend.NodeBlock {
+		return nil, &NotYetLowerable{Reason: "only for...of with a declaration and a block body is lowered yet"}
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, kids[0], &decls)
+	if len(decls) != 1 {
+		return nil, &NotYetLowerable{Reason: "for...of with other than a single loop binding is a later slice"}
+	}
+	dkids := r.prog.Children(decls[0])
+	if len(dkids) != 1 || dkids[0].Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "for...of with a destructuring or annotated loop variable is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(dkids[0]))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "for...of loop variable is not a Go identifier"}
+	}
+	if _, ok := r.arrayElem(kids[1]); !ok {
+		return nil, &NotYetLowerable{Reason: "for...of over a non-array iterable is a later slice"}
+	}
+	iter, err := r.lowerExpr(kids[1])
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.lowerBlock(kids[2])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.RangeStmt{
+		Key:   ident("_"),
+		Value: ident(name),
+		Tok:   token.DEFINE,
+		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident("Elems")}},
+		Body:  body,
+	}, nil
 }
 
 // lowerReturn lowers a return, with or without a value.
@@ -540,6 +588,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 
 	case frontend.NodeConditionalExpression:
 		return r.conditionalExpr(n)
+
+	case frontend.NodeArrayLiteralExpression:
+		return r.arrayLiteral(n)
 
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
@@ -1527,6 +1578,15 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Length")}}, nil
 	}
+	if prop == "length" {
+		if _, ok := r.arrayElem(obj); ok {
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Len")}}, nil
+		}
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)
@@ -1863,6 +1923,56 @@ func (r *Renderer) isBool(n frontend.Node) bool {
 // object path.
 func (r *Renderer) isString(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&frontend.TypeString != 0
+}
+
+// arrayElem reports whether the checker types n as an array, returning the
+// lowered Go element type when so. TypeObject covers both arrays and fixed-shape
+// objects in the frontend vocabulary, so an element type is what distinguishes
+// the two, the same test typeExpr uses to route an array type to renderArray. A
+// hand-back on the element type (an element that does not lower yet) reads here
+// as "not a lowerable array", so the caller hands the whole construct back.
+func (r *Renderer) arrayElem(n frontend.Node) (ast.Expr, bool) {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return nil, false
+	}
+	elem, ok := r.prog.ElementType(t)
+	if !ok {
+		return nil, false
+	}
+	e, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, false
+	}
+	return e, true
+}
+
+// arrayLiteral lowers an array literal [e0, e1, ...] to a value.NewArray call
+// instantiated at the element type. The element type is taken from the checker's
+// type for the whole literal, not guessed from the elements, so a widened or
+// empty literal is spelled the way the checker sees it and NewArray's type
+// argument is explicit rather than inferred from a possibly empty argument list.
+// Only a literal of plain element expressions whose element type lowers is
+// covered; a spread element or an elided hole hands back to a later slice.
+func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
+	elemType, ok := r.arrayElem(n)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array literal whose element type does not lower yet"}
+	}
+	kids := r.prog.Children(n)
+	args := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeSpreadElement {
+			return nil, &NotYetLowerable{Reason: "spread element in an array literal is a later slice"}
+		}
+		e, err := r.lowerExpr(k)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, e)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
 }
 
 // numericBinaryOp maps a TypeScript operator on number operands to its Go token.

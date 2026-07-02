@@ -249,6 +249,10 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "conditional", file: "func_conditional"},
 		// a ternary whose branches are strings types the IIFE result as value.BStr.
 		{name: "conditional_string", file: "func_conditional_string"},
+		// an array literal lowers to value.NewArray instantiated at the element type, .length on the array to the Len method, and for...of to a Go range over the backing slice.
+		{name: "array_forof", file: "func_array_forof"},
+		// the element type threads through the whole path: a string[] parameter is *value.Array[value.BStr], for...of binds each element as a value.BStr, and .length on that element is the string length.
+		{name: "array_strlen", file: "func_array_strlen"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -278,8 +282,9 @@ func TestRenderFuncHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
 		// a truthy number condition needs JavaScript coercion, not a Go bool.
 		{"truthyCond", "export function t(a: number): number { if (a) { return 1; } return 0; }"},
-		// a for-of over an iterable is a later slice.
-		{"forOf", "export function s(xs: number[]): number { let t = 0; for (const x of xs) { t = t + x; } return t; }"},
+		// for-of over an array lowers now, but over a string (a non-array iterable)
+		// is still a later slice, so it hands back.
+		{"forOfString", "export function s(x: string): number { let n = 0; for (const ch of x) { n = n + 1; } return n; }"},
 		// a prefix increment used as a value needs its pre-increment result, not just
 		// the mutation, so it hands back; the statement form (++b;) does lower.
 		{"prefixIncrValue", "export function p(a: number): number { let b = a; const c = ++b; return c; }"},
