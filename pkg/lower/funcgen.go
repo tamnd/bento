@@ -2348,6 +2348,28 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	// the dividend), which Go spells math.Mod, not the integer-only % token. It is
 	// handled here, before the operator table, so the number path can emit a call.
 	if opText == "%" && r.isNumber(left) && r.isNumber(right) {
+		// When both sides are integers in the 32-bit range and the divisor is a
+		// nonzero integer literal, the remainder is a native Go int32 modulo, not a
+		// float one. JavaScript % keeps the sign of the dividend, and so does Go's %
+		// on signed integers, so for int32 operands the two agree bit for bit, and
+		// the result is always smaller in magnitude than the divisor, so it stays in
+		// int32 and the float64 cast is exact. The divisor literal must be nonzero:
+		// Go's % panics on a zero divisor where JavaScript yields NaN, so the guard
+		// keeps the native form to the cases where a panic cannot happen. A counter
+		// folded through i % 26 in a hot loop pays a register op here instead of the
+		// math.Mod call the general path emits.
+		if r.int32Producing(left) && r.isInt32Literal(right) && !r.isZeroLiteral(right) {
+			l, err := r.int32Of(left)
+			if err != nil {
+				return nil, err
+			}
+			rr, err := r.int32Of(right)
+			if err != nil {
+				return nil, err
+			}
+			mod := &ast.BinaryExpr{X: &ast.ParenExpr{X: l}, Op: token.REM, Y: rr}
+			return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{mod}}, nil
+		}
 		l, err := r.lowerExpr(left)
 		if err != nil {
 			return nil, err
@@ -2472,7 +2494,49 @@ func bitwiseOp(op string) (goOp token.Token, shift, unsignedLeft, ok bool) {
 // because a JavaScript bitwise result is a number. For a shift, the right operand
 // is a count masked to the low five bits (value.ToUint32(r) & 31), the ECMAScript
 // rule that a shift by 32 is a shift by 0.
+// wrapInt32AsFloat lowers a node in the int32 domain and casts the result back to
+// float64, the shape a bitwise expression takes when its result flows into number
+// context. It is the body of the x | 0 identity fold, where the operand is already
+// int32 and only the surrounding float64 is needed.
+func (r *Renderer) wrapInt32AsFloat(n frontend.Node) (ast.Expr, error) {
+	x, err := r.int32Of(n)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{x}}, nil
+}
+
 func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left, right frontend.Node) (ast.Expr, error) {
+	// When both operands already lower to a native int32 (a specialized counter, a
+	// bitwise subexpression, a folded literal), the coercions are redundant: their
+	// Go int32 value is already the ToInt32 the operator wants. A non-shift bitwise
+	// op then stays in registers as float64(l & r) with no value.ToInt32 round trip.
+	// The unsigned-left >>> is excluded because its result can exceed the signed
+	// range, so it keeps the float64 path that widens through a uint32.
+	if !shift && !unsignedLeft && r.int32Producing(left) && r.int32Producing(right) {
+		// x | 0 and 0 | x are the coerce-to-int32 idiom, the identity on a value that
+		// is already int32, so the OR drops and the operand feeds the float64 cast
+		// directly, the same fold int32Binary makes in the int32 domain. This keeps a
+		// hot accumulator's trailing | 0 down to float64(acc) with no bitwise op.
+		if goOp == token.OR {
+			if r.isZeroLiteral(right) {
+				return r.wrapInt32AsFloat(left)
+			}
+			if r.isZeroLiteral(left) {
+				return r.wrapInt32AsFloat(right)
+			}
+		}
+		l, err := r.int32Of(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.int32Of(right)
+		if err != nil {
+			return nil, err
+		}
+		inner := &ast.BinaryExpr{X: &ast.ParenExpr{X: l}, Op: goOp, Y: rr}
+		return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}, nil
+	}
 	l, err := r.lowerExpr(left)
 	if err != nil {
 		return nil, err
