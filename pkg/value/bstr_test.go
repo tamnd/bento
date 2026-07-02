@@ -210,6 +210,21 @@ func TestConcatN(t *testing.T) {
 	if got.utf16 == nil {
 		t.Error("a surrogate-backed argument should force the code-unit result")
 	}
+	// A rope-backed receiver stays off the single-pass builder path but still
+	// joins its arguments in order through the pairwise fallback.
+	rope := Concat(FromGoString("x"), FromGoString("y"))
+	if got := rope.ConcatN(FromGoString("z"), FromGoString("w")); got.ToGoString() != "xyzw" {
+		t.Errorf("ConcatN over a rope receiver = %q, want \"xyzw\"", got.ToGoString())
+	}
+	// A longer all-ASCII join runs the single-pass builder and preserves order and
+	// length across every piece.
+	many := FromGoString("0").ConcatN(
+		FromGoString("1"), FromGoString("2"), FromGoString("3"),
+		FromGoString("4"), FromGoString("5"), FromGoString("6"),
+	)
+	if many.ToGoString() != "0123456" || many.Length() != 7 {
+		t.Errorf("ConcatN seven ASCII pieces = %q len %v, want \"0123456\" len 7", many.ToGoString(), many.Length())
+	}
 }
 
 // TestFromCharCode pins String.fromCharCode: no arguments gives the empty
