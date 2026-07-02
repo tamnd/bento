@@ -265,6 +265,10 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_indexof", file: "func_array_indexof"},
 		// join lowers to the value.Array Join method, passing the separator (the lowered string argument or the default comma when there is none) and a synthesized per-element ToString closure.
 		{name: "array_join", file: "func_array_join"},
+		// pop lowers to the value.Array Pop method, which returns value.Opt[T]; the T | undefined result type is the optional shape, and the pop() !== undefined guard lowers to the optional's IsUndefined presence check, negated.
+		{name: "opt_pop_drain", file: "func_opt_pop_drain"},
+		// a binding of an optional (T | undefined) is a value.Opt[T] variable, so this pins the union-to-Opt type lowering in the const declaration alongside the !== undefined presence test.
+		{name: "opt_pop_has", file: "func_opt_pop_has"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

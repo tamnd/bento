@@ -243,3 +243,29 @@ func TestNewArrayString(t *testing.T) {
 		t.Fatalf("second element length = %v, want 2", got)
 	}
 }
+
+// TestPop pins that pop removes and returns the last element on a non-empty
+// array, that it shortens the array, and that it returns the undefined optional
+// on an empty array without panicking.
+func TestPop(t *testing.T) {
+	a := NewArray[float64](1, 2, 3)
+	got := a.Pop()
+	if got.IsUndefined() {
+		t.Fatal("Pop() on non-empty array is undefined, want present")
+	}
+	if got.Get() != 3 {
+		t.Errorf("Pop() = %v, want 3", got.Get())
+	}
+	if a.Len() != 2 {
+		t.Errorf("Len() after Pop() = %v, want 2", a.Len())
+	}
+	a.Pop()
+	a.Pop()
+	empty := a.Pop()
+	if !empty.IsUndefined() {
+		t.Errorf("Pop() on empty array = present %v, want undefined", empty.Get())
+	}
+	if a.Len() != 0 {
+		t.Errorf("Len() after draining = %v, want 0", a.Len())
+	}
+}

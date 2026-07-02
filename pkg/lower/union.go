@@ -22,6 +22,23 @@ import (
 // the partitioner routes the unit to the engine rather than get a wrong Go type.
 func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 	members := r.prog.UnionMembers(t)
+
+	// The optional shape T | undefined lowers to value.Opt[T'] rather than the
+	// tagged sum, because undefined is not another type to discriminate but the
+	// one missing value: a present flag beside a T slot captures it with no
+	// boxing. This is the two-member union where one member is exactly undefined;
+	// the other is lowered as the element type. A null member is not this shape
+	// (null is a distinct value, not absence), so it falls through to the general
+	// paths and hands back until the tagged sum lands.
+	if inner, ok := r.optionalInner(members); ok {
+		elem, err := r.typeExpr(inner)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return index(sel("value", "Opt"), elem), nil
+	}
+
 	values := make([]string, 0, len(members))
 	for _, m := range members {
 		lit, ok := r.prog.LiteralValue(m)
@@ -40,6 +57,28 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 		return nil, err
 	}
 	return ident(name), nil
+}
+
+// optionalInner reports whether members are the optional shape T | undefined and
+// returns the non-undefined member T if so. That shape is exactly two members
+// where one is the bare undefined type; a undefined member is recognized by its
+// flags being exactly TypeUndefined, not by a undefined constituent of a wider
+// type. A union with more than two members, or a two-member union without an
+// undefined member (for example T | null), is not this shape and returns false,
+// so the caller falls through to the string-literal and hand-back paths.
+func (r *Renderer) optionalInner(members []frontend.Type) (frontend.Type, bool) {
+	if len(members) != 2 {
+		return frontend.Type{}, false
+	}
+	a, b := members[0], members[1]
+	switch {
+	case a.Flags == frontend.TypeUndefined && b.Flags != frontend.TypeUndefined:
+		return b, true
+	case b.Flags == frontend.TypeUndefined && a.Flags != frontend.TypeUndefined:
+		return a, true
+	default:
+		return frontend.Type{}, false
+	}
 }
 
 // internStringEnum returns the Go enum type name for a closed string-literal
