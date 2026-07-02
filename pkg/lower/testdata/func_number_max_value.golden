@@ -1,0 +1,3 @@
+func F() float64 {
+	return value.NumberMaxValue
+}
