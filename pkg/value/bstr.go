@@ -56,6 +56,22 @@ func FromUTF16(units []uint16) BStr {
 	return BStr{utf16: cp, lengthU16: len(cp)}
 }
 
+// FromCharCode builds a string from UTF-16 code units, String.fromCharCode. Each
+// argument is coerced to a 16-bit unsigned integer by ToUint16, the same
+// truncation the specification applies, so a number outside [0, 2^16) wraps
+// rather than being rejected and a fraction is dropped. The units are taken
+// verbatim, which means a lone surrogate is preserved rather than replaced, so
+// the result routes through FromUTF16 rather than the UTF-8 fast path. It is a
+// free function, not a method, because fromCharCode is a static on the String
+// constructor with no string receiver.
+func FromCharCode(codes ...float64) BStr {
+	units := make([]uint16, len(codes))
+	for i, c := range codes {
+		units[i] = ToUint16(c)
+	}
+	return FromUTF16(units)
+}
+
 // Length returns the number of UTF-16 code units, String.prototype.length. It is
 // a JavaScript number, so it is returned as a float64 to match the lowered type
 // of a number without a conversion at the use site.

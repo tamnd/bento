@@ -1,0 +1,3 @@
+func Chars(a float64, b float64, c float64) value.BStr {
+	return value.FromCharCode(a, b, c)
+}

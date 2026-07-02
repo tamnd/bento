@@ -33,6 +33,33 @@ func TestToUint32(t *testing.T) {
 	}
 }
 
+// TestToUint16 pins the ECMAScript ToUint16 coercion, the same steps as ToUint32
+// reduced modulo 2^16: NaN and infinities go to zero, values truncate toward
+// zero, and the result wraps into the unsigned 16-bit range.
+func TestToUint16(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want uint16
+	}{
+		{0, 0},
+		{65, 65},          // 'A'
+		{-1, 65535},       // wraps to 2^16 - 1
+		{65536, 0},        // 2^16 wraps to 0
+		{65537, 1},        // 2^16 + 1 wraps to 1
+		{3.9, 3},          // truncates toward zero
+		{-3.9, 65533},     // trunc to -3 then wrap
+		{math.NaN(), 0},   // NaN to 0
+		{math.Inf(1), 0},  // +Inf to 0
+		{math.Inf(-1), 0}, // -Inf to 0
+		{65536*4 + 9, 9},  // large value keeps only the low 16 bits
+	}
+	for _, c := range cases {
+		if got := ToUint16(c.in); got != c.want {
+			t.Errorf("ToUint16(%v) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
 // TestNumberPredicates pins Number.isNaN, isFinite, isInteger, and
 // isSafeInteger over the values that separate them: NaN, an infinity, a whole
 // number, a fraction, and an integer just past the safe range.
