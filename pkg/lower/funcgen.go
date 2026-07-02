@@ -2264,16 +2264,27 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	// number/bool dispatch, and a string operand against a non-primitive (an object
 	// or array, whose ToString is a later slice) hands back through stringifyOperand.
 	if opText == "+" && (r.isString(left) || r.isString(right)) {
-		l, err := r.stringifyOperand(left)
-		if err != nil {
-			return nil, err
-		}
-		rr, err := r.stringifyOperand(right)
-		if err != nil {
-			return nil, err
+		// Flatten a left-leaning chain of string + into the operands of one ConcatN,
+		// so "a" + x + "b" + y builds in a single strings.Builder pass and one
+		// allocation rather than folding pairwise through Concat, which allocates a
+		// fresh string at every join. The operands keep source order, so each one's
+		// ToString still runs left to right exactly as the pairwise fold ran it. A
+		// two-operand concatenation stays a plain Concat, which is already its one
+		// copy, so only a chain of three or more takes the join.
+		operands := r.stringPlusOperands(left, right)
+		pieces := make([]ast.Expr, len(operands))
+		for i, op := range operands {
+			p, err := r.stringifyOperand(op)
+			if err != nil {
+				return nil, err
+			}
+			pieces[i] = p
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "Concat"), Args: []ast.Expr{l, rr}}, nil
+		if len(pieces) == 2 {
+			return &ast.CallExpr{Fun: sel("value", "Concat"), Args: pieces}, nil
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: pieces[0], Sel: ident("ConcatN")}, Args: pieces[1:]}, nil
 	}
 
 	// === and !== on two strings compare by UTF-16 code unit, which is what
@@ -2564,6 +2575,31 @@ func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left,
 		inner = &ast.BinaryExpr{X: lx, Op: goOp, Y: rx}
 	}
 	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}, nil
+}
+
+// stringPlusOperands flattens a left-leaning chain of string + into its operands
+// in source order. JavaScript parses a + b + c as ((a + b) + c), so the left spine
+// of a string concatenation is a run of + nodes the checker still types as string;
+// descending that spine and taking each right operand, with the deepest left as the
+// head, yields the flat operand list one ConcatN joins in a single pass. A left
+// node that is not a string + stops the descent and becomes one head operand, so a
+// parenthesized subexpression or a non-string + folded into the chain stays whole.
+func (r *Renderer) stringPlusOperands(left, right frontend.Node) []frontend.Node {
+	var out []frontend.Node
+	var descend func(n frontend.Node)
+	descend = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeBinaryExpression && r.isString(n) {
+			if kids := r.prog.Children(n); len(kids) == 3 && r.prog.Text(kids[1]) == "+" {
+				descend(kids[0])
+				out = append(out, kids[2])
+				return
+			}
+		}
+		out = append(out, n)
+	}
+	descend(left)
+	out = append(out, right)
+	return out
 }
 
 // stringifyOperand lowers an operand of a string concatenation to a value.BStr,
