@@ -465,6 +465,19 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {7}, {42}, {123}},
 		},
 		{
+			name: "jsonRoundTrip",
+			// stringify a two-element array then parse it back and read the parsed
+			// array's length plus the text length, so the whole dynamic path runs
+			// against V8 through the engine: JSON.parse returns a boxed any, the
+			// property read dispatches through the box, and the mixed dynamic-plus-
+			// number sum coerces back to the number the function returns. The cases
+			// vary i so the record content and so the serialized text length change
+			// across runs while the array length stays two.
+			file: "eq_jsonRoundTrip",
+			fn:   "rt",
+			args: [][]any{{0}, {1}, {7}, {42}, {123}},
+		},
+		{
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.

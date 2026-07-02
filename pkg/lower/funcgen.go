@@ -68,6 +68,16 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 		return nil, err
 	}
 
+	// The declared return type is stashed for the duration of this body so a return
+	// statement can coerce its value across the dynamic boundary, the way an
+	// assignment does: a dynamic value returned from a function typed to return a
+	// number runs ToNumber, and a static value returned as any boxes. It is saved
+	// and restored so a later slice's nested function does not inherit the outer
+	// return type.
+	prevRet := r.retType
+	r.retType = sig.Return
+	defer func() { r.retType = prevRet }()
+
 	body, err := r.blockOf(fn)
 	if err != nil {
 		return nil, err
@@ -241,6 +251,10 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	expr, err = r.coerceReturn(expr, kids[0])
+	if err != nil {
+		return nil, err
+	}
 	return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
 }
 
@@ -318,7 +332,16 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 			return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType)}, nil
 		}
 	}
-	return r.lowerExpr(initNode)
+	init, err := r.lowerExpr(initNode)
+	if err != nil {
+		return nil, err
+	}
+	// A binding whose declared type crosses the dynamic boundary coerces the
+	// initializer to match: a dynamic value into a static binding runs the ToNumber
+	// family, and a static value into an any binding boxes. A binding whose two
+	// sides agree passes the initializer through unchanged, which is every static
+	// binding lowered so far.
+	return r.coerceToTarget(init, initNode, nameNode)
 }
 
 // collectVarDecls gathers the variable declarations inside a variable statement.
@@ -434,11 +457,29 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 	var err error
 	if compound {
 		rhs, err = r.combineBinary(baseOp, parts[0], parts[2])
+		if err != nil {
+			return nil, err
+		}
+		// A compound + on a dynamic operand produces a boxed value.Value, so when the
+		// target is a static primitive the result must coerce back to it (total += x
+		// keeps total a number even though x is any). The target being dynamic needs
+		// no coercion, since the boxed result already fits, and a compound whose result
+		// is static reaches a static target directly.
+		if r.combineIsDynamic(baseOp, parts[0], parts[2]) && !r.isDynamic(parts[0]) {
+			rhs, err = r.coerceDynamicToStatic(rhs, parts[0])
+			if err != nil {
+				return nil, err
+			}
+		}
 	} else {
 		rhs, err = r.lowerExpr(parts[2])
-	}
-	if err != nil {
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+		rhs, err = r.coerceToTarget(rhs, parts[2], parts[0])
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &ast.AssignStmt{
 		Lhs: []ast.Expr{ident(name)},
@@ -1103,26 +1144,39 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 	return &ast.CallExpr{Fun: sel("value", "FromCharCode"), Args: args}, nil
 }
 
-// jsonCall lowers a static call on the global JSON namespace. Only stringify is
-// covered here: it takes a single value and returns the exact text V8 produces,
-// which lowers to value.JSONStringify with the argument boxed as any so the
-// serializer's reflection walk can dispatch on its concrete type. A replacer or
-// a space argument (the second and third parameters) changes the output, so a
-// call that passes one hands back rather than ignoring it. JSON.parse produces a
-// dynamic any value, which waits on the value box, so it hands back here.
+// jsonCall lowers a static call on the global JSON namespace. stringify takes a
+// single value and returns the exact text V8 produces, which lowers to
+// value.JSONStringify with the argument boxed as any so the serializer's
+// reflection walk can dispatch on its concrete type. parse takes a single string
+// and returns a dynamic any value, which lowers to value.JSONParse and lands in
+// the boxed value world the checker already typed the result as. A replacer, a
+// space, or a reviver argument (the extra parameters) changes the behavior, so a
+// call that passes one hands back rather than ignoring it.
 func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
-	if method != "stringify" {
+	switch method {
+	case "stringify":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer or space argument is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
+	case "parse":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver argument is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "JSONParse"), Args: []ast.Expr{arg}}, nil
+	default:
 		return nil, &NotYetLowerable{Reason: "JSON." + method + " is a later slice"}
 	}
-	if len(argNodes) != 1 {
-		return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer or space argument is a later slice"}
-	}
-	arg, err := r.lowerExpr(argNodes[0])
-	if err != nil {
-		return nil, err
-	}
-	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
 }
 
 // primitiveValueCall lowers toString and valueOf on a number or boolean value.
@@ -1948,6 +2002,23 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
+	// A read o.k on a dynamic receiver (one typed any or unknown) has no static
+	// shape to intern to a Go field, so it dispatches at runtime through the boxed
+	// value's Get, which reports a string's length, an array's length and indices,
+	// and an object's own properties, and undefined for a miss, the JavaScript
+	// result. The property name is a plain string literal here, the source key, so
+	// Get looks it up by the same name the value carries. This routes before the
+	// static-shape paths below, which expect a receiver whose type the checker
+	// pinned down.
+	if r.isDynamic(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, nil
+	}
 	if r.isString(obj) && prop == "length" {
 		recv, err := r.lowerExpr(obj)
 		if err != nil {
@@ -2095,6 +2166,28 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 // the string, remainder, and bitwise special cases apply the same way whether
 // the operator was written on its own or fused to an assignment.
 func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.Expr, error) {
+	// + where either operand is dynamic (typed any or unknown) cannot pick a Go
+	// operator at compile time, because the operand's runtime kind decides whether
+	// the result is a numeric sum or a string concatenation. It lowers to value.Add,
+	// the boxed + that runs ToPrimitive on both sides and then adds or concatenates
+	// the way the language does. Each operand is boxed to a value.Value first: a
+	// dynamic operand already is one, and a static primitive is lifted through its
+	// constructor. This routes before the static operator paths below, which read
+	// isString and isNumber that a dynamic operand answers no to. Only + is dynamic
+	// here; another operator on a dynamic operand falls through and hands back.
+	if r.combineIsDynamic(opText, left, right) {
+		l, err := r.boxOperand(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.boxOperand(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Add"), Args: []ast.Expr{l, rr}}, nil
+	}
+
 	// + where either operand is a string is concatenation of a UTF-16 string, not
 	// a Go string +, which would be UTF-8, and not a Go operator at all since bstr
 	// is a struct. JavaScript + is string concatenation as soon as one operand is a
@@ -2411,6 +2504,121 @@ func (r *Renderer) isBool(n frontend.Node) bool {
 // object path.
 func (r *Renderer) isString(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&frontend.TypeString != 0
+}
+
+// isDynamic reports whether the checker types n as any or unknown, the types that
+// have no static Go shape and so live as a boxed value.Value. It is the guard the
+// dynamic paths use to route a property read, a +, or an assignment through the
+// value box rather than a static field, operator, or slot.
+func (r *Renderer) isDynamic(n frontend.Node) bool {
+	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
+// combineIsDynamic reports whether a binary operator on these operands produces a
+// boxed dynamic result, which is the case only for + with a dynamic operand: the
+// result kind is not known until runtime, so it goes through value.Add. Every
+// other operator on a dynamic operand is not lowered here and hands back through
+// the operator table, so this stays narrow to the one case combineBinary boxes.
+func (r *Renderer) combineIsDynamic(opText string, left, right frontend.Node) bool {
+	return opText == "+" && (r.isDynamic(left) || r.isDynamic(right))
+}
+
+// boxOperand lowers an operand to a value.Value so a dynamic operator can take it.
+// A dynamic operand already lowers to a value.Value and passes through; a static
+// primitive is lifted through its box constructor. A non-primitive static operand
+// has no box constructor on this path yet and hands back.
+func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
+	e, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	if r.isDynamic(n) {
+		return e, nil
+	}
+	return r.boxStaticToDynamic(e, n)
+}
+
+// boxStaticToDynamic wraps a statically typed primitive expression in the value
+// constructor that boxes it, so a number, string, or boolean can flow into a
+// dynamic slot or a dynamic operator. The source node carries the primitive kind,
+// which picks the constructor. A non-primitive source has no constructor here yet
+// and hands back.
+func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	switch {
+	case r.isNumber(src):
+		return &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{expr}}, nil
+	case r.isString(src):
+		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
+	case r.isBool(src):
+		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
+	}
+}
+
+// coerceDynamicToStatic wraps a boxed dynamic value in the coercion that lands it
+// in a static primitive slot, the ToNumber, ToString, or ToBoolean the language
+// runs when a value typed any flows into a number, string, or boolean binding. A
+// target that is not one of those three primitives has no coercion here and hands
+// back.
+func (r *Renderer) coerceDynamicToStatic(expr ast.Expr, target frontend.Node) (ast.Expr, error) {
+	return r.coerceDynamicToStaticFlags(expr, r.prog.TypeAt(target).Flags)
+}
+
+// coerceDynamicToStaticFlags is the flag-keyed core of coerceDynamicToStatic, so a
+// caller that holds a target type rather than a node (a return statement, whose
+// target is the function's declared return type) can pick the same coercion. It
+// maps a number, string, or boolean target to the matching ToNumber, ToString, or
+// ToBoolean; any other target hands back.
+func (r *Renderer) coerceDynamicToStaticFlags(expr ast.Expr, flags frontend.TypeFlags) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	switch {
+	case flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: sel("value", "ToNumber"), Args: []ast.Expr{expr}}, nil
+	case flags&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{expr}}, nil
+	case flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{expr}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "coercing a dynamic value into this static type is a later slice"}
+	}
+}
+
+// coerceReturn bridges a return value from its expression's type to the function's
+// declared return type across the dynamic boundary, the same coercion an
+// assignment applies to its target. A dynamic value returned as a static primitive
+// runs the ToNumber family, a static value returned as any boxes, and a return
+// whose value already matches the declared type passes through unchanged.
+func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr, error) {
+	srcDyn := r.isDynamic(srcNode)
+	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	switch {
+	case srcDyn && !tgtDyn:
+		return r.coerceDynamicToStaticFlags(expr, r.retType.Flags)
+	case !srcDyn && tgtDyn:
+		return r.boxStaticToDynamic(expr, srcNode)
+	default:
+		return expr, nil
+	}
+}
+
+// coerceToTarget bridges a value from a source node's type to a target node's type
+// across the dynamic boundary, the coercion an assignment or a binding applies when
+// one side is dynamic and the other static. A dynamic source into a static target
+// coerces through ToNumber and its siblings; a static source into a dynamic target
+// boxes through the value constructors; matching sides pass through unchanged.
+func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast.Expr, error) {
+	srcDyn := r.isDynamic(src)
+	tgtDyn := r.isDynamic(target)
+	switch {
+	case srcDyn && !tgtDyn:
+		return r.coerceDynamicToStatic(expr, target)
+	case !srcDyn && tgtDyn:
+		return r.boxStaticToDynamic(expr, src)
+	default:
+		return expr, nil
+	}
 }
 
 // arrayElem reports whether the checker types n as an array, returning the

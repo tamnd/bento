@@ -120,6 +120,11 @@ func TestRealPrimitivesRender(t *testing.T) {
 		{"string", "const x: string = \"s\";", "value.BStr"},
 		{"boolean", "const x: boolean = true;", "bool"},
 		{"symbol", "const x: symbol = Symbol();", "*value.Symbol"},
+		// any and unknown have no static shape, so they lower to the boxed value.Value
+		// the dynamic world uses; the operations on such a value dispatch on its
+		// runtime kind through the value package.
+		{"any", "const x: any = 1;", "value.Value"},
+		{"unknown", "const x: unknown = 1;", "value.Value"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,7 +275,6 @@ func TestRealNonIdentifierStringUnionHandsBack(t *testing.T) {
 // rather than a wrong Go type.
 func TestRealUnlowerableHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
-		{"any", "const x: any = 1;"},
 		{"union", "const x: number | string = 1;"},
 		{"typeParameter", "function f<T>(a: T) { const x = a; return x; }"},
 	}

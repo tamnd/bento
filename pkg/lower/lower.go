@@ -65,6 +65,12 @@ type Renderer struct {
 	// entry module's import declarations before any body is lowered, since a
 	// function or a top-level statement may call an imported builtin.
 	nodeImports map[string]nodeBuiltin
+	// retType is the declared return type of the function whose body is currently
+	// being lowered, so a return statement can coerce its value across the dynamic
+	// boundary the way an assignment does. It is the zero type outside a function
+	// body, and it is saved and restored around each body so a nested function does
+	// not inherit the outer return type.
+	retType frontend.Type
 }
 
 // NewRenderer builds a renderer over a checked program.
@@ -121,11 +127,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 
 	switch {
 	case t.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
-		// any and unknown have no static shape, so a value computed on them is
-		// dynamic by definition and runs on the engine (section 30). A lone any
-		// that only crosses the boundary boxes into value.Value, which is the
-		// boxing-boundary slice, not this one.
-		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "any or unknown is dynamic; it boxes at the boundary"}
+		// any and unknown have no static shape, so a value of one is self-describing
+		// at runtime: it is the boxed value.Value the dynamic world uses (section 30,
+		// the value model's boxing boundary). A dynamic value carries its own kind,
+		// so the operations on it (a property read, a coercion, the + operator)
+		// dispatch on that kind at runtime through the value package rather than on a
+		// Go static type here.
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
 
 	case t.Flags&frontend.TypeNumber != 0:
 		// number is IEEE-754 double, so float64 (D14, section 3). Integer

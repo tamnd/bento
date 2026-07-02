@@ -289,6 +289,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "pushloop", file: "func_pushloop"},
 		// JSON.stringify(x) is a static call on the global JSON namespace, so the receiver is not lowered to a value; it becomes value.JSONStringify with the argument boxed as any for the serializer's reflection walk.
 		{name: "json_stringify", file: "func_json_stringify"},
+		// JSON.parse(s) returns any, so the binding lowers to a boxed value.Value; a property read on that dynamic receiver dispatches through Get, and the number return coerces the boxed length through ToNumber.
+		{name: "json_parse", file: "func_json_parse"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
