@@ -1,3 +1,4 @@
 func F(x float64, s value.BStr) value.BStr {
-	return value.FromGoString("a").ConcatN(value.NumberToString(x), value.FromGoString("b"), s, value.FromGoString("c"))
+	var _sb0 value.StrBuilder
+	return _sb0.Reset().Lit("a", 1).Num(x).Lit("b", 1).Str(s).Lit("c", 1).Done()
 }
