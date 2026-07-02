@@ -1,0 +1,3 @@
+func Num(b bool) float64 {
+	return value.BoolToNumber(b)
+}

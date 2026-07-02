@@ -331,6 +331,27 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function show(s: string): string { return String(s); }`,
 		},
 		{
+			name:   "number_of_string",
+			golden: "func_number_of_string.golden",
+			// Number(s) on a string is the ECMAScript ToNumber over the StrNumericLiteral
+			// grammar, which lowers to value.StringToNumber rather than strconv, whose
+			// grammar accepts forms JavaScript rejects.
+			src: `export function num(s: string): number { return Number(s); }`,
+		},
+		{
+			name:   "number_of_bool",
+			golden: "func_number_of_bool.golden",
+			// Number(b) on a boolean lowers to value.BoolToNumber, true to 1 and false to 0.
+			src: `export function num(b: boolean): number { return Number(b); }`,
+		},
+		{
+			name:   "number_of_number",
+			golden: "func_number_of_number.golden",
+			// Number(n) on a number is the identity, so it lowers to the argument
+			// unchanged with no call wrapped around it.
+			src: `export function num(x: number): number { return Number(x); }`,
+		},
+		{
 			name:   "num_hex",
 			golden: "func_num_hex.golden",
 			// a hexadecimal integer literal is a number like any other, so it lowers to
