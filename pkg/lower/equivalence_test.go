@@ -1021,6 +1021,25 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "lengths",
 			args: [][]any{{0}, {1}, {12}, {-3}},
 		},
+		{
+			// pop drains the array through a while loop guarded by pop() !== undefined,
+			// so the presence test (Opt.IsUndefined lowering) and the mutating pop run
+			// through the engine: the loop must stop exactly when the array empties.
+			name: "optPopDrain",
+			file: "eq_opt_pop_drain",
+			fn:   "drain",
+			args: [][]any{{0}, {1}, {12}, {-3}},
+		},
+		{
+			// pop on a non-empty array yields a present optional, so the !== undefined
+			// test returns true; this pins the Opt binding and its presence check
+			// against TypeScript.
+			name: "optPopHas",
+			file: "eq_opt_pop_has",
+			fn:   "hasLast",
+			ret:  "boolean",
+			args: [][]any{{0}, {1}, {12}, {-3}},
+		},
 	}
 
 	for _, tc := range cases {
