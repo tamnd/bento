@@ -90,8 +90,13 @@ func Load(opts LoadOptions) (*Program, error) {
 		}
 	}
 
+	// The host reads through an overlay that adds bento's ambient Node
+	// declarations, while the resolver keeps the raw FS so its osFileSystem fast
+	// path (real directory listings for node_modules) is unaffected. The ambient
+	// file is prepended to the roots so the checker parses it and its declarations
+	// become globals across the program.
 	host := &loadHost{
-		fs:       fs,
+		fs:       ambientOverlay{base: fs},
 		resolver: resolve.New(resolve.Options{FS: fsForResolver(fs), Dev: true}),
 		cwd:      cwd,
 	}
@@ -99,8 +104,10 @@ func Load(opts LoadOptions) (*Program, error) {
 	co := adapter.CompilerOptions{Strict: true}
 	applyOverrides(&co, opts.Overrides)
 
+	roots := append([]string{ambientPath}, opts.Roots...)
+
 	a := adapter.NewReal()
-	h, err := a.BuildProgram(opts.Roots, co, host)
+	h, err := a.BuildProgram(roots, co, host)
 	if err != nil {
 		return nil, err
 	}
