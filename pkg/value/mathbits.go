@@ -27,6 +27,17 @@ func Clz32(x float64) float64 {
 	return float64(bits.LeadingZeros32(ToUint32(x)))
 }
 
+// Clz32U counts the leading zero bits of a value already held as a 32-bit
+// unsigned integer, the integer-typed core of Clz32. Clz32 exists for the float64
+// value model, where its argument is a number that must run through ToUint32
+// first; Clz32U is what the lowerer emits once a local is specialized to int32 and
+// the coercion is already done, so the leading-zero count is a single machine
+// instruction with no float round trip. The two agree by construction: Clz32(x) is
+// Clz32U(ToUint32(x)).
+func Clz32U(u uint32) int32 {
+	return int32(bits.LeadingZeros32(u))
+}
+
 // Imul multiplies two numbers as 32-bit signed integers, the ECMAScript Math.imul,
 // the one multiply that keeps only the low 32 bits rather than the full double
 // product. Each operand is coerced with ToInt32, the product of two int32 values

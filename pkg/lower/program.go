@@ -76,6 +76,12 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		}
 	}
 
+	// The module top-level is a body like a function's, so its integer locals are
+	// specialized the same way: the analysis runs over the whole main body before it
+	// is lowered, and the counters and accumulators of a compute loop are given a Go
+	// int32 type. The set is scoped to this lowering and needs no restore, since the
+	// program has no enclosing body.
+	r.int32Locals = r.int32LocalsOf(mainBody)
 	stmts, err := r.lowerStatements(mainBody)
 	if err != nil {
 		return Program{}, err
