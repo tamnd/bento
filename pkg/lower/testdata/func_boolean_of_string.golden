@@ -1,0 +1,3 @@
+func Ok(s value.BStr) bool {
+	return value.StringToBool(s)
+}
