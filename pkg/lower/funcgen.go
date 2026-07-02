@@ -1095,11 +1095,14 @@ func uint16SliceLit(units []uint16) ast.Expr {
 	}
 }
 
-// propertyAccess lowers a member expression. The only member this slice covers
-// is .length on a string, which is the code-unit count and lowers to the
-// value.BStr Length method, a float64 that matches the number type the checker
-// gives .length. Every other property (a field of a lowered object, a method
-// call, .length on an array) is its own later slice and hands back.
+// propertyAccess lowers a member expression. Two members are covered: .length on
+// a string, which is the code-unit count and lowers to the value.BStr Length
+// method, a float64 that matches the number type the checker gives .length; and a
+// numeric constant on the Math or Number namespace (Math.PI, Number.EPSILON, and
+// their siblings), which is a property read on a global rather than a method call,
+// so it lowers to the matching value-package constant. Every other property (a
+// field of a lowered object, a method call, .length on an array) is its own later
+// slice and hands back.
 func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
 	if len(kids) != 2 {
@@ -1114,7 +1117,68 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Length")}}, nil
 	}
+	if r.isGlobalRef(obj, "Math") {
+		if e, ok := mathConstant(prop); ok {
+			r.requireImport(valuePkg)
+			return e, nil
+		}
+		return nil, &NotYetLowerable{Reason: "Math." + prop + " as a value is a later slice"}
+	}
+	if r.isGlobalRef(obj, "Number") {
+		if e, ok := numberConstant(prop); ok {
+			r.requireImport(valuePkg)
+			return e, nil
+		}
+		return nil, &NotYetLowerable{Reason: "Number." + prop + " as a value is a later slice"}
+	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
+}
+
+// mathConstant maps a Math namespace property name to the value-package constant
+// that holds the exact double the specification names. Only the eight numeric
+// constants are covered; a method name (Math.floor and the like) is a function
+// value, not a number, and hands back.
+func mathConstant(prop string) (ast.Expr, bool) {
+	name, ok := map[string]string{
+		"E":       "MathE",
+		"LN10":    "MathLN10",
+		"LN2":     "MathLN2",
+		"LOG10E":  "MathLOG10E",
+		"LOG2E":   "MathLOG2E",
+		"PI":      "MathPI",
+		"SQRT1_2": "MathSQRT12",
+		"SQRT2":   "MathSQRT2",
+	}[prop]
+	if !ok {
+		return nil, false
+	}
+	return sel("value", name), true
+}
+
+// numberConstant maps a Number namespace property name to its value-package
+// counterpart. The finite constants are named constants; the three non-finite
+// ones (the infinities and NaN) cannot be Go constants, so they lower to a call
+// that builds the value.
+func numberConstant(prop string) (ast.Expr, bool) {
+	switch prop {
+	case "EPSILON":
+		return sel("value", "NumberEpsilon"), true
+	case "MAX_SAFE_INTEGER":
+		return sel("value", "NumberMaxSafeInteger"), true
+	case "MIN_SAFE_INTEGER":
+		return sel("value", "NumberMinSafeInteger"), true
+	case "MAX_VALUE":
+		return sel("value", "NumberMaxValue"), true
+	case "MIN_VALUE":
+		return sel("value", "NumberMinValue"), true
+	case "POSITIVE_INFINITY":
+		return &ast.CallExpr{Fun: sel("value", "NumberPositiveInfinity")}, true
+	case "NEGATIVE_INFINITY":
+		return &ast.CallExpr{Fun: sel("value", "NumberNegativeInfinity")}, true
+	case "NaN":
+		return &ast.CallExpr{Fun: sel("value", "NumberNaN")}, true
+	}
+	return nil, false
 }
 
 // numericLiteral lowers a number literal. number is float64, and a well-formed

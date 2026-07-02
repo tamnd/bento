@@ -174,6 +174,24 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "number_parseint", file: "func_number_parseint"},
 		// Number.parseFloat is the same function as the global parseFloat, so it lowers to value.ParseFloat.
 		{name: "number_parsefloat", file: "func_number_parsefloat"},
+		// the Math numeric constants are property reads on the global namespace, not method calls, so they lower through propertyAccess to the exact value-package constant.
+		{name: "math_e", file: "func_math_e"},
+		{name: "math_ln10", file: "func_math_ln10"},
+		{name: "math_ln2", file: "func_math_ln2"},
+		{name: "math_log10e", file: "func_math_log10e"},
+		{name: "math_log2e", file: "func_math_log2e"},
+		{name: "math_pi", file: "func_math_pi"},
+		{name: "math_sqrt1_2", file: "func_math_sqrt1_2"},
+		{name: "math_sqrt2", file: "func_math_sqrt2"},
+		// the Number constants lower the same way; the finite ones are value constants, the three non-finite ones (the infinities and NaN) are calls that build the value.
+		{name: "number_epsilon", file: "func_number_epsilon"},
+		{name: "number_max_safe_integer", file: "func_number_max_safe_integer"},
+		{name: "number_min_safe_integer", file: "func_number_min_safe_integer"},
+		{name: "number_max_value", file: "func_number_max_value"},
+		{name: "number_min_value", file: "func_number_min_value"},
+		{name: "number_positive_infinity", file: "func_number_positive_infinity"},
+		{name: "number_negative_infinity", file: "func_number_negative_infinity"},
+		{name: "number_nan", file: "func_number_nan"},
 		// the bare global isNaN, not the Number static one, so the callee is a plain identifier. On a number argument it coerces to nothing, so it lowers to the same value.NumberIsNaN predicate.
 		{name: "global_isnan", file: "func_global_isnan"},
 		// the bare global isFinite lowers to value.NumberIsFinite the same way.

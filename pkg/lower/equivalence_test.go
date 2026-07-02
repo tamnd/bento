@@ -643,6 +643,27 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "pf",
 			args: [][]any{{"3.14"}, {"42px"}, {"Infinity!"}, {"0x1F"}, {"abc"}},
 		},
+		// The Math and Number constants each take no argument and must return the exact
+		// same double the engine reads from the namespace property. A one-bit error in
+		// the checked-in decimal shows up here as a diverging result, so these cases are
+		// the real proof the constants are bit-exact, including the two infinities and
+		// NaN, which the harness canonicalizes to +Inf, -Inf, and NaN on both sides.
+		{name: "mathE", file: "eq_math_e", fn: "f", args: [][]any{{}}},
+		{name: "mathLN10", file: "eq_math_ln10", fn: "f", args: [][]any{{}}},
+		{name: "mathLN2", file: "eq_math_ln2", fn: "f", args: [][]any{{}}},
+		{name: "mathLOG10E", file: "eq_math_log10e", fn: "f", args: [][]any{{}}},
+		{name: "mathLOG2E", file: "eq_math_log2e", fn: "f", args: [][]any{{}}},
+		{name: "mathPI", file: "eq_math_pi", fn: "f", args: [][]any{{}}},
+		{name: "mathSQRT1_2", file: "eq_math_sqrt1_2", fn: "f", args: [][]any{{}}},
+		{name: "mathSQRT2", file: "eq_math_sqrt2", fn: "f", args: [][]any{{}}},
+		{name: "numberEpsilon", file: "eq_number_epsilon", fn: "f", args: [][]any{{}}},
+		{name: "numberMaxSafeInteger", file: "eq_number_max_safe_integer", fn: "f", args: [][]any{{}}},
+		{name: "numberMinSafeInteger", file: "eq_number_min_safe_integer", fn: "f", args: [][]any{{}}},
+		{name: "numberMaxValue", file: "eq_number_max_value", fn: "f", args: [][]any{{}}},
+		{name: "numberMinValue", file: "eq_number_min_value", fn: "f", args: [][]any{{}}},
+		{name: "numberPositiveInfinity", file: "eq_number_positive_infinity", fn: "f", args: [][]any{{}}},
+		{name: "numberNegativeInfinity", file: "eq_number_negative_infinity", fn: "f", args: [][]any{{}}},
+		{name: "numberNaN", file: "eq_number_nan", fn: "f", args: [][]any{{}}},
 		{
 			name: "booleanOfNumber",
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches
