@@ -259,6 +259,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_map", file: "func_array_map"},
 		// filter over a concise-body arrow lowers to the value.Array Filter method, the callback returning a bool with no same-type restriction.
 		{name: "array_filter", file: "func_array_filter"},
+		// slice lowers to the value.Array Slice method taking its zero, one, or two number bounds variadically, so slice(), slice(start), and slice(start, end) all reach the one method.
+		{name: "array_slice", file: "func_array_slice"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
