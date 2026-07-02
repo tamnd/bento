@@ -13,6 +13,7 @@ import (
 	"github.com/tamnd/bento/pkg/engine"
 	_ "github.com/tamnd/bento/pkg/engine/quickjs" // registers the default backend
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/value"
 )
 
 // This file proves the compiler is sound the only way that counts: it runs the
@@ -632,6 +633,17 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "fn",
 			ret:  "boolean",
 			args: [][]any{{3, 2}, {1, 0}, {0, 0}},
+		},
+		{
+			name: "performanceNow",
+			// performance.now() lowers to the value monotonic clock, and the engine reads
+			// the same host clock, so both agree that the second reading is not before the
+			// first. The result is a boolean so the non-deterministic elapsed value never
+			// enters the comparison.
+			file: "eq_performance_now",
+			fn:   "elapsedNonNeg",
+			ret:  "boolean",
+			args: [][]any{{1000}, {1}, {50000}},
 		},
 		{
 			name: "globalIsNaNIsFinite",
@@ -1271,6 +1283,17 @@ func evalTS(t *testing.T, src, fn, ret string, args []any) string {
 		t.Fatalf("engine.New: %v", err)
 	}
 	defer func() { _ = eng.Close() }()
+	// The bare engine has no prelude, so give it the same performance.now() the
+	// runtime installs, reading the identical value clock the compiled path lowers
+	// to, so a case that times a loop compares like against like.
+	if err := eng.Register("__bento_perfNow", func([]any) (any, error) {
+		return value.PerformanceNow(), nil
+	}); err != nil {
+		t.Fatalf("Register perfNow: %v", err)
+	}
+	if _, err := eng.Eval("perf.js", "globalThis.performance = { now: function () { return __bento_perfNow(); } };"); err != nil {
+		t.Fatalf("Eval perf shim: %v", err)
+	}
 	if _, err := eng.Eval("m.js", js.Code); err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
