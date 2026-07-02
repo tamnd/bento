@@ -976,6 +976,23 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "build",
 			args: [][]any{{0}, {1}, {10}, {-2}, {0.5}},
 		},
+		{
+			// map over an arrow scales each element by the argument, then the mapped
+			// array is summed, so the callback ran through the engine on every
+			// element rather than only being constructed.
+			name: "arrayMap",
+			file: "eq_array_map",
+			fn:   "scaled",
+			args: [][]any{{0}, {1}, {2}, {-3}, {0.5}},
+		},
+		{
+			// filter over an arrow keeps the elements above the argument, then the
+			// kept count is returned, so the predicate ran on every element.
+			name: "arrayFilter",
+			file: "eq_array_filter",
+			fn:   "above",
+			args: [][]any{{0}, {1}, {2}, {3}, {5}},
+		},
 	}
 
 	for _, tc := range cases {

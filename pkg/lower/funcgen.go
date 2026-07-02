@@ -602,9 +602,65 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeArrayLiteralExpression:
 		return r.arrayLiteral(n)
 
+	case frontend.NodeArrowFunction:
+		return r.arrowFunc(n)
+
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
 	}
+}
+
+// arrowFunc lowers an arrow function to a Go function literal. Only a concise
+// expression body is covered, the shape a map or filter callback almost always
+// takes; a block body, which needs the statement lowering to run inside a
+// literal, is a later slice. Each parameter takes its type from the checker,
+// which has already applied the contextual type from the call site, so a bare
+// x in xs.map(x => ...) is typed number without an annotation. The result type
+// comes from the body expression. This makes an arrow usable anywhere an
+// expression is, but its first consumers are the higher-order array methods.
+func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) < 2 {
+		return nil, &NotYetLowerable{Reason: "arrow function did not expose parameters and a body"}
+	}
+	body := kids[len(kids)-1]
+	if body.Kind() == frontend.NodeBlock {
+		return nil, &NotYetLowerable{Reason: "arrow function with a block body is a later slice"}
+	}
+	fields := make([]*ast.Field, 0, len(kids))
+	for _, k := range kids[:len(kids)-1] {
+		if k.Kind() != frontend.NodeParameter {
+			continue
+		}
+		pkids := r.prog.Children(k)
+		if len(pkids) != 1 || pkids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "arrow parameter that is not a plain identifier is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(pkids[0]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "arrow parameter is not a Go identifier"}
+		}
+		ptype, err := r.typeExpr(r.prog.TypeAt(pkids[0]))
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
+	}
+	retType, err := r.typeExpr(r.prog.TypeAt(body))
+	if err != nil {
+		return nil, err
+	}
+	loweredBody, err := r.lowerExpr(body)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: fields},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{loweredBody}}}},
+	}, nil
 }
 
 // conditionalExpr lowers a ternary cond ? whenTrue : whenFalse. Go has no
@@ -1997,9 +2053,10 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 // type, so the arguments lower directly with no per-argument kind guard the way
 // the string methods need, since here the element type, not a fixed argument
 // kind, is what the checker enforced. The reading, higher-order, and other
-// mutating methods (pop, indexOf, includes, join, map, filter, slice) are later
-// slices; pop and index reads additionally wait on the optional machinery for
-// their undefined result.
+// mutating methods (pop, indexOf, includes, join, slice) are later slices; pop
+// and index reads additionally wait on the optional machinery for their
+// undefined result. The higher-order map and filter are covered here, over a
+// concise-body arrow callback that takes the element.
 func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "push":
@@ -2016,9 +2073,74 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			args = append(args, lowered)
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Push")}, Args: args}, nil
+	case "map":
+		return r.arrayMapFilter(recvNode, "Map", argNodes, true)
+	case "filter":
+		return r.arrayMapFilter(recvNode, "Filter", argNodes, false)
 	default:
 		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
 	}
+}
+
+// arrayMapFilter lowers a map or filter call to the matching value.Array method
+// over a lowered callback. Only a single arrow-function argument is covered, the
+// shape these almost always take; a callback passed as a named reference is a
+// later slice, since it needs the reference resolved to a function value first.
+// map carries the same-element-type restriction the value method has: a Go
+// method cannot introduce a new type parameter, so a map whose callback returns
+// a different type than the element hands back for the free-function slice. That
+// restriction is read straight off the arrow's result type, which the checker
+// has already inferred, compared against the array's element type. filter has no
+// such restriction because its callback is always element to boolean.
+func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNodes []frontend.Node, restrictToElem bool) (ast.Expr, error) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
+	}
+	if restrictToElem {
+		elemType, ok := r.arrayElem(recvNode)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "array map on a receiver whose element type did not lower"}
+		}
+		arrow := argNodes[0]
+		kids := r.prog.Children(arrow)
+		bodyType, err := r.typeExpr(r.prog.TypeAt(kids[len(kids)-1]))
+		if err != nil {
+			return nil, err
+		}
+		same, err := sameGoType(elemType, bodyType)
+		if err != nil {
+			return nil, err
+		}
+		if !same {
+			return nil, &NotYetLowerable{Reason: "array map that changes the element type is a later slice"}
+		}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// sameGoType reports whether two lowered type expressions print to the same Go
+// source, the test map uses to keep its callback within the same-element-type
+// form the value method supports. Comparing the printed form is enough: the two
+// expressions are both built by typeExpr, so identical types produce identical
+// syntax, and any difference in element type shows up as a difference in text.
+func sameGoType(a, b ast.Expr) (bool, error) {
+	as, err := printExpr(a)
+	if err != nil {
+		return false, err
+	}
+	bs, err := printExpr(b)
+	if err != nil {
+		return false, err
+	}
+	return as == bs, nil
 }
 
 // numericBinaryOp maps a TypeScript operator on number operands to its Go token.
