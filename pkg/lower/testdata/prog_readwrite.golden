@@ -15,13 +15,13 @@ func main() {
 			{
 				var i float64 = 0
 				for ; i < count; i++ {
-					value.WriteFileSync(value.PathJoin(dir, value.Concat(value.Concat(value.FromGoString("f"), value.NumberToString(i)), value.FromGoString(".txt"))), payload)
+					value.WriteFileSync(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt"))), payload)
 				}
 			}
 			{
 				var i float64 = 0
 				for ; i < count; i++ {
-					bytes = bytes + value.ReadFileSyncUTF8(value.PathJoin(dir, value.Concat(value.Concat(value.FromGoString("f"), value.NumberToString(i)), value.FromGoString(".txt")))).Length()
+					bytes = bytes + value.ReadFileSyncUTF8(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt")))).Length()
 				}
 			}
 		}
