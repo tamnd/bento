@@ -78,6 +78,14 @@ type Renderer struct {
 	// specialized locals do not leak into another. A nil map (the default) specializes
 	// nothing, so a body with no eligible local lowers exactly as before.
 	int32Locals map[string]bool
+	// strBuilders is the list of reusable value.StrBuilder variables the current
+	// body needs, one per template or number-interpolated concatenation site the
+	// lowerer chose to build through a builder. A var declaration for each is hoisted
+	// to the top of the body, above any loop, so the builder is reused across
+	// iterations rather than recreated. Like int32Locals it is scoped to one body,
+	// saved and restored around each so one function's builders do not leak into
+	// another, and a nil slice (the default) hoists nothing.
+	strBuilders []string
 }
 
 // NewRenderer builds a renderer over a checked program.

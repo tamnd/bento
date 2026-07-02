@@ -55,6 +55,28 @@ func NumberToString(x float64) BStr {
 	return fromASCII(string(appendFinite(buf[:0], x)))
 }
 
+// appendNumberDecimal appends the JavaScript String(x) of a number to dst as
+// bytes and returns the extended slice, the byte-producing form of NumberToString
+// behind the transient-string builder, which widens the bytes to code units. It
+// runs the same branches: the non-finite words, "0" for either zero, the integer
+// fast path for a whole value within 2^53, and appendFinite for the general case.
+func appendNumberDecimal(dst []byte, x float64) []byte {
+	switch {
+	case math.IsNaN(x):
+		return append(dst, "NaN"...)
+	case x == 0:
+		return append(dst, '0') // both +0 and -0 stringify to "0"
+	case math.IsInf(x, 1):
+		return append(dst, "Infinity"...)
+	case math.IsInf(x, -1):
+		return append(dst, "-Infinity"...)
+	}
+	if x == math.Trunc(x) && x >= -twoPow53 && x <= twoPow53 {
+		return strconv.AppendInt(dst, int64(x), 10)
+	}
+	return appendFinite(dst, x)
+}
+
 // fromASCII wraps an all-ASCII string as a BStr with no code-unit scan. Every
 // byte a number formats to (a digit, '.', '-', 'e', '+') is one UTF-16 code
 // unit, so the length is the byte length and countUTF16Units would only confirm
