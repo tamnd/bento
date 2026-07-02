@@ -664,6 +664,48 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		{name: "numberPositiveInfinity", file: "eq_number_positive_infinity", fn: "f", args: [][]any{{}}},
 		{name: "numberNegativeInfinity", file: "eq_number_negative_infinity", fn: "f", args: [][]any{{}}},
 		{name: "numberNaN", file: "eq_number_nan", fn: "f", args: [][]any{{}}},
+		// Template literals build a string, so each case declares a string return and
+		// compares the joined result against the engine's. The head, the coerced
+		// substitutions, and the trailing literals must land in the same order with the
+		// same ToString, and the escapes must cook identically, or the strings diverge.
+		{name: "templateNosub", file: "eq_template_nosub", fn: "f", ret: "string", args: [][]any{{}}},
+		{
+			name: "templateBasic",
+			file: "eq_template_basic",
+			fn:   "f",
+			ret:  "string",
+			// a number and a string interpolated together, over an integer, a negative,
+			// and a fraction so the NumberToString of the first substitution is exercised
+			// alongside the passed-through string.
+			args: [][]any{{0, "x"}, {42, "mid"}, {-7, ""}, {3.5, "π"}},
+		},
+		{
+			name: "templateNumber",
+			file: "eq_template_number",
+			fn:   "f",
+			ret:  "string",
+			// a lone number substitution across the Number::toString spread: an integer,
+			// a fraction, a negative, zero, and the exponential thresholds, all of which
+			// must format the same as the engine inside the template.
+			args: [][]any{{0}, {42}, {-7}, {3.5}, {1e21}, {1e-7}, {1e20}},
+		},
+		{
+			name: "templateBool",
+			file: "eq_template_bool",
+			fn:   "f",
+			ret:  "string",
+			args: [][]any{{true}, {false}},
+		},
+		{
+			name: "templateEscape",
+			file: "eq_template_escape",
+			fn:   "f",
+			ret:  "string",
+			// the cooked head and tail carry a tab, an escaped backtick, and an escaped
+			// dollar-brace, so the engine and the generated Go must resolve the same
+			// escapes around the substitution.
+			args: [][]any{{1}, {-2}},
+		},
 		{
 			name: "booleanOfNumber",
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches

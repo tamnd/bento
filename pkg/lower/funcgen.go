@@ -417,6 +417,12 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeStringLiteral:
 		return r.stringLiteral(n)
 
+	case frontend.NodeNoSubstitutionTemplateLiteral:
+		return r.noSubTemplate(n)
+
+	case frontend.NodeTemplateExpression:
+		return r.templateExpression(n)
+
 	case frontend.NodePropertyAccessExpression:
 		return r.propertyAccess(n)
 
@@ -791,14 +797,24 @@ func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "String() with this argument count is a later slice"}
 	}
-	arg := argNodes[0]
+	return r.stringify(argNodes[0])
+}
+
+// stringify lowers one expression to its string form under the ECMAScript ToString
+// used by String(x) and by a template literal substitution: a number goes through
+// value.NumberToString (the exact Number::toString, not strconv), a boolean
+// through value.BoolToString, and a string is already a value.BStr so it passes
+// through unchanged. An argument this slice does not coerce (an object, whose
+// ToString runs user code) hands back. String(x) and `${x}` share this so the two
+// paths always agree on how a value becomes a string.
+func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 	lowered, err := r.lowerExpr(arg)
 	if err != nil {
 		return nil, err
 	}
 	switch {
 	case r.isString(arg):
-		return lowered, nil // String(s) on a string is the identity
+		return lowered, nil // already a string, the identity
 	case r.isNumber(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{lowered}}, nil
@@ -806,7 +822,7 @@ func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{lowered}}, nil
 	default:
-		return nil, &NotYetLowerable{Reason: "String() on this argument type is a later slice"}
+		return nil, &NotYetLowerable{Reason: "coercing this type to a string is a later slice"}
 	}
 }
 
@@ -1073,12 +1089,106 @@ func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "string literal has a malformed escape sequence"}
 	}
+	return r.bstrLit(units), nil
+}
+
+// bstrLit builds the AST for a value.BStr holding the given UTF-16 code units. A
+// content that is valid UTF-16 becomes a Go string literal wrapped in
+// value.FromGoString, the common case; a content that carries a lone surrogate,
+// which no Go string can hold, is emitted as a raw []uint16 wrapped in
+// value.FromUTF16 so the surrogate survives. The string literal and template
+// paths share this so both spell a compile-time string the same way.
+func (r *Renderer) bstrLit(units []uint16) ast.Expr {
 	r.requireImport(valuePkg)
 	if hasLoneSurrogate(units) {
-		return &ast.CallExpr{Fun: sel("value", "FromUTF16"), Args: []ast.Expr{uint16SliceLit(units)}}, nil
+		return &ast.CallExpr{Fun: sel("value", "FromUTF16"), Args: []ast.Expr{uint16SliceLit(units)}}
 	}
 	lit := &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(string(utf16.Decode(units)))}
-	return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{lit}}, nil
+	return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{lit}}
+}
+
+// noSubTemplate lowers a template literal with no substitutions, `like this`,
+// which denotes exactly one string. Its cooked content is the source between the
+// backticks with escapes resolved, so it lowers to the same value.BStr a string
+// literal of that content would, only the delimiters differ.
+func (r *Renderer) noSubTemplate(n frontend.Node) (ast.Expr, error) {
+	units, ok := templateCooked(r.prog.Text(n))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "template literal has a malformed escape sequence"}
+	}
+	return r.bstrLit(units), nil
+}
+
+// templateExpression lowers a template literal with substitutions, `a${x}b`, to a
+// single string. The frontend exposes it as a head literal followed by one span
+// per substitution, each span holding the interpolated expression and the literal
+// text that follows it (a middle, or the tail at the end). The result is the head
+// concatenated with, for each span, the expression coerced to a string and then
+// the following literal, so `a${x}b${y}c` becomes head "a", String(x), "b",
+// String(y), "c" joined in order. The expressions coerce through stringify, the
+// same ToString String(x) uses, so a template and an explicit String() call agree.
+// The join is one ConcatN on the head, which materializes the result once rather
+// than building an intermediate string per piece. An expression whose type does
+// not coerce (an object) hands the whole template back.
+func (r *Renderer) templateExpression(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) < 2 {
+		return nil, &NotYetLowerable{Reason: "template expression did not expose a head and at least one span"}
+	}
+	headUnits, ok := templateCooked(r.prog.Text(kids[0]))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "template head has a malformed escape sequence"}
+	}
+	// pieces is the flat ordered list of string values to join: the head, then for
+	// each span the coerced expression and the literal that follows it.
+	pieces := []ast.Expr{r.bstrLit(headUnits)}
+	for _, span := range kids[1:] {
+		parts := r.prog.Children(span)
+		if len(parts) != 2 {
+			return nil, &NotYetLowerable{Reason: "template span did not expose an expression and a literal"}
+		}
+		strExpr, err := r.stringify(parts[0])
+		if err != nil {
+			return nil, err
+		}
+		litUnits, ok := templateCooked(r.prog.Text(parts[1]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "template literal part has a malformed escape sequence"}
+		}
+		pieces = append(pieces, strExpr, r.bstrLit(litUnits))
+	}
+	return &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: pieces[0], Sel: ident("ConcatN")},
+		Args: pieces[1:],
+	}, nil
+}
+
+// templateCooked decodes the cooked value of one template literal token: the head,
+// a middle, the tail, or a whole no-substitution literal. The raw source carries
+// the delimiters the parser matched, so they are stripped first, a leading
+// backtick (a head or whole literal) or close brace (a middle or the tail), and a
+// trailing "${" before a substitution or a backtick at the end. What remains is
+// the same escaped content a string literal holds between its quotes, so
+// decodeJSString resolves it, including \` and \$ which stand for themselves. It
+// returns false when the delimiters are not the expected shape or an escape is
+// malformed, so the caller hands the template back rather than guessing.
+func templateCooked(text string) ([]uint16, bool) {
+	if len(text) < 2 {
+		return nil, false
+	}
+	if text[0] != '`' && text[0] != '}' {
+		return nil, false
+	}
+	inner := text[1:]
+	switch {
+	case strings.HasSuffix(inner, "${"):
+		inner = inner[:len(inner)-2]
+	case strings.HasSuffix(inner, "`"):
+		inner = inner[:len(inner)-1]
+	default:
+		return nil, false
+	}
+	return decodeJSString(inner)
 }
 
 // uint16SliceLit builds the AST for a []uint16{...} composite literal of the given
