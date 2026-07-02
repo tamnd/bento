@@ -151,6 +151,13 @@ func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
 	r.int32Locals = r.int32LocalsOf(r.prog.Children(block))
 	defer func() { r.int32Locals = prev }()
 
+	// The optional-locals set is scoped to this body the same way, so a narrowed read
+	// of an option unwraps with .Get() wherever in the body it sits and one function's
+	// options do not leak into another's reads.
+	prevOpt := r.optLocals
+	r.optLocals = r.optLocalsOf(r.prog.Children(block))
+	defer func() { r.optLocals = prevOpt }()
+
 	// The builder set is scoped to this body the same way: a template site anywhere
 	// in the body, however deeply nested, records its builder here, and blockOf
 	// hoists a var for each above the whole body so a builder inside a loop is reused
@@ -758,6 +765,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// transparent, which is what lets the specialization stay local to this file.
 		if r.int32Locals[name] {
 			return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{ident(name)}}, nil
+		}
+		// A local declared as an optional (value.Opt[T]) that the checker narrowed to
+		// T at this use, past a presence guard like `x !== undefined`, reads the stored
+		// value out with .Get(). The narrowing shows as the type at this node no longer
+		// carrying undefined; a read where the type is still the optional keeps the bare
+		// Opt value, which is what the presence test and an Opt-to-Opt assignment want.
+		if r.optLocals[name] && !r.isOptional(n) {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Get")}}, nil
 		}
 		return ident(name), nil
 
@@ -2589,12 +2604,66 @@ func (r *Renderer) optionalUndefinedCompare(left, right frontend.Node) (frontend
 // optional shape the same way renderUnion does, so the presence-test rewrite
 // fires exactly when the operand is a value.Opt and not on a wider union.
 func (r *Renderer) isOptional(n frontend.Node) bool {
-	t := r.prog.TypeAt(n)
+	return r.isOptionalType(r.prog.TypeAt(n))
+}
+
+// isOptionalType reports whether a type is the optional T | undefined shape that
+// lowers to value.Opt[T], reading it the same way renderUnion does. It is the
+// node-free form isOptional and the optLocals pre-pass share, so the declaration
+// scan and the per-use narrowing test agree on what counts as an option.
+func (r *Renderer) isOptionalType(t frontend.Type) bool {
 	if t.Flags&frontend.TypeUnion == 0 {
 		return false
 	}
 	_, ok := r.optionalInner(r.prog.UnionMembers(t))
 	return ok
+}
+
+// optLocalsOf analyzes a body and returns the set of local names declared with an
+// optional type (T | undefined, lowered to value.Opt[T]), so a read of one at a
+// point the checker narrowed to T can unwrap with .Get(). The walk descends through
+// nested blocks like int32LocalsOf, and it reads the declared type from the name
+// node of each variable declaration, which is the unnarrowed type at the point of
+// declaration. A name declared more than once is dropped from the set, since the
+// flat name set cannot tell two scopes apart and a wrong unwrap would be unsound;
+// such a body simply keeps every read of that name bare and hands back the narrowed
+// use to a later slice rather than risk it. A nil map means nothing to unwrap.
+func (r *Renderer) optLocalsOf(body []frontend.Node) map[string]bool {
+	opt := map[string]bool{}
+	declCount := map[string]int{}
+	for _, n := range body {
+		r.collectOptDecls(n, opt, declCount)
+	}
+	for name, c := range declCount {
+		if c != 1 {
+			delete(opt, name)
+		}
+	}
+	if len(opt) == 0 {
+		return nil
+	}
+	return opt
+}
+
+// collectOptDecls walks one node, recording each variable declaration whose name is
+// typed as an optional, and recurses into its children so a binding in a nested
+// block or loop is seen. It counts declarations per name alongside so optLocalsOf
+// can drop a name declared in more than one scope.
+func (r *Renderer) collectOptDecls(n frontend.Node, opt map[string]bool, declCount map[string]int) {
+	if n.Kind() == frontend.NodeVariableDeclaration {
+		kids := r.prog.Children(n)
+		if len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier {
+			if name, ok := localName(r.prog.Text(kids[0])); ok {
+				declCount[name]++
+				if r.isOptionalType(r.prog.TypeAt(kids[0])) {
+					opt[name] = true
+				}
+			}
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		r.collectOptDecls(c, opt, declCount)
+	}
 }
 
 // relationalToken maps a TypeScript relational operator to the Go comparison
