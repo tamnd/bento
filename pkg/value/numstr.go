@@ -31,6 +31,19 @@ func NumberToString(x float64) BStr {
 	case math.IsInf(x, -1):
 		return FromGoString("-Infinity")
 	}
+	// Fast path for an integer value whose magnitude is at most 2^53. In that range
+	// every integer is exactly representable as a float64, so it is its own shortest
+	// round-tripping decimal, and JavaScript prints it in plain notation with no
+	// point and no exponent, which is exactly strconv.FormatInt of the int64 value.
+	// That skips the shortest-digits scientific parse and the decimal-point
+	// placement the general path runs, the whole cost of stringifying a loop counter
+	// or any other whole number. The bound must be 2^53, not the wider int64 range:
+	// past 2^53 a float64 integer and its shortest decimal diverge (the stored value
+	// 1234567890123456768 prints as 1234567890123456800), so a wider guard would
+	// print the exact int64 where JavaScript prints the shorter rounding.
+	if x == math.Trunc(x) && x >= -twoPow53 && x <= twoPow53 {
+		return FromGoString(strconv.FormatInt(int64(x), 10))
+	}
 	if x < 0 {
 		return FromGoString("-" + formatFinite(-x))
 	}

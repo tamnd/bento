@@ -182,7 +182,19 @@ func (s BStr) CharCodeAt(i float64) float64 {
 	if i < 0 || i >= float64(s.lengthU16) {
 		return math.NaN()
 	}
-	return float64(s.units()[int(i)])
+	idx := int(i)
+	// ASCII fast path: when the UTF-8 view has one byte per code unit, every rune
+	// is ASCII, so the code unit at idx is the byte at idx and no code-unit slice
+	// has to be built. len(utf8) == lengthU16 is that all-ASCII test, since any
+	// multi-byte rune has more bytes than the one or two code units it encodes to.
+	// This matters because CharCodeAt on a UTF-8 string otherwise routes through
+	// units(), which materializes the whole UTF-16 slice for a single lookup, so a
+	// per-character scan of a built or formatted string would re-encode it on every
+	// index. A rope or a raw code-unit backing takes the general path below.
+	if s.rope == nil && s.utf16 == nil && len(s.utf8) == s.lengthU16 {
+		return float64(s.utf8[idx])
+	}
+	return float64(s.units()[idx])
 }
 
 // CharAt returns the one-code-unit string at index i, matching
@@ -855,6 +867,42 @@ func Concat(a, b BStr) BStr {
 // arguments it returns the receiver unchanged, which is what concat() with no
 // arguments does.
 func (s BStr) ConcatN(rest ...BStr) BStr {
+	if len(rest) == 0 {
+		return s
+	}
+	// Fast path: when the receiver and every argument are on the UTF-8 fast path
+	// with no pending rope, build the whole result in one pass. A template literal
+	// lowers to one ConcatN of its head, its substitutions, and its tails, so this
+	// is an N-piece join that would otherwise fold pairwise through Concat and
+	// allocate a fresh string on every join; one strings.Builder over all the
+	// pieces allocates once instead. An accumulation loop (s += ...) does not reach
+	// here, since that lowers to binary Concat, which keeps its rope so the loop
+	// stays linear; ConcatN is the one-shot join, where a single flat build is the
+	// cheaper shape than a rope that the next read would flatten anyway.
+	allUTF8 := s.rope == nil && s.utf16 == nil
+	if allUTF8 {
+		for i := range rest {
+			if rest[i].rope != nil || rest[i].utf16 != nil {
+				allUTF8 = false
+				break
+			}
+		}
+	}
+	if allUTF8 {
+		total := s.lengthU16
+		byteLen := len(s.utf8)
+		for i := range rest {
+			total += rest[i].lengthU16
+			byteLen += len(rest[i].utf8)
+		}
+		var b strings.Builder
+		b.Grow(byteLen)
+		b.WriteString(s.utf8)
+		for i := range rest {
+			b.WriteString(rest[i].utf8)
+		}
+		return BStr{utf8: b.String(), lengthU16: total}
+	}
 	out := s
 	for _, r := range rest {
 		out = Concat(out, r)

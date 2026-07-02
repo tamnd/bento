@@ -176,6 +176,12 @@ func MaxN(nums ...float64) float64 {
 // has no other double sharing its bits, so integers up to it round-trip exactly.
 const maxSafeInteger = 9007199254740991.0
 
+// twoPow53 is 2^53, the boundary below which every integer is exactly
+// representable as a float64 and so equals its own shortest round-tripping
+// decimal. NumberToString uses it to bound the integer fast path, since past this
+// point a float64 integer and the decimal JavaScript prints for it diverge.
+const twoPow53 = 9007199254740992.0
+
 // NumberIsNaN reports whether n is the NaN value, Number.isNaN. Unlike the global
 // isNaN it does no coercion, but the argument is already a number here, so it is
 // just the NaN test. It is not the same as `n != n` written in Go source only in
