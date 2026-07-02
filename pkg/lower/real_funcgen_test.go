@@ -379,6 +379,20 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function pf(s: string): number { return parseFloat(s); }`,
 		},
 		{
+			name:   "parse_int",
+			golden: "func_parse_int.golden",
+			// parseInt(s) with no radix lowers to value.ParseInt with a literal 0, which
+			// the value function treats as the omitted-argument case (base 10 with 0x
+			// detection).
+			src: `export function pi(s: string): number { return parseInt(s); }`,
+		},
+		{
+			name:   "parse_int_radix",
+			golden: "func_parse_int_radix.golden",
+			// parseInt(s, r) passes the radix through to value.ParseInt.
+			src: `export function pi(s: string, r: number): number { return parseInt(s, r); }`,
+		},
+		{
 			name:   "num_hex",
 			golden: "func_num_hex.golden",
 			// a hexadecimal integer literal is a number like any other, so it lowers to

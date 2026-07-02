@@ -1,0 +1,3 @@
+func Pi(s value.BStr) float64 {
+	return value.ParseInt(s, 0)
+}
