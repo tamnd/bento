@@ -149,15 +149,20 @@ func FromUTF16(units []uint16) BStr {
 // truncation the specification applies, so a number outside [0, 2^16) wraps
 // rather than being rejected and a fraction is dropped. The units are taken
 // verbatim, which means a lone surrogate is preserved rather than replaced, so
-// the result routes through FromUTF16 rather than the UTF-8 fast path. It is a
+// the result keeps the code-unit view rather than the UTF-8 fast path. It is a
 // free function, not a method, because fromCharCode is a static on the String
 // constructor with no string receiver.
+//
+// The units slice is allocated and filled here and never handed back to the
+// caller, so it backs the result directly, the way padTo does, without the
+// defensive copy FromUTF16 makes for a slice it does not own. That is the one
+// allocation the call costs; routing through FromUTF16 would double it.
 func FromCharCode(codes ...float64) BStr {
 	units := make([]uint16, len(codes))
 	for i, c := range codes {
 		units[i] = ToUint16(c)
 	}
-	return FromUTF16(units)
+	return BStr{utf16: units, lengthU16: len(units)}
 }
 
 // Length returns the number of UTF-16 code units, String.prototype.length. It is
