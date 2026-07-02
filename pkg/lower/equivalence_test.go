@@ -718,6 +718,37 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{72, 105, 33}, {65536 + 66, 67.9, 68}, {0xD83D, 0xDE00, 65}},
 		},
 		{
+			name: "stringReplace",
+			file: "eq_string_replace",
+			fn:   "rep",
+			ret:  "string",
+			// only the first match is replaced, a missing search returns the receiver,
+			// an empty search inserts at the front, and the substitution patterns $&,
+			// $` and $' and the literal $$ must expand the same as the engine.
+			args: [][]any{
+				{"abcabc", "bc", "X"},
+				{"hello", "xyz", "Q"},
+				{"abc", "", "-"},
+				{"a.b", ".", "[$&]"},
+				{"one two", "two", "<$`>"},
+				{"cost", "cost", "$$5"},
+			},
+		},
+		{
+			name: "stringReplaceAll",
+			file: "eq_string_replace_all",
+			fn:   "repAll",
+			ret:  "string",
+			// every match is replaced, the replacement is not rescanned, an empty
+			// search weaves at every gap, and $& expands per match.
+			args: [][]any{
+				{"abcabc", "bc", "X"},
+				{"aaa", "a", "aa"},
+				{"abc", "", "-"},
+				{"a.b.c", ".", "[$&]"},
+			},
+		},
+		{
 			name: "booleanOfNumber",
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches
 			// a nonzero result, +0, and NaN (0/0), the last being what a bare zero test

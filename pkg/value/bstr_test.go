@@ -177,6 +177,65 @@ func TestFromCharCode(t *testing.T) {
 	}
 }
 
+// TestReplace pins String.prototype.replace with two strings: only the first
+// occurrence is replaced, a missing search returns the receiver, an empty search
+// inserts at the front, and the substitution patterns $$, $&, $` and $' expand
+// while a $ before a digit stays literal because a string search has no captures.
+func TestReplace(t *testing.T) {
+	cases := []struct {
+		hay, search, repl, want string
+	}{
+		{"abcabc", "bc", "X", "aXabc"},           // only the first match
+		{"hello", "xyz", "X", "hello"},           // no match returns the receiver
+		{"abc", "", "-", "-abc"},                 // empty search inserts at the front
+		{"a.b", ".", "[$&]", "a[.]b"},            // $& is the matched text
+		{"one two", "two", "[$`]", "one [one ]"}, // $` is the text before
+		{"one two", "one", "[$']", "[ two] two"}, // $' is the text after
+		{"cost", "cost", "$$5", "$5"},            // $$ is a literal dollar
+		{"ab", "a", "$1", "$1b"},                 // $1 has no capture, stays literal
+	}
+	for _, c := range cases {
+		got := FromGoString(c.hay).Replace(FromGoString(c.search), FromGoString(c.repl)).ToGoString()
+		if got != c.want {
+			t.Errorf("%q.Replace(%q, %q) = %q, want %q", c.hay, c.search, c.repl, got, c.want)
+		}
+	}
+}
+
+// TestReplaceAll pins String.prototype.replaceAll with two strings: every
+// non-overlapping occurrence is replaced, a missing search returns the receiver,
+// an empty search weaves the replacement between every code unit and at both
+// ends, and the substitution patterns expand for each match.
+func TestReplaceAll(t *testing.T) {
+	cases := []struct {
+		hay, search, repl, want string
+	}{
+		{"abcabc", "bc", "X", "aXaX"},       // every match
+		{"aaa", "a", "aa", "aaaaaa"},        // replacement is not rescanned
+		{"hello", "xyz", "X", "hello"},      // no match returns the receiver
+		{"abc", "", "-", "-a-b-c-"},         // empty search weaves at every gap
+		{"a.b.c", ".", "[$&]", "a[.]b[.]c"}, // $& expands per match
+		{"", "", "X", "X"},                  // empty over empty is one insertion
+	}
+	for _, c := range cases {
+		got := FromGoString(c.hay).ReplaceAll(FromGoString(c.search), FromGoString(c.repl)).ToGoString()
+		if got != c.want {
+			t.Errorf("%q.ReplaceAll(%q, %q) = %q, want %q", c.hay, c.search, c.repl, got, c.want)
+		}
+	}
+}
+
+// TestReplaceCodeUnitWise pins that replace works on the UTF-16 code-unit view,
+// so a lone surrogate can be the search and the replacement, matching how
+// JavaScript treats an unpaired surrogate as an ordinary code unit.
+func TestReplaceCodeUnitWise(t *testing.T) {
+	hay := Concat(FromUTF16([]uint16{0xD83D}), FromGoString("x"))
+	got := hay.Replace(FromUTF16([]uint16{0xD83D}), FromGoString("Y"))
+	if got.ToGoString() != "Yx" {
+		t.Errorf("replacing a lone surrogate = %q, want \"Yx\"", got.ToGoString())
+	}
+}
+
 // TestCharCodeAt pins String.prototype.charCodeAt: in-range indices return the
 // UTF-16 code unit, an out-of-range or negative index returns NaN, a fractional
 // index truncates, and an astral character reads back as its two surrogate

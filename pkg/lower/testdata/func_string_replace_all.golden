@@ -1,0 +1,3 @@
+func RepAll(s value.BStr, a value.BStr, b value.BStr) value.BStr {
+	return s.ReplaceAll(a, b)
+}
