@@ -1055,6 +1055,10 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		return "Slice", []argKind{argNumber, argNumber}, 0, false, true
 	case "substring":
 		return "Substring", []argKind{argNumber, argNumber}, 0, false, true
+	case "substr":
+		// The legacy start-and-length form: a required start and an optional length,
+		// both numbers, so it admits one or two arguments like slice and substring.
+		return "Substr", []argKind{argNumber, argNumber}, 1, false, true
 	case "padStart":
 		return "PadStart", []argKind{argNumber, argString}, 1, false, true
 	case "padEnd":

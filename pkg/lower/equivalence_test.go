@@ -304,6 +304,16 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"hello", 1, 3}, {"hello", 3, 1}, {"hello", -2, 3}, {"hello", 2, 100}},
 		},
 		{
+			name: "substr",
+			// substr takes a start and a length, unlike slice and substring: a
+			// negative start counts from the end, a length past the end clamps, and a
+			// zero or negative length is empty, all of which must match the engine.
+			file: "eq_string_substr",
+			fn:   "sub",
+			ret:  "string",
+			args: [][]any{{"hello", 1, 3}, {"hello", -2, 5}, {"hello", 2, 100}, {"hello", 1, 0}, {"hello", 10, 2}},
+		},
+		{
 			name: "padStart2",
 			// padStart with an explicit pad string: a target longer than the
 			// string pads and repeats-then-truncates the pad, a target not longer

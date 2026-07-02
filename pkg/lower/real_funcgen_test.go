@@ -214,6 +214,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "number_valueof", file: "func_number_valueof"},
 		// toString on a boolean lowers to value.BoolToString, the coercion String(b) uses.
 		{name: "bool_tostring", file: "func_bool_tostring"},
+		// the legacy substr takes a start and a length, so it lowers to value.BStr.Substr like slice and substring lower to theirs.
+		{name: "string_substr", file: "func_string_substr"},
 		// the bare global isNaN, not the Number static one, so the callee is a plain identifier. On a number argument it coerces to nothing, so it lowers to the same value.NumberIsNaN predicate.
 		{name: "global_isnan", file: "func_global_isnan"},
 		// the bare global isFinite lowers to value.NumberIsFinite the same way.
