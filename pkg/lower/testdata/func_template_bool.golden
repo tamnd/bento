@@ -1,0 +1,3 @@
+func F(b bool) value.BStr {
+	return value.FromGoString("flag is ").ConcatN(value.BoolToString(b), value.FromGoString("!"))
+}
