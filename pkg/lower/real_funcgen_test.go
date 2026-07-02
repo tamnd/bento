@@ -200,6 +200,10 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "template_bool", file: "func_template_bool"},
 		// the cooked parts resolve escapes the same as a string literal, including a tab, an escaped backtick, and an escaped dollar-brace that is a literal rather than a substitution.
 		{name: "template_escape", file: "func_template_escape"},
+		// String.fromCharCode is a static call on the global String constructor, so it lowers to the variadic value.FromCharCode with each number argument passed through.
+		{name: "string_fromcharcode", file: "func_string_fromcharcode"},
+		// with no arguments fromCharCode is still value.FromCharCode, an empty call that yields the empty string.
+		{name: "string_fromcharcode_empty", file: "func_string_fromcharcode_empty"},
 		// the bare global isNaN, not the Number static one, so the callee is a plain identifier. On a number argument it coerces to nothing, so it lowers to the same value.NumberIsNaN predicate.
 		{name: "global_isnan", file: "func_global_isnan"},
 		// the bare global isFinite lowers to value.NumberIsFinite the same way.
