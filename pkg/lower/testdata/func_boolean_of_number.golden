@@ -1,0 +1,3 @@
+func Ok(x float64) bool {
+	return value.NumberToBool(x)
+}

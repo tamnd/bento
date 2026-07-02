@@ -475,6 +475,11 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Number" && r.isAmbientGlobal(kids[0]) {
 		return r.numberCoercion(kids[1:])
 	}
+	// Boolean(x) called as a function is the third primitive coercion, and routes
+	// the same way as String and Number before the user path.
+	if r.prog.Text(kids[0]) == "Boolean" && r.isAmbientGlobal(kids[0]) {
+		return r.booleanCoercion(kids[1:])
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
 		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
@@ -801,6 +806,36 @@ func (r *Renderer) numberCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{lowered}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Number() on this argument type is a later slice"}
+	}
+}
+
+// booleanCoercion lowers Boolean(x) called as a function over a primitive argument,
+// the third primitive coercion. A number goes through value.NumberToBool (false
+// only at zero or NaN), a string through value.StringToBool (false only when
+// empty), and a boolean passes through unchanged since Boolean(b) on a boolean is
+// the identity. It takes exactly one argument; a different arity, or an argument
+// this slice does not coerce (an object, which is always truthy but whose
+// evaluation this slice does not model), hands back.
+func (r *Renderer) booleanCoercion(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Boolean() with this argument count is a later slice"}
+	}
+	arg := argNodes[0]
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case r.isBool(arg):
+		return lowered, nil // Boolean(b) on a boolean is the identity
+	case r.isNumber(arg):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberToBool"), Args: []ast.Expr{lowered}}, nil
+	case r.isString(arg):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "StringToBool"), Args: []ast.Expr{lowered}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Boolean() on this argument type is a later slice"}
 	}
 }
 

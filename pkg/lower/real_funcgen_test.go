@@ -352,6 +352,26 @@ func TestRenderFuncGoldens(t *testing.T) {
 			src: `export function num(x: number): number { return Number(x); }`,
 		},
 		{
+			name:   "boolean_of_number",
+			golden: "func_boolean_of_number.golden",
+			// Boolean(x) on a number lowers to value.NumberToBool, false only at zero
+			// or NaN.
+			src: `export function ok(x: number): boolean { return Boolean(x); }`,
+		},
+		{
+			name:   "boolean_of_string",
+			golden: "func_boolean_of_string.golden",
+			// Boolean(s) on a string lowers to value.StringToBool, false only when empty.
+			src: `export function ok(s: string): boolean { return Boolean(s); }`,
+		},
+		{
+			name:   "boolean_of_bool",
+			golden: "func_boolean_of_bool.golden",
+			// Boolean(b) on a boolean is the identity, so it lowers to the argument
+			// unchanged with no call wrapped around it.
+			src: `export function ok(b: boolean): boolean { return Boolean(b); }`,
+		},
+		{
 			name:   "num_hex",
 			golden: "func_num_hex.golden",
 			// a hexadecimal integer literal is a number like any other, so it lowers to

@@ -608,6 +608,25 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{1, 2}, {2, 1}},
 		},
 		{
+			name: "booleanOfNumber",
+			// Boolean(x) on a number is false only at zero or NaN. The division reaches
+			// a nonzero result, +0, and NaN (0/0), the last being what a bare zero test
+			// would call truthy, so the engine and value.NumberToBool must agree.
+			src:  `export function ok(x: number, y: number): boolean { return Boolean(x / y); }`,
+			fn:   "ok",
+			ret:  "boolean",
+			args: [][]any{{6, 2}, {0, 1}, {0, 0}, {-3, 2}},
+		},
+		{
+			name: "booleanOfString",
+			// Boolean(s) on a string is false only when empty; content does not matter,
+			// so "0" and "false" are truthy and must agree with value.StringToBool.
+			src:  `export function ok(s: string): boolean { return Boolean(s); }`,
+			fn:   "ok",
+			ret:  "boolean",
+			args: [][]any{{""}, {"a"}, {" "}, {"0"}, {"false"}, {"😀"}},
+		},
+		{
 			name: "numberOfString",
 			// Number(s) on a string is the exact ECMAScript ToNumber over the
 			// StrNumericLiteral grammar. The inputs cover a trimmed decimal, a bare
