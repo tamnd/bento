@@ -1,0 +1,7 @@
+func Step(n float64) float64 {
+	var x float64 = n
+	x++
+	x--
+	x--
+	return x
+}
