@@ -299,11 +299,23 @@ func (s BStr) Replace(search, replacement BStr) BStr {
 	// keeps the result on the UTF-8 fast path. This skips materializing the whole
 	// receiver into a code-unit slice, the cost that dominated the strings workload.
 	if sf, ff := s.flat(), search.flat(); sf.utf16 == nil && ff.utf16 == nil && ff.lengthU16 > 0 {
-		if rf := replacement.flat(); rf.utf16 == nil && !strings.ContainsRune(rf.utf8, '$') {
-			if !strings.Contains(sf.utf8, ff.utf8) {
+		if rf := replacement.flat(); rf.utf16 == nil {
+			pos := strings.Index(sf.utf8, ff.utf8)
+			if pos < 0 {
 				return s
 			}
-			return FromGoString(strings.Replace(sf.utf8, ff.utf8, rf.utf8, 1))
+			if !strings.ContainsRune(rf.utf8, '$') {
+				return FromGoString(strings.Replace(sf.utf8, ff.utf8, rf.utf8, 1))
+			}
+			// A replacement carrying $ patterns still splices on bytes: $&, $` and $'
+			// copy whole byte ranges of the receiver and $$ a literal $, so every piece
+			// stays valid UTF-8 and the code-unit path's utf16.Encode of the receiver,
+			// the cost that dominated the replace workload, is never paid.
+			out := make([]byte, 0, len(sf.utf8)+len(rf.utf8))
+			out = append(out, sf.utf8[:pos]...)
+			out = appendSubstitutionBytes(out, sf.utf8, pos, len(ff.utf8), rf.utf8)
+			out = append(out, sf.utf8[pos+len(ff.utf8):]...)
+			return FromGoString(string(out))
 		}
 	}
 	hay, needle := s.units(), search.units()
@@ -332,11 +344,32 @@ func (s BStr) ReplaceAll(search, replacement BStr) BStr {
 	// without materializing the receiver into a code-unit slice. The empty-search
 	// weave and the $ patterns still fall through to the code-unit path.
 	if sf, ff := s.flat(), search.flat(); sf.utf16 == nil && ff.utf16 == nil && ff.lengthU16 > 0 {
-		if rf := replacement.flat(); rf.utf16 == nil && !strings.ContainsRune(rf.utf8, '$') {
+		if rf := replacement.flat(); rf.utf16 == nil {
 			if !strings.Contains(sf.utf8, ff.utf8) {
 				return s
 			}
-			return FromGoString(strings.ReplaceAll(sf.utf8, ff.utf8, rf.utf8))
+			if !strings.ContainsRune(rf.utf8, '$') {
+				return FromGoString(strings.ReplaceAll(sf.utf8, ff.utf8, rf.utf8))
+			}
+			// A $-carrying replacement splices on bytes at every match, the same
+			// byte-range copies Replace does, so the receiver is never materialized
+			// into code units. The search is non-empty here, so there is no zero-width
+			// weave, which the code-unit path below still owns.
+			hay, needle := sf.utf8, ff.utf8
+			out := make([]byte, 0, len(hay))
+			at := 0
+			for {
+				pos := strings.Index(hay[at:], needle)
+				if pos < 0 {
+					break
+				}
+				pos += at
+				out = append(out, hay[at:pos]...)
+				out = appendSubstitutionBytes(out, hay, pos, len(needle), rf.utf8)
+				at = pos + len(needle)
+			}
+			out = append(out, hay[at:]...)
+			return FromGoString(string(out))
 		}
 	}
 	hay, needle, repl := s.units(), search.units(), replacement.units()
@@ -494,6 +527,42 @@ func appendSubstitution(out, hay []uint16, pos, mlen int, replacement []uint16) 
 			// $ before a digit or a name is a capture reference a string search does
 			// not fill, so the $ stays literal and the next character is emitted on
 			// the following iteration as itself.
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// appendSubstitutionBytes is the byte-wise twin of appendSubstitution for the
+// UTF-8 fast path: it appends replacement to out, expanding the same ECMAScript
+// patterns ($$ to a literal $, $& the matched bytes, $` the bytes before the
+// match, $' the bytes after it) and leaving a $ before a digit, a name, or the
+// end verbatim. hay is valid UTF-8 and pos and mlen land on code-point
+// boundaries of a valid-UTF-8 match, so every copied range is itself valid UTF-8
+// and the result agrees with the code-unit expansion byte for byte. The pattern
+// bytes ($, &, backtick, quote) are ASCII, so a multibyte lead byte never trips
+// the switch.
+func appendSubstitutionBytes(out []byte, hay string, pos, mlen int, replacement string) []byte {
+	for i := 0; i < len(replacement); i++ {
+		c := replacement[i]
+		if c != '$' || i+1 >= len(replacement) {
+			out = append(out, c)
+			continue
+		}
+		switch replacement[i+1] {
+		case '$':
+			out = append(out, '$')
+			i++
+		case '&':
+			out = append(out, hay[pos:pos+mlen]...)
+			i++
+		case '`':
+			out = append(out, hay[:pos]...)
+			i++
+		case '\'':
+			out = append(out, hay[pos+mlen:]...)
+			i++
+		default:
 			out = append(out, c)
 		}
 	}
