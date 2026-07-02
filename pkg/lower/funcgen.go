@@ -2053,11 +2053,12 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 // type, so the arguments lower directly with no per-argument kind guard the way
 // the string methods need, since here the element type, not a fixed argument
 // kind, is what the checker enforced. The reading, higher-order, and other
-// remaining methods (pop, join) are later slices; pop additionally waits on the
-// optional machinery for its undefined result. The higher-order map and filter
-// are covered here, over a concise-body arrow callback that takes the element;
-// slice, which returns a fresh array over a copied range; and the search methods
-// indexOf and includes, over a synthesized element-equality closure.
+// pop is a later slice, waiting on the optional machinery for its undefined
+// result. The higher-order map and filter are covered here, over a concise-body
+// arrow callback that takes the element; slice, which returns a fresh array over
+// a copied range; the search methods indexOf and includes, over a synthesized
+// element-equality closure; and join, over a synthesized per-element ToString
+// closure.
 func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "push":
@@ -2082,6 +2083,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
 	case "includes":
 		return r.arrayIndexOfIncludes(recvNode, "Includes", argNodes, true)
+	case "join":
+		return r.arrayJoin(recvNode, argNodes)
 	case "slice":
 		if len(argNodes) > 2 {
 			return nil, &NotYetLowerable{Reason: "array slice with more than two arguments is not valid"}
@@ -2219,6 +2222,76 @@ func (r *Renderer) equalityClosure(elem frontend.Type, elemGo ast.Expr, sameValu
 	params := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("a"), ident("b")}, Type: elemGo}}}
 	return &ast.FuncLit{
 		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: ident("bool")}}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{body}}}},
+	}, nil
+}
+
+// arrayJoin lowers a join call to the value.Array Join method, passing the
+// separator and a synthesized per-element ToString closure. The separator is the
+// lowered string argument, or the JavaScript default comma when the call has
+// none; an argument that is not a string, or more than one, hands back, since
+// only the string-separator form is covered. The stringify closure is built the
+// same way the search-method equality is, off the element type, because the
+// value method cannot run the element-type-specific ToString on its type
+// parameter.
+func (r *Renderer) arrayJoin(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) > 1 {
+		return nil, &NotYetLowerable{Reason: "array join with more than one argument is not valid"}
+	}
+	elemGo, ok := r.arrayElem(recvNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array join on a receiver whose element type did not lower"}
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array join could not read its element type"}
+	}
+	str, err := r.stringifyClosure(elem, elemGo)
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	var sep ast.Expr
+	if len(argNodes) == 1 {
+		if !r.isString(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "array join with a non-string separator is a later slice"}
+		}
+		sep, err = r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		r.requireImport(valuePkg)
+		sep = &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: `","`}}}
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Join")}, Args: []ast.Expr{sep, str}}, nil
+}
+
+// stringifyClosure builds the func(T) value.BStr the join method takes, spelling
+// out the element-type ToString. It mirrors stringify but over a synthesized
+// parameter rather than a node: a number goes through value.NumberToString, a
+// boolean through value.BoolToString, and a string is returned as is. Any other
+// element type, whose ToString would run user code, hands back.
+func (r *Renderer) stringifyClosure(elem frontend.Type, elemGo ast.Expr) (ast.Expr, error) {
+	var body ast.Expr
+	switch {
+	case elem.Flags&frontend.TypeString != 0:
+		body = ident("x")
+	case elem.Flags&frontend.TypeNumber != 0:
+		r.requireImport(valuePkg)
+		body = &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{ident("x")}}
+	case elem.Flags&frontend.TypeBoolean != 0:
+		r.requireImport(valuePkg)
+		body = &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{ident("x")}}
+	default:
+		return nil, &NotYetLowerable{Reason: "array join on an element type without a value ToString is a later slice"}
+	}
+	params := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("x")}, Type: elemGo}}}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "BStr")}}}},
 		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{body}}}},
 	}, nil
 }

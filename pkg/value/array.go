@@ -138,6 +138,24 @@ func (a *Array[T]) Includes(target T, eq func(T, T) bool) bool {
 	return a.IndexOf(target, eq) >= 0
 }
 
+// Join concatenates the elements into a string separated by sep, the lowering of
+// Array.prototype.join. Each element becomes a string through str, supplied by
+// the caller for the same reason the search methods take an equality: a Go
+// method cannot run the element-type-specific ToString on its type parameter, so
+// the lowerer, which knows the element type, passes NumberToString, BoolToString,
+// or the identity for a string. An empty array joins to the empty string, and a
+// single element to itself with no separator, matching JavaScript.
+func (a *Array[T]) Join(sep BStr, str func(T) BStr) BStr {
+	if len(a.elems) == 0 {
+		return FromGoString("")
+	}
+	out := str(a.elems[0])
+	for _, x := range a.elems[1:] {
+		out = Concat(Concat(out, sep), str(x))
+	}
+	return out
+}
+
 // relativeIndex resolves a JavaScript slice bound against a length: it truncates
 // the Number toward zero, treats a negative value as counting back from the end,
 // and clamps the result into [0, length]. This is the shared step

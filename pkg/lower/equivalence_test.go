@@ -1012,6 +1012,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "find",
 			args: [][]any{{10}, {30}, {99}, {20}},
 		},
+		{
+			// join with an explicit separator, the default comma, and over a string
+			// array, so the synthesized per-element ToString and the separator
+			// handling run through the engine against TypeScript.
+			name: "arrayJoin",
+			file: "eq_array_join",
+			fn:   "lengths",
+			args: [][]any{{0}, {1}, {12}, {-3}},
+		},
 	}
 
 	for _, tc := range cases {
