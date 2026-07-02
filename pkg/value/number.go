@@ -16,12 +16,42 @@ import "math"
 // representable as a float64, so the float modulo below is exact.
 const twoPow32 = 4294967296.0
 
+// maxExactInt64 is the largest float64 whose conversion to int64 cannot overflow,
+// the greatest representable double below 2^63, and minExactInt64 is -2^63, which
+// is exactly representable. A finite value in [minExactInt64, maxExactInt64]
+// converts to int64 with no undefined behavior, and Go's float-to-int conversion
+// truncates toward zero, exactly the truncation ToUint32 and ToUint16 apply before
+// the modulo. That makes the low bits of the int64 the coercion result, so the
+// fast path can skip the math.Mod for every value that is not genuinely enormous.
+const (
+	maxExactInt64 = 9223372036854774784.0
+	minExactInt64 = -9223372036854775808.0
+)
+
 // ToUint32 coerces a number to an unsigned 32-bit integer, the ECMAScript
 // ToUint32 operation. NaN and the infinities become 0, every other value is
-// truncated toward zero and then reduced modulo 2^32 into [0, 2^32). The
-// reduction uses math.Mod rather than an integer cast so it stays correct for a
-// number too large to fit in an int64, where a direct conversion would overflow.
+// truncated toward zero and then reduced modulo 2^32 into [0, 2^32). Every
+// bitwise operand a normal program produces comes from integer arithmetic that
+// stays far inside 2^63, so the fast path takes the low 32 bits of the int64
+// conversion (which is that truncate-then-reduce, since Go conversion truncates
+// toward zero and a uint32 cast keeps the low 32 bits as two's complement) and
+// pays a couple of casts where the modulo path pays a math.Mod. NaN and the
+// infinities fail the range test and fall through to the slow path, which returns
+// 0, so the fast path needs no separate check for them.
 func ToUint32(n float64) uint32 {
+	if n >= minExactInt64 && n <= maxExactInt64 {
+		return uint32(int64(n))
+	}
+	return toUint32Slow(n)
+}
+
+// toUint32Slow is the ToUint32 path for a value too large for an int64 or not
+// finite. It is split off so ToUint32 stays small enough for the Go inliner to
+// fold into a caller, which turns a bitwise operator in a hot loop into inline
+// register math instead of a call. The math.Mod keeps the reduction exact for a
+// double past 2^63, where an integer cast would overflow, and NaN and the
+// infinities return 0.
+func toUint32Slow(n float64) uint32 {
 	if math.IsNaN(n) || math.IsInf(n, 0) {
 		return 0
 	}
@@ -50,8 +80,22 @@ const twoPow16 = 65536.0
 // modulus: NaN and the infinities become 0, and every other value is truncated
 // toward zero then reduced modulo 2^16 into [0, 2^16). String.fromCharCode is the
 // caller, which maps each argument through this before taking the result as a
-// UTF-16 code unit.
+// UTF-16 code unit. The fast path is ToUint32's, the low 16 bits of the int64
+// conversion, which skips the math.Mod for every argument short of 2^63; NaN and
+// the infinities fail the range test and fall to the slow path that returns 0.
 func ToUint16(n float64) uint16 {
+	if n >= minExactInt64 && n <= maxExactInt64 {
+		return uint16(int64(n))
+	}
+	return toUint16Slow(n)
+}
+
+// toUint16Slow is ToUint16's cold path for a value past int64 range or not
+// finite, split off for the same reason as toUint32Slow: it keeps ToUint16 small
+// enough to inline, so String.fromCharCode's per-argument coercion folds into the
+// caller. The math.Mod reduction stays exact for a huge double and NaN and the
+// infinities return 0.
+func toUint16Slow(n float64) uint16 {
 	if math.IsNaN(n) || math.IsInf(n, 0) {
 		return 0
 	}
