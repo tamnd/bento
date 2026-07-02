@@ -281,6 +281,10 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "opt_pop_has", file: "func_opt_pop_has"},
 		// s.repeat(n) lowers to the value.BStr Repeat method taking the count as a number, the count coerced and range-checked at runtime by the method the way String.prototype.repeat is.
 		{name: "repeat", file: "func_repeat"},
+		// s.split(sep) lowers to the value.BStr Split method returning *value.Array[value.BStr], the pieces the string separator cuts, so a chained join has an array to fold.
+		{name: "split", file: "func_split"},
+		// s.replace(/word/g, r) with a plain-literal global regexp lowers to the value.BStr ReplaceAll method over the literal the pattern spells, the global flag selecting ReplaceAll over Replace.
+		{name: "regex_replace", file: "func_regex_replace"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

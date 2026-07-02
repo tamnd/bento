@@ -241,6 +241,55 @@ func (s BStr) ReplaceAll(search, replacement BStr) BStr {
 	return FromUTF16(out)
 }
 
+// Split divides the string on each occurrence of a string separator and returns
+// the pieces, String.prototype.split(separator) in its string-separator form
+// (the regexp form and the optional limit are not modeled here; the compiler
+// hands those back). The pieces are cut on code-unit boundaries, so a separator
+// that occurs at the start or end yields an empty leading or trailing piece and a
+// separator that does not occur yields the whole string as the one piece, exactly
+// as JavaScript does. An empty separator splits into single code units, and the
+// empty string split by an empty separator is the empty array, the two edges the
+// specification calls out.
+func (s BStr) Split(sep BStr) *Array[BStr] {
+	// Fast path: the receiver and the separator are both valid UTF-8 and the
+	// separator is non-empty. UTF-8 is self-synchronizing, so a byte-level split
+	// lands on exactly the boundaries a code-unit split would and every piece is
+	// itself valid UTF-8, which keeps each piece on the UTF-8 fast path.
+	if s.utf16 == nil && sep.utf16 == nil && sep.lengthU16 > 0 {
+		pieces := strings.Split(s.utf8, sep.utf8)
+		out := make([]BStr, len(pieces))
+		for i, p := range pieces {
+			out[i] = FromGoString(p)
+		}
+		return NewArray(out...)
+	}
+	su := s.units()
+	if sep.lengthU16 == 0 {
+		// An empty separator with an empty receiver is the empty array; otherwise it
+		// splits into one string per code unit, so a lone surrogate becomes its own
+		// one-unit piece rather than being paired.
+		out := make([]BStr, len(su))
+		for i, u := range su {
+			out[i] = FromUTF16([]uint16{u})
+		}
+		return NewArray(out...)
+	}
+	pu := sep.units()
+	var out []BStr
+	start := 0
+	for i := 0; i+len(pu) <= len(su); {
+		if matchAt(su, pu, i) {
+			out = append(out, FromUTF16(su[start:i]))
+			i += len(pu)
+			start = i
+		} else {
+			i++
+		}
+	}
+	out = append(out, FromUTF16(su[start:]))
+	return NewArray(out...)
+}
+
 // indexOfUnits returns the first index at or after start where needle occurs in
 // hay, or -1 if it does not. An empty needle matches at start, the zero-width
 // match the replace methods weave a replacement into.

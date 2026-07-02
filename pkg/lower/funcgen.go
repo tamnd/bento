@@ -914,6 +914,18 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
+	// replace and replaceAll with a regexp literal first argument are their own
+	// path: a plain-literal pattern (no metacharacters) is exactly the string
+	// search the value replace methods do, so it lowers when the pattern is plain
+	// and the flags are a subset bento models, and hands back otherwise so a real
+	// pattern routes to the engine rather than compiling a wrong search.
+	if method == "replace" || method == "replaceAll" {
+		if len(argNodes) >= 1 {
+			if pattern, flags, isRe := r.regexLiteralArg(argNodes[0]); isRe {
+				return r.regexReplaceCall(recvNode, method, pattern, flags, argNodes)
+			}
+		}
+	}
 	goName, params, minArgs, variadic, ok := stringMethod(method)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " is a later slice"}
@@ -1607,6 +1619,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		return "Replace", []argKind{argString, argString}, 2, false, true
 	case "replaceAll":
 		return "ReplaceAll", []argKind{argString, argString}, 2, false, true
+	case "split":
+		// Only the string-separator form lowers, to value.BStr.Split returning a
+		// string array; a regexp separator does not type as a string, so methodCall
+		// hands it back, and the optional limit argument is a later slice, so exactly
+		// one argument is admitted.
+		return "Split", []argKind{argString}, 1, false, true
 	case "startsWith":
 		return "StartsWith", []argKind{argString, argNumber}, 1, false, true
 	case "endsWith":

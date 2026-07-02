@@ -1,0 +1,3 @@
+func Rr(s value.BStr, r value.BStr) value.BStr {
+	return s.ReplaceAll(value.FromGoString("word"), r)
+}

@@ -419,6 +419,30 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"ab", 0}, {"ab", 1}, {"x", 5}, {"", 9}, {"😀", 3}, {"ab", 2.9}},
 		},
 		{
+			name: "splitJoin",
+			// s.split(sep) then join(other) round-trips the pieces through a different
+			// separator, so both the split boundary and the piece count are exercised.
+			// The cases cover a separator that appears several times, one that is
+			// absent (a single piece), a trailing separator (an empty last piece), and
+			// an empty receiver, matching String.prototype.split and value.BStr.Split.
+			file: "eq_splitJoin",
+			fn:   "sj",
+			ret:  "string",
+			args: [][]any{{"a b c", " ", "-"}, {"abc", " ", "-"}, {"a ", " ", "-"}, {"", " ", "-"}},
+		},
+		{
+			name: "regexReplace",
+			// s.replace(/word/g, r) replaces every occurrence of the plain literal the
+			// regexp spells, which the lowerer reduces to the same code-unit search
+			// value.BStr.ReplaceAll does. The cases cover several matches, no match,
+			// and an empty receiver, matching String.prototype.replace with a global
+			// literal regexp.
+			file: "eq_regexReplace",
+			fn:   "rr",
+			ret:  "string",
+			args: [][]any{{"word word", "W"}, {"nomatch", "W"}, {"", "W"}},
+		},
+		{
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.
