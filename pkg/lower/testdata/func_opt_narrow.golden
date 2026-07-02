@@ -1,0 +1,8 @@
+func LastPlusOne(n float64) float64 {
+	var xs *value.Array[float64] = value.NewArray[float64](n, n+1)
+	var last value.Opt[float64] = xs.Pop()
+	if !last.IsUndefined() {
+		return last.Get() + 1
+	}
+	return 0
+}
