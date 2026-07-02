@@ -243,6 +243,10 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "compound_mod", file: "func_compound_mod"},
 		// ++ and -- on a number local map to Go's IncDecStmt, which accepts a float64.
 		{name: "incdec", file: "func_incdec"},
+		// a ternary lowers to an immediately-invoked function so only the taken branch runs; a chained ternary nests one inside the other's else return.
+		{name: "conditional", file: "func_conditional"},
+		// a ternary whose branches are strings types the IIFE result as value.BStr.
+		{name: "conditional_string", file: "func_conditional_string"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,6 +281,9 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		// a prefix increment used as a value needs its pre-increment result, not just
 		// the mutation, so it hands back; the statement form (++b;) does lower.
 		{"prefixIncrValue", "export function p(a: number): number { let b = a; const c = ++b; return c; }"},
+		// a ternary whose branches are different primitives is a union value, which
+		// needs the tagged union; a same-primitive ternary does lower.
+		{"ternaryMixed", "export function m(c: boolean, n: number, s: string): number { const x = c ? n : s; return n; }"},
 		// a generic function needs monomorphization first.
 		{"generic", "export function id<T>(x: T): T { return x; }"},
 		// an optional parameter needs the optional tagged type.
