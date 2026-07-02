@@ -143,6 +143,13 @@ func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
 	if block == nil {
 		return nil, &NotYetLowerable{Reason: "function has no body block (declare or overload)"}
 	}
+	// The int32 specialization set is computed once over the whole body and held for
+	// the duration of this function, so a counter declared in a nested loop is seen
+	// and the nested block inherits the same set. It is saved and restored like
+	// retType so one function's specialized locals do not leak into another.
+	prev := r.int32Locals
+	r.int32Locals = r.int32LocalsOf(r.prog.Children(block))
+	defer func() { r.int32Locals = prev }()
 	return r.lowerBlock(block)
 }
 
@@ -295,6 +302,23 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		name, ok := localName(r.prog.Text(kids[0]))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "variable name is not a Go identifier"}
+		}
+		// A local the analysis proved holds only 32-bit integers is declared as a Go
+		// int32 and its initializer is lowered in the int32 domain, so the counter or
+		// accumulator lives in a register with no float64 coercion on any of its
+		// operations. Every other local keeps its float64 (or richer) type and the
+		// ordinary boundary-coercing initializer.
+		if r.int32Locals[name] {
+			init, err := r.int32Of(kids[len(kids)-1])
+			if err != nil {
+				return nil, err
+			}
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   ident("int32"),
+				Values: []ast.Expr{init},
+			})
+			continue
 		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
@@ -470,6 +494,16 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 			if err != nil {
 				return nil, err
 			}
+		}
+	} else if r.int32Locals[name] {
+		// The target is an int32-specialized local, so the right-hand side lowers in the
+		// int32 domain and the assignment to the int32 variable is the ToInt32 the value
+		// would otherwise get from a | 0 or a Math.imul. The analysis only specialized
+		// this local because every one of its writes is inherently int32, so int32Of has
+		// a native lowering for this right-hand side rather than the coercing fallback.
+		rhs, err = r.int32Of(parts[2])
+		if err != nil {
+			return nil, err
 		}
 	} else {
 		rhs, err = r.lowerExpr(parts[2])
@@ -670,6 +704,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
+		}
+		// A local specialized to Go int32 is read back as float64(name), so every
+		// consumer of the read (arithmetic, a Math call, console.log) sees the same
+		// float64 a number local always presented. The int32 type is visible only on
+		// the declaration and on the writes lowered through int32Of; the read side is
+		// transparent, which is what lets the specialization stay local to this file.
+		if r.int32Locals[name] {
+			return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{ident(name)}}, nil
 		}
 		return ident(name), nil
 
