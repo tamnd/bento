@@ -1,3 +1,4 @@
 func F(b bool) value.BStr {
-	return value.FromGoString("flag is ").ConcatN(value.BoolToString(b), value.FromGoString("!"))
+	var _sb0 value.StrBuilder
+	return _sb0.Reset().Lit("flag is ", 8).Bool(b).Lit("!", 1).Done()
 }

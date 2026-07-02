@@ -1,3 +1,4 @@
 func F(x float64) value.BStr {
-	return value.FromGoString("tab\tafter").ConcatN(value.NumberToString(x), value.FromGoString("and a ` and ${ literal"))
+	var _sb0 value.StrBuilder
+	return _sb0.Reset().Lit("tab\tafter", 9).Num(x).Lit("and a ` and ${ literal", 22).Done()
 }
