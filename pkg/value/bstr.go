@@ -14,6 +14,7 @@ package value
 
 import (
 	"math"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -588,6 +589,38 @@ func padUnits(pad []BStr) []uint16 {
 		return []uint16{0x20}
 	}
 	return pad[0].units()
+}
+
+// Repeat returns s concatenated count times, String.prototype.repeat. count is
+// coerced to an integer the way JavaScript does (a fraction truncates toward
+// zero, NaN becomes 0), and a count that is negative or not finite is a
+// RangeError in JavaScript, which bento surfaces as a panic because the compiled
+// program has no exception machinery yet (a later slice lowers throw). The type
+// checker and the lowerer only admit a non-negative integer literal count today,
+// so the panic is unreachable from lowered code and guards only a direct runtime
+// caller. A count of zero, or an empty receiver, yields the empty string, and a
+// count of one returns the receiver unchanged. The UTF-8 fast path is kept when
+// the receiver is on it, since repeating valid UTF-8 stays valid UTF-8.
+func (s BStr) Repeat(count float64) BStr {
+	n := toInteger(count)
+	if n < 0 || math.IsInf(n, 0) {
+		panic("String.prototype.repeat: count out of range")
+	}
+	c := int(n)
+	if c == 0 || s.lengthU16 == 0 {
+		return BStr{lengthU16: 0}
+	}
+	if c == 1 {
+		return s
+	}
+	if s.utf16 == nil {
+		return BStr{utf8: strings.Repeat(s.utf8, c), lengthU16: s.lengthU16 * c}
+	}
+	out := make([]uint16, 0, s.lengthU16*c)
+	for i := 0; i < c; i++ {
+		out = append(out, s.utf16...)
+	}
+	return BStr{utf16: out, lengthU16: len(out)}
 }
 
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both

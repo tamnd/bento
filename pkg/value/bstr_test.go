@@ -617,3 +617,44 @@ func TestSubstr(t *testing.T) {
 		})
 	}
 }
+
+// TestRepeat pins String.prototype.repeat: the string concatenated count times,
+// with a count coerced to an integer, zero and empty yielding the empty string,
+// and one returning the receiver. The astral case proves the code-unit view is
+// repeated whole, so a surrogate pair survives the copy.
+func TestRepeat(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		count float64
+		want  string
+	}{
+		{"twice", "ab", 2, "abab"},
+		{"thrice", "x", 3, "xxx"},
+		{"zero", "ab", 0, ""},
+		{"one", "ab", 1, "ab"},
+		{"emptyReceiver", "", 5, ""},
+		{"fractionTruncates", "ab", 2.9, "abab"},
+		{"nanIsZero", "ab", math.NaN(), ""},
+		{"astral", "\U0001F600", 2, "\U0001F600\U0001F600"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FromGoString(tc.in).Repeat(tc.count).ToGoString(); got != tc.want {
+				t.Errorf("Repeat(%q, %v) = %q, want %q", tc.in, tc.count, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRepeatNegativePanics pins that a negative count is a RangeError in
+// JavaScript, which bento surfaces as a panic since the compiled program has no
+// exception machinery yet.
+func TestRepeatNegativePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Repeat(-1) did not panic")
+		}
+	}()
+	FromGoString("ab").Repeat(-1)
+}
