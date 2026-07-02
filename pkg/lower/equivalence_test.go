@@ -1173,11 +1173,6 @@ func evalTS(t *testing.T, src, fn, ret string, args []any) string {
 // own go.sum for the runtime import, which a clean CI checkout does not have.
 func runGo(t *testing.T, goSrc string, imports []string, name, ret string, args []any) string {
 	t.Helper()
-	dir, err := os.MkdirTemp(repoRoot(t), "eqrun-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
 
 	callArgs := make([]string, len(args))
 	for i, a := range args {
@@ -1200,17 +1195,29 @@ func runGo(t *testing.T, goSrc string, imports []string, name, ret string, args 
 		"package main\n\n%s\n\n%s\nfunc main() {\n\t%s\n}\n",
 		imp.String(), goSrc, goPrint(ret, call),
 	)
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
-	cmd := exec.Command("go", "run", ".")
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- output ---\n%s", err, main, out)
-	}
-	return canonOutput(t, ret, strings.TrimSpace(string(out)))
+	// The subject is what this exact program prints, which is fixed by its bytes
+	// and the runtime it links, so the compile and run is cached on both and only
+	// pays off when one of them changed. canonOutput runs on the cached output
+	// too, which is cheap and keeps the spelling identical to the engine side.
+	raw := cachedGoRun(t, main, func() string {
+		dir, err := os.MkdirTemp(repoRoot(t), "eqrun-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("go", "run", ".")
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- output ---\n%s", err, main, out)
+		}
+		return strings.TrimSpace(string(out))
+	})
+	return canonOutput(t, ret, raw)
 }
 
 // engineArg converts a case argument to the value the engine wants. Numbers in

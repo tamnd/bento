@@ -3,6 +3,12 @@
 *.out
 .DS_Store
 
+# Scratch package dirs the AOT tests build in, under the module tree so they
+# link the value runtime offline. Removed on success, ignored so an interrupted
+# run never leaves a tracked file behind.
+/eqrun-*/
+/progrun-*/
+
 # Built docs site (tago output) and its cache
 /docs/public/
 /docs/public-pages/

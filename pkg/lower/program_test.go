@@ -171,21 +171,25 @@ func runProgramTS(t *testing.T, src string) string {
 func runProgramGo(t *testing.T, src string) string {
 	t.Helper()
 	source := renderProgram(t, src)
-	dir, err := os.MkdirTemp(repoRoot(t), "progrun-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(source), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("go", "run", ".")
-	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- stderr ---\n%s", err, source, stderr.String())
-	}
-	return stdout.String()
+	// What the program prints is fixed by its bytes and the runtime it links, so
+	// the compile and run is cached on both and only rebuilds when one changed.
+	return cachedGoRun(t, source, func() string {
+		dir, err := os.MkdirTemp(repoRoot(t), "progrun-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("go", "run", ".")
+		cmd.Dir = dir
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- stderr ---\n%s", err, source, stderr.String())
+		}
+		return stdout.String()
+	})
 }
