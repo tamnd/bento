@@ -263,6 +263,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_slice", file: "func_array_slice"},
 		// indexOf and includes lower to the value.Array search methods, each passing the target and a synthesized element-equality closure: Go == for a number (includes adding the NaN-matches-NaN case), value.BStr.Equal for a string.
 		{name: "array_indexof", file: "func_array_indexof"},
+		// join lowers to the value.Array Join method, passing the separator (the lowered string argument or the default comma when there is none) and a synthesized per-element ToString closure.
+		{name: "array_join", file: "func_array_join"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

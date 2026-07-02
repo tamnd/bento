@@ -208,6 +208,30 @@ func TestIncludes(t *testing.T) {
 	}
 }
 
+// TestJoin pins that join stringifies each element and interleaves the
+// separator, that an empty array joins to the empty string, and that a single
+// element carries no separator.
+func TestJoin(t *testing.T) {
+	num := func(x float64) BStr { return NumberToString(x) }
+	a := NewArray[float64](1, 2, 3)
+	if got := a.Join(FromGoString("-"), num).ToGoString(); got != "1-2-3" {
+		t.Errorf("Join(-) = %q, want \"1-2-3\"", got)
+	}
+	one := NewArray[float64](7)
+	if got := one.Join(FromGoString("-"), num).ToGoString(); got != "7" {
+		t.Errorf("Join on one element = %q, want \"7\"", got)
+	}
+	empty := NewArray[float64]()
+	if got := empty.Join(FromGoString("-"), num).ToGoString(); got != "" {
+		t.Errorf("Join on empty = %q, want \"\"", got)
+	}
+	id := func(x BStr) BStr { return x }
+	words := NewArray(FromGoString("a"), FromGoString("bb"))
+	if got := words.Join(FromGoString(", "), id).ToGoString(); got != "a, bb" {
+		t.Errorf("Join on strings = %q, want \"a, bb\"", got)
+	}
+}
+
 // TestNewArrayString pins the header at a non-numeric element type, the string[]
 // case the lowerer emits as *Array[BStr].
 func TestNewArrayString(t *testing.T) {
