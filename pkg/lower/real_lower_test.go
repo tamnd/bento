@@ -128,6 +128,7 @@ func TestRealPrimitivesRender(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, got, err := renderReal(t, tc.src)
 			if err != nil {
 				t.Fatalf("RenderType error: %v", err)
@@ -280,6 +281,7 @@ func TestRealUnlowerableHandsBack(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, _, err := renderReal(t, tc.src)
 			var nyl *NotYetLowerable
 			if !errors.As(err, &nyl) {

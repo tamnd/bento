@@ -74,6 +74,7 @@ func TestRenderProgramGoldens(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			checkGolden(t, tc.golden, renderProgram(t, readTS(t, tc.file)))
 		})
 	}
@@ -88,6 +89,7 @@ func TestRenderProgramGoldens(t *testing.T) {
 // which makes the fixed number a sound oracle. The program creates its temp tree
 // under the OS temp directory and removes it, so the test leaves nothing behind.
 func TestReadWriteProgramRuns(t *testing.T) {
+	skipIfShort(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go toolchain not found on PATH; the node:fs bridge test builds and runs generated Go")
 	}
@@ -101,6 +103,7 @@ func TestReadWriteProgramRuns(t *testing.T) {
 // divergence in what it writes to standard output. It is skipped when the Go
 // toolchain is not on PATH, because the subject side compiles and runs real Go.
 func TestProgramTSAndGoAgree(t *testing.T) {
+	skipIfShort(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go toolchain not found on PATH; program equivalence test needs it to run generated Go")
 	}
@@ -115,6 +118,7 @@ func TestProgramTSAndGoAgree(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			src := readTS(t, tc.file)
 			want := runProgramTS(t, src)
 			got := runProgramGo(t, src)

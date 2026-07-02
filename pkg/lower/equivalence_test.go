@@ -60,6 +60,7 @@ type equivCase struct {
 // fails on any divergence. It is skipped when the Go toolchain is not on PATH,
 // because the subject side compiles and runs real Go.
 func TestTSAndGeneratedGoAgree(t *testing.T) {
+	skipIfShort(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go toolchain not found on PATH; equivalence test needs it to run generated Go")
 	}
@@ -1165,6 +1166,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			src := readTS(t, tc.file)
 			goSrc, imports := lowerToGo(t, src)
 			goName, ok := exportedField(tc.fn)
