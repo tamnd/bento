@@ -79,6 +79,56 @@ func TestPushShared(t *testing.T) {
 	}
 }
 
+// TestMap pins that map applies the callback to each element in order and
+// returns a fresh array, leaving the receiver unchanged.
+func TestMap(t *testing.T) {
+	a := NewArray[float64](1, 2, 3)
+	b := a.Map(func(x float64) float64 { return x * 10 })
+	want := []float64{10, 20, 30}
+	got := b.Elems()
+	if len(got) != len(want) {
+		t.Fatalf("Map len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Map()[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+	if a.Elems()[0] != 1 {
+		t.Errorf("Map mutated the receiver: Elems()[0] = %v, want 1", a.Elems()[0])
+	}
+}
+
+// TestFilter pins that filter keeps the elements the predicate accepts, in
+// order, and returns a fresh array, leaving the receiver unchanged.
+func TestFilter(t *testing.T) {
+	a := NewArray[float64](1, 2, 3, 4)
+	b := a.Filter(func(x float64) bool { return x > 2 })
+	want := []float64{3, 4}
+	got := b.Elems()
+	if len(got) != len(want) {
+		t.Fatalf("Filter len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Filter()[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+	if a.Len() != 4 {
+		t.Errorf("Filter mutated the receiver: Len() = %v, want 4", a.Len())
+	}
+}
+
+// TestFilterNoneKept pins that a predicate that rejects everything yields a
+// length-zero array, not a nil header.
+func TestFilterNoneKept(t *testing.T) {
+	a := NewArray[float64](1, 2, 3)
+	b := a.Filter(func(x float64) bool { return x > 100 })
+	if got := b.Len(); got != 0 {
+		t.Fatalf("Filter len = %v, want 0", got)
+	}
+}
+
 // TestNewArrayString pins the header at a non-numeric element type, the string[]
 // case the lowerer emits as *Array[BStr].
 func TestNewArrayString(t *testing.T) {
