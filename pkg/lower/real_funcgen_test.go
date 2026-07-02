@@ -253,6 +253,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_forof", file: "func_array_forof"},
 		// the element type threads through the whole path: a string[] parameter is *value.Array[value.BStr], for...of binds each element as a value.BStr, and .length on that element is the string length.
 		{name: "array_strlen", file: "func_array_strlen"},
+		// push is a mutating array method called as a statement: it lowers to the value.Array Push method wrapped in an expression statement, with the variadic form passing several arguments in one call.
+		{name: "array_push", file: "func_array_push"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

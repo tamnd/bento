@@ -967,6 +967,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "total",
 			args: [][]any{{0}, {1}, {2}, {-3}, {0.5}},
 		},
+		{
+			// push, including the variadic form, then the array is iterated and its
+			// length read, so the mutation is observed through the engine rather than
+			// only through the returned length.
+			name: "arrayPush",
+			file: "eq_array_push",
+			fn:   "build",
+			args: [][]any{{0}, {1}, {10}, {-2}, {0.5}},
+		},
 	}
 
 	for _, tc := range cases {
