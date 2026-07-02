@@ -543,6 +543,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "String") {
 		return r.stringStaticCall(method, argNodes)
 	}
+	// toString and valueOf on a number or a boolean value are the first methods on
+	// a non-string receiver: they lower to the same coercion a String() call or a
+	// bare use would take, so they route here before the string-method path.
+	if r.isNumber(recvNode) || r.isBool(recvNode) {
+		return r.primitiveValueCall(recvNode, method, argNodes)
+	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
@@ -670,6 +676,28 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "FromCharCode"), Args: args}, nil
+}
+
+// primitiveValueCall lowers toString and valueOf on a number or boolean value.
+// Both take no arguments here: number.toString with a radix throws a RangeError
+// on a radix outside 2..36, which waits on the exception machinery, so a call
+// with any argument hands back. toString is the same coercion String(x) already
+// uses, a number through value.NumberToString and a boolean through
+// value.BoolToString, so it shares stringify to stay in step with it. valueOf
+// returns the primitive itself, so it lowers to the receiver expression
+// unchanged. Any other method on a primitive receiver is a later slice.
+func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 0 {
+		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " with arguments is a later slice"}
+	}
+	switch method {
+	case "toString":
+		return r.stringify(recvNode)
+	case "valueOf":
+		return r.lowerExpr(recvNode)
+	default:
+		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " is a later slice"}
+	}
 }
 
 // numberMethod maps a JavaScript Number static predicate to the value function
