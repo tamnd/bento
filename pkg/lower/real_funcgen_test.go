@@ -274,8 +274,9 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		{"truthyCond", "export function t(a: number): number { if (a) { return 1; } return 0; }"},
 		// a for-of over an iterable is a later slice.
 		{"forOf", "export function s(xs: number[]): number { let t = 0; for (const x of xs) { t = t + x; } return t; }"},
-		// prefix increment mutates its operand, a later slice.
-		{"prefixIncr", "export function p(a: number): number { let b = a; ++b; return b; }"},
+		// a prefix increment used as a value needs its pre-increment result, not just
+		// the mutation, so it hands back; the statement form (++b;) does lower.
+		{"prefixIncrValue", "export function p(a: number): number { let b = a; const c = ++b; return c; }"},
 		// a generic function needs monomorphization first.
 		{"generic", "export function id<T>(x: T): T { return x; }"},
 		// an optional parameter needs the optional tagged type.
