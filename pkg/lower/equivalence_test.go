@@ -452,6 +452,19 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {5}, {50}},
 		},
 		{
+			name: "jsonStringify",
+			// JSON.stringify over a nested record with a number, a string, a boolean,
+			// a string array, and a nested object, so the serializer's every arm is
+			// exercised against V8 through the engine: key order, number formatting,
+			// boolean spelling, string quoting, array brackets, and nested objects all
+			// have to match byte for byte. The cases vary i so the even/odd boolean,
+			// the divisions, and the string building all change across runs.
+			file: "eq_jsonStringify",
+			fn:   "js",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {7}, {42}, {123}},
+		},
+		{
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.

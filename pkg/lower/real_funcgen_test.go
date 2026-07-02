@@ -287,6 +287,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "regex_replace", file: "func_regex_replace"},
 		// a typed empty-array binding lowers to value.NewArray at the binding's element type (the checker types a bare [] as never[], so the element type comes from the annotation), an unbraced for body lowers as a wrapped block, and push and length lower to the value.Array methods.
 		{name: "pushloop", file: "func_pushloop"},
+		// JSON.stringify(x) is a static call on the global JSON namespace, so the receiver is not lowered to a value; it becomes value.JSONStringify with the argument boxed as any for the serializer's reflection walk.
+		{name: "json_stringify", file: "func_json_stringify"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

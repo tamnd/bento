@@ -944,6 +944,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "String") {
 		return r.stringStaticCall(method, argNodes)
 	}
+	// JSON.stringify(x) is a static call on the global JSON namespace, not a method
+	// on a value, so it lowers to the value JSON serializer before the
+	// receiver-value paths below. JSON.parse waits on the dynamic value box.
+	if r.isGlobalRef(recvNode, "JSON") {
+		return r.jsonCall(method, argNodes)
+	}
 	// A method on an array receiver lowers to a value.Array method. This routes
 	// before the primitive and string paths, which expect a number, boolean, or
 	// string receiver an array is not.
@@ -1095,6 +1101,28 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "FromCharCode"), Args: args}, nil
+}
+
+// jsonCall lowers a static call on the global JSON namespace. Only stringify is
+// covered here: it takes a single value and returns the exact text V8 produces,
+// which lowers to value.JSONStringify with the argument boxed as any so the
+// serializer's reflection walk can dispatch on its concrete type. A replacer or
+// a space argument (the second and third parameters) changes the output, so a
+// call that passes one hands back rather than ignoring it. JSON.parse produces a
+// dynamic any value, which waits on the value box, so it hands back here.
+func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "stringify" {
+		return nil, &NotYetLowerable{Reason: "JSON." + method + " is a later slice"}
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer or space argument is a later slice"}
+	}
+	arg, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
 }
 
 // primitiveValueCall lowers toString and valueOf on a number or boolean value.

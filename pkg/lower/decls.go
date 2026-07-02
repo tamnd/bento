@@ -243,9 +243,18 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property) (*ast
 		if err != nil {
 			return nil, err
 		}
+		// The field carries the original JavaScript property name in a json struct
+		// tag, so a reflection walk (JSON.stringify) recovers the exact key rather
+		// than guessing it back from the exported Go name, which capitalizes the
+		// first letter and so cannot tell "name" from "Name". The tag is the one
+		// place the source key survives onto the Go type.
 		fields.List = append(fields.List, &ast.Field{
 			Names: []*ast.Ident{ident(field)},
 			Type:  goType,
+			Tag: &ast.BasicLit{
+				Kind:  token.STRING,
+				Value: "`json:\"" + p.Name + "\"`",
+			},
 		})
 	}
 

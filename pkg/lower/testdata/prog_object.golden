@@ -5,8 +5,8 @@ import (
 )
 
 type ObjHeightWidth struct {
-	Width  float64
-	Height float64
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 func Box(w float64, h float64) float64 {

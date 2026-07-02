@@ -1,8 +1,8 @@
 type ObjLabelOrigin struct {
-	Origin *ObjXY
-	Label  value.BStr
+	Origin *ObjXY     `json:"origin"`
+	Label  value.BStr `json:"label"`
 }
 type ObjXY struct {
-	X float64
-	Y float64
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
