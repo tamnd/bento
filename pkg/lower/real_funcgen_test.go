@@ -192,6 +192,14 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "number_positive_infinity", file: "func_number_positive_infinity"},
 		{name: "number_negative_infinity", file: "func_number_negative_infinity"},
 		{name: "number_nan", file: "func_number_nan"},
+		// a no-substitution template literal is exactly a string of its cooked content, so it lowers to the same value.FromGoString a string literal would.
+		{name: "template_nosub", file: "func_template_nosub"},
+		// a template with substitutions joins the head, each coerced expression, and the following literal with one ConcatN; the number goes through NumberToString and the string passes through.
+		{name: "template_basic", file: "func_template_basic"},
+		// a boolean substitution coerces through value.BoolToString, the same ToString String(b) uses.
+		{name: "template_bool", file: "func_template_bool"},
+		// the cooked parts resolve escapes the same as a string literal, including a tab, an escaped backtick, and an escaped dollar-brace that is a literal rather than a substitution.
+		{name: "template_escape", file: "func_template_escape"},
 		// the bare global isNaN, not the Number static one, so the callee is a plain identifier. On a number argument it coerces to nothing, so it lowers to the same value.NumberIsNaN predicate.
 		{name: "global_isnan", file: "func_global_isnan"},
 		// the bare global isFinite lowers to value.NumberIsFinite the same way.

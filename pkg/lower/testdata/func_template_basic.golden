@@ -1,0 +1,3 @@
+func F(x float64, s value.BStr) value.BStr {
+	return value.FromGoString("a").ConcatN(value.NumberToString(x), value.FromGoString("b"), s, value.FromGoString("c"))
+}

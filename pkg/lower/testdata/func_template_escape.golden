@@ -1,0 +1,3 @@
+func F(x float64) value.BStr {
+	return value.FromGoString("tab\tafter").ConcatN(value.NumberToString(x), value.FromGoString("and a ` and ${ literal"))
+}
