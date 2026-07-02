@@ -84,9 +84,85 @@ func encodeJSON(b *strings.Builder, v any) {
 			encodeJSON(b, e)
 		}
 		b.WriteByte(']')
+	case Value:
+		encodeBoxedJSON(b, x)
 	default:
 		encodeJSONObject(b, reflect.ValueOf(v))
 	}
+}
+
+// encodeBoxedJSON writes a boxed dynamic Value as JSON text, the JSON.stringify
+// path for a value whose shape is only known at runtime, which for the AOT path is
+// a JSON.parse result flowing back through a stringify. It dispatches on the
+// runtime kind the way the static walk dispatches on the Go type, and it follows
+// the specification's SerializeJSONProperty: a string, number, boolean, and null
+// render as themselves, an array folds a JSON-undefined element to null, and an
+// object serializes its own properties in insertion order with a JSON-undefined
+// value omitting the key. A number that is not finite renders as null, matching the
+// static number arm.
+func encodeBoxedJSON(b *strings.Builder, v Value) {
+	switch v.kind {
+	case KindNull:
+		b.WriteString("null")
+	case KindBool:
+		if v.AsBool() {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case KindNumber:
+		f := v.AsNumber()
+		if f != f || f > maxFinite || f < -maxFinite {
+			b.WriteString("null")
+			return
+		}
+		b.WriteString(NumberToString(f).ToGoString())
+	case KindString:
+		encodeJSONString(b, v.str())
+	case KindArray:
+		o := v.object()
+		b.WriteByte('[')
+		for i, e := range o.elems {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			if jsonUndefinedValue(e) {
+				b.WriteString("null")
+				continue
+			}
+			encodeBoxedJSON(b, e)
+		}
+		b.WriteByte(']')
+	case KindObject:
+		o := v.object()
+		b.WriteByte('{')
+		first := true
+		for i := range o.keys {
+			val := o.vals[i]
+			if jsonUndefinedValue(val) {
+				continue
+			}
+			if !first {
+				b.WriteByte(',')
+			}
+			first = false
+			encodeJSONString(b, o.keys[i])
+			b.WriteByte(':')
+			encodeBoxedJSON(b, val)
+		}
+		b.WriteByte('}')
+	default:
+		// undefined, symbol, and function have no JSON form; a top-level such value
+		// stringifies to undefined, which the typed call site models as the string
+		// being absent, so nothing is written here.
+	}
+}
+
+// jsonUndefinedValue reports whether a boxed value serializes as JSON-undefined,
+// the values SerializeJSONProperty drops: undefined itself, a function, and a
+// symbol. An array turns these into null and an object omits the property.
+func jsonUndefinedValue(v Value) bool {
+	return v.kind == KindUndefined || v.kind == KindFunc || v.kind == KindSymbol
 }
 
 // encodeJSONObject writes a generated object struct as a JSON object. The keys
