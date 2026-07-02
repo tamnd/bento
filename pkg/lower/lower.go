@@ -59,11 +59,17 @@ type Renderer struct {
 	prog    *frontend.Program
 	decls   *declSet
 	imports map[string]bool
+	// nodeImports maps a local binding name introduced by a node: import to the
+	// builtin it names, so a call to that binding lowers to the value helper the
+	// builtin maps to rather than a user function. It is populated once from the
+	// entry module's import declarations before any body is lowered, since a
+	// function or a top-level statement may call an imported builtin.
+	nodeImports map[string]nodeBuiltin
 }
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}}
 }
 
 // requireImport records that the Go the renderer has emitted refers to a

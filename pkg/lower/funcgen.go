@@ -802,6 +802,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if kids[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "call to a non-identifier callee is a later slice"}
 	}
+	// A call to a name bound by a node: import is a call to a host builtin, not a
+	// user function, so it routes to the value helper the builtin maps to before the
+	// user-function path, which would reject the alias symbol the binding carries.
+	if b, ok := r.nodeImports[r.prog.Text(kids[0])]; ok {
+		return r.nodeBuiltinCall(b, kids[1:])
+	}
 	// A bare call to an ambient global function (isNaN, isFinite) is not a call to
 	// a user binding, so it routes to the global-function lowering before the
 	// user-function path, which would otherwise reject it.
@@ -1621,6 +1627,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		// concat takes any number of string arguments, so it is variadic over a
 		// single repeating string kind and has no upper bound.
 		return "ConcatN", []argKind{argString}, 0, true, true
+	case "repeat":
+		// repeat takes exactly one number, the count. value.Repeat coerces it the
+		// way String.prototype.repeat does and treats a negative or non-finite count
+		// as the RangeError it is, so a bad count is caught at runtime rather than
+		// miscompiled.
+		return "Repeat", []argKind{argNumber}, 1, false, true
 	case "toUpperCase":
 		return "ToUpperCase", nil, 0, false, true
 	case "toLowerCase":

@@ -279,6 +279,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "opt_pop_drain", file: "func_opt_pop_drain"},
 		// a binding of an optional (T | undefined) is a value.Opt[T] variable, so this pins the union-to-Opt type lowering in the const declaration alongside the !== undefined presence test.
 		{name: "opt_pop_has", file: "func_opt_pop_has"},
+		// s.repeat(n) lowers to the value.BStr Repeat method taking the count as a number, the count coerced and range-checked at runtime by the method the way String.prototype.repeat is.
+		{name: "repeat", file: "func_repeat"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

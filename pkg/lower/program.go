@@ -39,6 +39,14 @@ type Program struct {
 // slice; today a program whose functions are self-contained (the common shape of
 // the compute workloads, which are a single top-level body) compiles.
 func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
+	// Record the module's node: import bindings before lowering any body, since a
+	// function or a top-level statement may call an imported builtin and the call
+	// lowering needs the binding already in hand. An import bento does not lower
+	// hands back here, routing the whole unit to the engine.
+	if err := r.collectNodeImports(entry); err != nil {
+		return Program{}, err
+	}
+
 	var funcs []ast.Decl
 	var mainBody []frontend.Node
 	for _, stmt := range r.prog.Children(entry) {
@@ -54,9 +62,13 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 			continue
 		case frontend.NodeUnknown:
 			// The parser ends a source file with an empty end-of-file token bento
-			// does not name; it is skipped. A non-empty unnamed node is a construct
-			// the frontend did not classify, so it hands back rather than vanish.
-			if strings.TrimSpace(r.prog.Text(stmt)) != "" {
+			// does not name; it is skipped. An import declaration is an unnamed node
+			// too, already validated and recorded by collectNodeImports above, and it
+			// carries no runtime code, so it is skipped here. A non-empty unnamed node
+			// that is neither is a construct the frontend did not classify, so it
+			// hands back rather than vanish.
+			text := strings.TrimSpace(r.prog.Text(stmt))
+			if text != "" && !strings.HasPrefix(text, "import") {
 				return Program{}, &NotYetLowerable{Reason: "unrecognized top-level construct is a later slice"}
 			}
 		default:

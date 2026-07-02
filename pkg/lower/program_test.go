@@ -70,11 +70,30 @@ func TestRenderProgramGoldens(t *testing.T) {
 		{"funcArea", "prog_func_area", "prog_func_area.golden"},
 		{"stdoutWrite", "prog_stdout_write", "prog_stdout_write.golden"},
 		{"object", "prog_object", "prog_object.golden"},
+		{"readwrite", "prog_readwrite", "prog_readwrite.golden"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			checkGolden(t, tc.golden, renderProgram(t, readTS(t, tc.file)))
 		})
+	}
+}
+
+// TestReadWriteProgramRuns proves the node:fs bridge end to end: the readwrite
+// benchmark writes 200 files of 512 bytes over 3 passes, reads them all back
+// summing their lengths, and prints the total, so the compiled program must
+// print 307200 (200 * 512 * 3). The engine cannot import node:fs, so this
+// workload is proven by building and running the generated Go rather than by the
+// TS-vs-Go equivalence harness; the output is fully determined by the byte count,
+// which makes the fixed number a sound oracle. The program creates its temp tree
+// under the OS temp directory and removes it, so the test leaves nothing behind.
+func TestReadWriteProgramRuns(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the node:fs bridge test builds and runs generated Go")
+	}
+	got := runProgramGo(t, readTS(t, "prog_readwrite"))
+	if got != "307200\n" {
+		t.Fatalf("readwrite printed %q, want %q", got, "307200\n")
 	}
 }
 

@@ -407,6 +407,18 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"a", "b", "c"}, {"", "x", ""}, {"π", "😀", "z"}},
 		},
 		{
+			name: "repeat",
+			// s.repeat(n) concatenates the string n times; the cases cover zero (the
+			// empty string), one (the receiver), several, an empty receiver, and an
+			// astral character so the code-unit copy is exercised. A fractional count
+			// truncates toward zero, which the last case pins, matching
+			// String.prototype.repeat and value.BStr.Repeat.
+			file: "eq_repeat",
+			fn:   "rep",
+			ret:  "string",
+			args: [][]any{{"ab", 0}, {"ab", 1}, {"x", 5}, {"", 9}, {"😀", 3}, {"ab", 2.9}},
+		},
+		{
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.

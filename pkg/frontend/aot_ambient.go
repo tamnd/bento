@@ -16,11 +16,16 @@ package frontend
 // user binding, the same test that separates the global Math from a local shadow.
 const ambientPath = "/__bento_ambient__.d.ts"
 
-// ambientSource declares the Node globals the AOT compiler can lower. process.env
-// is a string-or-undefined map, which lowers to the optional machinery; the
-// streams' write takes a string and returns a boolean, matching Node. The surface
-// is deliberately small: it grows one entry at a time as the lowerer learns to
-// emit each one, so a declared global is always a lowerable one.
+// ambientSource declares the Node globals and node: modules the AOT compiler can
+// lower. process.env is a string-or-undefined map, which lowers to the optional
+// machinery; the streams' write takes a string and returns a boolean, matching
+// Node. The node:fs, node:os, and node:path module declarations give the file
+// read and write surface a syscall workload uses without a caller installing
+// @types/node, each function typed exactly as bento lowers it (readFileSync only
+// in its encoding-and-string form, rmSync with the recursive and force options a
+// benchmark passes). The surface is deliberately small: it grows one entry at a
+// time as the lowerer learns to emit each one, so a declared name is always a
+// lowerable one.
 const ambientSource = `interface BentoProcessEnv { [key: string]: string | undefined; }
 interface BentoWriteStream { write(chunk: string): boolean; }
 interface BentoProcess {
@@ -30,6 +35,18 @@ interface BentoProcess {
 	stderr: BentoWriteStream;
 }
 declare var process: BentoProcess;
+declare module "node:fs" {
+	export function mkdtempSync(prefix: string): string;
+	export function writeFileSync(path: string, data: string): void;
+	export function readFileSync(path: string, encoding: "utf8"): string;
+	export function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
+}
+declare module "node:os" {
+	export function tmpdir(): string;
+}
+declare module "node:path" {
+	export function join(...parts: string[]): string;
+}
 `
 
 // ambientOverlay serves the synthetic ambient library on top of a base
