@@ -71,6 +71,13 @@ type Renderer struct {
 	// body, and it is saved and restored around each body so a nested function does
 	// not inherit the outer return type.
 	retType frontend.Type
+	// int32Locals is the set of local names in the body currently being lowered that
+	// have been proven to hold only 32-bit integers and are therefore given a Go
+	// int32 type rather than a float64. It is computed once per body by int32LocalsOf
+	// and, like retType, saved and restored around each body so one function's
+	// specialized locals do not leak into another. A nil map (the default) specializes
+	// nothing, so a body with no eligible local lowers exactly as before.
+	int32Locals map[string]bool
 }
 
 // NewRenderer builds a renderer over a checked program.

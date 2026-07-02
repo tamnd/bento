@@ -58,6 +58,43 @@ func TestClz32(t *testing.T) {
 	}
 }
 
+func TestClz32U(t *testing.T) {
+	// Clz32U is the integer core of Clz32, so it counts the leading zeros of a value
+	// already reduced to uint32 directly, with no ToUint32 coercion of its own.
+	cases := []struct {
+		in   uint32
+		want int32
+	}{
+		{0, 32},
+		{1, 31},
+		{2, 30},
+		{0x80000000, 0},
+		{0xFFFFFFFF, 0},
+		{0x00010000, 15},
+	}
+	for _, c := range cases {
+		if got := Clz32U(c.in); got != c.want {
+			t.Errorf("Clz32U(%#x) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+func TestClz32UMatchesClz32(t *testing.T) {
+	// The lowerer emits Clz32U(ToUint32(x)) where Clz32(x) would run, so the two must
+	// agree for every input, including the ones ToUint32 folds (a fraction, a
+	// negative, NaN, and infinity). This is the identity that makes the int32
+	// specialization bit-exact with the float64 lowering.
+	inputs := []float64{
+		0, 1, 2, 255, 0x80000000, 0xFFFFFFFF, -1, 3.9, 1e10,
+		math.NaN(), math.Inf(1), math.Inf(-1), math.Copysign(0, -1),
+	}
+	for _, x := range inputs {
+		if got, want := Clz32U(ToUint32(x)), int32(Clz32(x)); got != want {
+			t.Errorf("Clz32U(ToUint32(%g)) = %d, want Clz32(%g) = %d", x, got, x, want)
+		}
+	}
+}
+
 func TestImul(t *testing.T) {
 	cases := []struct {
 		a, b, want float64
