@@ -51,3 +51,33 @@ func (a *Array[T]) Push(xs ...T) float64 {
 	a.elems = append(a.elems, xs...)
 	return float64(len(a.elems))
 }
+
+// Map returns a new array holding f applied to each element in order, the
+// lowering of Array.prototype.map. This is the same-element-type form, where the
+// callback returns the element type; a map that changes the element type needs a
+// free generic function, a later slice, because a Go method cannot introduce a
+// new type parameter for the result. The callback here takes only the element,
+// which is the common shape; the index and array parameters JavaScript also
+// passes are a later slice. The result is a fresh array, so the receiver is
+// unchanged.
+func (a *Array[T]) Map(f func(T) T) *Array[T] {
+	out := make([]T, len(a.elems))
+	for i, x := range a.elems {
+		out[i] = f(x)
+	}
+	return &Array[T]{elems: out}
+}
+
+// Filter returns a new array of the elements for which f returns true, in order,
+// the lowering of Array.prototype.filter. As with Map, the callback takes only
+// the element for now. The result is a fresh array, so the receiver is
+// unchanged.
+func (a *Array[T]) Filter(f func(T) bool) *Array[T] {
+	out := make([]T, 0, len(a.elems))
+	for _, x := range a.elems {
+		if f(x) {
+			out = append(out, x)
+		}
+	}
+	return &Array[T]{elems: out}
+}
