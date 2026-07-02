@@ -2,6 +2,7 @@ package value
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +96,67 @@ func TestConcatMixedBacking(t *testing.T) {
 	}
 	if got.utf16 == nil {
 		t.Error("a surrogate-backed side should force the code-unit result")
+	}
+}
+
+// TestConcatRopeAccumulation is the reason the rope exists: a string built by
+// repeatedly concatenating onto a growing result must read back correct and must
+// not pay the O(n squared) copy a fold of eager Concat would. Each step here
+// crosses the eager threshold, so every Concat after the first builds a rope
+// node, and the final read flattens once.
+func TestConcatRopeAccumulation(t *testing.T) {
+	piece := FromGoString("0123456789abcdef") // 16 units, so four pieces cross 64
+	var want string
+	got := FromGoString("")
+	for i := 0; i < 100; i++ {
+		got = Concat(got, piece)
+		want += "0123456789abcdef"
+	}
+	if int(got.Length()) != len(want) {
+		t.Errorf("rope Length = %v, want %d", got.Length(), len(want))
+	}
+	if got.ToGoString() != want {
+		t.Errorf("rope ToGoString mismatch: got %d bytes, want %d", len(got.ToGoString()), len(want))
+	}
+	// A second read hits the cached flat, so it must still be identical.
+	if got.ToGoString() != want {
+		t.Error("second read of a flattened rope differs from the first")
+	}
+}
+
+// TestConcatRopeLengthBeforeFlatten checks that .length on an unflattened rope is
+// correct without forcing materialization, since the rope keeps the total code
+// unit count on the node.
+func TestConcatRopeLengthBeforeFlatten(t *testing.T) {
+	long := FromGoString(strings.Repeat("x", 40))
+	r := Concat(long, long) // 80 units, over the threshold, so a rope
+	if r.rope == nil {
+		t.Fatal("a large concat should build a rope node")
+	}
+	if r.rope.flat != nil {
+		t.Error("Length must not flatten the rope")
+	}
+	if r.Length() != 80 {
+		t.Errorf("rope Length = %v, want 80", r.Length())
+	}
+	if r.rope.flat != nil {
+		t.Error("reading Length flattened the rope")
+	}
+}
+
+// TestConcatRopeMixedBacking checks a rope whose leaves mix a UTF-8 leaf and a
+// surrogate-backed leaf flattens to the code-unit view and preserves the lone
+// surrogate, the same guarantee eager Concat gives.
+func TestConcatRopeMixedBacking(t *testing.T) {
+	filler := FromGoString(strings.Repeat("y", 50))
+	surrogate := FromUTF16([]uint16{0xD83D})
+	got := Concat(Concat(filler, surrogate), filler) // 101 units, a rope with a surrogate leaf
+	if int(got.Length()) != 101 {
+		t.Errorf("mixed rope Length = %v, want 101", got.Length())
+	}
+	units := got.units()
+	if units[50] != 0xD83D {
+		t.Errorf("lone surrogate at index 50 = %#x, want 0xD83D", units[50])
 	}
 }
 

@@ -29,9 +29,96 @@ import (
 // A BStr is immutable, like a JavaScript string, so it is passed and shared by
 // value with no defensive copy and no locking.
 type BStr struct {
-	utf8      string   // valid-UTF-8 fast path; used when utf16 is nil
-	utf16     []uint16 // populated only when utf8 cannot represent the value
-	lengthU16 int      // length in UTF-16 code units (String.prototype.length)
+	utf8      string    // valid-UTF-8 fast path; used when utf16 is nil and rope is nil
+	utf16     []uint16  // populated only when utf8 cannot represent the value
+	lengthU16 int       // length in UTF-16 code units (String.prototype.length)
+	rope      *ropeNode // set for a lazy concatenation; utf8 and utf16 are empty until flattened
+}
+
+// ropeNode is a deferred concatenation of two strings. Concat of a growing string
+// builds one of these in O(1) instead of copying, so a string built up over a
+// loop (s += ...) or a join is linear in its final length rather than quadratic.
+// The content is materialized on first demand and cached on the node, which every
+// copy of the BStr shares because it holds the same pointer, so a rope flattens at
+// most once however many times it is read. bento's compiled programs are
+// single-threaded today, so the cache needs no lock; a concurrent runtime would
+// guard flat.
+type ropeNode struct {
+	left, right BStr
+	flat        *BStr // cached materialized form, nil until first resolve
+}
+
+// concatFlatMax is the largest result Concat copies eagerly. Below it a copy is
+// cheaper than a rope node and keeps the common small concatenation (a template,
+// a coerced operand) on a plain backing so its next read needs no flatten. At or
+// above it, or when either side is already a rope, Concat defers so an
+// accumulation loop stays linear.
+const concatFlatMax = 64
+
+// flat returns an equivalent string with no pending rope, materializing and
+// caching the concatenation the first time it is needed. A string that is not a
+// rope is returned unchanged, the single cheap branch every field-reading method
+// takes on the common path. Length does not call this, so .length on a rope stays
+// O(1).
+func (s BStr) flat() BStr {
+	if s.rope == nil {
+		return s
+	}
+	if s.rope.flat != nil {
+		return *s.rope.flat
+	}
+	leaves := appendLeaves(make([]BStr, 0, 16), s)
+	utf8Only := true
+	total := 0
+	for i := range leaves {
+		if leaves[i].utf16 != nil {
+			utf8Only = false
+		}
+		total += leaves[i].lengthU16
+	}
+	var out BStr
+	if utf8Only {
+		var b strings.Builder
+		b.Grow(total)
+		for i := range leaves {
+			b.WriteString(leaves[i].utf8)
+		}
+		out = BStr{utf8: b.String(), lengthU16: total}
+	} else {
+		units := make([]uint16, 0, total)
+		for i := range leaves {
+			units = leaves[i].appendUnits(units)
+		}
+		out = BStr{utf16: units, lengthU16: len(units)}
+	}
+	s.rope.flat = &out
+	return out
+}
+
+// appendLeaves appends the non-empty leaf strings of a rope to out in left-to-right
+// order, walking the tree iteratively so a deep left-leaning chain (which is what
+// an accumulation loop builds) cannot overflow the goroutine stack. A subtree that
+// is already flattened is taken as a single leaf from its cache rather than
+// re-descended.
+func appendLeaves(out []BStr, s BStr) []BStr {
+	var stack []BStr
+	for {
+		for s.rope != nil && s.rope.flat == nil {
+			stack = append(stack, s.rope.right)
+			s = s.rope.left
+		}
+		if s.rope != nil {
+			s = *s.rope.flat
+		}
+		if s.lengthU16 > 0 {
+			out = append(out, s)
+		}
+		if len(stack) == 0 {
+			return out
+		}
+		s = stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+	}
 }
 
 // FromGoString builds a BStr from a Go string. A Go string is UTF-8, which is
@@ -187,6 +274,21 @@ func (s BStr) Includes(search BStr, position ...float64) bool {
 // so the replacement is inserted there. The replacement string carries the
 // ECMAScript substitution patterns: see appendSubstitution.
 func (s BStr) Replace(search, replacement BStr) BStr {
+	// Fast path: receiver, search, and replacement are all valid UTF-8, the search
+	// is non-empty, and the replacement carries no substitution pattern ($& and its
+	// kin). UTF-8 is self-synchronizing, so a byte search finds the same first match
+	// a code-unit search would, and with no $ pattern the replacement is a literal
+	// splice, which strings.Replace with a count of one does directly on bytes and
+	// keeps the result on the UTF-8 fast path. This skips materializing the whole
+	// receiver into a code-unit slice, the cost that dominated the strings workload.
+	if sf, ff := s.flat(), search.flat(); sf.utf16 == nil && ff.utf16 == nil && ff.lengthU16 > 0 {
+		if rf := replacement.flat(); rf.utf16 == nil && !strings.ContainsRune(rf.utf8, '$') {
+			if !strings.Contains(sf.utf8, ff.utf8) {
+				return s
+			}
+			return FromGoString(strings.Replace(sf.utf8, ff.utf8, rf.utf8, 1))
+		}
+	}
 	hay, needle := s.units(), search.units()
 	pos := indexOfUnits(hay, needle, 0)
 	if pos < 0 {
@@ -207,6 +309,19 @@ func (s BStr) Replace(search, replacement BStr) BStr {
 // "abc".replaceAll("", "-") to "-a-b-c-". When search does not occur the receiver
 // is returned unchanged.
 func (s BStr) ReplaceAll(search, replacement BStr) BStr {
+	// Fast path, the same conditions Replace takes: all three strings valid UTF-8, a
+	// non-empty search, and a replacement with no substitution pattern. Under those
+	// strings.ReplaceAll on bytes produces the exact code units the loop below would,
+	// without materializing the receiver into a code-unit slice. The empty-search
+	// weave and the $ patterns still fall through to the code-unit path.
+	if sf, ff := s.flat(), search.flat(); sf.utf16 == nil && ff.utf16 == nil && ff.lengthU16 > 0 {
+		if rf := replacement.flat(); rf.utf16 == nil && !strings.ContainsRune(rf.utf8, '$') {
+			if !strings.Contains(sf.utf8, ff.utf8) {
+				return s
+			}
+			return FromGoString(strings.ReplaceAll(sf.utf8, ff.utf8, rf.utf8))
+		}
+	}
 	hay, needle, repl := s.units(), search.units(), replacement.units()
 	out := make([]uint16, 0, len(hay))
 	i := 0
@@ -251,17 +366,33 @@ func (s BStr) ReplaceAll(search, replacement BStr) BStr {
 // empty string split by an empty separator is the empty array, the two edges the
 // specification calls out.
 func (s BStr) Split(sep BStr) *Array[BStr] {
+	s, sep = s.flat(), sep.flat()
 	// Fast path: the receiver and the separator are both valid UTF-8 and the
 	// separator is non-empty. UTF-8 is self-synchronizing, so a byte-level split
 	// lands on exactly the boundaries a code-unit split would and every piece is
 	// itself valid UTF-8, which keeps each piece on the UTF-8 fast path.
 	if s.utf16 == nil && sep.utf16 == nil && sep.lengthU16 > 0 {
-		pieces := strings.Split(s.utf8, sep.utf8)
-		out := make([]BStr, len(pieces))
-		for i, p := range pieces {
-			out[i] = FromGoString(p)
+		hay, sp := s.utf8, sep.utf8
+		// Size the result exactly, then cut the pieces as substrings of hay, which
+		// share its bytes with no copy. Building the []BStr directly avoids the
+		// intermediate []string strings.Split would allocate and the second copy
+		// NewArray would make, the two allocations that dominated the split cost.
+		out := make([]BStr, 0, strings.Count(hay, sp)+1)
+		// A pure-ASCII receiver (every byte is one code unit) lets each piece take its
+		// byte length as its code-unit length with no rescan, the common case here.
+		ascii := s.lengthU16 == len(hay)
+		start := 0
+		for {
+			idx := strings.Index(hay[start:], sp)
+			if idx < 0 {
+				break
+			}
+			piece := hay[start : start+idx]
+			out = append(out, asciiOrCounted(piece, ascii))
+			start += idx + len(sp)
 		}
-		return NewArray(out...)
+		out = append(out, asciiOrCounted(hay[start:], ascii))
+		return &Array[BStr]{elems: out}
 	}
 	su := s.units()
 	if sep.lengthU16 == 0 {
@@ -272,7 +403,7 @@ func (s BStr) Split(sep BStr) *Array[BStr] {
 		for i, u := range su {
 			out[i] = FromUTF16([]uint16{u})
 		}
-		return NewArray(out...)
+		return &Array[BStr]{elems: out}
 	}
 	pu := sep.units()
 	var out []BStr
@@ -287,7 +418,18 @@ func (s BStr) Split(sep BStr) *Array[BStr] {
 		}
 	}
 	out = append(out, FromUTF16(su[start:]))
-	return NewArray(out...)
+	return &Array[BStr]{elems: out}
+}
+
+// asciiOrCounted wraps a UTF-8 substring as a BStr on the fast path. When the
+// caller already knows the whole source is ASCII, the code-unit length is the byte
+// length and no rescan is needed; otherwise it counts the units. This is the split
+// hot path's shortcut past a per-piece countUTF16Units walk.
+func asciiOrCounted(piece string, ascii bool) BStr {
+	if ascii {
+		return BStr{utf8: piece, lengthU16: len(piece)}
+	}
+	return BStr{utf8: piece, lengthU16: countUTF16Units(piece)}
 }
 
 // indexOfUnits returns the first index at or after start where needle occurs in
@@ -662,6 +804,7 @@ func (s BStr) Repeat(count float64) BStr {
 	if c == 1 {
 		return s
 	}
+	s = s.flat()
 	if s.utf16 == nil {
 		return BStr{utf8: strings.Repeat(s.utf8, c), lengthU16: s.lengthU16 * c}
 	}
@@ -680,13 +823,28 @@ func (s BStr) Repeat(count float64) BStr {
 // struct, and Go string concat is never used as the lowering, because that would
 // be UTF-8 semantics on a UTF-16 string (05_type_lowering section 5).
 func Concat(a, b BStr) BStr {
-	if a.utf16 == nil && b.utf16 == nil {
-		return BStr{utf8: a.utf8 + b.utf8, lengthU16: a.lengthU16 + b.lengthU16}
+	// Concatenating onto the empty string is the first step of every accumulation
+	// loop; return the other side untouched so it neither copies nor ropes.
+	if a.lengthU16 == 0 {
+		return b
 	}
-	units := make([]uint16, 0, a.lengthU16+b.lengthU16)
-	units = a.appendUnits(units)
-	units = b.appendUnits(units)
-	return BStr{utf16: units, lengthU16: len(units)}
+	if b.lengthU16 == 0 {
+		return a
+	}
+	// A small result of two plain strings copies eagerly: the copy is cheap and the
+	// result stays on a direct backing, so its next read needs no flatten. Anything
+	// larger, or a side that is already a rope, defers into a rope node so a chain of
+	// concatenations is linear in the final length instead of quadratic.
+	if a.rope == nil && b.rope == nil && a.lengthU16+b.lengthU16 <= concatFlatMax {
+		if a.utf16 == nil && b.utf16 == nil {
+			return BStr{utf8: a.utf8 + b.utf8, lengthU16: a.lengthU16 + b.lengthU16}
+		}
+		units := make([]uint16, 0, a.lengthU16+b.lengthU16)
+		units = a.appendUnits(units)
+		units = b.appendUnits(units)
+		return BStr{utf16: units, lengthU16: len(units)}
+	}
+	return BStr{rope: &ropeNode{left: a, right: b}, lengthU16: a.lengthU16 + b.lengthU16}
 }
 
 // ConcatN returns the receiver followed by every argument in order, the lowering
@@ -742,6 +900,7 @@ func (a BStr) Equal(b BStr) bool {
 	if a.lengthU16 != b.lengthU16 {
 		return false
 	}
+	a, b = a.flat(), b.flat()
 	if a.utf16 == nil && b.utf16 == nil {
 		return a.utf8 == b.utf8
 	}
@@ -761,6 +920,7 @@ func (a BStr) Equal(b BStr) bool {
 // becomes the U+FFFD replacement, the same lossy mapping the platform makes when
 // such a string is written to a byte sink.
 func (s BStr) ToGoString() string {
+	s = s.flat()
 	if s.utf16 == nil {
 		return s.utf8
 	}
@@ -772,6 +932,7 @@ func (s BStr) ToGoString() string {
 // because a BStr is passed by value; a caller that needs the units repeatedly
 // holds them itself.
 func (s BStr) units() []uint16 {
+	s = s.flat()
 	if s.utf16 != nil {
 		return s.utf16
 	}
