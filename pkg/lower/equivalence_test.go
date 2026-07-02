@@ -108,6 +108,35 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {4}, {10}},
 		},
 		{
+			// i++ in the post clause plus +=, -=, and *= as statements.
+			name: "compoundArith",
+			file: "eq_compound_arith",
+			fn:   "accumulate",
+			args: [][]any{{0}, {1}, {5}, {10}},
+		},
+		{
+			// += on strings must concatenate as UTF-16, matched against the engine.
+			name: "compoundString",
+			file: "eq_compound_string",
+			fn:   "join",
+			ret:  "string",
+			args: [][]any{{"foo", "bar"}, {"", "x"}, {"a", ""}},
+		},
+		{
+			// %= is fmod, keeping the sign of the dividend, over positive, negative, and fractional operands.
+			name: "compoundMod",
+			file: "eq_compound_mod",
+			fn:   "wrap",
+			args: [][]any{{7, 3}, {-7, 3}, {5.5, 2}},
+		},
+		{
+			// ++ then -- twice nets a decrement, checked over a range.
+			name: "incDec",
+			file: "eq_incdec",
+			fn:   "step",
+			args: [][]any{{0}, {5}, {-3}},
+		},
+		{
 			name: "stringLength",
 			// The literal holds an astral character (one rune, two UTF-16 code
 			// units). .length must report code units, so the whole string is

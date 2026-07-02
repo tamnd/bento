@@ -240,26 +240,84 @@ func collectVarDecls(prog *frontend.Program, n frontend.Node, out *[]frontend.No
 	}
 }
 
-// lowerExprStatement lowers an expression used as a statement. The only form
-// covered is an assignment to a local, which the checker exposes as a binary
-// expression with an "=" operator; a call or other expression statement is a
-// later slice.
+// lowerExprStatement lowers an expression used as a statement. The covered
+// forms all update a local: a plain or compound assignment, which the checker
+// exposes as a binary expression, and a prefix or postfix ++/--; a call or
+// other expression statement is a later slice.
 func (r *Renderer) lowerExprStatement(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
-	if len(kids) != 1 || kids[0].Kind() != frontend.NodeBinaryExpression {
-		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment is a later slice"}
+	if len(kids) != 1 {
+		return nil, &NotYetLowerable{Reason: "expression statement did not expose a single expression"}
 	}
-	return r.lowerAssign(kids[0])
+	return r.lowerUpdate(kids[0])
 }
 
-// lowerAssign lowers a binary "=" expression to a Go assignment statement. It is
-// shared by an assignment used as a statement and a for-loop's post clause. The
-// target must be a local identifier; assigning to a property or an element is a
-// later slice.
+// lowerUpdate lowers a statement-position expression that mutates a local: a
+// plain assignment (=), a compound assignment (+=, -=, and the rest), or a
+// prefix/postfix increment or decrement. It is shared by an expression
+// statement and a for-loop's post clause, both of which discard the value, so
+// the prefix and postfix forms of ++/-- lower the same way.
+func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
+	switch n.Kind() {
+	case frontend.NodeBinaryExpression:
+		return r.lowerAssign(n)
+	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
+		return r.lowerIncDec(n)
+	default:
+		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment or update is a later slice"}
+	}
+}
+
+// lowerIncDec lowers a ++ or -- applied to a local number. In statement
+// position the prefix and postfix forms have the same effect since the value
+// is discarded, so both map to a Go IncDecStmt. Go's ++ and -- accept a
+// float64, so the loop counter keeps its number type. The operand must be a
+// local identifier of number type; ++/-- on anything else hands back.
+func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 1 {
+		return nil, &NotYetLowerable{Reason: "increment expression did not expose a single operand"}
+	}
+	operand := kids[0]
+	op := strings.TrimSpace(strings.Trim(strings.ReplaceAll(r.prog.Text(n), r.prog.Text(operand), ""), " "))
+	var tok token.Token
+	switch op {
+	case "++":
+		tok = token.INC
+	case "--":
+		tok = token.DEC
+	default:
+		return nil, &NotYetLowerable{Reason: "update operator " + op + " is a later slice"}
+	}
+	if operand.Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "increment of a non-identifier target is a later slice"}
+	}
+	if !r.isNumber(operand) {
+		return nil, &NotYetLowerable{Reason: "increment of a non-number needs coercion, a later slice"}
+	}
+	name, ok := localName(r.prog.Text(operand))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "increment target is not a Go identifier"}
+	}
+	return &ast.IncDecStmt{X: ident(name), Tok: tok}, nil
+}
+
+// lowerAssign lowers a binary assignment to a Go assignment statement. It
+// covers both a plain "=" and a compound operator like "+=": a compound
+// assignment desugars to x = x <op> rhs and reuses combineBinary, so a "+="
+// on strings concatenates and a "%=" becomes math.Mod, exactly as the binary
+// operator would. It is shared by an assignment used as a statement and a
+// for-loop's post clause. The target must be a local identifier; assigning to
+// a property or an element is a later slice.
 func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 	parts := r.prog.Children(bin)
-	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
-		return nil, &NotYetLowerable{Reason: "compound or non-assignment expression is a later slice"}
+	if len(parts) != 3 {
+		return nil, &NotYetLowerable{Reason: "binary expression did not expose left, operator, right"}
+	}
+	opText := r.prog.Text(parts[1])
+	baseOp, compound := compoundBaseOp(opText)
+	if opText != "=" && !compound {
+		return nil, &NotYetLowerable{Reason: "non-assignment expression used as a statement is a later slice"}
 	}
 	if parts[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "assignment to a non-identifier target is a later slice"}
@@ -268,7 +326,13 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "assignment target is not a Go identifier"}
 	}
-	rhs, err := r.lowerExpr(parts[2])
+	var rhs ast.Expr
+	var err error
+	if compound {
+		rhs, err = r.combineBinary(baseOp, parts[0], parts[2])
+	} else {
+		rhs, err = r.lowerExpr(parts[2])
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +341,39 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 		Tok: token.ASSIGN,
 		Rhs: []ast.Expr{rhs},
 	}, nil
+}
+
+// compoundBaseOp maps a compound assignment operator to the binary operator it
+// fuses, so combineBinary can build the x <op> rhs half of x <op>= rhs. Every
+// arithmetic and bitwise compound is here; the plain "=" is not a compound and
+// returns false.
+func compoundBaseOp(op string) (string, bool) {
+	switch op {
+	case "+=":
+		return "+", true
+	case "-=":
+		return "-", true
+	case "*=":
+		return "*", true
+	case "/=":
+		return "/", true
+	case "%=":
+		return "%", true
+	case "&=":
+		return "&", true
+	case "|=":
+		return "|", true
+	case "^=":
+		return "^", true
+	case "<<=":
+		return "<<", true
+	case ">>=":
+		return ">>", true
+	case ">>>=":
+		return ">>>", true
+	default:
+		return "", false
+	}
 }
 
 // lowerFor lowers a C-style for to Go. The classic three-clause form maps almost
@@ -305,7 +402,7 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	post, err := r.lowerAssign(kids[2])
+	post, err := r.lowerUpdate(kids[2])
 	if err != nil {
 		return nil, err
 	}
@@ -1397,7 +1494,15 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	if opText == "=" {
 		return nil, &NotYetLowerable{Reason: "assignment used as a value is a later slice"}
 	}
+	return r.combineBinary(opText, left, right)
+}
 
+// combineBinary lowers a JavaScript binary operator applied to two operand
+// nodes to the Go expression with the same meaning. It is the shared core of
+// binaryExpr and of a compound assignment (x += y desugars to x = x + y), so
+// the string, remainder, and bitwise special cases apply the same way whether
+// the operator was written on its own or fused to an assignment.
+func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.Expr, error) {
 	// + on two strings is concatenation of a UTF-16 string, not a Go string +,
 	// which would be UTF-8, and not a Go operator at all since bstr is a struct.
 	// It lowers to value.Concat, which picks the wider backing form and copies
