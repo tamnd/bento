@@ -588,6 +588,26 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{}},
 		},
 		{
+			name: "stringOfNumber",
+			// String(x) on a number is the exact ECMAScript Number::toString. The
+			// inputs are divided so the case exercises the exponential thresholds and
+			// the unpadded exponent that separate it from strconv's 'g': a large
+			// integer, the 1e21 boundary, a small decimal, and 1e-7 where JavaScript
+			// goes exponential. A fraction and a negative pin the ordinary path.
+			src:  `export function show(x: number, y: number): string { return String(x / y); }`,
+			fn:   "show",
+			ret:  "string",
+			args: [][]any{{1, 2}, {-3, 2}, {6, 2}, {1e21, 1}, {1, 1000000}, {1, 10000000}, {1, 0}, {0, 0}},
+		},
+		{
+			name: "stringOfBool",
+			// String(b) on a boolean is "true" or "false"; x < y makes both reachable.
+			src:  `export function show(x: number, y: number): string { return String(x < y); }`,
+			fn:   "show",
+			ret:  "string",
+			args: [][]any{{1, 2}, {2, 1}},
+		},
+		{
 			name: "numLiterals",
 			// the numeric-literal forms this slice lowers: hex, binary, and octal
 			// integers, an underscore-separated decimal, and an exponent. The compiler

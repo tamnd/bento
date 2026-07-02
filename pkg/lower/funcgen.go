@@ -464,6 +464,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if goName, ok := globalFn(r.prog.Text(kids[0])); ok && r.isAmbientGlobal(kids[0]) {
 		return r.globalFnCall(goName, kids[0], kids[1:])
 	}
+	// String(x) called as a function is a primitive-to-string coercion, an ambient
+	// global constructor call rather than a user function, so it routes before the
+	// user-function path.
+	if r.prog.Text(kids[0]) == "String" && r.isAmbientGlobal(kids[0]) {
+		return r.stringCoercion(kids[1:])
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
 		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
@@ -732,6 +738,36 @@ func (r *Renderer) globalFnCall(goName string, calleeNode frontend.Node, argNode
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// stringCoercion lowers String(x) called as a function over a primitive argument.
+// A number goes through value.NumberToString (the exact ECMAScript
+// Number::toString, not strconv), a boolean through value.BoolToString, and a
+// string is already a value.BStr so it passes through unchanged, the identity
+// String(s) is. It takes exactly one argument; a different arity, or an argument
+// this slice does not coerce (an object, whose ToString runs user code), hands
+// back.
+func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "String() with this argument count is a later slice"}
+	}
+	arg := argNodes[0]
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case r.isString(arg):
+		return lowered, nil // String(s) on a string is the identity
+	case r.isNumber(arg):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{lowered}}, nil
+	case r.isBool(arg):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{lowered}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "String() on this argument type is a later slice"}
+	}
 }
 
 // argKind names the primitive type a string method expects for one argument, so
