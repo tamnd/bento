@@ -208,6 +208,12 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "string_replace", file: "func_string_replace"},
 		// replaceAll lowers to value.BStr.ReplaceAll the same way.
 		{name: "string_replace_all", file: "func_string_replace_all"},
+		// toString on a number receiver is the same coercion String(x) uses, so it lowers to value.NumberToString.
+		{name: "number_tostring", file: "func_number_tostring"},
+		// valueOf on a number returns the primitive itself, so it lowers to the receiver expression unchanged.
+		{name: "number_valueof", file: "func_number_valueof"},
+		// toString on a boolean lowers to value.BoolToString, the coercion String(b) uses.
+		{name: "bool_tostring", file: "func_bool_tostring"},
 		// the bare global isNaN, not the Number static one, so the callee is a plain identifier. On a number argument it coerces to nothing, so it lowers to the same value.NumberIsNaN predicate.
 		{name: "global_isnan", file: "func_global_isnan"},
 		// the bare global isFinite lowers to value.NumberIsFinite the same way.

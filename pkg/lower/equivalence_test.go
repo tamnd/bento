@@ -749,6 +749,33 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			},
 		},
 		{
+			name: "numberToString",
+			file: "eq_number_tostring",
+			fn:   "show",
+			ret:  "string",
+			// toString spans the Number::toString cases: an integer, a fraction, a
+			// negative, the exponential thresholds, and the non-finite values, all of
+			// which must format the same as the engine.
+			args: [][]any{{0}, {42}, {-7}, {3.5}, {1e21}, {1e-7}, {1e20}},
+		},
+		{
+			name: "numberValueOf",
+			file: "eq_number_valueof",
+			fn:   "id",
+			ret:  "", // number
+			// valueOf returns the primitive itself, so the generated Go and the engine
+			// must return the identical number across the same spread.
+			args: [][]any{{0}, {42}, {-7}, {3.5}, {1e21}},
+		},
+		{
+			name: "boolToString",
+			file: "eq_bool_tostring",
+			fn:   "show",
+			ret:  "string",
+			// toString on a boolean is the word, not a number, for both values.
+			args: [][]any{{true}, {false}},
+		},
+		{
 			name: "booleanOfNumber",
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches
 			// a nonzero result, +0, and NaN (0/0), the last being what a bare zero test
