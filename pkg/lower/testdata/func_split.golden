@@ -1,0 +1,5 @@
+func Sp(s value.BStr, sep value.BStr) value.BStr {
+	return s.Split(sep).Join(value.FromGoString("-"), func(x value.BStr) value.BStr {
+		return x
+	})
+}

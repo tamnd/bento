@@ -407,6 +407,77 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"a", "b", "c"}, {"", "x", ""}, {"π", "😀", "z"}},
 		},
 		{
+			name: "repeat",
+			// s.repeat(n) concatenates the string n times; the cases cover zero (the
+			// empty string), one (the receiver), several, an empty receiver, and an
+			// astral character so the code-unit copy is exercised. A fractional count
+			// truncates toward zero, which the last case pins, matching
+			// String.prototype.repeat and value.BStr.Repeat.
+			file: "eq_repeat",
+			fn:   "rep",
+			ret:  "string",
+			args: [][]any{{"ab", 0}, {"ab", 1}, {"x", 5}, {"", 9}, {"😀", 3}, {"ab", 2.9}},
+		},
+		{
+			name: "splitJoin",
+			// s.split(sep) then join(other) round-trips the pieces through a different
+			// separator, so both the split boundary and the piece count are exercised.
+			// The cases cover a separator that appears several times, one that is
+			// absent (a single piece), a trailing separator (an empty last piece), and
+			// an empty receiver, matching String.prototype.split and value.BStr.Split.
+			file: "eq_splitJoin",
+			fn:   "sj",
+			ret:  "string",
+			args: [][]any{{"a b c", " ", "-"}, {"abc", " ", "-"}, {"a ", " ", "-"}, {"", " ", "-"}},
+		},
+		{
+			name: "regexReplace",
+			// s.replace(/word/g, r) replaces every occurrence of the plain literal the
+			// regexp spells, which the lowerer reduces to the same code-unit search
+			// value.BStr.ReplaceAll does. The cases cover several matches, no match,
+			// and an empty receiver, matching String.prototype.replace with a global
+			// literal regexp.
+			file: "eq_regexReplace",
+			fn:   "rr",
+			ret:  "string",
+			args: [][]any{{"word word", "W"}, {"nomatch", "W"}, {"", "W"}},
+		},
+		{
+			name: "pushloop",
+			// a typed empty-array binding, an unbraced for body, an array push, and a
+			// length read, all in one function, so the whole path proves out against
+			// the engine: the cases return the element count, which is the loop bound.
+			file: "eq_pushloop",
+			fn:   "pl",
+			args: [][]any{{0}, {1}, {5}, {50}},
+		},
+		{
+			name: "jsonStringify",
+			// JSON.stringify over a nested record with a number, a string, a boolean,
+			// a string array, and a nested object, so the serializer's every arm is
+			// exercised against V8 through the engine: key order, number formatting,
+			// boolean spelling, string quoting, array brackets, and nested objects all
+			// have to match byte for byte. The cases vary i so the even/odd boolean,
+			// the divisions, and the string building all change across runs.
+			file: "eq_jsonStringify",
+			fn:   "js",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {7}, {42}, {123}},
+		},
+		{
+			name: "jsonRoundTrip",
+			// stringify a two-element array then parse it back and read the parsed
+			// array's length plus the text length, so the whole dynamic path runs
+			// against V8 through the engine: JSON.parse returns a boxed any, the
+			// property read dispatches through the box, and the mixed dynamic-plus-
+			// number sum coerces back to the number the function returns. The cases
+			// vary i so the record content and so the serialized text length change
+			// across runs while the array length stays two.
+			file: "eq_jsonRoundTrip",
+			fn:   "rt",
+			args: [][]any{{0}, {1}, {7}, {42}, {123}},
+		},
+		{
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.
@@ -736,6 +807,38 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		// same ToString, and the escapes must cook identically, or the strings diverge.
 		{name: "templateNosub", file: "eq_template_nosub", fn: "f", ret: "string", args: [][]any{{}}},
 		{
+			// number.toString(radix) with a literal radix: radix 16 and 2 through
+			// value.NumberToStringRadix and a bare toString() through the radix-10
+			// path, compared against the engine over an integer masked to a byte so
+			// the digits and the sign stay in the covered range.
+			name: "numberRadix",
+			file: "eq_number_radix",
+			fn:   "radices",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {255}, {128}, {-1}},
+		},
+		{
+			// number.toFixed(digits) with a literal count at zero, two, and four
+			// fraction digits over a fractional value, compared against the engine so
+			// the exact-double rounding (ties up, not to even) is proven identical.
+			name: "numberFixed",
+			file: "eq_number_fixed",
+			fn:   "money",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {5}, {100}, {-3}},
+		},
+		{
+			// + concatenation that coerces a number and a boolean operand to a string,
+			// the same ToString the template path runs, so a mixed "n=" + n + " even=" +
+			// even chain is compared against the engine over an integer, a negative, and
+			// a fraction to exercise NumberToString and both boolean values.
+			name: "concatCoerce",
+			file: "eq_concat_coerce",
+			fn:   "label",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {2}, {-3}, {0.5}},
+		},
+		{
 			name: "templateBasic",
 			file: "eq_template_basic",
 			fn:   "f",
@@ -977,6 +1080,24 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {10}, {-2}, {0.5}},
 		},
 		{
+			// an index expression a[i] on both an array variable and an array literal,
+			// the index a bitwise-masked argument so it stays in bounds, so the At
+			// lowering and the number index run through the engine against TypeScript.
+			name: "arrayIndex",
+			file: "eq_array_index",
+			fn:   "pick",
+			args: [][]any{{0}, {1}, {2}, {3}, {5}, {-1}},
+		},
+		{
+			// an object literal is built with a shorthand and a keyed property, then two
+			// of its fields are read back, so the composite-literal construction and the
+			// struct-field read both run through the engine against TypeScript.
+			name: "objectLiteral",
+			file: "eq_object_literal",
+			fn:   "box",
+			args: [][]any{{0, 0}, {1, 2}, {3, 4}, {-2, 5}, {0.5, 1.5}},
+		},
+		{
 			// map over an arrow scales each element by the argument, then the mapped
 			// array is summed, so the callback ran through the engine on every
 			// element rather than only being constructed.
@@ -1173,11 +1294,6 @@ func evalTS(t *testing.T, src, fn, ret string, args []any) string {
 // own go.sum for the runtime import, which a clean CI checkout does not have.
 func runGo(t *testing.T, goSrc string, imports []string, name, ret string, args []any) string {
 	t.Helper()
-	dir, err := os.MkdirTemp(repoRoot(t), "eqrun-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
 
 	callArgs := make([]string, len(args))
 	for i, a := range args {
@@ -1200,17 +1316,29 @@ func runGo(t *testing.T, goSrc string, imports []string, name, ret string, args 
 		"package main\n\n%s\n\n%s\nfunc main() {\n\t%s\n}\n",
 		imp.String(), goSrc, goPrint(ret, call),
 	)
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
-	cmd := exec.Command("go", "run", ".")
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- output ---\n%s", err, main, out)
-	}
-	return canonOutput(t, ret, strings.TrimSpace(string(out)))
+	// The subject is what this exact program prints, which is fixed by its bytes
+	// and the runtime it links, so the compile and run is cached on both and only
+	// pays off when one of them changed. canonOutput runs on the cached output
+	// too, which is cheap and keeps the spelling identical to the engine side.
+	raw := cachedGoRun(t, main, func() string {
+		dir, err := os.MkdirTemp(repoRoot(t), "eqrun-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("go", "run", ".")
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- output ---\n%s", err, main, out)
+		}
+		return strings.TrimSpace(string(out))
+	})
+	return canonOutput(t, ret, raw)
 }
 
 // engineArg converts a case argument to the value the engine wants. Numbers in

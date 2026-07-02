@@ -14,6 +14,7 @@ package value
 
 import (
 	"math"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -238,6 +239,55 @@ func (s BStr) ReplaceAll(search, replacement BStr) BStr {
 	}
 	out = append(out, hay[min(i, len(hay)):]...)
 	return FromUTF16(out)
+}
+
+// Split divides the string on each occurrence of a string separator and returns
+// the pieces, String.prototype.split(separator) in its string-separator form
+// (the regexp form and the optional limit are not modeled here; the compiler
+// hands those back). The pieces are cut on code-unit boundaries, so a separator
+// that occurs at the start or end yields an empty leading or trailing piece and a
+// separator that does not occur yields the whole string as the one piece, exactly
+// as JavaScript does. An empty separator splits into single code units, and the
+// empty string split by an empty separator is the empty array, the two edges the
+// specification calls out.
+func (s BStr) Split(sep BStr) *Array[BStr] {
+	// Fast path: the receiver and the separator are both valid UTF-8 and the
+	// separator is non-empty. UTF-8 is self-synchronizing, so a byte-level split
+	// lands on exactly the boundaries a code-unit split would and every piece is
+	// itself valid UTF-8, which keeps each piece on the UTF-8 fast path.
+	if s.utf16 == nil && sep.utf16 == nil && sep.lengthU16 > 0 {
+		pieces := strings.Split(s.utf8, sep.utf8)
+		out := make([]BStr, len(pieces))
+		for i, p := range pieces {
+			out[i] = FromGoString(p)
+		}
+		return NewArray(out...)
+	}
+	su := s.units()
+	if sep.lengthU16 == 0 {
+		// An empty separator with an empty receiver is the empty array; otherwise it
+		// splits into one string per code unit, so a lone surrogate becomes its own
+		// one-unit piece rather than being paired.
+		out := make([]BStr, len(su))
+		for i, u := range su {
+			out[i] = FromUTF16([]uint16{u})
+		}
+		return NewArray(out...)
+	}
+	pu := sep.units()
+	var out []BStr
+	start := 0
+	for i := 0; i+len(pu) <= len(su); {
+		if matchAt(su, pu, i) {
+			out = append(out, FromUTF16(su[start:i]))
+			i += len(pu)
+			start = i
+		} else {
+			i++
+		}
+	}
+	out = append(out, FromUTF16(su[start:]))
+	return NewArray(out...)
 }
 
 // indexOfUnits returns the first index at or after start where needle occurs in
@@ -588,6 +638,38 @@ func padUnits(pad []BStr) []uint16 {
 		return []uint16{0x20}
 	}
 	return pad[0].units()
+}
+
+// Repeat returns s concatenated count times, String.prototype.repeat. count is
+// coerced to an integer the way JavaScript does (a fraction truncates toward
+// zero, NaN becomes 0), and a count that is negative or not finite is a
+// RangeError in JavaScript, which bento surfaces as a panic because the compiled
+// program has no exception machinery yet (a later slice lowers throw). The type
+// checker and the lowerer only admit a non-negative integer literal count today,
+// so the panic is unreachable from lowered code and guards only a direct runtime
+// caller. A count of zero, or an empty receiver, yields the empty string, and a
+// count of one returns the receiver unchanged. The UTF-8 fast path is kept when
+// the receiver is on it, since repeating valid UTF-8 stays valid UTF-8.
+func (s BStr) Repeat(count float64) BStr {
+	n := toInteger(count)
+	if n < 0 || math.IsInf(n, 0) {
+		panic("String.prototype.repeat: count out of range")
+	}
+	c := int(n)
+	if c == 0 || s.lengthU16 == 0 {
+		return BStr{lengthU16: 0}
+	}
+	if c == 1 {
+		return s
+	}
+	if s.utf16 == nil {
+		return BStr{utf8: strings.Repeat(s.utf8, c), lengthU16: s.lengthU16 * c}
+	}
+	out := make([]uint16, 0, s.lengthU16*c)
+	for i := 0; i < c; i++ {
+		out = append(out, s.utf16...)
+	}
+	return BStr{utf16: out, lengthU16: len(out)}
 }
 
 // Concat returns the concatenation of a and b, the lowering of `a + b` when both

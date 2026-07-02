@@ -1,0 +1,17 @@
+package main
+
+import (
+	"github.com/tamnd/bento/pkg/value"
+)
+
+func main() {
+	var width float64 = 5
+	var total float64 = 0
+	{
+		var i float64 = 0
+		for ; i < width; i++ {
+			total = total + i
+		}
+	}
+	value.WriteStdout(value.Concat(value.NumberToString(total), value.FromGoString("\n")))
+}

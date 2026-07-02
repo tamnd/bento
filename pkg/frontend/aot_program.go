@@ -145,12 +145,19 @@ func (p *Program) wrapParam(pi adapter.ParamInfo) Param {
 }
 
 // SourceFiles returns the top-level node of each file, the roots a consumer
-// walks to enumerate declarations.
+// walks to enumerate declarations. The synthetic ambient library bento injects
+// (its Node global declarations) is filtered out here, so it is invisible to
+// every consumer the way lib.d.ts is: it supplies globals to the checker but is
+// not a file the program lists, lowers, or reports on.
 func (p *Program) SourceFiles() []Node {
 	handles := p.adapter.SourceFiles(p.handle)
-	out := make([]Node, len(handles))
-	for i, h := range handles {
-		out[i] = p.wrapNode(h)
+	out := make([]Node, 0, len(handles))
+	for _, h := range handles {
+		n := p.wrapNode(h)
+		if n.File().Path == ambientPath {
+			continue
+		}
+		out = append(out, n)
 	}
 	return out
 }

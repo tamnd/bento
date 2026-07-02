@@ -1,0 +1,65 @@
+// This file owns Object, the reference type behind the object and array kinds of
+// a boxed Value (10_value_model section 6). The spec's Object uses hidden-class
+// shapes so a property read is a shape check plus an index rather than a map
+// probe, which is the dynamic world's single biggest speed lever. This first cut
+// keeps an ordered property map instead: it is behaviorally identical, preserving
+// insertion order the way JavaScript does, and the shape machinery is a later
+// performance slice that does not change any observable result.
+
+package value
+
+// Object is the storage behind a KindObject or KindArray value. A plain object
+// keeps its properties in insertion order as parallel key and value slices, the
+// order JavaScript enumerates and serializes in. An array keeps its elements in a
+// dense slice, separate from named properties, because indices are hot and must
+// not go through the property map. One struct backs both so an array can still
+// carry a named property without changing representation.
+type Object struct {
+	kind  Kind    // KindObject or KindArray
+	keys  []BStr  // property names in insertion order (named properties)
+	vals  []Value // property values, parallel to keys
+	elems []Value // dense element storage for an array
+}
+
+// NewObject returns an empty plain object value, the target JSON.parse builds a
+// key at a time as it reads an object literal.
+func NewObject() Value {
+	return objectValue(&Object{kind: KindObject})
+}
+
+// NewArrayValue returns an array value holding the given elements, the target
+// JSON.parse builds as it reads an array literal. The elements are taken as given,
+// in order, so the array's indices match the source order.
+func NewArrayValue(elems []Value) Value {
+	return objectValue(&Object{kind: KindArray, elems: elems})
+}
+
+// Set writes a named property, appending it in insertion order if the key is new
+// and overwriting in place if it already exists, so a repeated key keeps its first
+// position the way JavaScript's own property order does. It returns the receiver
+// value so JSON.parse can build an object in an expression.
+func (v Value) Set(key BStr, val Value) Value {
+	o := v.object()
+	for i := range o.keys {
+		if o.keys[i].Equal(key) {
+			o.vals[i] = val
+			return v
+		}
+	}
+	o.keys = append(o.keys, key)
+	o.vals = append(o.vals, val)
+	return v
+}
+
+// getOwn returns the value of a named own property, or undefined when the object
+// has no such key, the JavaScript result for a missing property. The lookup is a
+// linear scan of the ordered keys, which the shape machinery will later replace
+// with a shape check and an index.
+func (o *Object) getOwn(key BStr) Value {
+	for i := range o.keys {
+		if o.keys[i].Equal(key) {
+			return o.vals[i]
+		}
+	}
+	return Undefined
+}
