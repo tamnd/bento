@@ -154,6 +154,16 @@
     Promise.resolve().then(cb);
   };
 
+  // ---- performance ------------------------------------------------------
+  // performance.now() returns milliseconds from a monotonic origin, reading the
+  // same host clock the compiled path lowers performance.now() to, so a program
+  // timed here and after compilation measure the same way.
+  g.performance = {
+    now: function () {
+      return __bento_perfNow();
+    },
+  };
+
   // ---- process ----------------------------------------------------------
   // Boot data (argv, env, platform, cwd) is injected by Go as a JSON string so
   // the bridge stays to plain values.

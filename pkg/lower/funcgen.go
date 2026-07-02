@@ -969,6 +969,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "console") {
 		return r.consoleCall(method, argNodes)
 	}
+	// performance.now() is a call on the global performance object, not a value
+	// receiver, so it lowers to the value clock helper rather than a method on a
+	// runtime object. It is the timer a workload brackets its hot loop with to
+	// report an in-process compute number apart from process startup.
+	if r.isGlobalRef(recvNode, "performance") {
+		return r.performanceCall(method, argNodes)
+	}
 	// Math.floor(x) and friends are calls on the global Math namespace, not a
 	// value receiver, so they lower to the Go math package rather than a method.
 	if r.isGlobalRef(recvNode, "Math") {
@@ -1049,6 +1056,22 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+}
+
+// performanceCall lowers a call on the global performance object. Only now() is
+// covered: it takes no arguments and returns a number of milliseconds, so it maps
+// to value.PerformanceNow with an exact zero-argument check; anything else hands
+// back. Like Math and the other namespace globals, the performance receiver is not
+// lowered to a value, since it is the ambient timer, not a runtime object.
+func (r *Renderer) performanceCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "now" {
+		return nil, &NotYetLowerable{Reason: "performance." + method + " is a later slice"}
+	}
+	if len(argNodes) != 0 {
+		return nil, &NotYetLowerable{Reason: "performance.now with arguments is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "PerformanceNow")}, nil
 }
 
 // mathCall lowers a call on the global Math namespace to the matching function in
