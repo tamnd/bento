@@ -1,0 +1,8 @@
+func Total(n float64) float64 {
+	var ys *value.Array[float64] = value.NewArray[float64](10, 20, 30, 40)
+	var t float64 = 0
+	for _, x := range ys.Elems() {
+		t = t + x*n
+	}
+	return t + ys.Len()
+}
