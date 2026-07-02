@@ -180,6 +180,14 @@ func (r *Renderer) collectBinaryFacts(bin frontend.Node, f *int32Facts) {
 		r.markIntUse(parts[0], f)
 		r.markIntUse(parts[2], f)
 	}
+	// A remainder by a nonzero integer literal, x % 97, reads x as an integer: the
+	// funcgen modulo fast path lowers it to a native Go % when x is int32-producing,
+	// so counting it as an integer use lets a loop counter that only ever feeds a
+	// modulo (the replace workload's i % 97 and i % 13) specialize and skip math.Mod.
+	// Only the left operand is the integer use; the literal divisor is not a local.
+	if opText == "%" && r.isInt32Literal(parts[2]) && !r.isZeroLiteral(parts[2]) {
+		r.markIntUse(parts[0], f)
+	}
 }
 
 // collectUnaryFacts records a ++ or -- on an identifier and marks the operand of a
