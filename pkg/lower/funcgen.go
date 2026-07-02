@@ -2053,10 +2053,11 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 // type, so the arguments lower directly with no per-argument kind guard the way
 // the string methods need, since here the element type, not a fixed argument
 // kind, is what the checker enforced. The reading, higher-order, and other
-// mutating methods (pop, indexOf, includes, join, slice) are later slices; pop
-// and index reads additionally wait on the optional machinery for their
-// undefined result. The higher-order map and filter are covered here, over a
-// concise-body arrow callback that takes the element.
+// mutating methods (pop, indexOf, includes, join) are later slices; pop and
+// index reads additionally wait on the optional machinery for their undefined
+// result. The higher-order map and filter are covered here, over a concise-body
+// arrow callback that takes the element, as is slice, which returns a fresh
+// array over a copied range.
 func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "push":
@@ -2077,6 +2078,26 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayMapFilter(recvNode, "Map", argNodes, true)
 	case "filter":
 		return r.arrayMapFilter(recvNode, "Filter", argNodes, false)
+	case "slice":
+		if len(argNodes) > 2 {
+			return nil, &NotYetLowerable{Reason: "array slice with more than two arguments is not valid"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		args := make([]ast.Expr, 0, len(argNodes))
+		for _, a := range argNodes {
+			if !r.isNumber(a) {
+				return nil, &NotYetLowerable{Reason: "array slice with a non-number bound is a later slice"}
+			}
+			lowered, err := r.lowerExpr(a)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Slice")}, Args: args}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
 	}

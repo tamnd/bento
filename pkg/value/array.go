@@ -81,3 +81,53 @@ func (a *Array[T]) Filter(f func(T) bool) *Array[T] {
 	}
 	return &Array[T]{elems: out}
 }
+
+// Slice returns a shallow copy of a portion of the array into a new array, the
+// lowering of Array.prototype.slice. It takes zero, one, or two Number bounds,
+// matching the source call, since JavaScript's slice has both arguments
+// optional: slice() copies the whole array, slice(start) runs to the end, and
+// slice(start, end) is the half-open range. A bound is read exactly as
+// JavaScript specifies, through relativeIndex: it truncates toward zero, a
+// negative bound counts from the end, and the result is clamped into range, so
+// an out-of-range or crossed pair yields an empty array rather than a panic. The
+// result is a fresh array, so the receiver is unchanged.
+func (a *Array[T]) Slice(bounds ...float64) *Array[T] {
+	n := len(a.elems)
+	start := 0
+	end := n
+	if len(bounds) >= 1 {
+		start = relativeIndex(bounds[0], n)
+	}
+	if len(bounds) >= 2 {
+		end = relativeIndex(bounds[1], n)
+	}
+	if end < start {
+		end = start
+	}
+	out := make([]T, end-start)
+	copy(out, a.elems[start:end])
+	return &Array[T]{elems: out}
+}
+
+// relativeIndex resolves a JavaScript slice bound against a length: it truncates
+// the Number toward zero, treats a negative value as counting back from the end,
+// and clamps the result into [0, length]. This is the shared step
+// Array.prototype.slice applies to each of its bounds. NaN truncates to zero,
+// matching ToIntegerOrInfinity, so a NaN bound behaves as 0.
+func relativeIndex(v float64, length int) int {
+	i := int(v)
+	if v != v { // NaN truncates to 0
+		i = 0
+	}
+	if i < 0 {
+		i += length
+		if i < 0 {
+			return 0
+		}
+		return i
+	}
+	if i > length {
+		return length
+	}
+	return i
+}
