@@ -1,0 +1,4 @@
+func Pl(text value.BStr) float64 {
+	var back value.Value = value.JSONParse(text)
+	return value.ToNumber(back.Get(value.FromGoString("length")))
+}

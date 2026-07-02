@@ -1,0 +1,31 @@
+package main
+
+import (
+	"github.com/tamnd/bento/pkg/value"
+)
+
+func main() {
+	var dir value.BStr = value.Mkdtemp(value.PathJoin(value.Tmpdir(), value.FromGoString("bento-bench-")))
+	var count float64 = 200
+	var payload value.BStr = value.FromGoString("x").Repeat(512)
+	var bytes float64 = 0
+	{
+		var pass float64 = 0
+		for ; pass < 3; pass++ {
+			{
+				var i float64 = 0
+				for ; i < count; i++ {
+					value.WriteFileSync(value.PathJoin(dir, value.Concat(value.Concat(value.FromGoString("f"), value.NumberToString(i)), value.FromGoString(".txt"))), payload)
+				}
+			}
+			{
+				var i float64 = 0
+				for ; i < count; i++ {
+					bytes = bytes + value.ReadFileSyncUTF8(value.PathJoin(dir, value.Concat(value.Concat(value.FromGoString("f"), value.NumberToString(i)), value.FromGoString(".txt")))).Length()
+				}
+			}
+		}
+	}
+	value.RmSync(dir, true, true)
+	value.ConsoleLog(value.NumberToString(bytes))
+}

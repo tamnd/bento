@@ -1,0 +1,3 @@
+func Js(rec *ObjIdName) value.BStr {
+	return value.JSONStringify(rec)
+}

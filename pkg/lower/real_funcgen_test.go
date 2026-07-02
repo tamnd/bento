@@ -255,6 +255,16 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_strlen", file: "func_array_strlen"},
 		// push is a mutating array method called as a statement: it lowers to the value.Array Push method wrapped in an expression statement, with the variadic form passing several arguments in one call.
 		{name: "array_push", file: "func_array_push"},
+		// an index expression a[i] lowers to the value.Array At method: both an array variable and an array literal are indexed, and the index is a bitwise expression, so the number index threads through with no conversion.
+		{name: "array_index", file: "func_array_index"},
+		// + where one operand is a string is concatenation with coercion: a number operand becomes value.NumberToString and a boolean operand value.BoolToString before value.Concat, so a mixed "n=" + n + " even=" + even chain lowers without reaching the number/bool operator dispatch.
+		{name: "concat_coerce", file: "func_concat_coerce"},
+		// number.toString(radix) with a literal radix lowers to value.NumberToStringRadix folding the radix in, radix 16 and 2 taking that path and a bare toString() routing through the same NumberToString the radix-10 coercion uses.
+		{name: "number_radix", file: "func_number_radix"},
+		// number.toFixed(digits) with a literal digit count lowers to value.NumberToFixed folding the count in, so a fixed-point format at zero, two, and four fraction digits is emitted over a fractional value.
+		{name: "number_fixed", file: "func_number_fixed"},
+		// an object literal lowers to a composite literal building a pointer to the interned struct the shape maps to, a shorthand property and a keyed property both becoming keyed fields, and a later o.field read lowers to the matching Go struct field.
+		{name: "object_literal", file: "func_object_literal"},
 		// map over a concise-body arrow lowers to the value.Array Map method taking a Go function literal, the arrow's parameter typed from the checker and its body returning the element type.
 		{name: "array_map", file: "func_array_map"},
 		// filter over a concise-body arrow lowers to the value.Array Filter method, the callback returning a bool with no same-type restriction.
@@ -269,6 +279,18 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "opt_pop_drain", file: "func_opt_pop_drain"},
 		// a binding of an optional (T | undefined) is a value.Opt[T] variable, so this pins the union-to-Opt type lowering in the const declaration alongside the !== undefined presence test.
 		{name: "opt_pop_has", file: "func_opt_pop_has"},
+		// s.repeat(n) lowers to the value.BStr Repeat method taking the count as a number, the count coerced and range-checked at runtime by the method the way String.prototype.repeat is.
+		{name: "repeat", file: "func_repeat"},
+		// s.split(sep) lowers to the value.BStr Split method returning *value.Array[value.BStr], the pieces the string separator cuts, so a chained join has an array to fold.
+		{name: "split", file: "func_split"},
+		// s.replace(/word/g, r) with a plain-literal global regexp lowers to the value.BStr ReplaceAll method over the literal the pattern spells, the global flag selecting ReplaceAll over Replace.
+		{name: "regex_replace", file: "func_regex_replace"},
+		// a typed empty-array binding lowers to value.NewArray at the binding's element type (the checker types a bare [] as never[], so the element type comes from the annotation), an unbraced for body lowers as a wrapped block, and push and length lower to the value.Array methods.
+		{name: "pushloop", file: "func_pushloop"},
+		// JSON.stringify(x) is a static call on the global JSON namespace, so the receiver is not lowered to a value; it becomes value.JSONStringify with the argument boxed as any for the serializer's reflection walk.
+		{name: "json_stringify", file: "func_json_stringify"},
+		// JSON.parse(s) returns any, so the binding lowers to a boxed value.Value; a property read on that dynamic receiver dispatches through Get, and the number return coerces the boxed length through ToNumber.
+		{name: "json_parse", file: "func_json_parse"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

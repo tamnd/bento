@@ -1,0 +1,208 @@
+// Package build is bento's ahead-of-time path: it type-checks an entry module
+// with the real frontend, lowers it to a Go program, and compiles that program
+// to a native binary with the Go toolchain. It is the code behind `bento build`,
+// and the number bento's AOT benchmark column measures.
+//
+// The generated program imports bento's own value package for its runtime
+// primitives (the UTF-16 string model, the exact Number::toString, the console
+// helpers), so it is compiled inside the bento module tree, where that import
+// and its transitive dependencies already resolve from the module's go.mod and
+// go.sum with no network. The module root is discovered from the running binary
+// or an explicit override; a build that cannot find it fails with a clear
+// message rather than emitting a program that will not link.
+package build
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/lower"
+)
+
+// Options controls a single build. Entry is the path to the TypeScript or
+// JavaScript entry module; Output is where the native binary is written. A blank
+// Output defaults to the entry's base name without its extension, in the current
+// directory, matching how a Go or C compiler names its output.
+type Options struct {
+	Entry  string
+	Output string
+}
+
+// Build type-checks the entry module, lowers it to a Go program, and compiles
+// that program to a native binary at Options.Output. A type error in the entry,
+// a construct the lowerer does not yet cover, or a Go toolchain failure is
+// returned as an error, so the caller (the CLI, the benchmark harness) reports a
+// real failure rather than a binary that does not match the source.
+func Build(opts Options) error {
+	entry, err := filepath.Abs(opts.Entry)
+	if err != nil {
+		return fmt.Errorf("bento build: %s: %w", opts.Entry, err)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		return fmt.Errorf("bento build: %s: %w", opts.Entry, err)
+	}
+
+	output := opts.Output
+	if output == "" {
+		base := filepath.Base(entry)
+		output = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	output, err = filepath.Abs(output)
+	if err != nil {
+		return fmt.Errorf("bento build: output %s: %w", opts.Output, err)
+	}
+
+	source, err := Compile(entry)
+	if err != nil {
+		return err
+	}
+	return link(source, output)
+}
+
+// Compile type-checks the entry module and returns the Go source of the program
+// it lowers to. It is the front half of Build, split out so a caller can inspect
+// or golden the generated Go without running the toolchain.
+func Compile(entry string) (string, error) {
+	if isJavaScript(entry) {
+		return "", fmt.Errorf("bento build: %s: JavaScript entries are a later slice; the AOT path compiles TypeScript (.ts) today", entry)
+	}
+	prog, err := frontend.Load(frontend.LoadOptions{Roots: []string{entry}})
+	if err != nil {
+		return "", fmt.Errorf("bento build: %s: %w", entry, err)
+	}
+	if diag := firstError(prog); diag != "" {
+		return "", fmt.Errorf("bento build: %s: %s", entry, diag)
+	}
+
+	files := prog.SourceFiles()
+	if len(files) != 1 {
+		return "", fmt.Errorf("bento build: %s: multi-file programs are a later slice", entry)
+	}
+
+	r := lower.NewRenderer(prog)
+	p, err := r.RenderProgram(files[0])
+	if err != nil {
+		return "", fmt.Errorf("bento build: %s: %w", entry, err)
+	}
+	return p.Source, nil
+}
+
+// isJavaScript reports whether the entry is a JavaScript module by extension, so
+// the frontend is told to admit and check it. A TypeScript entry leaves the
+// options untouched and is checked strictly as usual.
+func isJavaScript(entry string) bool {
+	switch filepath.Ext(entry) {
+	case ".js", ".mjs", ".cjs", ".jsx":
+		return true
+	default:
+		return false
+	}
+}
+
+// firstError returns the message of the first type error in the program, or the
+// empty string when it type-checks cleanly. A build stops on the first error so
+// its message is the one the user sees, the same contract the CLI type-checker
+// keeps.
+func firstError(prog *frontend.Program) string {
+	for _, d := range prog.Diagnostics() {
+		if d.Category == frontend.CategoryError {
+			return d.Message
+		}
+	}
+	return ""
+}
+
+// link writes the generated Go program into a scratch directory inside the bento
+// module tree and compiles it to output with `go build`. Building inside the
+// module tree is what lets the program import bento's value package and its
+// transitive dependencies with no separate go.mod, go.sum, or module download,
+// so a build is hermetic and offline.
+func link(source, output string) error {
+	root, err := moduleRoot()
+	if err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp(root, "bento-build-")
+	if err != nil {
+		return fmt.Errorf("bento build: scratch dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(source), 0o644); err != nil {
+		return fmt.Errorf("bento build: write generated source: %w", err)
+	}
+
+	cmd := exec.Command("go", "build", "-o", output, ".")
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("bento build: go build failed: %w\n%s", err, stderr.String())
+	}
+	return nil
+}
+
+// moduleRoot finds the root of the bento module the running binary was built
+// from, the directory whose go.mod declares module github.com/tamnd/bento. The
+// generated program is compiled there so its import of the value package
+// resolves locally. BENTO_MODULE_ROOT overrides the search, which is how a CI
+// job that builds bento outside its checkout (so the binary is not under the
+// module tree) points the AOT build at the source it already has.
+func moduleRoot() (string, error) {
+	if r := os.Getenv("BENTO_MODULE_ROOT"); r != "" {
+		if isModuleRoot(r) {
+			return r, nil
+		}
+		return "", fmt.Errorf("bento build: BENTO_MODULE_ROOT=%s does not hold the bento module (no go.mod for github.com/tamnd/bento)", r)
+	}
+	var starts []string
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+	for _, start := range starts {
+		if root, ok := findModuleRoot(start); ok {
+			return root, nil
+		}
+	}
+	return "", fmt.Errorf("bento build: cannot locate the bento module source to link the runtime; " +
+		"set BENTO_MODULE_ROOT to a checkout of github.com/tamnd/bento")
+}
+
+// findModuleRoot walks up from start looking for the bento module root.
+func findModuleRoot(start string) (string, bool) {
+	dir := start
+	for {
+		if isModuleRoot(dir) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+// isModuleRoot reports whether dir holds the go.mod that declares the bento
+// module. It matches the module line exactly so a nested module that happens to
+// sit above the binary is not mistaken for it.
+func isModuleRoot(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "module github.com/tamnd/bento" {
+			return true
+		}
+	}
+	return false
+}

@@ -42,6 +42,29 @@ func (a *Array[T]) Len() float64 { return float64(len(a.elems)) }
 // grow-and-shrink edges are still a later slice.
 func (a *Array[T]) Elems() []T { return a.elems }
 
+// At reads the element a JavaScript index expression a[i] selects. The index is
+// a Number, so it is a float64 here to match the type the checker gives the
+// argument expression and to take the result of the bitwise and arithmetic path
+// with no conversion at the call site. JavaScript truncates the index toward
+// zero, and an index outside the array reads as the absent element. The element
+// type is not optional, because the checker types a[i] as T under its default
+// index signature rather than T | undefined, so an out-of-range read yields the
+// zero value of T. That is a faithful lowering of the covered subset, where the
+// programs that index an array do so within its bounds; the noUncheckedIndexed
+// -Access shape, which types the read as T | undefined and needs an Opt result,
+// is a later slice.
+func (a *Array[T]) At(i float64) T {
+	idx := int(i) // JavaScript ToInteger truncates toward zero.
+	if i != i {   // NaN truncates to 0, matching ToIntegerOrInfinity.
+		idx = 0
+	}
+	if idx >= 0 && idx < len(a.elems) {
+		return a.elems[idx]
+	}
+	var zero T
+	return zero
+}
+
 // Push appends its arguments to the end of the array and returns the new length
 // as a Number, matching JavaScript's Array.prototype.push. It is a pointer
 // method so the append is visible through every reference to the array, which is

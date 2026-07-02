@@ -23,50 +23,71 @@ import (
 // construct the statement and expression subset does not cover yet, so a caller
 // emits Go only for what lowers soundly.
 func (r *Renderer) RenderFunc(fn frontend.Node) (Decl, error) {
-	sym, ok := r.prog.SymbolAt(fn)
-	if !ok {
-		return Decl{}, &NotYetLowerable{Reason: "function declaration has no symbol (anonymous functions are a later slice)"}
-	}
-	name, ok := exportedField(sym.Name)
-	if !ok {
-		return Decl{}, &NotYetLowerable{Reason: "function name is not a Go identifier"}
-	}
-
-	sig, ok := r.prog.SignatureAt(fn)
-	if !ok {
-		return Decl{}, &NotYetLowerable{Reason: "function has no call signature"}
-	}
-	if len(sig.TypeParams) != 0 {
-		return Decl{}, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
-	}
-	if sig.RestParam != nil {
-		return Decl{}, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
-	}
-
-	params, err := r.paramFields(sig)
+	decl, err := r.funcDecl(fn)
 	if err != nil {
 		return Decl{}, err
-	}
-	results, err := r.resultFields(sig.Return)
-	if err != nil {
-		return Decl{}, err
-	}
-
-	body, err := r.blockOf(fn)
-	if err != nil {
-		return Decl{}, err
-	}
-
-	decl := &ast.FuncDecl{
-		Name: ident(name),
-		Type: &ast.FuncType{Params: params, Results: results},
-		Body: body,
 	}
 	src, err := printDecl(decl)
 	if err != nil {
 		return Decl{}, err
 	}
-	return Decl{Name: name, Source: src}, nil
+	return Decl{Name: decl.Name.Name, Source: src}, nil
+}
+
+// funcDecl builds the Go declaration node for a function without printing it, so
+// both RenderFunc (which prints one declaration) and the program assembler (which
+// prints a whole file at once) share the one place a signature and body become a
+// FuncDecl. It returns the same NotYetLowerable for an unlowerable construct.
+func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
+	sym, ok := r.prog.SymbolAt(fn)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "function declaration has no symbol (anonymous functions are a later slice)"}
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "function name is not a Go identifier"}
+	}
+
+	sig, ok := r.prog.SignatureAt(fn)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "function has no call signature"}
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+
+	params, err := r.paramFields(sig)
+	if err != nil {
+		return nil, err
+	}
+	results, err := r.resultFields(sig.Return)
+	if err != nil {
+		return nil, err
+	}
+
+	// The declared return type is stashed for the duration of this body so a return
+	// statement can coerce its value across the dynamic boundary, the way an
+	// assignment does: a dynamic value returned from a function typed to return a
+	// number runs ToNumber, and a static value returned as any boxes. It is saved
+	// and restored so a later slice's nested function does not inherit the outer
+	// return type.
+	prevRet := r.retType
+	r.retType = sig.Return
+	defer func() { r.retType = prevRet }()
+
+	body, err := r.blockOf(fn)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.FuncDecl{
+		Name: ident(name),
+		Type: &ast.FuncType{Params: params, Results: results},
+		Body: body,
+	}, nil
 }
 
 // paramFields lowers each parameter to a Go field with its lowered type. An
@@ -230,6 +251,10 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	expr, err = r.coerceReturn(expr, kids[0])
+	if err != nil {
+		return nil, err
+	}
 	return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
 }
 
@@ -257,8 +282,15 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
 		kids := r.prog.Children(d)
-		if len(kids) != 2 {
-			return nil, &NotYetLowerable{Reason: "variable binding with a type annotation or no initializer is a later slice"}
+		// A binding is [name, initializer] without an annotation, or [name, type,
+		// initializer] with one. The Go type is always read from the checker's type
+		// for the name, so the annotation node itself is not lowered, only skipped;
+		// what it changes is the child count, and the initializer is the last child
+		// in both shapes. A binding with no initializer (a bare declaration or an
+		// ambient one) has no last-child value to lower and hands back, since the
+		// zero-value strategy it would need is a later slice.
+		if len(kids) != 2 && len(kids) != 3 {
+			return nil, &NotYetLowerable{Reason: "variable binding with no initializer is a later slice"}
 		}
 		name, ok := localName(r.prog.Text(kids[0]))
 		if !ok {
@@ -268,7 +300,7 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		init, err := r.lowerExpr(kids[1])
+		init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 		if err != nil {
 			return nil, err
 		}
@@ -279,6 +311,37 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		})
 	}
 	return &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: specs}}, nil
+}
+
+// bindingInit lowers a binding's initializer, with one context-sensitive case an
+// initializer read on its own cannot get right: an empty array literal. The
+// checker types a bare [] as never[], since it has no element to infer from, so
+// lowering it in isolation would instantiate value.NewArray at never. The
+// annotated binding does carry the element type, so when the initializer is an
+// empty array literal and the binding is an array, the element type is taken from
+// the binding rather than from the literal, which is exactly the contextual type
+// TypeScript itself applies here. Every other initializer lowers on its own.
+func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, error) {
+	if initNode.Kind() == frontend.NodeArrayLiteralExpression && len(r.prog.Children(initNode)) == 0 {
+		if elem, ok := r.prog.ElementType(r.prog.TypeAt(nameNode)); ok {
+			elemType, err := r.typeExpr(elem)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType)}, nil
+		}
+	}
+	init, err := r.lowerExpr(initNode)
+	if err != nil {
+		return nil, err
+	}
+	// A binding whose declared type crosses the dynamic boundary coerces the
+	// initializer to match: a dynamic value into a static binding runs the ToNumber
+	// family, and a static value into an any binding boxes. A binding whose two
+	// sides agree passes the initializer through unchanged, which is every static
+	// binding lowered so far.
+	return r.coerceToTarget(init, initNode, nameNode)
 }
 
 // collectVarDecls gathers the variable declarations inside a variable statement.
@@ -394,11 +457,29 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 	var err error
 	if compound {
 		rhs, err = r.combineBinary(baseOp, parts[0], parts[2])
+		if err != nil {
+			return nil, err
+		}
+		// A compound + on a dynamic operand produces a boxed value.Value, so when the
+		// target is a static primitive the result must coerce back to it (total += x
+		// keeps total a number even though x is any). The target being dynamic needs
+		// no coercion, since the boxed result already fits, and a compound whose result
+		// is static reaches a static target directly.
+		if r.combineIsDynamic(baseOp, parts[0], parts[2]) && !r.isDynamic(parts[0]) {
+			rhs, err = r.coerceDynamicToStatic(rhs, parts[0])
+			if err != nil {
+				return nil, err
+			}
+		}
 	} else {
 		rhs, err = r.lowerExpr(parts[2])
-	}
-	if err != nil {
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+		rhs, err = r.coerceToTarget(rhs, parts[2], parts[0])
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &ast.AssignStmt{
 		Lhs: []ast.Expr{ident(name)},
@@ -449,8 +530,8 @@ func compoundBaseOp(op string) (string, bool) {
 // expression initializer hands back.
 func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
-	if len(kids) != 4 || kids[3].Kind() != frontend.NodeBlock {
-		return nil, &NotYetLowerable{Reason: "only a for with a declaration, condition, increment, and block body is lowered yet"}
+	if len(kids) != 4 {
+		return nil, &NotYetLowerable{Reason: "only a for with a declaration, condition, and increment is lowered yet"}
 	}
 
 	var decls []frontend.Node
@@ -470,13 +551,29 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := r.lowerBlock(kids[3])
+	body, err := r.loopBody(kids[3])
 	if err != nil {
 		return nil, err
 	}
 
 	loop := &ast.ForStmt{Cond: cond, Post: post, Body: body}
 	return &ast.BlockStmt{List: []ast.Stmt{initDecl, loop}}, nil
+}
+
+// loopBody lowers the body of a loop, which JavaScript allows to be either a
+// braced block or a single unbraced statement. A block lowers as its statements;
+// a lone statement is lowered on its own and wrapped in a Go block, since a Go
+// for always takes a block. This is what lets a one-line loop like
+// `for (...) xs.push(f(i));` lower without the source having to add braces.
+func (r *Renderer) loopBody(n frontend.Node) (*ast.BlockStmt, error) {
+	if n.Kind() == frontend.NodeBlock {
+		return r.lowerBlock(n)
+	}
+	stmt, err := r.lowerStatement(n)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.BlockStmt{List: []ast.Stmt{stmt}}, nil
 }
 
 // lowerIf lowers an if, with an optional else that is itself a block or a
@@ -492,10 +589,7 @@ func (r *Renderer) lowerIf(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if kids[1].Kind() != frontend.NodeBlock {
-		return nil, &NotYetLowerable{Reason: "if body that is not a block is a later slice"}
-	}
-	body, err := r.lowerBlock(kids[1])
+	body, err := r.lowerBodyBlock(kids[1])
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +604,9 @@ func (r *Renderer) lowerIf(n frontend.Node) (ast.Stmt, error) {
 	return stmt, nil
 }
 
-// lowerArm lowers one arm of an if: a block, or a chained if for an else-if.
+// lowerArm lowers one arm of an if: a block, a chained if for an else-if, or a
+// single unbraced statement such as `else return x`, which becomes a one
+// statement block so the Go if keeps its required block form.
 func (r *Renderer) lowerArm(n frontend.Node) (ast.Stmt, error) {
 	switch n.Kind() {
 	case frontend.NodeBlock:
@@ -518,8 +614,24 @@ func (r *Renderer) lowerArm(n frontend.Node) (ast.Stmt, error) {
 	case frontend.NodeIfStatement:
 		return r.lowerIf(n)
 	default:
-		return nil, &NotYetLowerable{Reason: "if arm that is not a block or else-if is a later slice"}
+		return r.lowerBodyBlock(n)
 	}
+}
+
+// lowerBodyBlock lowers a statement that stands where a block is expected: an if
+// or loop body written with braces stays a block, while a single unbraced
+// statement (`if (c) return x;`) becomes a one statement block, since a Go if or
+// for body is always a block. It is how the lowerer accepts the brace-optional
+// bodies JavaScript allows without a special case at every use.
+func (r *Renderer) lowerBodyBlock(n frontend.Node) (*ast.BlockStmt, error) {
+	if n.Kind() == frontend.NodeBlock {
+		return r.lowerBlock(n)
+	}
+	s, err := r.lowerStatement(n)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.BlockStmt{List: []ast.Stmt{s}}, nil
 }
 
 // lowerWhile lowers a while to a Go for with only a condition, Go's spelling of
@@ -607,6 +719,12 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 
 	case frontend.NodeArrayLiteralExpression:
 		return r.arrayLiteral(n)
+
+	case frontend.NodeElementAccessExpression:
+		return r.elementAccess(n)
+
+	case frontend.NodeObjectLiteralExpression:
+		return r.objectLiteral(n)
 
 	case frontend.NodeArrowFunction:
 		return r.arrowFunc(n)
@@ -770,6 +888,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if kids[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "call to a non-identifier callee is a later slice"}
 	}
+	// A call to a name bound by a node: import is a call to a host builtin, not a
+	// user function, so it routes to the value helper the builtin maps to before the
+	// user-function path, which would reject the alias symbol the binding carries.
+	if b, ok := r.nodeImports[r.prog.Text(kids[0])]; ok {
+		return r.nodeBuiltinCall(b, kids[1:])
+	}
 	// A bare call to an ambient global function (isNaN, isFinite) is not a call to
 	// a user binding, so it routes to the global-function lowering before the
 	// user-function path, which would otherwise reject it.
@@ -833,6 +957,18 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		return nil, &NotYetLowerable{Reason: "method callee did not expose a receiver and a method name"}
 	}
 	recvNode, method := kids[0], r.prog.Text(kids[1])
+	// process.stdout.write(s) and process.stderr.write(s) are the process output
+	// streams. The receiver is not a value, it is the ambient stream, so the call
+	// lowers to a value write helper rather than a method on a runtime object.
+	if stream, ok := r.processStream(recvNode); ok {
+		return r.processStreamCall(stream, method, argNodes)
+	}
+	// console.log(...) and friends are calls on the global console, not a value
+	// receiver, so they lower to the value console helpers rather than a method on a
+	// runtime object. This is the print path a developer reaches for by default.
+	if r.isGlobalRef(recvNode, "console") {
+		return r.consoleCall(method, argNodes)
+	}
 	// Math.floor(x) and friends are calls on the global Math namespace, not a
 	// value receiver, so they lower to the Go math package rather than a method.
 	if r.isGlobalRef(recvNode, "Math") {
@@ -849,6 +985,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "String") {
 		return r.stringStaticCall(method, argNodes)
 	}
+	// JSON.stringify(x) is a static call on the global JSON namespace, not a method
+	// on a value, so it lowers to the value JSON serializer before the
+	// receiver-value paths below. JSON.parse waits on the dynamic value box.
+	if r.isGlobalRef(recvNode, "JSON") {
+		return r.jsonCall(method, argNodes)
+	}
 	// A method on an array receiver lowers to a value.Array method. This routes
 	// before the primitive and string paths, which expect a number, boolean, or
 	// string receiver an array is not.
@@ -863,6 +1005,18 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
+	}
+	// replace and replaceAll with a regexp literal first argument are their own
+	// path: a plain-literal pattern (no metacharacters) is exactly the string
+	// search the value replace methods do, so it lowers when the pattern is plain
+	// and the flags are a subset bento models, and hands back otherwise so a real
+	// pattern routes to the engine rather than compiling a wrong search.
+	if method == "replace" || method == "replaceAll" {
+		if len(argNodes) >= 1 {
+			if pattern, flags, isRe := r.regexLiteralArg(argNodes[0]); isRe {
+				return r.regexReplaceCall(recvNode, method, pattern, flags, argNodes)
+			}
+		}
 	}
 	goName, params, minArgs, variadic, ok := stringMethod(method)
 	if !ok {
@@ -990,6 +1144,41 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 	return &ast.CallExpr{Fun: sel("value", "FromCharCode"), Args: args}, nil
 }
 
+// jsonCall lowers a static call on the global JSON namespace. stringify takes a
+// single value and returns the exact text V8 produces, which lowers to
+// value.JSONStringify with the argument boxed as any so the serializer's
+// reflection walk can dispatch on its concrete type. parse takes a single string
+// and returns a dynamic any value, which lowers to value.JSONParse and lands in
+// the boxed value world the checker already typed the result as. A replacer, a
+// space, or a reviver argument (the extra parameters) changes the behavior, so a
+// call that passes one hands back rather than ignoring it.
+func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "stringify":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer or space argument is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
+	case "parse":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver argument is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "JSONParse"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "JSON." + method + " is a later slice"}
+	}
+}
+
 // primitiveValueCall lowers toString and valueOf on a number or boolean value.
 // Both take no arguments here: number.toString with a radix throws a RangeError
 // on a radix outside 2..36, which waits on the exception machinery, so a call
@@ -999,6 +1188,55 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 // returns the primitive itself, so it lowers to the receiver expression
 // unchanged. Any other method on a primitive receiver is a later slice.
 func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	// number.toString(radix) is the one primitive method with an argument this
+	// slice covers. The radix must be a literal in 2..36 so no RangeError can fire
+	// (a bad radix throws, which waits on the exception machinery, and a dynamic
+	// radix cannot be range-checked at compile time). A radix of 10 is the same
+	// coercion String(x) runs, so it routes through stringify; any other radix
+	// lowers to value.NumberToStringRadix with the literal folded in.
+	if method == "toString" && len(argNodes) == 1 && r.isNumber(recvNode) {
+		radix, ok := r.literalIntArg(argNodes[0], 2, 36)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "number toString with a non-literal or out-of-range radix is a later slice"}
+		}
+		if radix == 10 {
+			return r.stringify(recvNode)
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "NumberToStringRadix"),
+			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(radix)}},
+		}, nil
+	}
+	// number.toFixed(digits) formats with a fixed number of fraction digits. The
+	// digit count must be a literal in 0..100 for the same reason the radix must:
+	// a count outside that range throws a RangeError, and a dynamic count cannot be
+	// range-checked at compile time. An omitted count means zero. It lowers to
+	// value.NumberToFixed, which rounds the exact double the way the specification
+	// does.
+	if method == "toFixed" && len(argNodes) <= 1 && r.isNumber(recvNode) {
+		digits := 0
+		if len(argNodes) == 1 {
+			d, ok := r.literalIntArg(argNodes[0], 0, 100)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "number toFixed with a non-literal or out-of-range digit count is a later slice"}
+			}
+			digits = d
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "NumberToFixed"),
+			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(digits)}},
+		}, nil
+	}
 	if len(argNodes) != 0 {
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " with arguments is a later slice"}
 	}
@@ -1010,6 +1248,28 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 	default:
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " is a later slice"}
 	}
+}
+
+// literalIntArg reads a numeric-literal argument whose ToInteger value lands in
+// [lo, hi], returning that integer. It is the shared compile-time guard for the
+// number formatting methods whose argument must be in a fixed range or throw: a
+// toString radix in 2..36 and a toFixed digit count in 0..100. A non-literal
+// argument (which cannot be checked at compile time) or a literal that truncates
+// outside the range returns false, so the caller hands back rather than emit a
+// call that could throw a RangeError with no handler in place.
+func (r *Renderer) literalIntArg(n frontend.Node, lo, hi int) (int, bool) {
+	if n.Kind() != frontend.NodeNumericLiteral {
+		return 0, false
+	}
+	v, ok := numericLiteralValue(r.prog.Text(n))
+	if !ok {
+		return 0, false
+	}
+	i := int(v) // ToInteger truncates toward zero.
+	if i < lo || i > hi {
+		return 0, false
+	}
+	return i, true
 }
 
 // numberMethod maps a JavaScript Number static predicate to the value function
@@ -1164,6 +1424,87 @@ func (r *Renderer) isAmbientGlobal(n frontend.Node) bool {
 		}
 	}
 	return true
+}
+
+// processStream reports whether n refers to process.stdout or process.stderr,
+// the ambient output streams, and returns which one. It matches a property access
+// whose object is the ambient global process and whose property is stdout or
+// stderr, so a user object that happens to carry a stdout field does not match and
+// its methods do not lower to the process write helpers.
+func (r *Renderer) processStream(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return "", false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return "", false
+	}
+	if !r.isGlobalRef(kids[0], "process") {
+		return "", false
+	}
+	switch prop := r.prog.Text(kids[1]); prop {
+	case "stdout", "stderr":
+		return prop, true
+	default:
+		return "", false
+	}
+}
+
+// processStreamCall lowers a call on a process output stream. Only write is
+// covered: it takes a single string and lowers to value.WriteStdout or
+// value.WriteStderr, which write the string's UTF-8 view to the file descriptor
+// and return the boolean write reports. A different method, a different arity, or
+// a non-string argument hands back rather than emitting a mistyped call.
+func (r *Renderer) processStreamCall(stream, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "write" {
+		return nil, &NotYetLowerable{Reason: "process." + stream + "." + method + " is a later slice"}
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "process." + stream + ".write with this argument count is a later slice"}
+	}
+	if !r.isString(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "process." + stream + ".write of a non-string is a later slice"}
+	}
+	arg, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	goName := "WriteStdout"
+	if stream == "stderr" {
+		goName = "WriteStderr"
+	}
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// consoleCall lowers a call on the global console. The methods that write to
+// standard output (log, info, debug) lower to value.ConsoleLog, and the ones that
+// write to standard error (error, warn) to value.ConsoleError. Each argument is
+// stringified with the same ECMAScript ToString a String() call uses, so a
+// number, boolean, or string prints exactly as Node's console does for that
+// primitive, and the parts join with a space and a trailing newline inside the
+// helper. An argument this slice cannot stringify (an object, whose inspect runs
+// richer formatting) hands back rather than printing the wrong text.
+func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	var goName string
+	switch method {
+	case "log", "info", "debug":
+		goName = "ConsoleLog"
+	case "error", "warn":
+		goName = "ConsoleError"
+	default:
+		return nil, &NotYetLowerable{Reason: "console." + method + " is a later slice"}
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		part, err := r.stringify(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, part)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
 }
 
 // globalFn maps a bare global function name to the value function that implements
@@ -1405,6 +1746,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		return "Replace", []argKind{argString, argString}, 2, false, true
 	case "replaceAll":
 		return "ReplaceAll", []argKind{argString, argString}, 2, false, true
+	case "split":
+		// Only the string-separator form lowers, to value.BStr.Split returning a
+		// string array; a regexp separator does not type as a string, so methodCall
+		// hands it back, and the optional limit argument is a later slice, so exactly
+		// one argument is admitted.
+		return "Split", []argKind{argString}, 1, false, true
 	case "startsWith":
 		return "StartsWith", []argKind{argString, argNumber}, 1, false, true
 	case "endsWith":
@@ -1425,6 +1772,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		// concat takes any number of string arguments, so it is variadic over a
 		// single repeating string kind and has no upper bound.
 		return "ConcatN", []argKind{argString}, 0, true, true
+	case "repeat":
+		// repeat takes exactly one number, the count. value.Repeat coerces it the
+		// way String.prototype.repeat does and treats a negative or non-finite count
+		// as the RangeError it is, so a bad count is caught at runtime rather than
+		// miscompiled.
+		return "Repeat", []argKind{argNumber}, 1, false, true
 	case "toUpperCase":
 		return "ToUpperCase", nil, 0, false, true
 	case "toLowerCase":
@@ -1649,6 +2002,23 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
+	// A read o.k on a dynamic receiver (one typed any or unknown) has no static
+	// shape to intern to a Go field, so it dispatches at runtime through the boxed
+	// value's Get, which reports a string's length, an array's length and indices,
+	// and an object's own properties, and undefined for a miss, the JavaScript
+	// result. The property name is a plain string literal here, the source key, so
+	// Get looks it up by the same name the value carries. This routes before the
+	// static-shape paths below, which expect a receiver whose type the checker
+	// pinned down.
+	if r.isDynamic(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, nil
+	}
 	if r.isString(obj) && prop == "length" {
 		recv, err := r.lowerExpr(obj)
 		if err != nil {
@@ -1678,6 +2048,29 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			return e, nil
 		}
 		return nil, &NotYetLowerable{Reason: "Number." + prop + " as a value is a later slice"}
+	}
+	// A plain read o.k on a fixed-shape object lowers to the Go struct field the
+	// shape's property interns to. The field name comes from the same exportedField
+	// mapping and the same internStruct registration the object literal and the
+	// type renderer use, so a read and the value it reads agree on the field. A
+	// shape that does not lower (an optional property, say) hands back through
+	// internStruct rather than reading a field that was never declared.
+	objType := r.prog.TypeAt(obj)
+	if objType.Flags&frontend.TypeObject != 0 {
+		if _, isArray := r.prog.ElementType(objType); !isArray {
+			field, ok := exportedField(prop)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "property name ." + prop + " is not a Go identifier"}
+			}
+			if _, err := r.decls.internStruct(r, objType); err != nil {
+				return nil, err
+			}
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.SelectorExpr{X: recv, Sel: ident(field)}, nil
+		}
 	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
 }
@@ -1773,17 +2166,44 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 // the string, remainder, and bitwise special cases apply the same way whether
 // the operator was written on its own or fused to an assignment.
 func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.Expr, error) {
-	// + on two strings is concatenation of a UTF-16 string, not a Go string +,
-	// which would be UTF-8, and not a Go operator at all since bstr is a struct.
-	// It lowers to value.Concat, which picks the wider backing form and copies
-	// once (section 5). It is handled before the operator table so the string path
-	// emits a call rather than reaching the number/bool dispatch.
-	if opText == "+" && r.isString(left) && r.isString(right) {
-		l, err := r.lowerExpr(left)
+	// + where either operand is dynamic (typed any or unknown) cannot pick a Go
+	// operator at compile time, because the operand's runtime kind decides whether
+	// the result is a numeric sum or a string concatenation. It lowers to value.Add,
+	// the boxed + that runs ToPrimitive on both sides and then adds or concatenates
+	// the way the language does. Each operand is boxed to a value.Value first: a
+	// dynamic operand already is one, and a static primitive is lifted through its
+	// constructor. This routes before the static operator paths below, which read
+	// isString and isNumber that a dynamic operand answers no to. Only + is dynamic
+	// here; another operator on a dynamic operand falls through and hands back.
+	if r.combineIsDynamic(opText, left, right) {
+		l, err := r.boxOperand(left)
 		if err != nil {
 			return nil, err
 		}
-		rr, err := r.lowerExpr(right)
+		rr, err := r.boxOperand(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Add"), Args: []ast.Expr{l, rr}}, nil
+	}
+
+	// + where either operand is a string is concatenation of a UTF-16 string, not
+	// a Go string +, which would be UTF-8, and not a Go operator at all since bstr
+	// is a struct. JavaScript + is string concatenation as soon as one operand is a
+	// string: the other operand is coerced to a string with the same ToString the
+	// value model runs, so a number becomes value.NumberToString and a boolean
+	// value.BoolToString before both are joined with value.Concat, which picks the
+	// wider backing form and copies once (section 5). It is handled before the
+	// operator table so the string path emits a call rather than reaching the
+	// number/bool dispatch, and a string operand against a non-primitive (an object
+	// or array, whose ToString is a later slice) hands back through stringifyOperand.
+	if opText == "+" && (r.isString(left) || r.isString(right)) {
+		l, err := r.stringifyOperand(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.stringifyOperand(right)
 		if err != nil {
 			return nil, err
 		}
@@ -2017,6 +2437,33 @@ func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left,
 	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}, nil
 }
 
+// stringifyOperand lowers an operand of a string concatenation to a value.BStr,
+// coercing it the way JavaScript + does once the other operand is a string. A
+// string operand is already a BStr and passes through; a number becomes
+// value.NumberToString and a boolean value.BoolToString, the exact ToString the
+// value model runs so a concatenated number reads the same bytes String(x) would
+// and matches the engine. A non-primitive operand, whose ToString needs the
+// object machinery, hands back for a later slice rather than emitting a coercion
+// that does not exist yet.
+func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
+	e, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case r.isString(n):
+		return e, nil
+	case r.isNumber(n):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{e}}, nil
+	case r.isBool(n):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{e}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "string concatenation with a non-primitive operand is a later slice"}
+	}
+}
+
 // binaryOp picks the Go operator for a TypeScript binary operator given its
 // operand types. It dispatches on the operand types so a number path and a
 // boolean path stay separate and each guards its own sound operator set; mixed
@@ -2057,6 +2504,121 @@ func (r *Renderer) isBool(n frontend.Node) bool {
 // object path.
 func (r *Renderer) isString(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&frontend.TypeString != 0
+}
+
+// isDynamic reports whether the checker types n as any or unknown, the types that
+// have no static Go shape and so live as a boxed value.Value. It is the guard the
+// dynamic paths use to route a property read, a +, or an assignment through the
+// value box rather than a static field, operator, or slot.
+func (r *Renderer) isDynamic(n frontend.Node) bool {
+	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
+// combineIsDynamic reports whether a binary operator on these operands produces a
+// boxed dynamic result, which is the case only for + with a dynamic operand: the
+// result kind is not known until runtime, so it goes through value.Add. Every
+// other operator on a dynamic operand is not lowered here and hands back through
+// the operator table, so this stays narrow to the one case combineBinary boxes.
+func (r *Renderer) combineIsDynamic(opText string, left, right frontend.Node) bool {
+	return opText == "+" && (r.isDynamic(left) || r.isDynamic(right))
+}
+
+// boxOperand lowers an operand to a value.Value so a dynamic operator can take it.
+// A dynamic operand already lowers to a value.Value and passes through; a static
+// primitive is lifted through its box constructor. A non-primitive static operand
+// has no box constructor on this path yet and hands back.
+func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
+	e, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	if r.isDynamic(n) {
+		return e, nil
+	}
+	return r.boxStaticToDynamic(e, n)
+}
+
+// boxStaticToDynamic wraps a statically typed primitive expression in the value
+// constructor that boxes it, so a number, string, or boolean can flow into a
+// dynamic slot or a dynamic operator. The source node carries the primitive kind,
+// which picks the constructor. A non-primitive source has no constructor here yet
+// and hands back.
+func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	switch {
+	case r.isNumber(src):
+		return &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{expr}}, nil
+	case r.isString(src):
+		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
+	case r.isBool(src):
+		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
+	}
+}
+
+// coerceDynamicToStatic wraps a boxed dynamic value in the coercion that lands it
+// in a static primitive slot, the ToNumber, ToString, or ToBoolean the language
+// runs when a value typed any flows into a number, string, or boolean binding. A
+// target that is not one of those three primitives has no coercion here and hands
+// back.
+func (r *Renderer) coerceDynamicToStatic(expr ast.Expr, target frontend.Node) (ast.Expr, error) {
+	return r.coerceDynamicToStaticFlags(expr, r.prog.TypeAt(target).Flags)
+}
+
+// coerceDynamicToStaticFlags is the flag-keyed core of coerceDynamicToStatic, so a
+// caller that holds a target type rather than a node (a return statement, whose
+// target is the function's declared return type) can pick the same coercion. It
+// maps a number, string, or boolean target to the matching ToNumber, ToString, or
+// ToBoolean; any other target hands back.
+func (r *Renderer) coerceDynamicToStaticFlags(expr ast.Expr, flags frontend.TypeFlags) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	switch {
+	case flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: sel("value", "ToNumber"), Args: []ast.Expr{expr}}, nil
+	case flags&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{expr}}, nil
+	case flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{expr}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "coercing a dynamic value into this static type is a later slice"}
+	}
+}
+
+// coerceReturn bridges a return value from its expression's type to the function's
+// declared return type across the dynamic boundary, the same coercion an
+// assignment applies to its target. A dynamic value returned as a static primitive
+// runs the ToNumber family, a static value returned as any boxes, and a return
+// whose value already matches the declared type passes through unchanged.
+func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr, error) {
+	srcDyn := r.isDynamic(srcNode)
+	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	switch {
+	case srcDyn && !tgtDyn:
+		return r.coerceDynamicToStaticFlags(expr, r.retType.Flags)
+	case !srcDyn && tgtDyn:
+		return r.boxStaticToDynamic(expr, srcNode)
+	default:
+		return expr, nil
+	}
+}
+
+// coerceToTarget bridges a value from a source node's type to a target node's type
+// across the dynamic boundary, the coercion an assignment or a binding applies when
+// one side is dynamic and the other static. A dynamic source into a static target
+// coerces through ToNumber and its siblings; a static source into a dynamic target
+// boxes through the value constructors; matching sides pass through unchanged.
+func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast.Expr, error) {
+	srcDyn := r.isDynamic(src)
+	tgtDyn := r.isDynamic(target)
+	switch {
+	case srcDyn && !tgtDyn:
+		return r.coerceDynamicToStatic(expr, target)
+	case !srcDyn && tgtDyn:
+		return r.boxStaticToDynamic(expr, src)
+	default:
+		return expr, nil
+	}
 }
 
 // arrayElem reports whether the checker types n as an array, returning the
@@ -2107,6 +2669,104 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
+// elementAccess lowers an index expression a[i] to the array's At method. Only an
+// array receiver is covered: arrayElem confirms the checker types the receiver as
+// an array whose element type lowers, and the index must be a Number, the JS array
+// index. An object property read spelled o["k"] and a string character read s[i]
+// have different runtime meanings and hand back to their own later slices. The
+// element type is carried by the receiver, so At needs no type argument here; it
+// returns the element the checker already typed the whole access as.
+func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return nil, &NotYetLowerable{Reason: "element access did not expose an object and an index"}
+	}
+	obj, idxNode := kids[0], kids[1]
+	if _, ok := r.arrayElem(obj); !ok {
+		return nil, &NotYetLowerable{Reason: "element access on a non-array receiver is a later slice"}
+	}
+	if !r.isNumber(idxNode) {
+		return nil, &NotYetLowerable{Reason: "array element access with a non-number index is a later slice"}
+	}
+	recv, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
+}
+
+// objectLiteral lowers an object literal { k: v, ... } to a composite literal
+// that builds a pointer to the generated struct the object's shape interns to.
+// The struct name comes from the same internStruct path a variable annotated
+// with this shape takes, so a literal and a binding of the same shape produce
+// the same Go type and structural assignability becomes Go assignability
+// (05_type_lowering section 12). Each property lowers to a keyed field, so the
+// literal's declaration order need not match the struct's field order. Only the
+// plain identifier-keyed forms are covered: a computed or string key belongs in
+// the object side table, a spread copies another object's own fields, and a
+// method or accessor is a function member, each its own later slice, so any of
+// them hands back rather than emit a wrong or partial struct.
+func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "object literal whose type is not an object shape is a later slice"}
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return nil, &NotYetLowerable{Reason: "object literal typed as an array is a later slice"}
+	}
+	// internStruct registers the struct and reports the name; a shape that does
+	// not lower (an optional property, a non-identifier field) hands back here, so
+	// the literal never builds a struct the type side would refuse to declare.
+	name, err := r.decls.internStruct(r, t)
+	if err != nil {
+		return nil, err
+	}
+	props := r.prog.Children(n)
+	elts := make([]ast.Expr, 0, len(props))
+	for _, p := range props {
+		if p.Kind() != frontend.NodeUnknown {
+			// A method, getter, or setter member is a function property, which the
+			// frontend names its own kind rather than a property assignment.
+			return nil, &NotYetLowerable{Reason: "object literal with a method or accessor member is a later slice"}
+		}
+		kids := r.prog.Children(p)
+		var keyNode, valNode frontend.Node
+		switch len(kids) {
+		case 1:
+			// A shorthand { x } is { x: x }: the single child is both the key and the
+			// value reference. A spread { ...o } is also a single-child member, but
+			// its text opens with the spread token, so it routes to the handback.
+			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
+				return nil, &NotYetLowerable{Reason: "object spread in a literal is a later slice"}
+			}
+			keyNode, valNode = kids[0], kids[0]
+		case 2:
+			keyNode, valNode = kids[0], kids[1]
+		default:
+			return nil, &NotYetLowerable{Reason: "object literal member with an unexpected shape is a later slice"}
+		}
+		if keyNode.Kind() != frontend.NodeIdentifier {
+			// A computed [k] key or a string/numeric key does not become a struct
+			// field; it belongs in the object side table, a later slice.
+			return nil, &NotYetLowerable{Reason: "object literal with a non-identifier key is a later slice"}
+		}
+		field, ok := exportedField(r.prog.Text(keyNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
+		}
+		val, err := r.lowerExpr(valNode)
+		if err != nil {
+			return nil, err
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+	}
+	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, nil
 }
 
 // arrayMethodCall lowers a method call on an array receiver to a value.Array
