@@ -268,8 +268,15 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
 		kids := r.prog.Children(d)
-		if len(kids) != 2 {
-			return nil, &NotYetLowerable{Reason: "variable binding with a type annotation or no initializer is a later slice"}
+		// A binding is [name, initializer] without an annotation, or [name, type,
+		// initializer] with one. The Go type is always read from the checker's type
+		// for the name, so the annotation node itself is not lowered, only skipped;
+		// what it changes is the child count, and the initializer is the last child
+		// in both shapes. A binding with no initializer (a bare declaration or an
+		// ambient one) has no last-child value to lower and hands back, since the
+		// zero-value strategy it would need is a later slice.
+		if len(kids) != 2 && len(kids) != 3 {
+			return nil, &NotYetLowerable{Reason: "variable binding with no initializer is a later slice"}
 		}
 		name, ok := localName(r.prog.Text(kids[0]))
 		if !ok {
@@ -279,7 +286,7 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		init, err := r.lowerExpr(kids[1])
+		init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 		if err != nil {
 			return nil, err
 		}
@@ -290,6 +297,28 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		})
 	}
 	return &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: specs}}, nil
+}
+
+// bindingInit lowers a binding's initializer, with one context-sensitive case an
+// initializer read on its own cannot get right: an empty array literal. The
+// checker types a bare [] as never[], since it has no element to infer from, so
+// lowering it in isolation would instantiate value.NewArray at never. The
+// annotated binding does carry the element type, so when the initializer is an
+// empty array literal and the binding is an array, the element type is taken from
+// the binding rather than from the literal, which is exactly the contextual type
+// TypeScript itself applies here. Every other initializer lowers on its own.
+func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, error) {
+	if initNode.Kind() == frontend.NodeArrayLiteralExpression && len(r.prog.Children(initNode)) == 0 {
+		if elem, ok := r.prog.ElementType(r.prog.TypeAt(nameNode)); ok {
+			elemType, err := r.typeExpr(elem)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType)}, nil
+		}
+	}
+	return r.lowerExpr(initNode)
 }
 
 // collectVarDecls gathers the variable declarations inside a variable statement.
@@ -460,8 +489,8 @@ func compoundBaseOp(op string) (string, bool) {
 // expression initializer hands back.
 func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
-	if len(kids) != 4 || kids[3].Kind() != frontend.NodeBlock {
-		return nil, &NotYetLowerable{Reason: "only a for with a declaration, condition, increment, and block body is lowered yet"}
+	if len(kids) != 4 {
+		return nil, &NotYetLowerable{Reason: "only a for with a declaration, condition, and increment is lowered yet"}
 	}
 
 	var decls []frontend.Node
@@ -481,13 +510,29 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := r.lowerBlock(kids[3])
+	body, err := r.loopBody(kids[3])
 	if err != nil {
 		return nil, err
 	}
 
 	loop := &ast.ForStmt{Cond: cond, Post: post, Body: body}
 	return &ast.BlockStmt{List: []ast.Stmt{initDecl, loop}}, nil
+}
+
+// loopBody lowers the body of a loop, which JavaScript allows to be either a
+// braced block or a single unbraced statement. A block lowers as its statements;
+// a lone statement is lowered on its own and wrapped in a Go block, since a Go
+// for always takes a block. This is what lets a one-line loop like
+// `for (...) xs.push(f(i));` lower without the source having to add braces.
+func (r *Renderer) loopBody(n frontend.Node) (*ast.BlockStmt, error) {
+	if n.Kind() == frontend.NodeBlock {
+		return r.lowerBlock(n)
+	}
+	stmt, err := r.lowerStatement(n)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.BlockStmt{List: []ast.Stmt{stmt}}, nil
 }
 
 // lowerIf lowers an if, with an optional else that is itself a block or a

@@ -443,6 +443,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"word word", "W"}, {"nomatch", "W"}, {"", "W"}},
 		},
 		{
+			name: "pushloop",
+			// a typed empty-array binding, an unbraced for body, an array push, and a
+			// length read, all in one function, so the whole path proves out against
+			// the engine: the cases return the element count, which is the loop bound.
+			file: "eq_pushloop",
+			fn:   "pl",
+			args: [][]any{{0}, {1}, {5}, {50}},
+		},
+		{
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.

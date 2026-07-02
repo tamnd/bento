@@ -285,6 +285,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "split", file: "func_split"},
 		// s.replace(/word/g, r) with a plain-literal global regexp lowers to the value.BStr ReplaceAll method over the literal the pattern spells, the global flag selecting ReplaceAll over Replace.
 		{name: "regex_replace", file: "func_regex_replace"},
+		// a typed empty-array binding lowers to value.NewArray at the binding's element type (the checker types a bare [] as never[], so the element type comes from the annotation), an unbraced for body lowers as a wrapped block, and push and length lower to the value.Array methods.
+		{name: "pushloop", file: "func_pushloop"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
