@@ -1,0 +1,3 @@
+func Num(s value.BStr) float64 {
+	return value.StringToNumber(s)
+}
