@@ -957,6 +957,16 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			tol:  1e-12,
 			args: [][]any{{0.25}, {1}, {-0.5}},
 		},
+		{
+			// an array literal built, iterated with for...of, and summed, plus its
+			// .length: the whole array path run through the engine. The scalar
+			// argument scales each element so the sum is discriminating rather than
+			// constant.
+			name: "arrayForOf",
+			file: "eq_array_forof",
+			fn:   "total",
+			args: [][]any{{0}, {1}, {2}, {-3}, {0.5}},
+		},
 	}
 
 	for _, tc := range cases {
