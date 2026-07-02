@@ -36,8 +36,18 @@ func (a *Array[T]) Len() float64 { return float64(len(a.elems)) }
 
 // Elems returns the backing slice for in-order iteration, the lowering target
 // of for...of. It is the live backing store, not a copy, which matches the
-// array iterator visiting the elements in place. Nothing mutates an array in
-// this slice, so the grow-and-shrink-during-iteration edges cannot arise yet;
-// the slice that adds mutation will decide then whether iteration needs to read
-// the length each step against a snapshot.
+// array iterator visiting the elements in place. A push during iteration is
+// visible through the same slice header the range captured at loop entry, which
+// matches the array iterator reading up to the current length; the sparse
+// grow-and-shrink edges are still a later slice.
 func (a *Array[T]) Elems() []T { return a.elems }
+
+// Push appends its arguments to the end of the array and returns the new length
+// as a Number, matching JavaScript's Array.prototype.push. It is a pointer
+// method so the append is visible through every reference to the array, which is
+// what a mutation on a shared array must be; a const binding in the source is no
+// obstacle, because const freezes the binding, not the array's contents.
+func (a *Array[T]) Push(xs ...T) float64 {
+	a.elems = append(a.elems, xs...)
+	return float64(len(a.elems))
+}

@@ -311,8 +311,18 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerAssign(n)
 	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
 		return r.lowerIncDec(n)
+	case frontend.NodeCallExpression:
+		// A call used as a statement discards its result, which Go allows for any
+		// function call, so it lowers to the call wrapped in an expression
+		// statement. This is how a mutating method like an array push is invoked
+		// for its effect rather than its value.
+		call, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.ExprStmt{X: call}, nil
 	default:
-		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment or update is a later slice"}
+		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment, update, or call is a later slice"}
 	}
 }
 
@@ -776,6 +786,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// the string-method path below, which expects a string receiver.
 	if r.isGlobalRef(recvNode, "String") {
 		return r.stringStaticCall(method, argNodes)
+	}
+	// A method on an array receiver lowers to a value.Array method. This routes
+	// before the primitive and string paths, which expect a number, boolean, or
+	// string receiver an array is not.
+	if _, ok := r.arrayElem(recvNode); ok {
+		return r.arrayMethodCall(recvNode, method, argNodes)
 	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
@@ -1973,6 +1989,36 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
+// arrayMethodCall lowers a method call on an array receiver to a value.Array
+// method. Only push is covered so far: it appends its arguments and returns the
+// new length. The checker has already verified each argument against the element
+// type, so the arguments lower directly with no per-argument kind guard the way
+// the string methods need, since here the element type, not a fixed argument
+// kind, is what the checker enforced. The reading, higher-order, and other
+// mutating methods (pop, indexOf, includes, join, map, filter, slice) are later
+// slices; pop and index reads additionally wait on the optional machinery for
+// their undefined result.
+func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "push":
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		args := make([]ast.Expr, 0, len(argNodes))
+		for _, a := range argNodes {
+			lowered, err := r.lowerExpr(a)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Push")}, Args: args}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
+	}
 }
 
 // numericBinaryOp maps a TypeScript operator on number operands to its Go token.
