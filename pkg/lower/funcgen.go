@@ -918,9 +918,13 @@ func numberMethod(name string) (goName string, ok bool) {
 // math.Sign at all. fround, clz32, and imul map to value too, but for a different
 // reason than round: they are integer or single-precision operations, so they are
 // bit-exact and agree with the engine to the last bit the way the transcendental
-// functions cannot. Left out on purpose: the transcendental functions (sin, log,
-// exp), whose last-bit results are not guaranteed identical across two libm
-// implementations. Each is a later slice.
+// functions cannot. The transcendental functions (cbrt, exp, expm1, the logs, the
+// trig and inverse-trig and hyperbolic families, atan2, and the two-argument
+// hypot) map straight onto the Go math package too, but their last-bit results are
+// not guaranteed identical across two libm implementations, so they are proven by
+// the equivalence harness's numeric-tolerance mode rather than by an exact match.
+// hypot stays two-argument because math.Hypot takes exactly two; the variadic
+// Math.hypot(a, b, c) hands back until a value.HypotN folds a list.
 func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok bool) {
 	switch name {
 	case "floor":
@@ -949,6 +953,48 @@ func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok boo
 		return valuePkg, "Clz32", 1, 1, true
 	case "imul":
 		return valuePkg, "Imul", 2, 2, true
+	case "cbrt":
+		return "math", "Cbrt", 1, 1, true
+	case "exp":
+		return "math", "Exp", 1, 1, true
+	case "expm1":
+		return "math", "Expm1", 1, 1, true
+	case "log":
+		return "math", "Log", 1, 1, true
+	case "log2":
+		return "math", "Log2", 1, 1, true
+	case "log10":
+		return "math", "Log10", 1, 1, true
+	case "log1p":
+		return "math", "Log1p", 1, 1, true
+	case "sin":
+		return "math", "Sin", 1, 1, true
+	case "cos":
+		return "math", "Cos", 1, 1, true
+	case "tan":
+		return "math", "Tan", 1, 1, true
+	case "asin":
+		return "math", "Asin", 1, 1, true
+	case "acos":
+		return "math", "Acos", 1, 1, true
+	case "atan":
+		return "math", "Atan", 1, 1, true
+	case "atan2":
+		return "math", "Atan2", 2, 2, true
+	case "sinh":
+		return "math", "Sinh", 1, 1, true
+	case "cosh":
+		return "math", "Cosh", 1, 1, true
+	case "tanh":
+		return "math", "Tanh", 1, 1, true
+	case "asinh":
+		return "math", "Asinh", 1, 1, true
+	case "acosh":
+		return "math", "Acosh", 1, 1, true
+	case "atanh":
+		return "math", "Atanh", 1, 1, true
+	case "hypot":
+		return "math", "Hypot", 2, 2, true
 	default:
 		return "", "", 0, 0, false
 	}

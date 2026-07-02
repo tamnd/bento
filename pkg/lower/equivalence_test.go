@@ -2,6 +2,7 @@ package lower
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,11 +37,22 @@ import (
 // function the calls drive. Each tuple element is a float64, string, or bool.
 // ret names the return kind ("number", "string", or "boolean"); an empty ret
 // means number, the common case.
+//
+// tol is the numeric tolerance for a number result. It defaults to zero, which
+// means the two sides must print the same string, the exact match every other
+// case wants. A transcendental function (sin, log, exp) is the one place that
+// is too strict: Go's math package and the engine's libm each round the last
+// bit their own way, so the results agree to within a few ULPs but not to the
+// printed digit. Such a case sets a small tol and the harness compares the two
+// numbers within max(tol, tol*|want|) instead of by string, which still catches
+// a real mistranslation (a wrong function, a swapped argument) while tolerating
+// the last-bit divergence two libm implementations are allowed.
 type equivCase struct {
 	name string
 	file string
 	fn   string
 	ret  string
+	tol  float64
 	args [][]any
 }
 
@@ -897,6 +909,54 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "hypotSq",
 			args: [][]any{{3, 4}, {0, 0}, {-2, 5}},
 		},
+		{
+			// A transcendental: Go's math.Sin and the engine's sin round the last
+			// bit differently, so this is the first case that compares within a
+			// tolerance rather than by exact string. The args cover 0, a fraction, a
+			// value past pi, and a negative.
+			name: "mathSin",
+			file: "eq_math_sin",
+			fn:   "s",
+			tol:  1e-12,
+			args: [][]any{{0}, {0.5}, {3.5}, {-1.25}},
+		},
+		{
+			// log over a value below, at, and above 1, where the sign of the result
+			// changes, plus a large argument.
+			name: "mathLog",
+			file: "eq_math_log",
+			fn:   "l",
+			tol:  1e-12,
+			args: [][]any{{0.5}, {1}, {2}, {1000}},
+		},
+		{
+			// atan2 takes two arguments in the order (y, x), so the cases span all
+			// four quadrants to prove the argument order matches the engine.
+			name: "mathAtan2",
+			file: "eq_math_atan2",
+			fn:   "a",
+			tol:  1e-12,
+			args: [][]any{{1, 1}, {1, -1}, {-1, -1}, {-1, 1}},
+		},
+		{
+			// the two-argument hypot, checked against the Pythagorean cases and a
+			// pair with a negative component.
+			name: "mathHypot",
+			file: "eq_math_hypot",
+			fn:   "h",
+			tol:  1e-12,
+			args: [][]any{{3, 4}, {5, 12}, {-8, 15}, {0, 0}},
+		},
+		{
+			// a sum over six more of the family (cos, tan, exp, cbrt, tanh, atan) so
+			// a single case exercises the trig, exponential, root, and hyperbolic
+			// paths at once; the tolerance absorbs each function's last-bit rounding.
+			name: "mathFamily",
+			file: "eq_math_family",
+			fn:   "f",
+			tol:  1e-12,
+			args: [][]any{{0.25}, {1}, {-0.5}},
+		},
 	}
 
 	for _, tc := range cases {
@@ -910,12 +970,46 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			for _, args := range tc.args {
 				want := evalTS(t, src, tc.fn, tc.ret, args)
 				got := runGo(t, goSrc, imports, goName, tc.ret, args)
+				if tc.tol > 0 {
+					if !numbersWithin(got, want, tc.tol) {
+						t.Errorf("%s(%v): generated Go = %s, TypeScript = %s (tol %g)", tc.fn, args, got, want, tc.tol)
+					}
+					continue
+				}
 				if got != want {
 					t.Errorf("%s(%v): generated Go = %s, TypeScript = %s", tc.fn, args, got, want)
 				}
 			}
 		})
 	}
+}
+
+// numbersWithin reports whether two printed number results agree within a
+// relative-or-absolute tolerance. It parses both sides as float64 and accepts
+// them when |got - want| <= max(tol, tol*|want|), so tol acts as an absolute
+// floor near zero and a relative bound for large magnitudes. NaN matches NaN
+// and an infinity matches the same infinity, since those are exact outcomes a
+// transcendental still has to reproduce, not last-bit rounding. A side that
+// does not parse as a float fails the comparison, which surfaces a wrong return
+// kind rather than hiding it.
+func numbersWithin(got, want string, tol float64) bool {
+	if got == want {
+		return true
+	}
+	g, gErr := strconv.ParseFloat(got, 64)
+	w, wErr := strconv.ParseFloat(want, 64)
+	if gErr != nil || wErr != nil {
+		return false
+	}
+	if math.IsNaN(g) || math.IsNaN(w) || math.IsInf(g, 0) || math.IsInf(w, 0) {
+		return false // exact cases already handled by the string equality above
+	}
+	diff := math.Abs(g - w)
+	bound := tol
+	if scaled := tol * math.Abs(w); scaled > bound {
+		bound = scaled
+	}
+	return diff <= bound
 }
 
 // lowerToGo compiles the snippet and lowers every top-level function plus any
