@@ -23,6 +23,7 @@ import (
 	"github.com/tamnd/bento/pkg/loop"
 	"github.com/tamnd/bento/pkg/node"
 	"github.com/tamnd/bento/pkg/resolve"
+	"github.com/tamnd/bento/pkg/value"
 )
 
 //go:embed prelude.js
@@ -200,6 +201,15 @@ func (rt *Runtime) installHostFuncs() error {
 
 	if err := reg("__bento_boot", func(args []any) (any, error) {
 		return rt.bootJSON()
+	}); err != nil {
+		return err
+	}
+
+	// performance.now() reads the same monotonic clock the AOT path lowers to, so a
+	// program timed in the engine and the same program timed after compilation
+	// measure against one origin and agree on an elapsed duration.
+	if err := reg("__bento_perfNow", func(args []any) (any, error) {
+		return value.PerformanceNow(), nil
 	}); err != nil {
 		return err
 	}
