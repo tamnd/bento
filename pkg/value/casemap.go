@@ -43,6 +43,7 @@ func (s BStr) ToLowerCase() BStr {
 // string to UTF-8 first would replace it. A fresh caser is passed in per call
 // because a cases.Caser may not be used concurrently.
 func (s BStr) caseMap(caser cases.Caser) BStr {
+	s = s.flat()
 	if s.utf16 == nil {
 		return FromGoString(caser.String(s.utf8))
 	}

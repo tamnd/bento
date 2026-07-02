@@ -1,5 +1,7 @@
 package value
 
+import "strings"
+
 // Array is bento's runtime representation of a JavaScript array whose element
 // type the compiler proved, the *Array[T] header that 05_type_lowering.md
 // section 11 names. It wraps a Go backing slice and adds the JavaScript array
@@ -172,11 +174,46 @@ func (a *Array[T]) Join(sep BStr, str func(T) BStr) BStr {
 	if len(a.elems) == 0 {
 		return FromGoString("")
 	}
-	out := str(a.elems[0])
-	for _, x := range a.elems[1:] {
-		out = Concat(Concat(out, sep), str(x))
+	// Accumulate into one buffer in a single pass, so a join of n elements is O(n)
+	// total rather than the O(n squared) a fold of pairwise Concat would cost by
+	// copying the growing result at every step. The UTF-8 fast path stays on bytes
+	// through a strings.Builder while every piece and the separator are valid UTF-8,
+	// which is the common case; the first piece that carries a raw code-unit backing
+	// falls through to the code-unit builder so a lone surrogate survives, matching
+	// how Concat picks its backing.
+	sep = sep.flat()
+	if sep.utf16 == nil {
+		var b strings.Builder
+		lengthU16 := 0
+		utf8Only := true
+		for i := range a.elems {
+			es := str(a.elems[i]).flat()
+			if es.utf16 != nil {
+				utf8Only = false
+				break
+			}
+			if i > 0 {
+				b.WriteString(sep.utf8)
+				lengthU16 += sep.lengthU16
+			}
+			b.WriteString(es.utf8)
+			lengthU16 += es.lengthU16
+		}
+		if utf8Only {
+			return BStr{utf8: b.String(), lengthU16: lengthU16}
+		}
 	}
-	return out
+	// Code-unit builder: correct for any backing, including a separator or a piece
+	// that holds a lone surrogate. str is a pure coercion, so re-running it here
+	// after the fast path bailed costs only the rare surrogate case.
+	var units []uint16
+	for i := range a.elems {
+		if i > 0 {
+			units = sep.appendUnits(units)
+		}
+		units = str(a.elems[i]).appendUnits(units)
+	}
+	return BStr{utf16: units, lengthU16: len(units)}
 }
 
 // Pop removes the last element and returns it, the lowering of
