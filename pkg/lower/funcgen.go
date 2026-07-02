@@ -538,9 +538,95 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodePrefixUnaryExpression:
 		return r.prefixUnary(n)
 
+	case frontend.NodeConditionalExpression:
+		return r.conditionalExpr(n)
+
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
 	}
+}
+
+// conditionalExpr lowers a ternary cond ? whenTrue : whenFalse. Go has no
+// conditional operator, so it lowers to an immediately-invoked function that
+// returns one branch or the other. The function form, rather than a helper
+// taking both values, is what preserves JavaScript's laziness: only the taken
+// branch's expression runs, so a side effect or a call in the untaken branch
+// does not fire. The condition reuses lowerCondition, so it must be a boolean
+// (a truthy number or object condition hands back until truthiness lands), and
+// the result type comes from the checker's type for the whole expression, which
+// is the common supertype of the two branches.
+func (r *Renderer) conditionalExpr(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 5 || r.prog.Text(kids[1]) != "?" || r.prog.Text(kids[3]) != ":" {
+		return nil, &NotYetLowerable{Reason: "conditional expression did not expose condition, true, and false branches"}
+	}
+	cond, err := r.lowerCondition(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	whenTrue, err := r.lowerExpr(kids[2])
+	if err != nil {
+		return nil, err
+	}
+	whenFalse, err := r.lowerExpr(kids[4])
+	if err != nil {
+		return nil, err
+	}
+	// The IIFE's return type is the branches' widened primitive, not the checker's
+	// type for the whole expression: TypeScript types a ternary as the union of
+	// its branch types, so two string literals give a "a" | "b" literal union and
+	// a chained numeric ternary gives a numeric-literal union, neither of which is
+	// the value.BStr or float64 the branch expressions actually produce. Both
+	// branches must widen to the same primitive; a ternary that mixes types (or
+	// whose branches are objects) needs the tagged union and hands back.
+	retType, kind, ok := r.condBranchType(kids[2])
+	_, otherKind, otherOK := r.condBranchType(kids[4])
+	if !ok || !otherOK || kind != otherKind {
+		return nil, &NotYetLowerable{Reason: "conditional whose branches are not both the same primitive type needs a union, a later slice"}
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: cond,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{whenTrue}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{whenFalse}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
+}
+
+// condBranchType reports the Go type a ternary branch lowers to and a name for
+// its primitive kind, seeing through parentheses and a nested ternary so a
+// chained a ? x : b ? y : z types by its leaf primitive rather than by the
+// checker's literal union. It returns ok == false for a branch that is not a
+// number, string, or boolean, so a ternary over objects or mixed types hands
+// back rather than guessing a return type.
+func (r *Renderer) condBranchType(n frontend.Node) (ast.Expr, string, bool) {
+	switch {
+	case r.isNumber(n):
+		return ident("float64"), "number", true
+	case r.isBool(n):
+		return ident("bool"), "bool", true
+	case r.isString(n):
+		r.requireImport(valuePkg)
+		return sel("value", "BStr"), "string", true
+	}
+	switch n.Kind() {
+	case frontend.NodeParenthesizedExpression:
+		if kids := r.prog.Children(n); len(kids) == 1 {
+			return r.condBranchType(kids[0])
+		}
+	case frontend.NodeConditionalExpression:
+		if kids := r.prog.Children(n); len(kids) == 5 {
+			return r.condBranchType(kids[2])
+		}
+	}
+	return nil, "", false
 }
 
 // callExpr lowers a call to a top-level function. The callee must be an
