@@ -3224,12 +3224,15 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 // over a lowered callback. Only a single arrow-function argument is covered, the
 // shape these almost always take; a callback passed as a named reference is a
 // later slice, since it needs the reference resolved to a function value first.
-// map carries the same-element-type restriction the value method has: a Go
-// method cannot introduce a new type parameter, so a map whose callback returns
-// a different type than the element hands back for the free-function slice. That
-// restriction is read straight off the arrow's result type, which the checker
-// has already inferred, compared against the array's element type. filter has no
-// such restriction because its callback is always element to boolean.
+// map handles both the same-type and the type-changing form. A Go method cannot
+// introduce a new type parameter, so the value.Array.Map method can only return
+// the element type; when the callback's result type matches the element the map
+// lowers to that method, and when it differs (number[].map(n => n.toString()) is
+// string[]) it lowers to the free function value.MapArray[T, U] with both type
+// arguments spelled out. The result type is read straight off the arrow's body,
+// which the checker has already inferred, compared against the array's element
+// type. filter has no such split because its callback is always element to
+// boolean, so it always uses the method.
 func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNodes []frontend.Node, restrictToElem bool) (ast.Expr, error) {
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
@@ -3250,7 +3253,22 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 			return nil, err
 		}
 		if !same {
-			return nil, &NotYetLowerable{Reason: "array map that changes the element type is a later slice"}
+			// A type-changing map cannot use the method, so it lowers to the free
+			// function value.MapArray[T, U](recv, fn), the one place the element and
+			// result Go types are both named in the emitted call.
+			recv, err := r.lowerExpr(recvNode)
+			if err != nil {
+				return nil, err
+			}
+			fn, err := r.lowerExpr(arrow)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{
+				Fun:  &ast.IndexListExpr{X: sel("value", "MapArray"), Indices: []ast.Expr{elemType, bodyType}},
+				Args: []ast.Expr{recv, fn},
+			}, nil
 		}
 	}
 	recv, err := r.lowerExpr(recvNode)
