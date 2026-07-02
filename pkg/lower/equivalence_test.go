@@ -137,6 +137,21 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {5}, {-3}},
 		},
 		{
+			// a chained ternary picks -1, 0, or 1 across the sign boundaries.
+			name: "conditional",
+			file: "eq_conditional",
+			fn:   "sign",
+			args: [][]any{{-5}, {0}, {8}},
+		},
+		{
+			// a ternary with string branches, matched against the engine's string.
+			name: "conditionalString",
+			file: "eq_conditional_string",
+			fn:   "label",
+			ret:  "string",
+			args: [][]any{{5}, {0}, {-2}},
+		},
+		{
 			name: "stringLength",
 			// The literal holds an astral character (one rune, two UTF-16 code
 			// units). .length must report code units, so the whole string is
