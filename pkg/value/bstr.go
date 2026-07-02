@@ -735,6 +735,16 @@ func isStringWhiteSpace(u uint16) bool {
 	return u >= 0x2000 && u <= 0x200A
 }
 
+// isStringWhiteSpaceRune is the rune form of isStringWhiteSpace, for trimming on
+// the UTF-8 fast path where the string is a sequence of runes rather than code
+// units. Every ECMAScript StrWhiteSpace code point is in the Basic Multilingual
+// Plane, so a rune is whitespace exactly when its low 16 bits are, and a rune
+// above the BMP is never whitespace. Keeping this as a thin wrapper over the
+// code-unit test means the two views can never drift apart.
+func isStringWhiteSpaceRune(r rune) bool {
+	return r >= 0 && r <= 0xFFFF && isStringWhiteSpace(uint16(r))
+}
+
 // PadStart pads the front of s with pad until the result is targetLength code
 // units long, matching String.prototype.padStart. targetLength is coerced to an
 // integer JavaScript-style (NaN becomes 0, a fraction truncates), and if it is

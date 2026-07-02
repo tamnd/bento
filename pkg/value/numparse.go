@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+	"strings"
 )
 
 // This file implements the String-to-Number conversion behind Number(x) on a
@@ -20,9 +21,14 @@ import (
 // radix-prefixed integer forms and the signed decimal (including Infinity), and
 // returns NaN for anything that does not match the grammar.
 func StringToNumber(s BStr) float64 {
-	// Trim reuses the exact StrWhiteSpace set; a lone surrogate cannot be numeric,
-	// so transcoding it to U+FFFD here is harmless (either way the result is NaN).
-	str := s.Trim().ToGoString()
+	// Trim the ECMAScript whitespace on the Go-string view rather than through
+	// BStr.Trim, which would materialize the whole string into a UTF-16 code-unit
+	// slice first. ToGoString keeps the UTF-8 fast path (the shape every numeric
+	// string that reaches here has), and strings.TrimFunc returns a sub-slice with no
+	// allocation, so the common no-whitespace case does no work. A lone surrogate
+	// cannot be numeric, so decoding it to U+FFFD on this path is harmless: the result
+	// is NaN either way.
+	str := strings.TrimFunc(s.ToGoString(), isStringWhiteSpaceRune)
 	if str == "" {
 		return 0
 	}
@@ -56,6 +62,16 @@ func StringToNumber(s BStr) float64 {
 func parseRadix(digits string, base int) float64 {
 	if !validRadixDigits(digits, base) {
 		return math.NaN()
+	}
+	// Fast path: a digit run that fits in a uint64 needs no big.Int. strconv.ParseUint
+	// rejects a sign and any non-base digit (validRadixDigits already screened those
+	// out), so a success here is an exact integer, and uint64-to-float64 rounds to
+	// nearest even, the same rounding big.Float.Float64 would apply, so the result is
+	// bit-identical to the general path. Only a run too long for uint64 (ErrRange)
+	// falls through to big.Int, where the arbitrary-precision value carries the full
+	// digit string before it rounds to a float64.
+	if u, err := strconv.ParseUint(digits, base, 64); err == nil {
+		return float64(u)
 	}
 	i, ok := new(big.Int).SetString(digits, base)
 	if !ok {

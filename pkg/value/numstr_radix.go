@@ -48,7 +48,12 @@ func NumberToStringRadix(x float64, radix int) BStr {
 // written fraction digits and into the integer part.
 func doubleToRadix(value float64, radix int) string {
 	const bufSize = 2200
-	buf := make([]byte, bufSize)
+	// The buffer is a stack array, not a make'd slice: the only value that escapes
+	// this function is the small result string, which string(buf[lo:hi]) copies out,
+	// so the array itself never leaves the frame and needs no heap allocation. A
+	// heap buffer here cost one 2200-byte allocation on every call, which dominated
+	// the radix path when a program stringifies many small integers in a loop.
+	var buf [bufSize]byte
 	intCursor := bufSize / 2
 	fracCursor := intCursor
 
