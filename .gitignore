@@ -14,3 +14,6 @@
 /docs/public-pages/
 /docs/public-cf/
 **/.tago-cache.db
+
+# compiled go test binaries
+*.test
