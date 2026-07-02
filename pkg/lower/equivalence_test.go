@@ -993,6 +993,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "above",
 			args: [][]any{{0}, {1}, {2}, {3}, {5}},
 		},
+		{
+			// slice in its two-bound, negative-start, and no-argument forms, so the
+			// JavaScript index math (negative from the end, clamped, half-open) is
+			// run through the engine against the value method.
+			name: "arraySlice",
+			file: "eq_array_slice",
+			fn:   "middle",
+			args: [][]any{{0}, {1}, {-3}, {0.5}},
+		},
 	}
 
 	for _, tc := range cases {

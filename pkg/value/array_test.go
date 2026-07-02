@@ -129,6 +129,41 @@ func TestFilterNoneKept(t *testing.T) {
 	}
 }
 
+// TestSlice pins the slice bounds: a half-open two-bound range, a one-bound run
+// to the end, a negative start counting from the end, and the no-argument whole
+// copy, each returning a fresh array and leaving the receiver unchanged.
+func TestArraySlice(t *testing.T) {
+	a := NewArray[float64](0, 1, 2, 3, 4)
+	cases := []struct {
+		name   string
+		bounds []float64
+		want   []float64
+	}{
+		{"two bounds", []float64{1, 3}, []float64{1, 2}},
+		{"one bound", []float64{2}, []float64{2, 3, 4}},
+		{"negative start", []float64{-2}, []float64{3, 4}},
+		{"no argument", nil, []float64{0, 1, 2, 3, 4}},
+		{"crossed pair", []float64{3, 1}, []float64{}},
+		{"start past end", []float64{99}, []float64{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := a.Slice(tc.bounds...).Elems()
+			if len(got) != len(tc.want) {
+				t.Fatalf("Slice(%v) len = %d, want %d", tc.bounds, len(got), len(tc.want))
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("Slice(%v)[%d] = %v, want %v", tc.bounds, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+	if a.Len() != 5 {
+		t.Errorf("Slice mutated the receiver: Len() = %v, want 5", a.Len())
+	}
+}
+
 // TestNewArrayString pins the header at a non-numeric element type, the string[]
 // case the lowerer emits as *Array[BStr].
 func TestNewArrayString(t *testing.T) {
