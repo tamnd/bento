@@ -109,6 +109,35 @@ func (a *Array[T]) Slice(bounds ...float64) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// IndexOf returns the index of the first element equal to target, or -1 if none
+// is, the lowering of Array.prototype.indexOf. Equality is supplied by the
+// caller through eq rather than fixed here, because a Go method cannot compare
+// two values of the type parameter T (it is any, not comparable) and because the
+// exact equality JavaScript uses is element-type-specific: the lowerer passes
+// strict equality for indexOf, which for a number is Go ==, so a NaN target is
+// never found, matching indexOf's use of the strict equality operator. The
+// result is a Number, so it is a float64. The optional fromIndex argument is a
+// later slice; this is the whole-array scan.
+func (a *Array[T]) IndexOf(target T, eq func(T, T) bool) float64 {
+	for i, x := range a.elems {
+		if eq(x, target) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// Includes reports whether any element equals target, the lowering of
+// Array.prototype.includes. It is IndexOf against the same target, so it shares
+// the linear scan; the difference between the two methods is entirely in the eq
+// the lowerer passes. includes uses SameValueZero, which unlike strict equality
+// treats NaN as equal to NaN, so the lowerer passes a NaN-aware eq for a number
+// element here while it passes strict equality for IndexOf. That is why a NaN is
+// found by includes but not by indexOf, matching JavaScript.
+func (a *Array[T]) Includes(target T, eq func(T, T) bool) bool {
+	return a.IndexOf(target, eq) >= 0
+}
+
 // relativeIndex resolves a JavaScript slice bound against a length: it truncates
 // the Number toward zero, treats a negative value as counting back from the end,
 // and clamps the result into [0, length]. This is the shared step
