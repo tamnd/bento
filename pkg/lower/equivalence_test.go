@@ -1002,6 +1002,16 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			fn:   "middle",
 			args: [][]any{{0}, {1}, {-3}, {0.5}},
 		},
+		{
+			// indexOf and includes on both a number and a string array, so the
+			// synthesized equality closures run through the engine: the argument is
+			// present for some inputs and absent for others, and the string search is
+			// exercised alongside.
+			name: "arrayIndexOf",
+			file: "eq_array_indexof",
+			fn:   "find",
+			args: [][]any{{10}, {30}, {99}, {20}},
+		},
 	}
 
 	for _, tc := range cases {
