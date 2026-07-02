@@ -587,3 +587,33 @@ func TestSubstring(t *testing.T) {
 		})
 	}
 }
+
+// TestSubstr pins the legacy String.prototype.substr, which takes a start and a
+// count: an interior run, a negative start counting from the end, a start past
+// the end giving empty, an omitted length running to the end, a length past the
+// end clamping, and a zero or negative length giving empty.
+func TestSubstr(t *testing.T) {
+	h := FromGoString("hello")
+	cases := []struct {
+		name string
+		args []float64
+		want string
+	}{
+		{"interior", []float64{1, 3}, "ell"},
+		{"negativeStartFromEnd", []float64{-2}, "lo"},
+		{"negativeStartClampsToZero", []float64{-10}, "hello"},
+		{"startPastEndEmpty", []float64{10}, ""},
+		{"oneArgToEnd", []float64{2}, "llo"},
+		{"lengthPastEndClamps", []float64{2, 100}, "llo"},
+		{"zeroLengthEmpty", []float64{1, 0}, ""},
+		{"negativeLengthEmpty", []float64{1, -1}, ""},
+		{"fractionalStartTruncates", []float64{1.9, 2}, "el"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := h.Substr(tc.args...).ToGoString(); got != tc.want {
+				t.Errorf("Substr(%v) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}

@@ -380,6 +380,44 @@ func (s BStr) Substring(args ...float64) BStr {
 	return s.sub(start, end)
 }
 
+// Substr returns a run of code units of a given length starting at an index,
+// matching the legacy String.prototype.substr. It differs from Slice and
+// Substring in taking a start and a count rather than two bounds: a negative
+// start counts from the end and clamps at 0, an omitted length runs to the end
+// of the string, and a negative or zero length yields the empty string. It is
+// variadic so one signature covers the one- and two-argument forms, and it works
+// on the code-unit view so a cut can land inside an astral pair and return a lone
+// surrogate the way JavaScript does.
+func (s BStr) Substr(args ...float64) BStr {
+	size := s.lengthU16
+	start := 0
+	if len(args) >= 1 {
+		n := toInteger(args[0])
+		switch {
+		case n < 0:
+			if v := float64(size) + n; v > 0 {
+				start = int(v)
+			}
+		case n > float64(size):
+			start = size
+		default:
+			start = int(n)
+		}
+	}
+	count := size - start
+	if len(args) >= 2 {
+		if n := toInteger(args[1]); n < 0 {
+			count = 0
+		} else if n < float64(count) {
+			count = int(n)
+		}
+	}
+	if count <= 0 {
+		return BStr{}
+	}
+	return s.sub(start, start+count)
+}
+
 // sub returns the code units in [start, end) as a new string. The caller has
 // already clamped both bounds into [0, length] and ordered them, so the slice is
 // always valid. It goes through FromUTF16 because a substring can split an astral
