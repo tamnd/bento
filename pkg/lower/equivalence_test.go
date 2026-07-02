@@ -608,6 +608,24 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{1, 2}, {2, 1}},
 		},
 		{
+			name: "numberOfString",
+			// Number(s) on a string is the exact ECMAScript ToNumber over the
+			// StrNumericLiteral grammar. The inputs cover a trimmed decimal, a bare
+			// fraction, the radix prefixes, the Infinity word, the empty string (which
+			// is 0), and a non-numeric string (which is NaN), all of which the engine
+			// and value.StringToNumber must agree on, including the NaN result.
+			src:  `export function num(s: string): number { return Number(s); }`,
+			fn:   "num",
+			args: [][]any{{"  42  "}, {".5"}, {"1e3"}, {"0x1F"}, {"0b101"}, {"0o17"}, {"Infinity"}, {"-Infinity"}, {""}, {"abc"}, {"1_000"}},
+		},
+		{
+			name: "numberOfBool",
+			// Number(b) on a boolean is 1 or 0; x < y makes both reachable.
+			src:  `export function num(x: number, y: number): number { return Number(x < y); }`,
+			fn:   "num",
+			args: [][]any{{1, 2}, {2, 1}},
+		},
+		{
 			name: "numLiterals",
 			// the numeric-literal forms this slice lowers: hex, binary, and octal
 			// integers, an underscore-separated decimal, and an exponent. The compiler

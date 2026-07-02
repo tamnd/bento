@@ -470,6 +470,11 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "String" && r.isAmbientGlobal(kids[0]) {
 		return r.stringCoercion(kids[1:])
 	}
+	// Number(x) called as a function is a primitive-to-number coercion, the
+	// companion to String(x), and routes the same way before the user path.
+	if r.prog.Text(kids[0]) == "Number" && r.isAmbientGlobal(kids[0]) {
+		return r.numberCoercion(kids[1:])
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
 		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
@@ -767,6 +772,35 @@ func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{lowered}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "String() on this argument type is a later slice"}
+	}
+}
+
+// numberCoercion lowers Number(x) called as a function over a primitive argument.
+// A string goes through value.StringToNumber (the exact ECMAScript ToNumber over
+// the StrNumericLiteral grammar, not strconv), a boolean through value.BoolToNumber
+// (true is 1, false is 0), and a number is already a float64 so it passes through
+// unchanged. It takes exactly one argument; a different arity, or an argument this
+// slice does not coerce (an object, whose valueOf runs user code), hands back.
+func (r *Renderer) numberCoercion(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Number() with this argument count is a later slice"}
+	}
+	arg := argNodes[0]
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case r.isNumber(arg):
+		return lowered, nil // Number(n) on a number is the identity
+	case r.isString(arg):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "StringToNumber"), Args: []ast.Expr{lowered}}, nil
+	case r.isBool(arg):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{lowered}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Number() on this argument type is a later slice"}
 	}
 }
 
