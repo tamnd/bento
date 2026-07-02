@@ -17,6 +17,14 @@ jobs:
   # Build and test on Linux and macOS with the race detector on. gofmt and vet
   # run here too so a formatting slip fails fast on both platforms. bento is pure
   # Go with no cgo and no browser, so nothing extra needs installing first.
+  #
+  # This job runs -short, which skips the AOT tests that shell out to `go run` to
+  # build a generated program and the ones that spin the JavaScript engine to
+  # evaluate the reference. Those two paths are the whole cost of the pkg/lower
+  # suite (a few hundred toolchain links and engine spins), so leaving them off
+  # keeps the pull-request signal fast. The behavioral equivalence they prove runs
+  # in the equivalence job below, after merge, and every developer runs the full
+  # suite locally before pushing.
   test:
     strategy:
       fail-fast: false
@@ -43,10 +51,37 @@ jobs:
       - name: build
         run: go build ./...
       - name: test
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        run: go test -short -race -count=1 -coverprofile=coverage.out ./...
       - name: coverage summary
         if: matrix.os == 'ubuntu-latest'
         run: go tool cover -func=coverage.out | tail -1
+
+  # The full behavioral equivalence proof: the AOT tests that compile the
+  # generated Go and run it, and the ones that evaluate the reference TypeScript in
+  # the JavaScript engine, both compared to prove the two agree. This is the slow
+  # path the test job above skips, so it runs after merge on main rather than on
+  # every pull request. The generated programs are content-addressed in a cache
+  # keyed on the value runtime, so a run only rebuilds the fixtures whose behavior
+  # could have moved; when pkg/value is unchanged the whole suite is a cache hit.
+  equivalence:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: restore AOT test cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bento-aot-testcache
+          key: bento-aot-testcache-${{ runner.os }}-${{ hashFiles('pkg/value/**/*.go', 'go.mod') }}
+          restore-keys: |
+            bento-aot-testcache-${{ runner.os }}-
+      - name: equivalence
+        run: go test -count=1 ./pkg/lower/ ./pkg/frontend/...
 
   # golangci-lint bundles staticcheck, govet, ineffassign, errcheck, unused and
   # more, so it is the main quality gate.
