@@ -235,6 +235,14 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "logical", file: "func_logical"},
 		// a C-style for becomes a Go block holding the let declaration and a for with an empty init, so the loop variable keeps its float64 type; the return negates with a unary minus.
 		{name: "for_loop", file: "func_for"},
+		// a postfix ++ in the for-post clause becomes an idiomatic Go IncDecStmt; the arithmetic compound assignments desugar to x = x <op> rhs so they reuse the binary lowering.
+		{name: "compound_arith", file: "func_compound_arith"},
+		// += on strings routes through the string-concat path of the shared binary lowering, so it emits value.Concat rather than a Go += that a BStr struct would reject.
+		{name: "compound_string", file: "func_compound_string"},
+		// %= reuses the remainder path, so it emits math.Mod, not a Go %= that a float64 would reject.
+		{name: "compound_mod", file: "func_compound_mod"},
+		// ++ and -- on a number local map to Go's IncDecStmt, which accepts a float64.
+		{name: "incdec", file: "func_incdec"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

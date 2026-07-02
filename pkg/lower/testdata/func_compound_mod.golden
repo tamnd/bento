@@ -1,0 +1,4 @@
+func Wrap(x float64, m float64) float64 {
+	x = math.Mod(x, m)
+	return x
+}
