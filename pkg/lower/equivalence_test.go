@@ -608,6 +608,17 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{1, 2}, {2, 1}},
 		},
 		{
+			name: "parseFloatString",
+			// parseFloat(s) reads the longest decimal prefix and ignores the rest. The
+			// inputs cover a bare number, a trailing tail, a leading-whitespace trim, the
+			// Infinity word, a dangling exponent marker (where the mantissa alone is the
+			// prefix), the radix form parseFloat does not read (so "0x1F" is 0), and a
+			// non-numeric string (NaN), all of which must agree with value.ParseFloat.
+			src:  `export function pf(s: string): number { return parseFloat(s); }`,
+			fn:   "pf",
+			args: [][]any{{"3.14"}, {"42px"}, {"  -2.5  "}, {"1e3rest"}, {"Infinity!"}, {"1e"}, {"0x1F"}, {".5"}, {"abc"}, {""}},
+		},
+		{
 			name: "booleanOfNumber",
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches
 			// a nonzero result, +0, and NaN (0/0), the last being what a bare zero test
