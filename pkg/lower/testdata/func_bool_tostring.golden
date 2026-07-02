@@ -1,0 +1,3 @@
+func Show(b bool) value.BStr {
+	return value.BoolToString(b)
+}
