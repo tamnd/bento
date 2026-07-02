@@ -23,50 +23,61 @@ import (
 // construct the statement and expression subset does not cover yet, so a caller
 // emits Go only for what lowers soundly.
 func (r *Renderer) RenderFunc(fn frontend.Node) (Decl, error) {
-	sym, ok := r.prog.SymbolAt(fn)
-	if !ok {
-		return Decl{}, &NotYetLowerable{Reason: "function declaration has no symbol (anonymous functions are a later slice)"}
-	}
-	name, ok := exportedField(sym.Name)
-	if !ok {
-		return Decl{}, &NotYetLowerable{Reason: "function name is not a Go identifier"}
-	}
-
-	sig, ok := r.prog.SignatureAt(fn)
-	if !ok {
-		return Decl{}, &NotYetLowerable{Reason: "function has no call signature"}
-	}
-	if len(sig.TypeParams) != 0 {
-		return Decl{}, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
-	}
-	if sig.RestParam != nil {
-		return Decl{}, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
-	}
-
-	params, err := r.paramFields(sig)
+	decl, err := r.funcDecl(fn)
 	if err != nil {
 		return Decl{}, err
-	}
-	results, err := r.resultFields(sig.Return)
-	if err != nil {
-		return Decl{}, err
-	}
-
-	body, err := r.blockOf(fn)
-	if err != nil {
-		return Decl{}, err
-	}
-
-	decl := &ast.FuncDecl{
-		Name: ident(name),
-		Type: &ast.FuncType{Params: params, Results: results},
-		Body: body,
 	}
 	src, err := printDecl(decl)
 	if err != nil {
 		return Decl{}, err
 	}
-	return Decl{Name: name, Source: src}, nil
+	return Decl{Name: decl.Name.Name, Source: src}, nil
+}
+
+// funcDecl builds the Go declaration node for a function without printing it, so
+// both RenderFunc (which prints one declaration) and the program assembler (which
+// prints a whole file at once) share the one place a signature and body become a
+// FuncDecl. It returns the same NotYetLowerable for an unlowerable construct.
+func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
+	sym, ok := r.prog.SymbolAt(fn)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "function declaration has no symbol (anonymous functions are a later slice)"}
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "function name is not a Go identifier"}
+	}
+
+	sig, ok := r.prog.SignatureAt(fn)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "function has no call signature"}
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+
+	params, err := r.paramFields(sig)
+	if err != nil {
+		return nil, err
+	}
+	results, err := r.resultFields(sig.Return)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := r.blockOf(fn)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.FuncDecl{
+		Name: ident(name),
+		Type: &ast.FuncType{Params: params, Results: results},
+		Body: body,
+	}, nil
 }
 
 // paramFields lowers each parameter to a Go field with its lowered type. An
@@ -492,10 +503,7 @@ func (r *Renderer) lowerIf(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if kids[1].Kind() != frontend.NodeBlock {
-		return nil, &NotYetLowerable{Reason: "if body that is not a block is a later slice"}
-	}
-	body, err := r.lowerBlock(kids[1])
+	body, err := r.lowerBodyBlock(kids[1])
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +518,9 @@ func (r *Renderer) lowerIf(n frontend.Node) (ast.Stmt, error) {
 	return stmt, nil
 }
 
-// lowerArm lowers one arm of an if: a block, or a chained if for an else-if.
+// lowerArm lowers one arm of an if: a block, a chained if for an else-if, or a
+// single unbraced statement such as `else return x`, which becomes a one
+// statement block so the Go if keeps its required block form.
 func (r *Renderer) lowerArm(n frontend.Node) (ast.Stmt, error) {
 	switch n.Kind() {
 	case frontend.NodeBlock:
@@ -518,8 +528,24 @@ func (r *Renderer) lowerArm(n frontend.Node) (ast.Stmt, error) {
 	case frontend.NodeIfStatement:
 		return r.lowerIf(n)
 	default:
-		return nil, &NotYetLowerable{Reason: "if arm that is not a block or else-if is a later slice"}
+		return r.lowerBodyBlock(n)
 	}
+}
+
+// lowerBodyBlock lowers a statement that stands where a block is expected: an if
+// or loop body written with braces stays a block, while a single unbraced
+// statement (`if (c) return x;`) becomes a one statement block, since a Go if or
+// for body is always a block. It is how the lowerer accepts the brace-optional
+// bodies JavaScript allows without a special case at every use.
+func (r *Renderer) lowerBodyBlock(n frontend.Node) (*ast.BlockStmt, error) {
+	if n.Kind() == frontend.NodeBlock {
+		return r.lowerBlock(n)
+	}
+	s, err := r.lowerStatement(n)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.BlockStmt{List: []ast.Stmt{s}}, nil
 }
 
 // lowerWhile lowers a while to a Go for with only a condition, Go's spelling of
@@ -833,6 +859,18 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		return nil, &NotYetLowerable{Reason: "method callee did not expose a receiver and a method name"}
 	}
 	recvNode, method := kids[0], r.prog.Text(kids[1])
+	// process.stdout.write(s) and process.stderr.write(s) are the process output
+	// streams. The receiver is not a value, it is the ambient stream, so the call
+	// lowers to a value write helper rather than a method on a runtime object.
+	if stream, ok := r.processStream(recvNode); ok {
+		return r.processStreamCall(stream, method, argNodes)
+	}
+	// console.log(...) and friends are calls on the global console, not a value
+	// receiver, so they lower to the value console helpers rather than a method on a
+	// runtime object. This is the print path a developer reaches for by default.
+	if r.isGlobalRef(recvNode, "console") {
+		return r.consoleCall(method, argNodes)
+	}
 	// Math.floor(x) and friends are calls on the global Math namespace, not a
 	// value receiver, so they lower to the Go math package rather than a method.
 	if r.isGlobalRef(recvNode, "Math") {
@@ -1164,6 +1202,87 @@ func (r *Renderer) isAmbientGlobal(n frontend.Node) bool {
 		}
 	}
 	return true
+}
+
+// processStream reports whether n refers to process.stdout or process.stderr,
+// the ambient output streams, and returns which one. It matches a property access
+// whose object is the ambient global process and whose property is stdout or
+// stderr, so a user object that happens to carry a stdout field does not match and
+// its methods do not lower to the process write helpers.
+func (r *Renderer) processStream(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return "", false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return "", false
+	}
+	if !r.isGlobalRef(kids[0], "process") {
+		return "", false
+	}
+	switch prop := r.prog.Text(kids[1]); prop {
+	case "stdout", "stderr":
+		return prop, true
+	default:
+		return "", false
+	}
+}
+
+// processStreamCall lowers a call on a process output stream. Only write is
+// covered: it takes a single string and lowers to value.WriteStdout or
+// value.WriteStderr, which write the string's UTF-8 view to the file descriptor
+// and return the boolean write reports. A different method, a different arity, or
+// a non-string argument hands back rather than emitting a mistyped call.
+func (r *Renderer) processStreamCall(stream, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "write" {
+		return nil, &NotYetLowerable{Reason: "process." + stream + "." + method + " is a later slice"}
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "process." + stream + ".write with this argument count is a later slice"}
+	}
+	if !r.isString(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "process." + stream + ".write of a non-string is a later slice"}
+	}
+	arg, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	goName := "WriteStdout"
+	if stream == "stderr" {
+		goName = "WriteStderr"
+	}
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// consoleCall lowers a call on the global console. The methods that write to
+// standard output (log, info, debug) lower to value.ConsoleLog, and the ones that
+// write to standard error (error, warn) to value.ConsoleError. Each argument is
+// stringified with the same ECMAScript ToString a String() call uses, so a
+// number, boolean, or string prints exactly as Node's console does for that
+// primitive, and the parts join with a space and a trailing newline inside the
+// helper. An argument this slice cannot stringify (an object, whose inspect runs
+// richer formatting) hands back rather than printing the wrong text.
+func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	var goName string
+	switch method {
+	case "log", "info", "debug":
+		goName = "ConsoleLog"
+	case "error", "warn":
+		goName = "ConsoleError"
+	default:
+		return nil, &NotYetLowerable{Reason: "console." + method + " is a later slice"}
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		part, err := r.stringify(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, part)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
 }
 
 // globalFn maps a bare global function name to the value function that implements
