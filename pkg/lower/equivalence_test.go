@@ -31,12 +31,14 @@ import (
 // those strings are equal.
 
 // equivCase is one function exercised with several argument tuples. The source
-// defines the exported functions; fn is the one the calls drive. Each tuple
-// element is a float64, string, or bool. ret names the return kind ("number",
-// "string", or "boolean"); an empty ret means number, the common case.
+// lives in a checked-in testdata/<file>.ts, read at run time so the exact
+// TypeScript being compared is a file a reviewer can open; fn is the exported
+// function the calls drive. Each tuple element is a float64, string, or bool.
+// ret names the return kind ("number", "string", or "boolean"); an empty ret
+// means number, the common case.
 type equivCase struct {
 	name string
-	src  string
+	file string
 	fn   string
 	ret  string
 	args [][]any
@@ -53,93 +55,55 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 	cases := []equivCase{
 		{
 			name: "identity",
-			src:  "export function identity(x: number): number { return x; }",
+			file: "eq_identity",
 			fn:   "identity",
 			args: [][]any{{0}, {42}, {-7}, {3.5}},
 		},
 		{
 			name: "add",
-			src:  "export function add(a: number, b: number): number { return a + b; }",
+			file: "eq_add",
 			fn:   "add",
 			args: [][]any{{1, 2}, {-3, 3}, {0.1, 0.2}, {1e6, 1}},
 		},
 		{
 			name: "arithmetic",
-			src:  "export function mix(a: number, b: number): number { return (a + b) * a - b / 2; }",
+			file: "eq_arithmetic",
 			fn:   "mix",
 			args: [][]any{{2, 4}, {5, 10}, {-1, -2}, {1.5, 0.5}},
 		},
 		{
 			name: "keywordParam",
-			src:  "export function pick(type: number): number { return type; }",
+			file: "eq_keywordParam",
 			fn:   "pick",
 			args: [][]any{{9}, {-4}},
 		},
 		{
 			name: "loop",
-			src: `export function score(n: number): number {
-  let total = 0;
-  let i = 1;
-  while (i <= n) {
-    if (i === 3) {
-      total = total + 10;
-    } else {
-      total = total + i;
-    }
-    i = i + 1;
-  }
-  return total;
-}`,
+			file: "eq_loop",
 			fn:   "score",
 			args: [][]any{{0}, {1}, {3}, {5}, {10}},
 		},
 		{
 			name: "factorial",
-			src: `export function fact(n: number): number {
-  let acc = 1;
-  let i = 2;
-  while (i <= n) {
-    acc = acc * i;
-    i = i + 1;
-  }
-  return acc;
-}`,
+			file: "eq_factorial",
 			fn:   "fact",
 			args: [][]any{{0}, {1}, {5}, {10}},
 		},
 		{
 			name: "branch",
-			src: `export function clamp(x: number): number {
-  if (x < 0) {
-    return 0;
-  } else if (x > 100) {
-    return 100;
-  }
-  return x;
-}`,
+			file: "eq_branch",
 			fn:   "clamp",
 			args: [][]any{{-5}, {0}, {42}, {100}, {250}},
 		},
 		{
 			name: "recursion",
-			src: `export function fib(n: number): number {
-  if (n < 2) {
-    return n;
-  }
-  return fib(n - 1) + fib(n - 2);
-}`,
+			file: "eq_recursion",
 			fn:   "fib",
 			args: [][]any{{0}, {1}, {7}, {12}},
 		},
 		{
 			name: "forLoopNegate",
-			src: `export function negsum(n: number): number {
-  let t = 0;
-  for (let i = 1; i <= n; i = i + 1) {
-    t = t + i;
-  }
-  return -t;
-}`,
+			file: "eq_forLoopNegate",
 			fn:   "negsum",
 			args: [][]any{{0}, {4}, {10}},
 		},
@@ -150,10 +114,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// "a" (1) + emoji (2) + "b" (1) = 4. A Go len() over UTF-8 bytes would
 			// say 6, so this proves the emitted Go runs the real value.BStr and
 			// gets the JavaScript answer, matched against quickjs.
-			src: `export function width(): number {
-  let s = "a" + "😀" + "b";
-  return s.length;
-}`,
+			file: "eq_stringLength",
 			fn:   "width",
 			args: [][]any{{}},
 		},
@@ -162,7 +123,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// A string argument in and a string result out: concatenation with a
 			// real value, including an astral emoji, must round-trip through the
 			// value model and read back identically to what quickjs produced.
-			src:  `export function greet(name: string): string { return "Hello, " + name; }`,
+			file: "eq_greet",
 			fn:   "greet",
 			ret:  "string",
 			args: [][]any{{"World"}, {"😀"}, {""}, {"a b c"}},
@@ -171,7 +132,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "stringEq",
 			// === on two strings compares by UTF-16 code unit and returns a real
 			// boolean, so the case pairs equal, unequal, empty, and astral inputs.
-			src:  `export function same(a: string, b: string): boolean { return a === b; }`,
+			file: "eq_stringEq",
 			fn:   "same",
 			ret:  "boolean",
 			args: [][]any{{"x", "x"}, {"x", "y"}, {"", ""}, {"😀", "😀"}, {"😀", "😁"}},
@@ -180,7 +141,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "stringNeq",
 			// !== is the negation, exercised over the same shapes so the emitted
 			// !value.Equal matches JavaScript's inequality point for point.
-			src:  `export function diff(a: string, b: string): boolean { return a !== b; }`,
+			file: "eq_stringNeq",
 			fn:   "diff",
 			ret:  "boolean",
 			args: [][]any{{"x", "x"}, {"x", "y"}, {"", ""}, {"😀", "😀"}},
@@ -193,7 +154,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// reverse, equal strings, a prefix before its extension, uppercase below
 			// lowercase, and the astral case where the leading surrogate D83D orders
 			// below the BMP letter z.
-			src:  `export function lt(a: string, b: string): boolean { return a < b; }`,
+			file: "eq_stringLess",
 			fn:   "lt",
 			ret:  "boolean",
 			args: [][]any{{"a", "b"}, {"b", "a"}, {"x", "x"}, {"ab", "abc"}, {"Z", "a"}, {"😀", "z"}},
@@ -202,7 +163,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "stringLessEqual",
 			// <= differs from < only on equal strings, so the equal pair is the case
 			// that separates them.
-			src:  `export function le(a: string, b: string): boolean { return a <= b; }`,
+			file: "eq_stringLessEqual",
 			fn:   "le",
 			ret:  "boolean",
 			args: [][]any{{"a", "b"}, {"b", "a"}, {"x", "x"}, {"ab", "abc"}},
@@ -211,7 +172,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "stringGreaterEqual",
 			// > and >= are the mirror, carried by the same Compare against zero with
 			// the flipped token; one case pins both together.
-			src:  `export function ge(a: string, b: string): boolean { return (a > b) || (a >= b); }`,
+			file: "eq_stringGreaterEqual",
 			fn:   "ge",
 			ret:  "boolean",
 			args: [][]any{{"b", "a"}, {"a", "b"}, {"x", "x"}, {"abc", "ab"}},
@@ -224,7 +185,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// as "NaN" on both sides), and the two surrogate halves of an astral
 			// character, where charCodeAt(0) and charCodeAt(1) are the high and low
 			// code units, not one code point.
-			src:  `export function codeAt(s: string, i: number): number { return s.charCodeAt(i); }`,
+			file: "eq_charCodeAt",
 			fn:   "codeAt",
 			args: [][]any{{"abc", 0}, {"abc", 1}, {"abc", 2}, {"abc", 3}, {"abc", -1}, {"😀", 0}, {"😀", 1}},
 		},
@@ -238,7 +199,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// astral receiver produces is pinned in the value package unit test
 			// instead, where it is checked code unit for code unit rather than
 			// through a lossy string comparison.
-			src:  `export function at(s: string, i: number): string { return s.charAt(i); }`,
+			file: "eq_charAt",
 			fn:   "at",
 			ret:  "string",
 			args: [][]any{{"abc", 0}, {"abc", 1}, {"abc", 2}, {"abc", 3}, {"abc", -1}},
@@ -249,7 +210,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// argument. The cases cover a hit at the start, in the middle, a miss
 			// (-1), the empty search (0), and a search inside an astral character
 			// so the code-unit index matches JavaScript rather than a rune index.
-			src:  `export function find(s: string, sub: string): number { return s.indexOf(sub); }`,
+			file: "eq_indexOf",
 			fn:   "find",
 			args: [][]any{{"hello", "he"}, {"hello", "lo"}, {"hello", "z"}, {"hello", ""}, {"a😀b", "b"}},
 		},
@@ -258,7 +219,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// indexOf with the start position: a match before the position is skipped,
 			// a match exactly at it counts, a position past the end gives -1 for a
 			// non-empty search and the length for the empty search.
-			src:  `export function findFrom(s: string, sub: string, from: number): number { return s.indexOf(sub, from); }`,
+			file: "eq_indexOfFrom",
 			fn:   "findFrom",
 			args: [][]any{{"abcabc", "a", 1}, {"abcabc", "c", 2}, {"abcabc", "a", 4}, {"abc", "", 99}, {"abc", "a", -5}},
 		},
@@ -267,21 +228,21 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// lastIndexOf reports the greatest matching index, so it differs from
 			// indexOf on a string with two matches; the cases cover the two-match
 			// string, a miss, the empty search, and an astral character.
-			src:  `export function findLast(s: string, sub: string): number { return s.lastIndexOf(sub); }`,
+			file: "eq_lastIndexOf",
 			fn:   "findLast",
 			args: [][]any{{"abcabc", "a"}, {"abcabc", "c"}, {"hello", "z"}, {"hello", ""}, {"a😀b", "b"}},
 		},
 		{
 			name: "includes",
 			// The boolean companion of indexOf over the same shapes.
-			src:  `export function has(s: string, sub: string): boolean { return s.includes(sub); }`,
+			file: "eq_includes",
 			fn:   "has",
 			ret:  "boolean",
 			args: [][]any{{"hello", "ell"}, {"hello", "z"}, {"hello", ""}, {"a😀b", "😀"}},
 		},
 		{
 			name: "startsWith",
-			src:  `export function starts(s: string, p: string): boolean { return s.startsWith(p); }`,
+			file: "eq_startsWith",
 			fn:   "starts",
 			ret:  "boolean",
 			args: [][]any{{"hello", "he"}, {"hello", "lo"}, {"hello", ""}, {"hi", "hello"}, {"😀x", "😀"}},
@@ -290,7 +251,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "endsWith",
 			// the suffix companion, covering a real suffix, a non-suffix, the empty
 			// suffix, a suffix longer than the string, and an astral suffix.
-			src:  `export function ends(s: string, p: string): boolean { return s.endsWith(p); }`,
+			file: "eq_endsWith",
 			fn:   "ends",
 			ret:  "boolean",
 			args: [][]any{{"hello", "lo"}, {"hello", "he"}, {"hello", ""}, {"hi", "hello"}, {"x😀", "😀"}},
@@ -299,7 +260,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "startsWithPos",
 			// startsWith with the position: the prefix must begin at it, so a prefix
 			// that matches at 0 fails at a later position and matches at its own.
-			src:  `export function startsAt(s: string, p: string, at: number): boolean { return s.startsWith(p, at); }`,
+			file: "eq_startsWithPos",
 			fn:   "startsAt",
 			ret:  "boolean",
 			args: [][]any{{"abcabc", "abc", 3}, {"abcabc", "abc", 1}, {"abcabc", "bc", 1}, {"abc", "", 99}},
@@ -308,7 +269,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "endsWithPos",
 			// endsWith with the end position: the window ends there, so a prefix of the
 			// string reads as a suffix of the shortened window.
-			src:  `export function endsAt(s: string, p: string, at: number): boolean { return s.endsWith(p, at); }`,
+			file: "eq_endsWithPos",
 			fn:   "endsAt",
 			ret:  "boolean",
 			args: [][]any{{"hello", "hell", 4}, {"hello", "lo", 4}, {"hello", "hel", 3}},
@@ -318,7 +279,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// slice with both bounds over a BMP receiver, covering an interior
 			// range, the full string, negative-from-end bounds, an empty result
 			// when start is at or past end, and an end past the length.
-			src:  `export function sl(s: string, a: number, b: number): string { return s.slice(a, b); }`,
+			file: "eq_slice2",
 			fn:   "sl",
 			ret:  "string",
 			args: [][]any{{"hello", 1, 3}, {"hello", 0, 5}, {"hello", -3, -1}, {"hello", 3, 1}, {"hello", 2, 100}},
@@ -327,7 +288,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "slice1",
 			// slice with a single bound proves the optional-argument arity end to
 			// end: a positive start, a negative start, and a start past the end.
-			src:  `export function tail(s: string, a: number): string { return s.slice(a); }`,
+			file: "eq_slice1",
 			fn:   "tail",
 			ret:  "string",
 			args: [][]any{{"hello", 0}, {"hello", 2}, {"hello", -2}, {"hello", 10}},
@@ -337,7 +298,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// substring differs from slice at the edges: negatives become 0 and a
 			// start past end swaps, so the cases pin both behaviors against the
 			// engine.
-			src:  `export function sub(s: string, a: number, b: number): string { return s.substring(a, b); }`,
+			file: "eq_substring",
 			fn:   "sub",
 			ret:  "string",
 			args: [][]any{{"hello", 1, 3}, {"hello", 3, 1}, {"hello", -2, 3}, {"hello", 2, 100}},
@@ -347,7 +308,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// padStart with an explicit pad string: a target longer than the
 			// string pads and repeats-then-truncates the pad, a target not longer
 			// leaves the string alone, and an empty pad string is a no-op.
-			src:  `export function pad(s: string, n: number, p: string): string { return s.padStart(n, p); }`,
+			file: "eq_padStart2",
 			fn:   "pad",
 			ret:  "string",
 			args: [][]any{{"5", 3, "0"}, {"5", 1, "0"}, {"5", 6, "ab"}, {"abc", 5, ""}, {"abc", -2, "0"}},
@@ -356,7 +317,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "padStart1",
 			// padStart with no pad argument defaults to a space, the optional-arg
 			// path over a mixed number-then-string signature.
-			src:  `export function padsp(s: string, n: number): string { return s.padStart(n); }`,
+			file: "eq_padStart1",
 			fn:   "padsp",
 			ret:  "string",
 			args: [][]any{{"7", 4}, {"7", 1}, {"hi", 5}},
@@ -364,7 +325,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		{
 			name: "padEnd2",
 			// padEnd appends the filler instead of prepending it; same rules.
-			src:  `export function padr(s: string, n: number, p: string): string { return s.padEnd(n, p); }`,
+			file: "eq_padEnd2",
 			fn:   "padr",
 			ret:  "string",
 			args: [][]any{{"5", 3, "0"}, {"5", 6, "ab"}, {"abc", 2, "0"}, {"abc", 5, ""}},
@@ -374,7 +335,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// s.concat(a, b) joins three strings in order; the cases cover an empty
 			// receiver, empty arguments, and a multi-byte character so the code-unit
 			// join is exercised, all of which must match the engine's concat.
-			src:  `export function j(s: string, a: string, b: string): string { return s.concat(a, b); }`,
+			file: "eq_concatMethod",
 			fn:   "j",
 			ret:  "string",
 			args: [][]any{{"a", "b", "c"}, {"", "x", ""}, {"π", "😀", "z"}},
@@ -383,7 +344,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "mathFloor",
 			// Math.floor over positive, negative, and already-integer inputs, where
 			// floor differs from truncation on the negative fraction.
-			src:  `export function fl(x: number): number { return Math.floor(x); }`,
+			file: "eq_mathFloor",
 			fn:   "fl",
 			args: [][]any{{3.7}, {-3.2}, {5}, {-0.5}},
 		},
@@ -391,7 +352,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "mathCeilTruncAbs",
 			// three one-argument methods composed, so the whole chain is checked at
 			// once: ceil then abs of a trunc, covering the sign handling each does.
-			src:  `export function c(x: number): number { return Math.ceil(Math.abs(Math.trunc(x))); }`,
+			file: "eq_mathCeilTruncAbs",
 			fn:   "c",
 			args: [][]any{{3.9}, {-3.9}, {0}},
 		},
@@ -399,7 +360,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "mathSqrt",
 			// perfect squares so the result is exact on both sides, since IEEE sqrt
 			// is correctly rounded and deterministic.
-			src:  `export function r(x: number): number { return Math.sqrt(x); }`,
+			file: "eq_mathSqrt",
 			fn:   "r",
 			args: [][]any{{4}, {9}, {2}, {0}},
 		},
@@ -407,7 +368,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "mathPow",
 			// integer and power-of-two exponents, whose results are exact so the two
 			// pow implementations cannot diverge in the last bit.
-			src:  `export function p(a: number, b: number): number { return Math.pow(a, b); }`,
+			file: "eq_mathPow",
 			fn:   "p",
 			args: [][]any{{2, 10}, {5, 3}, {2, -2}, {9, 0}},
 		},
@@ -415,7 +376,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "mathMinMax",
 			// min and max fold two numbers; the cases cover the ordinary order, the
 			// reversed order, and equal values.
-			src:  `export function mm(a: number, b: number): number { return Math.max(a, Math.min(a, b)); }`,
+			file: "eq_mathMinMax",
 			fn:   "mm",
 			args: [][]any{{3, 7}, {7, 3}, {4, 4}, {-1, -5}},
 		},
@@ -424,7 +385,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// three arguments through the variadic Math.min, which the two-argument
 			// lowering could not do; the cases put the smallest first, middle, and
 			// last so the fold order does not matter.
-			src:  `export function m3(a: number, b: number, c: number): number { return Math.min(a, b, c); }`,
+			file: "eq_mathMin3",
 			fn:   "m3",
 			args: [][]any{{1, 2, 3}, {2, 1, 3}, {3, 2, 1}, {5, 5, 5}},
 		},
@@ -433,7 +394,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// the half-way inputs are where JavaScript and Go's math.Round disagree:
 			// 2.5 rounds to 3 both ways, but -2.5 rounds to -2 in JavaScript (toward
 			// +Infinity) and -3 in Go, so this case fails unless value.Round is used.
-			src:  `export function rnd(x: number): number { return Math.round(x); }`,
+			file: "eq_mathRound",
 			fn:   "rnd",
 			args: [][]any{{2.5}, {-2.5}, {2.4}, {-2.6}, {0}},
 		},
@@ -441,7 +402,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "mathSign",
 			// sign over positive, negative, and zero; the zero passes through so both
 			// sides print the same, and the nonzero cases give the constant one.
-			src:  `export function sgn(x: number): number { return Math.sign(x); }`,
+			file: "eq_mathSign",
 			fn:   "sgn",
 			args: [][]any{{5}, {-5}, {0}, {0.001}, {-0.001}},
 		},
@@ -449,7 +410,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "bitAndOrXor",
 			// the three logical bitwise operators over positive, negative (which
 			// exercises the two's-complement ToInt32 wrap), and zero operands.
-			src:  `export function b(a: number, c: number): number { return (a & c) | (a ^ c); }`,
+			file: "eq_bitAndOrXor",
 			fn:   "b",
 			args: [][]any{{12, 10}, {-1, 255}, {0, 0}, {-8, 3}},
 		},
@@ -458,7 +419,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// left and arithmetic-right shift, including a negative left operand so
 			// the sign propagation of >> is checked, and a count above 31 to pin the
 			// five-bit mask.
-			src:  `export function sh(a: number, n: number): number { return (a << n) >> n; }`,
+			file: "eq_bitShifts",
 			fn:   "sh",
 			args: [][]any{{1, 4}, {-1, 2}, {255, 1}, {1, 33}},
 		},
@@ -467,7 +428,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// >>> is the operator that most visibly differs from a signed shift:
 			// -1 >>> 0 is 4294967295, not -1, so the ToUint32 coercion is what makes
 			// the emitted Go agree with the engine.
-			src:  `export function us(a: number, n: number): number { return a >>> n; }`,
+			file: "eq_bitUnsignedShift",
 			fn:   "us",
 			args: [][]any{{-1, 0}, {-1, 1}, {256, 2}, {8, 1}},
 		},
@@ -475,7 +436,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "bitNot",
 			// ~x is -(x+1) on the coerced integer, so the cases cover positive,
 			// negative, zero, and a fraction that must truncate first.
-			src:  `export function inv(x: number): number { return ~x; }`,
+			file: "eq_bitNot",
 			fn:   "inv",
 			args: [][]any{{0}, {5}, {-1}, {6.9}, {-6.9}},
 		},
@@ -483,7 +444,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "bitCoerceFraction",
 			// a fractional operand must truncate before the bitwise op, the ToInt32
 			// step, so 6.9 & 3 is 6 & 3, not a float operation.
-			src:  `export function f(a: number, c: number): number { return a & c; }`,
+			file: "eq_bitCoerceFraction",
 			fn:   "f",
 			args: [][]any{{6.9, 3}, {-6.9, 3}},
 		},
@@ -492,7 +453,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// the argument is x / y so the cases can reach a fraction (7/2), a whole
 			// number (6/2), and a non-finite value (1/0 is Infinity), all of which
 			// Number.isInteger must judge the same way the engine does.
-			src:  `export function ii(x: number, y: number): boolean { return Number.isInteger(x / y); }`,
+			file: "eq_numberIsInteger",
 			fn:   "ii",
 			ret:  "boolean",
 			args: [][]any{{6, 2}, {7, 2}, {1, 0}, {-4, 2}},
@@ -501,7 +462,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "numberIsFiniteNaN",
 			// isFinite and isNaN over the same x / y, covering a finite result, an
 			// infinity (1/0), and a NaN (0/0).
-			src:  `export function fn(x: number, y: number): boolean { return Number.isFinite(x / y) || Number.isNaN(x / y); }`,
+			file: "eq_numberIsFiniteNaN",
 			fn:   "fn",
 			ret:  "boolean",
 			args: [][]any{{3, 2}, {1, 0}, {0, 0}},
@@ -511,7 +472,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// the bare global isNaN and isFinite over x / y, covering a finite result,
 			// an infinity (1/0), and a NaN (0/0). On a number argument these coerce to
 			// nothing, so they must agree with the engine's coercing globals.
-			src:  `export function g(x: number, y: number): boolean { return isNaN(x / y) || isFinite(x / y); }`,
+			file: "eq_globalIsNaNIsFinite",
 			fn:   "g",
 			ret:  "boolean",
 			args: [][]any{{3, 2}, {1, 0}, {0, 0}},
@@ -520,7 +481,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "numberIsSafeInteger",
 			// x * y lets a case exceed the safe-integer range: 9007199254740992 is
 			// 2^53, an integer that is not safe, so the harness pins the boundary.
-			src:  `export function si(x: number, y: number): boolean { return Number.isSafeInteger(x * y); }`,
+			file: "eq_numberIsSafeInteger",
 			fn:   "si",
 			ret:  "boolean",
 			args: [][]any{{2, 3}, {4503599627370496, 2}, {4503599627370497, 2}},
@@ -531,7 +492,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// ToUpper: the sharp s expands to SS, a word carries the expansion, a
 			// ligature expands, and the emoji has no case, all of which must match the
 			// engine's toUpperCase.
-			src:  `export function up(s: string): string { return s.toUpperCase(); }`,
+			file: "eq_toUpperCase",
 			fn:   "up",
 			ret:  "string",
 			args: [][]any{{"hello"}, {"ß"}, {"straße"}, {"ﬀ"}, {"aπ😀"}},
@@ -542,7 +503,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// capital sigma lowercases to ς and a non-final one to σ, which Go's simple
 			// ToLower does not do; the dotted capital I expands to i plus a combining
 			// dot.
-			src:  `export function down(s: string): string { return s.toLowerCase(); }`,
+			file: "eq_toLowerCase",
 			fn:   "down",
 			ret:  "string",
 			args: [][]any{{"HELLO"}, {"ΟΔΟΣ"}, {"ΣΣ"}, {"İ"}},
@@ -554,7 +515,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// zero-width no-break space (U+FEFF), all of which trim removes and
 			// Go's unicode.IsSpace would get wrong. An all-whitespace string trims
 			// to empty and a clean string is unchanged.
-			src:  `export function clean(s: string): string { return s.trim(); }`,
+			file: "eq_trim",
 			fn:   "clean",
 			ret:  "string",
 			args: [][]any{{"  hello  "}, {"\t\n hi \r\n"}, {"\u00a0x\u00a0"}, {"\ufeffy\ufeff"}, {"none"}, {"   "}},
@@ -563,14 +524,14 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "trimStart",
 			// trimStart removes only the leading run, so trailing whitespace must
 			// survive, which the engine and the emitted Go must agree on.
-			src:  `export function lead(s: string): string { return s.trimStart(); }`,
+			file: "eq_trimStart",
 			fn:   "lead",
 			ret:  "string",
 			args: [][]any{{"  hi  "}, {" x"}, {"none"}},
 		},
 		{
 			name: "trimEnd",
-			src:  `export function tailws(s: string): string { return s.trimEnd(); }`,
+			file: "eq_trimEnd",
 			fn:   "tailws",
 			ret:  "string",
 			args: [][]any{{"  hi  "}, {"x "}, {"none"}},
@@ -582,7 +543,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// units at lower time, and the engine decodes them at parse time, so the
 			// two returned strings must match. A zero-argument function, so the one
 			// call passes no arguments.
-			src:  `export function lit(): string { return "tab\tnl\nhex\x41 emoji\u{1F600}"; }`,
+			file: "eq_strlitEscapes",
 			fn:   "lit",
 			ret:  "string",
 			args: [][]any{{}},
@@ -594,7 +555,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// the unpadded exponent that separate it from strconv's 'g': a large
 			// integer, the 1e21 boundary, a small decimal, and 1e-7 where JavaScript
 			// goes exponential. A fraction and a negative pin the ordinary path.
-			src:  `export function show(x: number, y: number): string { return String(x / y); }`,
+			file: "eq_stringOfNumber",
 			fn:   "show",
 			ret:  "string",
 			args: [][]any{{1, 2}, {-3, 2}, {6, 2}, {1e21, 1}, {1, 1000000}, {1, 10000000}, {1, 0}, {0, 0}},
@@ -602,7 +563,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		{
 			name: "stringOfBool",
 			// String(b) on a boolean is "true" or "false"; x < y makes both reachable.
-			src:  `export function show(x: number, y: number): string { return String(x < y); }`,
+			file: "eq_stringOfBool",
 			fn:   "show",
 			ret:  "string",
 			args: [][]any{{1, 2}, {2, 1}},
@@ -613,7 +574,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// trailing tail, a signed value with whitespace, the 0x prefix, a leading
 			// zero (which is not legacy octal), a fraction stopped at the point, and the
 			// non-numeric NaN case, all of which must agree with value.ParseInt.
-			src:  `export function pi(s: string): number { return parseInt(s); }`,
+			file: "eq_parseIntString",
 			fn:   "pi",
 			args: [][]any{{"42px"}, {"  -17  "}, {"0x1F"}, {"010"}, {"3.9"}, {"abc"}, {""}},
 		},
@@ -621,7 +582,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "parseIntRadix",
 			// parseInt(s, r) with an explicit radix: binary, octal, hex (with and without
 			// the prefix), base 36, and the out-of-range radix that is NaN.
-			src:  `export function pi(s: string, r: number): number { return parseInt(s, r); }`,
+			file: "eq_parseIntRadix",
 			fn:   "pi",
 			args: [][]any{{"101", 2}, {"777", 8}, {"ff", 16}, {"0x1F", 16}, {"0x1F", 10}, {"zz", 36}, {"10", 1}},
 		},
@@ -632,7 +593,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// Infinity word, a dangling exponent marker (where the mantissa alone is the
 			// prefix), the radix form parseFloat does not read (so "0x1F" is 0), and a
 			// non-numeric string (NaN), all of which must agree with value.ParseFloat.
-			src:  `export function pf(s: string): number { return parseFloat(s); }`,
+			file: "eq_parseFloatString",
 			fn:   "pf",
 			args: [][]any{{"3.14"}, {"42px"}, {"  -2.5  "}, {"1e3rest"}, {"Infinity!"}, {"1e"}, {"0x1F"}, {".5"}, {"abc"}, {""}},
 		},
@@ -641,7 +602,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches
 			// a nonzero result, +0, and NaN (0/0), the last being what a bare zero test
 			// would call truthy, so the engine and value.NumberToBool must agree.
-			src:  `export function ok(x: number, y: number): boolean { return Boolean(x / y); }`,
+			file: "eq_booleanOfNumber",
 			fn:   "ok",
 			ret:  "boolean",
 			args: [][]any{{6, 2}, {0, 1}, {0, 0}, {-3, 2}},
@@ -650,7 +611,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			name: "booleanOfString",
 			// Boolean(s) on a string is false only when empty; content does not matter,
 			// so "0" and "false" are truthy and must agree with value.StringToBool.
-			src:  `export function ok(s: string): boolean { return Boolean(s); }`,
+			file: "eq_booleanOfString",
 			fn:   "ok",
 			ret:  "boolean",
 			args: [][]any{{""}, {"a"}, {" "}, {"0"}, {"false"}, {"😀"}},
@@ -662,14 +623,14 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// fraction, the radix prefixes, the Infinity word, the empty string (which
 			// is 0), and a non-numeric string (which is NaN), all of which the engine
 			// and value.StringToNumber must agree on, including the NaN result.
-			src:  `export function num(s: string): number { return Number(s); }`,
+			file: "eq_numberOfString",
 			fn:   "num",
 			args: [][]any{{"  42  "}, {".5"}, {"1e3"}, {"0x1F"}, {"0b101"}, {"0o17"}, {"Infinity"}, {"-Infinity"}, {""}, {"abc"}, {"1_000"}},
 		},
 		{
 			name: "numberOfBool",
 			// Number(b) on a boolean is 1 or 0; x < y makes both reachable.
-			src:  `export function num(x: number, y: number): number { return Number(x < y); }`,
+			file: "eq_numberOfBool",
 			fn:   "num",
 			args: [][]any{{1, 2}, {2, 1}},
 		},
@@ -679,13 +640,13 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			// integers, an underscore-separated decimal, and an exponent. The compiler
 			// emits each as the Go literal for the same value and the engine parses the
 			// same source, so their sum must agree. A zero-argument function.
-			src:  `export function n(): number { return 0xFF + 0b1010 + 0o17 + 1_000 + 1.5e2; }`,
+			file: "eq_numLiterals",
 			fn:   "n",
 			args: [][]any{{}},
 		},
 		{
 			name: "modulo",
-			src:  "export function rem(a: number, b: number): number { return a % b; }",
+			file: "eq_modulo",
 			// fmod keeps the sign of the dividend and works on fractions, so the
 			// cases cover negative dividends and a non-integer operand, where a
 			// naive integer remainder would diverge from JavaScript.
@@ -694,26 +655,13 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		},
 		{
 			name: "logical",
-			src: `export function between(x: number, lo: number, hi: number): number {
-  if (x >= lo && x <= hi) {
-    return 1;
-  }
-  if (x < lo || x > hi) {
-    return -1;
-  }
-  return 0;
-}`,
+			file: "eq_logical",
 			fn:   "between",
 			args: [][]any{{5, 0, 10}, {-1, 0, 10}, {11, 0, 10}, {0, 0, 10}, {10, 0, 10}},
 		},
 		{
 			name: "crossCall",
-			src: `export function square(x: number): number {
-  return x * x;
-}
-export function hypotSq(a: number, b: number): number {
-  return square(a) + square(b);
-}`,
+			file: "eq_crossCall",
 			fn:   "hypotSq",
 			args: [][]any{{3, 4}, {0, 0}, {-2, 5}},
 		},
@@ -721,13 +669,14 @@ export function hypotSq(a: number, b: number): number {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			goSrc, imports := lowerToGo(t, tc.src)
+			src := readTS(t, tc.file)
+			goSrc, imports := lowerToGo(t, src)
 			goName, ok := exportedField(tc.fn)
 			if !ok {
 				t.Fatalf("entry %q is not a Go identifier", tc.fn)
 			}
 			for _, args := range tc.args {
-				want := evalTS(t, tc.src, tc.fn, tc.ret, args)
+				want := evalTS(t, src, tc.fn, tc.ret, args)
 				got := runGo(t, goSrc, imports, goName, tc.ret, args)
 				if got != want {
 					t.Errorf("%s(%v): generated Go = %s, TypeScript = %s", tc.fn, args, got, want)
