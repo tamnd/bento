@@ -121,6 +121,12 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "math_round", file: "func_math_round"},
 		// Go has no math.Sign, so Math.sign lowers to value.Sign.
 		{name: "math_sign", file: "func_math_sign"},
+		// Math.fround is a single-precision round trip, bit-exact, so it lowers to value.Fround rather than any math package function.
+		{name: "math_fround", file: "func_math_fround"},
+		// Math.clz32 counts leading zeros of the ToUint32 coercion, so it lowers to value.Clz32.
+		{name: "math_clz32", file: "func_math_clz32"},
+		// Math.imul is a two-argument 32-bit integer multiply, so it lowers to value.Imul with both arguments passed through.
+		{name: "math_imul", file: "func_math_imul"},
 		// String(x) on a number is the ECMAScript Number::toString, which lowers to value.NumberToString rather than strconv, whose exponent thresholds and padding differ.
 		{name: "string_of_number", file: "func_string_of_number"},
 		// String(b) on a boolean lowers to value.BoolToString.

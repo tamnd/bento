@@ -655,7 +655,10 @@ func numberMethod(name string) (goName string, ok bool) {
 // so value.MinN and value.MaxN fold a whole argument list with the same identity,
 // NaN, and signed-zero rules. round and sign also map to value: Math.round breaks
 // a tie toward +Infinity where math.Round rounds away from zero, and Go has no
-// math.Sign at all. Left out on purpose: the transcendental functions (sin, log,
+// math.Sign at all. fround, clz32, and imul map to value too, but for a different
+// reason than round: they are integer or single-precision operations, so they are
+// bit-exact and agree with the engine to the last bit the way the transcendental
+// functions cannot. Left out on purpose: the transcendental functions (sin, log,
 // exp), whose last-bit results are not guaranteed identical across two libm
 // implementations. Each is a later slice.
 func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok bool) {
@@ -680,6 +683,12 @@ func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok boo
 		return valuePkg, "Round", 1, 1, true
 	case "sign":
 		return valuePkg, "Sign", 1, 1, true
+	case "fround":
+		return valuePkg, "Fround", 1, 1, true
+	case "clz32":
+		return valuePkg, "Clz32", 1, 1, true
+	case "imul":
+		return valuePkg, "Imul", 2, 2, true
 	default:
 		return "", "", 0, 0, false
 	}

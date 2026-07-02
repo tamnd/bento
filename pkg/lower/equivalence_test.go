@@ -407,6 +407,34 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{5}, {-5}, {0}, {0.001}, {-0.001}},
 		},
 		{
+			name: "mathFround",
+			// fround snaps to the nearest float32: an exact value is unchanged, 1.1 lands
+			// on its float32 neighbor, 2^24+1 rounds down to 2^24 (the first integer
+			// float32 cannot hold), and a magnitude past the float32 range goes to
+			// infinity, all of which the engine's Math.fround does too.
+			file: "eq_mathFround",
+			fn:   "f",
+			args: [][]any{{1}, {1.1}, {16777217}, {1e39}, {-0.5}},
+		},
+		{
+			name: "mathClz32",
+			// clz32 counts leading zeros of the ToUint32 coercion: 0 counts all 32, a
+			// power of two counts its position, -1 coerces to all ones so counts 0, and a
+			// fraction truncates before the count.
+			file: "eq_mathClz32",
+			fn:   "c",
+			args: [][]any{{0}, {1}, {2}, {-1}, {3.9}},
+		},
+		{
+			name: "mathImul",
+			// imul multiplies as 32-bit signed integers, so the small case is ordinary but
+			// the large ones overflow and keep only the low 32 bits, wrapping negative the
+			// way the engine's Math.imul does; a fraction truncates first.
+			file: "eq_mathImul",
+			fn:   "m",
+			args: [][]any{{3, 4}, {-1, 8}, {4294967295, 5}, {2147483647, 2}, {6.9, 3}},
+		},
+		{
 			name: "bitAndOrXor",
 			// the three logical bitwise operators over positive, negative (which
 			// exercises the two's-complement ToInt32 wrap), and zero operands.
