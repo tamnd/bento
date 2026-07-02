@@ -1012,6 +1012,13 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		return "LastIndexOf", []argKind{argString, argNumber}, 1, false, true
 	case "includes":
 		return "Includes", []argKind{argString, argNumber}, 1, false, true
+	case "replace":
+		// Only the string-pattern, string-replacement form lowers; a regexp pattern
+		// or a replacer function argument does not type as a string, so methodCall
+		// hands it back. Both arguments are required, so it is not variadic.
+		return "Replace", []argKind{argString, argString}, 2, false, true
+	case "replaceAll":
+		return "ReplaceAll", []argKind{argString, argString}, 2, false, true
 	case "startsWith":
 		return "StartsWith", []argKind{argString, argNumber}, 1, false, true
 	case "endsWith":

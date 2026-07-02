@@ -177,6 +177,120 @@ func (s BStr) Includes(search BStr, position ...float64) bool {
 	return s.IndexOf(search, position...) >= 0
 }
 
+// Replace returns s with the first occurrence of search replaced by the
+// expansion of replacement, matching String.prototype.replace called with two
+// strings. (The regexp pattern and the replacer-function forms are a later
+// slice.) The search is code-unit-wise, so it agrees with JavaScript on astral
+// text and lone surrogates, and when search does not occur the receiver is
+// returned unchanged with no allocation. An empty search matches at the front,
+// so the replacement is inserted there. The replacement string carries the
+// ECMAScript substitution patterns: see appendSubstitution.
+func (s BStr) Replace(search, replacement BStr) BStr {
+	hay, needle := s.units(), search.units()
+	pos := indexOfUnits(hay, needle, 0)
+	if pos < 0 {
+		return s
+	}
+	out := make([]uint16, 0, len(hay)+len(replacement.units()))
+	out = append(out, hay[:pos]...)
+	out = appendSubstitution(out, hay, pos, len(needle), replacement.units())
+	out = append(out, hay[pos+len(needle):]...)
+	return FromUTF16(out)
+}
+
+// ReplaceAll returns s with every non-overlapping occurrence of search replaced
+// by the expansion of replacement, matching String.prototype.replaceAll called
+// with two strings. It shares Replace's code-unit search and substitution rules.
+// An empty search matches at every position including both ends, so the
+// replacement is woven between every code unit, matching how JavaScript expands
+// "abc".replaceAll("", "-") to "-a-b-c-". When search does not occur the receiver
+// is returned unchanged.
+func (s BStr) ReplaceAll(search, replacement BStr) BStr {
+	hay, needle, repl := s.units(), search.units(), replacement.units()
+	out := make([]uint16, 0, len(hay))
+	i := 0
+	matched := false
+	for {
+		pos := indexOfUnits(hay, needle, i)
+		if pos < 0 {
+			break
+		}
+		matched = true
+		out = append(out, hay[i:pos]...)
+		out = appendSubstitution(out, hay, pos, len(needle), repl)
+		if len(needle) == 0 {
+			// A zero-width match cannot advance on its own, so emit the code unit at
+			// the match and step one past it; that also puts a final replacement past
+			// the last unit before the scan runs off the end.
+			if pos < len(hay) {
+				out = append(out, hay[pos])
+			}
+			i = pos + 1
+		} else {
+			i = pos + len(needle)
+		}
+		if i > len(hay) {
+			break
+		}
+	}
+	if !matched {
+		return s
+	}
+	out = append(out, hay[min(i, len(hay)):]...)
+	return FromUTF16(out)
+}
+
+// indexOfUnits returns the first index at or after start where needle occurs in
+// hay, or -1 if it does not. An empty needle matches at start, the zero-width
+// match the replace methods weave a replacement into.
+func indexOfUnits(hay, needle []uint16, start int) int {
+	if len(needle) == 0 {
+		return start
+	}
+	for i := start; i+len(needle) <= len(hay); i++ {
+		if matchAt(hay, needle, i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// appendSubstitution appends replacement to out, expanding the ECMAScript
+// substitution patterns a string replace understands: $$ becomes a literal $, $&
+// the matched code units, $` the code units before the match, and $' the code
+// units after it. A $ before a digit or a <name> refers to a capture group,
+// which a string search has none of, so it is left verbatim, as is a trailing $
+// with nothing after it. pos and mlen locate the match within hay.
+func appendSubstitution(out, hay []uint16, pos, mlen int, replacement []uint16) []uint16 {
+	for i := 0; i < len(replacement); i++ {
+		c := replacement[i]
+		if c != '$' || i+1 >= len(replacement) {
+			out = append(out, c)
+			continue
+		}
+		switch replacement[i+1] {
+		case '$':
+			out = append(out, '$')
+			i++
+		case '&':
+			out = append(out, hay[pos:pos+mlen]...)
+			i++
+		case '`':
+			out = append(out, hay[:pos]...)
+			i++
+		case '\'':
+			out = append(out, hay[pos+mlen:]...)
+			i++
+		default:
+			// $ before a digit or a name is a capture reference a string search does
+			// not fill, so the $ stays literal and the next character is emitted on
+			// the following iteration as itself.
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // StartsWith reports whether s has prefix starting at an optional position,
 // matching String.prototype.startsWith. The position is optional, so the method
 // is variadic; it is clamped into [0, length] and the prefix is matched there. It
