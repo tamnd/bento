@@ -41,6 +41,27 @@ func ToInt32(n float64) int32 {
 	return int32(ToUint32(n))
 }
 
+// twoPow16 is 2^16, the modulus ToUint16 reduces by. It is exactly representable
+// as a float64, so the float modulo below is exact.
+const twoPow16 = 65536.0
+
+// ToUint16 coerces a number to an unsigned 16-bit integer, the ECMAScript
+// ToUint16 operation. It mirrors ToUint32 step for step and differs only in the
+// modulus: NaN and the infinities become 0, and every other value is truncated
+// toward zero then reduced modulo 2^16 into [0, 2^16). String.fromCharCode is the
+// caller, which maps each argument through this before taking the result as a
+// UTF-16 code unit.
+func ToUint16(n float64) uint16 {
+	if math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0
+	}
+	m := math.Mod(math.Trunc(n), twoPow16)
+	if m < 0 {
+		m += twoPow16
+	}
+	return uint16(m)
+}
+
 // Round rounds a number to the nearest integer, Math.round. It is not math.Round:
 // JavaScript breaks a tie by rounding toward +Infinity (Math.round(2.5) is 3 and
 // Math.round(-2.5) is -2), where Go's math.Round rounds a tie away from zero

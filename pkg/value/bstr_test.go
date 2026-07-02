@@ -150,6 +150,33 @@ func TestConcatN(t *testing.T) {
 	}
 }
 
+// TestFromCharCode pins String.fromCharCode: no arguments gives the empty
+// string, ASCII code units spell out their characters, each argument wraps
+// through ToUint16 so a number past 2^16 keeps only the low 16 bits, a fraction
+// truncates, and a bare surrogate half is preserved as a lone surrogate rather
+// than replaced.
+func TestFromCharCode(t *testing.T) {
+	if got := FromCharCode(); got.ToGoString() != "" || got.Length() != 0 {
+		t.Errorf("FromCharCode() = %q len %v, want empty", got.ToGoString(), got.Length())
+	}
+	if got := FromCharCode(72, 105); got.ToGoString() != "Hi" {
+		t.Errorf("FromCharCode(72, 105) = %q, want \"Hi\"", got.ToGoString())
+	}
+	// 65536 + 65 wraps to 65, so it reads back as 'A', and 65.9 truncates to 65.
+	if got := FromCharCode(65536+65, 65.9); got.ToGoString() != "AA" {
+		t.Errorf("FromCharCode(65601, 65.9) = %q, want \"AA\"", got.ToGoString())
+	}
+	// A surrogate pair supplied as two code units rejoins into one astral rune.
+	if got := FromCharCode(0xD83D, 0xDE00); got.ToGoString() != "\U0001F600" {
+		t.Errorf("FromCharCode(0xD83D, 0xDE00) = %q, want the emoji", got.ToGoString())
+	}
+	// A lone high surrogate survives as a single code unit off the fast path.
+	lone := FromCharCode(0xD83D)
+	if lone.Length() != 1 || lone.utf16 == nil {
+		t.Errorf("FromCharCode(0xD83D) len %v utf16 nil %v, want 1 and a code-unit view", lone.Length(), lone.utf16 == nil)
+	}
+}
+
 // TestCharCodeAt pins String.prototype.charCodeAt: in-range indices return the
 // UTF-16 code unit, an out-of-range or negative index returns NaN, a fractional
 // index truncates, and an astral character reads back as its two surrogate

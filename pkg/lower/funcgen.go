@@ -537,6 +537,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Number") {
 		return r.numberCall(method, argNodes)
 	}
+	// String.fromCharCode(...) is a static call on the global String constructor,
+	// not a method on a string value, so it lowers to a value constructor before
+	// the string-method path below, which expects a string receiver.
+	if r.isGlobalRef(recvNode, "String") {
+		return r.stringStaticCall(method, argNodes)
+	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
@@ -638,6 +644,32 @@ func (r *Renderer) numberCall(method string, argNodes []frontend.Node) (ast.Expr
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// stringStaticCall lowers a static call on the global String constructor. Only
+// fromCharCode is covered here: it takes any number of number arguments, coerces
+// each to a UTF-16 code unit, and returns a string, so it maps to the variadic
+// value.FromCharCode. fromCodePoint waits for the exception machinery, since it
+// throws a RangeError on a code point outside the Unicode range. Like Math and
+// Number, String is a namespace on this path, not a value, so the receiver is
+// not lowered.
+func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "fromCharCode" {
+		return nil, &NotYetLowerable{Reason: "String." + method + " is a later slice"}
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		if !r.isNumber(a) {
+			return nil, &NotYetLowerable{Reason: "String.fromCharCode with a non-number argument is a later slice"}
+		}
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "FromCharCode"), Args: args}, nil
 }
 
 // numberMethod maps a JavaScript Number static predicate to the value function

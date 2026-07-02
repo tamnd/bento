@@ -707,6 +707,17 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{1}, {-2}},
 		},
 		{
+			name: "stringFromCharCode",
+			file: "eq_string_from_char_code",
+			fn:   "chars",
+			ret:  "string",
+			// each argument goes through ToUint16, so the cases cover plain ASCII, a
+			// value past 2^16 that must wrap, a fraction that must truncate, and a
+			// surrogate pair that rejoins into one astral rune. The engine and
+			// value.FromCharCode must agree code unit for code unit.
+			args: [][]any{{72, 105, 33}, {65536 + 66, 67.9, 68}, {0xD83D, 0xDE00, 65}},
+		},
+		{
 			name: "booleanOfNumber",
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches
 			// a nonzero result, +0, and NaN (0/0), the last being what a bare zero test
