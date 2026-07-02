@@ -1895,17 +1895,22 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 // the string, remainder, and bitwise special cases apply the same way whether
 // the operator was written on its own or fused to an assignment.
 func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.Expr, error) {
-	// + on two strings is concatenation of a UTF-16 string, not a Go string +,
-	// which would be UTF-8, and not a Go operator at all since bstr is a struct.
-	// It lowers to value.Concat, which picks the wider backing form and copies
-	// once (section 5). It is handled before the operator table so the string path
-	// emits a call rather than reaching the number/bool dispatch.
-	if opText == "+" && r.isString(left) && r.isString(right) {
-		l, err := r.lowerExpr(left)
+	// + where either operand is a string is concatenation of a UTF-16 string, not
+	// a Go string +, which would be UTF-8, and not a Go operator at all since bstr
+	// is a struct. JavaScript + is string concatenation as soon as one operand is a
+	// string: the other operand is coerced to a string with the same ToString the
+	// value model runs, so a number becomes value.NumberToString and a boolean
+	// value.BoolToString before both are joined with value.Concat, which picks the
+	// wider backing form and copies once (section 5). It is handled before the
+	// operator table so the string path emits a call rather than reaching the
+	// number/bool dispatch, and a string operand against a non-primitive (an object
+	// or array, whose ToString is a later slice) hands back through stringifyOperand.
+	if opText == "+" && (r.isString(left) || r.isString(right)) {
+		l, err := r.stringifyOperand(left)
 		if err != nil {
 			return nil, err
 		}
-		rr, err := r.lowerExpr(right)
+		rr, err := r.stringifyOperand(right)
 		if err != nil {
 			return nil, err
 		}
@@ -2137,6 +2142,33 @@ func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left,
 		inner = &ast.BinaryExpr{X: lx, Op: goOp, Y: rx}
 	}
 	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}, nil
+}
+
+// stringifyOperand lowers an operand of a string concatenation to a value.BStr,
+// coercing it the way JavaScript + does once the other operand is a string. A
+// string operand is already a BStr and passes through; a number becomes
+// value.NumberToString and a boolean value.BoolToString, the exact ToString the
+// value model runs so a concatenated number reads the same bytes String(x) would
+// and matches the engine. A non-primitive operand, whose ToString needs the
+// object machinery, hands back for a later slice rather than emitting a coercion
+// that does not exist yet.
+func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
+	e, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case r.isString(n):
+		return e, nil
+	case r.isNumber(n):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{e}}, nil
+	case r.isBool(n):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{e}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "string concatenation with a non-primitive operand is a later slice"}
+	}
 }
 
 // binaryOp picks the Go operator for a TypeScript binary operator given its

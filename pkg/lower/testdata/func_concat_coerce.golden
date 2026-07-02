@@ -1,0 +1,4 @@
+func Label(n float64) value.BStr {
+	var even bool = (float64(value.ToInt32(n) & value.ToInt32(1))) == 0
+	return value.Concat(value.Concat(value.Concat(value.Concat(value.FromGoString("n="), value.NumberToString(n)), value.FromGoString(" even=")), value.BoolToString(even)), value.FromGoString("!"))
+}

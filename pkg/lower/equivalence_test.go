@@ -736,6 +736,17 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		// same ToString, and the escapes must cook identically, or the strings diverge.
 		{name: "templateNosub", file: "eq_template_nosub", fn: "f", ret: "string", args: [][]any{{}}},
 		{
+			// + concatenation that coerces a number and a boolean operand to a string,
+			// the same ToString the template path runs, so a mixed "n=" + n + " even=" +
+			// even chain is compared against the engine over an integer, a negative, and
+			// a fraction to exercise NumberToString and both boolean values.
+			name: "concatCoerce",
+			file: "eq_concat_coerce",
+			fn:   "label",
+			ret:  "string",
+			args: [][]any{{0}, {1}, {2}, {-3}, {0.5}},
+		},
+		{
 			name: "templateBasic",
 			file: "eq_template_basic",
 			fn:   "f",

@@ -257,6 +257,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_push", file: "func_array_push"},
 		// an index expression a[i] lowers to the value.Array At method: both an array variable and an array literal are indexed, and the index is a bitwise expression, so the number index threads through with no conversion.
 		{name: "array_index", file: "func_array_index"},
+		// + where one operand is a string is concatenation with coercion: a number operand becomes value.NumberToString and a boolean operand value.BoolToString before value.Concat, so a mixed "n=" + n + " even=" + even chain lowers without reaching the number/bool operator dispatch.
+		{name: "concat_coerce", file: "func_concat_coerce"},
 		// map over a concise-body arrow lowers to the value.Array Map method taking a Go function literal, the arrow's parameter typed from the checker and its body returning the element type.
 		{name: "array_map", file: "func_array_map"},
 		// filter over a concise-body arrow lowers to the value.Array Filter method, the callback returning a bool with no same-type restriction.
