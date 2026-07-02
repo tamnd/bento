@@ -70,13 +70,19 @@ func (r *Renderer) RenderFunc(fn frontend.Node) (Decl, error) {
 }
 
 // paramFields lowers each parameter to a Go field with its lowered type. An
-// optional parameter is T | undefined plus a presence bit, the optional tagged
-// type of a later slice, so a signature with one hands back.
+// optional parameter (one a caller may omit, so its index is at or past the
+// signature's MinArgs) still hands back: its type is the optional value.Opt[T]
+// now, but a call that omits the argument must synthesize the undefined optional,
+// the call-site defaulting of a later slice, so lowering the parameter without it
+// would emit a Go function no omitting caller could call. Its type carrying an
+// explicit undefined member is not what marks it optional here, since the checker
+// reports the same T | undefined type for a required parameter annotated that
+// way; the caller-omittable distinction is MinArgs alone.
 func (r *Renderer) paramFields(sig frontend.Signature) (*ast.FieldList, error) {
 	fields := &ast.FieldList{}
-	for _, p := range sig.Params {
-		if p.Optional {
-			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs the optional tagged type, a later slice"}
+	for i, p := range sig.Params {
+		if i >= sig.MinArgs {
+			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 		}
 		pname, ok := localName(p.Name)
 		if !ok {
@@ -1829,6 +1835,29 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return &ast.BinaryExpr{X: cmp, Op: relOp, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}}, nil
 	}
 
+	// === and !== against undefined, where the other operand is an optional
+	// (T | undefined, lowered to value.Opt[T]), is a presence test, not a value
+	// compare. undefined has no Go value to put on the right of a ==, and the
+	// optional carries its presence in a flag, so the comparison lowers to the
+	// optional's IsUndefined: x === undefined is x.IsUndefined() and x !== undefined
+	// is its negation. Only the undefined operand is skipped; the optional operand
+	// is lowered normally to receive the method. A === or !== between two optionals,
+	// or an optional against a defined value, is a value compare and not this case,
+	// so both operands being checked keeps this to the undefined-literal shape.
+	if opText == "===" || opText == "!==" {
+		if optNode, ok := r.optionalUndefinedCompare(left, right); ok {
+			opt, err := r.lowerExpr(optNode)
+			if err != nil {
+				return nil, err
+			}
+			check := &ast.CallExpr{Fun: &ast.SelectorExpr{X: opt, Sel: ident("IsUndefined")}}
+			if opText == "!==" {
+				return &ast.UnaryExpr{Op: token.NOT, X: check}, nil
+			}
+			return check, nil
+		}
+	}
+
 	// Remainder on numbers is the one arithmetic operator that is not a Go binary
 	// operator: JavaScript % is fmod (a floating remainder that keeps the sign of
 	// the dividend), which Go spells math.Mod, not the integer-only % token. It is
@@ -1870,6 +1899,39 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return nil, err
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// optionalUndefinedCompare recognizes an equality between an optional and the
+// bare undefined literal and returns the optional operand. One operand must type
+// as exactly undefined (the undefined keyword, flags TypeUndefined) and the other
+// must be an optional (a union whose members are the T | undefined shape). It
+// returns false when neither operand is the undefined literal, when both are, or
+// when the non-undefined operand is not an optional, so the caller only rewrites
+// the genuine presence test and leaves every other equality to the value compare.
+func (r *Renderer) optionalUndefinedCompare(left, right frontend.Node) (frontend.Node, bool) {
+	lUndef := r.prog.TypeAt(left).Flags == frontend.TypeUndefined
+	rUndef := r.prog.TypeAt(right).Flags == frontend.TypeUndefined
+	switch {
+	case rUndef && !lUndef && r.isOptional(left):
+		return left, true
+	case lUndef && !rUndef && r.isOptional(right):
+		return right, true
+	default:
+		return nil, false
+	}
+}
+
+// isOptional reports whether a node's type is an optional, the T | undefined
+// shape that lowers to value.Opt[T]. It reads the type as a union and checks the
+// optional shape the same way renderUnion does, so the presence-test rewrite
+// fires exactly when the operand is a value.Opt and not on a wider union.
+func (r *Renderer) isOptional(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeUnion == 0 {
+		return false
+	}
+	_, ok := r.optionalInner(r.prog.UnionMembers(t))
+	return ok
 }
 
 // relationalToken maps a TypeScript relational operator to the Go comparison
@@ -2085,6 +2147,15 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayIndexOfIncludes(recvNode, "Includes", argNodes, true)
 	case "join":
 		return r.arrayJoin(recvNode, argNodes)
+	case "pop":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "array pop takes no arguments"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Pop")}}, nil
 	case "slice":
 		if len(argNodes) > 2 {
 			return nil, &NotYetLowerable{Reason: "array slice with more than two arguments is not valid"}

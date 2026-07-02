@@ -156,6 +156,23 @@ func (a *Array[T]) Join(sep BStr, str func(T) BStr) BStr {
 	return out
 }
 
+// Pop removes the last element and returns it, the lowering of
+// Array.prototype.pop. Its declared type is T | undefined, so it returns an
+// Opt[T]: a present optional holding the removed element on a non-empty array,
+// and the undefined optional on an empty array, where JavaScript pop returns
+// undefined and leaves the array empty. It is a pointer method because the
+// removal must be visible through every reference to the array, the same reason
+// Push is. The backing slice is reshortened by one, so the popped slot is no
+// longer part of the array.
+func (a *Array[T]) Pop() Opt[T] {
+	if len(a.elems) == 0 {
+		return None[T]()
+	}
+	last := a.elems[len(a.elems)-1]
+	a.elems = a.elems[:len(a.elems)-1]
+	return Some(last)
+}
+
 // relativeIndex resolves a JavaScript slice bound against a length: it truncates
 // the Number toward zero, treats a negative value as counting back from the end,
 // and clamps the result into [0, length]. This is the shared step
