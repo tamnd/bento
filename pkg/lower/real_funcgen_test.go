@@ -261,6 +261,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_filter", file: "func_array_filter"},
 		// slice lowers to the value.Array Slice method taking its zero, one, or two number bounds variadically, so slice(), slice(start), and slice(start, end) all reach the one method.
 		{name: "array_slice", file: "func_array_slice"},
+		// indexOf and includes lower to the value.Array search methods, each passing the target and a synthesized element-equality closure: Go == for a number (includes adding the NaN-matches-NaN case), value.BStr.Equal for a string.
+		{name: "array_indexof", file: "func_array_indexof"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

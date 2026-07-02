@@ -2053,11 +2053,11 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 // type, so the arguments lower directly with no per-argument kind guard the way
 // the string methods need, since here the element type, not a fixed argument
 // kind, is what the checker enforced. The reading, higher-order, and other
-// mutating methods (pop, indexOf, includes, join) are later slices; pop and
-// index reads additionally wait on the optional machinery for their undefined
-// result. The higher-order map and filter are covered here, over a concise-body
-// arrow callback that takes the element, as is slice, which returns a fresh
-// array over a copied range.
+// remaining methods (pop, join) are later slices; pop additionally waits on the
+// optional machinery for its undefined result. The higher-order map and filter
+// are covered here, over a concise-body arrow callback that takes the element;
+// slice, which returns a fresh array over a copied range; and the search methods
+// indexOf and includes, over a synthesized element-equality closure.
 func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "push":
@@ -2078,6 +2078,10 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayMapFilter(recvNode, "Map", argNodes, true)
 	case "filter":
 		return r.arrayMapFilter(recvNode, "Filter", argNodes, false)
+	case "indexOf":
+		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
+	case "includes":
+		return r.arrayIndexOfIncludes(recvNode, "Includes", argNodes, true)
 	case "slice":
 		if len(argNodes) > 2 {
 			return nil, &NotYetLowerable{Reason: "array slice with more than two arguments is not valid"}
@@ -2145,6 +2149,78 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// arrayIndexOfIncludes lowers an indexOf or includes call to the matching
+// value.Array method, passing the target and a synthesized equality closure. The
+// closure is what lets the value method stay type-agnostic: it cannot compare
+// two values of its type parameter, so the lowerer, which knows the element
+// type, builds the comparison. The equality differs by method and element type.
+// For a number element, indexOf uses strict equality, which is Go ==, so a NaN
+// target is never found, while includes uses SameValueZero, so its closure also
+// treats two NaNs as equal. For a string element the comparison is
+// value.BStr.Equal either way, since strict equality and SameValueZero agree on
+// strings, and for a boolean it is Go ==. An element type outside those, whose
+// equality would be reference identity or a deep compare, hands back. The
+// optional fromIndex argument is a later slice, so more than one argument hands
+// back.
+func (r *Renderer) arrayIndexOfIncludes(recvNode frontend.Node, goMethod string, argNodes []frontend.Node, sameValueZero bool) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a fromIndex argument is a later slice"}
+	}
+	elemGo, ok := r.arrayElem(recvNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " on a receiver whose element type did not lower"}
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " could not read its element type"}
+	}
+	eq, err := r.equalityClosure(elem, elemGo, sameValueZero)
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	target, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{target, eq}}, nil
+}
+
+// equalityClosure builds the func(T, T) bool the array search methods take,
+// spelling out the JavaScript equality for the element type. The parameters are
+// named a and b and typed at the element's Go type. A number compares with ==,
+// and under SameValueZero also matches two NaNs (a != a && b != b), the one place
+// includes and indexOf diverge. A string compares with value.BStr.Equal, a
+// boolean with ==. Any other element type hands back, since its equality is not
+// one of these value comparisons.
+func (r *Renderer) equalityClosure(elem frontend.Type, elemGo ast.Expr, sameValueZero bool) (ast.Expr, error) {
+	var body ast.Expr
+	switch {
+	case elem.Flags&frontend.TypeNumber != 0:
+		body = &ast.BinaryExpr{X: ident("a"), Op: token.EQL, Y: ident("b")}
+		if sameValueZero {
+			// a == b || a != a && b != b, so NaN matches NaN under SameValueZero.
+			nanA := &ast.BinaryExpr{X: ident("a"), Op: token.NEQ, Y: ident("a")}
+			nanB := &ast.BinaryExpr{X: ident("b"), Op: token.NEQ, Y: ident("b")}
+			body = &ast.BinaryExpr{X: body, Op: token.LOR, Y: &ast.BinaryExpr{X: nanA, Op: token.LAND, Y: nanB}}
+		}
+	case elem.Flags&frontend.TypeString != 0:
+		body = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident("a"), Sel: ident("Equal")}, Args: []ast.Expr{ident("b")}}
+	case elem.Flags&frontend.TypeBoolean != 0:
+		body = &ast.BinaryExpr{X: ident("a"), Op: token.EQL, Y: ident("b")}
+	default:
+		return nil, &NotYetLowerable{Reason: "array search on an element type without a value equality is a later slice"}
+	}
+	params := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("a"), ident("b")}, Type: elemGo}}}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: ident("bool")}}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{body}}}},
+	}, nil
 }
 
 // sameGoType reports whether two lowered type expressions print to the same Go

@@ -164,6 +164,50 @@ func TestArraySlice(t *testing.T) {
 	}
 }
 
+// numberStrictEq is the strict-equality closure the lowerer synthesizes for
+// indexOf on a number array: Go == on two float64.
+func numberStrictEq(a, b float64) bool { return a == b }
+
+// numberSameValueZero is the closure for includes on a number array: == plus the
+// NaN-matches-NaN case SameValueZero adds.
+func numberSameValueZero(a, b float64) bool { return a == b || a != a && b != b }
+
+// TestIndexOf pins that indexOf returns the first matching index or -1, and that
+// with strict equality a NaN target is never found, matching indexOf.
+func TestIndexOf(t *testing.T) {
+	a := NewArray[float64](10, 20, 30, 20)
+	if got := a.IndexOf(20, numberStrictEq); got != 1 {
+		t.Errorf("IndexOf(20) = %v, want 1", got)
+	}
+	if got := a.IndexOf(99, numberStrictEq); got != -1 {
+		t.Errorf("IndexOf(99) = %v, want -1", got)
+	}
+	nan := 0.0
+	nan = nan / nan
+	withNaN := NewArray(1, nan, 3)
+	if got := withNaN.IndexOf(nan, numberStrictEq); got != -1 {
+		t.Errorf("IndexOf(NaN) with strict equality = %v, want -1", got)
+	}
+}
+
+// TestIncludes pins that includes reports membership and, with SameValueZero,
+// does find a NaN, the point where it diverges from indexOf.
+func TestIncludes(t *testing.T) {
+	a := NewArray[float64](10, 20, 30)
+	if !a.Includes(20, numberSameValueZero) {
+		t.Error("Includes(20) = false, want true")
+	}
+	if a.Includes(99, numberSameValueZero) {
+		t.Error("Includes(99) = true, want false")
+	}
+	nan := 0.0
+	nan = nan / nan
+	withNaN := NewArray(1, nan, 3)
+	if !withNaN.Includes(nan, numberSameValueZero) {
+		t.Error("Includes(NaN) with SameValueZero = false, want true")
+	}
+}
+
 // TestNewArrayString pins the header at a non-numeric element type, the string[]
 // case the lowerer emits as *Array[BStr].
 func TestNewArrayString(t *testing.T) {
