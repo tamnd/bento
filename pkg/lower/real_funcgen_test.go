@@ -204,6 +204,10 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "string_fromcharcode", file: "func_string_fromcharcode"},
 		// with no arguments fromCharCode is still value.FromCharCode, an empty call that yields the empty string.
 		{name: "string_fromcharcode_empty", file: "func_string_fromcharcode_empty"},
+		// the string-string form of replace lowers to value.BStr.Replace; a regexp or function argument would not type as a string and would hand back.
+		{name: "string_replace", file: "func_string_replace"},
+		// replaceAll lowers to value.BStr.ReplaceAll the same way.
+		{name: "string_replace_all", file: "func_string_replace_all"},
 		// the bare global isNaN, not the Number static one, so the callee is a plain identifier. On a number argument it coerces to nothing, so it lowers to the same value.NumberIsNaN predicate.
 		{name: "global_isnan", file: "func_global_isnan"},
 		// the bare global isFinite lowers to value.NumberIsFinite the same way.
