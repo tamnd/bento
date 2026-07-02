@@ -977,6 +977,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {10}, {-2}, {0.5}},
 		},
 		{
+			// an index expression a[i] on both an array variable and an array literal,
+			// the index a bitwise-masked argument so it stays in bounds, so the At
+			// lowering and the number index run through the engine against TypeScript.
+			name: "arrayIndex",
+			file: "eq_array_index",
+			fn:   "pick",
+			args: [][]any{{0}, {1}, {2}, {3}, {5}, {-1}},
+		},
+		{
 			// map over an arrow scales each element by the argument, then the mapped
 			// array is summed, so the callback ran through the engine on every
 			// element rather than only being constructed.

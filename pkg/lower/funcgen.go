@@ -634,6 +634,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeArrayLiteralExpression:
 		return r.arrayLiteral(n)
 
+	case frontend.NodeElementAccessExpression:
+		return r.elementAccess(n)
+
 	case frontend.NodeArrowFunction:
 		return r.arrowFunc(n)
 
@@ -2226,6 +2229,36 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
+// elementAccess lowers an index expression a[i] to the array's At method. Only an
+// array receiver is covered: arrayElem confirms the checker types the receiver as
+// an array whose element type lowers, and the index must be a Number, the JS array
+// index. An object property read spelled o["k"] and a string character read s[i]
+// have different runtime meanings and hand back to their own later slices. The
+// element type is carried by the receiver, so At needs no type argument here; it
+// returns the element the checker already typed the whole access as.
+func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return nil, &NotYetLowerable{Reason: "element access did not expose an object and an index"}
+	}
+	obj, idxNode := kids[0], kids[1]
+	if _, ok := r.arrayElem(obj); !ok {
+		return nil, &NotYetLowerable{Reason: "element access on a non-array receiver is a later slice"}
+	}
+	if !r.isNumber(idxNode) {
+		return nil, &NotYetLowerable{Reason: "array element access with a non-number index is a later slice"}
+	}
+	recv, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
 }
 
 // arrayMethodCall lowers a method call on an array receiver to a value.Array
