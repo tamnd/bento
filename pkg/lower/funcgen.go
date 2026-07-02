@@ -606,6 +606,16 @@ func (r *Renderer) mathCall(method string, argNodes []frontend.Node) (ast.Expr, 
 // as number; anything else hands back. Like Math, the Number receiver is not
 // lowered to a value, since it is a namespace, not a runtime object.
 func (r *Renderer) numberCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	// Number.parseInt and Number.parseFloat are the same function objects as the
+	// global parseInt and parseFloat by specification, so they lower through the
+	// exact same paths rather than a separate mapping. They take a string and
+	// return a number, unlike the predicates below that take a number.
+	switch method {
+	case "parseInt":
+		return r.parseIntCall(argNodes)
+	case "parseFloat":
+		return r.parseFloatCall(argNodes)
+	}
 	goName, ok := numberMethod(method)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "Number." + method + " is a later slice"}
@@ -627,9 +637,10 @@ func (r *Renderer) numberCall(method string, argNodes []frontend.Node) (ast.Expr
 // numberMethod maps a JavaScript Number static predicate to the value function
 // that implements it. Only the non-coercing predicates are here: isNaN, isFinite,
 // isInteger, and isSafeInteger, whose meaning on a number argument is exact.
-// Number.parseFloat and parseInt, which parse a string, are a later slice, as is
-// the Number(x) coercion call, which is a call on Number itself rather than a
-// static method.
+// Number.parseFloat and parseInt are handled before this map in numberCall, since
+// they route to the same lowering as the global parseInt/parseFloat. The Number(x)
+// coercion call is a call on Number itself rather than a static method, so it is
+// handled on the coercion path.
 func numberMethod(name string) (goName string, ok bool) {
 	switch name {
 	case "isNaN":

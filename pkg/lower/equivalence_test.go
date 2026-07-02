@@ -626,6 +626,24 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{"3.14"}, {"42px"}, {"  -2.5  "}, {"1e3rest"}, {"Infinity!"}, {"1e"}, {"0x1F"}, {".5"}, {"abc"}, {""}},
 		},
 		{
+			name: "numberParseInt",
+			// Number.parseInt is the same function as the global parseInt, so it must give
+			// the same answers over the radix spread: binary, octal, hex with the prefix,
+			// base 10 not stripping 0x, base 36, and the out-of-range radix that is NaN.
+			file: "eq_numberParseInt",
+			fn:   "pi",
+			args: [][]any{{"101", 2}, {"777", 8}, {"0x1F", 16}, {"0x1F", 10}, {"zz", 36}, {"10", 1}},
+		},
+		{
+			name: "numberParseFloat",
+			// Number.parseFloat is the same function as the global parseFloat, so it reads
+			// the same longest decimal prefix over a bare number, a trailing tail, the
+			// Infinity word, the radix form it does not read, and a non-numeric string.
+			file: "eq_numberParseFloat",
+			fn:   "pf",
+			args: [][]any{{"3.14"}, {"42px"}, {"Infinity!"}, {"0x1F"}, {"abc"}},
+		},
+		{
 			name: "booleanOfNumber",
 			// Boolean(x) on a number is false only at zero or NaN. The division reaches
 			// a nonzero result, +0, and NaN (0/0), the last being what a bare zero test
