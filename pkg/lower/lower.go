@@ -184,6 +184,22 @@ func (r *Renderer) Imports() []string {
 	return paths
 }
 
+// GoImportPaths returns the Go import paths the rendered program reaches through a
+// go: interop call, sorted, with no duplicates. It reads the alias map, which is
+// populated only as a package is actually called into, so a go: import that is
+// declared but never called is not listed. The build consults this to detect
+// whether any reached package pulls in cgo before it runs the toolchain
+// (document 16 section 9.5), the one caller that needs the interop paths apart
+// from the import block importSpecs already assembles.
+func (r *Renderer) GoImportPaths() []string {
+	paths := make([]string, 0, len(r.goAliases))
+	for p := range r.goAliases {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // RenderType returns the Go type expression that represents t, registering any
 // named declarations it needs (a struct for an object shape) into the renderer.
 // It returns a NotYetLowerable error for a construct whose slice has not landed,
