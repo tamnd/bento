@@ -47,8 +47,10 @@ import (
 // result that is a slice of a basic ([]string, []float64) the keyword is "slice" and
 // the element keyword rides here, so the lowerer marshals the array element by
 // element (section 6.4); for a scalar crossing the element is the empty string. A
-// []byte is deliberately not a slice crossing, because it projects to a Uint8Array
-// (section 7.3), a later slice, so it clears OK and hands the call back.
+// []byte is not a slice crossing: it carries the keyword "bytes" with an empty
+// element and marshals as one Uint8Array through the byte bridge (section 7.3),
+// because the buffer crosses as a whole and shares its backing storage rather than
+// element by element.
 //
 // An opaque handle (section 6.13), a foreign named type the bridge does not project
 // (a struct with no exported fields or methods, or a named func type), carries the
@@ -172,6 +174,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 			}
 			continue
 		}
+		if bytesCrossing(t) {
+			results = append(results, "bytes")
+			resultElems = append(resultElems, "")
+			continue
+		}
 		if elem, good := sliceCrossing(t); good {
 			results = append(results, "slice")
 			resultElems = append(resultElems, elem)
@@ -213,6 +220,9 @@ func classifySignature(sig *types.Signature) FuncSig {
 // string parameter would (section 6.9). The order matches the loop it replaces: a
 // slice of a basic first, then any, then an opaque handle, then a scalar crossing.
 func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, ok bool) {
+	if bytesCrossing(t) {
+		return "bytes", DefinedConv{}, "", true
+	}
 	if e, good := sliceCrossing(t); good {
 		return "slice", DefinedConv{}, e, true
 	}
@@ -254,13 +264,29 @@ func crossingType(t types.Type) (string, DefinedConv, bool) {
 	return kw, DefinedConv{Name: obj.Name(), Path: obj.Pkg().Path()}, true
 }
 
+// bytesCrossing reports whether t is a []byte, the one slice that crosses whole as a
+// Uint8Array rather than element by element (section 7.3). A []byte projects to a
+// Uint8Array and its backing storage is the buffer's own bytes, so the lowerer
+// marshals it through the byte bridge in one move; every other slice of a basic goes
+// through sliceCrossing. It matches an unnamed slice of uint8, which is what a []byte
+// or []uint8 parameter is, the same shape sliceCrossing keys on for its slices.
+func bytesCrossing(t types.Type) bool {
+	s, ok := t.(*types.Slice)
+	if !ok {
+		return false
+	}
+	b, ok := s.Elem().(*types.Basic)
+	return ok && b.Kind() == types.Uint8
+}
+
 // sliceCrossing classifies a slice of a plain basic for the boundary, returning the
 // element's Go type keyword and true so the lowerer marshals a []string or []float64
-// element by element as a bento array (section 6.4). A []byte is deliberately not a
-// slice crossing: it projects to a Uint8Array, a later slice (section 7.3), so it
-// returns false and the call hands back. A slice of a defined type or a non-basic
-// element also returns false, because only the scalar element crossings are covered
-// here, so those await their own slice.
+// element by element as a bento array (section 6.4). A []byte is not a slice
+// crossing: bytesCrossing claims it first because it crosses whole as a Uint8Array
+// (section 7.3), so the uint8 element is rejected here as a defense in case this is
+// reached on its own. A slice of a defined type or a non-basic element also returns
+// false, because only the scalar element crossings are covered here, so those await
+// their own slice.
 func sliceCrossing(t types.Type) (string, bool) {
 	s, ok := t.(*types.Slice)
 	if !ok {

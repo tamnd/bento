@@ -78,17 +78,31 @@ func F(names []string, sizes []float64) []int { return nil }
 	}
 }
 
-// TestClassifyRejectsByteSlice proves a []byte is not a slice crossing: it projects
-// to a Uint8Array (section 7.3), a later slice, so it clears OK and the call hands
-// back rather than marshal it as a number array.
-func TestClassifyRejectsByteSlice(t *testing.T) {
-	if sig := sigOf(t, `package p
-func F(b []byte) int { return 0 }`, "F"); sig.OK {
-		t.Error("a []byte parameter classified as lowerable, want a hand-back")
+// TestClassifyByteSlice proves a []byte is the whole-buffer crossing, not an
+// element-by-element slice: it carries the keyword "bytes" with an empty element,
+// both as a parameter and a result, so the lowerer marshals it as one Uint8Array
+// through the byte bridge (section 7.3). A []uint8, the same type under its alias,
+// classifies the same way.
+func TestClassifyByteSlice(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(b []byte) []byte { return b }`, "F")
+	if !sig.OK {
+		t.Fatal("a []byte signature classified as not lowerable, want the bytes crossing")
 	}
-	if sig := sigOf(t, `package p
-func F() []byte { return nil }`, "F"); sig.OK {
-		t.Error("a []byte result classified as lowerable, want a hand-back")
+	if want := []string{"bytes"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	if want := []string{"bytes"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+	if sig.ParamElem[0] != "" || sig.ResultElem[0] != "" {
+		t.Errorf("bytes crossing carried an element %q/%q, want none since the buffer crosses whole", sig.ParamElem[0], sig.ResultElem[0])
+	}
+
+	alias := sigOf(t, `package p
+func F(b []uint8) int { return 0 }`, "F")
+	if !alias.OK || !slices.Equal(alias.Params, []string{"bytes"}) {
+		t.Errorf("[]uint8 classified OK=%v params=%v, want a bytes crossing", alias.OK, alias.Params)
 	}
 }
 
@@ -216,13 +230,13 @@ func F(n int) {}
 	}
 }
 
-// TestClassifyRejectsUnsupported holds the boundary: a variadic, a slice
-// parameter, a two-value result, and an error in a non-trailing position each
-// clear OK so the lowerer hands the call back rather than emit an unsound crossing.
+// TestClassifyRejectsUnsupported holds the boundary: a channel parameter, a
+// two-value result, and an error in a non-trailing position each clear OK so the
+// lowerer hands the call back rather than emit an unsound crossing.
 func TestClassifyRejectsUnsupported(t *testing.T) {
 	cases := map[string]string{
-		"slice param": `package p
-func F(b []byte) int { return 0 }`,
+		"channel param": `package p
+func F(c chan int) int { return 0 }`,
 		"two results": `package p
 func F() (int, int) { return 0, 0 }`,
 		"non-trailing error": `package p
