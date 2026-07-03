@@ -62,3 +62,18 @@ func (b *BigInt) String() string { return b.i.String() }
 
 // IsZero reports whether the bigint is 0n, the falsy bigint.
 func (b *BigInt) IsZero() bool { return b.i.Sign() == 0 }
+
+// BigIntToString renders a *big.Int the typed side holds as its decimal digits,
+// the value String(b) and a `${b}` template produce. It is the typed-side companion
+// of the boxed ToString: a bigint's string form is just its digits, with no suffix.
+func BigIntToString(b *big.Int) BStr {
+	return FromGoString(b.String())
+}
+
+// BigIntToConsole renders a *big.Int the way console.log inspects a bigint: the
+// decimal digits with a trailing "n", so console.log(10n) prints "10n" while
+// String(10n) and `${10n}` stay "10". Only the console inspector adds the suffix,
+// which is why it is its own helper and not BigIntToString.
+func BigIntToConsole(b *big.Int) BStr {
+	return FromGoString(b.String() + "n")
+}

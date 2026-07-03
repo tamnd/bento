@@ -261,6 +261,7 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	case t.Flags&frontend.TypeBigInt != 0:
 		// bigint is arbitrary precision, so *big.Int; no fixed-width Go integer
 		// is correct (section 4).
+		r.requireImport("math/big")
 		return star(sel("big", "Int")), nil
 
 	case t.Flags&frontend.TypeString != 0:
