@@ -514,3 +514,90 @@ func F(pts ...Point) int { return 0 }
 		t.Errorf("variadic struct element name = %q, want Point", name)
 	}
 }
+
+// TestClassifyFuncParam proves a Go func parameter with basic parameters and a single
+// basic result is a callback crossing, carrying the keyword "func" and a packed
+// element that recovers the result and parameter keywords, so the lowerer wraps a
+// bento function as a Go func value (sections 6.9, 7.6).
+func TestClassifyFuncParam(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(n int, f func(int) int) int { return f(n) }
+`, "F")
+	if !sig.OK {
+		t.Fatal("a callback-parameter signature classified as not lowerable")
+	}
+	if want := []string{"int", "func"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	result, params := SplitFuncElem(sig.ParamElem[1])
+	if result != "int" {
+		t.Errorf("callback result keyword = %q, want int", result)
+	}
+	if want := []string{"int"}; !slices.Equal(params, want) {
+		t.Errorf("callback param keywords = %v, want %v", params, want)
+	}
+}
+
+// TestClassifyFuncMultiParam proves a callback with more than one parameter and a
+// mix of basic kinds packs every parameter keyword in order, so the wrapper marshals
+// each argument by its own type.
+func TestClassifyFuncMultiParam(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(f func(string, int) string) string { return f("a", 1) }
+`, "F")
+	if !sig.OK {
+		t.Fatal("a multi-parameter callback classified as not lowerable")
+	}
+	result, params := SplitFuncElem(sig.ParamElem[0])
+	if result != "string" {
+		t.Errorf("callback result keyword = %q, want string", result)
+	}
+	if want := []string{"string", "int"}; !slices.Equal(params, want) {
+		t.Errorf("callback param keywords = %v, want %v", params, want)
+	}
+}
+
+// TestClassifyVoidFuncParam proves a void callback, a Go func with no result, is a
+// callback crossing whose packed element carries an empty result keyword, so the
+// lowerer emits a wrapper with no return.
+func TestClassifyVoidFuncParam(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(f func(int)) { f(0) }
+`, "F")
+	if !sig.OK {
+		t.Fatal("a void-callback signature classified as not lowerable")
+	}
+	result, params := SplitFuncElem(sig.ParamElem[0])
+	if result != "" {
+		t.Errorf("void callback result keyword = %q, want empty", result)
+	}
+	if want := []string{"int"}; !slices.Equal(params, want) {
+		t.Errorf("void callback param keywords = %v, want %v", params, want)
+	}
+}
+
+// TestClassifyRejectsFuncOfComposite proves a callback the wrapper cannot marshal
+// hands back rather than cross a shape this slice does not cover: a callback with a
+// composite parameter, one returning an error (the throwing callback of section 7.6),
+// one with more than one result, and a variadic callback each clear the crossing.
+func TestClassifyRejectsFuncOfComposite(t *testing.T) {
+	cases := map[string]string{
+		"slice parameter": `package p
+func F(f func([]int) int) int { return 0 }
+`,
+		"error result": `package p
+func F(f func(int) error) { }
+`,
+		"two results": `package p
+func F(f func(int) (int, int)) { }
+`,
+		"variadic callback": `package p
+func F(f func(...int) int) { }
+`,
+	}
+	for name, src := range cases {
+		if sig := sigOf(t, src, "F"); sig.OK {
+			t.Errorf("%s: callback classified as lowerable, want a hand-back", name)
+		}
+	}
+}
