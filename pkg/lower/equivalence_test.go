@@ -1122,6 +1122,27 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{}},
 		},
 		{
+			// a Map with number keys is filled in a loop, read back through the optional
+			// get with an undefined guard, and an existing key overwritten in place, then
+			// the sum folds in the size, so set (insert and update), get, and size all run
+			// through the engine against a real JavaScript Map whose key identity and
+			// insertion behavior must agree with the runtime's.
+			name: "mapNumber",
+			file: "eq_map_number",
+			fn:   "tally",
+			args: [][]any{{0}, {1}, {4}, {10}},
+		},
+		{
+			// a Map with string keys is probed with has for a present and an absent key, an
+			// entry is deleted and its absence confirmed, a survivor is read through get, and
+			// the post-delete size folds in, so has, delete, get, and size run against the
+			// engine and the string key comparison must match the runtime's BStr identity.
+			name: "mapString",
+			file: "eq_map_string",
+			fn:   "letters",
+			args: [][]any{{1}, {2}, {5}},
+		},
+		{
 			// an object literal is built with a shorthand and a keyed property, then two
 			// of its fields are read back, so the composite-literal construction and the
 			// struct-field read both run through the engine against TypeScript.

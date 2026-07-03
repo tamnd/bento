@@ -1207,6 +1207,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if _, ok := r.arrayElem(recvNode); ok {
 		return r.arrayMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
+	// routes before the primitive and string paths, which expect a number, boolean,
+	// or string receiver a map is not.
+	if r.isMap(recvNode) {
+		return r.mapMethodCall(recvNode, method, argNodes)
+	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
 	// bare use would take, so they route here before the string-method path.
@@ -2378,6 +2384,17 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Len")}}, nil
 		}
 	}
+	// map.size reads the entry count of a Map (section 6.5). It is an accessor in the
+	// source but a method on value.Map, so it lowers to a Size() call, the same float64
+	// the checker gives the property. This routes before the struct-field path, which
+	// would otherwise try to intern size as a field of a shape a map is not.
+	if prop == "size" && r.isMap(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Size")}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)
@@ -3379,6 +3396,48 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 	default:
 		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
 	}
+}
+
+// mapMethodCall lowers a method call on a Map receiver to the matching value.Map
+// method (section 6.5). Each method maps to its Go name with an exact argument
+// count: get(k) reads an entry as an Opt the same narrowing and nullish paths any
+// optional takes, set(k, v) writes and returns the map, has(k) and delete(k) report
+// membership, and clear() empties it. The checker has already typed each argument
+// against the map's own K and V, so the arguments lower straight through with no
+// extra kind guard; a method or an argument count outside this set hands back.
+func (r *Renderer) mapMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	var goName string
+	var want int
+	switch method {
+	case "get":
+		goName, want = "Get", 1
+	case "set":
+		goName, want = "Set", 2
+	case "has":
+		goName, want = "Has", 1
+	case "delete":
+		goName, want = "Delete", 1
+	case "clear":
+		goName, want = "Clear", 0
+	default:
+		return nil, &NotYetLowerable{Reason: "map method ." + method + " is a later slice"}
+	}
+	if len(argNodes) != want {
+		return nil, &NotYetLowerable{Reason: "map method ." + method + " with this argument count is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]ast.Expr, 0, want)
+	for _, a := range argNodes {
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
 }
 
 // arrayMapFilter lowers a map or filter call to the matching value.Array method
