@@ -4,6 +4,8 @@
 // result becomes a read-only object box.
 package structfixture
 
+import "strconv"
+
 // Point is a 2D point with exported integer coordinates.
 type Point struct {
 	X int
@@ -26,4 +28,30 @@ type Profile struct {
 // MakeProfile builds a Profile from its three fields.
 func MakeProfile(name string, age int, active bool) Profile {
 	return Profile{Name: name, Age: age, Active: active}
+}
+
+// Sum adds a Point's coordinates, so a struct crosses in as a parameter and the
+// call reads its integer fields back on the Go side.
+func Sum(p Point) int {
+	return p.X + p.Y
+}
+
+// Describe renders a Profile to a string, so a struct with a string, a numeric, and
+// a boolean field all cross in as one parameter.
+func Describe(u Profile) string {
+	suffix := "inactive"
+	if u.Active {
+		suffix = "active"
+	}
+	return u.Name + " " + strconv.Itoa(u.Age) + " " + suffix
+}
+
+// SumAll adds the coordinates of every Point, so a variadic of structs spreads each
+// element through the struct crossing.
+func SumAll(pts ...Point) int {
+	total := 0
+	for _, p := range pts {
+		total += p.X + p.Y
+	}
+	return total
 }

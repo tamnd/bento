@@ -746,6 +746,69 @@ console.log(u.Name + " " + u.Age + " " + u.Active);
 	}
 }
 
+// TestGoImportStructParamEmitsFieldMarshaling pins that a bento object passed to a Go
+// struct parameter lowers to a closure that binds the box and returns a Go struct
+// literal, reading each exported field off the box and marshaling it by keyword. Sum
+// takes a Point, so the argument marshals into structfixture.Point{X: int(o.X), Y:
+// int(o.Y)} at the call site (section 6.7).
+func TestGoImportStructParamEmitsFieldMarshaling(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { MakePoint, Sum } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const p = MakePoint(3, 4);
+console.log(Sum(p));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func(o *ObjXY) structfixture.Point") {
+		t.Errorf("a struct argument did not lower to a boxing closure:\n%s", source)
+	}
+	if !strings.Contains(source, "structfixture.Point{X: int(o.X), Y: int(o.Y)}") {
+		t.Errorf("a struct argument did not build the Go struct literal from the box:\n%s", source)
+	}
+}
+
+// TestGoImportStructParamRuns proves the struct-parameter crossing end to end: a Go
+// Point built by MakePoint and a bento object literal both pass into Sum, which reads
+// the fields on the Go side, so a struct crosses in from either a boxed result or a
+// fresh object literal.
+func TestGoImportStructParamRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct test builds and runs generated Go")
+	}
+	const src = `import { MakePoint, Sum, Describe } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const p = MakePoint(3, 4);
+console.log(Sum(p));
+console.log(Sum({ X: 10, Y: 20 }));
+console.log(Describe({ Name: "bob", Age: 5, Active: false }));
+`
+	got := runProgramGo(t, src)
+	if want := "7\n30\nbob 5 inactive\n"; got != want {
+		t.Fatalf("go: struct-parameter program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportVariadicStructRuns proves the struct crossing composes with the
+// variadic spread: SumAll takes any number of Points, and each object literal spread
+// into it marshals through the struct crossing on its own, so the Go side reads every
+// element's fields and the empty call reassembles an empty slice.
+func TestGoImportVariadicStructRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct test builds and runs generated Go")
+	}
+	const src = `import { SumAll } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+console.log(SumAll({ X: 1, Y: 2 }, { X: 3, Y: 4 }));
+console.log(SumAll());
+`
+	got := runProgramGo(t, src)
+	if want := "10\n0\n"; got != want {
+		t.Fatalf("go: variadic-struct program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportVariadicEmitsSpreadCall pins that a call to a variadic Go function
 // spreads its arguments positionally into the Go call: path.Join is func(...string),
 // so each argument marshals through StringToGo on its own and Go reassembles the
