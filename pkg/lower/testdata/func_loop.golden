@@ -7,7 +7,7 @@ func Score(n float64) float64 {
 		} else {
 			total += i
 		}
-		i += 1
+		i++
 	}
 	return total
 }
