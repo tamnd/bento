@@ -54,6 +54,59 @@ func F(b byte, r rune) uint64 { return 0 }
 	}
 }
 
+// TestClassifySliceOfScalars proves a slice of a plain basic classifies as a slice
+// crossing carrying its element keyword, both as a parameter and a result, so the
+// lowerer marshals a []string or []float64 element by element (section 6.4).
+func TestClassifySliceOfScalars(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(names []string, sizes []float64) []int { return nil }
+`, "F")
+	if !sig.OK {
+		t.Fatal("slice-of-scalars signature classified as not lowerable")
+	}
+	if want := []string{"slice", "slice"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	if want := []string{"string", "float64"}; !slices.Equal(sig.ParamElem, want) {
+		t.Errorf("param elements = %v, want %v", sig.ParamElem, want)
+	}
+	if want := []string{"slice"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+	if want := []string{"int"}; !slices.Equal(sig.ResultElem, want) {
+		t.Errorf("result elements = %v, want %v", sig.ResultElem, want)
+	}
+}
+
+// TestClassifyRejectsByteSlice proves a []byte is not a slice crossing: it projects
+// to a Uint8Array (section 7.3), a later slice, so it clears OK and the call hands
+// back rather than marshal it as a number array.
+func TestClassifyRejectsByteSlice(t *testing.T) {
+	if sig := sigOf(t, `package p
+func F(b []byte) int { return 0 }`, "F"); sig.OK {
+		t.Error("a []byte parameter classified as lowerable, want a hand-back")
+	}
+	if sig := sigOf(t, `package p
+func F() []byte { return nil }`, "F"); sig.OK {
+		t.Error("a []byte result classified as lowerable, want a hand-back")
+	}
+}
+
+// TestClassifyRejectsSliceOfComposite proves a slice whose element is not a plain
+// basic (a slice of a struct, a slice of a slice) is not covered by this slice, so it
+// clears OK.
+func TestClassifyRejectsSliceOfComposite(t *testing.T) {
+	if sig := sigOf(t, `package p
+type T struct{ X int }
+func F(t []T) int { return 0 }`, "F"); sig.OK {
+		t.Error("a slice of a struct classified as lowerable, want a hand-back")
+	}
+	if sig := sigOf(t, `package p
+func F(m [][]int) int { return 0 }`, "F"); sig.OK {
+		t.Error("a slice of a slice classified as lowerable, want a hand-back")
+	}
+}
+
 // TestClassifyVoidResult checks a function with no result is lowerable with an
 // empty result list, the void-call shape.
 func TestClassifyVoidResult(t *testing.T) {

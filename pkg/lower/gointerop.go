@@ -160,7 +160,7 @@ func (r *Renderer) goConstRef(name string) (ast.Expr, bool, error) {
 		// the same step a defined-type result takes (section 6.11).
 		read = stripBrandToBasic(info.Keyword, read)
 	}
-	marshaled, err := r.marshalResultFromGo(info.Keyword, read)
+	marshaled, err := r.marshalResultFromGo(info.Keyword, "", read)
 	if err != nil {
 		return nil, false, err
 	}
@@ -213,7 +213,7 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		if err != nil {
 			return nil, err
 		}
-		marshaled, err := r.marshalArgToGo(sig.Params[i], sig.ParamConv[i], lowered)
+		marshaled, err := r.marshalArgToGo(sig.Params[i], sig.ParamElem[i], sig.ParamConv[i], lowered)
 		if err != nil {
 			return nil, err
 		}
@@ -221,6 +221,10 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 	}
 	alias := r.requireGoImport(b.importPath)
 	goCall := &ast.CallExpr{Fun: sel(alias, b.name), Args: args}
+	resultElem := ""
+	if len(sig.ResultElem) > 0 {
+		resultElem = sig.ResultElem[0]
+	}
 	if sig.Throws {
 		// A trailing error hoists to a throw. The Go call returns (T, error) or just
 		// error, and Go's f(g()) call form passes both results straight into the bridge
@@ -235,11 +239,11 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 			return r.guardVoid(&ast.CallExpr{Fun: sel("bridge", "Check"), Args: []ast.Expr{goCall}}), nil
 		}
 		must := &ast.CallExpr{Fun: sel("bridge", "Must"), Args: []ast.Expr{goCall}}
-		marshaled, err := r.marshalResultFromGo(sig.Results[0], r.stripResultBrand(sig, must))
+		marshaled, err := r.marshalResultFromGo(sig.Results[0], resultElem, r.stripResultBrand(sig, must))
 		if err != nil {
 			return nil, err
 		}
-		return r.guardExpr(marshaled, sig.Results[0]), nil
+		return r.guardExpr(marshaled, sig.Results[0], resultElem), nil
 	}
 	if len(sig.Results) == 0 {
 		// A Go function with no value result lowers to the bare call, valid where the
@@ -247,11 +251,11 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		// type-checks.
 		return r.guardVoid(goCall), nil
 	}
-	marshaled, err := r.marshalResultFromGo(sig.Results[0], r.stripResultBrand(sig, goCall))
+	marshaled, err := r.marshalResultFromGo(sig.Results[0], resultElem, r.stripResultBrand(sig, goCall))
 	if err != nil {
 		return nil, err
 	}
-	return r.guardExpr(marshaled, sig.Results[0]), nil
+	return r.guardExpr(marshaled, sig.Results[0], resultElem), nil
 }
 
 // stripResultBrand converts a defined-type result to its underlying basic before
@@ -287,7 +291,7 @@ func stripBrandToBasic(keyword string, expr ast.Expr) ast.Expr {
 // guarded call can raise, so this records usesThrow to defer the top-level uncaught
 // reporter, which is what keeps the value model imported for the value.BStr result
 // type.
-func (r *Renderer) guardExpr(expr ast.Expr, goResult string) ast.Expr {
+func (r *Renderer) guardExpr(expr ast.Expr, goResult, elem string) ast.Expr {
 	r.usesThrow = true
 	r.requireImport(bridgePkg)
 	return &ast.CallExpr{
@@ -296,7 +300,7 @@ func (r *Renderer) guardExpr(expr ast.Expr, goResult string) ast.Expr {
 			&ast.FuncLit{
 				Type: &ast.FuncType{
 					Params:  &ast.FieldList{},
-					Results: &ast.FieldList{List: []*ast.Field{{Type: r.bentoResultType(goResult)}}},
+					Results: &ast.FieldList{List: []*ast.Field{{Type: r.bentoResultType(goResult, elem)}}},
 				},
 				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{expr}}}},
 			},
@@ -327,14 +331,35 @@ func (r *Renderer) guardVoid(call ast.Expr) ast.Expr {
 // a bool, and every numeric result widens to a float64 bento number. The value
 // model is already imported whenever a call is guarded, because guarding records
 // usesThrow and the uncaught reporter lives in the value package.
-func (r *Renderer) bentoResultType(goResult string) ast.Expr {
+func (r *Renderer) bentoResultType(goResult, elem string) ast.Expr {
 	switch goResult {
 	case "string":
 		return sel("value", "BStr")
 	case "bool":
 		return ident("bool")
+	case "slice":
+		// A slice result crosses to a bento array whose element is the bento type its own
+		// keyword names, the same header the array model uses for a TypeScript array
+		// (section 6.4).
+		r.requireImport(valuePkg)
+		return star(index(sel("value", "Array"), r.bentoResultType(elem, "")))
 	default:
 		return ident("float64")
+	}
+}
+
+// elemConv builds the per-element conversion closure a slice crossing hands to
+// bridge.SliceToGo or bridge.SliceFromGo: a one-parameter function named over x that
+// returns body, with the parameter and result types the crossing direction fixes
+// (section 6.4). The body is the element's own scalar crossing applied to x, so a
+// slice reuses the exact marshaling a single element would take.
+func (r *Renderer) elemConv(paramType, resultType, body ast.Expr) *ast.FuncLit {
+	return &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("x")}, Type: paramType}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: resultType}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{body}}}},
 	}
 }
 
@@ -348,7 +373,22 @@ func (r *Renderer) bentoResultType(goResult string) ast.Expr {
 // conversion the plain path applies is unnecessary because the named conversion
 // narrows a bento number itself, and a string still transcodes through the bridge
 // before it becomes the defined string (section 6.11).
-func (r *Renderer) marshalArgToGo(goType string, conv goimport.DefinedConv, arg ast.Expr) (ast.Expr, error) {
+func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv, arg ast.Expr) (ast.Expr, error) {
+	if goType == "slice" {
+		// A bento array crosses to a Go slice element by element: the emitted closure
+		// applies the element's own crossing to each element, and bridge.SliceToGo runs
+		// it over the array (section 6.4). The closure parameter is the bento element
+		// type and its result the Go element type, the inverse of the result path.
+		r.requireImport(bridgePkg)
+		body, err := r.marshalArgToGo(elem, "", goimport.DefinedConv{}, ident("x"))
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{
+			Fun:  sel("bridge", "SliceToGo"),
+			Args: []ast.Expr{arg, r.elemConv(r.bentoResultType(elem, ""), ident(elem), body)},
+		}, nil
+	}
 	if conv.Name != "" {
 		inner := arg
 		if goType == "string" {
@@ -384,7 +424,22 @@ func (r *Renderer) marshalArgToGo(goType string, conv goimport.DefinedConv, arg 
 // float-width number widens to a bento number, and a 64-bit integer goes through
 // the bridge range check that turns a silent precision loss into a RangeError
 // (section 7.5). A result type the slice does not cover hands back.
-func (r *Renderer) marshalResultFromGo(goType string, goCall ast.Expr) (ast.Expr, error) {
+func (r *Renderer) marshalResultFromGo(goType, elem string, goCall ast.Expr) (ast.Expr, error) {
+	if goType == "slice" {
+		// A Go slice crosses back to a bento array element by element: the emitted
+		// closure applies the element's own crossing to each element, and
+		// bridge.SliceFromGo runs it over the slice (section 6.4). The closure parameter
+		// is the Go element type and its result the bento element type.
+		r.requireImport(bridgePkg)
+		body, err := r.marshalResultFromGo(elem, "", ident("x"))
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{
+			Fun:  sel("bridge", "SliceFromGo"),
+			Args: []ast.Expr{goCall, r.elemConv(ident(elem), r.bentoResultType(elem, ""), body)},
+		}, nil
+	}
 	switch goType {
 	case "string":
 		r.requireImport(bridgePkg)
@@ -455,9 +510,9 @@ func (r *Renderer) goImportCallByType(b goBuiltin, call frontend.Node, argNodes 
 	case rt.Flags&frontend.TypeString != 0:
 		r.requireImport(bridgePkg)
 		fromGo := &ast.CallExpr{Fun: sel("bridge", "StringFromGo"), Args: []ast.Expr{goCall}}
-		return r.guardExpr(fromGo, "string"), nil
+		return r.guardExpr(fromGo, "string", ""), nil
 	case rt.Flags&frontend.TypeBoolean != 0:
-		return r.guardExpr(goCall, "bool"), nil
+		return r.guardExpr(goCall, "bool", ""), nil
 	default:
 		return nil, &NotYetLowerable{Reason: "go: call result of this type is a later slice"}
 	}
