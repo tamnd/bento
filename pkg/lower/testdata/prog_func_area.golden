@@ -12,7 +12,7 @@ func main() {
 	{
 		var i float64 = 1
 		for ; i <= 3; i++ {
-			sum = sum + Area(i, i)
+			sum += Area(i, i)
 		}
 	}
 	value.ConsoleLog(value.FromGoString("total area"), value.NumberToString(sum))
