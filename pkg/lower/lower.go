@@ -65,6 +65,16 @@ type Renderer struct {
 	// entry module's import declarations before any body is lowered, since a
 	// function or a top-level statement may call an imported builtin.
 	nodeImports map[string]nodeBuiltin
+	// goImports maps a local binding name introduced by a go: import to the Go
+	// symbol it names, so a call to that binding lowers to a direct call into the
+	// real Go package rather than a user function. Like nodeImports it is populated
+	// once from the entry module's import declarations before any body is lowered.
+	goImports map[string]goBuiltin
+	// goAliases maps a Go import path to the local alias the emitted file imports it
+	// under, assigned on first call into the package so an imported-but-never-called
+	// package emits no import. Every call into one package renders the same alias, so
+	// the qualifier a call emits and the import spec the file carries agree.
+	goAliases map[string]string
 	// retType is the declared return type of the function whose body is currently
 	// being lowered, so a return statement can coerce its value across the dynamic
 	// boundary the way an assignment does. It is the zero type outside a function
@@ -98,7 +108,7 @@ type Renderer struct {
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goAliases: map[string]string{}}
 }
 
 // requireImport records that the Go the renderer has emitted refers to a

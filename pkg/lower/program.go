@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/format"
 	"go/token"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -97,8 +98,8 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	}
 
 	file := &ast.File{Name: ident("main")}
-	if paths := r.Imports(); len(paths) > 0 {
-		file.Decls = append(file.Decls, importDecl(paths))
+	if specs := r.importSpecs(); len(specs) > 0 {
+		file.Decls = append(file.Decls, importDecl(specs))
 	}
 	// The generated struct types the functions and the main body referred to are
 	// collected after lowering, since interning happens as a use is lowered, and
@@ -114,18 +115,46 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	return Program{Source: src}, nil
 }
 
+// goImportSpec is one import the assembled file carries: a Go import path and,
+// for a go: interop package, the local alias it is imported under. A plain runtime
+// import (the value model, math) has an empty alias and prints unaliased.
+type goImportSpec struct {
+	alias string
+	path  string
+}
+
+// importSpecs is the full import set the assembled file needs, the plain runtime
+// imports the lowering required and the aliased Go packages a go: call reached,
+// sorted by path so the output is deterministic.
+func (r *Renderer) importSpecs() []goImportSpec {
+	specs := make([]goImportSpec, 0, len(r.imports)+len(r.goAliases))
+	for p := range r.imports {
+		specs = append(specs, goImportSpec{path: p})
+	}
+	for p, a := range r.goAliases {
+		specs = append(specs, goImportSpec{alias: a, path: p})
+	}
+	sort.Slice(specs, func(i, j int) bool { return specs[i].path < specs[j].path })
+	return specs
+}
+
 // importDecl builds the import block for the assembled file. The parenthesized
 // form is forced (a nonzero Lparen) so a single import prints as an import block
 // like every other, which keeps the generated file's shape stable as more
-// imports appear.
-func importDecl(paths []string) ast.Decl {
-	specs := make([]ast.Spec, 0, len(paths))
-	for _, p := range paths {
-		specs = append(specs, &ast.ImportSpec{
-			Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p)},
-		})
+// imports appear. A spec with an alias prints it as the import name, the form a
+// go: interop package needs so the call qualifier and the import agree.
+func importDecl(specs []goImportSpec) ast.Decl {
+	out := make([]ast.Spec, 0, len(specs))
+	for _, s := range specs {
+		spec := &ast.ImportSpec{
+			Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(s.path)},
+		}
+		if s.alias != "" {
+			spec.Name = ident(s.alias)
+		}
+		out = append(out, spec)
 	}
-	return &ast.GenDecl{Tok: token.IMPORT, Lparen: token.Pos(1), Specs: specs}
+	return &ast.GenDecl{Tok: token.IMPORT, Lparen: token.Pos(1), Specs: out}
 }
 
 // printFile renders the assembled file to gofmt-clean Go source. A print failure
