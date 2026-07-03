@@ -132,6 +132,22 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 	}
 	alias := r.requireGoImport(b.importPath)
 	goCall := &ast.CallExpr{Fun: sel(alias, b.name), Args: args}
+	if sig.Throws {
+		// A trailing error hoists to a throw. The Go call returns (T, error) or just
+		// error, and Go's f(g()) call form passes both results straight into the bridge
+		// helper: bridge.Must returns the value and raises on a non-nil error, and
+		// bridge.Check is its no-result sibling. The raised GoError is a value.Thrown,
+		// so recording usesThrow defers the top-level reporter, and a bento catch reads
+		// it as an Error (section 7.7).
+		r.usesThrow = true
+		r.requireImport(bridgePkg)
+		if len(sig.Results) == 0 {
+			// error-only: bridge.Check(call), valid where the void call is a statement.
+			return &ast.CallExpr{Fun: sel("bridge", "Check"), Args: []ast.Expr{goCall}}, nil
+		}
+		must := &ast.CallExpr{Fun: sel("bridge", "Must"), Args: []ast.Expr{goCall}}
+		return r.marshalResultFromGo(sig.Results[0], must)
+	}
 	if len(sig.Results) == 0 {
 		// A Go function with no value result lowers to the bare call, valid where the
 		// TypeScript call is used as a statement, which is the only place a void call

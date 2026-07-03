@@ -15,13 +15,19 @@ import "go/types"
 // keyword of each parameter and each non-error result: "string", "bool", "int",
 // "int64", "float64", and the rest of the numeric basics. OK reports whether the
 // whole signature is in a shape the lowerer marshals today; a variadic, an
-// unclassifiable parameter or result, more than one non-error result, or a
-// trailing error clears it, so the lowerer hands the call back rather than emit an
-// unsound crossing. A cleared OK still carries whatever it classified, for a
-// diagnostic, but the lowerer reads only the flag.
+// unclassifiable parameter or result, more than one non-error result, or an error
+// in a non-trailing position clears it, so the lowerer hands the call back rather
+// than emit an unsound crossing. A cleared OK still carries whatever it classified,
+// for a diagnostic, but the lowerer reads only the flag.
+//
+// Throws reports whether the signature ends in a trailing error, the (T, error)
+// idiom that projects to a value that throws on failure (section 6.6). The error
+// is dropped from Results, so Results holds only the non-error results the call
+// returns; the lowerer wraps the call in the throw bridge when Throws is set.
 type FuncSig struct {
 	Params  []string
 	Results []string
+	Throws  bool
 	OK      bool
 }
 
@@ -59,9 +65,11 @@ func Signatures(importPath string) (map[string]FuncSig, error) {
 // classifySignature reduces a Go signature to the marshal keywords the lowerer
 // reads. It clears OK for anything outside the crossings this slice covers: a
 // variadic tail, a parameter or non-error result that is not a plain basic type,
-// more than one non-error result, or a trailing error (the throw bridge of section
-// 6.6 lands in a later slice). The keywords are still filled best-effort so a
-// future slice can widen support without re-deriving them.
+// more than one non-error result, or an error in a non-trailing position. A
+// trailing error is the (T, error) throw idiom (section 6.6): it is dropped from
+// Results, sets Throws, and leaves OK intact so the lowerer wraps the call in the
+// throw bridge. The keywords are filled best-effort so a diagnostic can name a
+// crossing even when OK is clear.
 func classifySignature(sig *types.Signature) FuncSig {
 	ok := !sig.Variadic()
 	params := make([]string, 0, sig.Params().Len())
@@ -73,12 +81,18 @@ func classifySignature(sig *types.Signature) FuncSig {
 		params = append(params, kw)
 	}
 	var results []string
-	for i := 0; i < sig.Results().Len(); i++ {
+	throws := false
+	n := sig.Results().Len()
+	for i := 0; i < n; i++ {
 		t := sig.Results().At(i).Type()
 		if isErrorType(t) {
-			// A trailing error is the throw bridge, a later slice; a program that calls
-			// a fallible Go function routes to the engine until it lands.
-			ok = false
+			// A trailing error hoists to a throw; an error anywhere else is not the
+			// idiom and has no marshaling, so the call hands back.
+			if i == n-1 {
+				throws = true
+			} else {
+				ok = false
+			}
 			continue
 		}
 		kw := basicKeyword(t)
@@ -88,9 +102,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 		results = append(results, kw)
 	}
 	if len(results) > 1 {
+		// More than one non-error result maps to a tuple, a later slice; only a single
+		// value (with or without a hoisted error) is marshaled today.
 		ok = false
 	}
-	return FuncSig{Params: params, Results: results, OK: ok}
+	return FuncSig{Params: params, Results: results, Throws: throws, OK: ok}
 }
 
 // basicKeyword returns the Go type keyword for a plain basic type, and "" for
