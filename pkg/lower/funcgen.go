@@ -1088,6 +1088,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeNumericLiteral:
 		return r.numericLiteral(n)
 
+	case frontend.NodeBigIntLiteral:
+		return r.bigIntLiteral(n)
+
 	case frontend.NodeStringLiteral:
 		return r.stringLiteral(n)
 
@@ -2034,7 +2037,7 @@ func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Exp
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {
-		part, err := r.stringify(a)
+		part, err := r.consoleStringify(a)
 		if err != nil {
 			return nil, err
 		}
@@ -2042,6 +2045,24 @@ func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Exp
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
+}
+
+// consoleStringify lowers one console argument to its inspected string form, which
+// matches ToString for every type but bigint: console.log(10n) prints "10n" with the
+// suffix the inspector adds, while String(10n) and `${10n}` stay "10". So a bigint
+// argument goes through value.BigIntToConsole and every other type defers to the
+// shared stringify, keeping the two string paths in step everywhere the suffix does
+// not apply.
+func (r *Renderer) consoleStringify(arg frontend.Node) (ast.Expr, error) {
+	if r.isBigInt(arg) {
+		lowered, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BigIntToConsole"), Args: []ast.Expr{lowered}}, nil
+	}
+	return r.stringify(arg)
 }
 
 // globalFn maps a bare global function name to the value function that implements
@@ -2117,6 +2138,9 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 	case r.isBool(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{lowered}}, nil
+	case r.isBigInt(arg):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{lowered}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "coercing this type to a string is a later slice"}
 	}
@@ -2345,6 +2369,18 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 	op := strings.TrimSpace(strings.TrimSuffix(r.prog.Text(n), r.prog.Text(operand)))
 	switch op {
 	case "-":
+		// A bigint negation is a *big.Int method, not a Go unary minus, so -x lowers
+		// to new(big.Int).Neg(x), a fresh value the way every bigint operator returns
+		// one, leaving the operand untouched.
+		if r.isBigInt(operand) {
+			x, err := r.lowerExpr(operand)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport("math/big")
+			fresh := &ast.CallExpr{Fun: ident("new"), Args: []ast.Expr{sel("big", "Int")}}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: fresh, Sel: ident("Neg")}, Args: []ast.Expr{x}}, nil
+		}
 		if !r.isNumber(operand) {
 			return nil, &NotYetLowerable{Reason: "unary minus on a non-number is a later slice"}
 		}
@@ -2802,6 +2838,26 @@ func (r *Renderer) numericLiteral(n frontend.Node) (ast.Expr, error) {
 	return &ast.BasicLit{Kind: kind, Value: value}, nil
 }
 
+// bigIntLiteral lowers a bigint literal like 123n to the *big.Int that denotes the
+// same value (section 4). The trailing n marks the type and is dropped, digit
+// separators are stripped, and a radix prefix (0x, 0o, 0b) is read, the same grammar
+// a numeric literal accepts minus the fraction and exponent forms a bigint cannot
+// take. A value that fits an int64 becomes big.NewInt(v), the readable one-call form;
+// a literal past the 64-bit range is a later slice and hands back rather than emit a
+// less direct construction.
+func (r *Renderer) bigIntLiteral(n frontend.Node) (ast.Expr, error) {
+	text := r.prog.Text(n)
+	v, ok := bigIntLiteralInt64(text)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "bigint literal " + text + " does not fit int64, a later slice"}
+	}
+	r.requireImport("math/big")
+	return &ast.CallExpr{
+		Fun:  sel("big", "NewInt"),
+		Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.FormatInt(v, 10)}},
+	}, nil
+}
+
 // binaryExpr lowers a binary expression on two operands of the same primitive
 // type. On two numbers the arithmetic operators map directly on float64 and the
 // relational and equality operators map to Go comparisons that yield bool. On
@@ -2970,6 +3026,17 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		}
 	}
 
+	// A bigint operator is a *big.Int method, never a Go binary operator, because
+	// the value is a pointer to an arbitrary-precision integer. The arithmetic
+	// operators allocate a fresh big.Int for the result so a shared operand is never
+	// mutated (section 4), the relational operators compare through Cmp, and === / !==
+	// are a Cmp against zero. Handled before the operator table, whose Go operator
+	// would not compile on a *big.Int, and typed on both operands because TypeScript
+	// forbids mixing a bigint with any other type in an operator.
+	if r.isBigInt(left) && r.isBigInt(right) {
+		return r.bigIntBinary(opText, left, right)
+	}
+
 	// Remainder on numbers is the one arithmetic operator that is not a Go binary
 	// operator: JavaScript % is fmod (a floating remainder that keeps the sign of
 	// the dividend), which Go spells math.Mod, not the integer-only % token. It is
@@ -3033,6 +3100,64 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return nil, err
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// bigIntBinary lowers a binary operator on two bigints to the *big.Int form with
+// the same meaning. The arithmetic operators map to a fresh new(big.Int).Op(l, r):
+// Add, Sub, Mul, Quo (truncated toward zero, the way BigInt / divides), and Rem
+// (the sign of the dividend, the way BigInt % takes it). The relational operators
+// map to a Cmp against zero, and === / !== to Cmp == 0 / != 0, so two bigints of the
+// same value compare equal regardless of which allocation holds them. The bitwise
+// operators and ** are a later slice and hand back.
+func (r *Renderer) bigIntBinary(opText string, left, right frontend.Node) (ast.Expr, error) {
+	l, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, err
+	}
+	rr, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, err
+	}
+	if method, ok := bigIntArithMethod(opText); ok {
+		r.requireImport("math/big")
+		fresh := &ast.CallExpr{Fun: ident("new"), Args: []ast.Expr{sel("big", "Int")}}
+		return &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: fresh, Sel: ident(method)},
+			Args: []ast.Expr{l, rr},
+		}, nil
+	}
+	cmp := &ast.CallExpr{Fun: &ast.SelectorExpr{X: l, Sel: ident("Cmp")}, Args: []ast.Expr{rr}}
+	if relOp, ok := relationalToken(opText); ok {
+		return &ast.BinaryExpr{X: cmp, Op: relOp, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}}, nil
+	}
+	switch opText {
+	case "===", "==":
+		return &ast.BinaryExpr{X: cmp, Op: token.EQL, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}}, nil
+	case "!==", "!=":
+		return &ast.BinaryExpr{X: cmp, Op: token.NEQ, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "bigint operator " + opText + " is a later slice"}
+}
+
+// bigIntArithMethod maps a bigint arithmetic operator to the *big.Int method that
+// computes it, or reports false for an operator that is not one of the five basic
+// arithmetic forms. Quo and Rem are the truncated-toward-zero pair, which match the
+// way BigInt / and % behave, so no sign correction is needed.
+func bigIntArithMethod(opText string) (string, bool) {
+	switch opText {
+	case "+":
+		return "Add", true
+	case "-":
+		return "Sub", true
+	case "*":
+		return "Mul", true
+	case "/":
+		return "Quo", true
+	case "%":
+		return "Rem", true
+	default:
+		return "", false
+	}
 }
 
 // optionalUndefinedCompare recognizes an equality between an optional and the
@@ -3294,6 +3419,9 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 	case r.isBool(n):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{e}}, nil
+	case r.isBigInt(n):
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{e}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "string concatenation with a non-primitive operand is a later slice"}
 	}
@@ -3359,6 +3487,14 @@ func (r *Renderer) isBool(n frontend.Node) bool {
 // object path.
 func (r *Renderer) isString(n frontend.Node) bool {
 	return r.primitiveFlags(n)&frontend.TypeString != 0
+}
+
+// isBigInt reports whether the checker types n as bigint, the guard that routes the
+// operators and coercions to the *big.Int method forms rather than the float64
+// operator forms. It sees through a branded alias the same way isNumber does, so a
+// go: defined type over bigint still lands on the bigint path.
+func (r *Renderer) isBigInt(n frontend.Node) bool {
+	return r.primitiveFlags(n)&frontend.TypeBigInt != 0
 }
 
 // isDynamic reports whether the checker types n as any or unknown, the types that
