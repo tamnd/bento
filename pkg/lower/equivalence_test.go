@@ -1102,6 +1102,26 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {2}, {3}, {5}, {-1}},
 		},
 		{
+			// a Uint8Array is allocated at a length, each byte is written with a value
+			// that overflows 0..255 so the ToUint8 wrap runs, then the bytes are read
+			// back and summed, so construction from a length, .length, the indexed
+			// write, and the indexed read all run through the engine against a real
+			// JavaScript Uint8Array whose byte coercion must agree with the runtime's.
+			name: "bytesChecksum",
+			file: "eq_bytes_checksum",
+			fn:   "checksum",
+			args: [][]any{{0}, {1}, {4}, {16}, {100}},
+		},
+		{
+			// a Uint8Array is built from a number list holding values above 255 and
+			// below 0, so the initializer's per-element ToUint8 wrap runs, then the
+			// bytes are summed, proving new Uint8Array([...]) against the engine.
+			name: "bytesLiteral",
+			file: "eq_bytes_literal",
+			fn:   "fromList",
+			args: [][]any{{}},
+		},
+		{
 			// an object literal is built with a shorthand and a keyed property, then two
 			// of its fields are read back, so the composite-literal construction and the
 			// struct-field read both run through the engine against TypeScript.
