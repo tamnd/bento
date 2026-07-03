@@ -101,6 +101,12 @@ func (h *loadHost) ResolveModule(specifier, containingFile string) (string, adap
 	if err != nil {
 		return "", importKindFromSpecifier(specifier), false
 	}
+	// A go: import resolves to the virtual path its generated declarations are
+	// served at, and is a typed input so the checker binds the names imported from
+	// it against the real Go package API.
+	if res.Kind == resolve.KindGo {
+		return goDeclPath(res.Path, res.GoVersion), adapter.ImportGo, true
+	}
 	kind := mapImportKind(specifier, res)
 	return res.Path, kind, res.Kind == resolve.KindFile && isSourceFile(res.Path)
 }
