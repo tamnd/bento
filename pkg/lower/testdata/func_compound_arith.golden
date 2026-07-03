@@ -1,5 +1,5 @@
 func Accumulate(n float64) float64 {
-	var t float64 = 0
+	t := 0.0
 	for i := 0.0; i < n; i++ {
 		t += i
 	}

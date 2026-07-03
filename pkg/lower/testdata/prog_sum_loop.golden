@@ -5,8 +5,8 @@ import (
 )
 
 func main() {
-	var width float64 = 5
-	var total float64 = 0
+	width := 5.0
+	total := 0.0
 	for i := 0.0; i < width; i++ {
 		total += i
 	}

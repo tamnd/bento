@@ -3,7 +3,7 @@ func Scaled(n float64) float64 {
 	var ys *value.Array[float64] = xs.Map(func(x float64) float64 {
 		return x * n
 	})
-	var t float64 = 0
+	t := 0.0
 	for _, y := range ys.Elems() {
 		t += y
 	}
