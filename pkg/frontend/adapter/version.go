@@ -9,7 +9,7 @@ package adapter
 // (upstream keeps them under internal/). This sha is that fork's commit, wired
 // into go.mod with a replace directive; RealAdapter is built and tested against
 // it, and Revision returns it.
-const PinnedRevision = "1034b608e6e88fdb10575a7f6b1858538c5702af"
+const PinnedRevision = "514c6b45d6394ed703c51c698ade7afdb7fd6eb5"
 
 // RealAdapterAvailable reports whether a real typescript-go-backed adapter can
 // be constructed in this build. It is false until the upstream API is importable

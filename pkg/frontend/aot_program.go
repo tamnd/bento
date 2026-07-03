@@ -218,6 +218,17 @@ func (p *Program) SymbolAt(n Node) (Symbol, bool) {
 	return p.wrapSymbol(h), true
 }
 
+// TypeSymbol returns the symbol a type was declared by, and ok=false for an
+// anonymous type. Lowering uses it to walk from a class instance type back to
+// the class declaration that names it.
+func (p *Program) TypeSymbol(t Type) (Symbol, bool) {
+	h, ok := p.adapter.SymbolOfType(p.handle, p.typeHandle(t))
+	if !ok {
+		return Symbol{}, false
+	}
+	return p.wrapSymbol(h), true
+}
+
 // Aliased follows an import or export alias to the symbol it ultimately names.
 func (p *Program) Aliased(s Symbol) Symbol {
 	return p.wrapSymbol(p.adapter.AliasedSymbol(p.handle, p.symbolHandle(s)))

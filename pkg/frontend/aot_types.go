@@ -105,6 +105,10 @@ const (
 	NodeFalseKeyword                  = adapter.NodeFalseKeyword
 	NodeNullKeyword                   = adapter.NodeNullKeyword
 
+	// Class-body keywords.
+	NodeThisKeyword  = adapter.NodeThisKeyword
+	NodeSuperKeyword = adapter.NodeSuperKeyword
+
 	NodeWithStatement = adapter.NodeWithStatement
 )
 

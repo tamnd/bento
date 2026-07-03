@@ -151,6 +151,10 @@ type TSAdapter interface {
 
 	// Symbols.
 	SymbolOfNode(p ProgramHandle, n NodeHandle) (SymbolHandle, bool)
+	// SymbolOfType returns the symbol a type was declared by, so lowering can
+	// walk from a class instance type back to the class declaration that names
+	// it. Anonymous types (object literals, unions) have no symbol.
+	SymbolOfType(p ProgramHandle, t TypeHandle) (SymbolHandle, bool)
 	AliasedSymbol(p ProgramHandle, s SymbolHandle) SymbolHandle
 	DeclarationsOf(p ProgramHandle, s SymbolHandle) []NodeHandle
 	SymbolName(s SymbolHandle) string
