@@ -146,11 +146,27 @@ type Renderer struct {
 	// saved and restored around each so one function's builders do not leak into
 	// another, and a nil slice (the default) hoists nothing.
 	strBuilders []string
+	// bigOwned is the set of bigint local names in the body currently being lowered
+	// whose *big.Int is provably unshared, so a self-referential update like
+	// acc = acc * i mutates in place with acc.Mul(acc, i) instead of allocating a
+	// fresh big.Int per iteration. It is computed once per body by bigOwnedLocalsOf
+	// and, like int32Locals, saved and restored around each body. A nil map (the
+	// default) owns nothing, so every bigint write keeps the always-fresh form.
+	bigOwned map[string]bool
+	// bigLits interns the wide bigint literals of the program: a literal past int64
+	// cannot be a big.NewInt call, so it becomes a package-level var parsed once at
+	// init by value.BigIntMustParse, and every site that writes the same value reads
+	// the same var. The map keys the literal's canonical decimal digits to the var
+	// name; bigLitOrder remembers first-use order so the emitted var block is
+	// deterministic. Program-scoped, not body-scoped: two functions naming the same
+	// constant share one var.
+	bigLits     map[string]string
+	bigLitOrder []string
 }
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}}
 }
 
 // SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go

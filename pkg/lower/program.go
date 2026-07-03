@@ -84,6 +84,7 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// program has no enclosing body.
 	r.int32Locals = r.int32LocalsOf(mainBody)
 	r.optLocals = r.optLocalsOf(mainBody)
+	r.bigOwned = r.bigOwnedLocalsOf(mainBody)
 	r.strBuilders = nil
 	stmts, err := r.lowerStatements(mainBody)
 	if err != nil {
@@ -117,6 +118,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// collected after lowering, since interning happens as a use is lowered, and
 	// emitted before the functions, the conventional Go order of types then code.
 	file.Decls = append(file.Decls, r.DeclNodes()...)
+	// The wide bigint literals the bodies interned emit as package vars, each parsed
+	// once at init, so a constant past int64 named in a loop costs one parse for the
+	// program's life. They follow the types and precede the code like any other
+	// package-level state.
+	file.Decls = append(file.Decls, r.bigLitDecls()...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
 
@@ -125,6 +131,35 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		return Program{}, err
 	}
 	return Program{Source: src}, nil
+}
+
+// bigLitDecls emits one package-level var per wide bigint literal the bodies
+// interned, in first-use order so the output is deterministic:
+//
+//	var bigLit1 = value.BigIntMustParse("36893488147419103232")
+//
+// Each parses once at init, so a loop that names the constant re-reads the same
+// *big.Int. The var is shared across every site that named the value, which is
+// why bigown.go treats a read of one as not fresh: a local initialized from it
+// must never be mutated in place.
+func (r *Renderer) bigLitDecls() []ast.Decl {
+	if len(r.bigLitOrder) == 0 {
+		return nil
+	}
+	out := make([]ast.Decl, 0, len(r.bigLitOrder))
+	for _, decimal := range r.bigLitOrder {
+		out = append(out, &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names: []*ast.Ident{ident(r.bigLits[decimal])},
+				Values: []ast.Expr{&ast.CallExpr{
+					Fun:  sel("value", "BigIntMustParse"),
+					Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(decimal)}},
+				}},
+			}},
+		})
+	}
+	return out
 }
 
 // goImportSpec is one import the assembled file carries: a Go import path and,

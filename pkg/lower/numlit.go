@@ -102,19 +102,20 @@ func numericLiteralValue(text string) (float64, bool) {
 	return v, true
 }
 
-// bigIntLiteralInt64 decodes a bigint literal's source text (a numeric literal with
-// a trailing n, like 123n or 0xffn or 1_000n) to the int64 it denotes, reporting
-// false for a literal whose magnitude does not fit int64. It reads the same radix
-// prefixes and underscore separators a numeric literal accepts, minus the fraction
-// and exponent forms a bigint cannot take. The int64 bound is what keeps the emitted
-// form a single big.NewInt call; a wider literal is a later slice.
-func bigIntLiteralInt64(text string) (int64, bool) {
+// bigIntLiteralValue decodes a bigint literal's source text (a numeric literal
+// with a trailing n, like 123n or 0xffn or 1_000_000_000_000_000_000_000n) to the
+// arbitrary-precision integer it denotes. It reads the same radix prefixes and
+// underscore separators a numeric literal accepts, minus the fraction and exponent
+// forms a bigint cannot take. The caller picks the emitted shape by the value's
+// width: within int64 it is a big.NewInt call, wider it is an interned package var
+// parsed once at init.
+func bigIntLiteralValue(text string) (*big.Int, bool) {
 	if !strings.HasSuffix(text, "n") {
-		return 0, false
+		return nil, false
 	}
 	clean := strings.ReplaceAll(text[:len(text)-1], "_", "")
 	if clean == "" {
-		return 0, false
+		return nil, false
 	}
 	base := 10
 	digits := clean
@@ -128,9 +129,9 @@ func bigIntLiteralInt64(text string) (int64, bool) {
 			base, digits = 8, clean[2:]
 		}
 	}
-	v, err := strconv.ParseInt(digits, base, 64)
-	if err != nil {
-		return 0, false
+	v, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		return nil, false
 	}
 	return v, true
 }
