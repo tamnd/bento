@@ -252,6 +252,8 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerForOf(n)
 	case frontend.NodeThrowStatement:
 		return r.lowerThrow(n)
+	case frontend.NodeTryStatement:
+		return r.lowerTry(n)
 	default:
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	}
@@ -759,6 +761,13 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
+		}
+		// A catch binding read outside of its .message or .name property (which
+		// propertyAccess handles before it reaches here) hands back, since the runtime
+		// models a caught error as a value.Error rather than a general boxed value, so
+		// passing it on or reassigning it has no lowering yet.
+		if r.errorLocals[name] {
+			return nil, &NotYetLowerable{Reason: "a caught error used other than reading .message or .name is a later slice"}
 		}
 		// A local specialized to Go int32 is read back as float64(name), so every
 		// consumer of the read (arithmetic, a Math call, console.log) sees the same
@@ -2238,6 +2247,23 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
+	// A read of a caught error's .message or .name lowers to the matching method on
+	// the *value.Error the catch bound. It routes before the dynamic path because
+	// the checker types a catch binding unknown, which would otherwise send the read
+	// through the boxed-value Get the error value does not carry. Only these two
+	// properties are read; any other member of a caught error hands back.
+	if obj.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(obj)); ok && r.errorLocals[name] {
+			switch prop {
+			case "message":
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Message")}}, nil
+			case "name":
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Name")}}, nil
+			default:
+				return nil, &NotYetLowerable{Reason: "a caught error's ." + prop + " is a later slice"}
+			}
+		}
+	}
 	// A read o.k on a dynamic receiver (one typed any or unknown) has no static
 	// shape to intern to a Go field, so it dispatches at runtime through the boxed
 	// value's Get, which reports a string's length, an array's length and indices,
@@ -2411,6 +2437,22 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	// constructor. This routes before the static operator paths below, which read
 	// isString and isNumber that a dynamic operand answers no to. Only + is dynamic
 	// here; another operator on a dynamic operand falls through and hands back.
+	// instanceof on a caught error narrows the binding so a catch can read its
+	// .message or .name; it routes first because a catch binding is typed unknown,
+	// which the operand tests below would send down the dynamic path. Only a caught
+	// error against a built-in error constructor is covered here, and any other
+	// instanceof hands back until class-instance narrowing lands.
+	if opText == "instanceof" {
+		expr, handled, err := r.errorInstanceof(left, right)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			return expr, nil
+		}
+		return nil, &NotYetLowerable{Reason: "instanceof outside a caught built-in error is a later slice"}
+	}
+
 	if r.combineIsDynamic(opText, left, right) {
 		l, err := r.boxOperand(left)
 		if err != nil {

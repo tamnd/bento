@@ -70,6 +70,158 @@ func TestThrowNonErrorHandsBack(t *testing.T) {
 	}
 }
 
+// handsBack renders a snippet and fails unless the lowering hands it back, the
+// contract for a construct that is outside the covered subset and must fall
+// through to the engine rather than emit unsound Go.
+func handsBack(t *testing.T, src string) {
+	t.Helper()
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
+		t.Fatalf("snippet lowered, want a hand-back:\n%s", src)
+	}
+}
+
+// TestTryCatchLowersToRecoverClosure pins the catch shape: the try body runs in an
+// immediately invoked closure whose deferred recover converts the panic with
+// value.Caught and runs the catch body, the panic/recover encoding of try/catch.
+func TestTryCatchLowersToRecoverClosure(t *testing.T) {
+	const src = `try { throw new Error("boom"); } catch (e) { if (e instanceof Error) { console.log(e.message); } }
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"defer func() {",
+		"if rec := recover(); rec != nil {",
+		"e := value.Caught(rec)",
+		`e.IsA("Error")`,
+		"e.Message()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("try/catch lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestTryFinallyLowersToDeferredClosure proves a try/finally with no catch lowers
+// to a closure whose deferred function is the finally body and which never
+// recovers, so a throw inside the try still propagates after the finally runs.
+func TestTryFinallyLowersToDeferredClosure(t *testing.T) {
+	const src = `try { console.log("body"); } finally { console.log("fin"); }
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "defer func() {") {
+		t.Errorf("try/finally did not defer the finally body:\n%s", source)
+	}
+	if strings.Contains(source, "recover()") {
+		t.Errorf("a try with no catch recovered a panic it should let propagate:\n%s", source)
+	}
+}
+
+// TestTryCatchFinallyRunsFinallyLast proves the two handlers are deferred so the
+// catch runs before the finally: the finally defer is emitted first, so under Go's
+// last-in-first-out defer order it runs after the catch and after a normal
+// completion, matching the language.
+func TestTryCatchFinallyRunsFinallyLast(t *testing.T) {
+	const src = `try { throw new TypeError("x"); } catch (e) { if (e instanceof TypeError) { console.log("caught"); } } finally { console.log("fin"); }
+`
+	source := renderProgram(t, src)
+	fin := strings.Index(source, `value.FromGoString("fin")`)
+	recover := strings.Index(source, "recover()")
+	if fin < 0 || recover < 0 {
+		t.Fatalf("expected both a finally body and a recover:\n%s", source)
+	}
+	if fin > recover {
+		t.Errorf("finally defer was emitted after the catch defer, so it would run first, not last:\n%s", source)
+	}
+}
+
+// TestCatchBindingNarrowsToReadNameAndMessage proves a caught error narrowed with
+// instanceof reads its .name and .message as the value.Error methods, the property
+// reads a catch does after narrowing the unknown binding.
+func TestCatchBindingNarrowsToReadNameAndMessage(t *testing.T) {
+	const src = `try { throw new RangeError("r"); } catch (e) { if (e instanceof RangeError) { console.log(e.name); console.log(e.message); } }
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "e.Name()") {
+		t.Errorf("narrowed catch did not read .name as e.Name():\n%s", source)
+	}
+	if !strings.Contains(source, "e.Message()") {
+		t.Errorf("narrowed catch did not read .message as e.Message():\n%s", source)
+	}
+}
+
+// TestEmptyCatchStillRecovers proves a catch whose binding is unused still recovers
+// and converts the payload, so a Go runtime panic re-raises through value.Caught
+// rather than being silently swallowed, while the caught error is discarded.
+func TestEmptyCatchStillRecovers(t *testing.T) {
+	const src = `try { throw new Error("boom"); } catch (e) { console.log("handled"); }
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.Caught(rec)") {
+		t.Errorf("an unused catch binding skipped the payload conversion:\n%s", source)
+	}
+}
+
+// TestReturningTryHandsBack proves a return inside a try, catch, or finally body
+// hands the whole statement back, because a Go return inside the emitted closure
+// would leave the closure rather than the enclosing function, an abrupt completion
+// this slice does not carry out of the construct.
+func TestReturningTryHandsBack(t *testing.T) {
+	handsBack(t, "function f(): number { try { return 1; } finally { console.log(\"fin\"); } }\nf();\n")
+	handsBack(t, "function f(): number { try { console.log(\"body\"); } catch (e) { return 2; } return 0; }\nf();\n")
+	handsBack(t, "function f(): number { try { console.log(\"body\"); } finally { return 3; } }\nf();\n")
+}
+
+// TestInstanceofOutsideCatchHandsBack proves instanceof on a value that is not a
+// caught error hands back, since class-instance narrowing is a later slice and
+// only a caught built-in error is covered here.
+func TestInstanceofOutsideCatchHandsBack(t *testing.T) {
+	handsBack(t, "class C {}\nconst c: unknown = new C();\nif (c instanceof C) { console.log(\"c\"); }\n")
+}
+
+// TestTryCatchFinallyRunsEndToEnd proves the whole construct end to end: a program
+// that throws inside a try, catches with an instanceof narrowing, reads the
+// message, and runs a finally compiles to a binary whose output is the catch line
+// then the finally line, in that order, and exits zero because the throw was
+// caught.
+func TestTryCatchFinallyRunsEndToEnd(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the try/catch/finally test builds and runs generated Go")
+	}
+	const src = `try {
+  throw new RangeError("out of range");
+} catch (e) {
+  if (e instanceof RangeError) {
+    console.log("caught: " + e.message);
+  }
+} finally {
+  console.log("cleanup");
+}
+`
+	source := renderProgram(t, src)
+	dir, err := os.MkdirTemp(repoRoot(t), "tryrun-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("a caught throw exited non-zero: %v\n--- program ---\n%s\n--- stderr ---\n%s", err, source, stderr.String())
+	}
+	if got := stdout.String(); got != "caught: out of range\ncleanup\n" {
+		t.Errorf("try/catch/finally printed %q, want the catch line then the finally line", got)
+	}
+}
+
 // TestUncaughtThrowReportsAndExits proves the raise-and-report path end to end: a
 // program that throws an uncaught error compiles to a binary that prints the
 // uncaught-error line to standard error and exits non-zero, the way a runtime
