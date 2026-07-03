@@ -937,8 +937,20 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 			continue
 		}
 		pkids := r.prog.Children(k)
-		if len(pkids) != 1 || pkids[0].Kind() != frontend.NodeIdentifier {
+		// A bare parameter is a lone identifier; an annotated one, (n: number),
+		// carries the type node as a second child. The type is already folded into
+		// the checker's answer for the identifier, so we read the name off the first
+		// child and let the annotation ride along. Anything whose first child is not
+		// the identifier is a rest element or a binding pattern, and any extra child
+		// past the annotation is a default value that would need call-site
+		// defaulting; both stay a later slice.
+		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
 			return nil, &NotYetLowerable{Reason: "arrow parameter that is not a plain identifier is a later slice"}
+		}
+		for _, extra := range pkids[1:] {
+			if extra.Kind() != frontend.NodeUnknown {
+				return nil, &NotYetLowerable{Reason: "arrow parameter with a default value is a later slice"}
+			}
 		}
 		name, ok := localName(r.prog.Text(pkids[0]))
 		if !ok {
