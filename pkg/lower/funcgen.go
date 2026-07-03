@@ -121,7 +121,7 @@ func (r *Renderer) paramFields(sig frontend.Signature) (*ast.FieldList, error) {
 // resultFields lowers the return type to the function's result list. A void or
 // undefined return (the zero type carries no flags) is no result at all.
 func (r *Renderer) resultFields(ret frontend.Type) (*ast.FieldList, error) {
-	if ret.Flags == 0 || ret.Flags&frontend.TypeVoid != 0 || ret.Flags&frontend.TypeUndefined != 0 {
+	if isVoidReturn(ret) {
 		return nil, nil
 	}
 	rt, err := r.typeExpr(ret)
@@ -129,6 +129,14 @@ func (r *Renderer) resultFields(ret frontend.Type) (*ast.FieldList, error) {
 		return nil, err
 	}
 	return &ast.FieldList{List: []*ast.Field{{Type: rt}}}, nil
+}
+
+// isVoidReturn reports whether a return type carries no value: a bare void, an
+// undefined, or the zero type a function with no annotated return and no value
+// carries. These are the shapes that give a func literal no result, whether the
+// return sits on a function declaration or a concise-body arrow.
+func isVoidReturn(ret frontend.Type) bool {
+	return ret.Flags == 0 || ret.Flags&frontend.TypeVoid != 0 || ret.Flags&frontend.TypeUndefined != 0
 }
 
 // blockOf finds the function's body block and lowers it. A function with no body
@@ -962,11 +970,27 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		}
 		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
 	}
-	retType, err := r.typeExpr(r.prog.TypeAt(body))
+	bodyType := r.prog.TypeAt(body)
+	loweredBody, err := r.lowerExpr(body)
 	if err != nil {
 		return nil, err
 	}
-	loweredBody, err := r.lowerExpr(body)
+	// A void body, the shape a callback that runs for its effect takes ((i) =>
+	// console.log(i) against a Go func(int)), gives the func literal no result and
+	// stands the body in the statement position, the same way resultFields drops a
+	// void return. Only a call expression is a legal Go statement, so a void body
+	// that lowered to anything else hands back rather than emit invalid Go.
+	if isVoidReturn(bodyType) {
+		call, ok := loweredBody.(*ast.CallExpr)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "arrow with a void body that is not a call is a later slice"}
+		}
+		return &ast.FuncLit{
+			Type: &ast.FuncType{Params: &ast.FieldList{List: fields}},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}},
+		}, nil
+	}
+	retType, err := r.typeExpr(bodyType)
 	if err != nil {
 		return nil, err
 	}

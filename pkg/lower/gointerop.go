@@ -664,6 +664,57 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 			Args: []ast.Expr{arg},
 		}, nil
 	}
+	if goType == "func" {
+		// A bento function crosses into a Go func parameter as a wrapper closure the Go
+		// library calls: the wrapper takes the Go parameter types, marshals each Go
+		// argument to the bento value the callback expects, invokes the bento function,
+		// and marshals its result back to the Go return type (section 7.6). The callback
+		// runs inline on the call, which is the synchronous case a Go API like a Map
+		// helper or filepath.Walk takes; the cross-goroutine hand-off onto the loop is a
+		// later slice tied to the event loop. The bento function is the lowered argument
+		// itself, called as a literal, so a callback argument must be a real function
+		// expression and hands back if it arrives inside a composite.
+		if argNode == nil {
+			return nil, &NotYetLowerable{Reason: "go: a callback argument must be a top-level argument"}
+		}
+		resultKw, paramKws := goimport.SplitFuncElem(elem)
+		fields := make([]*ast.Field, 0, len(paramKws))
+		callArgs := make([]ast.Expr, 0, len(paramKws))
+		for i, pk := range paramKws {
+			name := "p" + strconv.Itoa(i)
+			fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ident(pk)})
+			// The Go argument crosses into the bento value the callback's parameter holds,
+			// the same Go-to-bento crossing a result takes, so the callback body sees a
+			// bento number, string, or boolean exactly as it would from any other source.
+			bento, err := r.marshalResultFromGo(pk, "", ident(name))
+			if err != nil {
+				return nil, err
+			}
+			callArgs = append(callArgs, bento)
+		}
+		inner := &ast.CallExpr{Fun: arg, Args: callArgs}
+		if resultKw == "" {
+			// A void callback is called for its effect: the wrapper has no result and the
+			// bento call stands as a statement.
+			return &ast.FuncLit{
+				Type: &ast.FuncType{Params: &ast.FieldList{List: fields}},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: inner}}},
+			}, nil
+		}
+		// The bento result crosses back to the Go return type, the same bento-to-Go
+		// crossing an argument takes, so a Go caller sees the return type it declared.
+		goRet, err := r.marshalArgToGo(resultKw, "", goimport.DefinedConv{}, inner, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{List: fields},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: ident(resultKw)}}},
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{goRet}}}},
+		}, nil
+	}
 	if conv.Name != "" {
 		inner := arg
 		if goType == "string" {
