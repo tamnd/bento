@@ -52,6 +52,7 @@ func renderProgram(t *testing.T, src string) string {
 	prog := compile(t, src)
 	r := NewRenderer(prog)
 	r.SetGoSignatures(testGoSignatures())
+	r.SetGoConstants(testGoConstants())
 	p, err := r.RenderProgram(entryFile(t, prog))
 	if err != nil {
 		t.Fatalf("RenderProgram: %v", err)

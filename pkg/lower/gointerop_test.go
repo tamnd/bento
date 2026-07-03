@@ -29,6 +29,27 @@ func testGoSignatures() func(importPath, name string) (goimport.FuncSig, bool) {
 	}
 }
 
+// testGoConstants is the constant resolver the program tests wire alongside
+// testGoSignatures, loading each Go package's constants once and memoizing them, so
+// a reference to a go: constant marshals by the real Go type the same way the build
+// does. It is the test-side twin of build.goConstantResolver.
+func testGoConstants() func(importPath, name string) (string, bool) {
+	memo := map[string]map[string]string{}
+	return func(importPath, name string) (string, bool) {
+		consts, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			consts, err = goimport.Constants(importPath)
+			if err != nil {
+				consts = map[string]string{}
+			}
+			memo[importPath] = consts
+		}
+		kw, ok := consts[name]
+		return kw, ok
+	}
+}
+
 // This file covers the go: import lowering: a call to a name a go: import binds
 // lowers to a direct call into the real Go package, with the value crossings run
 // through the interop bridge. The unit cases pin the pieces that need no toolchain
@@ -320,6 +341,50 @@ try {
 	got := runProgramGo(t, src)
 	if want := "caught: go: call panicked: strings: negative Repeat count\n"; got != want {
 		t.Fatalf("go: panic program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportConstRefEmitsQualifiedRead pins that a reference to a go: constant
+// lowers to the qualified Go constant read marshaled by its type: math.Pi is an
+// untyped float that crosses as a plain float64 number, and math.MaxInt32 is an
+// untyped int that crosses through the range check, the section 6.10 mapping. A
+// constant read cannot panic, so it carries no boundary guard.
+func TestGoImportConstRefEmitsQualifiedRead(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Pi, MaxInt32 } from "go:math";
+console.log(Pi);
+console.log(MaxInt32);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "math.Pi") {
+		t.Errorf("a float constant reference did not lower to the qualified read:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.Int64ToNumber(int64(math.MaxInt32))") {
+		t.Errorf("an int constant reference did not cross through the range check:\n%s", source)
+	}
+	if strings.Contains(source, "bridge.Guard(func() float64 { return math.Pi") {
+		t.Errorf("a constant read was wrapped in the boundary guard, which it does not need:\n%s", source)
+	}
+}
+
+// TestGoImportConstRefRuns proves the constant crossing end to end: a program that
+// reads math.Pi and math.MaxInt32 prints the values the TypeScript would, so the
+// qualified read and the number marshaling are proven against a real build.
+func TestGoImportConstRefRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: constant test builds and runs generated Go")
+	}
+	const src = `import { Pi, MaxInt32 } from "go:math";
+console.log(Pi);
+console.log(MaxInt32);
+`
+	got := runProgramGo(t, src)
+	if want := "3.141592653589793\n2147483647\n"; got != want {
+		t.Fatalf("go: constant program printed %q, want %q", got, want)
 	}
 }
 
