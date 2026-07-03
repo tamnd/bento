@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
 )
 
 // This file lowers virtual dispatch (05_type_lowering sections 13 and 14). A
@@ -44,6 +45,18 @@ func (c *classInfo) hasVTable() bool {
 // isVirtual reports whether the named method dispatches through the vtable.
 func (c *classInfo) isVirtual(prop string) bool {
 	return c.root().vprops[prop]
+}
+
+// chainHasAbstract reports whether the class or any ancestor is abstract,
+// which routes its construction to the split form: an abstract base has no
+// NewX, only an init a derived constructor runs on the embedded base.
+func (c *classInfo) chainHasAbstract() bool {
+	for ci := c; ci != nil; ci = ci.base {
+		if ci.abstract {
+			return true
+		}
+	}
+	return false
 }
 
 // descendsFrom reports whether t is a proper ancestor of c, the test an upcast
@@ -195,7 +208,17 @@ func (r *Renderer) vtableVarDecl(c *classInfo) (ast.Decl, error) {
 			}
 		}
 		var slot ast.Expr
-		if owner == root {
+		if owner == root && impl.abstract {
+			// An abstract slot has no Impl to point at. It panics instead, and
+			// the panic is unreachable in well-typed code: the checker makes
+			// every concrete subclass override the method, so every vtable a
+			// constructor can pin fills this slot with a real body.
+			var err error
+			slot, err = r.abstractSlot(root, m)
+			if err != nil {
+				return nil, err
+			}
+		} else if owner == root {
 			slot = &ast.SelectorExpr{
 				X:   &ast.ParenExpr{X: star(ident(root.goName))},
 				Sel: ident(implName(m)),
@@ -221,6 +244,23 @@ func (r *Renderer) vtableVarDecl(c *classInfo) (ast.Decl, error) {
 			Names:  []*ast.Ident{ident(vtableVarName(c))},
 			Values: []ast.Expr{lit},
 		}},
+	}, nil
+}
+
+// abstractSlot builds the vtable slot of an abstract method: a function of
+// the slot's type whose body is one panic naming the method.
+func (r *Renderer) abstractSlot(root *classInfo, m classMethod) (ast.Expr, error) {
+	ft, _, err := r.slotFuncType(root, m)
+	if err != nil {
+		return nil, err
+	}
+	call := &ast.CallExpr{
+		Fun:  ident("panic"),
+		Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(root.name + "." + m.prop + " is abstract")}},
+	}
+	return &ast.FuncLit{
+		Type: ft,
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}},
 	}, nil
 }
 
@@ -368,24 +408,40 @@ func classNeedsInit(c *classInfo) bool {
 	return c.base != nil && classNeedsInit(c.base)
 }
 
-// vtableCtorDecls emits a virtual hierarchy's construction: NewX allocates,
-// pins the class's vtable, runs the initializers, and returns. When the class
-// is itself extended and has anything to initialize, the initializers split
-// into an initX function taking the receiver, so a subclass constructor can
-// run them on its embedded base in place, under the subclass's already-pinned
-// vtable.
-func (r *Renderer) vtableCtorDecls(info *classInfo, params *ast.FieldList) ([]ast.Decl, error) {
+// splitCtorDecls emits a split hierarchy's construction: NewX allocates, pins
+// the class's vtable when the hierarchy has one, runs the initializers, and
+// returns. When the class is itself extended and has anything to initialize,
+// the initializers split into an initX function taking the receiver, so a
+// subclass constructor can run them on its embedded base in place, under the
+// subclass's already-pinned vtable. An abstract class emits the init function
+// alone: the checker rejects new on it, so there is no NewX to allocate one.
+func (r *Renderer) splitCtorDecls(info *classInfo, params *ast.FieldList) ([]ast.Decl, error) {
+	if info.abstract {
+		if !info.extended || !classNeedsInit(info) {
+			return nil, nil
+		}
+		if err := r.mintName(initName(info), "class "+info.name+"'s init function"); err != nil {
+			return nil, err
+		}
+		initDecl, err := r.initFuncDecl(info)
+		if err != nil {
+			return nil, err
+		}
+		return []ast.Decl{initDecl}, nil
+	}
 	stmts := []ast.Stmt{
 		&ast.AssignStmt{
 			Lhs: []ast.Expr{ident(info.recv)},
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(info.goName)}}},
 		},
-		&ast.AssignStmt{
+	}
+	if info.hasVTable() {
+		stmts = append(stmts, &ast.AssignStmt{
 			Lhs: []ast.Expr{&ast.SelectorExpr{X: ident(info.recv), Sel: ident("vtable")}},
 			Tok: token.ASSIGN,
 			Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: ident(vtableVarRef(info))}},
-		},
+		})
 	}
 	if info.extended && classNeedsInit(info) {
 		if err := r.mintName(initName(info), "class "+info.name+"'s init function"); err != nil {
@@ -407,22 +463,9 @@ func (r *Renderer) vtableCtorDecls(info *classInfo, params *ast.FieldList) ([]as
 			},
 			Body: &ast.BlockStmt{List: stmts},
 		}
-		initParams, err := r.ctorParamFields(info)
+		initDecl, err := r.initFuncDecl(info)
 		if err != nil {
 			return nil, err
-		}
-		initParams.List = append([]*ast.Field{{
-			Names: []*ast.Ident{ident(info.recv)},
-			Type:  star(ident(info.goName)),
-		}}, initParams.List...)
-		initStmts, err := r.ctorInitStmts(info)
-		if err != nil {
-			return nil, err
-		}
-		initDecl := &ast.FuncDecl{
-			Name: ident(initName(info)),
-			Type: &ast.FuncType{Params: initParams},
-			Body: &ast.BlockStmt{List: initStmts},
 		}
 		return []ast.Decl{newDecl, initDecl}, nil
 	}
@@ -440,6 +483,29 @@ func (r *Renderer) vtableCtorDecls(info *classInfo, params *ast.FieldList) ([]as
 		},
 		Body: &ast.BlockStmt{List: stmts},
 	}}, nil
+}
+
+// initFuncDecl builds the initX function a derived constructor calls on the
+// embedded base: the receiver first, then the constructor's own parameters,
+// running the base chain's init, the field initializers, and the body.
+func (r *Renderer) initFuncDecl(info *classInfo) (*ast.FuncDecl, error) {
+	initParams, err := r.ctorParamFields(info)
+	if err != nil {
+		return nil, err
+	}
+	initParams.List = append([]*ast.Field{{
+		Names: []*ast.Ident{ident(info.recv)},
+		Type:  star(ident(info.goName)),
+	}}, initParams.List...)
+	initStmts, err := r.ctorInitStmts(info)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FuncDecl{
+		Name: ident(initName(info)),
+		Type: &ast.FuncType{Params: initParams},
+		Body: &ast.BlockStmt{List: initStmts},
+	}, nil
 }
 
 // ctorInitStmts builds the initializer statements a virtual-hierarchy
