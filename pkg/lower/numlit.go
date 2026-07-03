@@ -102,6 +102,39 @@ func numericLiteralValue(text string) (float64, bool) {
 	return v, true
 }
 
+// bigIntLiteralInt64 decodes a bigint literal's source text (a numeric literal with
+// a trailing n, like 123n or 0xffn or 1_000n) to the int64 it denotes, reporting
+// false for a literal whose magnitude does not fit int64. It reads the same radix
+// prefixes and underscore separators a numeric literal accepts, minus the fraction
+// and exponent forms a bigint cannot take. The int64 bound is what keeps the emitted
+// form a single big.NewInt call; a wider literal is a later slice.
+func bigIntLiteralInt64(text string) (int64, bool) {
+	if !strings.HasSuffix(text, "n") {
+		return 0, false
+	}
+	clean := strings.ReplaceAll(text[:len(text)-1], "_", "")
+	if clean == "" {
+		return 0, false
+	}
+	base := 10
+	digits := clean
+	if len(clean) >= 2 && clean[0] == '0' {
+		switch clean[1] {
+		case 'x', 'X':
+			base, digits = 16, clean[2:]
+		case 'b', 'B':
+			base, digits = 2, clean[2:]
+		case 'o', 'O':
+			base, digits = 8, clean[2:]
+		}
+	}
+	v, err := strconv.ParseInt(digits, base, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 // radixIsFinite reports whether the base-n integer written as digits names a value
 // that fits a finite float64. It parses through a big.Int so a very long run of
 // digits does not overflow an intermediate integer, then checks the float64 the
