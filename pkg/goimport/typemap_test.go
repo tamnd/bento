@@ -230,6 +230,24 @@ var VarFn func(parts ...string) int
 	}
 }
 
+// TestParamListRenamesReservedNames proves a Go parameter whose name is a
+// TypeScript reserved word (strings.Replace has a parameter literally named `new`)
+// is renamed to a positional label, so the emitted declaration parses. A parameter
+// name is only a label the type rides on, never referenced by a caller, so the
+// rename is invisible to the projected surface.
+func TestParamListRenamesReservedNames(t *testing.T) {
+	src := `package p
+var Fn func(old string, new string, function int) string
+`
+	pkg := checkSource(t, src)
+	m := NewMapper(pkg)
+	got := m.Map(lookupType(t, pkg, "Fn"))
+	want := "(old: string, a1: string, a2: number) => string"
+	if got != want {
+		t.Errorf("reserved-word params projected to %q, want %q", got, want)
+	}
+}
+
 func TestMapUnsafeIsUnsupported(t *testing.T) {
 	src := `package p
 import "unsafe"
