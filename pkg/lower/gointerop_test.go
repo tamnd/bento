@@ -216,6 +216,46 @@ try {
 	}
 }
 
+// TestGoImportNamespaceRuns proves the namespace form end to end: a module that
+// imports a Go package as a namespace (import * as strs) and calls its members
+// through the binding compiles to the same direct Go calls a named import would,
+// so strs.ToUpper and strs.HasPrefix cross through the bridge and a second
+// namespace's sc.Itoa marshals a number, all in one program (section 3).
+func TestGoImportNamespaceRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the namespace go: test builds and runs generated Go")
+	}
+	const src = `import * as strs from "go:strings";
+import * as sc from "go:strconv";
+const shout = strs.ToUpper("hello");
+console.log(shout);
+console.log(strs.HasPrefix(shout, "HE"));
+console.log(sc.Itoa(42));
+`
+	got := runProgramGo(t, src)
+	if want := "HELLO\ntrue\n42\n"; got != want {
+		t.Fatalf("namespace go: program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportNamespaceEmitsDirectCall pins that a namespace member call lowers to
+// the qualified Go call through the bridge, the same shape a named import emits, so
+// the binding is purely a call-site convenience and adds no indirection.
+func TestGoImportNamespaceEmitsDirectCall(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import * as strs from "go:strings";
+console.log(strs.ToUpper("hi"));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "strings.ToUpper(bridge.StringToGo(") {
+		t.Errorf("a namespace member call did not lower to the direct Go call through the bridge:\n%s", source)
+	}
+}
+
 // TestGoImportEmitsAliasedImport pins that the assembled Go imports the Go package
 // under its alias and calls it qualified by that alias through the bridge, the
 // shape section 9.1 fixes, without needing to run the program.
