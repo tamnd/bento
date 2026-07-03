@@ -9,6 +9,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/net v0.56.0
 	golang.org/x/text v0.38.0
+	golang.org/x/tools v0.47.0
 	modernc.org/quickjs v0.20.0
 )
 
@@ -43,6 +44,7 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
+	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	modernc.org/libc v1.73.5 // indirect
