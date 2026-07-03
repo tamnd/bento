@@ -139,7 +139,7 @@ func F() Point { return Point{} }
 	if want := []string{"struct"}; !slices.Equal(sig.Results, want) {
 		t.Errorf("results = %v, want %v", sig.Results, want)
 	}
-	path, name, fields := SplitStructElem(sig.ResultElem[0])
+	path, name, fields, _ := SplitStructElem(sig.ResultElem[0])
 	if name != "Point" {
 		t.Errorf("struct name = %q, want Point", name)
 	}
@@ -175,7 +175,7 @@ func F(pt Point) int { return pt.X }
 	if want := []string{"struct"}; !slices.Equal(sig.Params, want) {
 		t.Errorf("params = %v, want %v", sig.Params, want)
 	}
-	path, name, fields := SplitStructElem(sig.ParamElem[0])
+	path, name, fields, _ := SplitStructElem(sig.ParamElem[0])
 	if path != "p" || name != "Point" {
 		t.Errorf("struct param element path/name = %q/%q, want p/Point", path, name)
 	}
@@ -245,7 +245,7 @@ func F(t []T) int { return 0 }`, "F")
 	if want := []string{"structslice"}; !slices.Equal(sig.Params, want) {
 		t.Errorf("params = %v, want %v", sig.Params, want)
 	}
-	path, name, fields := SplitStructElem(sig.ParamElem[0])
+	path, name, fields, _ := SplitStructElem(sig.ParamElem[0])
 	if name != "T" || path == "" || len(fields) != 1 || fields[0].Name != "X" {
 		t.Errorf("param struct element = %q.%q fields %v, want a package path and T{X}", path, name, fields)
 	}
@@ -526,7 +526,7 @@ func F(pts ...Point) int { return 0 }
 	if want := []string{"struct"}; !slices.Equal(sig.Params, want) {
 		t.Errorf("params = %v, want the element struct %v", sig.Params, want)
 	}
-	if _, name, _ := SplitStructElem(sig.ParamElem[0]); name != "Point" {
+	if _, name, _, _ := SplitStructElem(sig.ParamElem[0]); name != "Point" {
 		t.Errorf("variadic struct element name = %q, want Point", name)
 	}
 }

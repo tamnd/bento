@@ -305,7 +305,10 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, call fro
 // marshaling it by its keyword. The whole thing wraps in the boundary recover so a
 // panic in the Go call reports as a thrown value.
 func (r *Renderer) guardStructResult(elem string, goResult ast.Expr, call frontend.Node) (ast.Expr, error) {
-	_, _, fields := goimport.SplitStructElem(elem)
+	// The pointer bit is not read here: the guard binds the Go result with :=, so a
+	// *Point result infers a *Point local and a Point result a Point local, and a
+	// field read auto-dereferences either, so the box is built the same way.
+	_, _, fields, _ := goimport.SplitStructElem(elem)
 	rt := r.prog.TypeAt(call)
 	interned, err := r.decls.internStruct(r, rt)
 	if err != nil {
@@ -375,7 +378,7 @@ func (r *Renderer) structBoxElts(fields []goimport.StructField, recvName string)
 // per-element range check that throws, reports as a thrown value. This is the result
 // direction: a []struct argument is a later slice.
 func (r *Renderer) guardStructSliceResult(elem string, goSlice ast.Expr, call frontend.Node) (ast.Expr, error) {
-	path, typeName, fields := goimport.SplitStructElem(elem)
+	path, typeName, fields, ptr := goimport.SplitStructElem(elem)
 	et, ok := r.prog.ElementType(r.prog.TypeAt(call))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "go: a []struct result must have an array element type"}
@@ -393,10 +396,16 @@ func (r *Renderer) guardStructSliceResult(elem string, goSlice ast.Expr, call fr
 	r.requireImport(valuePkg)
 	alias := r.requireGoImport(path)
 	internedPtr := star(ident(interned))
+	// A []*Point element is a *Point, so the closure binds v as a pointer and a field
+	// read auto-dereferences it; a []Point element binds v as the value struct.
+	var elemType ast.Expr = sel(alias, typeName)
+	if ptr {
+		elemType = star(elemType)
+	}
 	// conv := func(v alias.Type) *interned { return &interned{...fields...} }
 	conv := &ast.FuncLit{
 		Type: &ast.FuncType{
-			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("v")}, Type: sel(alias, typeName)}}},
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("v")}, Type: elemType}}},
 			Results: &ast.FieldList{List: []*ast.Field{{Type: internedPtr}}},
 		},
 		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
@@ -426,7 +435,7 @@ func (r *Renderer) guardStructSliceResult(elem string, goSlice ast.Expr, call fr
 // box; the []struct argument hands it to bridge.SliceToGo to run over each element,
 // so both marshal a struct the same way.
 func (r *Renderer) structArgConv(elem string, boxType frontend.Type) (*ast.FuncLit, error) {
-	path, typeName, fields := goimport.SplitStructElem(elem)
+	path, typeName, fields, ptr := goimport.SplitStructElem(elem)
 	interned, err := r.decls.internStruct(r, boxType)
 	if err != nil {
 		return nil, err
@@ -446,14 +455,21 @@ func (r *Renderer) structArgConv(elem string, boxType frontend.Type) (*ast.FuncL
 		elts = append(elts, &ast.KeyValueExpr{Key: ident(f.Name), Value: val})
 	}
 	goStruct := sel(alias, typeName)
+	// A *T parameter takes the address of a fresh struct; a value T returns it as is.
+	// The box read is identical either way, so only the result type and the single
+	// return expression carry the pointer.
+	var resultType ast.Expr = goStruct
+	var lit ast.Expr = &ast.CompositeLit{Type: goStruct, Elts: elts}
+	if ptr {
+		resultType = star(goStruct)
+		lit = &ast.UnaryExpr{Op: token.AND, X: lit}
+	}
 	return &ast.FuncLit{
 		Type: &ast.FuncType{
 			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("o")}, Type: star(ident(interned))}}},
-			Results: &ast.FieldList{List: []*ast.Field{{Type: goStruct}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: resultType}}},
 		},
-		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
-			&ast.CompositeLit{Type: goStruct, Elts: elts},
-		}}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{lit}}}},
 	}, nil
 }
 
