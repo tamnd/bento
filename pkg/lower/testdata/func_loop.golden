@@ -3,11 +3,11 @@ func Score(n float64) float64 {
 	var i float64 = 1
 	for i <= n {
 		if i == 3 {
-			total = total + 10
+			total += 10
 		} else {
-			total = total + i
+			total += i
 		}
-		i = i + 1
+		i += 1
 	}
 	return total
 }

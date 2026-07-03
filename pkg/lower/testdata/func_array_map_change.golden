@@ -5,7 +5,7 @@ func LabelWidth(n float64) float64 {
 	})
 	var total float64 = 0
 	for _, y := range ys.Elems() {
-		total = total + y.Length()
+		total += y.Length()
 	}
 	return total
 }

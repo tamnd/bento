@@ -10,7 +10,7 @@ func main() {
 	{
 		var i float64 = 0
 		for ; i < width; i++ {
-			total = total + i
+			total += i
 		}
 	}
 	value.WriteStdout(value.Concat(value.NumberToString(total), value.FromGoString("\n")))

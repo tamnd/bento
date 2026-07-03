@@ -2,8 +2,8 @@ func Negsum(n float64) float64 {
 	var t float64 = 0
 	{
 		var i float64 = 1
-		for ; i <= n; i = i + 1 {
-			t = t + i
+		for ; i <= n; i += 1 {
+			t += i
 		}
 	}
 	return -t

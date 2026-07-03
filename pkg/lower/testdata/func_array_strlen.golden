@@ -1,7 +1,7 @@
 func Widths(words *value.Array[value.BStr]) float64 {
 	var n float64 = 0
 	for _, w := range words.Elems() {
-		n = n + w.Length()
+		n += w.Length()
 	}
 	return n
 }
