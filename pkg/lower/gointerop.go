@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/goimport"
 )
 
 // This file lowers a go: import to a direct call into the real Go package it
@@ -78,16 +79,145 @@ func (r *Renderer) recordGoImport(module string, clause frontend.Node, haveClaus
 }
 
 // goImportCall lowers a call to a name bound by a go: import to a direct call into
-// the Go package. Each argument marshals by its TypeScript type: a string through
-// bridge.StringToGo, a boolean unchanged. The result marshals back by the call's
-// type: a string through bridge.StringFromGo, a boolean unchanged. A parameter or
-// a result of any other type hands back, because the marshaling of a number, a
-// byte slice, a struct, or an error needs the Go signature this slice does not yet
-// read, and emitting a bare call for one would cross the boundary unsound.
+// the Go package. When the Go signature is in hand (the build wires it), each
+// argument and the result marshal by the Go type, so a number crosses with the
+// right conversion and 64-bit range check (section 7.5). Without a signature it
+// falls back to the crossings a TypeScript type settles on its own, the string and
+// boolean marshaling, and hands a number back. Either way a crossing the slice
+// does not cover hands the whole call back rather than emit an unsound call.
 func (r *Renderer) goImportCall(b goBuiltin, call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
 	if !isGoIdent(b.name) {
 		return nil, &NotYetLowerable{Reason: "go: symbol " + b.name + " is not a Go identifier"}
 	}
+	if sig, ok := r.goSignature(b); ok {
+		return r.goImportCallBySig(b, sig, argNodes)
+	}
+	return r.goImportCallByType(b, call, argNodes)
+}
+
+// goSignature returns the Go signature of a go: function when a resolver is wired
+// and the signature is in a shape this slice marshals. A cleared OK (a variadic, an
+// error return, an unsupported type) reports not-found so the caller falls back to
+// the type-only path, which hands back on anything past string and boolean.
+func (r *Renderer) goSignature(b goBuiltin) (goimport.FuncSig, bool) {
+	if r.goSigs == nil {
+		return goimport.FuncSig{}, false
+	}
+	sig, ok := r.goSigs(b.importPath, b.name)
+	if !ok || !sig.OK {
+		return goimport.FuncSig{}, false
+	}
+	return sig, true
+}
+
+// goImportCallBySig lowers a go: call against its Go signature, marshaling each
+// argument and the result by the Go type keyword the signature carries. The
+// argument count must match the signature, and each argument's marshaling must be
+// one the crossing supports, or the call hands back.
+func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != len(sig.Params) {
+		return nil, &NotYetLowerable{Reason: "go: call to " + b.name + " with a defaulted or spread argument is a later slice"}
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for i, a := range argNodes {
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		marshaled, err := r.marshalArgToGo(sig.Params[i], lowered)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, marshaled)
+	}
+	alias := r.requireGoImport(b.importPath)
+	goCall := &ast.CallExpr{Fun: sel(alias, b.name), Args: args}
+	if len(sig.Results) == 0 {
+		// A Go function with no value result lowers to the bare call, valid where the
+		// TypeScript call is used as a statement, which is the only place a void call
+		// type-checks.
+		return goCall, nil
+	}
+	return r.marshalResultFromGo(sig.Results[0], goCall)
+}
+
+// marshalArgToGo wraps a lowered argument in the crossing its Go parameter type
+// needs: a string transcodes through the bridge, a boolean passes through, and a
+// number converts to the Go numeric type (a bento number is a float64, so a Go int
+// parameter takes an int conversion). A parameter type the slice does not cover
+// hands back.
+func (r *Renderer) marshalArgToGo(goType string, arg ast.Expr) (ast.Expr, error) {
+	switch goType {
+	case "string":
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "StringToGo"), Args: []ast.Expr{arg}}, nil
+	case "bool":
+		return arg, nil
+	case "float64":
+		// A bento number is already a float64, so a float64 parameter needs no
+		// conversion.
+		return arg, nil
+	default:
+		if isGoNumeric(goType) {
+			// A bento number is a float64; a narrower or integer Go parameter takes an
+			// explicit conversion, which truncates toward zero exactly as a JavaScript
+			// to-integer coercion does.
+			return &ast.CallExpr{Fun: ident(goType), Args: []ast.Expr{arg}}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "go: parameter of Go type " + goType + " is a later slice"}
+	}
+}
+
+// marshalResultFromGo wraps a Go call's result in the crossing back to a bento
+// value: a string transcodes through the bridge, a boolean passes through, a
+// float-width number widens to a bento number, and a 64-bit integer goes through
+// the bridge range check that turns a silent precision loss into a RangeError
+// (section 7.5). A result type the slice does not cover hands back.
+func (r *Renderer) marshalResultFromGo(goType string, goCall ast.Expr) (ast.Expr, error) {
+	switch goType {
+	case "string":
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "StringFromGo"), Args: []ast.Expr{goCall}}, nil
+	case "bool":
+		return goCall, nil
+	case "float64":
+		return goCall, nil
+	case "float32", "int8", "int16", "int32", "uint8", "uint16", "uint32":
+		// Every value of these types fits a float64 exactly, so the widening is a plain
+		// conversion with no range check (section 6.2).
+		return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{goCall}}, nil
+	case "int64":
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "Int64ToNumber"), Args: []ast.Expr{goCall}}, nil
+	case "uint64", "uintptr":
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "Uint64ToNumber"), Args: []ast.Expr{goCall}}, nil
+	case "int":
+		// int is 64-bit on the targets bento builds for, so it takes the same range
+		// check as int64 after a widening conversion to the checked type.
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{
+			Fun:  sel("bridge", "Int64ToNumber"),
+			Args: []ast.Expr{&ast.CallExpr{Fun: ident("int64"), Args: []ast.Expr{goCall}}},
+		}, nil
+	case "uint":
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{
+			Fun:  sel("bridge", "Uint64ToNumber"),
+			Args: []ast.Expr{&ast.CallExpr{Fun: ident("uint64"), Args: []ast.Expr{goCall}}},
+		}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "go: result of Go type " + goType + " is a later slice"}
+	}
+}
+
+// goImportCallByType lowers a go: call from the TypeScript types alone, the path
+// taken when no Go signature is wired. It covers the crossings a TypeScript type
+// fixes without the Go type: a string through the bridge and a boolean unchanged.
+// A number hands back, because the TypeScript number does not say whether the Go
+// side wants an int, an int64, or a float64, and only the signature-driven path
+// can marshal it soundly.
+func (r *Renderer) goImportCallByType(b goBuiltin, call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
@@ -118,6 +248,20 @@ func (r *Renderer) goImportCall(b goBuiltin, call frontend.Node, argNodes []fron
 		return goCall, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "go: call result of this type is a later slice"}
+	}
+}
+
+// isGoNumeric reports whether a Go type keyword names a numeric basic type, the
+// set marshalArgToGo converts a bento number into. It excludes float64, which a
+// bento number already is, so the caller handles that with no conversion.
+func isGoNumeric(goType string) bool {
+	switch goType {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+		"float32", "float64":
+		return true
+	default:
+		return false
 	}
 }
 

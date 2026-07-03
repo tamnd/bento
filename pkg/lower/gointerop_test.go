@@ -4,7 +4,30 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/tamnd/bento/pkg/goimport"
 )
+
+// testGoSignatures is the signature resolver the program tests wire into the
+// renderer, loading each Go package's signatures once and memoizing them, so a go:
+// call marshals numbers by the real Go type the same way the build does. It is the
+// test-side twin of build.goSignatureResolver.
+func testGoSignatures() func(importPath, name string) (goimport.FuncSig, bool) {
+	memo := map[string]map[string]goimport.FuncSig{}
+	return func(importPath, name string) (goimport.FuncSig, bool) {
+		sigs, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			sigs, err = goimport.Signatures(importPath)
+			if err != nil {
+				sigs = map[string]goimport.FuncSig{}
+			}
+			memo[importPath] = sigs
+		}
+		sig, ok := sigs[name]
+		return sig, ok
+	}
+}
 
 // This file covers the go: import lowering: a call to a name a go: import binds
 // lowers to a direct call into the real Go package, with the value crossings run
@@ -97,6 +120,50 @@ console.log(ok);
 	got := runProgramGo(t, src)
 	if want := "HELLO\ntrue\n"; got != want {
 		t.Fatalf("go: interop program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportMarshalsNumbers proves the signature-driven number crossings end to
+// end: strconv.Itoa marshals a number argument to a Go int, math.Abs crosses a
+// float64 both ways with no conversion, and utf8.RuneCountInString returns a Go int
+// widened back to a number through the range check. Running the binary is the
+// oracle, since the whole point is that the marshaling the signature drives is the
+// one the Go toolchain compiles and runs.
+func TestGoImportMarshalsNumbers(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: number test builds and runs generated Go")
+	}
+	const src = `import { Itoa } from "go:strconv";
+import { Abs } from "go:math";
+import { RuneCountInString } from "go:unicode/utf8";
+console.log(Itoa(42));
+console.log(Abs(-3.5));
+console.log(RuneCountInString("héllo"));
+`
+	got := runProgramGo(t, src)
+	if want := "42\n3.5\n5\n"; got != want {
+		t.Fatalf("go: number program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportNumberNeedsSignature proves the honest fallback: with no signature
+// resolver wired, a go: call whose crossing needs the Go type (a number argument or
+// result) hands back rather than guess, so the unit routes to the engine. The
+// string and boolean crossings still lower, because the TypeScript type settles
+// them without the Go signature.
+func TestGoImportNumberNeedsSignature(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Itoa } from "go:strconv";
+console.log(Itoa(42));
+`
+	prog := compile(t, src)
+	r := NewRenderer(prog) // no SetGoSignatures: the type-only path must hand a number back
+	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
+		t.Fatal("a number crossing lowered with no signature resolver, want a hand-back")
 	}
 }
 

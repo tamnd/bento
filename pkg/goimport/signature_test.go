@@ -1,0 +1,103 @@
+package goimport
+
+import (
+	"go/types"
+	"slices"
+	"testing"
+)
+
+// sigOf type-checks a source package and classifies the named function, so a test
+// asserts on the marshal keywords the lowerer will read without loading a real
+// module.
+func sigOf(t *testing.T, src, name string) FuncSig {
+	t.Helper()
+	pkg := checkSource(t, src)
+	fn, ok := pkg.Scope().Lookup(name).(*types.Func)
+	if !ok {
+		t.Fatalf("no function %q in package", name)
+	}
+	return classifySignature(fn.Type().(*types.Signature))
+}
+
+// TestClassifyScalarSignature checks the common shape: string, boolean, and the
+// numeric basics each carry their Go type keyword, and the whole signature is
+// lowerable.
+func TestClassifyScalarSignature(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(s string, n int, big int64, f float64, ok bool) string { return s }
+`, "F")
+	if !sig.OK {
+		t.Fatal("scalar signature classified as not lowerable")
+	}
+	if want := []string{"string", "int", "int64", "float64", "bool"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	if want := []string{"string"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+}
+
+// TestClassifyUnsignedAndByte checks the unsigned and alias numerics, since their
+// result crossing (uint64 range check, byte widening) turns on the exact keyword.
+func TestClassifyUnsignedAndByte(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(b byte, r rune) uint64 { return 0 }
+`, "F")
+	if !sig.OK {
+		t.Fatal("unsigned signature classified as not lowerable")
+	}
+	if want := []string{"uint8", "int32"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("byte and rune params = %v, want %v", sig.Params, want)
+	}
+	if want := []string{"uint64"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+}
+
+// TestClassifyVoidResult checks a function with no result is lowerable with an
+// empty result list, the void-call shape.
+func TestClassifyVoidResult(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(n int) {}
+`, "F")
+	if !sig.OK {
+		t.Fatal("void signature classified as not lowerable")
+	}
+	if len(sig.Results) != 0 {
+		t.Errorf("void results = %v, want none", sig.Results)
+	}
+}
+
+// TestClassifyRejectsUnsupported holds the boundary: a variadic, an error return,
+// a slice parameter, and a two-value result each clear OK so the lowerer hands the
+// call back rather than emit an unsound crossing.
+func TestClassifyRejectsUnsupported(t *testing.T) {
+	cases := map[string]string{
+		"variadic": `package p
+func F(parts ...string) string { return "" }`,
+		"error result": `package p
+func F(s string) (string, error) { return s, nil }`,
+		"slice param": `package p
+func F(b []byte) int { return 0 }`,
+		"two results": `package p
+func F() (int, int) { return 0, 0 }`,
+	}
+	for name, src := range cases {
+		if sig := sigOf(t, src, "F"); sig.OK {
+			t.Errorf("%s: classified as lowerable, want a hand-back", name)
+		}
+	}
+}
+
+// TestClassifyRejectsNamedNumeric proves a defined type over a basic (the common
+// time.Duration shape) is not classified as its underlying number, because it
+// projects to a branded alias, not number, so its crossing differs.
+func TestClassifyRejectsNamedNumeric(t *testing.T) {
+	sig := sigOf(t, `package p
+type Duration int64
+func F(d Duration) Duration { return d }
+`, "F")
+	if sig.OK {
+		t.Error("named numeric classified as lowerable, want a hand-back")
+	}
+}
