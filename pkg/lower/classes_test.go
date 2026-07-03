@@ -249,9 +249,54 @@ func TestClassHandsBack(t *testing.T) {
 		want string
 	}{
 		{
-			"extends",
-			"class A { x: number = 1; }\nclass B extends A { }\nconsole.log(new B().x);\n",
-			"heritage",
+			"implements",
+			"interface HasX { x: number; }\nclass A implements HasX { x: number = 1; }\nconsole.log(new A().x);\n",
+			"heritage (implements)",
+		},
+		{
+			"extendsNonClass",
+			"const A = class { x: number = 1; };\nclass B extends A { }\nconsole.log(new B().x);\n",
+			"not a class this slice lowers",
+		},
+		{
+			"overrideMethod",
+			"class A { m(): number { return 1; } }\nclass B extends A { m(): number { return 2; } }\nconsole.log(new B().m());\n",
+			"vtable",
+		},
+		{
+			"shadowField",
+			"class A { x: number = 1; }\nclass B extends A { x: number = 2; }\nconsole.log(new B().x);\n",
+			"vtable",
+		},
+		{
+			"crossCaseShadow",
+			"class A { total(): number { return 1; } }\nclass B extends A { Total: number = 2; }\nconsole.log(new B().Total);\n",
+			"vtable",
+		},
+		{
+			"memberSpellsBaseName",
+			"class A { x: number = 1; }\nclass B extends A { a: number = 2; }\nconsole.log(new B().a);\n",
+			"embedded base field's name",
+		},
+		{
+			"superNotFirst",
+			"class A { x: number = 1; }\nclass B extends A { constructor() { console.log(0); super(); } }\nconsole.log(new B().x);\n",
+			"first statement is not super()",
+		},
+		{
+			"derivedToBaseBinding",
+			"class A { x: number = 1; }\nclass B extends A { }\nconst a: A = new B();\nconsole.log(a.x);\n",
+			"binding a B instance to a A-typed slot",
+		},
+		{
+			"derivedForBaseParam",
+			"class A { x: number = 1; }\nclass B extends A { }\nfunction f(a: A): number { return a.x; }\nconsole.log(f(new B()));\n",
+			"passing a B instance for a A parameter",
+		},
+		{
+			"superSetterStore",
+			"class A { n: number = 1; set x(v: number) { this.n = v; } }\nclass B extends A { put(v: number): void { super.x = v; } }\nconst b: B = new B();\nb.put(5);\nconsole.log(b.n);\n",
+			"later slice",
 		},
 		{
 			"staticAccessor",
@@ -667,5 +712,200 @@ console.log(t.bump());
 		"hit:2\n"
 	if got != want {
 		t.Fatalf("parameter property program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassExtendsEmbedsAndFolds pins the inheritance lowering: the derived
+// struct embeds the base as its first field, a constructor whose statements
+// past super() are pure stores folds to the composite literal with the base
+// element first, and an inherited method call and field read reach the base
+// through Go promotion, with no wrapper emitted.
+func TestClassExtendsEmbedsAndFolds(t *testing.T) {
+	const src = `class Animal {
+  legs: number;
+  constructor(legs: number) {
+    this.legs = legs;
+  }
+  count(): number {
+    return this.legs;
+  }
+}
+class Dog extends Animal {
+  tricks: number;
+  constructor(legs: number, tricks: number) {
+    super(legs);
+    this.tricks = tricks;
+  }
+}
+const d: Dog = new Dog(4, 2);
+console.log(d.count());
+console.log(d.legs);
+console.log(d.tricks);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"type Dog struct {\n\tAnimal\n",                         // the embedded base, first
+		"return &Dog{Animal: *NewAnimal(legs), Tricks: tricks}", // the fold, base element first
+		"d.Count()", // inherited method through promotion
+		"d.Legs",    // inherited field through promotion
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("inheritance did not print %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestClassExtendsGeneralForm pins the constructor order when the body does
+// not fold: the base assignment from super() comes first, then the derived
+// field initializers, then the rest of the body with the super statement
+// stripped, matching the order JavaScript runs them in.
+func TestClassExtendsGeneralForm(t *testing.T) {
+	const src = `class A {
+  x: number;
+  constructor(x: number) {
+    this.x = x;
+  }
+}
+class B extends A {
+  y: number = 1;
+  constructor(x: number) {
+    super(x + 1);
+    console.log(this.y);
+  }
+}
+console.log(new B(3).x);
+`
+	source := renderProgram(t, src)
+	base := strings.Index(source, "b.A = *NewA(x + 1)")
+	init := strings.Index(source, "b.Y = 1")
+	if base < 0 || init < 0 || base > init {
+		t.Errorf("general form did not order the base assignment before the field initializer:\n%s", source)
+	}
+	if !strings.Contains(source, "NewB(3).X") {
+		t.Errorf("inherited field read on a new expression did not promote:\n%s", source)
+	}
+}
+
+// TestClassExtendsSynthesizedCtor pins the derived class with no constructor:
+// the synthesized NewB takes the base constructor's parameters and passes them
+// straight through.
+func TestClassExtendsSynthesizedCtor(t *testing.T) {
+	const src = `class A {
+  x: number;
+  constructor(x: number) {
+    this.x = x;
+  }
+}
+class B extends A {
+}
+const b: B = new B(7);
+console.log(b.x);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"func NewB(x float64) *B",
+		"return &B{A: *NewA(x)}",
+		"b.X",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("synthesized constructor did not print %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestClassSuperMemberAccess pins super.m() inside a derived method: super
+// lowers to the embedded base selector, so the call goes through the base
+// value explicitly, while this.n still reads the promoted base field. (A base
+// field through super, super.n, is a checker error, so only methods and
+// accessors ever reach the super lowering.)
+func TestClassSuperMemberAccess(t *testing.T) {
+	const src = `class A {
+  n: number = 1;
+  m(): number {
+    return this.n;
+  }
+}
+class B extends A {
+  call(): number {
+    return super.m() + this.n;
+  }
+}
+console.log(new B().call());
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "b.A.M()") || !strings.Contains(source, "b.N") {
+		t.Errorf("super method call did not lower to the embedded base selector:\n%s", source)
+	}
+}
+
+// TestClassPromotedFieldStore pins stores into an inherited field: this.count
+// inside a derived method and b.count on a derived instance both write the
+// promoted base field, keeping the compound and step collapses.
+func TestClassPromotedFieldStore(t *testing.T) {
+	const src = `class A {
+  count: number = 0;
+}
+class B extends A {
+  bump(): void {
+    this.count += 2;
+  }
+}
+const b: B = new B();
+b.bump();
+b.count++;
+console.log(b.count);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "b.Count += 2") || !strings.Contains(source, "b.Count++") {
+		t.Errorf("promoted field stores did not collapse:\n%s", source)
+	}
+}
+
+// TestClassExtendsRun builds and runs the inheritance slice end to end: a
+// two-level chain with a folded derived constructor, an inherited method and
+// field served by promotion, and a grandchild with a synthesized constructor,
+// printing what node prints.
+func TestClassExtendsRun(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `class Animal {
+  legs: number;
+  constructor(legs: number) {
+    this.legs = legs;
+  }
+  count(): number {
+    return this.legs;
+  }
+}
+class Dog extends Animal {
+  tricks: number = 0;
+  constructor() {
+    super(4);
+  }
+  learn(): void {
+    this.tricks++;
+  }
+}
+class Puppy extends Dog {
+}
+const d: Dog = new Dog();
+d.learn();
+d.learn();
+console.log(d.count());
+console.log(d.tricks);
+console.log(d.legs);
+const p: Puppy = new Puppy();
+p.learn();
+console.log(p.count() + p.tricks);
+`
+	got := runProgramGo(t, src)
+	want := "4\n" +
+		"2\n" +
+		"4\n" +
+		"5\n"
+	if got != want {
+		t.Fatalf("inheritance program printed %q, want %q", got, want)
 	}
 }

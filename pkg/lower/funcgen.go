@@ -147,6 +147,14 @@ func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
 	if block == nil {
 		return nil, &NotYetLowerable{Reason: "function has no body block (declare or overload)"}
 	}
+	return r.scopedBlock(block, 0)
+}
+
+// scopedBlock lowers a body block with the per-body analysis sets scoped to
+// it, skipping the first skip statements. The only caller that skips is the
+// derived constructor, whose validated super() call is emitted as the base
+// assignment before the field initializers rather than lowered in place.
+func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, error) {
 	// The int32 specialization set is computed once over the whole body and held for
 	// the duration of this function, so a counter declared in a nested loop is seen
 	// and the nested block inherits the same set. It is saved and restored like
@@ -178,12 +186,11 @@ func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
 	prevBig := r.bigOwned
 	r.bigOwned = r.bigOwnedLocalsOf(r.prog.Children(block))
 	defer func() { r.bigOwned = prevBig }()
-	body, err := r.lowerBlock(block)
+	stmts, err := r.lowerStatements(r.prog.Children(block)[skip:])
 	if err != nil {
 		return nil, err
 	}
-	body.List = r.hoistStrBuilders(body.List)
-	return body, nil
+	return &ast.BlockStmt{List: r.hoistStrBuilders(stmts)}, nil
 }
 
 // arrowFunc lowers an arrow function to a Go function literal. Both a concise

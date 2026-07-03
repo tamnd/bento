@@ -95,6 +95,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
 	}
+	// Arguments lower positionally with no coercion step, so a class instance
+	// passed where the declaration names a different class (a derived for a
+	// base parameter) is guarded here rather than emitting Go that would not
+	// compile.
+	if sig, ok := r.prog.SignatureAt(n); ok {
+		if err := r.guardClassArgs(kids[1:], sig.Params); err != nil {
+			return nil, err
+		}
+	}
 	args := make([]ast.Expr, 0, len(kids)-1)
 	for _, a := range kids[1:] {
 		lowered, err := r.lowerExpr(a)

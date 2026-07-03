@@ -55,6 +55,16 @@ type classInfo struct {
 	// idiom, and the property read and write sites route to the calls.
 	getters []classMethod
 	setters []classSetter
+	// base is the registered class this one extends, nil for a root class. The
+	// base embeds as the derived struct's first field, so Go promotion serves
+	// the inherited fields and methods; registration rejects a derived member
+	// sharing a base member's name, so promotion never has to break a tie.
+	base *classInfo
+	// superArgs are the argument nodes of the constructor's super(...) call,
+	// validated to be its first statement. They stay nil when the class has no
+	// constructor of its own; the synthesized constructor passes its parameters
+	// (the base's) straight through.
+	superArgs []frontend.Node
 }
 
 // classField is one instance field, in declaration order.
@@ -129,6 +139,52 @@ func (c *classInfo) getterByName(prop string) (classMethod, bool) {
 func (c *classInfo) setterByName(prop string) (classSetter, bool) {
 	for _, s := range c.setters {
 		if s.prop == prop {
+			return s, true
+		}
+	}
+	return classSetter{}, false
+}
+
+// The lookup* helpers resolve an instance property against the whole base
+// chain, the view a use site has of an instance: a derived instance serves its
+// own members and every inherited one, and the emitted selector or call
+// reaches a base's member through Go's own promotion. Registration rejects a
+// derived member sharing a base member's name, so at most one class on the
+// chain owns any property and the walk order cannot change the answer. The
+// byName forms above stay own-only for the sites that must not chain: the
+// constructor fold, which may only fold stores into fields the literal being
+// built declares, and statics, which do not inherit in this slice.
+
+func (c *classInfo) lookupField(prop string) (classField, bool) {
+	for ci := c; ci != nil; ci = ci.base {
+		if f, ok := ci.fieldByName(prop); ok {
+			return f, true
+		}
+	}
+	return classField{}, false
+}
+
+func (c *classInfo) lookupMethod(prop string) (classMethod, bool) {
+	for ci := c; ci != nil; ci = ci.base {
+		if m, ok := ci.methodByName(prop); ok {
+			return m, true
+		}
+	}
+	return classMethod{}, false
+}
+
+func (c *classInfo) lookupGetter(prop string) (classMethod, bool) {
+	for ci := c; ci != nil; ci = ci.base {
+		if m, ok := ci.getterByName(prop); ok {
+			return m, true
+		}
+	}
+	return classMethod{}, false
+}
+
+func (c *classInfo) lookupSetter(prop string) (classSetter, bool) {
+	for ci := c; ci != nil; ci = ci.base {
+		if s, ok := ci.setterByName(prop); ok {
 			return s, true
 		}
 	}
@@ -271,12 +327,21 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			}
 			info.setters = append(info.setters, s)
 		case frontend.NodeUnknown:
-			// A heritage clause (extends, implements) surfaces as an unnamed node;
-			// inheritance is a later slice. An empty leftover token is skipped.
+			// A heritage clause surfaces as an unnamed node whose text starts with
+			// its keyword. An extends clause names the base class this slice embeds;
+			// implements stays a later slice, and an empty leftover token is skipped.
 			text := strings.TrimSpace(r.prog.Text(m))
-			if text != "" {
+			if text == "" {
+				continue
+			}
+			if firstWord(text) != "extends" || info.base != nil {
 				return &NotYetLowerable{Reason: "class heritage (" + firstWord(text) + ") is a later slice"}
 			}
+			base, err := r.baseClassOf(m)
+			if err != nil {
+				return err
+			}
+			info.base = base
 		default:
 			return &NotYetLowerable{Reason: "this class member kind is a later slice"}
 		}
@@ -296,6 +361,19 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 	info.fields = append(paramProps, info.fields...)
 	if err := r.checkAccessorClashes(info); err != nil {
 		return err
+	}
+	if info.base != nil {
+		if err := r.checkBaseClashes(info); err != nil {
+			return err
+		}
+		if info.ctor == nil {
+			// The synthesized derived constructor is the base's: same parameters,
+			// passed straight through to super, exactly what JavaScript runs when a
+			// derived class declares no constructor of its own.
+			info.ctorParams = info.base.ctorParams
+		} else if err := r.validateSuper(info); err != nil {
+			return err
+		}
 	}
 
 	info.recv = r.receiverName(info)
@@ -331,6 +409,147 @@ func (r *Renderer) checkAccessorClashes(info *classInfo) error {
 		}
 	}
 	return nil
+}
+
+// baseClassOf resolves an extends clause to the registered base class. The
+// clause wraps one expression node whose single child must be a plain
+// identifier: a generic base (extends Base<T>) carries type-argument children
+// and an expression base (extends mixin()) is not an identifier at all, and
+// both need machinery this slice does not build. The identifier resolves the
+// way a class name reference does, through its symbol to the exact registered
+// declaration; the checker rejects a class used before its declaration, so a
+// resolvable base is always already registered when the derived class reads it.
+func (r *Renderer) baseClassOf(clause frontend.Node) (*classInfo, error) {
+	kids := r.prog.Children(clause)
+	if len(kids) != 1 {
+		return nil, &NotYetLowerable{Reason: "an extends clause that is not a single base class is a later slice"}
+	}
+	ekids := r.prog.Children(kids[0])
+	if len(ekids) != 1 || ekids[0].Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
+	}
+	base, ok := r.classNameRef(ekids[0])
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "extending " + r.prog.Text(ekids[0]) + ", which is not a class this slice lowers, is a later slice"}
+	}
+	return base, nil
+}
+
+// checkBaseClashes rejects a derived class whose own members collide with the
+// base chain. A member sharing an inherited member's name is an override or a
+// shadow, which needs virtual dispatch, the vtable slice; comparing the emitted
+// Go names subsumes the property-name check (a property's Go name is its
+// exported spelling) and also catches a cross-case collision like a field Total
+// under a base method total, where one Go selector would mean two source
+// properties. The direct base's type name is reserved too, in both directions:
+// it is the embedded field's name in the derived struct, and a member spelling
+// it would shadow the embedded value Go promotion reads through.
+func (r *Renderer) checkBaseClashes(info *classInfo) error {
+	own := map[string]string{}
+	for _, f := range info.fields {
+		own[f.goName] = "field ." + f.prop
+	}
+	for _, m := range info.methods {
+		own[m.goName] = "method ." + m.prop
+	}
+	for _, g := range info.getters {
+		own[g.goName] = "accessor ." + g.prop
+	}
+	for _, s := range info.setters {
+		own[s.goName] = "accessor ." + s.prop
+	}
+	if what, ok := own[info.base.goName]; ok {
+		return &NotYetLowerable{Reason: "class " + info.name + "'s " + what + " spells " + info.base.goName + ", the embedded base field's name"}
+	}
+	for b := info.base; b != nil; b = b.base {
+		theirs := map[string]string{}
+		for _, f := range b.fields {
+			theirs[f.goName] = "field ." + f.prop
+		}
+		for _, m := range b.methods {
+			theirs[m.goName] = "method ." + m.prop
+		}
+		for _, g := range b.getters {
+			theirs[g.goName] = "accessor ." + g.prop
+		}
+		for _, s := range b.setters {
+			theirs[s.goName] = "accessor ." + s.prop
+		}
+		for goName, what := range own {
+			if their, ok := theirs[goName]; ok {
+				return &NotYetLowerable{Reason: "class " + info.name + "'s " + what + " collides with base class " + b.name + "'s " + their + "; overriding needs the vtable slice"}
+			}
+		}
+		if their, ok := theirs[info.base.goName]; ok {
+			return &NotYetLowerable{Reason: "base class " + b.name + "'s " + their + " spells " + info.base.goName + ", the embedded base field's name in class " + info.name}
+		}
+	}
+	return nil
+}
+
+// validateSuper checks a derived constructor's super call: exactly one in the
+// whole constructor (a conditional or repeated super has no single point to
+// become the base assignment), it must be the first statement (TypeScript
+// permits this-free statements before it, but the lowering runs the base
+// constructor before the derived field initializers, so anything earlier would
+// run out of order), and its argument count must match the base constructor.
+// The argument nodes are kept for the base-value construction.
+func (r *Renderer) validateSuper(info *classInfo) error {
+	if n := r.countSuperCalls(info.ctor); n != 1 {
+		return &NotYetLowerable{Reason: "a derived constructor that calls super() " + itoa(n) + " times is a later slice"}
+	}
+	var block frontend.Node
+	for _, k := range r.prog.Children(info.ctor) {
+		if k.Kind() == frontend.NodeBlock {
+			block = k
+		}
+	}
+	stmts := r.prog.Children(block)
+	if len(stmts) == 0 {
+		return &NotYetLowerable{Reason: "a derived constructor whose first statement is not super() is a later slice"}
+	}
+	args, ok := r.superCallOf(stmts[0])
+	if !ok {
+		return &NotYetLowerable{Reason: "a derived constructor whose first statement is not super() is a later slice"}
+	}
+	if len(args) != len(info.base.ctorParams) {
+		return &NotYetLowerable{Reason: "super() with an argument count that differs from the base constructor is a later slice"}
+	}
+	info.superArgs = args
+	return nil
+}
+
+// superCallOf recognizes a statement of the exact shape super(args) and
+// returns the argument nodes.
+func (r *Renderer) superCallOf(stmt frontend.Node) ([]frontend.Node, bool) {
+	if stmt.Kind() != frontend.NodeExpressionStatement {
+		return nil, false
+	}
+	kids := r.prog.Children(stmt)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodeCallExpression {
+		return nil, false
+	}
+	ckids := r.prog.Children(kids[0])
+	if len(ckids) == 0 || ckids[0].Kind() != frontend.NodeSuperKeyword {
+		return nil, false
+	}
+	return ckids[1:], true
+}
+
+// countSuperCalls counts the bare super(...) calls under n. A super.m() call
+// is a call over a property access, not over the super keyword itself, so it
+// does not count.
+func (r *Renderer) countSuperCalls(n frontend.Node) int {
+	count := 0
+	if n.Kind() == frontend.NodeCallExpression {
+		if kids := r.prog.Children(n); len(kids) > 0 && kids[0].Kind() == frontend.NodeSuperKeyword {
+			count++
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		count += r.countSuperCalls(c)
+	}
+	return count
 }
 
 // memberIsStatic reports whether a class member carries the static modifier,
@@ -835,6 +1054,14 @@ func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
 // object shape's struct does, so a reflection walk recovers the exact key.
 func (r *Renderer) classStruct(info *classInfo) (ast.Decl, error) {
 	fields := &ast.FieldList{}
+	if info.base != nil {
+		// The embedded base sits first, the way a hand-written derived struct
+		// puts it: Go promotion serves the inherited fields and methods, and
+		// encoding/json flattens the embedded fields, which keeps the wire shape
+		// on the JS own-property layout (a base constructor assigns onto this, so
+		// every inherited field is an own property of the instance).
+		fields.List = append(fields.List, &ast.Field{Type: ident(info.base.goName)})
+	}
 	for _, f := range info.fields {
 		goType, err := r.typeExpr(r.prog.TypeAt(f.ident))
 		if err != nil {
@@ -918,13 +1145,27 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 		return &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{lit}}}}, nil
 	}
 
-	// The general form: allocate, run the field initializers in order, run the
-	// body with this bound to the receiver, return the receiver.
+	// The general form: allocate, construct the base value, run the field
+	// initializers in order, run the body with this bound to the receiver,
+	// return the receiver. The base assignment comes first because super()
+	// runs before the derived field initializers, and the lowered body skips
+	// the super statement it replaces.
 	stmts := []ast.Stmt{&ast.AssignStmt{
 		Lhs: []ast.Expr{ident(info.recv)},
 		Tok: token.DEFINE,
 		Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(info.goName)}}},
 	}}
+	if info.base != nil {
+		superVal, err := r.superCtorExpr(info)
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{&ast.SelectorExpr{X: ident(info.recv), Sel: ident(info.base.goName)}},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{superVal},
+		})
+	}
 	for _, f := range info.fields {
 		if f.init == nil {
 			continue
@@ -944,14 +1185,57 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 		})
 	}
 	if info.ctor != nil {
-		block, err := r.blockOf(info.ctor)
+		var block frontend.Node
+		for _, k := range r.prog.Children(info.ctor) {
+			if k.Kind() == frontend.NodeBlock {
+				block = k
+			}
+		}
+		skip := 0
+		if info.base != nil {
+			skip = 1 // the validated super() call, already emitted as the base assignment
+		}
+		body, err := r.scopedBlock(block, skip)
 		if err != nil {
 			return nil, err
 		}
-		stmts = append(stmts, block.List...)
+		stmts = append(stmts, body.List...)
 	}
 	stmts = append(stmts, &ast.ReturnStmt{Results: []ast.Expr{ident(info.recv)}})
 	return &ast.BlockStmt{List: stmts}, nil
+}
+
+// superCtorExpr builds the base value a derived constructor stores or folds:
+// *NewBase(args), the dereferenced base constructor call. With a declared
+// constructor the validated super arguments lower and coerce against the base
+// constructor's parameters, the same bridging new Base(args) applies; with no
+// constructor the synthesized one passes its own parameters (the base's)
+// straight through by name.
+func (r *Renderer) superCtorExpr(info *classInfo) (ast.Expr, error) {
+	base := info.base
+	args := make([]ast.Expr, 0, len(info.ctorParams))
+	if info.ctor == nil {
+		for _, p := range info.ctorParams {
+			pname, ok := localName(r.prog.Text(r.paramNameNode(p)))
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "constructor parameter name is not a Go identifier"}
+			}
+			args = append(args, ident(pname))
+		}
+	} else {
+		for i, a := range info.superArgs {
+			lowered, err := r.lowerExpr(a)
+			if err != nil {
+				return nil, err
+			}
+			lowered, err = r.coerceToTarget(lowered, a, r.paramNameNode(base.ctorParams[i]))
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
+		}
+	}
+	return &ast.StarExpr{X: &ast.CallExpr{Fun: ident("New" + base.goName), Args: args}}, nil
 }
 
 // ctorCompositeFold recognizes the constructor whose whole effect is storing
@@ -979,11 +1263,20 @@ func (r *Renderer) ctorCompositeFold(info *classInfo) (ast.Expr, bool, error) {
 				block = k
 			}
 		}
-		for _, stmt := range r.prog.Children(block) {
+		body := r.prog.Children(block)
+		if info.base != nil {
+			// The first statement is the validated super() call; it folds as the
+			// base element below rather than as a field store.
+			body = body[1:]
+		}
+		for _, stmt := range body {
 			prop, rhs, ok := r.thisFieldStore(stmt)
 			if !ok || !r.pureCtorValue(rhs) {
 				return nil, false, nil
 			}
+			// Own fields only, never the chained lookup: a store into an inherited
+			// field has no slot in the literal being built, so it must fail the
+			// fold and take the general form, where Go promotion carries it.
 			if _, isField := info.fieldByName(prop); !isField {
 				return nil, false, nil
 			}
@@ -992,6 +1285,16 @@ func (r *Renderer) ctorCompositeFold(info *classInfo) (ast.Expr, bool, error) {
 	}
 
 	lit := &ast.CompositeLit{Type: ident(info.goName)}
+	if info.base != nil {
+		// The base element evaluates first in the literal, and every other
+		// element is pure, so the base constructor's effects keep the order
+		// super() gives them even when it is not itself pure.
+		superVal, err := r.superCtorExpr(info)
+		if err != nil {
+			return nil, false, err
+		}
+		lit.Elts = append(lit.Elts, &ast.KeyValueExpr{Key: ident(info.base.goName), Value: superVal})
+	}
 	for _, f := range info.fields {
 		v, ok := values[f.prop]
 		if !ok {
@@ -1177,9 +1480,9 @@ func (r *Renderer) newClass(info *classInfo, argNodes []frontend.Node) (ast.Expr
 // classMethodCall lowers recv.method(args) on a class instance to the Go method
 // call. Arguments lower plainly, the same way a top-level function call's do.
 func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string, argNodes []frontend.Node) (ast.Expr, error) {
-	m, ok := info.methodByName(method)
+	m, ok := info.lookupMethod(method)
 	if !ok {
-		if _, isField := info.fieldByName(method); isField {
+		if _, isField := info.lookupField(method); isField {
 			return nil, &NotYetLowerable{Reason: "calling a field of class " + info.name + " as a function is a later slice"}
 		}
 		return nil, &NotYetLowerable{Reason: "class " + info.name + " has no method ." + method + " this slice lowers"}
@@ -1190,6 +1493,9 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 	}
 	if len(argNodes) != len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
+	}
+	if err := r.guardClassArgs(argNodes, sig.Params); err != nil {
+		return nil, err
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {
@@ -1218,6 +1524,9 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 	}
 	if len(argNodes) != len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
+	}
+	if err := r.guardClassArgs(argNodes, sig.Params); err != nil {
+		return nil, err
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {
@@ -1263,12 +1572,12 @@ func (r *Renderer) classFieldOfTarget(target frontend.Node) (*classInfo, classFi
 	if !ok {
 		return nil, classField{}, false, nil
 	}
-	f, ok := info.fieldByName(prop)
+	f, ok := info.lookupField(prop)
 	if !ok {
-		if _, isSet := info.setterByName(prop); isSet {
+		if _, isSet := info.lookupSetter(prop); isSet {
 			return nil, classField{}, false, &NotYetLowerable{Reason: "a compound store or increment through the ." + prop + " accessor of class " + info.name + " is a later slice"}
 		}
-		if _, isGet := info.getterByName(prop); isGet {
+		if _, isGet := info.lookupGetter(prop); isGet {
 			return nil, classField{}, false, &NotYetLowerable{Reason: "storing into the read-only accessor ." + prop + " of class " + info.name + " is a later slice"}
 		}
 		return nil, classField{}, false, &NotYetLowerable{Reason: "storing into ." + prop + " of class " + info.name + " is a later slice"}
@@ -1388,7 +1697,7 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 	if !ok {
 		return nil, false, nil
 	}
-	s, ok := info.setterByName(r.prog.Text(tkids[1]))
+	s, ok := info.lookupSetter(r.prog.Text(tkids[1]))
 	if !ok || opText != "=" {
 		return nil, false, nil
 	}
