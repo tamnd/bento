@@ -2,6 +2,8 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
+	"strconv"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -64,6 +66,35 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: sel("value", ctor), Args: []ast.Expr{message}}, nil
 }
 
+// errorInstanceof lowers `e instanceof Error` on a caught error, the guard a
+// catch narrows its binding with before reading the error. The checker types a
+// catch binding unknown, so the only way a catch reads .message or .name is to
+// narrow first, and instanceof is that narrowing (04_frontend_typescript_go.md,
+// the narrowing table). The left operand must be a catch binding in scope and the
+// right a built-in error constructor; the test lowers to the IsA name check, since
+// the runtime models the error family as one type with a name rather than
+// distinct Go types. It reports handled=false when the left is not a caught error,
+// so a general instanceof still hands back, and an error against a non-error
+// constructor hands back explicitly.
+func (r *Renderer) errorInstanceof(left, right frontend.Node) (ast.Expr, bool, error) {
+	if left.Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	name, ok := localName(r.prog.Text(left))
+	if !ok || !r.errorLocals[name] {
+		return nil, false, nil
+	}
+	ctor := r.prog.Text(right)
+	if _, isErr := errorCtors[ctor]; !isErr {
+		return nil, false, &NotYetLowerable{Reason: "instanceof a class other than a built-in error on a caught error is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: ident(name), Sel: ident("IsA")},
+		Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(ctor)}},
+	}, true, nil
+}
+
 // lowerThrow lowers a throw statement to a panic carrying the thrown error, the
 // raise half of the exception model. Only throwing a built-in error is covered
 // (throw new Error("..."), or throwing a variable bound to one), because the
@@ -102,4 +133,176 @@ func (r *Renderer) isThrowable(n frontend.Node) bool {
 		return ok
 	}
 	return false
+}
+
+// lowerTry lowers a try/catch/finally to a Go closure over panic and recover. A
+// throw inside the try body is a panic, so the try body runs inside an immediately
+// invoked function whose deferred functions handle it: a catch is a deferred
+// recover that binds the caught error and runs the catch body, and a finally is a
+// deferred call that runs whether or not the body threw. The two are deferred in
+// order so the catch runs first and the finally last, matching the language:
+// finally runs after the catch, and after a normal completion too.
+//
+// The closure cannot carry an abrupt completion out of the construct, so a try,
+// catch, or finally body that returns hands the whole statement back; a break or
+// continue inside a body already hands back at the statement lowering, so only a
+// return needs guarding here. Widening to abrupt completions that escape the
+// construct is a later slice.
+func (r *Renderer) lowerTry(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeBlock {
+		return nil, &NotYetLowerable{Reason: "try did not expose a block body"}
+	}
+	tryBlock := kids[0]
+
+	var catchClause, finallyBlock frontend.Node
+	var hasCatch, hasFinally bool
+	for _, k := range kids[1:] {
+		if k.Kind() == frontend.NodeBlock {
+			finallyBlock, hasFinally = k, true
+		} else {
+			catchClause, hasCatch = k, true
+		}
+	}
+	if !hasCatch && !hasFinally {
+		return nil, &NotYetLowerable{Reason: "a try with neither catch nor finally is a later slice"}
+	}
+	if r.blockReturns(tryBlock) || (hasFinally && r.blockReturns(finallyBlock)) {
+		return nil, &NotYetLowerable{Reason: "a return that escapes a try, catch, or finally is a later slice"}
+	}
+
+	var closureBody []ast.Stmt
+
+	// The finally defer is added first so it runs last, after the catch and after a
+	// normal completion, the language's ordering.
+	if hasFinally {
+		finStmts, err := r.lowerBlock(finallyBlock)
+		if err != nil {
+			return nil, err
+		}
+		closureBody = append(closureBody, &ast.DeferStmt{Call: callClosure(finStmts.List)})
+	}
+
+	if hasCatch {
+		catchDefer, err := r.catchDefer(catchClause)
+		if err != nil {
+			return nil, err
+		}
+		closureBody = append(closureBody, catchDefer)
+	}
+
+	tryStmts, err := r.lowerBlock(tryBlock)
+	if err != nil {
+		return nil, err
+	}
+	closureBody = append(closureBody, tryStmts.List...)
+
+	return &ast.ExprStmt{X: callClosure(closureBody)}, nil
+}
+
+// catchDefer builds the deferred recover that runs a catch clause. It recovers the
+// panic, and when something was thrown it converts the payload to the *value.Error
+// the binding names (value.Caught re-panics a Go runtime bug so a genuine crash is
+// not swallowed) and runs the catch body. A catch with no binding still recovers
+// and converts, so a Go runtime panic is re-raised rather than silently caught, but
+// discards the error.
+func (r *Renderer) catchDefer(catchClause frontend.Node) (ast.Stmt, error) {
+	var binding string
+	var catchBlock frontend.Node
+	for _, k := range r.prog.Children(catchClause) {
+		switch k.Kind() {
+		case frontend.NodeBlock:
+			catchBlock = k
+		case frontend.NodeVariableDeclaration:
+			vk := r.prog.Children(k)
+			if len(vk) != 1 || vk[0].Kind() != frontend.NodeIdentifier {
+				return nil, &NotYetLowerable{Reason: "a destructured catch binding is a later slice"}
+			}
+			name, ok := localName(r.prog.Text(vk[0]))
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "catch binding is not a Go identifier"}
+			}
+			binding = name
+		default:
+			return nil, &NotYetLowerable{Reason: "an unusual catch clause is a later slice"}
+		}
+	}
+	if catchBlock == nil {
+		return nil, &NotYetLowerable{Reason: "catch clause did not expose a block body"}
+	}
+	if r.blockReturns(catchBlock) {
+		return nil, &NotYetLowerable{Reason: "a return that escapes a try, catch, or finally is a later slice"}
+	}
+
+	// The binding is in scope only while the catch block is lowered, so a read of its
+	// .message or .name resolves to the error and a use elsewhere hands back.
+	if binding != "" {
+		prev := r.errorLocals[binding]
+		r.errorLocals[binding] = true
+		defer func() { r.errorLocals[binding] = prev }()
+	}
+	catchStmts, err := r.lowerBlock(catchBlock)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+
+	// bind is `e := value.Caught(rec)` when the clause names the error, or a bare
+	// `value.Caught(rec)` call when it does not, so a Go runtime panic re-raises
+	// either way. A named binding is also assigned to blank so a catch that never
+	// reads the error still compiles.
+	caught := &ast.CallExpr{Fun: sel("value", "Caught"), Args: []ast.Expr{ident("rec")}}
+	var body []ast.Stmt
+	if binding == "" {
+		body = append(body, &ast.ExprStmt{X: caught})
+	} else {
+		body = append(body,
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(binding)}, Tok: token.DEFINE, Rhs: []ast.Expr{caught}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{ident(binding)}},
+		)
+	}
+	body = append(body, catchStmts.List...)
+
+	// if rec := recover(); rec != nil { <body> }
+	guard := &ast.IfStmt{
+		Init: &ast.AssignStmt{
+			Lhs: []ast.Expr{ident("rec")},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.CallExpr{Fun: ident("recover")}},
+		},
+		Cond: &ast.BinaryExpr{X: ident("rec"), Op: token.NEQ, Y: ident("nil")},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.DeferStmt{Call: callClosure([]ast.Stmt{guard})}, nil
+}
+
+// blockReturns reports whether a statement subtree contains a return that would
+// complete out of it, descending through nested statements but not into a nested
+// function, whose own return is its own. It is the guard the try lowering uses to
+// keep an escaping return out of the closure it emits, where a Go return would
+// leave the closure rather than the enclosing function.
+func (r *Renderer) blockReturns(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		return false
+	case frontend.NodeReturnStatement:
+		return true
+	}
+	for _, k := range r.prog.Children(n) {
+		if r.blockReturns(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// callClosure wraps statements in an immediately invoked function with no
+// parameters or results, the form a try body and its deferred handlers take so a
+// recover can run inside a deferred function.
+func callClosure(stmts []ast.Stmt) *ast.CallExpr {
+	return &ast.CallExpr{Fun: &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}},
+		Body: &ast.BlockStmt{List: stmts},
+	}}
 }

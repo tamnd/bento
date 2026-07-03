@@ -104,6 +104,13 @@ type Renderer struct {
 	// stored T is pulled out of the option; a read where the type is still optional
 	// keeps the bare Opt value. A nil map (the default) unwraps nothing.
 	optLocals map[string]bool
+	// errorLocals is the set of catch-binding names in scope while a catch block is
+	// lowered, each bound to the *value.Error the catch recovered. A read of the
+	// binding's .message or .name lowers to the matching method on the error; the
+	// binding used any other way hands back, since the runtime models a caught error
+	// as a value.Error and not a general boxed value yet. It is set around a catch
+	// block and cleared after, so a binding does not leak past its clause.
+	errorLocals map[string]bool
 	// usesThrow records that the program emitted a construct that can raise a
 	// thrown value the runtime must report if it escapes: an explicit throw, or a
 	// boundary crossing that range-checks (a go: int64 result). When set, the
@@ -124,7 +131,7 @@ type Renderer struct {
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goAliases: map[string]string{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}}
 }
 
 // SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go
