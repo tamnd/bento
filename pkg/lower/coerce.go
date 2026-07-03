@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -151,10 +152,7 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	case !srcDyn && tgtDyn:
 		return r.boxStaticToDynamic(expr, srcNode)
 	default:
-		if err := r.guardClassBinding(srcNode, r.retType); err != nil {
-			return nil, err
-		}
-		return expr, nil
+		return r.bridgeClassBinding(expr, srcNode, r.retType)
 	}
 }
 
@@ -172,51 +170,35 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	case !srcDyn && tgtDyn:
 		return r.boxStaticToDynamic(expr, src)
 	default:
-		if err := r.guardClassBinding(src, r.prog.TypeAt(target)); err != nil {
-			return nil, err
-		}
-		return expr, nil
+		return r.bridgeClassBinding(expr, src, r.prog.TypeAt(target))
 	}
 }
 
-// guardClassBinding rejects a binding whose source is one lowered class and
-// whose target declares another. The checker accepts such a binding (a derived
-// instance flowing into a base-typed slot, or two structurally compatible
-// classes), but the lowered Go types are distinct named structs, so the
-// emitted assignment would not compile; holding a derived instance behind a
-// base-typed name is the assignability slice. Matching classes and non-class
-// sides pass, keeping this a guard, not a coercion.
-func (r *Renderer) guardClassBinding(src frontend.Node, target frontend.Type) error {
+// bridgeClassBinding bridges a binding whose source is one lowered class and
+// whose target declares another. The one bridge built here is the upcast: a
+// derived instance flowing into an ancestor-typed slot becomes the address of
+// its embedded base, the same object under the base's static type, which Go
+// promotion reaches through any embedding depth with the single selector. The
+// promoted vtable pointer rides along, so a virtual call through the upcast
+// value still dispatches to the derived override, the JavaScript behavior.
+// Any other cross-class binding (a downcast, structural twins) hands back;
+// matching classes and non-class sides pass through untouched.
+func (r *Renderer) bridgeClassBinding(expr ast.Expr, src frontend.Node, target frontend.Type) (ast.Expr, error) {
 	srcInfo, ok := r.classOfNode(src)
 	if !ok {
-		return nil
+		return expr, nil
 	}
 	tgtInfo, ok := r.classOfType(target)
 	if !ok || tgtInfo == srcInfo {
-		return nil
+		return expr, nil
 	}
-	return &NotYetLowerable{Reason: "binding a " + srcInfo.name + " instance to a " + tgtInfo.name + "-typed slot is a later slice"}
-}
-
-// guardClassArgs applies the class-binding guard to each argument against its
-// declared parameter, because call arguments lower positionally with no
-// coercion step where the mismatch would otherwise surface.
-func (r *Renderer) guardClassArgs(argNodes []frontend.Node, params []frontend.Param) error {
-	for i, a := range argNodes {
-		if i >= len(params) {
-			break
-		}
-		srcInfo, ok := r.classOfNode(a)
-		if !ok {
-			continue
-		}
-		tgtInfo, ok := r.classOfType(params[i].Type)
-		if !ok || tgtInfo == srcInfo {
-			continue
-		}
-		return &NotYetLowerable{Reason: "passing a " + srcInfo.name + " instance for a " + tgtInfo.name + " parameter is a later slice"}
+	if srcInfo.descendsFrom(tgtInfo) {
+		return &ast.UnaryExpr{
+			Op: token.AND,
+			X:  &ast.SelectorExpr{X: expr, Sel: ident(tgtInfo.goName)},
+		}, nil
 	}
-	return nil
+	return nil, &NotYetLowerable{Reason: "binding a " + srcInfo.name + " instance to a " + tgtInfo.name + "-typed slot is a later slice"}
 }
 
 // sameGoType reports whether two lowered type expressions print to the same Go
