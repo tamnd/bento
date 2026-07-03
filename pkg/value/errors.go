@@ -1,6 +1,9 @@
 package value
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 // This file is the value-model side of thrown JavaScript errors. A throw in the
 // typed world lowers to a Go panic carrying a thrown value, a catch recovers it,
@@ -38,6 +41,15 @@ type Thrown interface {
 type Error struct {
 	name    BStr
 	message BStr
+	// cause is the original Go error behind a boundary failure, kept so a caught
+	// error preserves Go's identity-based error handling (16_go_interop.md section
+	// 7.7). A go: call that returns a non-nil error raises a bridge value that
+	// wraps the Go error, and Caught pulls that error out and stores it here, so
+	// err.is(sentinel) and err.as(target) reach the real error with errors.Is and
+	// errors.As. It is nil for an error the program threw itself (new Error(...)),
+	// which has no Go error behind it, and a nil cause is simply not a match for
+	// any target, so Is and As stay false rather than special-case the absence.
+	cause error
 }
 
 // Name reports the error's constructor name as a bento string, the lowering of
@@ -112,10 +124,43 @@ func Caught(r any) *Error {
 	case *Error:
 		return t
 	case Thrown:
-		return &Error{name: FromGoString(t.ErrorName()), message: FromGoString(t.ErrorMessage())}
+		e := &Error{name: FromGoString(t.ErrorName()), message: FromGoString(t.ErrorMessage())}
+		// A boundary failure that wraps a Go error (the GoError a go: call raises)
+		// hands the original error through Unwrap, so the caught error keeps a live
+		// handle to it and err.is/err.as can branch on identity (section 7.7). A
+		// boundary Thrown with no Go error behind it (a RangeError from the number
+		// check) unwraps to nil and leaves cause unset.
+		if u, ok := t.(interface{ Unwrap() error }); ok {
+			e.cause = u.Unwrap()
+		}
+		return e
 	default:
 		panic(r)
 	}
+}
+
+// Cause reports the original Go error behind a caught boundary failure, or nil for
+// an error the program threw itself. It is the value.Value-side handle behind a
+// caught error's goError property (section 7.7): the underlying Go value that
+// errors.Is and errors.As walk, kept alive by the caught error that holds it.
+func (e *Error) Cause() error { return e.cause }
+
+// Is reports whether the caught error matches a Go sentinel, the lowering of
+// err.is(target) where target is an error imported from a go: package (io.EOF is
+// the canonical one, section 7.7). It defers to errors.Is against the original Go
+// error, so a wrapped sentinel matches exactly as it would in Go; an error the
+// program threw itself has no Go error behind it and matches nothing.
+func (e *Error) Is(target error) bool {
+	return e.cause != nil && errors.Is(e.cause, target)
+}
+
+// As unwraps the caught error's Go error into target, the lowering of err.as(...)
+// (section 7.7). It defers to errors.As, so target is a pointer to the concrete Go
+// error type the chain is searched for, and it reports whether a match was
+// assigned; an error the program threw itself has no Go error to unwrap and never
+// matches.
+func (e *Error) As(target any) bool {
+	return e.cause != nil && errors.As(e.cause, target)
 }
 
 // Throw raises a thrown error so an enclosing catch recovers it or the top-level
