@@ -1,11 +1,14 @@
 package lower
 
 import (
+	"go/ast"
 	"go/token"
 	"math"
 	"math/big"
 	"strconv"
 	"strings"
+
+	"github.com/tamnd/bento/pkg/frontend"
 )
 
 // This file decodes a JavaScript numeric literal's source text into the Go literal
@@ -150,4 +153,19 @@ func radixIsFinite(digits string, base int) bool {
 	}
 	f, _ := new(big.Float).SetInt(i).Float64()
 	return !math.IsInf(f, 0)
+}
+
+// numericLiteral lowers a number literal. number is float64, and a well-formed
+// JavaScript literal denotes the same float64 whether it is written in decimal,
+// hex, binary, or octal, with digit separators, or with an exponent, so
+// decodeNumericLiteral validates the value and returns the cleaned Go literal for
+// it. A BigInt or a value that overflows to Infinity is not a float64 this slice
+// lowers and hands back.
+func (r *Renderer) numericLiteral(n frontend.Node) (ast.Expr, error) {
+	text := r.prog.Text(n)
+	value, kind, ok := decodeNumericLiteral(text)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "numeric literal " + text + " is not a finite number this slice lowers"}
+	}
+	return &ast.BasicLit{Kind: kind, Value: value}, nil
 }
