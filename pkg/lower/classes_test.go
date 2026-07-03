@@ -304,9 +304,9 @@ func TestClassHandsBack(t *testing.T) {
 			"definite-assignment",
 		},
 		{
-			"parameterProperty",
-			"class A { constructor(private x: number) { } }\nconst a: A = new A(1);\nconsole.log(a);\n",
-			"parameter property",
+			"parameterPropertyDefault",
+			"class A { constructor(public x: number = 5) { } }\nconst a: A = new A();\nconsole.log(a.x);\n",
+			"default value",
 		},
 		{
 			"ctorReturn",
@@ -462,6 +462,74 @@ console.log(t.f);
 	}
 }
 
+// TestClassParamPropsFold pins the parameter property lowering: the parameter
+// declares a struct field, and a constructor whose whole effect is the
+// parameter properties folds to the composite literal.
+func TestClassParamPropsFold(t *testing.T) {
+	const src = `class Point {
+  constructor(public x: number, public y: number) {}
+}
+const p: Point = new Point(3, 4);
+console.log(p.x + p.y);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "X float64 `json:\"x\"`") || !strings.Contains(source, "Y float64 `json:\"y\"`") {
+		t.Errorf("parameter properties did not declare tagged struct fields:\n%s", source)
+	}
+	if !strings.Contains(source, "return &Point{X: x, Y: y}") {
+		t.Errorf("parameter properties did not fold to a composite literal:\n%s", source)
+	}
+	if !strings.Contains(source, "p.X + p.Y") {
+		t.Errorf("parameter property fields did not read as struct fields:\n%s", source)
+	}
+}
+
+// TestClassParamPropsOrder pins the assignment order: TypeScript assigns
+// parameter properties before the declared field initializers run, so in the
+// general constructor form the parameter store comes first.
+func TestClassParamPropsOrder(t *testing.T) {
+	const src = `class A {
+  n: number = 1;
+  constructor(public m: number) {
+    console.log("born");
+  }
+}
+const a: A = new A(2);
+console.log(a.m + a.n);
+`
+	source := renderProgram(t, src)
+	iM := strings.Index(source, "a.M = m")
+	iN := strings.Index(source, "a.N = 1")
+	if iM < 0 || iN < 0 {
+		t.Fatalf("general constructor did not assign both the parameter property and the initializer:\n%s", source)
+	}
+	if iM > iN {
+		t.Errorf("parameter property assigned after the declared initializer:\n%s", source)
+	}
+}
+
+// TestClassParamPropModifiers pins that private and readonly are checker-level
+// facts: the field lowers the same exported way, mixed modifiers are accepted,
+// and access control stays the checker's job.
+func TestClassParamPropModifiers(t *testing.T) {
+	const src = `class Box {
+  constructor(private readonly v: string) {}
+  val(): string {
+    return this.v;
+  }
+}
+const b: Box = new Box("hi");
+console.log(b.val());
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "return &Box{V: v}") {
+		t.Errorf("private readonly parameter property did not fold:\n%s", source)
+	}
+	if !strings.Contains(source, "return b.V") {
+		t.Errorf("this-read of the parameter property did not lower to the field:\n%s", source)
+	}
+}
+
 // TestClassCompletionRuns builds and runs a program that exercises the whole
 // slice end to end: construction through the folded and general constructors,
 // method dispatch, this-stores, instance-local stores, and pointer-receiver
@@ -559,5 +627,45 @@ console.log(A.total);
 		"1\n"
 	if got != want {
 		t.Fatalf("statics and accessors program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassParamPropsRun builds and runs the parameter property slice end to
+// end: folded construction from parameters, a private readonly field read
+// through a method, and a parameter property mixing with a declared field,
+// printing what node prints.
+func TestClassParamPropsRun(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `class Point {
+  constructor(public x: number, public y: number) {}
+  norm2(): number {
+    return this.x * this.x + this.y * this.y;
+  }
+}
+class Tag {
+  count: number = 0;
+  constructor(private readonly name: string) {}
+  bump(): string {
+    this.count += 1;
+    return this.name + ":" + this.count;
+  }
+}
+const p: Point = new Point(3, 4);
+console.log(p.norm2());
+p.x += 1;
+console.log(p.x);
+const t: Tag = new Tag("hit");
+t.bump();
+console.log(t.bump());
+`
+	got := runProgramGo(t, src)
+	want := "25\n" +
+		"4\n" +
+		"hit:2\n"
+	if got != want {
+		t.Fatalf("parameter property program printed %q, want %q", got, want)
 	}
 }
