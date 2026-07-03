@@ -205,6 +205,7 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 	}
 
 	info := &classInfo{name: name, goName: goName, decl: decl}
+	var paramProps []classField
 	for _, m := range kids[1:] {
 		switch m.Kind() {
 		case frontend.NodeIdentifier:
@@ -227,12 +228,13 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			if info.ctor != nil {
 				return &NotYetLowerable{Reason: "constructor overloads are a later slice"}
 			}
-			params, err := r.ctorParamsOf(m)
+			params, props, err := r.ctorParamsOf(m)
 			if err != nil {
 				return err
 			}
 			info.ctor = m
 			info.ctorParams = params
+			paramProps = props
 		case frontend.NodeMethodDeclaration:
 			if r.memberIsStatic(m) {
 				meth, err := r.staticMethodOf(info, m, taken)
@@ -279,6 +281,19 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			return &NotYetLowerable{Reason: "this class member kind is a later slice"}
 		}
 	}
+	// Parameter properties are fields the constructor declares, and TypeScript
+	// assigns them before the declared initializers run, so they sit first in
+	// field order. The checker rejects a parameter property duplicating a
+	// declared member, so the clash checks here are defense in depth.
+	for _, f := range paramProps {
+		if _, dup := info.fieldByName(f.prop); dup {
+			return &NotYetLowerable{Reason: "a parameter property named like a field is a later slice"}
+		}
+		if _, c := info.methodByName(f.prop); c {
+			return &NotYetLowerable{Reason: "a parameter property named like a method is a later slice"}
+		}
+	}
+	info.fields = append(paramProps, info.fields...)
 	if err := r.checkAccessorClashes(info); err != nil {
 		return err
 	}
@@ -362,27 +377,81 @@ func (r *Renderer) classFieldOf(m frontend.Node) (classField, error) {
 }
 
 // ctorParamsOf validates the constructor's shape and returns its parameter
-// nodes. Only plain typed parameters are covered: a default value needs
-// call-site defaulting, and a parameter property (constructor(private x: ...))
-// declares a field as a side effect, both later slices.
-func (r *Renderer) ctorParamsOf(ctor frontend.Node) ([]frontend.Node, error) {
+// nodes plus the fields its parameter properties declare. A default value
+// needs call-site defaulting, a later slice.
+func (r *Renderer) ctorParamsOf(ctor frontend.Node) ([]frontend.Node, []classField, error) {
 	var params []frontend.Node
+	var props []classField
 	hasBody := false
 	for _, k := range r.prog.Children(ctor) {
 		switch k.Kind() {
 		case frontend.NodeParameter:
-			if err := r.plainParam(k); err != nil {
-				return nil, err
+			prop, err := r.ctorParam(k)
+			if err != nil {
+				return nil, nil, err
 			}
 			params = append(params, k)
+			if prop != nil {
+				props = append(props, *prop)
+			}
 		case frontend.NodeBlock:
 			hasBody = true
 		}
 	}
 	if !hasBody {
-		return nil, &NotYetLowerable{Reason: "a constructor overload signature is a later slice"}
+		return nil, nil, &NotYetLowerable{Reason: "a constructor overload signature is a later slice"}
 	}
-	return params, nil
+	return params, props, nil
+}
+
+// ctorParam validates one constructor parameter and, when it is a parameter
+// property (constructor(public x: number)), returns the field it declares.
+// The field's init is the parameter's own name node: the property's whole
+// effect is this.x = x, so it lowers like a declared field initialized to the
+// parameter, and being a bare name it always folds pure.
+func (r *Renderer) ctorParam(p frontend.Node) (*classField, error) {
+	kids := r.prog.Children(p)
+	mods := 0
+	for _, k := range kids {
+		if k.Kind() != frontend.NodeUnknown {
+			break
+		}
+		switch text := strings.TrimSpace(r.prog.Text(k)); text {
+		case "public", "private", "protected", "readonly":
+			mods++
+		default:
+			return nil, &NotYetLowerable{Reason: "the parameter modifier " + text + " is a later slice"}
+		}
+	}
+	if mods >= len(kids) || kids[mods].Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "a parameter that is not a plain identifier is a later slice"}
+	}
+	nameNode := kids[mods]
+	for _, extra := range kids[mods+1:] {
+		if extra.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: "a parameter with a default value is a later slice"}
+		}
+	}
+	if mods == 0 {
+		return nil, nil
+	}
+	prop := r.prog.Text(nameNode)
+	goName, ok := exportedField(prop)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "parameter property name is not a Go identifier"}
+	}
+	return &classField{prop: prop, goName: goName, ident: nameNode, init: nameNode}, nil
+}
+
+// paramNameNode returns a parameter's name node, past the leading modifier
+// children a parameter property carries.
+func (r *Renderer) paramNameNode(p frontend.Node) frontend.Node {
+	for _, k := range r.prog.Children(p) {
+		if k.Kind() == frontend.NodeIdentifier {
+			return k
+		}
+	}
+	return r.prog.Children(p)[0]
 }
 
 // plainParam checks one parameter node is a bare typed identifier: the name,
@@ -799,7 +868,7 @@ func (r *Renderer) classStruct(info *classInfo) (ast.Decl, error) {
 func (r *Renderer) classCtor(info *classInfo) (ast.Decl, error) {
 	params := &ast.FieldList{}
 	for _, p := range info.ctorParams {
-		nameNode := r.prog.Children(p)[0]
+		nameNode := r.paramNameNode(p)
 		pname, ok := localName(r.prog.Text(nameNode))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "constructor parameter name is not a Go identifier"}
@@ -1095,7 +1164,7 @@ func (r *Renderer) newClass(info *classInfo, argNodes []frontend.Node) (ast.Expr
 		if err != nil {
 			return nil, err
 		}
-		paramName := r.prog.Children(info.ctorParams[i])[0]
+		paramName := r.paramNameNode(info.ctorParams[i])
 		lowered, err = r.coerceToTarget(lowered, a, paramName)
 		if err != nil {
 			return nil, err
