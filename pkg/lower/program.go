@@ -91,6 +91,18 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	}
 	stmts = r.hoistStrBuilders(stmts)
 
+	// A program that can raise a thrown value defers the uncaught-error reporter as
+	// its first statement, so a throw that escapes every catch prints an
+	// uncaught-error line and exits non-zero rather than crashing with a Go stack.
+	// The defer is first so it is the last to run and thus sees any panic the body
+	// raises. A program that cannot throw defers nothing, leaving its main and its
+	// imports as they were.
+	if r.usesThrow {
+		r.requireImport(valuePkg)
+		report := &ast.DeferStmt{Call: &ast.CallExpr{Fun: sel("value", "ReportUncaught")}}
+		stmts = append([]ast.Stmt{report}, stmts...)
+	}
+
 	mainDecl := &ast.FuncDecl{
 		Name: ident("main"),
 		Type: &ast.FuncType{Params: &ast.FieldList{}},

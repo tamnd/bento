@@ -250,6 +250,8 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerFor(n)
 	case frontend.NodeForOfStatement:
 		return r.lowerForOf(n)
+	case frontend.NodeThrowStatement:
+		return r.lowerThrow(n)
 	default:
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	}
@@ -831,6 +833,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 
 	case frontend.NodeArrowFunction:
 		return r.arrowFunc(n)
+
+	case frontend.NodeNewExpression:
+		return r.newExpr(n)
 
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
