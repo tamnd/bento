@@ -69,10 +69,13 @@ const y = x | 0;
 console.log(y);
 `
 	got := renderProgram(t, src)
-	if !strings.Contains(got, "var x float64") {
+	// x := 0.0 is the float64 short declaration the readability fold emits for a plain
+	// number local, so seeing it proves x kept its float64 type rather than being
+	// specialized to int32.
+	if !strings.Contains(got, "x := 0.0") {
 		t.Errorf("a local written a fractional value should stay float64\n---\n%s", got)
 	}
-	if strings.Contains(got, "var x int32") {
+	if strings.Contains(got, "var x int32") || strings.Contains(got, "x := int32") {
 		t.Errorf("a local written a fractional value was wrongly specialized to int32\n---\n%s", got)
 	}
 }
