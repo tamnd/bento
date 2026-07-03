@@ -12,10 +12,13 @@ import "github.com/tamnd/bento/pkg/frontend"
 // Boxing is the second lattice Pass B propagates (section 4.2). It is a monotone
 // data-flow analysis: a value escapes if it flows to a sink or flows to another
 // value that escapes, computed to a fixpoint. This analysis seeds the sinks it can
-// see directly and closes escape over the aliasing it can see within a unit; the
-// inter-procedural flow that carries escape across a return or through a retained
-// argument is a later slice, and until it lands the result is a sound lower bound
-// that lowering must not yet rely on to stop boxing.
+// see directly, closes escape over the aliasing it sees within a unit, and carries
+// escape across a call edge by tying each object argument to the callee parameter
+// it binds, so a value stringified inside a callee boxes at the call site too. The
+// remaining flows, escape across a return value and through a retained argument,
+// and the argument-to-parameter alignment of rest and destructured parameters, are
+// still later slices; because a missed edge could under-box, the result stays a
+// sound lower bound that lowering must not yet rely on to stop boxing.
 type Boxing struct {
 	// Escaping holds every binding symbol that must be boxed.
 	Escaping map[frontend.Symbol]bool
@@ -38,7 +41,7 @@ func (pt *Partitioner) Boxing() Boxing {
 	seeds := map[frontend.Symbol]bool{}
 	edges := map[frontend.Symbol][]frontend.Symbol{}
 	for _, u := range units {
-		pt.scanEscapes(u.Root, index, seeds, edges)
+		pt.scanEscapes(u.Root, units, index, seeds, edges)
 	}
 
 	closeEscapes(seeds, edges)
@@ -46,14 +49,16 @@ func (pt *Partitioner) Boxing() Boxing {
 }
 
 // scanEscapes walks one unit's body, stopping at nested function boundaries the
-// way the other Pass B walks do. It seeds an escape at every dynamic-sink argument
-// and records an aliasing edge at every binding-to-binding declaration or
-// assignment, so the closure can carry an escape from one alias to the other.
-func (pt *Partitioner) scanEscapes(node frontend.Node, index map[nodeKey]int, seeds map[frontend.Symbol]bool, edges map[frontend.Symbol][]frontend.Symbol) {
+// way the other Pass B walks do. It seeds an escape at every dynamic-sink argument,
+// records an aliasing edge at every binding-to-binding declaration or assignment,
+// and records the argument-to-parameter edges of every in-program call, so the
+// closure can carry an escape from one alias to another and across a call edge.
+func (pt *Partitioner) scanEscapes(node frontend.Node, units []Unit, index map[nodeKey]int, seeds map[frontend.Symbol]bool, edges map[frontend.Symbol][]frontend.Symbol) {
 	for _, child := range pt.prog.Children(node) {
 		switch child.Kind() {
 		case frontend.NodeCallExpression, frontend.NodeNewExpression:
 			pt.seedSinks(child, index, seeds)
+			pt.collectCallArgEdges(child, units, index, edges)
 		case frontend.NodeVariableDeclaration:
 			pt.collectDeclarationAlias(child, edges)
 		case frontend.NodeBinaryExpression:
@@ -62,7 +67,50 @@ func (pt *Partitioner) scanEscapes(node frontend.Node, index map[nodeKey]int, se
 		if functionLike(child.Kind()) {
 			continue
 		}
-		pt.scanEscapes(child, index, seeds, edges)
+		pt.scanEscapes(child, units, index, seeds, edges)
+	}
+}
+
+// collectCallArgEdges records the inter-procedural escape edges of one call into a
+// unit of this program: each object argument is tied to the callee parameter it
+// binds, so escape flows across the call in both directions. If the callee walks
+// its parameter into a sink, the caller's argument that supplied it must box too,
+// which is the flow the 13.5 worked example turns on: an Order passed to a function
+// that JSON.stringifies it escapes at the call site, not only inside the callee.
+// The edge is symmetric because a symbol carries one representation for the whole
+// program, so an argument already boxed for another reason forces the callee to
+// read its parameter boxed as well; this over-approximates in the direction of more
+// boxing, which section 13.2 sanctions as sound.
+//
+// Arguments and parameters are matched by position, which is exact for an ordinary
+// call. A rest parameter, a destructured parameter, or a spread argument can
+// misalign the mapping and is not handled here; because a missed edge could
+// under-box, this keeps the whole analysis a sound lower bound that lowering must
+// not yet consume, the same caveat the intra-unit slices carry.
+func (pt *Partitioner) collectCallArgEdges(call frontend.Node, units []Unit, index map[nodeKey]int, edges map[frontend.Symbol][]frontend.Symbol) {
+	j, ok := pt.calleeUnit(call, index)
+	if !ok {
+		return
+	}
+	var params []LiveSlot
+	pt.collectParams(units[j].Root, &params)
+	if len(params) == 0 {
+		return
+	}
+	kids := pt.prog.Children(call)
+	if len(kids) < 2 {
+		return
+	}
+	for k, arg := range kids[1:] {
+		if k >= len(params) {
+			break
+		}
+		if params[k].Box != BoxObject || !isBoxable(pt.prog.TypeAt(arg)) {
+			continue
+		}
+		if sym, ok := pt.bindingOf(arg); ok {
+			addAliasEdge(edges, sym, params[k].Symbol)
+		}
 	}
 }
 
