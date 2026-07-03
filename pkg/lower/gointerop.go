@@ -580,6 +580,51 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 		valConv := r.elemConv(r.bentoResultType(valKw, ""), ident(valKw), valBody)
 		return &ast.CallExpr{Fun: sel("bridge", "MapToGo"), Args: []ast.Expr{arg, keyConv, valConv}}, nil
 	}
+	if goType == "struct" {
+		// A bento object crosses into a Go struct parameter field by field: a closure
+		// binds the boxed object and returns a Go struct literal, reading each exported
+		// field off the box and marshaling it by its keyword into the matching Go field
+		// (section 6.7). The box is the same interned struct the object's shape interns
+		// to, so its field the closure reads and the Go field it fills line up by name.
+		// The struct crosses only as a top-level argument, never inside a composite, so a
+		// missing argument node (which only a recursive composite element passes) hands
+		// back.
+		if argNode == nil {
+			return nil, &NotYetLowerable{Reason: "go: a struct argument must be a top-level argument"}
+		}
+		path, typeName, fields := goimport.SplitStructElem(elem)
+		interned, err := r.decls.internStruct(r, r.prog.TypeAt(argNode))
+		if err != nil {
+			return nil, err
+		}
+		alias := r.requireGoImport(path)
+		elts := make([]ast.Expr, 0, len(fields))
+		for _, f := range fields {
+			boxField, ok := exportedField(f.Name)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "go: struct field " + f.Name + " is not a Go identifier"}
+			}
+			read := &ast.SelectorExpr{X: ident("o"), Sel: ident(boxField)}
+			val, err := r.marshalArgToGo(f.Keyword, "", goimport.DefinedConv{}, read, nil)
+			if err != nil {
+				return nil, err
+			}
+			elts = append(elts, &ast.KeyValueExpr{Key: ident(f.Name), Value: val})
+		}
+		goStruct := sel(alias, typeName)
+		return &ast.CallExpr{
+			Fun: &ast.FuncLit{
+				Type: &ast.FuncType{
+					Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("o")}, Type: star(ident(interned))}}},
+					Results: &ast.FieldList{List: []*ast.Field{{Type: goStruct}}},
+				},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+					&ast.CompositeLit{Type: goStruct, Elts: elts},
+				}}}},
+			},
+			Args: []ast.Expr{arg},
+		}, nil
+	}
 	if goType == "any" {
 		// A Go any parameter takes a boxed bento value: bridge.AnyToGo unwraps a scalar to
 		// its Go native and passes a reference value through as its value.Value box
