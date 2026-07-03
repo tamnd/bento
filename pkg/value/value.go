@@ -167,6 +167,8 @@ func ToBoolean(v Value) bool {
 	case KindNumber:
 		f := v.AsNumber()
 		return f != 0 && !math.IsNaN(f)
+	case KindBigInt:
+		return !v.bigint().IsZero()
 	case KindString:
 		return v.str().Length() != 0
 	default:
@@ -190,6 +192,12 @@ func ToNumber(v Value) float64 {
 		return BoolToNumber(v.AsBool())
 	case KindNumber:
 		return v.AsNumber()
+	case KindBigInt:
+		// The abstract ToNumber throws on a bigint: arithmetic never silently
+		// coerces a bigint to a number, so 10n * 2 is a TypeError, not 20. An
+		// explicit Number(b) conversion goes through its own helper, not this path.
+		Throw(NewTypeError(FromGoString("Cannot convert a BigInt value to a number")))
+		return 0
 	case KindString:
 		return StringToNumber(v.str())
 	default:
@@ -212,6 +220,8 @@ func ToString(v Value) BStr {
 		return BoolToString(v.AsBool())
 	case KindNumber:
 		return NumberToString(v.AsNumber())
+	case KindBigInt:
+		return FromGoString(v.bigint().String())
 	case KindString:
 		return v.str()
 	default:
@@ -229,6 +239,17 @@ func Add(a, b Value) Value {
 	pb := toPrimitiveDefault(b)
 	if pa.kind == KindString || pb.kind == KindString {
 		return StringValue(Concat(ToString(pa), ToString(pb)))
+	}
+	// A bigint adds to a bigint and produces a bigint. Mixing a bigint with a
+	// number is a TypeError, the same rule that makes 1n + 1 throw, so + never
+	// silently narrows a bigint to a double or widens a double to a bigint.
+	if pa.kind == KindBigInt || pb.kind == KindBigInt {
+		if pa.kind != KindBigInt || pb.kind != KindBigInt {
+			Throw(NewTypeError(FromGoString("Cannot mix BigInt and other types, use explicit conversions")))
+		}
+		sum := &BigInt{}
+		sum.i.Add(&pa.bigint().i, &pb.bigint().i)
+		return BigIntValue(sum)
 	}
 	return Number(ToNumber(pa) + ToNumber(pb))
 }
