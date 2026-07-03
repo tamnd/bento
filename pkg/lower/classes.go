@@ -65,6 +65,15 @@ type classInfo struct {
 	// constructor of its own; the synthesized constructor passes its parameters
 	// (the base's) straight through.
 	superArgs []frontend.Node
+	// vprops, set only on a hierarchy root, names the methods some subclass
+	// overrides; each becomes a slot in the root's vtable (section 13).
+	// overrides names this class's own methods that fill an inherited slot.
+	// extended marks a class some registered class directly extends, which is
+	// what makes its constructor split out the init function a derived
+	// constructor calls on the embedded base when the hierarchy is virtual.
+	vprops    map[string]bool
+	overrides map[string]bool
+	extended  bool
 }
 
 // classField is one instance field, in declaration order.
@@ -223,6 +232,7 @@ func (r *Renderer) collectClasses(entry frontend.Node) error {
 		}
 	}
 	walk(entry)
+	r.classTaken = taken
 	for _, decl := range classDecls {
 		if err := r.registerClass(decl, taken); err != nil {
 			return err
@@ -342,6 +352,7 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 				return err
 			}
 			info.base = base
+			base.extended = true
 		default:
 			return &NotYetLowerable{Reason: "this class member kind is a later slice"}
 		}
@@ -435,54 +446,100 @@ func (r *Renderer) baseClassOf(clause frontend.Node) (*classInfo, error) {
 	return base, nil
 }
 
-// checkBaseClashes rejects a derived class whose own members collide with the
-// base chain. A member sharing an inherited member's name is an override or a
-// shadow, which needs virtual dispatch, the vtable slice; comparing the emitted
-// Go names subsumes the property-name check (a property's Go name is its
-// exported spelling) and also catches a cross-case collision like a field Total
-// under a base method total, where one Go selector would mean two source
-// properties. The direct base's type name is reserved too, in both directions:
-// it is the embedded field's name in the derived struct, and a member spelling
-// it would shadow the embedded value Go promotion reads through.
+// classMember is one emitted member for the clash walk: its kind, its source
+// property, and the phrase an error names it by.
+type classMember struct {
+	kind string // "field", "method", or "accessor"
+	prop string
+	desc string
+}
+
+// classMembers indexes a class's own members by emitted Go name, the namespace
+// a collision would corrupt.
+func classMembers(c *classInfo) map[string]classMember {
+	m := map[string]classMember{}
+	for _, f := range c.fields {
+		m[f.goName] = classMember{"field", f.prop, "field ." + f.prop}
+	}
+	for _, meth := range c.methods {
+		m[meth.goName] = classMember{"method", meth.prop, "method ." + meth.prop}
+	}
+	for _, g := range c.getters {
+		m[g.goName] = classMember{"accessor", g.prop, "accessor ." + g.prop}
+	}
+	for _, s := range c.setters {
+		m[s.goName] = classMember{"accessor", s.prop, "accessor ." + s.prop}
+	}
+	return m
+}
+
+// checkBaseClashes walks a derived class's own members against the base chain.
+// A method redeclaring a base method of the same name is an override and is
+// recorded as a vtable slot below; every other collision hands back. Comparing
+// the emitted Go names subsumes the property-name check (a property's Go name
+// is its exported spelling) and also catches a cross-case collision like a
+// field Total under a base method total, where one Go selector would mean two
+// source properties; the same-prop condition on the method arm keeps such a
+// cross-case pair out of the override path. The direct base's type name is
+// reserved too, in both directions: it is the embedded field's name in the
+// derived struct, and a member spelling it would shadow the embedded value Go
+// promotion reads through.
 func (r *Renderer) checkBaseClashes(info *classInfo) error {
-	own := map[string]string{}
-	for _, f := range info.fields {
-		own[f.goName] = "field ." + f.prop
-	}
-	for _, m := range info.methods {
-		own[m.goName] = "method ." + m.prop
-	}
-	for _, g := range info.getters {
-		own[g.goName] = "accessor ." + g.prop
-	}
-	for _, s := range info.setters {
-		own[s.goName] = "accessor ." + s.prop
-	}
-	if what, ok := own[info.base.goName]; ok {
-		return &NotYetLowerable{Reason: "class " + info.name + "'s " + what + " spells " + info.base.goName + ", the embedded base field's name"}
+	own := classMembers(info)
+	if o, ok := own[info.base.goName]; ok {
+		return &NotYetLowerable{Reason: "class " + info.name + "'s " + o.desc + " spells " + info.base.goName + ", the embedded base field's name"}
 	}
 	for b := info.base; b != nil; b = b.base {
-		theirs := map[string]string{}
-		for _, f := range b.fields {
-			theirs[f.goName] = "field ." + f.prop
-		}
-		for _, m := range b.methods {
-			theirs[m.goName] = "method ." + m.prop
-		}
-		for _, g := range b.getters {
-			theirs[g.goName] = "accessor ." + g.prop
-		}
-		for _, s := range b.setters {
-			theirs[s.goName] = "accessor ." + s.prop
-		}
-		for goName, what := range own {
-			if their, ok := theirs[goName]; ok {
-				return &NotYetLowerable{Reason: "class " + info.name + "'s " + what + " collides with base class " + b.name + "'s " + their + "; overriding needs the vtable slice"}
+		theirs := classMembers(b)
+		for goName, o := range own {
+			their, ok := theirs[goName]
+			if !ok {
+				continue
 			}
+			if o.kind == "method" && their.kind == "method" && o.prop == their.prop {
+				continue // an override, recorded by recordOverrides below
+			}
+			return &NotYetLowerable{Reason: "class " + info.name + "'s " + o.desc + " collides with base class " + b.name + "'s " + their.desc + "; only a method overriding a same-named base method lowers"}
 		}
 		if their, ok := theirs[info.base.goName]; ok {
-			return &NotYetLowerable{Reason: "base class " + b.name + "'s " + their + " spells " + info.base.goName + ", the embedded base field's name in class " + info.name}
+			return &NotYetLowerable{Reason: "base class " + b.name + "'s " + their.desc + " spells " + info.base.goName + ", the embedded base field's name in class " + info.name}
 		}
+	}
+	return r.recordOverrides(info)
+}
+
+// recordOverrides registers each own method that redeclares a base-chain
+// method as a virtual override: the hierarchy root gains a vtable slot for the
+// method and this class is marked as filling it. The declaring class must be
+// the root itself, because the vtable pointer lives on the root's struct and
+// its slots take the root's type; a method introduced partway down the chain
+// would need a second vtable on the mid class, machinery a later slice adds.
+func (r *Renderer) recordOverrides(info *classInfo) error {
+	root := info.base
+	for root.base != nil {
+		root = root.base
+	}
+	for _, m := range info.methods {
+		var owner *classInfo
+		for b := info.base; b != nil; b = b.base {
+			if _, ok := b.methodByName(m.prop); ok {
+				owner = b
+			}
+		}
+		if owner == nil {
+			continue
+		}
+		if owner != root {
+			return &NotYetLowerable{Reason: "class " + info.name + " overrides ." + m.prop + ", which " + owner.name + " declares below the hierarchy root; a mid-chain virtual method is a later slice"}
+		}
+		if root.vprops == nil {
+			root.vprops = map[string]bool{}
+		}
+		root.vprops[m.prop] = true
+		if info.overrides == nil {
+			info.overrides = map[string]bool{}
+		}
+		info.overrides[m.prop] = true
 	}
 	return nil
 }
@@ -974,11 +1031,19 @@ func (r *Renderer) renderClasses() ([]ast.Decl, error) {
 }
 
 func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
+	var out []ast.Decl
+	if len(info.vprops) > 0 {
+		vt, err := r.vtableTypeDecl(info)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, vt)
+	}
 	structDecl, err := r.classStruct(info)
 	if err != nil {
 		return nil, err
 	}
-	out := []ast.Decl{structDecl}
+	out = append(out, structDecl)
 	for _, f := range info.statics {
 		vd, err := r.staticVarDecl(f)
 		if err != nil {
@@ -986,20 +1051,45 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		}
 		out = append(out, vd)
 	}
-	ctorDecl, err := r.classCtor(info)
+	// The hierarchy root and every class with its own overrides carry a vtable
+	// var holding the slot functions instances of that exact class dispatch
+	// through; a class with no overrides of its own shares its nearest
+	// ancestor's var.
+	if len(info.vprops) > 0 || len(info.overrides) > 0 {
+		vd, err := r.vtableVarDecl(info)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, vd)
+	}
+	ctorDecls, err := r.classCtor(info)
 	if err != nil {
 		return nil, err
 	}
-	out = append(out, ctorDecl)
+	out = append(out, ctorDecls...)
 	for _, m := range info.methods {
-		md, err := r.classMethodDecl(info, m)
+		// A virtual method's body emits under its Impl name; the root also
+		// gains the entry method under the original name, so every call site
+		// keeps its spelling and dispatch runs through the vtable.
+		name := m.goName
+		if info.vprops[m.prop] {
+			entry, err := r.virtualEntryDecl(info, m)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, entry)
+			name = implName(m)
+		} else if info.overrides[m.prop] {
+			name = implName(m)
+		}
+		md, err := r.classMethodDecl(info, m, name)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, md)
 	}
 	for _, g := range info.getters {
-		md, err := r.classMethodDecl(info, g)
+		md, err := r.classMethodDecl(info, g, g.goName)
 		if err != nil {
 			return nil, err
 		}
@@ -1008,7 +1098,7 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 	// A setter emits through the same method path: its checker signature is the
 	// one parameter and a void return, exactly the SetX method a Go author writes.
 	for _, s := range info.setters {
-		md, err := r.classMethodDecl(info, classMethod{prop: s.prop, goName: s.goName, node: s.node})
+		md, err := r.classMethodDecl(info, classMethod{prop: s.prop, goName: s.goName, node: s.node}, s.goName)
 		if err != nil {
 			return nil, err
 		}
@@ -1054,6 +1144,16 @@ func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
 // object shape's struct does, so a reflection walk recovers the exact key.
 func (r *Renderer) classStruct(info *classInfo) (ast.Decl, error) {
 	fields := &ast.FieldList{}
+	if len(info.vprops) > 0 {
+		// The hierarchy root carries the vtable pointer as its first field, set
+		// once by each constructor and read by every virtual entry. It is
+		// unexported machinery, not a source property, so it takes no json tag
+		// and the reflection walk in the value package skips it.
+		fields.List = append(fields.List, &ast.Field{
+			Names: []*ast.Ident{ident("vtable")},
+			Type:  star(ident(vtableTypeName(info))),
+		})
+	}
 	if info.base != nil {
 		// The embedded base sits first, the way a hand-written derived struct
 		// puts it: Go promotion serves the inherited fields and methods, and
@@ -1092,7 +1192,50 @@ func (r *Renderer) classStruct(info *classInfo) (ast.Decl, error) {
 // value here; the strict checker the frontend always runs proves every field
 // definitely assigned before a program reaches lowering, so the two never
 // diverge on a checked program.
-func (r *Renderer) classCtor(info *classInfo) (ast.Decl, error) {
+func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
+	if info.ctor != nil && subtreeHasKind(r.prog, info.ctor, frontend.NodeReturnStatement) {
+		return nil, &NotYetLowerable{Reason: "a return inside a constructor is a later slice"}
+	}
+	for _, f := range info.fields {
+		if f.init != nil && subtreeHasKind(r.prog, f.init, frontend.NodeThisKeyword) {
+			return nil, &NotYetLowerable{Reason: "a field initializer that reads this is a later slice"}
+		}
+	}
+	params, err := r.ctorParamFields(info)
+	if err != nil {
+		return nil, err
+	}
+
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = info, info.recv
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+
+	if info.hasVTable() {
+		// A virtual hierarchy splits construction: NewX allocates and pins the
+		// class's vtable before any initializer runs, so a virtual call inside a
+		// base constructor already dispatches to the derived override, the order
+		// JavaScript runs (a JS instance is its final class from the first line
+		// of the base constructor, unlike C++).
+		return r.vtableCtorDecls(info, params)
+	}
+	body, err := r.ctorBody(info)
+	if err != nil {
+		return nil, err
+	}
+	return []ast.Decl{&ast.FuncDecl{
+		Name: ident("New" + info.goName),
+		Type: &ast.FuncType{
+			Params:  params,
+			Results: &ast.FieldList{List: []*ast.Field{{Type: star(ident(info.goName))}}},
+		},
+		Body: body,
+	}}, nil
+}
+
+// ctorParamFields builds the constructor's Go parameter list from the declared
+// parameter nodes, shared by the NewX declaration and the initX split a virtual
+// hierarchy adds.
+func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 	params := &ast.FieldList{}
 	for _, p := range info.ctorParams {
 		nameNode := r.paramNameNode(p)
@@ -1106,23 +1249,7 @@ func (r *Renderer) classCtor(info *classInfo) (ast.Decl, error) {
 		}
 		params.List = append(params.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
 	}
-
-	prevClass, prevThis := r.curClass, r.thisName
-	r.curClass, r.thisName = info, info.recv
-	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
-
-	body, err := r.ctorBody(info)
-	if err != nil {
-		return nil, err
-	}
-	return &ast.FuncDecl{
-		Name: ident("New" + info.goName),
-		Type: &ast.FuncType{
-			Params:  params,
-			Results: &ast.FieldList{List: []*ast.Field{{Type: star(ident(info.goName))}}},
-		},
-		Body: body,
-	}, nil
+	return params, nil
 }
 
 // ctorBody builds the constructor's statements, folding to a composite literal
@@ -1130,15 +1257,6 @@ func (r *Renderer) classCtor(info *classInfo) (ast.Decl, error) {
 // its own lowering (a bare return must still yield the receiver), so it hands
 // back for now.
 func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
-	if info.ctor != nil && subtreeHasKind(r.prog, info.ctor, frontend.NodeReturnStatement) {
-		return nil, &NotYetLowerable{Reason: "a return inside a constructor is a later slice"}
-	}
-	for _, f := range info.fields {
-		if f.init != nil && subtreeHasKind(r.prog, f.init, frontend.NodeThisKeyword) {
-			return nil, &NotYetLowerable{Reason: "a field initializer that reads this is a later slice"}
-		}
-	}
-
 	if lit, ok, err := r.ctorCompositeFold(info); err != nil {
 		return nil, err
 	} else if ok {
@@ -1166,6 +1284,25 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 			Rhs: []ast.Expr{superVal},
 		})
 	}
+	inits, err := r.fieldInitStmts(info)
+	if err != nil {
+		return nil, err
+	}
+	stmts = append(stmts, inits...)
+	body, err := r.ctorBodyStmts(info)
+	if err != nil {
+		return nil, err
+	}
+	stmts = append(stmts, body...)
+	stmts = append(stmts, &ast.ReturnStmt{Results: []ast.Expr{ident(info.recv)}})
+	return &ast.BlockStmt{List: stmts}, nil
+}
+
+// fieldInitStmts lowers the declared field initializers to the receiver-field
+// assignments the general constructor form runs, in declaration order, the
+// order JavaScript runs them.
+func (r *Renderer) fieldInitStmts(info *classInfo) ([]ast.Stmt, error) {
+	var stmts []ast.Stmt
 	for _, f := range info.fields {
 		if f.init == nil {
 			continue
@@ -1184,25 +1321,31 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 			Rhs: []ast.Expr{rhs},
 		})
 	}
-	if info.ctor != nil {
-		var block frontend.Node
-		for _, k := range r.prog.Children(info.ctor) {
-			if k.Kind() == frontend.NodeBlock {
-				block = k
-			}
-		}
-		skip := 0
-		if info.base != nil {
-			skip = 1 // the validated super() call, already emitted as the base assignment
-		}
-		body, err := r.scopedBlock(block, skip)
-		if err != nil {
-			return nil, err
-		}
-		stmts = append(stmts, body.List...)
+	return stmts, nil
+}
+
+// ctorBodyStmts lowers the declared constructor's body with this bound to the
+// receiver, skipping the validated super() statement a derived constructor
+// leads with, which the caller has already emitted as the base construction.
+func (r *Renderer) ctorBodyStmts(info *classInfo) ([]ast.Stmt, error) {
+	if info.ctor == nil {
+		return nil, nil
 	}
-	stmts = append(stmts, &ast.ReturnStmt{Results: []ast.Expr{ident(info.recv)}})
-	return &ast.BlockStmt{List: stmts}, nil
+	var block frontend.Node
+	for _, k := range r.prog.Children(info.ctor) {
+		if k.Kind() == frontend.NodeBlock {
+			block = k
+		}
+	}
+	skip := 0
+	if info.base != nil {
+		skip = 1 // the validated super() call, already emitted by the caller
+	}
+	body, err := r.scopedBlock(block, skip)
+	if err != nil {
+		return nil, err
+	}
+	return body.List, nil
 }
 
 // superCtorExpr builds the base value a derived constructor stores or folds:
@@ -1212,6 +1355,18 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 // constructor the synthesized one passes its own parameters (the base's)
 // straight through by name.
 func (r *Renderer) superCtorExpr(info *classInfo) (ast.Expr, error) {
+	args, err := r.superCtorArgs(info)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.StarExpr{X: &ast.CallExpr{Fun: ident("New" + info.base.goName), Args: args}}, nil
+}
+
+// superCtorArgs lowers the arguments a derived constructor hands its base:
+// the validated super arguments coerced against the base constructor's
+// parameters, or the synthesized pass-through of its own parameters by name
+// when the class declares no constructor.
+func (r *Renderer) superCtorArgs(info *classInfo) ([]ast.Expr, error) {
 	base := info.base
 	args := make([]ast.Expr, 0, len(info.ctorParams))
 	if info.ctor == nil {
@@ -1235,7 +1390,7 @@ func (r *Renderer) superCtorExpr(info *classInfo) (ast.Expr, error) {
 			args = append(args, lowered)
 		}
 	}
-	return &ast.StarExpr{X: &ast.CallExpr{Fun: ident("New" + base.goName), Args: args}}, nil
+	return args, nil
 }
 
 // ctorCompositeFold recognizes the constructor whose whole effect is storing
@@ -1368,8 +1523,10 @@ func (r *Renderer) pureCtorValue(n frontend.Node) bool {
 
 // classMethodDecl emits one method as a pointer-receiver Go method: the
 // signature from the checker like a function declaration's, the body lowered
-// with this bound to the receiver.
-func (r *Renderer) classMethodDecl(info *classInfo, m classMethod) (ast.Decl, error) {
+// with this bound to the receiver. The emitted name is passed in because a
+// virtual method's body emits under its Impl name while everything else keeps
+// the member's own Go name.
+func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) (ast.Decl, error) {
 	sig, ok := r.prog.SignatureAt(m.node)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "method has no call signature"}
@@ -1405,7 +1562,7 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod) (ast.Decl, er
 			Names: []*ast.Ident{ident(info.recv)},
 			Type:  star(ident(info.goName)),
 		}}},
-		Name: ident(m.goName),
+		Name: ident(name),
 		Type: &ast.FuncType{Params: params, Results: results},
 		Body: body,
 	}, nil
@@ -1478,8 +1635,13 @@ func (r *Renderer) newClass(info *classInfo, argNodes []frontend.Node) (ast.Expr
 }
 
 // classMethodCall lowers recv.method(args) on a class instance to the Go method
-// call. Arguments lower plainly, the same way a top-level function call's do.
-func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string, argNodes []frontend.Node) (ast.Expr, error) {
+// call, bridging each argument against its declared parameter the way an
+// assignment does. A super.m() call on a virtual method routes to the Impl
+// body directly: the entry would dispatch through the instance's own vtable
+// and recurse into the very override that is calling super, while Go promotion
+// on the embedded base picks the nearest ancestor's Impl, the method JS super
+// names.
+func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string, argNodes []frontend.Node, viaSuper bool) (ast.Expr, error) {
 	m, ok := info.lookupMethod(method)
 	if !ok {
 		if _, isField := info.lookupField(method); isField {
@@ -1494,18 +1656,23 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 	if len(argNodes) != len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
-	if err := r.guardClassArgs(argNodes, sig.Params); err != nil {
-		return nil, err
+	name := m.goName
+	if viaSuper && info.isVirtual(method) {
+		name = implName(m)
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
-	for _, a := range argNodes {
+	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		lowered, err = r.bridgeClassBinding(lowered, a, sig.Params[i].Type)
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, lowered)
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(m.goName)}, Args: args}, nil
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
 }
 
 // staticMethodCall lowers A.m(args) to the package function the static method
@@ -1525,12 +1692,13 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 	if len(argNodes) != len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
-	if err := r.guardClassArgs(argNodes, sig.Params); err != nil {
-		return nil, err
-	}
 	args := make([]ast.Expr, 0, len(argNodes))
-	for _, a := range argNodes {
+	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		lowered, err = r.bridgeClassBinding(lowered, a, sig.Params[i].Type)
 		if err != nil {
 			return nil, err
 		}

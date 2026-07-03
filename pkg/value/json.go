@@ -175,23 +175,43 @@ func encodeJSONObject(b *strings.Builder, rv reflect.Value) {
 	if rv.Kind() == reflect.Pointer {
 		rv = rv.Elem()
 	}
-	t := rv.Type()
 	b.WriteByte('{')
 	first := true
+	encodeJSONFields(b, rv, &first)
+	b.WriteByte('}')
+}
+
+// encodeJSONFields writes one struct's fields as JSON members, sharing the
+// comma state with its caller so an embedded struct's fields interleave with
+// the outer struct's as one flat object. A derived class embeds its base, and
+// in JavaScript every inherited field is an own property of the instance (the
+// base constructor assigns onto this), so the base's fields flatten into the
+// same object, in base-first order because the embedded field sits first. An
+// unexported field is compiler machinery (the vtable pointer), not a source
+// property, and is skipped.
+func encodeJSONFields(b *strings.Builder, rv reflect.Value, first *bool) {
+	t := rv.Type()
 	for i := 0; i < t.NumField(); i++ {
-		key := t.Field(i).Tag.Get("json")
-		if key == "" {
-			key = t.Field(i).Name
+		f := t.Field(i)
+		if f.PkgPath != "" {
+			continue
 		}
-		if !first {
+		if f.Anonymous {
+			encodeJSONFields(b, rv.Field(i), first)
+			continue
+		}
+		key := f.Tag.Get("json")
+		if key == "" {
+			key = f.Name
+		}
+		if !*first {
 			b.WriteByte(',')
 		}
-		first = false
+		*first = false
 		encodeJSONString(b, FromGoString(key))
 		b.WriteByte(':')
 		encodeJSON(b, rv.Field(i).Interface())
 	}
-	b.WriteByte('}')
 }
 
 // encodeJSONString writes a JavaScript string as a JSON string literal, escaping
