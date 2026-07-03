@@ -188,6 +188,33 @@ console.log(RuneCountInString("héllo"));
 	}
 }
 
+// TestGoImportMarshalsBytes proves the []byte crossing end to end in both
+// directions (section 7.3). A Uint8Array built from a number list crosses into
+// hex.EncodeToString as a Go []byte and the hex string crosses back, exercising
+// the argument marshaling through bridge.BytesToGo. hex.DecodeString returns a
+// ([]byte, error), so the error half unwraps into the throw machinery and the byte
+// half crosses back through bridge.BytesFromGo into a Uint8Array whose length and
+// bytes are then read. Running the binary is the oracle: the encode and the decode
+// must round-trip through a real build the same way the standard library does.
+func TestGoImportMarshalsBytes(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: bytes test builds and runs generated Go")
+	}
+	const src = `import { EncodeToString, DecodeString } from "go:encoding/hex";
+const buf = new Uint8Array([65, 66, 67]);
+console.log(EncodeToString(buf));
+const back = DecodeString("48656c6c6f");
+console.log(back.length);
+console.log(back[0]);
+console.log(back[4]);
+`
+	got := runProgramGo(t, src)
+	if want := "414243\n5\n72\n111\n"; got != want {
+		t.Fatalf("go: bytes program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportNumberNeedsSignature proves the honest fallback: with no signature
 // resolver wired, a go: call whose crossing needs the Go type (a number argument or
 // result) hands back rather than guess, so the unit routes to the engine. The
