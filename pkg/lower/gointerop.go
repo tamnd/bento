@@ -424,9 +424,37 @@ func (r *Renderer) bentoResultType(goResult, elem string) ast.Expr {
 		// returns a *value.Uint8Array.
 		r.requireImport(valuePkg)
 		return star(sel("value", "Uint8Array"))
+	case "map":
+		// A map result crosses to the value model's Map, spelled as the pointer a map
+		// local is spelled, instantiated at the bento key and value types the crossing's
+		// own keywords name (section 6.5).
+		r.requireImport(valuePkg)
+		keyKw, valKw := goimport.SplitMapElem(elem)
+		return star(&ast.IndexListExpr{
+			X:       sel("value", "Map"),
+			Indices: []ast.Expr{r.bentoResultType(keyKw, ""), r.bentoResultType(valKw, "")},
+		})
 	default:
 		return ident("float64")
 	}
+}
+
+// bentoMapCtor builds the empty bento Map a map crossing back fills: the constructor
+// its key kind fixes (a string key takes NewStringMap, a boolean NewBoolMap, and any
+// numeric key NewNumberMap), instantiated at the bento value type the value keyword
+// names. The bento Map carries a per-kind key equality the bridge cannot pick from
+// the Go types alone, so the lowerer selects the constructor here and hands the empty
+// map to bridge.MapFromGo to fill (section 6.5).
+func (r *Renderer) bentoMapCtor(keyKw, valKw string) ast.Expr {
+	r.requireImport(valuePkg)
+	ctor := "NewNumberMap"
+	switch keyKw {
+	case "string":
+		ctor = "NewStringMap"
+	case "bool":
+		ctor = "NewBoolMap"
+	}
+	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", ctor), Index: r.bentoResultType(valKw, "")}}
 }
 
 // elemConv builds the per-element conversion closure a slice crossing hands to
@@ -471,6 +499,27 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 			Fun:  sel("bridge", "SliceToGo"),
 			Args: []ast.Expr{arg, r.elemConv(r.bentoResultType(elem, ""), ident(elem), body)},
 		}, nil
+	}
+	if goType == "map" {
+		// A bento Map crosses to a Go map entry by entry: bridge.MapToGo iterates the map
+		// once and applies a key crossing and a value crossing to each entry, each the
+		// same scalar crossing a single key or value would take (section 6.5). The two
+		// closures take the bento key and value types and return the Go key and value
+		// types, the inverse of the result path. A map key and value are always plain
+		// basics in this slice, never an any, so neither crossing needs an argument node.
+		r.requireImport(bridgePkg)
+		keyKw, valKw := goimport.SplitMapElem(elem)
+		keyBody, err := r.marshalArgToGo(keyKw, "", goimport.DefinedConv{}, ident("x"), nil)
+		if err != nil {
+			return nil, err
+		}
+		valBody, err := r.marshalArgToGo(valKw, "", goimport.DefinedConv{}, ident("x"), nil)
+		if err != nil {
+			return nil, err
+		}
+		keyConv := r.elemConv(r.bentoResultType(keyKw, ""), ident(keyKw), keyBody)
+		valConv := r.elemConv(r.bentoResultType(valKw, ""), ident(valKw), valBody)
+		return &ast.CallExpr{Fun: sel("bridge", "MapToGo"), Args: []ast.Expr{arg, keyConv, valConv}}, nil
 	}
 	if goType == "any" {
 		// A Go any parameter takes a boxed bento value: bridge.AnyToGo unwraps a scalar to
@@ -560,6 +609,30 @@ func (r *Renderer) marshalResultFromGo(goType, elem string, goCall ast.Expr) (as
 		return &ast.CallExpr{
 			Fun:  sel("bridge", "SliceFromGo"),
 			Args: []ast.Expr{goCall, r.elemConv(ident(elem), r.bentoResultType(elem, ""), body)},
+		}, nil
+	}
+	if goType == "map" {
+		// A Go map crosses back to a bento Map entry by entry: bridge.MapFromGo ranges the
+		// Go map and applies a key crossing and a value crossing to each entry, filling the
+		// empty bento Map its key kind fixes (section 6.5). The two closures take the Go key
+		// and value types and return the bento key and value types. Go map iteration order
+		// is unspecified, so the bento Map's order after the crossing is unspecified too,
+		// which the Map contract allows.
+		r.requireImport(bridgePkg)
+		keyKw, valKw := goimport.SplitMapElem(elem)
+		keyBody, err := r.marshalResultFromGo(keyKw, "", ident("x"))
+		if err != nil {
+			return nil, err
+		}
+		valBody, err := r.marshalResultFromGo(valKw, "", ident("x"))
+		if err != nil {
+			return nil, err
+		}
+		keyConv := r.elemConv(ident(keyKw), r.bentoResultType(keyKw, ""), keyBody)
+		valConv := r.elemConv(ident(valKw), r.bentoResultType(valKw, ""), valBody)
+		return &ast.CallExpr{
+			Fun:  sel("bridge", "MapFromGo"),
+			Args: []ast.Expr{goCall, r.bentoMapCtor(keyKw, valKw), keyConv, valConv},
 		}, nil
 	}
 	if goType == "bytes" {
