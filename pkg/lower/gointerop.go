@@ -236,23 +236,14 @@ func (r *Renderer) goSignature(b goBuiltin) (goimport.FuncSig, bool) {
 
 // goImportCallBySig lowers a go: call against its Go signature, marshaling each
 // argument and the result by the Go type keyword the signature carries. The
-// argument count must match the signature, and each argument's marshaling must be
-// one the crossing supports, or the call hands back.
+// arguments marshal through marshalCallArgs, which enforces the count the signature
+// wants (exact for a fixed signature, at-least-the-fixed-parameters for a variadic
+// one), and each argument's and the result's marshaling must be one the crossing
+// supports, or the call hands back.
 func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes []frontend.Node) (ast.Expr, error) {
-	if len(argNodes) != len(sig.Params) {
-		return nil, &NotYetLowerable{Reason: "go: call to " + b.name + " with a defaulted or spread argument is a later slice"}
-	}
-	args := make([]ast.Expr, 0, len(argNodes))
-	for i, a := range argNodes {
-		lowered, err := r.lowerExpr(a)
-		if err != nil {
-			return nil, err
-		}
-		marshaled, err := r.marshalArgToGo(sig.Params[i], sig.ParamElem[i], sig.ParamConv[i], lowered, a)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, marshaled)
+	args, err := r.marshalCallArgs(b, sig, argNodes)
+	if err != nil {
+		return nil, err
 	}
 	alias := r.requireGoImport(b.importPath)
 	goCall := &ast.CallExpr{Fun: sel(alias, b.name), Args: args}
@@ -291,6 +282,43 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		return nil, err
 	}
 	return r.guardExpr(marshaled, sig.Results[0], resultElem), nil
+}
+
+// marshalCallArgs lowers and marshals each argument of a go: call against the Go
+// signature, returning the positional Go arguments the call passes. A fixed
+// signature demands an exact argument count. A variadic signature (section 6.9)
+// requires at least the fixed parameters and marshals every argument past them by
+// the element type the trailing entry carries, so a ...string call marshals each
+// tail argument as one string and Go reassembles the slice; passing zero tail
+// arguments is allowed and emits the call with only its fixed arguments.
+func (r *Renderer) marshalCallArgs(b goBuiltin, sig goimport.FuncSig, argNodes []frontend.Node) ([]ast.Expr, error) {
+	last := len(sig.Params) - 1
+	if sig.Variadic {
+		if len(argNodes) < last {
+			return nil, &NotYetLowerable{Reason: "go: variadic call to " + b.name + " with fewer arguments than its required parameters"}
+		}
+	} else if len(argNodes) != len(sig.Params) {
+		return nil, &NotYetLowerable{Reason: "go: call to " + b.name + " with a defaulted or spread argument is a later slice"}
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for i, a := range argNodes {
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		// An argument in or past the variadic slot marshals by the trailing element entry;
+		// a fixed argument marshals by its own parameter entry.
+		p := i
+		if sig.Variadic && i >= last {
+			p = last
+		}
+		marshaled, err := r.marshalArgToGo(sig.Params[p], sig.ParamElem[p], sig.ParamConv[p], lowered, a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, marshaled)
+	}
+	return args, nil
 }
 
 // stripResultBrand converts a defined-type result to its underlying basic before
