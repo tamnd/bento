@@ -418,6 +418,12 @@ func (r *Renderer) bentoResultType(goResult, elem string) ast.Expr {
 		// (section 6.12).
 		r.requireImport(valuePkg)
 		return sel("value", "Value")
+	case "bytes":
+		// A []byte result crosses to the value model's byte buffer, spelled as the
+		// pointer a Uint8Array local is spelled (section 7.3), so the guard closure
+		// returns a *value.Uint8Array.
+		r.requireImport(valuePkg)
+		return star(sel("value", "Uint8Array"))
 	default:
 		return ident("float64")
 	}
@@ -484,6 +490,15 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 		}
 		return &ast.CallExpr{Fun: sel("bridge", "AnyToGo"), Args: []ast.Expr{boxed}}, nil
 	}
+	if goType == "bytes" {
+		// A Uint8Array crosses into a Go []byte parameter through bridge.BytesToGo, which
+		// copies the buffer into a fresh Go slice so a callee that retains or mutates the
+		// slice past the call can never alias bento's buffer (section 7.3). The zero-copy
+		// BytesToGoShared is sound only for a callee proven to read the bytes within the
+		// call, a proof a later slice supplies; the safe copying form is the default here.
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "BytesToGo"), Args: []ast.Expr{arg}}, nil
+	}
 	if goType == "opaque" {
 		// An opaque handle crosses back into Go by recovering the real value the token
 		// holds: bento held it as a bridge.Opaque, and OpaqueToGo asserts it back to the
@@ -546,6 +561,15 @@ func (r *Renderer) marshalResultFromGo(goType, elem string, goCall ast.Expr) (as
 			Fun:  sel("bridge", "SliceFromGo"),
 			Args: []ast.Expr{goCall, r.elemConv(ident(elem), r.bentoResultType(elem, ""), body)},
 		}, nil
+	}
+	if goType == "bytes" {
+		// A Go []byte result crosses back through bridge.BytesFromGo, which copies the Go
+		// slice into a fresh bento buffer so a callee that keeps the slice and mutates it
+		// after return cannot change bytes the bento program now owns (section 7.3). The
+		// zero-copy BytesFromGoShared is the fast path a later slice reaches for once it
+		// can prove Go will not mutate the slice; the safe copying form is the default.
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "BytesFromGo"), Args: []ast.Expr{goCall}}, nil
 	}
 	if goType == "opaque" {
 		// An opaque handle crosses back as a token: bento never inspects it, so the Go
