@@ -82,13 +82,13 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	// of those fingerprints is still read as the class it is. A method read
 	// without a call is a bound-function value, a later slice.
 	if info, ok := r.classReceiver(obj); ok {
-		f, isField := info.fieldByName(prop)
-		g, isGetter := info.getterByName(prop)
+		f, isField := info.lookupField(prop)
+		g, isGetter := info.lookupGetter(prop)
 		if !isField && !isGetter {
-			if _, isMethod := info.methodByName(prop); isMethod {
+			if _, isMethod := info.lookupMethod(prop); isMethod {
 				return nil, &NotYetLowerable{Reason: "a method of class " + info.name + " read as a value is a later slice"}
 			}
-			if _, isSetter := info.setterByName(prop); isSetter {
+			if _, isSetter := info.lookupSetter(prop); isSetter {
 				return nil, &NotYetLowerable{Reason: "reading the write-only accessor ." + prop + " of class " + info.name + " is a later slice"}
 			}
 			return nil, &NotYetLowerable{Reason: "class " + info.name + " has no property ." + prop + " this slice lowers"}

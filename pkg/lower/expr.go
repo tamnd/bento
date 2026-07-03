@@ -94,6 +94,17 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		return ident(r.thisName), nil
 
+	case frontend.NodeSuperKeyword:
+		// Inside a lowered derived-class body, super is the embedded base value,
+		// so super.m() and super.x reach the base member through the embedded
+		// field selector; with no overrides that static dispatch is exactly what
+		// the source means. A bare super() call never reaches here: the
+		// constructor lowering folds it into the base assignment.
+		if r.thisName == "" || r.curClass == nil || r.curClass.base == nil {
+			return nil, &NotYetLowerable{Reason: "super outside a lowered derived class body is a later slice"}
+		}
+		return &ast.SelectorExpr{X: ident(r.thisName), Sel: ident(r.curClass.base.goName)}, nil
+
 	case frontend.NodeTrueKeyword:
 		return ident("true"), nil
 
