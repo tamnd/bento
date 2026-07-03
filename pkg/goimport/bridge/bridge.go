@@ -88,6 +88,61 @@ func SliceFromGo[G any, B any](s []G, conv func(G) B) *value.Array[B] {
 	return value.NewArray(out...)
 }
 
+// BytesToGo marshals a bento Uint8Array to a Go []byte for a parameter of type
+// []byte, the copy-on-uncertainty default of section 7.3. It copies the buffer's
+// bytes into a fresh Go slice, so a Go function that retains or mutates the slice
+// past the call can never alias bento's buffer, which is the safe crossing when the
+// callee's retention is not known. The lowerer emits this by default and reaches for
+// BytesToGoShared only where it can prove the callee reads the bytes within the call
+// and does not keep them. A nil array (a shape the buffer model does not produce)
+// crosses as a nil slice, so a Go function that branches on nil sees it; an empty
+// buffer crosses as an empty non-nil slice.
+func BytesToGo(a *value.Uint8Array) []byte {
+	if a == nil {
+		return nil
+	}
+	src := a.Bytes()
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
+}
+
+// BytesToGoShared marshals a bento Uint8Array to a Go []byte by handing over the
+// buffer's own backing slice with no copy, the zero-copy fast path of section 7.3.
+// It is sound only when the Go callee reads the bytes within the call and does not
+// retain or mutate them past return, the large set of read-only byte APIs
+// (sha256.Sum256, an io.Writer.Write that copies), so the lowerer emits it in place
+// of BytesToGo only where it can prove that. A nil array crosses as a nil slice, the
+// same as the copying form.
+func BytesToGoShared(a *value.Uint8Array) []byte {
+	if a == nil {
+		return nil
+	}
+	return a.Bytes()
+}
+
+// BytesFromGo marshals a Go []byte returned from a go: call to a bento Uint8Array,
+// the copy-on-uncertainty default of section 7.3. It copies the Go slice into a
+// fresh buffer, so a Go function that keeps the slice and mutates it after return
+// cannot change bytes the bento program now owns. A nil Go slice crosses as an empty
+// buffer, because a bento Uint8Array has no nil, so a Go function returning nil and
+// one returning an empty slice both hand back an empty buffer.
+func BytesFromGo(b []byte) *value.Uint8Array {
+	out := make([]byte, len(b))
+	copy(out, b)
+	return value.Uint8ArrayFromGo(out)
+}
+
+// BytesFromGoShared marshals a Go []byte returned from a go: call to a bento
+// Uint8Array by adopting the Go slice with no copy, the zero-copy fast path of
+// section 7.3. It is sound only when Go will not mutate the slice after return, so
+// the lowerer emits it in place of BytesFromGo only where it can prove that; the
+// adopted slice is then bento's to own and the tracing GC keeps it alive. A nil Go
+// slice crosses as an empty buffer, the same as the copying form.
+func BytesFromGoShared(b []byte) *value.Uint8Array {
+	return value.Uint8ArrayFromGo(b)
+}
+
 // Opaque is a token for a Go value the bridge does not project (section 6.13). It
 // holds the real Go value the bento side received from one go: call and hands to
 // another, never dereferenced: an option value, an unexported concrete type behind

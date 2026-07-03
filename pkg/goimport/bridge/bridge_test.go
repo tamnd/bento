@@ -231,6 +231,87 @@ func TestSliceRoundTripThroughGo(t *testing.T) {
 	}
 }
 
+func TestBytesToGoCopiesTheBuffer(t *testing.T) {
+	// The default crossing copies, so a Go callee that keeps and mutates the slice
+	// cannot reach back into bento's buffer (section 7.3).
+	a := value.Uint8ArrayOf(1, 2, 3)
+	got := BytesToGo(a)
+	if len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("BytesToGo = %v, want [1 2 3]", got)
+	}
+	got[0] = 99
+	if a.At(0) != 1 {
+		t.Errorf("mutating the copy changed the buffer: At(0) = %v, want 1", a.At(0))
+	}
+}
+
+func TestBytesToGoSharedAliasesTheBuffer(t *testing.T) {
+	// The fast path hands over the backing slice itself, so a write the Go callee
+	// makes within the call is visible in the buffer, which is exactly what the
+	// zero-copy contract permits for an API that mutates in place.
+	a := value.Uint8ArrayOf(1, 2, 3)
+	got := BytesToGoShared(a)
+	if len(got) != 3 {
+		t.Fatalf("BytesToGoShared length = %d, want 3", len(got))
+	}
+	got[0] = 99
+	if a.At(0) != 99 {
+		t.Errorf("the shared slice did not alias the buffer: At(0) = %v, want 99", a.At(0))
+	}
+}
+
+func TestBytesToGoNilArrayIsNilSlice(t *testing.T) {
+	// A nil array crosses as a nil slice through both forms, so a Go function that
+	// branches on nil sees it.
+	if got := BytesToGo(nil); got != nil {
+		t.Errorf("BytesToGo(nil) = %v, want a nil slice", got)
+	}
+	if got := BytesToGoShared(nil); got != nil {
+		t.Errorf("BytesToGoShared(nil) = %v, want a nil slice", got)
+	}
+}
+
+func TestBytesFromGoCopiesTheSlice(t *testing.T) {
+	// The default result crossing copies, so a Go function that keeps the slice and
+	// mutates it after return cannot change bytes bento now owns (section 7.3).
+	b := []byte{10, 20, 30}
+	got := BytesFromGo(b)
+	if got.Len() != 3 || got.At(0) != 10 || got.At(2) != 30 {
+		t.Fatalf("BytesFromGo produced %v %v %v, want 10 .. 30", got.At(0), got.At(1), got.At(2))
+	}
+	b[0] = 99
+	if got.At(0) != 10 {
+		t.Errorf("mutating the source changed the buffer: At(0) = %v, want 10", got.At(0))
+	}
+}
+
+func TestBytesFromGoSharedAdoptsTheSlice(t *testing.T) {
+	// The fast path adopts the returned slice, so it reads back the same bytes with no
+	// copy; the lowerer emits this only when Go will not mutate after return.
+	b := []byte{10, 20, 30}
+	got := BytesFromGoShared(b)
+	if got.Len() != 3 || got.At(1) != 20 {
+		t.Errorf("BytesFromGoShared produced length %v At(1) %v, want 3 and 20", got.Len(), got.At(1))
+	}
+}
+
+func TestBytesFromGoNilIsEmptyBuffer(t *testing.T) {
+	// A nil Go slice crosses as an empty buffer, because a bento Uint8Array has no nil.
+	if got := BytesFromGo(nil); got == nil || got.Len() != 0 {
+		t.Errorf("BytesFromGo(nil) = %v, want an empty buffer", got)
+	}
+}
+
+func TestBytesRoundTripThroughGo(t *testing.T) {
+	// A Uint8Array to a Go slice and back is the identity on its bytes, the shape a
+	// []byte parameter and a []byte result share.
+	a := value.Uint8ArrayOf(4, 5, 6)
+	back := BytesFromGo(BytesToGo(a))
+	if back.Len() != 3 || back.At(0) != 4 || back.At(1) != 5 || back.At(2) != 6 {
+		t.Errorf("round trip = %v %v %v, want 4 5 6", back.At(0), back.At(1), back.At(2))
+	}
+}
+
 func TestAnyToGoUnwrapsScalars(t *testing.T) {
 	// A bento scalar unwraps to the Go native a Go function inspecting the any expects,
 	// so a type switch on the crossed value matches the concrete case (section 6.12).
