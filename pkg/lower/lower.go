@@ -302,6 +302,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "Uint8Array")), nil
 		}
+		if r.isMapType(t) {
+			// A Map<K, V> (section 6.5) is the value model's keyed collection, spelled as a
+			// pointer to the generic value.Map header, and the type a Go map[K]V projects to
+			// across the boundary. It is not a struct shape, so it routes here before
+			// renderObject would intern its method interface as fields.
+			return r.renderMap(t)
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -340,6 +347,29 @@ func (r *Renderer) renderArray(elem frontend.Type) (ast.Expr, error) {
 		return nil, err
 	}
 	return star(index(sel("value", "Array"), inner)), nil
+}
+
+// renderMap lowers a Map<K, V> type to a pointer to the generic value.Map header
+// (section 6.5). It reads the key and value types off the map's set signature and
+// renders each through typeExpr, so a Map<string, number> becomes a
+// *value.Map[value.BStr, float64] and the element types carry whatever their own
+// lowering is. A key or value type that has no lowering yet hands back through the
+// same NotYetLowerable typeExpr returns for it.
+func (r *Renderer) renderMap(t frontend.Type) (ast.Expr, error) {
+	k, v, ok := r.mapKeyVal(t)
+	if !ok {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "Map type did not expose its key and value through a set signature"}
+	}
+	kExpr, err := r.typeExpr(k)
+	if err != nil {
+		return nil, err
+	}
+	vExpr, err := r.typeExpr(v)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return star(&ast.IndexListExpr{X: sel("value", "Map"), Indices: []ast.Expr{kExpr, vExpr}}), nil
 }
 
 // renderObject lowers a fixed-shape object type to a pointer to a generated Go
@@ -387,6 +417,70 @@ func (r *Renderer) isBytesType(t frontend.Type) bool {
 		}
 	}
 	return false
+}
+
+// isMapType reports whether an object type is a JavaScript Map, the keyed
+// collection bento maps to value.Map (section 6.5). The standard library types a
+// Map with get, set, has, and size together: get and set separate it from a Set
+// (which has add, not get) and an Array, size separates it from a WeakMap (which
+// has no size), so the four names together are the fingerprint, read the same way
+// isBytesType reads BYTES_PER_ELEMENT. A caller must have already ruled the type
+// out as an array, so this runs only for the non-array object shapes.
+func (r *Renderer) isMapType(t frontend.Type) bool {
+	var hasGet, hasSet, hasHas, hasSize bool
+	for _, p := range r.prog.Properties(t) {
+		switch p.Name {
+		case "get":
+			hasGet = true
+		case "set":
+			hasSet = true
+		case "has":
+			hasHas = true
+		case "size":
+			hasSize = true
+		}
+	}
+	return hasGet && hasSet && hasHas && hasSize
+}
+
+// isMap reports whether the checker types a node as a Map, the receiver test the
+// map lowerings share (a new expression's target, a .get or .set call, a .size
+// read). It is the node-level companion to isMapType: it reads the node's type and
+// applies the same fingerprint, first ruling out an array so an array is never
+// mistaken for a map.
+func (r *Renderer) isMap(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isMapType(t)
+}
+
+// mapKeyVal returns the key and value types of a Map type, read off its set method
+// whose signature is set(key: K, value: V): this. The standard library declares set
+// on every Map, so its first two parameters carry K and V exactly, which is more
+// direct than reconstructing them from get's V | undefined result. It reports false
+// for a type with no such set signature, which a non-map object is.
+func (r *Renderer) mapKeyVal(t frontend.Type) (key, val frontend.Type, ok bool) {
+	var setType frontend.Type
+	found := false
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "set" {
+			setType, found = p.Type, true
+			break
+		}
+	}
+	if !found {
+		return frontend.Type{}, frontend.Type{}, false
+	}
+	call, _ := r.prog.Signatures(setType)
+	if len(call) == 0 || len(call[0].Params) < 2 {
+		return frontend.Type{}, frontend.Type{}, false
+	}
+	return call[0].Params[0].Type, call[0].Params[1].Type, true
 }
 
 // isBytes reports whether the checker types a node as a Uint8Array, the receiver

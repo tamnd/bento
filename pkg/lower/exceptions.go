@@ -42,6 +42,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Uint8Array" {
 		return r.newUint8Array(kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "Map" {
+		return r.newMap(n, kids[1:])
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}
@@ -110,6 +113,53 @@ func (r *Renderer) newUint8Array(args []frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: sel("value", "NewUint8Array"), Args: []ast.Expr{length}}, nil
+}
+
+// newMap lowers a Map construction, the keyed collection of section 6.5. Only the
+// empty new Map<K, V>() is covered: it picks the value constructor for the key kind
+// (a number, string, or boolean key each compares by its own SameValueZero) and
+// instantiates it at the value type, so new Map<string, number>() lowers to
+// value.NewStringMap[float64](). The key and value come from the map's own type at
+// this node, read off its set signature the same way renderMap reads them, so the
+// instantiation matches the type a binding of the map is declared with. The
+// entries-argument form (new Map([[k, v], ...])) and a non-primitive key are later
+// slices and hand back.
+func (r *Renderer) newMap(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
+	// The children of a new expression carry the written type arguments (new
+	// Map<string, number>()) ahead of the value arguments, and the frontend leaves a
+	// type node unnamed, so it reads as NodeUnknown. Only a real value argument (the
+	// entries list) has a named kind, so counting the named children is what tells the
+	// empty constructor from the entries form.
+	valueArgs := 0
+	for _, a := range args {
+		if a.Kind() != frontend.NodeUnknown {
+			valueArgs++
+		}
+	}
+	if valueArgs != 0 {
+		return nil, &NotYetLowerable{Reason: "only the empty new Map() is lowered yet, not the entries-argument form"}
+	}
+	k, v, ok := r.mapKeyVal(r.prog.TypeAt(n))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "new Map did not expose its key and value types"}
+	}
+	var ctor string
+	switch {
+	case k.Flags&frontend.TypeNumber != 0:
+		ctor = "NewNumberMap"
+	case k.Flags&frontend.TypeString != 0:
+		ctor = "NewStringMap"
+	case k.Flags&frontend.TypeBoolean != 0:
+		ctor = "NewBoolMap"
+	default:
+		return nil, &NotYetLowerable{Reason: "a Map with a key that is not a number, string, or boolean is a later slice"}
+	}
+	vExpr, err := r.typeExpr(v)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", ctor), Index: vExpr}}, nil
 }
 
 // errorInstanceof lowers `e instanceof Error` on a caught error, the guard a
