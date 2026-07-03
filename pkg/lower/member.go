@@ -60,6 +60,25 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, nil
 	}
+	// A field read on a class instance, this.x inside a class body or p.x on an
+	// instance, lowers to the Go struct field the class declared. It routes before
+	// the length, size, and interned-shape paths so a class whose fields happen to
+	// spell one of those fingerprints is still read as the class it is. A method
+	// read without a call is a bound-function value, a later slice.
+	if info, ok := r.classReceiver(obj); ok {
+		f, ok := info.fieldByName(prop)
+		if !ok {
+			if _, isMethod := info.methodByName(prop); isMethod {
+				return nil, &NotYetLowerable{Reason: "a method of class " + info.name + " read as a value is a later slice"}
+			}
+			return nil, &NotYetLowerable{Reason: "class " + info.name + " has no property ." + prop + " this slice lowers"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.SelectorExpr{X: recv, Sel: ident(f.goName)}, nil
+	}
 	if r.isString(obj) && prop == "length" {
 		recv, err := r.lowerExpr(obj)
 		if err != nil {

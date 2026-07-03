@@ -162,11 +162,22 @@ type Renderer struct {
 	// constant share one var.
 	bigLits     map[string]string
 	bigLitOrder []string
+	// classes registers the module's top-level classes by source name, collected
+	// in a pre-pass so a body can construct an instance of a class declared below
+	// it; classOrder keeps source order so the emitted declarations are
+	// deterministic. curClass and thisName are the body scope: inside a lowered
+	// constructor or method they name the class and its receiver identifier so
+	// this lowers to the receiver, and they are saved and restored around each
+	// body the way retType is.
+	classes    map[string]*classInfo
+	classOrder []string
+	curClass   *classInfo
+	thisName   string
 }
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}}
 }
 
 // SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go
@@ -301,6 +312,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		// TypeObject covers both arrays and fixed-shape objects in the frontend
 		// vocabulary. An element type means it is an array; otherwise it is an
 		// object shape that lowers to a struct.
+		if info, ok := r.classOfType(t); ok {
+			// A class instance is the named struct the class lowered to, held by
+			// pointer so methods mutate it and identity is preserved, and it routes
+			// first so a class whose fields spell an array-like or Map-like shape is
+			// never re-derived structurally.
+			return star(ident(info.goName)), nil
+		}
 		if elem, ok := r.prog.ElementType(t); ok {
 			return r.renderArray(elem)
 		}
