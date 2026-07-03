@@ -213,7 +213,7 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		if err != nil {
 			return nil, err
 		}
-		marshaled, err := r.marshalArgToGo(sig.Params[i], sig.ParamElem[i], sig.ParamConv[i], lowered)
+		marshaled, err := r.marshalArgToGo(sig.Params[i], sig.ParamElem[i], sig.ParamConv[i], lowered, a)
 		if err != nil {
 			return nil, err
 		}
@@ -349,6 +349,12 @@ func (r *Renderer) bentoResultType(goResult, elem string) ast.Expr {
 		// where the token crosses back into Go (section 6.13).
 		r.requireImport(bridgePkg)
 		return sel("bridge", "Opaque")
+	case "any":
+		// A Go any result crosses back to the boxed value.Value the dynamic world uses, so
+		// the guard closure returns a value.Value; the unknown projection holds it directly
+		// (section 6.12).
+		r.requireImport(valuePkg)
+		return sel("value", "Value")
 	default:
 		return ident("float64")
 	}
@@ -379,14 +385,16 @@ func (r *Renderer) elemConv(paramType, resultType, body ast.Expr) *ast.FuncLit {
 // conversion the plain path applies is unnecessary because the named conversion
 // narrows a bento number itself, and a string still transcodes through the bridge
 // before it becomes the defined string (section 6.11).
-func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv, arg ast.Expr) (ast.Expr, error) {
+func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv, arg ast.Expr, argNode frontend.Node) (ast.Expr, error) {
 	if goType == "slice" {
 		// A bento array crosses to a Go slice element by element: the emitted closure
 		// applies the element's own crossing to each element, and bridge.SliceToGo runs
 		// it over the array (section 6.4). The closure parameter is the bento element
-		// type and its result the Go element type, the inverse of the result path.
+		// type and its result the Go element type, the inverse of the result path. A
+		// slice element is always a plain basic, never an any, so the element crossing
+		// needs no argument node.
 		r.requireImport(bridgePkg)
-		body, err := r.marshalArgToGo(elem, "", goimport.DefinedConv{}, ident("x"))
+		body, err := r.marshalArgToGo(elem, "", goimport.DefinedConv{}, ident("x"), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -394,6 +402,24 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 			Fun:  sel("bridge", "SliceToGo"),
 			Args: []ast.Expr{arg, r.elemConv(r.bentoResultType(elem, ""), ident(elem), body)},
 		}, nil
+	}
+	if goType == "any" {
+		// A Go any parameter takes a boxed bento value: bridge.AnyToGo unwraps a scalar to
+		// its Go native and passes a reference value through as its value.Value box
+		// (section 6.12). The argument's own static type, not the any parameter, fixes the
+		// lowered Go type, so a statically typed argument (a number literal into an any
+		// slot) is boxed to a value.Value first, while an already-dynamic argument is a
+		// value.Value and passes straight in.
+		r.requireImport(bridgePkg)
+		boxed := arg
+		if argNode != nil && !r.isDynamic(argNode) {
+			b, err := r.boxStaticToDynamic(arg, argNode)
+			if err != nil {
+				return nil, err
+			}
+			boxed = b
+		}
+		return &ast.CallExpr{Fun: sel("bridge", "AnyToGo"), Args: []ast.Expr{boxed}}, nil
 	}
 	if goType == "opaque" {
 		// An opaque handle crosses back into Go by recovering the real value the token
@@ -466,6 +492,15 @@ func (r *Renderer) marshalResultFromGo(goType, elem string, goCall ast.Expr) (as
 		// declaration.
 		r.requireImport(bridgePkg)
 		return &ast.CallExpr{Fun: sel("bridge", "OpaqueFromGo"), Args: []ast.Expr{goCall}}, nil
+	}
+	if goType == "any" {
+		// A Go any result crosses back to a boxed bento value: bridge.AnyFromGo unboxes a
+		// value the value model represents to its bento kind and passes a value.Value that
+		// round-tripped through a Go container back unchanged (section 6.12). The result
+		// projects to unknown, so the bento side holds it as the value.Value the dynamic
+		// world already uses.
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "AnyFromGo"), Args: []ast.Expr{goCall}}, nil
 	}
 	switch goType {
 	case "string":

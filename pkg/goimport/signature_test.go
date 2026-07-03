@@ -144,9 +144,10 @@ func F() Option { return nil }
 
 // TestClassifyRejectsClassAndInterface holds the boundary between an opaque token
 // and a richer projection: a struct with an exported field or an exported method is
-// a class (section 6.7), a named interface is the interface projection (section 6.8),
-// and an empty interface is any (section 6.12), so none of them is an opaque handle
-// and each clears OK in this slice.
+// a class (section 6.7) and a named interface with methods is the interface
+// projection (section 6.8), so neither is an opaque handle and each clears OK in this
+// slice. An empty interface is not here because it is any, a covered crossing
+// (section 6.12), which TestClassifyAnyInterface pins.
 func TestClassifyRejectsClassAndInterface(t *testing.T) {
 	cases := map[string]string{
 		"exported field": `package p
@@ -159,14 +160,45 @@ func F() T { return T{} }`,
 		"named interface": `package p
 type I interface{ M() int }
 func F() I { return nil }`,
-		"empty interface": `package p
-type Any interface{}
-func F() Any { return nil }`,
 	}
 	for name, src := range cases {
 		if sig := sigOf(t, src, "F"); sig.OK {
 			t.Errorf("%s: classified as lowerable, want a hand-back", name)
 		}
+	}
+}
+
+// TestClassifyAnyInterface proves a Go any (interface{}), its named empty-interface
+// alias, and the literal interface{} all classify as an any crossing, both as a
+// parameter and a result, so the lowerer boxes and unboxes them as dynamic bento
+// values (section 6.12).
+func TestClassifyAnyInterface(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(v any) any { return v }
+`, "F")
+	if !sig.OK {
+		t.Fatal("any signature classified as not lowerable")
+	}
+	if want := []string{"any"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	if want := []string{"any"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+
+	lit := sigOf(t, `package p
+func F(v interface{}) interface{} { return v }
+`, "F")
+	if !lit.OK || !slices.Equal(lit.Params, []string{"any"}) || !slices.Equal(lit.Results, []string{"any"}) {
+		t.Errorf("interface{} classified OK=%v params=%v results=%v, want an any crossing", lit.OK, lit.Params, lit.Results)
+	}
+
+	named := sigOf(t, `package p
+type Any interface{}
+func F(v Any) Any { return v }
+`, "F")
+	if !named.OK || !slices.Equal(named.Results, []string{"any"}) {
+		t.Errorf("named empty interface classified OK=%v results=%v, want an any result", named.OK, named.Results)
 	}
 }
 

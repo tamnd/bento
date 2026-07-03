@@ -50,6 +50,11 @@ import (
 // holds the real Go value as a token and hands it back to another go: call without
 // ever inspecting it, so the lowerer emits no conversion and only names the foreign
 // Go type where the guard closure needs it.
+//
+// A Go any (the alias for interface{}) carries the keyword "any" in Params or Results
+// with an empty element slot, the dynamic crossing of section 6.12. It projects to
+// unknown and crosses as a boxed bento value, so the lowerer boxes the argument to a
+// value.Value on the way in and unboxes the result on the way out.
 type FuncSig struct {
 	Params        []string
 	ParamConv     []DefinedConv
@@ -122,6 +127,12 @@ func classifySignature(sig *types.Signature) FuncSig {
 			paramElems = append(paramElems, elem)
 			continue
 		}
+		if anyCrossing(t) {
+			params = append(params, "any")
+			convs = append(convs, DefinedConv{})
+			paramElems = append(paramElems, "")
+			continue
+		}
 		if path, name, good := opaqueCrossing(t); good {
 			params = append(params, "opaque")
 			convs = append(convs, DefinedConv{})
@@ -156,6 +167,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 		if elem, good := sliceCrossing(t); good {
 			results = append(results, "slice")
 			resultElems = append(resultElems, elem)
+			continue
+		}
+		if anyCrossing(t) {
+			results = append(results, "any")
+			resultElems = append(resultElems, "")
 			continue
 		}
 		if path, name, good := opaqueCrossing(t); good {
@@ -296,6 +312,21 @@ func hasExportedField(st *types.Struct) bool {
 		}
 	}
 	return false
+}
+
+// anyCrossing reports whether a parameter or result is a Go any (the alias for
+// interface{}), the dynamic crossing of section 6.12. It fires for an interface with an
+// empty method set, which is exactly interface{}, its any alias, and a named empty
+// interface, all of which hold any value and project to unknown. error and every other
+// named interface carry a method set, so they are left to their own projection (a throw
+// for error, a method interface for the rest, sections 6.6 and 6.8), and a struct, a
+// basic, or a slice is not an interface at all and never reaches here.
+func anyCrossing(t types.Type) bool {
+	it, ok := t.Underlying().(*types.Interface)
+	if !ok {
+		return false
+	}
+	return it.Empty()
 }
 
 // OpaqueElem packs a foreign type's import path and Go name into the single element

@@ -108,7 +108,10 @@ func (m *Mapper) mark(h Helper) { m.used[h] = true }
 // named type to its projection, and anything with no faithful mapping to a
 // GoUnsupported marker so the failure is a checker error at the call site.
 func (m *Mapper) Map(t types.Type) string {
-	switch u := t.(type) {
+	// Strip any type alias first, so the builtin any (an alias for interface{} that
+	// go/types presents as *types.Alias) and a package's own alias resolve to the type
+	// they name rather than falling through to the GoUnsupported default (section 6.12).
+	switch u := types.Unalias(t).(type) {
 	case *types.Basic:
 		return m.mapBasic(u)
 	case *types.Pointer:

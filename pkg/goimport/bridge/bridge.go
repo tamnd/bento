@@ -117,6 +117,82 @@ func OpaqueToGo[T any](o Opaque) T {
 	return o.v.(T)
 }
 
+// AnyToGo marshals a bento value into a Go any parameter, the empty-interface crossing
+// of section 6.12. A scalar unwraps to the Go native a Go function inspecting the any
+// expects: a nullish value to a nil interface, a boolean to a Go bool, a number to a
+// float64, and a string to a Go string, so a type switch in the Go library matches the
+// concrete case. A reference value (an object, an array, a function) has no native Go
+// form, so it crosses as the value.Value box itself, which keeps its identity when a Go
+// container stores it and hands it back through AnyFromGo (section 7.4). This is the
+// value model's own boxing, named here as the boundary entry point.
+func AnyToGo(v value.Value) any {
+	switch v.Kind() {
+	case value.KindUndefined, value.KindNull:
+		return nil
+	case value.KindBool:
+		return v.AsBool()
+	case value.KindNumber:
+		return v.AsNumber()
+	case value.KindString:
+		return value.ToString(v).ToGoString()
+	default:
+		return v
+	}
+}
+
+// AnyFromGo marshals a Go any result back to a bento value, the inverse of AnyToGo
+// (section 6.12). A value the value model represents unboxes to its bento kind: a nil
+// interface to null, a Go bool to a boolean, every Go integer and float to a number
+// (the 64-bit widths through the same safe-integer check a static number result takes,
+// section 7.5), and a Go string to a bento string. A value.Value that a bento value
+// round-trips through a Go container passes through unchanged, so an object handed to Go
+// as any and returned keeps its identity. A Go value of a type the value model cannot
+// represent raises a boundary error rather than cross a shape bento has no box for: the
+// opaque handle that would hold it (section 6.13) lives in a static go: result typed
+// GoOpaque, not in a dynamic any, so a dynamic crossing has no token slot for it.
+func AnyFromGo(v any) value.Value {
+	switch x := v.(type) {
+	case nil:
+		return value.Null
+	case value.Value:
+		return x
+	case value.BStr:
+		return value.StringValue(x)
+	case bool:
+		return value.Bool(x)
+	case string:
+		return value.StringValue(value.FromGoString(x))
+	case int:
+		return value.Number(Int64ToNumber(int64(x)))
+	case int8:
+		return value.Number(float64(x))
+	case int16:
+		return value.Number(float64(x))
+	case int32:
+		return value.Number(float64(x))
+	case int64:
+		return value.Number(Int64ToNumber(x))
+	case uint:
+		return value.Number(Uint64ToNumber(uint64(x)))
+	case uint8:
+		return value.Number(float64(x))
+	case uint16:
+		return value.Number(float64(x))
+	case uint32:
+		return value.Number(float64(x))
+	case uint64:
+		return value.Number(Uint64ToNumber(x))
+	case uintptr:
+		return value.Number(Uint64ToNumber(uint64(x)))
+	case float32:
+		return value.Number(float64(x))
+	case float64:
+		return value.Number(x)
+	default:
+		panic(GoError{Err: fmt.Errorf("go: value of Go type %T returned as any has no bento projection", v)})
+	}
+}
+
 // Must returns v, or raises when err is non-nil: the throw-mode bridge for a Go
 // (T, error) result projected as a T that throws (section 6.6). A go: call whose
 // Go signature ends in error lowers to a call to this, so the TypeScript author
