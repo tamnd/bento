@@ -556,6 +556,47 @@ console.log(Describe(opt));
 	}
 }
 
+// TestGoImportAnyEmitsBoxCrossing pins that a go: call with an any parameter and an
+// any result boxes and unboxes through the value model: a statically typed argument
+// is lifted to a value.Value and marshaled through bridge.AnyToGo, and the any result
+// crosses back through bridge.AnyFromGo, the section 6.12 crossing.
+func TestGoImportAnyEmitsBoxCrossing(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Echo, Name } from "go:github.com/tamnd/bento/pkg/goimport/anyfixture";
+console.log(Name(Echo(42)));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.AnyToGo(value.Number(") {
+		t.Errorf("a statically typed any argument was not boxed and marshaled:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.AnyFromGo(anyfixture.Echo(") {
+		t.Errorf("an any result was not unboxed through the bridge:\n%s", source)
+	}
+}
+
+// TestGoImportAnyRoundTripRuns proves the any crossing end to end: Echo hands a value
+// through a Go any and back, and Name reports the Go kind the crossing unwrapped it
+// to, so a number stays a number across the round trip and a string reports as a
+// string, both observed against a real build.
+func TestGoImportAnyRoundTripRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: any test builds and runs generated Go")
+	}
+	const src = `import { Echo, Name } from "go:github.com/tamnd/bento/pkg/goimport/anyfixture";
+console.log(Name(Echo(3)));
+console.log(Name("hi"));
+console.log(Name(true));
+`
+	got := runProgramGo(t, src)
+	if want := "number\nstring\nbool\n"; got != want {
+		t.Fatalf("go: any round-trip printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportEmitsAliasedImport pins that the assembled Go imports the Go package
 // under its alias and calls it qualified by that alias through the bridge, the
 // shape section 9.1 fixes, without needing to run the program.

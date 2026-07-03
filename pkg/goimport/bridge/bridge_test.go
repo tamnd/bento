@@ -230,3 +230,87 @@ func TestSliceRoundTripThroughGo(t *testing.T) {
 		t.Errorf("round trip = %q %q, want one two", StringToGo(back.At(0)), StringToGo(back.At(1)))
 	}
 }
+
+func TestAnyToGoUnwrapsScalars(t *testing.T) {
+	// A bento scalar unwraps to the Go native a Go function inspecting the any expects,
+	// so a type switch on the crossed value matches the concrete case (section 6.12).
+	if got := AnyToGo(value.Null); got != nil {
+		t.Errorf("null crossed to %v, want a nil interface", got)
+	}
+	if got := AnyToGo(value.Undefined); got != nil {
+		t.Errorf("undefined crossed to %v, want a nil interface", got)
+	}
+	if got := AnyToGo(value.Bool(true)); got != true {
+		t.Errorf("bool crossed to %v, want true", got)
+	}
+	if got := AnyToGo(value.Number(42)); got != float64(42) {
+		t.Errorf("number crossed to %v, want float64(42)", got)
+	}
+	if got := AnyToGo(value.StringValue(value.FromGoString("hi"))); got != "hi" {
+		t.Errorf("string crossed to %v, want the Go string hi", got)
+	}
+}
+
+func TestAnyRoundTripThroughGo(t *testing.T) {
+	// Every scalar bento kind survives a round trip through a Go any, the identity a
+	// generic container gives when it stores and returns a value untouched.
+	for _, v := range []value.Value{value.Null, value.Bool(false), value.Number(-7), value.StringValue(value.FromGoString("x"))} {
+		back := AnyFromGo(AnyToGo(v))
+		if back.Kind() != v.Kind() {
+			t.Errorf("round trip of kind %v produced kind %v", v.Kind(), back.Kind())
+		}
+	}
+	if back := AnyFromGo(AnyToGo(value.Number(3.5))); back.AsNumber() != 3.5 {
+		t.Errorf("number round trip = %v, want 3.5", back.AsNumber())
+	}
+}
+
+func TestAnyFromGoUnboxesGoNatives(t *testing.T) {
+	// A Go native returned as any unboxes to the bento kind its dynamic Go type maps to,
+	// so a Go library that builds a fresh value hands back a usable bento value.
+	if got := AnyFromGo("go"); got.Kind() != value.KindString {
+		t.Errorf("Go string unboxed to kind %v, want string", got.Kind())
+	}
+	if got := AnyFromGo(int64(9)); got.Kind() != value.KindNumber || got.AsNumber() != 9 {
+		t.Errorf("Go int64 unboxed to %v, want the number 9", got)
+	}
+	if got := AnyFromGo(true); got.Kind() != value.KindBool || !got.AsBool() {
+		t.Errorf("Go bool unboxed to %v, want true", got)
+	}
+	if got := AnyFromGo(nil); got.Kind() != value.KindNull {
+		t.Errorf("nil unboxed to kind %v, want null", got.Kind())
+	}
+}
+
+func TestAnyFromGoReferenceKeepsIdentity(t *testing.T) {
+	// A bento array handed to Go as any crosses as its value.Value box, not a Go native,
+	// so returning it through AnyFromGo yields the same reference value (section 7.4).
+	arr := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2)})
+	crossed := AnyToGo(arr)
+	if _, ok := crossed.(value.Value); !ok {
+		t.Fatalf("a reference value crossed as %T, want its value.Value box", crossed)
+	}
+	back := AnyFromGo(crossed)
+	if back.Kind() != value.KindArray {
+		t.Errorf("reference round trip produced kind %v, want array", back.Kind())
+	}
+	if got := back.Get(value.FromGoString("length")); got.AsNumber() != 2 {
+		t.Errorf("round-tripped array length = %v, want 2", got.AsNumber())
+	}
+}
+
+func TestAnyFromGoUnprojectedTypeRaises(t *testing.T) {
+	// A Go value of a type the value model cannot represent has no dynamic box, so the
+	// crossing raises a boundary GoError rather than corrupt the value (section 6.12).
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("an unprojected Go type crossed as any did not raise")
+		}
+		if _, ok := r.(GoError); !ok {
+			t.Errorf("raised %T, want GoError", r)
+		}
+	}()
+	type foreign struct{ n int }
+	AnyFromGo(foreign{n: 1})
+}
