@@ -162,6 +162,15 @@ func (g *generator) declareType(tn *types.TypeName) string {
 	tp := g.mapper.TypeParams(named.TypeParams())
 	switch u := named.Underlying().(type) {
 	case *types.Struct:
+		if !structHasExportedSurface(named, u) {
+			// A struct with no exported fields and no exported methods has no shape the
+			// author can read or call, so it projects as an opaque token rather than an
+			// empty interface: it is a handle received from one call and passed to another
+			// (section 6.13), which is exactly how the runtime crosses it.
+			g.mapper.mark(HelperOpaque)
+			return g.doc(tn) + "export type " + tn.Name() + tp +
+				" = GoOpaque<\"" + g.pkg.Name() + "." + tn.Name() + "\">;\n"
+		}
 		return g.declareStruct(tn, named, tp, u)
 	case *types.Interface:
 		return g.declareInterface(tn, tp, u)
@@ -170,6 +179,23 @@ func (g *generator) declareType(tn *types.TypeName) string {
 	default:
 		return g.doc(tn) + "export type " + tn.Name() + tp + " = " + g.mapper.Map(u) + ";\n"
 	}
+}
+
+// structHasExportedSurface reports whether a struct type has any exported field or
+// any exported method, the shape an author can read or call. A struct with neither
+// is an opaque token, not a class, so it projects as GoOpaque (section 6.13).
+func structHasExportedSurface(named *types.Named, st *types.Struct) bool {
+	for f := range st.Fields() {
+		if f.Exported() {
+			return true
+		}
+	}
+	for fn := range named.Methods() {
+		if fn.Exported() {
+			return true
+		}
+	}
+	return false
 }
 
 // declareStruct emits a struct as an interface: exported fields become properties

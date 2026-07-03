@@ -511,6 +511,51 @@ console.log(words.length);
 	}
 }
 
+// TestGoImportOpaqueHandleEmitsTokenCrossing pins that a go: call returning a type
+// the bridge does not project boxes it into the uniform bridge.Opaque token: the
+// result is wrapped by OpaqueFromGo, a local that holds it is typed bridge.Opaque
+// whatever the foreign type is, and passing the token back recovers the concrete
+// type through OpaqueToGo named by its package alias, the section 6.13 crossing.
+func TestGoImportOpaqueHandleEmitsTokenCrossing(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { WithLevel, Describe } from "go:github.com/tamnd/bento/pkg/goimport/optfixture";
+const opt = WithLevel(7);
+console.log(Describe(opt));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.OpaqueFromGo(optfixture.WithLevel(") {
+		t.Errorf("an opaque result was not boxed into a token:\n%s", source)
+	}
+	if !strings.Contains(source, "var opt bridge.Opaque = ") {
+		t.Errorf("a local holding an opaque token was not typed bridge.Opaque:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.OpaqueToGo[optfixture.Level](opt)") {
+		t.Errorf("an opaque argument did not recover its concrete Go type on the way back:\n%s", source)
+	}
+}
+
+// TestGoImportOpaqueHandleRoundTripRuns proves the opaque crossing end to end: the
+// program receives an option token from one go: call and hands it to another, which
+// reads the level it carries, so the token round-trips through bento untouched and
+// the second call prints the number the first put in.
+func TestGoImportOpaqueHandleRoundTripRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: opaque test builds and runs generated Go")
+	}
+	const src = `import { WithLevel, Describe } from "go:github.com/tamnd/bento/pkg/goimport/optfixture";
+const opt = WithLevel(7);
+console.log(Describe(opt));
+`
+	got := runProgramGo(t, src)
+	if want := "7\n"; got != want {
+		t.Fatalf("go: opaque round-trip printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportEmitsAliasedImport pins that the assembled Go imports the Go package
 // under its alias and calls it qualified by that alias through the bridge, the
 // shape section 9.1 fixes, without needing to run the program.

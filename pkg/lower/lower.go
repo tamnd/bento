@@ -256,6 +256,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		if elem, ok := r.prog.ElementType(t); ok {
 			return r.renderArray(elem)
 		}
+		if r.isGoOpaqueType(t) {
+			// A go: opaque handle (section 6.13) projects to a GoOpaque object, but it is a
+			// token bento never reads, not a shape: a local that holds one is typed as the
+			// uniform bridge.Opaque the crossing produces, not a struct of its phantom brand.
+			r.requireImport(bridgePkg)
+			return sel("bridge", "Opaque"), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -307,6 +314,20 @@ func (r *Renderer) renderObject(t frontend.Type) (ast.Expr, error) {
 		return nil, err
 	}
 	return star(ident(name)), nil
+}
+
+// isGoOpaqueType reports whether an object type is a go: opaque handle, the
+// GoOpaque<Tag> the bridge projects for a Go type it does not express (section
+// 6.13). GoOpaque is { readonly __goOpaque: Tag }, so the phantom brand property is
+// its fingerprint: a real object shape never carries it. The check is by property
+// name alone, so it matches whatever the tag is without reading it.
+func (r *Renderer) isGoOpaqueType(t frontend.Type) bool {
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "__goOpaque" {
+			return true
+		}
+	}
+	return false
 }
 
 // Decls returns the generated declarations the rendered types referred to, in a
