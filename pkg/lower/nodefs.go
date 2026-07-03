@@ -88,6 +88,13 @@ func (r *Renderer) recordNodeImport(decl frontend.Node) error {
 			clause, haveClause = k, true
 		}
 	}
+	// A go: specifier is a Go interop import, not a node: builtin, so it routes to
+	// the interop recorder, which maps its bindings to direct Go calls. It is handled
+	// here, in the one import walk, so a module mixing node: and go: imports records
+	// both from a single pass.
+	if strings.HasPrefix(module, goScheme) {
+		return r.recordGoImport(module, clause, haveClause)
+	}
 	exports, ok := nodeModuleExports[module]
 	if !ok {
 		return &NotYetLowerable{Reason: "import of module " + module + " is a later slice"}

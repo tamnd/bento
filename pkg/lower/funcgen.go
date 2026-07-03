@@ -997,6 +997,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if b, ok := r.nodeImports[r.prog.Text(kids[0])]; ok {
 		return r.nodeBuiltinCall(b, kids[1:])
 	}
+	// A call to a name bound by a go: import is a direct call into a real Go package,
+	// so it routes to the interop lowering before the user-function path, which would
+	// reject the alias symbol the binding carries.
+	if b, ok := r.goImports[r.prog.Text(kids[0])]; ok {
+		return r.goImportCall(b, n, kids[1:])
+	}
 	// A bare call to an ambient global function (isNaN, isFinite) is not a call to
 	// a user binding, so it routes to the global-function lowering before the
 	// user-function path, which would otherwise reject it.
