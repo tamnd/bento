@@ -9,104 +9,161 @@ import "github.com/tamnd/bento/pkg/frontend"
 // 13). A binding not in the set can stay in its cheap monomorphic representation
 // for its whole lifetime.
 //
-// Boxing is the second lattice Pass B propagates (section 4.2). This slice
-// computes a sound lower bound on it: every binding reported here genuinely
-// escapes, so the caller can trust an Escapes result, while the transitive
-// data-flow closure that catches values which escape by flowing into another
-// escaping value (section 13.2) is a later slice. Nothing lowers against this
-// result yet, so reporting a lower bound is safe; when lowering consumes it, the
-// transitive closure must be in place first, because under-boxing an escaping
-// value would be unsound.
+// Boxing is the second lattice Pass B propagates (section 4.2). It is a monotone
+// data-flow analysis: a value escapes if it flows to a sink or flows to another
+// value that escapes, computed to a fixpoint. This analysis seeds the sinks it can
+// see directly and closes escape over the aliasing it can see within a unit; the
+// inter-procedural flow that carries escape across a return or through a retained
+// argument is a later slice, and until it lands the result is a sound lower bound
+// that lowering must not yet rely on to stop boxing.
 type Boxing struct {
-	// Escaping holds every binding symbol that reaches a dynamic sink directly.
+	// Escaping holds every binding symbol that must be boxed.
 	Escaping map[frontend.Symbol]bool
 }
 
-// Escapes reports whether a binding must be boxed. A false result from this slice
-// means "not known to escape by a direct sink," not yet "provably monomorphic";
-// the latter waits on the transitive closure.
+// Escapes reports whether a binding must be boxed.
 func (b Boxing) Escapes(sym frontend.Symbol) bool { return b.Escaping[sym] }
 
 // Boxing runs escape analysis over the whole program and returns the boxing
-// lattice. It walks every unit body, since a binding can reach a sink in any unit
-// that can see it, and marks the binding behind every value that flows straight
-// into a dynamic sink.
-//
-// The sink this slice detects is the reflective walk: JSON.stringify reads its
-// argument's shape dynamically (section 13.1), so a typed object handed to it can
-// no longer be assumed to keep a fixed Go layout and must be boxed. This is the
-// sink of the section 13.5 worked example, where audit's JSON.stringify(o) is
-// exactly what forces o to box while a value only ever passed to summarize stays
-// monomorphic. Primitives are immutable and cross by value with no identity
-// concern (section 9.3), so only object-shaped arguments escape here.
+// lattice. It walks every unit body to seed the direct sinks and collect the
+// aliasing edges, then closes escape over those edges to a fixpoint so a value
+// that escapes reaches every binding that aliases it.
 func (pt *Partitioner) Boxing() Boxing {
-	b := Boxing{Escaping: map[frontend.Symbol]bool{}}
-	for _, u := range pt.Units() {
-		pt.scanEscapes(u.Root, &b)
+	units := pt.Units()
+	index := make(map[nodeKey]int, len(units))
+	for i, u := range units {
+		index[keyOf(u.Root)] = i
 	}
-	return b
+
+	seeds := map[frontend.Symbol]bool{}
+	edges := map[frontend.Symbol][]frontend.Symbol{}
+	for _, u := range units {
+		pt.scanEscapes(u.Root, index, seeds, edges)
+	}
+
+	closeEscapes(seeds, edges)
+	return Boxing{Escaping: seeds}
 }
 
 // scanEscapes walks one unit's body, stopping at nested function boundaries the
-// way the other Pass B walks do, and records the binding behind every dynamic
-// sink argument it finds. Each call is visited once, under the unit that owns it,
-// which is enough because a sink marks the binding it names regardless of which
-// unit the sink sits in.
-func (pt *Partitioner) scanEscapes(node frontend.Node, b *Boxing) {
+// way the other Pass B walks do. It seeds an escape at every dynamic-sink argument
+// and records an aliasing edge at every binding-to-binding declaration or
+// assignment, so the closure can carry an escape from one alias to the other.
+func (pt *Partitioner) scanEscapes(node frontend.Node, index map[nodeKey]int, seeds map[frontend.Symbol]bool, edges map[frontend.Symbol][]frontend.Symbol) {
 	for _, child := range pt.prog.Children(node) {
-		if child.Kind() == frontend.NodeCallExpression {
-			pt.inspectSink(child, b)
+		switch child.Kind() {
+		case frontend.NodeCallExpression, frontend.NodeNewExpression:
+			pt.seedSinks(child, index, seeds)
+		case frontend.NodeVariableDeclaration:
+			pt.collectDeclarationAlias(child, edges)
+		case frontend.NodeBinaryExpression:
+			pt.collectAssignmentAlias(child, edges)
 		}
 		if functionLike(child.Kind()) {
 			continue
 		}
-		pt.scanEscapes(child, b)
+		pt.scanEscapes(child, index, seeds, edges)
 	}
 }
 
-// inspectSink marks the binding behind a JSON.stringify argument as escaping. A
-// stringify of an object-typed reference to a binding forces that binding to box;
-// a stringify of a primitive, a literal, or a fresh expression marks nothing,
-// because a value with no binding and no identity has nothing to keep monomorphic.
-func (pt *Partitioner) inspectSink(call frontend.Node, b *Boxing) {
+// seedSinks marks the binding behind every argument that crosses into a position
+// the type system cannot vouch for. A value handed to an any or unknown parameter
+// can be walked reflectively, retained, or shape-mutated by the receiver, none of
+// which a fixed Go layout survives, so it must box. This one rule covers the
+// reflective walk (JSON.stringify, whose parameter is any) and the boundary
+// crossing into interpreted or unknown code alike. Primitives are immutable and
+// cross by value with no identity concern (section 9.3), so only object-shaped
+// arguments seed an escape.
+func (pt *Partitioner) seedSinks(call frontend.Node, index map[nodeKey]int, seeds map[frontend.Symbol]bool) {
 	kids := pt.prog.Children(call)
 	if len(kids) < 2 {
 		return
 	}
-	if !pt.isJSONStringify(kids[0]) {
-		return
-	}
-	arg := kids[1]
-	if !isBoxable(pt.prog.TypeAt(arg)) {
-		return
-	}
-	if sym, ok := pt.bindingOf(arg); ok {
-		b.Escaping[sym] = true
+	args := kids[1:]
+	sig, hasSig := pt.prog.SignatureAt(call)
+	calleeExternal := pt.calleeIsExternal(kids[0], index)
+
+	for k, arg := range args {
+		if !isBoxable(pt.prog.TypeAt(arg)) {
+			continue
+		}
+		if !pt.positionUntyped(sig, hasSig, k, calleeExternal) {
+			continue
+		}
+		if sym, ok := pt.bindingOf(arg); ok {
+			seeds[sym] = true
+		}
 	}
 }
 
-// isJSONStringify reports whether a call's callee is the global JSON.stringify. It
-// is a property access whose receiver resolves to the global JSON namespace and
-// whose member name is stringify, the same shape the lowerer recognizes before it
-// emits the value serializer.
-func (pt *Partitioner) isJSONStringify(callee frontend.Node) bool {
-	if callee.Kind() != frontend.NodePropertyAccessExpression {
-		return false
+// collectDeclarationAlias records the aliasing edge in a `const w = v` or
+// `let w = v` whose initializer is a bare reference to another binding. Both name
+// the same object at runtime, so if either escapes the other must box too; the
+// edge is symmetric. A type annotation between the name and the initializer names
+// a type, not a value binding, so it is skipped by the value-binding check.
+func (pt *Partitioner) collectDeclarationAlias(decl frontend.Node, edges map[frontend.Symbol][]frontend.Symbol) {
+	kids := pt.prog.Children(decl)
+	if len(kids) < 2 {
+		return
 	}
-	parts := pt.prog.Children(callee)
-	if len(parts) < 2 {
-		return false
+	name := kids[0]
+	w, ok := pt.valueBindingSymbol(name)
+	if !ok || !isBoxable(pt.prog.TypeAt(name)) {
+		return
 	}
-	recv, name := parts[0], parts[1]
-	if sym, ok := pt.prog.SymbolAt(recv); !ok || sym.Name != "JSON" {
-		return false
+	for _, rhs := range kids[1:] {
+		v, ok := pt.valueBindingSymbol(rhs)
+		if !ok || !isBoxable(pt.prog.TypeAt(rhs)) {
+			continue
+		}
+		addAliasEdge(edges, w, v)
 	}
-	return pt.prog.Text(name) == "stringify"
+}
+
+// collectAssignmentAlias records the aliasing edge in an assignment `w = v` where
+// both sides are bindings of object type. Like a declaration alias, the two name
+// the same object, so escape flows between them.
+func (pt *Partitioner) collectAssignmentAlias(bin frontend.Node, edges map[frontend.Symbol][]frontend.Symbol) {
+	kids := pt.prog.Children(bin)
+	if len(kids) != 3 || pt.prog.Text(kids[1]) != "=" {
+		return
+	}
+	l, ok := pt.valueBindingSymbol(kids[0])
+	if !ok || !isBoxable(pt.prog.TypeAt(kids[0])) {
+		return
+	}
+	r, ok := pt.valueBindingSymbol(kids[2])
+	if !ok || !isBoxable(pt.prog.TypeAt(kids[2])) {
+		return
+	}
+	addAliasEdge(edges, l, r)
+}
+
+// valueBindingSymbol returns the symbol a bare identifier names when that symbol
+// is a value binding, a parameter or a variable, as opposed to a type, a function,
+// or a class. Only a value binding holds a value that can alias another and be
+// boxed, so a name that resolves to anything else is not an alias endpoint.
+func (pt *Partitioner) valueBindingSymbol(n frontend.Node) (frontend.Symbol, bool) {
+	if n.Kind() != frontend.NodeIdentifier {
+		return frontend.Symbol{}, false
+	}
+	sym, ok := pt.prog.SymbolAt(n)
+	if !ok {
+		return frontend.Symbol{}, false
+	}
+	sym = pt.prog.Aliased(sym)
+	for _, decl := range pt.prog.Declarations(sym) {
+		switch decl.Kind() {
+		case frontend.NodeParameter, frontend.NodeVariableDeclaration:
+			return sym, true
+		}
+	}
+	return frontend.Symbol{}, false
 }
 
 // bindingOf returns the symbol a bare identifier names, the binding whose stored
-// value the sink observes. An argument that is not a plain identifier, a literal,
-// a call, a property access, names no single binding to box, so it returns false.
+// value a sink observes. An argument that is not a plain identifier names no
+// single binding to box.
 func (pt *Partitioner) bindingOf(arg frontend.Node) (frontend.Symbol, bool) {
 	if arg.Kind() != frontend.NodeIdentifier {
 		return frontend.Symbol{}, false
@@ -123,4 +180,34 @@ func (pt *Partitioner) bindingOf(arg frontend.Node) (frontend.Symbol, bool) {
 // Only these need boxing when they reach a sink; primitives cross by value.
 func isBoxable(t frontend.Type) bool {
 	return t.Flags&frontend.TypeObject != 0
+}
+
+// addAliasEdge adds a symmetric edge between two aliasing bindings, so the closure
+// can carry an escape in either direction.
+func addAliasEdge(edges map[frontend.Symbol][]frontend.Symbol, a, b frontend.Symbol) {
+	if a == b {
+		return
+	}
+	edges[a] = append(edges[a], b)
+	edges[b] = append(edges[b], a)
+}
+
+// closeEscapes propagates escape to a fixpoint over the aliasing edges: once a
+// binding escapes, every binding it aliases escapes too, transitively. The lattice
+// is finite and monotone, so the worklist drains and the fixpoint is reached.
+func closeEscapes(seeds map[frontend.Symbol]bool, edges map[frontend.Symbol][]frontend.Symbol) {
+	work := make([]frontend.Symbol, 0, len(seeds))
+	for sym := range seeds {
+		work = append(work, sym)
+	}
+	for len(work) > 0 {
+		sym := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, next := range edges[sym] {
+			if !seeds[next] {
+				seeds[next] = true
+				work = append(work, next)
+			}
+		}
+	}
 }

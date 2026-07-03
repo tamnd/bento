@@ -62,6 +62,68 @@ func TestBoxingPrimitiveDoesNotEscape(t *testing.T) {
 	}
 }
 
+// TestBoxingAliasEscapesTransitively pins the closure: a value that escapes
+// carries the escape to every binding that aliases it. copy is stringified and
+// escapes directly; rec, which copy was declared from, names the same object and
+// must box too.
+func TestBoxingAliasEscapesTransitively(t *testing.T) {
+	src := "export function audit(rec: { id: string; total: number }): void {\n" +
+		"  const copy = rec;\n" +
+		"  console.log(JSON.stringify(copy));\n" +
+		"}\n"
+	b := realBoxing(t, src)
+
+	if !escapesNamed(b, "copy") {
+		t.Errorf("copy did not escape through JSON.stringify; escaping = %v", b.Escaping)
+	}
+	if !escapesNamed(b, "rec") {
+		t.Errorf("rec did not inherit copy's escape across the alias; escaping = %v", b.Escaping)
+	}
+}
+
+// TestBoxingAssignmentAliasEscapes pins that an assignment alias carries escape
+// the same way a declaration alias does. other is stringified and escapes, and rec
+// was assigned into other, so rec names the same object and boxes.
+func TestBoxingAssignmentAliasEscapes(t *testing.T) {
+	src := "export function audit(rec: { id: string }, other: { id: string }): void {\n" +
+		"  other = rec;\n" +
+		"  console.log(JSON.stringify(other));\n" +
+		"}\n"
+	b := realBoxing(t, src)
+
+	if !escapesNamed(b, "rec") {
+		t.Errorf("rec did not inherit other's escape across the assignment; escaping = %v", b.Escaping)
+	}
+}
+
+// TestBoxingUntypedCrossingEscapes pins the boundary-crossing sink beyond the
+// reflective walk: an object handed to an any parameter crosses into code that may
+// retain or shape-mutate it, so it boxes. order flows into sink's any parameter and
+// escapes.
+func TestBoxingUntypedCrossingEscapes(t *testing.T) {
+	src := "export function sink(x: any): void {}\n" +
+		"export function feed(order: { id: string; total: number }): void { sink(order); }\n"
+	b := realBoxing(t, src)
+
+	if !escapesNamed(b, "order") {
+		t.Errorf("order did not escape crossing into an any parameter; escaping = %v", b.Escaping)
+	}
+}
+
+// TestBoxingTypedCrossingStaysMonomorphic pins the tight side: an object handed to
+// a concretely typed parameter stays monomorphic, because the callee is bound by
+// the type and cannot treat it dynamically. order flows only into keep's typed
+// parameter and does not escape.
+func TestBoxingTypedCrossingStaysMonomorphic(t *testing.T) {
+	src := "export function keep(rec: { total: number }): number { return rec.total; }\n" +
+		"export function pass(order: { total: number }): number { return keep(order); }\n"
+	b := realBoxing(t, src)
+
+	if escapesNamed(b, "order") {
+		t.Errorf("order escaped crossing into a typed parameter, but a typed crossing stays monomorphic; escaping = %v", b.Escaping)
+	}
+}
+
 // TestBoxingNoSinkNoEscape pins that a value which never reaches a sink stays
 // monomorphic. rec is only read through a typed field access, so escape analysis
 // leaves it out of the boxing set.
