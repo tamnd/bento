@@ -32,10 +32,19 @@ import "go/types"
 // carries only the underlying keyword of a defined-type result, and ResultDefined
 // records that the result is a defined type so the lowerer strips its brand before
 // marshaling it back.
+//
+// ParamElem and ResultElem are parallel to Params and Results: for a parameter or
+// result that is a slice of a basic ([]string, []float64) the keyword is "slice" and
+// the element keyword rides here, so the lowerer marshals the array element by
+// element (section 6.4); for a scalar crossing the element is the empty string. A
+// []byte is deliberately not a slice crossing, because it projects to a Uint8Array
+// (section 7.3), a later slice, so it clears OK and hands the call back.
 type FuncSig struct {
 	Params        []string
 	ParamConv     []DefinedConv
+	ParamElem     []string
 	Results       []string
+	ResultElem    []string
 	ResultDefined bool
 	Throws        bool
 	OK            bool
@@ -93,15 +102,25 @@ func classifySignature(sig *types.Signature) FuncSig {
 	ok := !sig.Variadic()
 	params := make([]string, 0, sig.Params().Len())
 	convs := make([]DefinedConv, 0, sig.Params().Len())
+	paramElems := make([]string, 0, sig.Params().Len())
 	for i := 0; i < sig.Params().Len(); i++ {
-		kw, conv, good := crossingType(sig.Params().At(i).Type())
+		t := sig.Params().At(i).Type()
+		if elem, good := sliceCrossing(t); good {
+			params = append(params, "slice")
+			convs = append(convs, DefinedConv{})
+			paramElems = append(paramElems, elem)
+			continue
+		}
+		kw, conv, good := crossingType(t)
 		if !good {
 			ok = false
 		}
 		params = append(params, kw)
 		convs = append(convs, conv)
+		paramElems = append(paramElems, "")
 	}
 	var results []string
+	var resultElems []string
 	throws := false
 	resultDefined := false
 	n := sig.Results().Len()
@@ -117,6 +136,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 			}
 			continue
 		}
+		if elem, good := sliceCrossing(t); good {
+			results = append(results, "slice")
+			resultElems = append(resultElems, elem)
+			continue
+		}
 		kw, conv, good := crossingType(t)
 		if !good {
 			ok = false
@@ -125,13 +149,14 @@ func classifySignature(sig *types.Signature) FuncSig {
 			resultDefined = true
 		}
 		results = append(results, kw)
+		resultElems = append(resultElems, "")
 	}
 	if len(results) > 1 {
 		// More than one non-error result maps to a tuple, a later slice; only a single
 		// value (with or without a hoisted error) is marshaled today.
 		ok = false
 	}
-	return FuncSig{Params: params, ParamConv: convs, Results: results, ResultDefined: resultDefined, Throws: throws, OK: ok}
+	return FuncSig{Params: params, ParamConv: convs, ParamElem: paramElems, Results: results, ResultElem: resultElems, ResultDefined: resultDefined, Throws: throws, OK: ok}
 }
 
 // crossingType classifies a parameter or result type for the boundary: a plain
@@ -160,6 +185,25 @@ func crossingType(t types.Type) (string, DefinedConv, bool) {
 		return "", DefinedConv{}, false
 	}
 	return kw, DefinedConv{Name: obj.Name(), Path: obj.Pkg().Path()}, true
+}
+
+// sliceCrossing classifies a slice of a plain basic for the boundary, returning the
+// element's Go type keyword and true so the lowerer marshals a []string or []float64
+// element by element as a bento array (section 6.4). A []byte is deliberately not a
+// slice crossing: it projects to a Uint8Array, a later slice (section 7.3), so it
+// returns false and the call hands back. A slice of a defined type or a non-basic
+// element also returns false, because only the scalar element crossings are covered
+// here, so those await their own slice.
+func sliceCrossing(t types.Type) (string, bool) {
+	s, ok := t.(*types.Slice)
+	if !ok {
+		return "", false
+	}
+	kw := basicKeyword(s.Elem())
+	if kw == "" || kw == "uint8" {
+		return "", false
+	}
+	return kw, true
 }
 
 // basicKeyword returns the Go type keyword for a plain basic type, and "" for
