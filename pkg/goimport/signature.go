@@ -184,6 +184,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 			resultElems = append(resultElems, elem)
 			continue
 		}
+		if path, name, fields, good := sliceStructCrossing(t); good {
+			results = append(results, "structslice")
+			resultElems = append(resultElems, StructElem(path, name, fields))
+			continue
+		}
 		if key, val, good := mapCrossing(t); good {
 			results = append(results, "map")
 			resultElems = append(resultElems, MapElem(key, val))
@@ -381,6 +386,25 @@ func sliceCrossing(t types.Type) (string, bool) {
 		return "", false
 	}
 	return kw, true
+}
+
+// sliceStructCrossing classifies a slice whose element is a struct crossing, the
+// []Point shape, returning the element struct's import path, Go name, and exported
+// fields and true so the lowerer marshals the slice element by element into a bento
+// array of read-only object boxes (sections 6.4, 6.7). It fires only where
+// sliceCrossing does not: a slice of a plain basic is the scalar slice crossing, and
+// a []byte is the Uint8Array crossing, so both are already claimed before this is
+// reached. The element must be a struct structCrossing accepts, an exported named
+// type with at least one exported field, every field a plain basic; a slice of a
+// struct with a composite field hands back with structCrossing, and a slice of a
+// slice or a map awaits its own slice. This is the result direction only: a []Point
+// argument (a bento array crossing into a Go slice of structs) is a later slice.
+func sliceStructCrossing(t types.Type) (string, string, []StructField, bool) {
+	s, ok := t.(*types.Slice)
+	if !ok {
+		return "", "", nil, false
+	}
+	return structCrossing(s.Elem())
 }
 
 // mapCrossing classifies a Go map of a plain basic key to a plain basic value for
