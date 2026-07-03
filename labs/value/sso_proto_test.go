@@ -33,15 +33,21 @@ package valuelab
 
 import "testing"
 
+// ropeStub and the utf8/rope fields below never carry a value in this benchmark.
+// They exist only so plainBStr and ssoBStr have the same field layout and size as
+// the shipped BStr, since the copy cost these benchmarks measure is a function of
+// that size. The directives say exactly that to the linter.
+//
+//nolint:unused // sizes the struct like the shipped BStr; never read on purpose
 type ropeStub struct{ a, b, c uintptr }
 
 // plainBStr is the shape bento ships: a short fromCharCode result lives in the
 // heap-backed utf16 slice, so building one allocates.
 type plainBStr struct {
-	utf8      string
+	utf8      string //nolint:unused // present only to match the shipped BStr size
 	utf16     []uint16
 	lengthU16 int
-	rope      *ropeStub
+	rope      *ropeStub //nolint:unused // present only to match the shipped BStr size
 }
 
 // Both constructors are marked non-inlinable (the directive below) so the built
@@ -68,10 +74,10 @@ const ssoCap = 8
 // lives in the value itself with no heap slice, so building one does not allocate;
 // a larger one spills to the utf16 slice exactly as today.
 type ssoBStr struct {
-	utf8      string
+	utf8      string //nolint:unused // present only to match the shipped BStr size
 	utf16     []uint16
 	lengthU16 int
-	rope      *ropeStub
+	rope      *ropeStub //nolint:unused // present only to match the shipped BStr size
 	inline    [ssoCap]uint16
 	inlineLen int8 // >=0 means the inline array holds the value
 }
