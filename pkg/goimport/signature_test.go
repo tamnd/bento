@@ -157,6 +157,33 @@ func F() Point { return Point{} }
 	}
 }
 
+// TestClassifyStructParam proves a Go named struct with exported basic fields is a
+// struct crossing as a parameter too, carrying the keyword "struct" with the same
+// packed element as a result, so the lowerer marshals a bento object into the Go
+// struct value at the call site (section 6.7).
+func TestClassifyStructParam(t *testing.T) {
+	sig := sigOf(t, `package p
+type Point struct {
+	X int
+	Y int
+}
+func F(pt Point) int { return pt.X }
+`, "F")
+	if !sig.OK {
+		t.Fatal("a struct-parameter signature classified as not lowerable")
+	}
+	if want := []string{"struct"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	path, name, fields := SplitStructElem(sig.ParamElem[0])
+	if path != "p" || name != "Point" {
+		t.Errorf("struct param element path/name = %q/%q, want p/Point", path, name)
+	}
+	if len(fields) != 2 || fields[0].Name != "X" || fields[1].Name != "Y" {
+		t.Errorf("struct param fields = %v, want X and Y", fields)
+	}
+}
+
 // TestClassifyRejectsStructOfComposite proves a struct with a non-basic field (a
 // slice, another struct) is not covered by this slice, so a function returning it
 // hands back rather than emit a half-boxed result.
@@ -454,17 +481,36 @@ func F(args ...any) { }
 }
 
 // TestClassifyVariadicOfComposite proves a variadic whose element is not a covered
-// crossing (a slice of a struct spread as the tail) clears OK, so the call hands back
+// crossing (a map to a slice spread as the tail) clears OK, so the call hands back
 // rather than marshal an element it cannot cross.
 func TestClassifyVariadicOfComposite(t *testing.T) {
 	sig := sigOf(t, `package p
-type T struct{ X int }
-func F(items ...T) int { return 0 }
+func F(items ...map[string][]int) int { return 0 }
 `, "F")
 	if sig.OK {
-		t.Error("variadic of a class struct classified as lowerable, want a hand-back")
+		t.Error("variadic of an uncovered map classified as lowerable, want a hand-back")
 	}
 	if !sig.Variadic {
 		t.Error("signature not flagged variadic even though it hands back, want the flag set for a diagnostic")
+	}
+}
+
+// TestClassifyVariadicStruct proves a variadic whose element is a struct crossing is
+// covered: each spread argument marshals through the struct crossing on its own, so a
+// variadic of structs classifies as lowerable with the struct keyword on its element
+// (section 6.7).
+func TestClassifyVariadicStruct(t *testing.T) {
+	sig := sigOf(t, `package p
+type Point struct{ X int; Y int }
+func F(pts ...Point) int { return 0 }
+`, "F")
+	if !sig.OK || !sig.Variadic {
+		t.Fatalf("variadic of a struct classified OK=%v Variadic=%v, want both true", sig.OK, sig.Variadic)
+	}
+	if want := []string{"struct"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want the element struct %v", sig.Params, want)
+	}
+	if _, name, _ := SplitStructElem(sig.ParamElem[0]); name != "Point" {
+		t.Errorf("variadic struct element name = %q, want Point", name)
 	}
 }
