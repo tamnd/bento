@@ -1,6 +1,9 @@
 package frontend
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // mapFS is an in-memory FileSystem for exercising Load without touching disk.
 type mapFS struct{ files map[string]string }
@@ -177,6 +180,43 @@ func TestLoadGoImportIsTyped(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected an error for passing a number to Sum256, which wants a Uint8Array")
+	}
+}
+
+// TestLoadUnsupportedGoSignatureIsCallSiteError proves the section 6.14 promise:
+// a Go function whose signature requires a type the bridge cannot cross is not
+// dropped from the declarations, it is projected with a GoUnsupported marker, so an
+// author who reaches for it gets a clear checker error at the call site rather than
+// a mysterious missing export or a runtime surprise. math/cmplx.Abs takes a
+// complex128, which has no faithful TypeScript meaning and projects as
+// GoUnsupported, so passing a number to it must be a checker error. Like the other
+// go: interop tests this loads a real standard library package, so it needs the Go
+// toolchain but no network.
+func TestLoadUnsupportedGoSignatureIsCallSiteError(t *testing.T) {
+	fs := mapFS{files: map[string]string{
+		"/app/main.ts": "import { Abs } from \"go:math/cmplx\";\n" +
+			"export const m = Abs(1);\n",
+	}}
+	prog, err := Load(LoadOptions{Dir: "/app", Roots: []string{"/app/main.ts"}, FS: fs})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// The symbol is projected, not omitted: Abs binds, so the diagnostic is a type
+	// error at the call, never a "no exported member Abs" that would mean the
+	// declaration silently swallowed the function.
+	found := false
+	for _, d := range prog.Diagnostics() {
+		if d.Category != CategoryError {
+			continue
+		}
+		found = true
+		if strings.Contains(d.Message, "Abs") && strings.Contains(strings.ToLower(d.Message), "no exported member") {
+			t.Errorf("Abs was omitted from the declarations instead of projected as GoUnsupported: %s", d.Message)
+		}
+	}
+	if !found {
+		t.Fatal("expected a checker error for calling a go: function whose parameter projects as GoUnsupported")
 	}
 }
 
