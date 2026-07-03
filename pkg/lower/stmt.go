@@ -285,6 +285,9 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.bigIntInPlaceAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		if stmt, ok, err := r.classFieldAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		assign, err := r.lowerAssign(n)
 		if err != nil {
 			return nil, err
@@ -384,6 +387,19 @@ func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
 		tok = token.DEC
 	default:
 		return nil, &NotYetLowerable{Reason: "update operator " + op + " is a later slice"}
+	}
+	// this.count++ and p.count++ on a class field are the same statement on a
+	// struct field, so the field selector the class lowering builds takes the
+	// place of the local identifier.
+	if operand.Kind() == frontend.NodePropertyAccessExpression {
+		if lhs, ok, err := r.classFieldTarget(operand); err != nil {
+			return nil, err
+		} else if ok {
+			if !r.isNumber(operand) {
+				return nil, &NotYetLowerable{Reason: "increment of a non-number needs coercion, a later slice"}
+			}
+			return &ast.IncDecStmt{X: lhs, Tok: tok}, nil
+		}
 	}
 	if operand.Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "increment of a non-identifier target is a later slice"}

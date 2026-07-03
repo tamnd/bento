@@ -170,6 +170,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "JSON") {
 		return r.jsonCall(method, argNodes)
 	}
+	// A method on a class instance, this.m(...) inside a class body or p.m(...)
+	// on an instance, lowers to the Go method the class declared. It routes
+	// before the array, map, and string paths so a class receiver is dispatched
+	// as the class it is rather than re-derived structurally.
+	if info, ok := r.classReceiver(recvNode); ok {
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return r.classMethodCall(info, recv, method, argNodes)
+	}
 	// A method on an array receiver lowers to a value.Array method. This routes
 	// before the primitive and string paths, which expect a number, boolean, or
 	// string receiver an array is not.

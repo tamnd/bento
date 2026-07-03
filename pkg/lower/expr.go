@@ -87,6 +87,13 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodePropertyAccessExpression:
 		return r.propertyAccess(n)
 
+	case frontend.NodeThisKeyword:
+		// Inside a lowered constructor or method, this is the receiver.
+		if r.thisName == "" {
+			return nil, &NotYetLowerable{Reason: "this outside a lowered class body is a later slice"}
+		}
+		return ident(r.thisName), nil
+
 	case frontend.NodeTrueKeyword:
 		return ident("true"), nil
 

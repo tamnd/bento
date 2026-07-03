@@ -40,6 +40,15 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if len(kids) == 0 {
 		return nil, &NotYetLowerable{Reason: "new expression did not expose a constructor"}
 	}
+	// A user class constructs through its generated NewX function. The name is
+	// resolved through the constructor identifier's symbol, not its spelling, so a
+	// local class named Map or Uint8Array still constructs as the class and never
+	// falls through to a built-in with the same name.
+	if kids[0].Kind() == frontend.NodeIdentifier {
+		if info, ok := r.classCtorRef(kids[0]); ok {
+			return r.newClass(info, kids[1:])
+		}
+	}
 	if r.prog.Text(kids[0]) == "Uint8Array" {
 		return r.newUint8Array(kids[1:])
 	}
