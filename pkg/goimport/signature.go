@@ -259,12 +259,14 @@ func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, 
 // in TypeScript, returning the parameter Go type keywords and the single result
 // keyword and true so the lowerer wraps a bento function as a Go func value (sections
 // 6.9, 7.6). It fires for a func whose parameters are each a plain basic and whose
-// result is nothing or one plain basic: those are the scalar crossings the wrapper
-// can marshal in both directions today. A variadic func, a func with more than one
-// result, an error result (the throwing callback of section 7.6), or any composite
-// parameter or result clears the crossing so the call hands back, each awaiting its
-// own slice. A named func type is matched through its underlying signature, so a
-// declared callback type crosses the same as an inline func type.
+// result is nothing, one plain basic, or a lone error: those are the crossings the
+// wrapper can marshal in both directions today. A lone error result is spelled
+// "error" in the result slot, the throwing-callback shape of section 7.6 where a
+// throw inside the bento callback becomes the Go func's non-nil error return. A
+// variadic func, a func with more than one result, an error paired with a value, or
+// any composite parameter or result clears the crossing so the call hands back, each
+// awaiting its own slice. A named func type is matched through its underlying
+// signature, so a declared callback type crosses the same as an inline func type.
 func funcCrossing(t types.Type) (params []string, result string, ok bool) {
 	sig, isSig := t.Underlying().(*types.Signature)
 	if !isSig {
@@ -287,6 +289,11 @@ func funcCrossing(t types.Type) (params []string, result string, ok bool) {
 	case 0:
 		return out, "", true
 	case 1:
+		if isErrorType(rs.At(0).Type()) {
+			// A lone error result is the throwing callback: the bento callback returns
+			// nothing and its throw becomes this error return (section 7.6).
+			return out, "error", true
+		}
 		kw := basicKeyword(rs.At(0).Type())
 		if kw == "" {
 			return nil, "", false

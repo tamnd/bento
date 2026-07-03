@@ -15,6 +15,7 @@
 package bridge
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/tamnd/bento/pkg/value"
@@ -306,6 +307,41 @@ func Check(err error) {
 	if err != nil {
 		panic(GoError{Err: err})
 	}
+}
+
+// CallbackError runs a bento callback wrapped as a Go func that returns error and
+// turns a throw from the callback into that error return (section 7.6). It runs fn,
+// which invokes the bento callback, and returns nil when the callback returns
+// normally. If the callback throws, it recovers the thrown value: a bento error that
+// already wraps a Go error (a caught go: error re-thrown from the callback) returns
+// that Go error unchanged, so the Go side sees the same error by identity and
+// errors.Is still matches; any other thrown value returns an error whose message is
+// the value's string form, so the Go library calling the callback sees a normal
+// non-nil error. A Go runtime panic that is not a bento throw keeps unwinding, so a
+// real bug in the runtime is not swallowed into an error return. It is the inverse of
+// Check, which turns a Go error into a bento throw on the call path.
+func CallbackError(fn func()) (err error) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		thrown, ok := r.(value.Thrown)
+		if !ok {
+			panic(r)
+		}
+		if e, isErr := thrown.(*value.Error); isErr && e.IsGoError() {
+			err = e.Cause()
+			return
+		}
+		if e, isErr := thrown.(error); isErr {
+			err = errors.New(e.Error())
+			return
+		}
+		err = errors.New(thrown.ErrorName() + ": " + thrown.ErrorMessage())
+	}()
+	fn()
+	return nil
 }
 
 // Guard runs a go: call and converts a Go panic that escapes the call into a

@@ -40,3 +40,18 @@ func Each(n int, f func(int)) {
 		f(i)
 	}
 }
+
+// TryEach calls f with every value in 0..n-1 and stops at the first non-nil error it
+// returns, handing that error back to the caller. It models a Go API whose callback
+// reports failure through an error return (the WalkFunc shape), so a throw inside the
+// bento callback must become the func's error return for TryEach to see it and stop.
+// It returns the 1-based index it stopped at and the error, or the count and nil when
+// every call succeeded, so the bento side observes both whether and where it stopped.
+func TryEach(n int, f func(int) error) (int, error) {
+	for i := range n {
+		if err := f(i); err != nil {
+			return i + 1, err
+		}
+	}
+	return n, nil
+}
