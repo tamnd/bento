@@ -619,3 +619,42 @@ console.log(ToUpper("hi"));
 		t.Errorf("assembled program does not marshal the string result back through the bridge:\n%s", source)
 	}
 }
+
+// TestGoImportPathsReportsReachedPackages proves GoImportPaths lists the Go import
+// path a go: call reached, the seam the build reads to detect cgo before it runs
+// the toolchain (section 9.5). A program that calls strings.ToUpper reaches exactly
+// the strings package, so the accessor returns it.
+func TestGoImportPathsReportsReachedPackages(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { ToUpper } from "go:strings";
+console.log(ToUpper("hi"));
+`
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	r.SetGoConstants(testGoConstants())
+	if _, err := r.RenderProgram(entryFile(t, prog)); err != nil {
+		t.Fatalf("RenderProgram: %v", err)
+	}
+	if paths := r.GoImportPaths(); len(paths) != 1 || paths[0] != "strings" {
+		t.Errorf("GoImportPaths() = %v, want [strings]", paths)
+	}
+}
+
+// TestGoImportPathsEmptyWithoutGoImport proves a program that reaches no go: import
+// reports no interop paths, so the cgo gate sees nothing to check and a plain
+// program never pays a detection load. It needs no go toolchain since it lowers no
+// go: call.
+func TestGoImportPathsEmptyWithoutGoImport(t *testing.T) {
+	prog := compile(t, "console.log(1 + 2);\n")
+	r := NewRenderer(prog)
+	if _, err := r.RenderProgram(entryFile(t, prog)); err != nil {
+		t.Fatalf("RenderProgram: %v", err)
+	}
+	if paths := r.GoImportPaths(); len(paths) != 0 {
+		t.Errorf("GoImportPaths() = %v, want empty for a program with no go: import", paths)
+	}
+}
