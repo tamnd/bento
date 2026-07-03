@@ -184,6 +184,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 			resultElems = append(resultElems, elem)
 			continue
 		}
+		if key, val, good := mapCrossing(t); good {
+			results = append(results, "map")
+			resultElems = append(resultElems, MapElem(key, val))
+			continue
+		}
 		if anyCrossing(t) {
 			results = append(results, "any")
 			resultElems = append(resultElems, "")
@@ -225,6 +230,9 @@ func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, 
 	}
 	if e, good := sliceCrossing(t); good {
 		return "slice", DefinedConv{}, e, true
+	}
+	if key, val, good := mapCrossing(t); good {
+		return "map", DefinedConv{}, MapElem(key, val), true
 	}
 	if anyCrossing(t) {
 		return "any", DefinedConv{}, "", true
@@ -297,6 +305,32 @@ func sliceCrossing(t types.Type) (string, bool) {
 		return "", false
 	}
 	return kw, true
+}
+
+// mapCrossing classifies a Go map of a plain basic key to a plain basic value for
+// the boundary, returning the key and value Go type keywords and true so the lowerer
+// marshals it entry by entry as a bento Map (section 6.5). Both the key and the value
+// must be a plain basic this slice crosses: the key becomes a bento number, string,
+// or boolean, which are exactly the key kinds the value model's Map constructors
+// build (a numeric key maps to number, so map[int]V and map[float64]V share one
+// numbered key kind), and the value takes the same scalar crossing a single value
+// would. A map whose key or value is a defined type, a slice, another map, or any
+// other non-basic shape returns false, so the call hands back rather than cross a
+// shape this slice does not marshal; those await their own slices.
+func mapCrossing(t types.Type) (string, string, bool) {
+	m, ok := t.(*types.Map)
+	if !ok {
+		return "", "", false
+	}
+	key := basicKeyword(m.Key())
+	if key == "" {
+		return "", "", false
+	}
+	val := basicKeyword(m.Elem())
+	if val == "" {
+		return "", "", false
+	}
+	return key, val, true
 }
 
 // opaqueCrossing classifies a foreign named type the bridge does not project as an
@@ -397,6 +431,23 @@ func OpaqueElem(path, name string) string {
 func SplitOpaqueElem(elem string) (string, string) {
 	path, name, _ := strings.Cut(elem, "\x00")
 	return path, name
+}
+
+// MapElem packs a map crossing's key and value Go type keywords into the single
+// element string it rides in ParamElem or ResultElem, so the lowerer reads both the
+// key kind that picks the bento Map constructor and the value kind that marshals each
+// value without a second parallel slice. The separator is a NUL, which never appears
+// in a Go type keyword, so the split is exact, the same packing an opaque crossing
+// uses for its path and name.
+func MapElem(key, val string) string {
+	return key + "\x00" + val
+}
+
+// SplitMapElem recovers the key and value Go type keywords MapElem packed, for the
+// lowerer to build the bento Map constructor and the per-entry crossings.
+func SplitMapElem(elem string) (string, string) {
+	key, val, _ := strings.Cut(elem, "\x00")
+	return key, val
 }
 
 // basicKeyword returns the Go type keyword for a plain basic type, and "" for
