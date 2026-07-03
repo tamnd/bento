@@ -256,6 +256,73 @@ console.log(strs.ToUpper("hi"));
 	}
 }
 
+// TestGoImportWrapsCallInBoundaryGuard pins that a go: call lowers through the
+// boundary guard of section 12.3: the marshaled result rides inside a bridge.Guard
+// closure that returns the bento result type, so a panic from the Go library
+// converts to a catchable thrown GoError, and the program defers the uncaught
+// reporter because a guarded call can raise.
+func TestGoImportWrapsCallInBoundaryGuard(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { ToUpper } from "go:strings";
+console.log(ToUpper("hi"));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.Guard(func() value.BStr") {
+		t.Errorf("a string go: result was not wrapped in the boundary guard:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.StringFromGo(strings.ToUpper(bridge.StringToGo(") {
+		t.Errorf("the guarded call did not keep the direct bridge crossing:\n%s", source)
+	}
+	if !strings.Contains(source, "defer value.ReportUncaught()") {
+		t.Errorf("a program with a guarded go: call did not defer the uncaught reporter:\n%s", source)
+	}
+}
+
+// TestGoImportGuardsVoidCallWithGuard0 pins that a void go: call lowers through the
+// statement form of the guard, so a call that returns nothing is protected the same
+// way a value call is.
+func TestGoImportGuardsVoidCallWithGuard0(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { GC } from "go:runtime";
+GC();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.Guard0(func() {") {
+		t.Errorf("a void go: call was not wrapped in the statement guard:\n%s", source)
+	}
+}
+
+// TestGoImportPanicSurfacesAsCatchableError proves the boundary guard end to end: a
+// go: call that panics inside the Go library (strings.Repeat with a negative count)
+// converts to a thrown GoError that a bento try/catch recovers and reads as an Error
+// whose message is the Go panic's string form, the section 12.3 guarantee that a Go
+// panic becomes a catchable JavaScript exception.
+func TestGoImportPanicSurfacesAsCatchableError(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: panic test builds and runs generated Go")
+	}
+	const src = `import { Repeat } from "go:strings";
+try {
+  Repeat("x", -1);
+} catch (e) {
+  if (e instanceof Error) {
+    console.log("caught: " + e.message);
+  }
+}
+`
+	got := runProgramGo(t, src)
+	if want := "caught: go: call panicked: strings: negative Repeat count\n"; got != want {
+		t.Fatalf("go: panic program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportEmitsAliasedImport pins that the assembled Go imports the Go package
 // under its alias and calls it qualified by that alias through the bridge, the
 // shape section 9.1 fixes, without needing to run the program.

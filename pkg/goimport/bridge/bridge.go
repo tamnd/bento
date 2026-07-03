@@ -14,7 +14,11 @@
 // depend on.
 package bridge
 
-import "github.com/tamnd/bento/pkg/value"
+import (
+	"fmt"
+
+	"github.com/tamnd/bento/pkg/value"
+)
 
 // StringToGo transcodes a bento string to the Go UTF-8 string a Go func parameter
 // of type string expects (section 7.2). A bento string is UTF-16 code units and a
@@ -69,6 +73,45 @@ func Check(err error) {
 	if err != nil {
 		panic(GoError{Err: err})
 	}
+}
+
+// Guard runs a go: call and converts a Go panic that escapes the call into a
+// thrown GoError, so a panic from the Go library the call entered becomes a
+// catchable JavaScript exception (section 12.3). A value.Thrown panic (a deliberate
+// bento throw, including the GoError the (T, error) bridge raises and the RangeError
+// the number check raises) is left to keep unwinding, so a bento throw is not
+// reclassified and a genuine bento runtime bug still surfaces as itself; only a
+// panic that originates in the Go call is converted. It is the generic value-result
+// form; Guard0 is the sibling for a call that returns nothing.
+func Guard[T any](fn func() T) T {
+	defer repanic()
+	return fn()
+}
+
+// Guard0 is the void-result form of Guard, for a go: call whose Go function returns
+// nothing and lowers to a statement.
+func Guard0(fn func()) {
+	defer repanic()
+	fn()
+}
+
+// repanic is the deferred recover at the go: boundary: it lets a bento throw
+// through unchanged and converts any other Go panic into a thrown GoError whose
+// message is the panic's string form, so the loss of the call is reported the way
+// every other boundary failure is. It calls recover directly, as a deferred
+// function must, so Guard and Guard0 only name it in their defer.
+func repanic() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	if _, ok := r.(value.Thrown); ok {
+		panic(r)
+	}
+	if err, ok := r.(error); ok {
+		panic(GoError{Err: err})
+	}
+	panic(GoError{Err: fmt.Errorf("go: call panicked: %v", r)})
 }
 
 // GoError is the value a failed go: call raises. It carries the original Go error,
