@@ -71,6 +71,12 @@ type Renderer struct {
 	// real Go package rather than a user function. Like nodeImports it is populated
 	// once from the entry module's import declarations before any body is lowered.
 	goImports map[string]goBuiltin
+	// goNamespaces maps a local binding introduced by a namespace go: import (import
+	// * as zstd from "go:...") to the Go import path it names, so a member call on the
+	// binding (zstd.NewReader(...)) lowers to a direct call into that package. It is
+	// the namespace twin of goImports, which holds the named-import bindings; a call
+	// site consults it when the callee is a property access on a namespace binding.
+	goNamespaces map[string]string
 	// goAliases maps a Go import path to the local alias the emitted file imports it
 	// under, assigned on first call into the package so an imported-but-never-called
 	// package emits no import. Every call into one package renders the same alias, so
@@ -131,7 +137,7 @@ type Renderer struct {
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}}
 }
 
 // SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go

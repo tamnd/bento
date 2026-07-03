@@ -998,8 +998,14 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "call expression exposed no callee"}
 	}
 	// A member callee (s.charCodeAt(...)) is a method call, not a plain function
-	// call; the string methods are the only ones covered so far.
+	// call; the string methods are the only ones covered so far. A call on a
+	// namespace go: import (zstd.NewReader(...)) is also a member callee, but it is a
+	// direct call into the Go package the namespace names, so it routes to the interop
+	// lowering before the method-call path.
 	if kids[0].Kind() == frontend.NodePropertyAccessExpression {
+		if b, ok := r.namespaceGoCall(kids[0]); ok {
+			return r.goImportCall(b, n, kids[1:])
+		}
 		return r.methodCall(kids[0], kids[1:])
 	}
 	if kids[0].Kind() != frontend.NodeIdentifier {
