@@ -90,6 +90,14 @@ const (
 	// ReasonUnsupportedSyntax: the unit uses a language construct the lowering
 	// pass does not cover yet. Soft, because the covered set grows each release.
 	ReasonUnsupportedSyntax
+	// ReasonControlInversion: the unit's own body compiles cleanly, but Pass B
+	// found the unit's function handed to an untyped callback position, so
+	// interpreted or unknown code can call back into it with arguments of the
+	// wrong static type (06_compile_vs_interpret.md section 4.4, the
+	// control-inversion edge). Soft: the fix is entry guards, which make the unit
+	// Speculative rather than Interpreted. Unlike the other soft reasons this one
+	// is raised by Pass B, not Pass A.
+	ReasonControlInversion
 )
 
 // Severity returns the fixed severity of a reason kind. This is the single table
@@ -126,6 +134,8 @@ func (k ReasonKind) String() string {
 		return "type outside the lowerable set"
 	case ReasonUnsupportedSyntax:
 		return "unsupported syntax"
+	case ReasonControlInversion:
+		return "compiled function handed to an untyped callback position"
 	default:
 		return "unknown"
 	}
