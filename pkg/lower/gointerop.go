@@ -148,12 +148,19 @@ func (r *Renderer) goConstRef(name string) (ast.Expr, bool, error) {
 	if !ok || r.goConsts == nil {
 		return nil, false, nil
 	}
-	keyword, ok := r.goConsts(b.importPath, b.name)
+	info, ok := r.goConsts(b.importPath, b.name)
 	if !ok {
 		return nil, false, nil
 	}
 	alias := r.requireGoImport(b.importPath)
-	marshaled, err := r.marshalResultFromGo(keyword, sel(alias, b.name))
+	read := ast.Expr(sel(alias, b.name))
+	if info.Defined {
+		// A constant of a defined type over a basic (time.Second) is read as the branded
+		// type; strip it to the underlying basic so the marshaling sees the plain Go type,
+		// the same step a defined-type result takes (section 6.11).
+		read = stripBrandToBasic(info.Keyword, read)
+	}
+	marshaled, err := r.marshalResultFromGo(info.Keyword, read)
 	if err != nil {
 		return nil, false, err
 	}
@@ -206,7 +213,7 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		if err != nil {
 			return nil, err
 		}
-		marshaled, err := r.marshalArgToGo(sig.Params[i], lowered)
+		marshaled, err := r.marshalArgToGo(sig.Params[i], sig.ParamConv[i], lowered)
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +235,7 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 			return r.guardVoid(&ast.CallExpr{Fun: sel("bridge", "Check"), Args: []ast.Expr{goCall}}), nil
 		}
 		must := &ast.CallExpr{Fun: sel("bridge", "Must"), Args: []ast.Expr{goCall}}
-		marshaled, err := r.marshalResultFromGo(sig.Results[0], must)
+		marshaled, err := r.marshalResultFromGo(sig.Results[0], r.stripResultBrand(sig, must))
 		if err != nil {
 			return nil, err
 		}
@@ -240,11 +247,36 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		// type-checks.
 		return r.guardVoid(goCall), nil
 	}
-	marshaled, err := r.marshalResultFromGo(sig.Results[0], goCall)
+	marshaled, err := r.marshalResultFromGo(sig.Results[0], r.stripResultBrand(sig, goCall))
 	if err != nil {
 		return nil, err
 	}
 	return r.guardExpr(marshaled, sig.Results[0]), nil
+}
+
+// stripResultBrand converts a defined-type result to its underlying basic before
+// the result marshaling reads it, so the brand of section 6.11 is gone by the time
+// the value crosses back. A plain-basic result is returned untouched.
+func (r *Renderer) stripResultBrand(sig goimport.FuncSig, expr ast.Expr) ast.Expr {
+	if !sig.ResultDefined || len(sig.Results) == 0 {
+		return expr
+	}
+	return stripBrandToBasic(sig.Results[0], expr)
+}
+
+// stripBrandToBasic converts a branded value of a defined type over a basic to that
+// basic, so the marshaling that reads it sees the plain Go type it expects. It is
+// needed only for the keywords the marshaling hands straight to the bridge or returns
+// unchanged (string, bool, float64) and the wide integers it forwards without a
+// widening conversion (int64, uint64, uintptr): the remaining integer and float
+// keywords already ride a conversion in the marshaling that strips the brand, so they
+// pass through here untouched.
+func stripBrandToBasic(keyword string, expr ast.Expr) ast.Expr {
+	switch keyword {
+	case "string", "bool", "float64", "int64", "uint64", "uintptr":
+		return &ast.CallExpr{Fun: ident(keyword), Args: []ast.Expr{expr}}
+	}
+	return expr
 }
 
 // guardExpr wraps a lowered go: call result in the boundary recover of section
@@ -310,8 +342,22 @@ func (r *Renderer) bentoResultType(goResult string) ast.Expr {
 // needs: a string transcodes through the bridge, a boolean passes through, and a
 // number converts to the Go numeric type (a bento number is a float64, so a Go int
 // parameter takes an int conversion). A parameter type the slice does not cover
-// hands back.
-func (r *Renderer) marshalArgToGo(goType string, arg ast.Expr) (ast.Expr, error) {
+// hands back. When conv names a defined type over a basic (time.Duration over
+// int64), the bento value converts straight to the named type qualified by its
+// package, so the Go call receives a real time.Duration; the underlying-basic
+// conversion the plain path applies is unnecessary because the named conversion
+// narrows a bento number itself, and a string still transcodes through the bridge
+// before it becomes the defined string (section 6.11).
+func (r *Renderer) marshalArgToGo(goType string, conv goimport.DefinedConv, arg ast.Expr) (ast.Expr, error) {
+	if conv.Name != "" {
+		inner := arg
+		if goType == "string" {
+			r.requireImport(bridgePkg)
+			inner = &ast.CallExpr{Fun: sel("bridge", "StringToGo"), Args: []ast.Expr{arg}}
+		}
+		alias := r.requireGoImport(conv.Path)
+		return &ast.CallExpr{Fun: sel(alias, conv.Name), Args: []ast.Expr{inner}}, nil
+	}
 	switch goType {
 	case "string":
 		r.requireImport(bridgePkg)

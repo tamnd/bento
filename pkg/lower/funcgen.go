@@ -2934,23 +2934,43 @@ func (r *Renderer) binaryOp(opText string, left, right frontend.Node) (token.Tok
 	}
 }
 
+// primitiveFlags returns the type flags of n with a branded alias folded down to
+// its underlying primitive. A go: defined type over a basic (time.Duration over
+// int64) projects as a branded alias (number & { __brand }), an intersection whose
+// runtime value is the underlying primitive, so its primitive-member flag is folded
+// in and a consumer coerces and operates on it as the number, string, or boolean it
+// is (section 6.11). A plain type is returned unchanged.
+func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
+	t := r.prog.TypeAt(n)
+	f := t.Flags
+	if f&frontend.TypeIntersection == 0 {
+		return f
+	}
+	const prim = frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
+	for _, m := range r.prog.IntersectionMembers(t) {
+		f |= m.Flags & prim
+	}
+	return f
+}
+
 // isNumber reports whether the checker types n as number, the guard that keeps
 // the arithmetic path sound while string and mixed operands wait for their slice.
+// It sees through a branded alias to the underlying number (section 6.11).
 func (r *Renderer) isNumber(n frontend.Node) bool {
-	return r.prog.TypeAt(n).Flags&frontend.TypeNumber != 0
+	return r.primitiveFlags(n)&frontend.TypeNumber != 0
 }
 
 // isBool reports whether the checker types n as boolean, the guard that keeps a
 // control-flow condition a real Go bool rather than a coerced value.
 func (r *Renderer) isBool(n frontend.Node) bool {
-	return r.prog.TypeAt(n).Flags&frontend.TypeBoolean != 0
+	return r.primitiveFlags(n)&frontend.TypeBoolean != 0
 }
 
 // isString reports whether the checker types n as string, the guard that routes
 // + to value.Concat and .length to value.BStr.Length rather than to a number or
 // object path.
 func (r *Renderer) isString(n frontend.Node) bool {
-	return r.prog.TypeAt(n).Flags&frontend.TypeString != 0
+	return r.primitiveFlags(n)&frontend.TypeString != 0
 }
 
 // isDynamic reports whether the checker types n as any or unknown, the types that

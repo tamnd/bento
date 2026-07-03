@@ -24,11 +24,30 @@ import "go/types"
 // idiom that projects to a value that throws on failure (section 6.6). The error
 // is dropped from Results, so Results holds only the non-error results the call
 // returns; the lowerer wraps the call in the throw bridge when Throws is set.
+//
+// ParamConv is parallel to Params: for a parameter that is a defined type over a
+// basic (time.Duration over int64), it names the type a bento value converts to at
+// the call so the Go function receives a real time.Duration and not a bare int64
+// (section 6.11); for a plain basic parameter it is the zero DefinedConv. Results
+// carries only the underlying keyword of a defined-type result, and ResultDefined
+// records that the result is a defined type so the lowerer strips its brand before
+// marshaling it back.
 type FuncSig struct {
-	Params  []string
-	Results []string
-	Throws  bool
-	OK      bool
+	Params        []string
+	ParamConv     []DefinedConv
+	Results       []string
+	ResultDefined bool
+	Throws        bool
+	OK            bool
+}
+
+// DefinedConv names the conversion a defined-type parameter takes: Name is the
+// defined type's name and Path the import path it comes from, so the emitted call
+// converts a bento value to the named type qualified by that package. An empty Name
+// marks a plain basic parameter that needs no defined-type conversion.
+type DefinedConv struct {
+	Name string
+	Path string
 }
 
 // Signatures loads the Go package at importPath and returns the signature of each
@@ -73,15 +92,18 @@ func Signatures(importPath string) (map[string]FuncSig, error) {
 func classifySignature(sig *types.Signature) FuncSig {
 	ok := !sig.Variadic()
 	params := make([]string, 0, sig.Params().Len())
+	convs := make([]DefinedConv, 0, sig.Params().Len())
 	for i := 0; i < sig.Params().Len(); i++ {
-		kw := basicKeyword(sig.Params().At(i).Type())
-		if kw == "" {
+		kw, conv, good := crossingType(sig.Params().At(i).Type())
+		if !good {
 			ok = false
 		}
 		params = append(params, kw)
+		convs = append(convs, conv)
 	}
 	var results []string
 	throws := false
+	resultDefined := false
 	n := sig.Results().Len()
 	for i := 0; i < n; i++ {
 		t := sig.Results().At(i).Type()
@@ -95,9 +117,12 @@ func classifySignature(sig *types.Signature) FuncSig {
 			}
 			continue
 		}
-		kw := basicKeyword(t)
-		if kw == "" {
+		kw, conv, good := crossingType(t)
+		if !good {
 			ok = false
+		}
+		if conv.Name != "" {
+			resultDefined = true
 		}
 		results = append(results, kw)
 	}
@@ -106,7 +131,35 @@ func classifySignature(sig *types.Signature) FuncSig {
 		// value (with or without a hoisted error) is marshaled today.
 		ok = false
 	}
-	return FuncSig{Params: params, Results: results, Throws: throws, OK: ok}
+	return FuncSig{Params: params, ParamConv: convs, Results: results, ResultDefined: resultDefined, Throws: throws, OK: ok}
+}
+
+// crossingType classifies a parameter or result type for the boundary: a plain
+// basic returns its keyword and a zero DefinedConv, and a defined type over a basic
+// (time.Duration over int64) returns the underlying basic's keyword and the
+// DefinedConv the lowerer converts through, so the branded projection of section
+// 6.11 crosses as its underlying value while the call still passes the real named
+// type. Anything else (a struct, an interface, an unexported or non-basic defined
+// type) returns "" and false so the signature hands back. The defined type must be
+// exported and belong to a package, because the .d.ts projects only exported types
+// and the emitted conversion qualifies the name by its package.
+func crossingType(t types.Type) (string, DefinedConv, bool) {
+	if kw := basicKeyword(t); kw != "" {
+		return kw, DefinedConv{}, true
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return "", DefinedConv{}, false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || !obj.Exported() {
+		return "", DefinedConv{}, false
+	}
+	kw := basicKeyword(named.Underlying())
+	if kw == "" {
+		return "", DefinedConv{}, false
+	}
+	return kw, DefinedConv{Name: obj.Name(), Path: obj.Pkg().Path()}, true
 }
 
 // basicKeyword returns the Go type keyword for a plain basic type, and "" for

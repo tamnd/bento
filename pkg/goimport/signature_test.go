@@ -113,15 +113,28 @@ func F() error { return nil }`, "F")
 	}
 }
 
-// TestClassifyRejectsNamedNumeric proves a defined type over a basic (the common
-// time.Duration shape) is not classified as its underlying number, because it
-// projects to a branded alias, not number, so its crossing differs.
-func TestClassifyRejectsNamedNumeric(t *testing.T) {
+// TestClassifyNamedNumeric proves a defined type over a basic (the common
+// time.Duration shape) classifies by its underlying number and records the named
+// conversion, so a parameter converts to the named type on the way in and a result
+// strips the brand on the way out (section 6.11).
+func TestClassifyNamedNumeric(t *testing.T) {
 	sig := sigOf(t, `package p
 type Duration int64
 func F(d Duration) Duration { return d }
 `, "F")
-	if sig.OK {
-		t.Error("named numeric classified as lowerable, want a hand-back")
+	if !sig.OK {
+		t.Fatal("named numeric classified as not lowerable, want its underlying number")
+	}
+	if want := []string{"int64"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	if len(sig.ParamConv) != 1 || sig.ParamConv[0].Name != "Duration" {
+		t.Errorf("param conversion = %+v, want a Duration conversion", sig.ParamConv)
+	}
+	if want := []string{"int64"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+	if !sig.ResultDefined {
+		t.Error("result not marked defined, want the brand stripped on the way out")
 	}
 }

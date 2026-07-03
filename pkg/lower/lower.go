@@ -94,7 +94,7 @@ type Renderer struct {
 	// disambiguation goSigs does for a call. It is optional and wired from the same
 	// package load; with no resolver a reference to a go: binding used as a value
 	// hands back, since the renderer cannot tell a constant from a function value.
-	goConsts func(importPath, name string) (string, bool)
+	goConsts func(importPath, name string) (goimport.ConstInfo, bool)
 	// retType is the declared return type of the function whose body is currently
 	// being lowered, so a return statement can coerce its value across the dynamic
 	// boundary the way an assignment does. It is the zero type outside a function
@@ -159,7 +159,7 @@ func (r *Renderer) SetGoSignatures(resolve func(importPath, name string) (goimpo
 // companion to SetGoSignatures for a binding used as a value rather than called. It
 // is set from the same Go package load; a renderer with no resolver hands a
 // reference to a go: binding back rather than guess whether it is a constant.
-func (r *Renderer) SetGoConstants(resolve func(importPath, name string) (string, bool)) {
+func (r *Renderer) SetGoConstants(resolve func(importPath, name string) (goimport.ConstInfo, bool)) {
 	r.goConsts = resolve
 }
 
