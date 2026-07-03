@@ -85,9 +85,21 @@ func (e GoError) Error() string { return e.Err.Error() }
 // 7.7).
 func (e GoError) Unwrap() error { return e.Err }
 
+// ErrorName and ErrorMessage make a failed go: call a value.Thrown, so the same
+// top-level handler that reports a program throw reports a boundary failure, and a
+// catch tells it apart by name. A GoError projects as a JavaScript Error carrying
+// the Go error's string (section 7.7).
+func (e GoError) ErrorName() string    { return "Error" }
+func (e GoError) ErrorMessage() string { return e.Err.Error() }
+
 // RangeError is the value a boundary range check raises (section 7.5). It is a
 // distinct type from GoError so a catch, once throw lands, can tell a numeric
 // overflow apart from a returned Go error, mirroring JavaScript's RangeError.
 type RangeError struct{ Message string }
 
 func (e RangeError) Error() string { return e.Message }
+
+// ErrorName and ErrorMessage make a boundary range check a value.Thrown, reported
+// and caught as the RangeError it mirrors.
+func (e RangeError) ErrorName() string    { return "RangeError" }
+func (e RangeError) ErrorMessage() string { return e.Message }

@@ -104,6 +104,14 @@ type Renderer struct {
 	// stored T is pulled out of the option; a read where the type is still optional
 	// keeps the bare Opt value. A nil map (the default) unwraps nothing.
 	optLocals map[string]bool
+	// usesThrow records that the program emitted a construct that can raise a
+	// thrown value the runtime must report if it escapes: an explicit throw, or a
+	// boundary crossing that range-checks (a go: int64 result). When set, the
+	// assembled main defers value.ReportUncaught so an uncaught throw prints an
+	// uncaught-error line and exits non-zero rather than crashing with a Go stack. A
+	// program that cannot throw defers nothing, so its main and its imports are
+	// unchanged.
+	usesThrow bool
 	// strBuilders is the list of reusable value.StrBuilder variables the current
 	// body needs, one per template or number-interpolated concatenation site the
 	// lowerer chose to build through a builder. A var declaration for each is hoisted
