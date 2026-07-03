@@ -476,7 +476,17 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.bytesElementAssign(n); ok || err != nil {
 			return stmt, err
 		}
-		return r.lowerAssign(n)
+		assign, err := r.lowerAssign(n)
+		if err != nil {
+			return nil, err
+		}
+		// A compound step of exactly one, x += 1 or x -= 1, is the increment a person
+		// writes x++ or x--. Both discard the value here (a statement or a for-loop's
+		// post clause), so the IncDecStmt is the same operation spelled the shorter way.
+		if inc, ok := incDecFromStep(assign); ok {
+			return inc, nil
+		}
+		return assign, nil
 	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
 		return r.lowerIncDec(n)
 	case frontend.NodeCallExpression:
@@ -661,6 +671,31 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 		Tok: tok,
 		Rhs: []ast.Expr{rhs},
 	}, nil
+}
+
+// incDecFromStep rewrites a compound step of one, x += 1 or x -= 1, into Go's ++
+// or --. It fires only on a bare += or -= whose right-hand side is the literal 1,
+// so a step of any other size or a wider expression keeps the compound assignment.
+// The value is discarded in every position lowerUpdate serves, so ++ and += 1 are
+// the same operation, and ++ is how it reads.
+func incDecFromStep(a *ast.AssignStmt) (*ast.IncDecStmt, bool) {
+	var tok token.Token
+	switch a.Tok {
+	case token.ADD_ASSIGN:
+		tok = token.INC
+	case token.SUB_ASSIGN:
+		tok = token.DEC
+	default:
+		return nil, false
+	}
+	if len(a.Lhs) != 1 || len(a.Rhs) != 1 {
+		return nil, false
+	}
+	lit, ok := a.Rhs[0].(*ast.BasicLit)
+	if !ok || (lit.Value != "1" && lit.Value != "1.0") {
+		return nil, false
+	}
+	return &ast.IncDecStmt{X: a.Lhs[0], Tok: tok}, true
 }
 
 // compoundBaseOp maps a compound assignment operator to the binary operator it
