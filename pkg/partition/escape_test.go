@@ -124,6 +124,44 @@ func TestBoxingTypedCrossingStaysMonomorphic(t *testing.T) {
 	}
 }
 
+// TestBoxingEscapesAcrossCallEdge pins the section 13.5 worked example: an object
+// handed to a function that JSON.stringifies it escapes at the call site, not only
+// inside the callee. au is stringified inside audit and escapes; hd, the argument
+// handle passes to audit, inherits that escape across the call edge; sm, summarize's
+// parameter, inherits it too because the same hd flows into summarize, so summarize
+// must read that instance through the boxed representation.
+func TestBoxingEscapesAcrossCallEdge(t *testing.T) {
+	src := "interface Order { id: string; total: number }\n" +
+		"function summarize(sm: Order): number { return sm.total * 1.1; }\n" +
+		"function audit(au: Order): void { console.log(JSON.stringify(au)); }\n" +
+		"function handle(hd: Order): number { audit(hd); return summarize(hd); }\n"
+	b := realBoxing(t, src)
+
+	for _, name := range []string{"au", "hd", "sm"} {
+		if !escapesNamed(b, name) {
+			t.Errorf("%s did not escape, but the stringified object reaches it across a call edge; escaping = %v", name, b.Escaping)
+		}
+	}
+}
+
+// TestBoxingUnconnectedObjectStaysMonomorphic pins that the call-edge flow does not
+// spill onto a value with no path to a sink. z is only read through a typed field
+// access and is passed nowhere, so it stays monomorphic even while an unrelated
+// object in the same program escapes.
+func TestBoxingUnconnectedObjectStaysMonomorphic(t *testing.T) {
+	src := "interface Order { id: string; total: number }\n" +
+		"function priceOnly(z: Order): number { return z.total; }\n" +
+		"function audit(au: Order): void { console.log(JSON.stringify(au)); }\n"
+	b := realBoxing(t, src)
+
+	if escapesNamed(b, "z") {
+		t.Errorf("z escaped, but it reaches no sink and is passed nowhere; escaping = %v", b.Escaping)
+	}
+	if !escapesNamed(b, "au") {
+		t.Errorf("au did not escape through JSON.stringify; escaping = %v", b.Escaping)
+	}
+}
+
 // TestBoxingNoSinkNoEscape pins that a value which never reaches a sink stays
 // monomorphic. rec is only read through a typed field access, so escape analysis
 // leaves it out of the boxing set.
