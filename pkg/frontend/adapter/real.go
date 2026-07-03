@@ -245,6 +245,18 @@ func (a *RealAdapter) SymbolOfNode(p ProgramHandle, n NodeHandle) (SymbolHandle,
 	return wrapSymbol(sym), true
 }
 
+// SymbolOfType returns the symbol a type was declared by, the checker field
+// that links a class instance type back to its class declaration. It is a plain
+// field read like DeclarationsOf, so it takes no checker lock. An anonymous
+// type carries no symbol and reports false.
+func (a *RealAdapter) SymbolOfType(_ ProgramHandle, t TypeHandle) (SymbolHandle, bool) {
+	sym := typeOfHandle(t).Symbol()
+	if sym == nil {
+		return nil, false
+	}
+	return wrapSymbol(sym), true
+}
+
 func (a *RealAdapter) AliasedSymbol(p ProgramHandle, s SymbolHandle) SymbolHandle {
 	c, release := prog(p).checker()
 	defer release()
