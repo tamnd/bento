@@ -634,9 +634,24 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 			return nil, err
 		}
 	}
+	// A right-hand side that is exactly "target op value" over a native Go operator
+	// collapses to Go's compound assignment, so total = total + i is written total +=
+	// i the way a developer would. This fires whether the source wrote += or spelled
+	// the self-reference out, and only on a bare binary whose left operand is the
+	// target identifier, so a string concat (a .Concat call, not a Go +) or a
+	// coercion-wrapped result is left as the plain assignment it needs to be.
+	tok := token.ASSIGN
+	if bin, ok := rhs.(*ast.BinaryExpr); ok {
+		if ctok, ok := compoundAssignToken(bin.Op); ok {
+			if x, ok := bin.X.(*ast.Ident); ok && x.Name == name {
+				tok = ctok
+				rhs = bin.Y
+			}
+		}
+	}
 	return &ast.AssignStmt{
 		Lhs: []ast.Expr{ident(name)},
-		Tok: token.ASSIGN,
+		Tok: tok,
 		Rhs: []ast.Expr{rhs},
 	}, nil
 }
@@ -645,6 +660,41 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 // fuses, so combineBinary can build the x <op> rhs half of x <op>= rhs. Every
 // arithmetic and bitwise compound is here; the plain "=" is not a compound and
 // returns false.
+// compoundAssignToken maps a native Go binary operator to its compound-assignment
+// form (ADD to +=, SHL to <<=, and so on), reporting whether one exists. It is the
+// peephole that lets total = total + i print as total += i: every arithmetic and
+// bitwise Go operator has a compound form, so the rewrite is always available when the
+// right-hand side is a bare binary over the target. Comparison and logical operators
+// have no compound form and return false, so a boolean assignment is left alone.
+func compoundAssignToken(op token.Token) (token.Token, bool) {
+	switch op {
+	case token.ADD:
+		return token.ADD_ASSIGN, true
+	case token.SUB:
+		return token.SUB_ASSIGN, true
+	case token.MUL:
+		return token.MUL_ASSIGN, true
+	case token.QUO:
+		return token.QUO_ASSIGN, true
+	case token.REM:
+		return token.REM_ASSIGN, true
+	case token.AND:
+		return token.AND_ASSIGN, true
+	case token.OR:
+		return token.OR_ASSIGN, true
+	case token.XOR:
+		return token.XOR_ASSIGN, true
+	case token.SHL:
+		return token.SHL_ASSIGN, true
+	case token.SHR:
+		return token.SHR_ASSIGN, true
+	case token.AND_NOT:
+		return token.AND_NOT_ASSIGN, true
+	default:
+		return token.ILLEGAL, false
+	}
+}
+
 func compoundBaseOp(op string) (string, bool) {
 	switch op {
 	case "+=":

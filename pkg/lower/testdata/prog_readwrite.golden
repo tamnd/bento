@@ -21,7 +21,7 @@ func main() {
 			{
 				var i float64 = 0
 				for ; i < count; i++ {
-					bytes = bytes + value.ReadFileSyncUTF8(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt")))).Length()
+					bytes += value.ReadFileSyncUTF8(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt")))).Length()
 				}
 			}
 		}

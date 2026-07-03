@@ -7,10 +7,10 @@ func Find(n float64) float64 {
 	if xs.Includes(n, func(a, b float64) bool {
 		return a == b || a != a && b != b
 	}) {
-		score = score + 1000
+		score += 1000
 	}
 	var words *value.Array[value.BStr] = value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("bb"), value.FromGoString("ccc"))
-	score = score + words.IndexOf(value.FromGoString("bb"), func(a, b value.BStr) bool {
+	score += words.IndexOf(value.FromGoString("bb"), func(a, b value.BStr) bool {
 		return a.Equal(b)
 	})
 	return score
