@@ -87,6 +87,27 @@ func TestJSONStringifyArray(t *testing.T) {
 	}
 }
 
+// TestJSONStringifyEmbeddedStruct checks the reflection walk over a lowered
+// class struct: an anonymous embedded base flattens into the same object the
+// way JavaScript sees every inherited field as an own property, base fields
+// first, and an unexported field (the vtable pointer a virtual hierarchy
+// carries) is compiler machinery with no JSON form and is skipped.
+func TestJSONStringifyEmbeddedStruct(t *testing.T) {
+	type Animal struct {
+		vt   *struct{ f func() }
+		Legs float64 `json:"legs"`
+	}
+	type Dog struct {
+		Animal
+		Name BStr `json:"name"`
+	}
+	_ = Dog{}.vt
+	d := &Dog{Animal: Animal{Legs: 4}, Name: FromGoString("rex")}
+	if got := JSONStringify(d).ToGoString(); got != `{"legs":4,"name":"rex"}` {
+		t.Fatalf("embedded struct = %q", got)
+	}
+}
+
 func nan() float64 { z := float64(0); return z / z }
 
 func inf(s int) float64 {
