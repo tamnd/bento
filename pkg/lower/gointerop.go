@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 	"strconv"
 	"strings"
 	"unicode"
@@ -214,7 +215,7 @@ func (r *Renderer) goImportCall(b goBuiltin, call frontend.Node, argNodes []fron
 		return nil, &NotYetLowerable{Reason: "go: symbol " + b.name + " is not a Go identifier"}
 	}
 	if sig, ok := r.goSignature(b); ok {
-		return r.goImportCallBySig(b, sig, argNodes)
+		return r.goImportCallBySig(b, sig, call, argNodes)
 	}
 	return r.goImportCallByType(b, call, argNodes)
 }
@@ -240,7 +241,7 @@ func (r *Renderer) goSignature(b goBuiltin) (goimport.FuncSig, bool) {
 // wants (exact for a fixed signature, at-least-the-fixed-parameters for a variadic
 // one), and each argument's and the result's marshaling must be one the crossing
 // supports, or the call hands back.
-func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes []frontend.Node) (ast.Expr, error) {
+func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
 	args, err := r.marshalCallArgs(b, sig, argNodes)
 	if err != nil {
 		return nil, err
@@ -265,6 +266,9 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 			return r.guardVoid(&ast.CallExpr{Fun: sel("bridge", "Check"), Args: []ast.Expr{goCall}}), nil
 		}
 		must := &ast.CallExpr{Fun: sel("bridge", "Must"), Args: []ast.Expr{goCall}}
+		if sig.Results[0] == "struct" {
+			return r.guardStructResult(resultElem, must, call)
+		}
 		marshaled, err := r.marshalResultFromGo(sig.Results[0], resultElem, r.stripResultBrand(sig, must))
 		if err != nil {
 			return nil, err
@@ -277,11 +281,66 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		// type-checks.
 		return r.guardVoid(goCall), nil
 	}
+	if sig.Results[0] == "struct" {
+		return r.guardStructResult(resultElem, goCall, call)
+	}
 	marshaled, err := r.marshalResultFromGo(sig.Results[0], resultElem, r.stripResultBrand(sig, goCall))
 	if err != nil {
 		return nil, err
 	}
 	return r.guardExpr(marshaled, sig.Results[0], resultElem), nil
+}
+
+// guardStructResult lowers a go: call whose Go result is a struct into a read-only
+// object box (sections 6.7 and 7.4). The struct crosses to the SAME interned Go
+// struct the interface shape interns to, so property access on the bound variable
+// resolves against one Go type. A closure binds the Go result to v and returns a
+// pointer to a freshly built interned struct, reading each exported Go field and
+// marshaling it by its keyword. The whole thing wraps in the boundary recover so a
+// panic in the Go call reports as a thrown value.
+func (r *Renderer) guardStructResult(elem string, goResult ast.Expr, call frontend.Node) (ast.Expr, error) {
+	_, _, fields := goimport.SplitStructElem(elem)
+	rt := r.prog.TypeAt(call)
+	interned, err := r.decls.internStruct(r, rt)
+	if err != nil {
+		return nil, err
+	}
+	elts := make([]ast.Expr, 0, len(fields))
+	for _, f := range fields {
+		read := &ast.SelectorExpr{X: ident("v"), Sel: ident(f.Name)}
+		val, err := r.marshalResultFromGo(f.Keyword, "", read)
+		if err != nil {
+			return nil, err
+		}
+		field, ok := exportedField(f.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "go: struct field " + f.Name + " is not a Go identifier"}
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+	}
+	r.usesThrow = true
+	r.requireImport(bridgePkg)
+	retType := star(ident(interned))
+	body := []ast.Stmt{
+		&ast.AssignStmt{
+			Lhs: []ast.Expr{ident("v")},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{goResult},
+		},
+		&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(interned), Elts: elts}},
+		}},
+	}
+	return &ast.CallExpr{
+		Fun: sel("bridge", "Guard"),
+		Args: []ast.Expr{&ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+			},
+			Body: &ast.BlockStmt{List: body},
+		}},
+	}, nil
 }
 
 // marshalCallArgs lowers and marshals each argument of a go: call against the Go

@@ -120,6 +120,62 @@ func F() map[K]int { return nil }
 	}
 }
 
+// TestClassifyStructResult proves a Go named struct with exported basic fields is a
+// struct crossing as a result: it carries the keyword "struct" with an element that
+// packs the import path, the Go type name, and each exported field's name and
+// keyword, so the lowerer can box the result into the interned struct (section 6.7).
+func TestClassifyStructResult(t *testing.T) {
+	sig := sigOf(t, `package p
+type Point struct {
+	X int
+	Y int
+	hidden int
+}
+func F() Point { return Point{} }
+`, "F")
+	if !sig.OK {
+		t.Fatal("a struct-result signature classified as not lowerable")
+	}
+	if want := []string{"struct"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+	path, name, fields := SplitStructElem(sig.ResultElem[0])
+	if name != "Point" {
+		t.Errorf("struct name = %q, want Point", name)
+	}
+	if path != "p" {
+		t.Errorf("struct path = %q, want p", path)
+	}
+	if len(fields) != 2 {
+		t.Fatalf("struct carried %d fields, want 2 (the unexported one dropped): %v", len(fields), fields)
+	}
+	if fields[0].Name != "X" || fields[0].Keyword != "int" {
+		t.Errorf("field 0 = %+v, want X/int", fields[0])
+	}
+	if fields[1].Name != "Y" || fields[1].Keyword != "int" {
+		t.Errorf("field 1 = %+v, want Y/int", fields[1])
+	}
+}
+
+// TestClassifyRejectsStructOfComposite proves a struct with a non-basic field (a
+// slice, another struct) is not covered by this slice, so a function returning it
+// hands back rather than emit a half-boxed result.
+func TestClassifyRejectsStructOfComposite(t *testing.T) {
+	if sig := sigOf(t, `package p
+type Bag struct{ Items []int }
+func F() Bag { return Bag{} }
+`, "F"); sig.OK {
+		t.Error("a struct with a slice field classified as lowerable, want a hand-back")
+	}
+	if sig := sigOf(t, `package p
+type Inner struct{ A int }
+type Outer struct{ In Inner }
+func F() Outer { return Outer{} }
+`, "F"); sig.OK {
+		t.Error("a struct with a struct field classified as lowerable, want a hand-back")
+	}
+}
+
 // TestClassifyByteSlice proves a []byte is the whole-buffer crossing, not an
 // element-by-element slice: it carries the keyword "bytes" with an empty element,
 // both as a parameter and a result, so the lowerer marshals it as one Uint8Array
@@ -198,18 +254,17 @@ func F() Option { return nil }
 	}
 }
 
-// TestClassifyRejectsClassAndInterface holds the boundary between an opaque token
-// and a richer projection: a struct with an exported field or an exported method is
-// a class (section 6.7) and a named interface with methods is the interface
-// projection (section 6.8), so neither is an opaque handle and each clears OK in this
-// slice. An empty interface is not here because it is any, a covered crossing
-// (section 6.12), which TestClassifyAnyInterface pins.
+// TestClassifyRejectsClassAndInterface holds the boundary between a struct crossing
+// this slice covers and a projection it does not: a struct whose only exported
+// surface is a method carries no field to box, and a named interface with methods is
+// the interface projection (section 6.8), so neither classifies here. A struct with
+// exported basic fields is the struct crossing (section 6.7), which
+// TestClassifyStructResult pins, so it is not in this reject set. An empty interface
+// is not here either because it is any, a covered crossing (section 6.12), which
+// TestClassifyAnyInterface pins.
 func TestClassifyRejectsClassAndInterface(t *testing.T) {
 	cases := map[string]string{
-		"exported field": `package p
-type T struct{ X int }
-func F() T { return T{} }`,
-		"exported method": `package p
+		"exported method only": `package p
 type T struct{ n int }
 func (t T) M() int { return t.n }
 func F() T { return T{} }`,
