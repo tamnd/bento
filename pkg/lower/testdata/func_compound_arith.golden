@@ -3,7 +3,7 @@ func Accumulate(n float64) float64 {
 	for i := 0.0; i < n; i++ {
 		t += i
 	}
-	t -= 1
+	t--
 	t *= 2
 	return t
 }
