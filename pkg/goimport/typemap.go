@@ -186,11 +186,18 @@ func (m *Mapper) mapBasic(b *types.Basic) string {
 // mapSignature projects a func type as a TypeScript function type. The result
 // follows the (T, error) rule of section 6.6 in throw mode: a lone error result
 // is dropped and becomes a throw, a single non-error result is that type, and
-// multiple results are a tuple. Parameters carry across positionally, and a
-// variadic tail becomes a rest parameter.
+// multiple results are a tuple.
 func (m *Mapper) mapSignature(sig *types.Signature) string {
+	return "(" + m.ParamList(sig) + ") => " + m.mapResults(sig.Results())
+}
+
+// ParamList renders a signature's parameters as a TypeScript parameter list
+// without the enclosing parentheses, so it is shared by func-type projection and
+// by the declaration emitter for top-level functions and methods. Parameters
+// carry across positionally, an unnamed or blank parameter gets a positional name,
+// and a variadic tail becomes a rest parameter over the element type.
+func (m *Mapper) ParamList(sig *types.Signature) string {
 	var b strings.Builder
-	b.WriteByte('(')
 	params := sig.Params()
 	for i := 0; i < params.Len(); i++ {
 		if i > 0 {
@@ -214,9 +221,63 @@ func (m *Mapper) mapSignature(sig *types.Signature) string {
 		}
 		b.WriteString(name + ": " + m.Map(p.Type()))
 	}
-	b.WriteString(") => ")
-	b.WriteString(m.mapResults(sig.Results()))
 	return b.String()
+}
+
+// Results projects a signature's result tuple in throw mode, exposed so the
+// declaration emitter shares the exact (T, error) hoisting the func-type
+// projection uses (section 6.6).
+func (m *Mapper) Results(sig *types.Signature) string { return m.mapResults(sig.Results()) }
+
+// TypeParams renders a type parameter list as TypeScript type parameters, so a
+// generic function or type projects with the same parameters it declares in Go
+// (section 11). A constraint that is a well-known interface projects as an
+// extends bound; anything else is dropped, because the Go compiler enforces the
+// real constraint at instantiation (section 11.3). It returns "" for a
+// non-generic declaration.
+func (m *Mapper) TypeParams(tp *types.TypeParamList) string {
+	if tp == nil || tp.Len() == 0 {
+		return ""
+	}
+	parts := make([]string, tp.Len())
+	for i := 0; i < tp.Len(); i++ {
+		p := tp.At(i)
+		name := p.Obj().Name()
+		if bound := m.constraintBound(p); bound != "" {
+			name += " extends " + bound
+		}
+		parts[i] = name
+	}
+	return "<" + strings.Join(parts, ", ") + ">"
+}
+
+// constraintBound returns the TypeScript extends bound for a type parameter's
+// constraint when it is a named interface the bridge projects (a method-set
+// constraint like io.Reader becomes GoReader), or "" when the constraint has no
+// TypeScript meaning and is safely dropped (comparable, any, a type-set union).
+func (m *Mapper) constraintBound(p *types.TypeParam) string {
+	c := p.Constraint()
+	if c == nil {
+		return ""
+	}
+	named, ok := c.(*types.Named)
+	if !ok {
+		return ""
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	if !ok || iface.Empty() {
+		return ""
+	}
+	// Only project the constraint when it resolves to a named helper; a type set
+	// or a bare method interface has no faithful TypeScript bound (section 11.3).
+	if obj := named.Obj(); obj.Pkg() != nil {
+		short := obj.Pkg().Name() + "." + obj.Name()
+		if h, ok := wellKnown[short]; ok {
+			m.mark(h)
+			return string(h)
+		}
+	}
+	return ""
 }
 
 // mapResults projects a result tuple in throw mode (section 6.6). It is shared by
