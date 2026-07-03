@@ -294,6 +294,26 @@ func TestClassHandsBack(t *testing.T) {
 			"embedded base field's name",
 		},
 		{
+			"abstractField",
+			"abstract class A { abstract x: number; }\nconsole.log(\"x\");\n",
+			"an abstract field",
+		},
+		{
+			"abstractAccessor",
+			"abstract class A { abstract get v(): number; }\nconsole.log(\"x\");\n",
+			"an abstract accessor",
+		},
+		{
+			"midChainAbstract",
+			"abstract class A { m(): number { return 1; } }\nabstract class B extends A { abstract p(): number; }\nconsole.log(\"x\");\n",
+			"mid-chain virtual method",
+		},
+		{
+			"overloadSignature",
+			"class A { m(x: number): number; m(x: number): number { return x; } }\nconsole.log(new A().m(1));\n",
+			"a method overload signature",
+		},
+		{
 			"superNotFirst",
 			"class A { x: number = 1; }\nclass B extends A { constructor() { console.log(0); super(); } }\nconsole.log(new B().x);\n",
 			"first statement is not super()",
@@ -1143,5 +1163,185 @@ console.log(JSON.stringify(d));
 		"{\"name\":\"rex\",\"tricks\":0}\n"
 	if got != want {
 		t.Fatalf("super chain program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassAbstractEmits pins the abstract half of the vtable lowering: the
+// abstract root emits its struct, vtable, and virtual entry but no NewX, the
+// abstract method has no Impl body and its base slot panics, and a concrete
+// subclass constructs through NewX plus the root's init on the embedded base.
+func TestClassAbstractEmits(t *testing.T) {
+	const src = `abstract class Shape {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  abstract area(): number;
+  describe(): string {
+    return this.name + ":" + this.area();
+  }
+}
+class Square extends Shape {
+  side: number;
+  constructor(side: number) {
+    super("square");
+    this.side = side;
+  }
+  area(): number {
+    return this.side * this.side;
+  }
+}
+console.log(new Square(3).describe());
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"type shapeVTable struct {",                           // the abstract root still owns the vtable
+		"area func(s *Shape) float64",                         // the abstract method claims its slot
+		"panic(\"Shape.area is abstract\")",                   // the root's slot panics, unreachable in well-typed code
+		"func (s *Shape) Area() float64 {",                    // the entry keeps the exported name
+		"return s.vtable.area(s)",                             // and only dispatches
+		"func initShape(s *Shape, name value.BStr) {",         // construction is the init alone
+		"initShape(&s.Shape, value.FromGoString(\"square\"))", // which the subclass runs on the embedded base
+		"func NewSquare(side float64) *Square {",              // the concrete subclass keeps its constructor
+		".vtable = &squareVTable",                             // pinning its own vtable
+		"(*Square)(unsafe.Pointer(s)).areaImpl()",             // whose slot downcasts to the override
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("abstract class did not print %q:\n%s", want, source)
+		}
+	}
+	for _, reject := range []string{
+		"func NewShape",            // the checker rejects new on an abstract class, so no constructor exists
+		"func (s *Shape) areaImpl", // an abstract method has no body to emit
+	} {
+		if strings.Contains(source, reject) {
+			t.Errorf("abstract class printed %q, which must not exist:\n%s", reject, source)
+		}
+	}
+}
+
+// TestClassAbstractNoVTableEmits pins the split an abstract base forces even
+// without virtual dispatch: no vtable machinery appears, but the base emits
+// init instead of NewX and the subclass constructor runs it in place.
+func TestClassAbstractNoVTableEmits(t *testing.T) {
+	const src = `abstract class Base {
+  label: string;
+  constructor(label: string) {
+    this.label = label;
+  }
+  show(): string {
+    return this.label;
+  }
+}
+class Kid extends Base {
+  constructor() {
+    super("kid");
+  }
+}
+console.log(new Kid().show());
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"func initBase(b *Base, label value.BStr) {",
+		"initBase(&k.Base, value.FromGoString(\"kid\"))",
+		"func NewKid() *Kid {",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("abstract base did not print %q:\n%s", want, source)
+		}
+	}
+	for _, reject := range []string{
+		"func NewBase", // no constructor for the abstract base
+		"VTable",       // nothing here dispatches virtually
+		"vtable",
+	} {
+		if strings.Contains(source, reject) {
+			t.Errorf("abstract base printed %q, which must not exist:\n%s", reject, source)
+		}
+	}
+}
+
+// TestClassAbstractRuns builds and runs abstract dispatch end to end: two
+// concrete subclasses fill the abstract slot, a base-typed caller reaches each
+// override, and a base method calls the abstract method on this.
+func TestClassAbstractRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `abstract class Shape {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  abstract area(): number;
+  describe(): string {
+    return this.name + ":" + this.area();
+  }
+}
+class Square extends Shape {
+  side: number;
+  constructor(side: number) {
+    super("square");
+    this.side = side;
+  }
+  area(): number {
+    return this.side * this.side;
+  }
+}
+class Circle extends Shape {
+  r: number;
+  constructor(r: number) {
+    super("circle");
+    this.r = r;
+  }
+  area(): number {
+    return 3 * this.r * this.r;
+  }
+}
+function show(s: Shape): string {
+  return s.describe();
+}
+console.log(show(new Square(3)));
+console.log(show(new Circle(2)));
+const s: Shape = new Square(4);
+console.log(s.area());
+`
+	got := runProgramGo(t, src)
+	want := "square:9\n" +
+		"circle:12\n" +
+		"16\n"
+	if got != want {
+		t.Fatalf("abstract dispatch program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassAbstractNoVTableRuns builds and runs the non-virtual abstract
+// chain: the subclass constructs through the base's init with no vtable
+// anywhere.
+func TestClassAbstractNoVTableRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `abstract class Base {
+  label: string;
+  constructor(label: string) {
+    this.label = label;
+  }
+  show(): string {
+    return this.label;
+  }
+}
+class Kid extends Base {
+  constructor() {
+    super("kid");
+  }
+}
+console.log(new Kid().show());
+`
+	got := runProgramGo(t, src)
+	if want := "kid\n"; got != want {
+		t.Fatalf("abstract base program printed %q, want %q", got, want)
 	}
 }
