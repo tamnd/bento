@@ -6,7 +6,7 @@ import "testing"
 // test asserts on the marshal keywords the lowerer reads without loading a real
 // module. It mirrors sigOf for the constant surface, running the same classifier
 // Constants runs over a loaded package.
-func constsOf(t *testing.T, src string) map[string]string {
+func constsOf(t *testing.T, src string) map[string]ConstInfo {
 	t.Helper()
 	return classifyConstants(checkSource(t, src))
 }
@@ -30,26 +30,30 @@ const Big int64 = 1 << 40
 		"Big":  "int64",
 	}
 	for name, kw := range want {
-		if got[name] != kw {
-			t.Errorf("constant %s classified as %q, want %q", name, got[name], kw)
+		if got[name].Keyword != kw {
+			t.Errorf("constant %s classified as %q, want %q", name, got[name].Keyword, kw)
 		}
 	}
 }
 
-// TestConstantsSkipsDefinedType proves a constant of a defined type over a basic
-// (the time.Duration shape) is not classified as its underlying number, because it
-// projects to a branded alias, not number, so its crossing differs and it is left
-// for a later slice.
-func TestConstantsSkipsDefinedType(t *testing.T) {
+// TestConstantsClassifiesDefinedType proves a constant of a defined type over a
+// basic (the time.Duration shape) is classified by its underlying number and
+// marked Defined, so a reference to it reads the qualified Go const and strips the
+// brand before marshaling as that number. A plain int stays undefined.
+func TestConstantsClassifiesDefinedType(t *testing.T) {
 	got := constsOf(t, `package p
 type Level int
 const High Level = 3
 const Plain = 3
 `)
-	if _, ok := got["High"]; ok {
-		t.Errorf("a defined-type constant was classified, want a skip")
+	high, ok := got["High"]
+	if !ok {
+		t.Fatalf("a defined-type constant was not classified, want its underlying number")
 	}
-	if got["Plain"] != "int" {
-		t.Errorf("a plain int constant classified as %q, want int", got["Plain"])
+	if high.Keyword != "int" || !high.Defined {
+		t.Errorf("defined-type constant classified as %+v, want {int true}", high)
+	}
+	if got["Plain"].Keyword != "int" || got["Plain"].Defined {
+		t.Errorf("a plain int constant classified as %+v, want {int false}", got["Plain"])
 	}
 }

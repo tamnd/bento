@@ -33,20 +33,20 @@ func testGoSignatures() func(importPath, name string) (goimport.FuncSig, bool) {
 // testGoSignatures, loading each Go package's constants once and memoizing them, so
 // a reference to a go: constant marshals by the real Go type the same way the build
 // does. It is the test-side twin of build.goConstantResolver.
-func testGoConstants() func(importPath, name string) (string, bool) {
-	memo := map[string]map[string]string{}
-	return func(importPath, name string) (string, bool) {
+func testGoConstants() func(importPath, name string) (goimport.ConstInfo, bool) {
+	memo := map[string]map[string]goimport.ConstInfo{}
+	return func(importPath, name string) (goimport.ConstInfo, bool) {
 		consts, loaded := memo[importPath]
 		if !loaded {
 			var err error
 			consts, err = goimport.Constants(importPath)
 			if err != nil {
-				consts = map[string]string{}
+				consts = map[string]goimport.ConstInfo{}
 			}
 			memo[importPath] = consts
 		}
-		kw, ok := consts[name]
-		return kw, ok
+		info, ok := consts[name]
+		return info, ok
 	}
 }
 
@@ -385,6 +385,64 @@ console.log(MaxInt32);
 	got := runProgramGo(t, src)
 	if want := "3.141592653589793\n2147483647\n"; got != want {
 		t.Fatalf("go: constant program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportDefinedConstStripsBrand pins that a reference to a go: constant of a
+// defined type over a basic (time.Second is a time.Duration over int64) lowers to
+// the qualified read converted back to the underlying number before it crosses, so
+// the branded value passes through as the plain number the projection promises, the
+// section 6.11 mapping for a defined-type constant.
+func TestGoImportDefinedConstStripsBrand(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Second } from "go:time";
+console.log(Second);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.Int64ToNumber(int64(time.Second))") {
+		t.Errorf("a defined-type constant did not strip its brand into the underlying number:\n%s", source)
+	}
+}
+
+// TestGoImportDefinedConstRuns proves the defined-type constant crossing end to end:
+// a program that reads time.Second and time.Millisecond prints their underlying
+// nanosecond counts, so the qualified read, the brand strip, and the number
+// marshaling are proven against a real build.
+func TestGoImportDefinedConstRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: defined-const test builds and runs generated Go")
+	}
+	const src = `import { Second, Millisecond } from "go:time";
+console.log(Second);
+console.log(Millisecond);
+`
+	got := runProgramGo(t, src)
+	if want := "1000000000\n1000000\n"; got != want {
+		t.Fatalf("go: defined-const program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportDefinedParamConvertsToNamedType pins that a go: call whose parameter is
+// a defined type over a basic converts the crossed number to the named Go type on the
+// way in: time.Sleep takes a time.Duration, so the marshaled int64 is wrapped in
+// time.Duration(...) before the call, the section 6.11 mapping for a defined-type
+// parameter. The argument is the Duration-branded Millisecond constant, which the
+// projection admits where a plain number would not type-check.
+func TestGoImportDefinedParamConvertsToNamedType(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Sleep, Millisecond } from "go:time";
+Sleep(Millisecond);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "time.Sleep(time.Duration(") {
+		t.Errorf("a defined-type parameter did not convert the crossed number to the named type:\n%s", source)
 	}
 }
 
