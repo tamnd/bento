@@ -73,3 +73,30 @@ func BenchmarkClz32Native(b *testing.B) {
 	}
 	sinkI32 = acc
 }
+
+// BenchmarkCoercionBody runs the whole coercion inner-loop body one iteration per
+// b.Loop() the way the workload's golden does: format n, parse it back, build and
+// parse the "0x" hex, and fold the two truthiness tests. It is the aggregate the
+// per-primitive benchmarks above decompose, so a profile of this benchmark shows
+// where the workload's compute time actually lands.
+func BenchmarkCoercionBody(b *testing.B) {
+	prefix := value.FromGoString("0x")
+	var acc, truthy float64
+	i := 0
+	pass := 0
+	for b.Loop() {
+		n := float64(i)*1.5 - float64(pass)
+		s := value.NumberToString(n)
+		acc += value.StringToNumber(s)
+		acc += value.StringToNumber(value.Concat(prefix, value.NumberToStringRadix(float64(i&0xff), 16)))
+		if value.NumberToBool(n) && value.StringToBool(s) {
+			truthy++
+		}
+		i++
+		if i == 2000 {
+			i = 0
+			pass++
+		}
+	}
+	sinkFloat = acc + truthy
+}
