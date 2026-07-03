@@ -1120,6 +1120,16 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {2}, {-3}, {0.5}},
 		},
 		{
+			// a map whose callback returns a different type than the element: each
+			// number becomes its decimal string, and the summed string lengths are
+			// returned, so value.MapArray[float64, value.BStr] is run through the
+			// engine and its result compared width for width against the TypeScript.
+			name: "arrayMapChange",
+			file: "eq_array_map_change",
+			fn:   "labelWidth",
+			args: [][]any{{1}, {5}, {-7}, {42}, {0}},
+		},
+		{
 			// filter over an arrow keeps the elements above the argument, then the
 			// kept count is returned, so the predicate ran on every element.
 			name: "arrayFilter",
