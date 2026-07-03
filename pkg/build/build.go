@@ -148,20 +148,20 @@ func goSignatureResolver() func(importPath, name string) (goimport.FuncSig, bool
 // value. It memoizes each package's constants the same way, sharing the one
 // go/packages load and degrading a failed load to an empty set, so a reference to a
 // constant from a package that will not load simply hands back.
-func goConstantResolver() func(importPath, name string) (string, bool) {
-	memo := map[string]map[string]string{}
-	return func(importPath, name string) (string, bool) {
+func goConstantResolver() func(importPath, name string) (goimport.ConstInfo, bool) {
+	memo := map[string]map[string]goimport.ConstInfo{}
+	return func(importPath, name string) (goimport.ConstInfo, bool) {
 		consts, loaded := memo[importPath]
 		if !loaded {
 			var err error
 			consts, err = goimport.Constants(importPath)
 			if err != nil {
-				consts = map[string]string{}
+				consts = map[string]goimport.ConstInfo{}
 			}
 			memo[importPath] = consts
 		}
-		kw, ok := consts[name]
-		return kw, ok
+		info, ok := consts[name]
+		return info, ok
 	}
 }
 

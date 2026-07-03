@@ -379,6 +379,24 @@ func (a *RealAdapter) UnionOf(p ProgramHandle, t TypeHandle) []TypeHandle {
 	return out
 }
 
+func (a *RealAdapter) IntersectionOf(p ProgramHandle, t TypeHandle) []TypeHandle {
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return []TypeHandle{t}
+	}
+	_, release := prog(p).checker()
+	defer release()
+	if ty.Flags()&shim.TypeFlagsIntersection == 0 {
+		return []TypeHandle{t}
+	}
+	members := ty.Types()
+	out := make([]TypeHandle, 0, len(members))
+	for _, m := range members {
+		out = append(out, wrapType(m))
+	}
+	return out
+}
+
 func (a *RealAdapter) PropertiesOf(p ProgramHandle, t TypeHandle) []PropertyInfo {
 	c, release := prog(p).checker()
 	defer release()
