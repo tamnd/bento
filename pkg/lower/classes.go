@@ -44,8 +44,8 @@ type classInfo struct {
 
 // classField is one instance field, in declaration order.
 type classField struct {
-	prop   string // source property name
-	goName string // exported Go field name
+	prop   string        // source property name
+	goName string        // exported Go field name
 	ident  frontend.Node // the name node, whose checker type is the declared field type
 	init   frontend.Node // the initializer expression, nil when none
 }
