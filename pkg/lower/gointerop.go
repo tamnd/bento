@@ -167,6 +167,41 @@ func (r *Renderer) goConstRef(name string) (ast.Expr, bool, error) {
 	return marshaled, true, nil
 }
 
+// goErrorSentinelRef resolves an argument that names a go: sentinel error variable
+// to the qualified Go variable read, so a caught error's is() compares against the
+// real Go value (section 7.7). Two reference forms resolve: a direct binding (EOF
+// imported by name from go:io) and a namespace member (io.EOF where io is a
+// namespace import). In both the resolver must confirm the bound name is an error
+// variable, so a constant or a function used in the argument position hands back
+// and the is() call falls through to its not-lowerable path rather than emit an
+// unsound comparison. A nil resolver (no Go toolchain wired) reports not found.
+func (r *Renderer) goErrorSentinelRef(arg frontend.Node) (ast.Expr, bool) {
+	if r.goErrorVars == nil {
+		return nil, false
+	}
+	var importPath, name string
+	switch arg.Kind() {
+	case frontend.NodeIdentifier:
+		b, ok := r.goImports[r.prog.Text(arg)]
+		if !ok {
+			return nil, false
+		}
+		importPath, name = b.importPath, b.name
+	case frontend.NodePropertyAccessExpression:
+		b, ok := r.namespaceGoCall(arg)
+		if !ok {
+			return nil, false
+		}
+		importPath, name = b.importPath, b.name
+	default:
+		return nil, false
+	}
+	if !isGoIdent(name) || !r.goErrorVars(importPath, name) {
+		return nil, false
+	}
+	return sel(r.requireGoImport(importPath), name), true
+}
+
 // goImportCall lowers a call to a name bound by a go: import to a direct call into
 // the Go package. When the Go signature is in hand (the build wires it), each
 // argument and the result marshal by the Go type, so a number crosses with the

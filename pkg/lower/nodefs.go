@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/goimport"
 )
 
 // This file lowers the small node:fs, node:os, and node:path surface a syscall
@@ -94,6 +95,16 @@ func (r *Renderer) recordNodeImport(decl frontend.Node) error {
 	// both from a single pass.
 	if strings.HasPrefix(module, goScheme) {
 		return r.recordGoImport(module, clause, haveClause)
+	}
+	// The bento:go vocabulary module (section 5.2) declares the TypeScript types that
+	// model Go concepts the language lacks. An import from it carries only compile-time
+	// meaning: GoError names the class a catch narrows to with instanceof, which lowers
+	// through the caught-error path by name rather than through a recorded binding, and
+	// the rest are types with no runtime value. So the import records nothing and lowers
+	// to nothing, the way a type-only import does; a bento:go runtime helper used as a
+	// value still hands back at its call site until that helper lowers.
+	if module == goimport.VocabularyModule {
+		return nil
 	}
 	exports, ok := nodeModuleExports[module]
 	if !ok {

@@ -95,6 +95,13 @@ type Renderer struct {
 	// package load; with no resolver a reference to a go: binding used as a value
 	// hands back, since the renderer cannot tell a constant from a function value.
 	goConsts func(importPath, name string) (goimport.ConstInfo, bool)
+	// goErrorVars reports whether a name exported by a go: package is a sentinel
+	// error variable (io.EOF, sql.ErrNoRows), so a caught error's is() lowers to
+	// errors.Is against the real Go variable and branches on identity the way Go
+	// code does (section 7.7). It is optional and wired from the same package load;
+	// with no resolver err.is against a go: sentinel hands back, since the renderer
+	// cannot tell an error variable from any other exported binding.
+	goErrorVars func(importPath, name string) bool
 	// retType is the declared return type of the function whose body is currently
 	// being lowered, so a return statement can coerce its value across the dynamic
 	// boundary the way an assignment does. It is the zero type outside a function
@@ -161,6 +168,14 @@ func (r *Renderer) SetGoSignatures(resolve func(importPath, name string) (goimpo
 // reference to a go: binding back rather than guess whether it is a constant.
 func (r *Renderer) SetGoConstants(resolve func(importPath, name string) (goimport.ConstInfo, bool)) {
 	r.goConsts = resolve
+}
+
+// SetGoErrorVars wires the resolver a caught error's is() checks a go: sentinel
+// against, so err.is(EOF) lowers to errors.Is against io.EOF. It is set from the
+// same Go package load; a renderer with no resolver hands err.is back rather than
+// guess whether a bound name is an error variable.
+func (r *Renderer) SetGoErrorVars(resolve func(importPath, name string) bool) {
+	r.goErrorVars = resolve
 }
 
 // requireImport records that the Go the renderer has emitted refers to a

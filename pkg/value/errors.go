@@ -145,6 +145,13 @@ func Caught(r any) *Error {
 // errors.Is and errors.As walk, kept alive by the caught error that holds it.
 func (e *Error) Cause() error { return e.cause }
 
+// IsGoError reports whether the caught error came from Go, the lowering of
+// e instanceof GoError on a catch binding (section 7.7). A boundary failure that
+// wrapped a Go error carries a cause, so it is a GoError; an error the program
+// threw itself has no Go error behind it and is not. This is what narrows a catch
+// binding to the GoError surface before err.is or err.as reads it.
+func (e *Error) IsGoError() bool { return e.cause != nil }
+
 // Is reports whether the caught error matches a Go sentinel, the lowering of
 // err.is(target) where target is an error imported from a go: package (io.EOF is
 // the canonical one, section 7.7). It defers to errors.Is against the original Go
