@@ -682,6 +682,70 @@ console.log(counts.size);
 	}
 }
 
+// TestGoImportStructResultEmitsInternedBox pins that a Go struct result lowers to a
+// guarded closure that binds the Go value and returns a pointer to a freshly built
+// interned struct, reading each exported Go field. The MakePoint result is a Point
+// with X and Y, so the marshaling reads v.X and v.Y and boxes them into the same
+// interned struct the interface shape interns to (sections 6.7 and 7.4).
+func TestGoImportStructResultEmitsInternedBox(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { MakePoint } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const p = MakePoint(3, 4);
+console.log(p.X + p.Y);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "v := structfixture.MakePoint(") {
+		t.Errorf("a struct result did not bind the Go call to v:\n%s", source)
+	}
+	if !strings.Contains(source, "v.X") || !strings.Contains(source, "v.Y") {
+		t.Errorf("a struct result did not read each exported Go field:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.Guard(func() *") {
+		t.Errorf("a struct result was not guarded with a pointer result type:\n%s", source)
+	}
+}
+
+// TestGoImportStructResultRuns proves the struct crossing end to end: MakePoint
+// returns a Go Point, the bento program reads p.X and p.Y off the boxed result, and
+// their sum prints, so the Go struct value, the interned box, and the field access
+// are all proven against a real build.
+func TestGoImportStructResultRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct test builds and runs generated Go")
+	}
+	const src = `import { MakePoint } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const p = MakePoint(3, 4);
+console.log(p.X + p.Y);
+`
+	got := runProgramGo(t, src)
+	if want := "7\n"; got != want {
+		t.Fatalf("go: struct program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportStructMixedFieldsRun proves the crossing carries every basic field
+// kind at once: MakeProfile returns a struct with a string name, a numeric age, and
+// a boolean flag, and the bento program reads all three back, so each field marshals
+// by its own keyword into the interned box.
+func TestGoImportStructMixedFieldsRun(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct test builds and runs generated Go")
+	}
+	const src = `import { MakeProfile } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const u = MakeProfile("ada", 36, true);
+console.log(u.Name + " " + u.Age + " " + u.Active);
+`
+	got := runProgramGo(t, src)
+	if want := "ada 36 true\n"; got != want {
+		t.Fatalf("go: struct mixed-field program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportVariadicEmitsSpreadCall pins that a call to a variadic Go function
 // spreads its arguments positionally into the Go call: path.Join is func(...string),
 // so each argument marshals through StringToGo on its own and Go reassembles the
