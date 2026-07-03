@@ -111,3 +111,73 @@ func TestCheckIsQuietOnNil(t *testing.T) {
 	}()
 	Check(nil)
 }
+
+// TestGuardReturnsValueWhenNoPanic proves the boundary guard is transparent on the
+// happy path: a go: call that returns normally returns its value unchanged, so the
+// guard adds no behavior when nothing panics.
+func TestGuardReturnsValueWhenNoPanic(t *testing.T) {
+	if got := Guard(func() int { return 42 }); got != 42 {
+		t.Errorf("Guard of a returning call = %d, want 42", got)
+	}
+}
+
+// TestGuardConvertsGoPanicToThrow proves a Go panic that escapes a go: call is
+// converted to a thrown GoError, the section 12.3 guarantee that a Go panic becomes
+// a catchable JavaScript exception. A panic with an error value keeps the error
+// reachable through Unwrap, and a panic with a non-error value carries its string
+// form.
+func TestGuardConvertsGoPanicToThrow(t *testing.T) {
+	sentinel := errors.New("boom")
+	func() {
+		defer func() {
+			r := recover()
+			ge, ok := r.(GoError)
+			if !ok {
+				t.Fatalf("guard of an error panic raised %T, want GoError", r)
+			}
+			if !errors.Is(ge, sentinel) {
+				t.Errorf("converted GoError does not unwrap to the panicked error")
+			}
+		}()
+		Guard(func() int { panic(sentinel) })
+	}()
+
+	func() {
+		defer func() {
+			r := recover()
+			ge, ok := r.(GoError)
+			if !ok {
+				t.Fatalf("guard of a string panic raised %T, want GoError", r)
+			}
+			if ge.Error() != "go: call panicked: kaboom" {
+				t.Errorf("converted GoError message = %q, want the panic's string form", ge.Error())
+			}
+		}()
+		Guard(func() int { panic("kaboom") })
+	}()
+}
+
+// TestGuardPassesThrownThrough proves a deliberate bento throw crossing the guard
+// is left to keep unwinding, not reclassified: a RangeError raised by the number
+// check inside a go: call surfaces as the RangeError it is, so instanceof narrowing
+// still tells a numeric overflow apart from a Go panic.
+func TestGuardPassesThrownThrough(t *testing.T) {
+	defer func() {
+		r := recover()
+		if _, ok := r.(RangeError); !ok {
+			t.Fatalf("guard reclassified a bento throw to %T, want the RangeError unchanged", r)
+		}
+	}()
+	Guard(func() float64 { panic(RangeError{Message: "overflow"}) })
+}
+
+// TestGuard0GuardsVoidCall proves the void form guards a go: call that returns
+// nothing the same way, converting a Go panic to a thrown GoError.
+func TestGuard0GuardsVoidCall(t *testing.T) {
+	defer func() {
+		if _, ok := recover().(GoError); !ok {
+			t.Fatal("Guard0 did not convert a Go panic to a GoError")
+		}
+	}()
+	Guard0(func() { panic("void boom") })
+}
