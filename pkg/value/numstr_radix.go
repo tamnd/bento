@@ -1,6 +1,9 @@
 package value
 
-import "math"
+import (
+	"math"
+	"strconv"
+)
 
 // This file implements Number.prototype.toString(radix) for a radix other than
 // 10, the non-decimal number-to-string conversion. Radix 10 is Number::toString,
@@ -34,6 +37,20 @@ func NumberToStringRadix(x float64, radix int) BStr {
 		return FromGoString("Infinity")
 	case math.IsInf(x, -1):
 		return FromGoString("-Infinity")
+	}
+	// Fast path for a whole value of magnitude at most 2^53. Such a value has no
+	// fractional part, so the general dtoa-in-base path skips its fraction loop and
+	// only runs the integer digits, which for a positional radix are exactly what
+	// strconv.AppendInt writes: the same digit alphabet (radixDigits is lowercase,
+	// matching AppendInt for base 2..36) and the same leading '-'. Taking this path
+	// avoids the 2200-byte stack buffer doubleToRadix zeroes on every call, the cost
+	// that dominated stringifying a loop counter or a byte value in a radix. The
+	// bound is 2^53 for the same reason NumberToString uses it: past that an integer
+	// float and its exact int64 diverge, and doubleToRadix fills the unrepresented
+	// low digits with zero, which AppendInt of the int64 would not reproduce.
+	if x == math.Trunc(x) && x >= -twoPow53 && x <= twoPow53 {
+		var ibuf [24]byte
+		return fromASCII(string(strconv.AppendInt(ibuf[:0], int64(x), radix)))
 	}
 	return FromGoString(doubleToRadix(x, radix))
 }
