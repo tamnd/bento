@@ -7,11 +7,8 @@ import (
 func main() {
 	var width float64 = 5
 	var total float64 = 0
-	{
-		var i float64 = 0
-		for ; i < width; i++ {
-			total += i
-		}
+	for i := 0.0; i < width; i++ {
+		total += i
 	}
 	value.WriteStdout(value.Concat(value.NumberToString(total), value.FromGoString("\n")))
 }
