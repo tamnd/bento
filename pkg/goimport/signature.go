@@ -245,11 +245,72 @@ func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, 
 	if path, name, fields, good := structCrossing(t); good {
 		return "struct", DefinedConv{}, StructElem(path, name, fields), true
 	}
+	if params, result, good := funcCrossing(t); good {
+		return "func", DefinedConv{}, FuncElem(params, result), true
+	}
 	if path, name, good := opaqueCrossing(t); good {
 		return "opaque", DefinedConv{}, OpaqueElem(path, name), true
 	}
 	kw, conv, good := crossingType(t)
 	return kw, conv, "", good
+}
+
+// funcCrossing classifies a Go func-typed parameter as a callback the author writes
+// in TypeScript, returning the parameter Go type keywords and the single result
+// keyword and true so the lowerer wraps a bento function as a Go func value (sections
+// 6.9, 7.6). It fires for a func whose parameters are each a plain basic and whose
+// result is nothing or one plain basic: those are the scalar crossings the wrapper
+// can marshal in both directions today. A variadic func, a func with more than one
+// result, an error result (the throwing callback of section 7.6), or any composite
+// parameter or result clears the crossing so the call hands back, each awaiting its
+// own slice. A named func type is matched through its underlying signature, so a
+// declared callback type crosses the same as an inline func type.
+func funcCrossing(t types.Type) (params []string, result string, ok bool) {
+	sig, isSig := t.Underlying().(*types.Signature)
+	if !isSig {
+		return nil, "", false
+	}
+	if sig.Variadic() {
+		return nil, "", false
+	}
+	ps := sig.Params()
+	out := make([]string, 0, ps.Len())
+	for i := 0; i < ps.Len(); i++ {
+		kw := basicKeyword(ps.At(i).Type())
+		if kw == "" {
+			return nil, "", false
+		}
+		out = append(out, kw)
+	}
+	rs := sig.Results()
+	switch rs.Len() {
+	case 0:
+		return out, "", true
+	case 1:
+		kw := basicKeyword(rs.At(0).Type())
+		if kw == "" {
+			return nil, "", false
+		}
+		return out, kw, true
+	default:
+		return nil, "", false
+	}
+}
+
+// FuncElem packs a callback crossing's Go type keywords for the lowerer: the single
+// result keyword first (empty for a void callback), then each parameter keyword, all
+// NUL-separated. The result leads so an empty parameter list is unambiguous, the same
+// scheme MapElem and StructElem use for their own composite element data.
+func FuncElem(params []string, result string) string {
+	return strings.Join(append([]string{result}, params...), "\x00")
+}
+
+// SplitFuncElem recovers the result keyword and the parameter keywords FuncElem
+// packed, for the lowerer to type the wrapper closure and marshal each argument and
+// the return across the boundary.
+func SplitFuncElem(elem string) (result string, params []string) {
+	parts := strings.Split(elem, "\x00")
+	return parts[0], parts[1:]
 }
 
 // crossingType classifies a parameter or result type for the boundary: a plain
