@@ -136,6 +136,7 @@ func compileProgram(entry string) (string, []string, error) {
 	r := lower.NewRenderer(prog)
 	r.SetGoSignatures(goSignatureResolver())
 	r.SetGoConstants(goConstantResolver())
+	r.SetGoErrorVars(goErrorVarResolver())
 	p, err := r.RenderProgram(entryFile)
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
@@ -186,6 +187,28 @@ func goConstantResolver() func(importPath, name string) (goimport.ConstInfo, boo
 		}
 		info, ok := consts[name]
 		return info, ok
+	}
+}
+
+// goErrorVarResolver builds the resolver the lowerer checks a go: sentinel against
+// when a caught error's is() names one, the companion to goConstantResolver for an
+// error variable rather than a constant. It memoizes each package's error variables
+// the same way, sharing the one go/packages load and degrading a failed load to an
+// empty set, so err.is against a sentinel from a package that will not load simply
+// hands back.
+func goErrorVarResolver() func(importPath, name string) bool {
+	memo := map[string]map[string]bool{}
+	return func(importPath, name string) bool {
+		vars, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			vars, err = goimport.ErrorVars(importPath)
+			if err != nil {
+				vars = map[string]bool{}
+			}
+			memo[importPath] = vars
+		}
+		return vars[name]
 	}
 }
 

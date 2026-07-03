@@ -1095,6 +1095,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		return nil, &NotYetLowerable{Reason: "method callee did not expose a receiver and a method name"}
 	}
 	recvNode, method := kids[0], r.prog.Text(kids[1])
+	// A method on a caught error is one of the error-identity calls of section 7.7:
+	// err.is(sentinel) lowers to errors.Is against the Go error the caught error
+	// carries. It routes first because the checker types a catch binding unknown, so
+	// the receiver-value paths below would not recognize it, and because the argument
+	// is a go: sentinel reference rather than a bento value. Only a receiver the
+	// lowerer bound as a caught error takes this path.
+	if recvNode.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(recvNode)); ok && r.errorLocals[name] {
+			return r.errorMethodCall(name, method, argNodes)
+		}
+	}
 	// process.stdout.write(s) and process.stderr.write(s) are the process output
 	// streams. The receiver is not a value, it is the ambient stream, so the call
 	// lowers to a value write helper rather than a method on a runtime object.

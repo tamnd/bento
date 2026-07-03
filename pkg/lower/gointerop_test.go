@@ -50,6 +50,26 @@ func testGoConstants() func(importPath, name string) (goimport.ConstInfo, bool) 
 	}
 }
 
+// testGoErrorVars is the sentinel-error resolver the program tests wire alongside
+// the others, loading each Go package's error variables once and memoizing them, so
+// a caught error's is() against a go: sentinel lowers the same way the build does.
+// It is the test-side twin of build.goErrorVarResolver.
+func testGoErrorVars() func(importPath, name string) bool {
+	memo := map[string]map[string]bool{}
+	return func(importPath, name string) bool {
+		vars, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			vars, err = goimport.ErrorVars(importPath)
+			if err != nil {
+				vars = map[string]bool{}
+			}
+			memo[importPath] = vars
+		}
+		return vars[name]
+	}
+}
+
 // This file covers the go: import lowering: a call to a name a go: import binds
 // lowers to a direct call into the real Go package, with the value crossings run
 // through the interop bridge. The unit cases pin the pieces that need no toolchain
@@ -234,6 +254,65 @@ try {
 	got := runProgramGo(t, src)
 	if want := "42\ncaught: strconv.Atoi: parsing \"nope\": invalid syntax\n"; got != want {
 		t.Fatalf("go: error bridge program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportErrorIsEmitsIdentityCheck pins that a caught error's is() against a
+// go: sentinel lowers to the value.Error identity methods of section 7.7: the
+// instanceof GoError guard becomes IsGoError, and is(ErrSyntax) becomes Is against
+// the qualified Go variable read, so the comparison is errors.Is against the real
+// sentinel rather than a string match. The sentinel read pulls strconv.ErrSyntax
+// straight from the Go package, bypassing the bento value model.
+func TestGoImportErrorIsEmitsIdentityCheck(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Atoi, ErrSyntax } from "go:strconv";
+import { GoError } from "bento:go";
+try {
+  Atoi("nope");
+} catch (e) {
+  if (e instanceof GoError) {
+    if (e.is(ErrSyntax)) {
+      console.log("syntax");
+    }
+  }
+}
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".IsGoError()") {
+		t.Errorf("instanceof GoError did not lower to the IsGoError narrowing:\n%s", source)
+	}
+	if !strings.Contains(source, ".Is(strconv.ErrSyntax)") {
+		t.Errorf("err.is(ErrSyntax) did not lower to errors.Is against the sentinel:\n%s", source)
+	}
+}
+
+// TestGoImportErrorIsRuns proves the error-identity path end to end: Atoi on a bad
+// number returns a Go error wrapping strconv.ErrSyntax, and the caught error's
+// is(ErrSyntax) reports true where is(ErrRange) reports false, so a bento author
+// branches on Go error identity exactly as a Go author does with errors.Is
+// (section 7.7).
+func TestGoImportErrorIsRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: error identity test builds and runs generated Go")
+	}
+	const src = `import { Atoi, ErrSyntax, ErrRange } from "go:strconv";
+import { GoError } from "bento:go";
+try {
+  Atoi("nope");
+} catch (e) {
+  if (e instanceof GoError) {
+    console.log(e.is(ErrSyntax));
+    console.log(e.is(ErrRange));
+  }
+}
+`
+	got := runProgramGo(t, src)
+	if want := "true\nfalse\n"; got != want {
+		t.Fatalf("go: error identity program printed %q, want %q", got, want)
 	}
 }
 
