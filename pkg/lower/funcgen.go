@@ -458,6 +458,9 @@ func (r *Renderer) lowerExprStatement(n frontend.Node) (ast.Stmt, error) {
 func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 	switch n.Kind() {
 	case frontend.NodeBinaryExpression:
+		if stmt, ok, err := r.bytesElementAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		return r.lowerAssign(n)
 	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
 		return r.lowerIncDec(n)
@@ -474,6 +477,57 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 	default:
 		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment, update, or call is a later slice"}
 	}
+}
+
+// bytesElementAssign lowers a Uint8Array element write a[i] = v to the buffer's
+// SetAt, the store half of the byte-buffer indexing lowered as a read by
+// elementAccess (section 6.3). It reports ok=false when the statement is not an
+// element write into a byte buffer, so lowerUpdate falls through to lowerAssign,
+// which handles the local-identifier assignments; only when the target is an
+// element access whose receiver the checker types a Uint8Array does this claim the
+// statement. The value coerces to a byte inside SetAt with the runtime's ToUint8,
+// so the lowering passes it as the Number the checker typed it. Only a plain "="
+// is covered: a compound write a[i] += v reads and writes the element and is a
+// later slice, so it hands back for the engine rather than dropping the read.
+func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
+	parts := r.prog.Children(bin)
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, false, nil
+	}
+	target := parts[0]
+	if target.Kind() != frontend.NodeElementAccessExpression {
+		return nil, false, nil
+	}
+	idxParts := r.prog.Children(target)
+	if len(idxParts) != 2 {
+		return nil, false, nil
+	}
+	recvNode, idxNode := idxParts[0], idxParts[1]
+	if !r.isBytes(recvNode) {
+		return nil, false, nil
+	}
+	if !r.isNumber(idxNode) {
+		return nil, false, &NotYetLowerable{Reason: "a Uint8Array write with a non-number index is a later slice"}
+	}
+	if !r.isNumber(parts[2]) {
+		return nil, false, &NotYetLowerable{Reason: "a Uint8Array write of a non-number value is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, false, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, false, err
+	}
+	val, err := r.lowerExpr(parts[2])
+	if err != nil {
+		return nil, false, err
+	}
+	return &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetAt")},
+		Args: []ast.Expr{idx, val},
+	}}, true, nil
 }
 
 // lowerIncDec lowers a ++ or -- applied to a local number. In statement
@@ -2315,7 +2369,8 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Length")}}, nil
 	}
 	if prop == "length" {
-		if _, ok := r.arrayElem(obj); ok {
+		_, isArray := r.arrayElem(obj)
+		if isArray || r.isBytes(obj) {
 			recv, err := r.lowerExpr(obj)
 			if err != nil {
 				return nil, err
@@ -3162,8 +3217,15 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "element access did not expose an object and an index"}
 	}
 	obj, idxNode := kids[0], kids[1]
-	if _, ok := r.arrayElem(obj); !ok {
-		return nil, &NotYetLowerable{Reason: "element access on a non-array receiver is a later slice"}
+	// A Uint8Array read a[i] returns a byte as a Number through the buffer's own At,
+	// the same method name a typed Array indexes through, so the two receivers share
+	// this shape and differ only in which value type carries At. A byte buffer is not
+	// an array in the checker's vocabulary (it has no element type), so it is tested
+	// here explicitly rather than falling through arrayElem.
+	if !r.isBytes(obj) {
+		if _, ok := r.arrayElem(obj); !ok {
+			return nil, &NotYetLowerable{Reason: "element access on a non-array receiver is a later slice"}
+		}
 	}
 	if !r.isNumber(idxNode) {
 		return nil, &NotYetLowerable{Reason: "array element access with a non-number index is a later slice"}

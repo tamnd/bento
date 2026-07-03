@@ -294,6 +294,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(bridgePkg)
 			return sel("bridge", "Opaque"), nil
 		}
+		if r.isBytesType(t) {
+			// A Uint8Array (section 6.3) is the value model's byte buffer, spelled as a
+			// pointer the same way a typed Array is, and the type a Go []byte projects to
+			// across the boundary (section 7.3). It is not a struct shape, so it routes
+			// here before renderObject would intern its interface as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "Uint8Array")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -359,6 +367,43 @@ func (r *Renderer) isGoOpaqueType(t frontend.Type) bool {
 		}
 	}
 	return false
+}
+
+// isBytesType reports whether an object type is a Uint8Array, the JavaScript byte
+// buffer bento maps to value.Uint8Array (section 6.3). The standard library types
+// the typed-array family with a BYTES_PER_ELEMENT constant no plain object or the
+// generic Array carries, so that property is the fingerprint here, read by name
+// the same way isGoOpaqueType reads its brand. The family shares this property, so
+// the fingerprint alone does not tell Uint8Array from an Int8Array; bento only
+// lowers Uint8Array, and construction is gated on the Uint8Array name at the new
+// expression, so no other typed array reaches a position that would consult this,
+// which keeps the ambiguity unreachable rather than merely unlikely. A caller
+// must have already ruled the type out as an array (its ElementType is not an
+// array element), so this runs only for the non-array object shapes.
+func (r *Renderer) isBytesType(t frontend.Type) bool {
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "BYTES_PER_ELEMENT" {
+			return true
+		}
+	}
+	return false
+}
+
+// isBytes reports whether the checker types a node as a Uint8Array, the receiver
+// test the byte-buffer lowerings share (a new expression's target, an indexed read
+// or write, a .length). It is the node-level companion to isBytesType: it reads the
+// node's type and applies the same fingerprint, first ruling out an array so a real
+// typed array (which is an object with an element type) is never mistaken for the
+// byte buffer.
+func (r *Renderer) isBytes(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isBytesType(t)
 }
 
 // Decls returns the generated declarations the rendered types referred to, in a
