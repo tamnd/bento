@@ -167,6 +167,55 @@ console.log(Itoa(42));
 	}
 }
 
+// TestGoImportErrorHoistsToThrow pins the (T, error) throw bridge shape: a call to
+// strconv.Atoi, whose Go signature is (int, error), lowers to the Go call wrapped
+// in bridge.Must so the error hoists to a throw and the int result crosses back
+// through the range check, the mapping section 6.6 fixes.
+func TestGoImportErrorHoistsToThrow(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Atoi } from "go:strconv";
+console.log(Atoi("42"));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.Must(strconv.Atoi(") {
+		t.Errorf("a (T, error) call did not wrap the Go call in the throw bridge:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.Int64ToNumber(int64(bridge.Must(") {
+		t.Errorf("the throw bridge's int result did not cross back through the range check:\n%s", source)
+	}
+	if !strings.Contains(source, "defer value.ReportUncaught()") {
+		t.Errorf("a program that can raise a go: error did not defer the uncaught reporter:\n%s", source)
+	}
+}
+
+// TestGoImportErrorBridgeRuns proves the throw bridge end to end: strconv.Atoi on a
+// valid number returns the parsed value, and on a bad number the returned Go error
+// hoists to a throw that a bento catch recovers and reads as an Error whose message
+// is the Go error string, the round trip section 7.7 promises.
+func TestGoImportErrorBridgeRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: error test builds and runs generated Go")
+	}
+	const src = `import { Atoi } from "go:strconv";
+console.log(Atoi("42"));
+try {
+  Atoi("nope");
+} catch (e) {
+  if (e instanceof Error) {
+    console.log("caught: " + e.message);
+  }
+}
+`
+	got := runProgramGo(t, src)
+	if want := "42\ncaught: strconv.Atoi: parsing \"nope\": invalid syntax\n"; got != want {
+		t.Fatalf("go: error bridge program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportEmitsAliasedImport pins that the assembled Go imports the Go package
 // under its alias and calls it qualified by that alias through the bridge, the
 // shape section 9.1 fixes, without needing to run the program.
