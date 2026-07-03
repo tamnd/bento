@@ -189,6 +189,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 			resultElems = append(resultElems, MapElem(key, val))
 			continue
 		}
+		if path, name, fields, good := structCrossing(t); good {
+			results = append(results, "struct")
+			resultElems = append(resultElems, StructElem(path, name, fields))
+			continue
+		}
 		if anyCrossing(t) {
 			results = append(results, "any")
 			resultElems = append(resultElems, "")
@@ -331,6 +336,96 @@ func mapCrossing(t types.Type) (string, string, bool) {
 		return "", "", false
 	}
 	return key, val, true
+}
+
+// StructField is one exported field of a struct crossing: its Go field name and the
+// Go type keyword its value marshals by, the pair the lowerer reads to build the
+// interned struct field and the per-field crossing (section 6.7).
+type StructField struct {
+	Name    string
+	Keyword string
+}
+
+// structCrossing classifies a Go named struct with exported basic fields as a struct
+// result crossing, returning its import path, Go name, and the exported fields and
+// true so the lowerer marshals it to the object box the interface projection shares
+// (sections 6.7, 7.4). It fires only for a struct this slice can read whole: a named,
+// exported type whose underlying is a struct with at least one exported field, every
+// exported field of a plain basic type. Unexported fields are ignored, because the
+// author cannot read them and the projection does not surface them. A struct with no
+// exported field is not a struct crossing but an opaque token (opaqueCrossing claims
+// it), and an exported field of a composite type (a nested struct, a slice, another
+// map) clears the crossing so the call hands back rather than marshal a field this
+// slice cannot cross; those await their own slices. Methods are allowed and ignored:
+// this slice reads a struct's data, and calling its methods is a later slice, so a
+// struct with methods still crosses as the data an author reads.
+func structCrossing(t types.Type) (string, string, []StructField, bool) {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return "", "", nil, false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || !obj.Exported() {
+		return "", "", nil, false
+	}
+	if isErrorType(named) {
+		return "", "", nil, false
+	}
+	st, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return "", "", nil, false
+	}
+	var fields []StructField
+	for i := 0; i < st.NumFields(); i++ {
+		f := st.Field(i)
+		if !f.Exported() {
+			continue
+		}
+		kw := basicKeyword(f.Type())
+		if kw == "" {
+			// An exported field of a composite type has no scalar crossing here, so the
+			// whole struct hands back until its own slice marshals that field.
+			return "", "", nil, false
+		}
+		fields = append(fields, StructField{Name: f.Name(), Keyword: kw})
+	}
+	if len(fields) == 0 {
+		// A struct with no exported field is a pure token, left to opaqueCrossing.
+		return "", "", nil, false
+	}
+	return obj.Pkg().Path(), obj.Name(), fields, true
+}
+
+// StructElem packs a struct crossing's import path, Go type name, and exported fields
+// into the single element string it rides in ResultElem, so the lowerer builds the
+// interned struct and the per-field crossings without a second parallel slice. The
+// path and name lead, then one entry per field spelled name:keyword, all joined by a
+// NUL, which never appears in a Go import path, identifier, or type keyword, so the
+// split is exact. A field name and its keyword are joined by a colon, which a Go
+// identifier and a type keyword never contain, so that split is exact too.
+func StructElem(path, name string, fields []StructField) string {
+	parts := make([]string, 0, len(fields)+2)
+	parts = append(parts, path, name)
+	for _, f := range fields {
+		parts = append(parts, f.Name+":"+f.Keyword)
+	}
+	return strings.Join(parts, "\x00")
+}
+
+// SplitStructElem recovers the import path, Go type name, and exported fields
+// StructElem packed, for the lowerer to build the interned struct reference and the
+// per-field crossings.
+func SplitStructElem(elem string) (string, string, []StructField) {
+	parts := strings.Split(elem, "\x00")
+	if len(parts) < 2 {
+		return "", "", nil
+	}
+	fields := make([]StructField, 0, len(parts)-2)
+	for _, p := range parts[2:] {
+		name, kw, _ := strings.Cut(p, ":")
+		fields = append(fields, StructField{Name: name, Keyword: kw})
+	}
+	return parts[0], parts[1], fields
 }
 
 // opaqueCrossing classifies a foreign named type the bridge does not project as an
