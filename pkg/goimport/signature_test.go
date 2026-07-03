@@ -576,17 +576,38 @@ func F(f func(int)) { f(0) }
 	}
 }
 
+// TestClassifyErrorResultFuncParam proves a callback returning a lone error is a
+// crossing whose packed element carries the "error" result sentinel, so the lowerer
+// wraps the bento callback in the throw-to-error bridge of section 7.6.
+func TestClassifyErrorResultFuncParam(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(f func(int) error) { }
+`, "F")
+	if !sig.OK {
+		t.Fatal("a throwing-callback signature classified as not lowerable")
+	}
+	result, params := SplitFuncElem(sig.ParamElem[0])
+	if result != "error" {
+		t.Errorf("error callback result keyword = %q, want error", result)
+	}
+	if want := []string{"int"}; !slices.Equal(params, want) {
+		t.Errorf("error callback param keywords = %v, want %v", params, want)
+	}
+}
+
 // TestClassifyRejectsFuncOfComposite proves a callback the wrapper cannot marshal
 // hands back rather than cross a shape this slice does not cover: a callback with a
-// composite parameter, one returning an error (the throwing callback of section 7.6),
-// one with more than one result, and a variadic callback each clear the crossing.
+// composite parameter, one pairing a value with an error, one with more than one
+// non-error result, and a variadic callback each clear the crossing. A lone error
+// result is covered (TestClassifyErrorResultFuncParam), so only an error paired with
+// a value stays a hand-back here.
 func TestClassifyRejectsFuncOfComposite(t *testing.T) {
 	cases := map[string]string{
 		"slice parameter": `package p
 func F(f func([]int) int) int { return 0 }
 `,
-		"error result": `package p
-func F(f func(int) error) { }
+		"value and error result": `package p
+func F(f func(int) (int, error)) { }
 `,
 		"two results": `package p
 func F(f func(int) (int, int)) { }

@@ -112,6 +112,55 @@ func TestCheckIsQuietOnNil(t *testing.T) {
 	Check(nil)
 }
 
+// TestCallbackErrorNilWhenCallbackReturns proves a callback that returns normally
+// gives Go a nil error, the happy path of the throw-to-error bridge (section 7.6).
+func TestCallbackErrorNilWhenCallbackReturns(t *testing.T) {
+	if err := CallbackError(func() {}); err != nil {
+		t.Errorf("CallbackError of a returning callback = %v, want nil", err)
+	}
+}
+
+// TestCallbackErrorRoundTripsGoError proves a caught go: error re-thrown from a
+// callback returns to Go as the same error by identity: the wrapper recovers the
+// bento error, sees it wraps a Go error, and returns that Go error, so errors.Is
+// against the original sentinel still matches on the Go side (section 7.6).
+func TestCallbackErrorRoundTripsGoError(t *testing.T) {
+	sentinel := errors.New("boom")
+	caught := value.Caught(GoError{Err: sentinel})
+	err := CallbackError(func() { panic(caught) })
+	if err == nil {
+		t.Fatal("CallbackError of a throwing callback returned nil")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("returned error does not unwrap to the original Go error")
+	}
+}
+
+// TestCallbackErrorStringFormForPlainThrow proves a plain program throw (an Error the
+// callback raised itself, with no Go error behind it) returns to Go as an error whose
+// message is the thrown value's string form, so the Go library sees a normal error.
+func TestCallbackErrorStringFormForPlainThrow(t *testing.T) {
+	err := CallbackError(func() { panic(value.NewError(value.FromGoString("boom"))) })
+	if err == nil {
+		t.Fatal("CallbackError of a throwing callback returned nil")
+	}
+	if got := err.Error(); got != "Error: boom" {
+		t.Errorf("returned error message = %q, want %q", got, "Error: boom")
+	}
+}
+
+// TestCallbackErrorRepanicsRuntimePanic proves a Go runtime panic that is not a bento
+// throw keeps unwinding rather than being swallowed into an error return, so a real
+// bug in the runtime still surfaces as a crash.
+func TestCallbackErrorRepanicsRuntimePanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("CallbackError swallowed a non-throw runtime panic")
+		}
+	}()
+	CallbackError(func() { panic("not a thrown value") })
+}
+
 // TestGuardReturnsValueWhenNoPanic proves the boundary guard is transparent on the
 // happy path: a go: call that returns normally returns its value unchanged, so the
 // guard adds no behavior when nothing panics.
