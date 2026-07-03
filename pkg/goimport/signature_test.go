@@ -221,8 +221,6 @@ func F(n int) {}
 // clear OK so the lowerer hands the call back rather than emit an unsound crossing.
 func TestClassifyRejectsUnsupported(t *testing.T) {
 	cases := map[string]string{
-		"variadic": `package p
-func F(parts ...string) string { return "" }`,
 		"slice param": `package p
 func F(b []byte) int { return 0 }`,
 		"two results": `package p
@@ -284,5 +282,78 @@ func F(d Duration) Duration { return d }
 	}
 	if !sig.ResultDefined {
 		t.Error("result not marked defined, want the brand stripped on the way out")
+	}
+}
+
+// TestClassifyVariadicScalar proves a ...T rest parameter is classified by its
+// element type and flagged variadic, so the lowerer marshals each spread argument as
+// one T and passes them positionally into the Go call (section 6.9). The element of a
+// ...string is a plain string, and the fixed parameters ahead of it keep their own
+// keywords.
+func TestClassifyVariadicScalar(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(sep string, parts ...string) string { return sep }
+`, "F")
+	if !sig.OK {
+		t.Fatal("variadic-of-string signature classified as not lowerable")
+	}
+	if !sig.Variadic {
+		t.Error("signature not flagged variadic, want the trailing rest parameter recognized")
+	}
+	if want := []string{"string", "string"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want the fixed string and the element string %v", sig.Params, want)
+	}
+	if want := []string{"string"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+}
+
+// TestClassifyVariadicNumericThrows proves a variadic numeric that also returns a
+// trailing error keeps both crossings: the element is the number keyword, the error
+// hoists to a throw, and the single non-error result rides through. This is the
+// fmt.Println shape (a ...any returning (int, error)) reduced to a concrete element.
+func TestClassifyVariadicNumericThrows(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(vals ...int) (int, error) { return 0, nil }
+`, "F")
+	if !sig.OK || !sig.Variadic || !sig.Throws {
+		t.Fatalf("variadic numeric with error classified OK=%v Variadic=%v Throws=%v, want all true", sig.OK, sig.Variadic, sig.Throws)
+	}
+	if want := []string{"int"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want the element int %v", sig.Params, want)
+	}
+	if want := []string{"int"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want the error dropped leaving [int] %v", sig.Results, want)
+	}
+}
+
+// TestClassifyVariadicAny proves a ...any rest parameter classifies its element as
+// the dynamic crossing, so each spread argument boxes to a bento value on the way in
+// (section 6.12). This is the shape a variadic logger takes.
+func TestClassifyVariadicAny(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(args ...any) { }
+`, "F")
+	if !sig.OK || !sig.Variadic {
+		t.Fatalf("variadic any classified OK=%v Variadic=%v, want both true", sig.OK, sig.Variadic)
+	}
+	if want := []string{"any"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want the element any %v", sig.Params, want)
+	}
+}
+
+// TestClassifyVariadicOfComposite proves a variadic whose element is not a covered
+// crossing (a slice of a struct spread as the tail) clears OK, so the call hands back
+// rather than marshal an element it cannot cross.
+func TestClassifyVariadicOfComposite(t *testing.T) {
+	sig := sigOf(t, `package p
+type T struct{ X int }
+func F(items ...T) int { return 0 }
+`, "F")
+	if sig.OK {
+		t.Error("variadic of a class struct classified as lowerable, want a hand-back")
+	}
+	if !sig.Variadic {
+		t.Error("signature not flagged variadic even though it hands back, want the flag set for a diagnostic")
 	}
 }

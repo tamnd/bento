@@ -590,6 +590,65 @@ console.log(words.length);
 	}
 }
 
+// TestGoImportVariadicEmitsSpreadCall pins that a call to a variadic Go function
+// spreads its arguments positionally into the Go call: path.Join is func(...string),
+// so each argument marshals through StringToGo on its own and Go reassembles the
+// slice from the positional arguments, with no bento-side slice built (section 6.9).
+func TestGoImportVariadicEmitsSpreadCall(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Join } from "go:path";
+console.log(Join("usr", "local", "bin"));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "path.Join(bridge.StringToGo(") {
+		t.Errorf("a variadic call did not spread its first argument through the bridge into the Go call:\n%s", source)
+	}
+	if n := strings.Count(source, "bridge.StringToGo("); n != 3 {
+		t.Errorf("variadic call marshaled %d string arguments, want one per spread argument (3):\n%s", n, source)
+	}
+}
+
+// TestGoImportVariadicRuns proves the variadic crossing end to end: path.Join with
+// three arguments joins them with a slash, and path.Join with no arguments returns
+// the empty string, so a variadic call marshals each argument as one element and the
+// zero-argument case emits a bare call the Go side reassembles into an empty slice.
+func TestGoImportVariadicRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: variadic test builds and runs generated Go")
+	}
+	const src = `import { Join } from "go:path";
+console.log(Join("usr", "local", "bin"));
+console.log(Join());
+`
+	got := runProgramGo(t, src)
+	if want := "usr/local/bin\n\n"; got != want {
+		t.Fatalf("go: variadic program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportVariadicMixedFixedRuns proves a fixed parameter ahead of a variadic
+// tail marshals by its own type while the tail marshals by the element type:
+// fmt.Sprintf takes a fixed format string and a variadic ...any, so the format
+// crosses through the string bridge and each trailing argument boxes through the any
+// crossing, and the formatted result crosses back (sections 6.9, 6.12).
+func TestGoImportVariadicMixedFixedRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: variadic test builds and runs generated Go")
+	}
+	const src = `import { Sprintf } from "go:fmt";
+console.log(Sprintf("%s and %s", "cats", "dogs"));
+`
+	got := runProgramGo(t, src)
+	if want := "cats and dogs\n"; got != want {
+		t.Fatalf("go: mixed fixed-and-variadic program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportOpaqueHandleEmitsTokenCrossing pins that a go: call returning a type
 // the bridge does not project boxes it into the uniform bridge.Opaque token: the
 // result is wrapped by OpaqueFromGo, a local that holds it is typed bridge.Opaque
