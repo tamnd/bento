@@ -88,6 +88,46 @@ func SliceFromGo[G any, B any](s []G, conv func(G) B) *value.Array[B] {
 	return value.NewArray(out...)
 }
 
+// MapToGo marshals a bento Map to a Go map, applying keyConv and valConv to cross
+// each entry to the Go key and value types (section 6.5). It iterates the bento map
+// once through Range, so the single pass the crossing costs is the map's own
+// iteration, and inserts each converted pair into a fresh Go map. A nil bento map (a
+// shape the map model does not produce) crosses as a nil Go map, so a Go function
+// that branches on nil sees it; an empty map crosses as an empty non-nil map. The
+// key conversion is the scalar crossing the emitted closure names, so a map[string]V
+// reuses StringToGo per key and a numeric-keyed map reuses the numeric conversion,
+// exactly as a single key would cross. The Go key type is comparable because every
+// key kind bento supports (string, number, boolean) is a comparable Go type.
+func MapToGo[BK any, BV any, GK comparable, GV any](m *value.Map[BK, BV], keyConv func(BK) GK, valConv func(BV) GV) map[GK]GV {
+	if m == nil {
+		return nil
+	}
+	out := make(map[GK]GV, int(m.Size()))
+	m.Range(func(k BK, v BV) {
+		out[keyConv(k)] = valConv(v)
+	})
+	return out
+}
+
+// MapFromGo marshals a Go map returned from a go: call to a bento Map, applying
+// keyConv and valConv to cross each entry back (section 6.5). The caller passes the
+// empty bento map dst its key kind fixes (NewNumberMap, NewStringMap, or NewBoolMap),
+// because the bento map carries a per-kind key equality the bridge cannot pick from
+// the Go types alone, and this fills and returns it. A nil Go map crosses as the
+// empty bento map, because a bento Map has no nil, so a Go function returning nil and
+// one returning an empty map both hand back an empty map. Go map iteration order is
+// unspecified, so the bento map's insertion order after the crossing is unspecified
+// too, which section 6.5 fixes as the contract: a Map from a Go map has no promised
+// order. Any per-entry range check (a map value through Int64ToNumber) runs inside
+// valConv, so the same safe-integer guarantee the scalar crossing gives applies to
+// every value.
+func MapFromGo[GK comparable, GV any, BK any, BV any](m map[GK]GV, dst *value.Map[BK, BV], keyConv func(GK) BK, valConv func(GV) BV) *value.Map[BK, BV] {
+	for k, v := range m {
+		dst.Set(keyConv(k), valConv(v))
+	}
+	return dst
+}
+
 // BytesToGo marshals a bento Uint8Array to a Go []byte for a parameter of type
 // []byte, the copy-on-uncertainty default of section 7.3. It copies the buffer's
 // bytes into a fresh Go slice, so a Go function that retains or mutates the slice
