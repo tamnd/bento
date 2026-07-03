@@ -9,21 +9,12 @@ func main() {
 	var count float64 = 200
 	var payload value.BStr = value.FromGoString("x").Repeat(512)
 	var bytes float64 = 0
-	{
-		var pass float64 = 0
-		for ; pass < 3; pass++ {
-			{
-				var i float64 = 0
-				for ; i < count; i++ {
-					value.WriteFileSync(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt"))), payload)
-				}
-			}
-			{
-				var i float64 = 0
-				for ; i < count; i++ {
-					bytes += value.ReadFileSyncUTF8(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt")))).Length()
-				}
-			}
+	for pass := 0.0; pass < 3; pass++ {
+		for i := 0.0; i < count; i++ {
+			value.WriteFileSync(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt"))), payload)
+		}
+		for i := 0.0; i < count; i++ {
+			bytes += value.ReadFileSyncUTF8(value.PathJoin(dir, value.FromGoString("f").ConcatN(value.NumberToString(i), value.FromGoString(".txt")))).Length()
 		}
 	}
 	value.RmSync(dir, true, true)
