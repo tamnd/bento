@@ -55,6 +55,39 @@ func Uint64ToNumber(n uint64) float64 {
 	return float64(n)
 }
 
+// SliceToGo marshals a bento array to a Go slice element by element, applying conv
+// to each element to cross it to the Go element type (section 6.4). A nil array (a
+// hole the array model never produces for a dense array) crosses as a nil slice, and
+// an empty array as an empty non-nil slice, so a Go function that distinguishes nil
+// from empty sees the array's own emptiness. The element conversion is the scalar
+// crossing the emitted closure names, so a []string parameter reuses StringToGo per
+// element and a number slice reuses the numeric conversion.
+func SliceToGo[B any, G any](a *value.Array[B], conv func(B) G) []G {
+	if a == nil {
+		return nil
+	}
+	src := a.Elems()
+	out := make([]G, len(src))
+	for i, v := range src {
+		out[i] = conv(v)
+	}
+	return out
+}
+
+// SliceFromGo marshals a Go slice returned from a go: call to a bento array, applying
+// conv to each element to cross it back (section 6.4). A nil Go slice crosses as an
+// empty array, because a bento array has no nil, so a Go function returning nil and a
+// Go function returning an empty slice both hand back an empty array. Any per-element
+// range check (a []int64 element through Int64ToNumber) runs inside conv, so the same
+// safe-integer guarantee the scalar crossing gives applies to every element.
+func SliceFromGo[G any, B any](s []G, conv func(G) B) *value.Array[B] {
+	out := make([]B, len(s))
+	for i, v := range s {
+		out[i] = conv(v)
+	}
+	return value.NewArray(out...)
+}
+
 // Must returns v, or raises when err is non-nil: the throw-mode bridge for a Go
 // (T, error) result projected as a T that throws (section 6.6). A go: call whose
 // Go signature ends in error lowers to a call to this, so the TypeScript author

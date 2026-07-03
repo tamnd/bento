@@ -446,6 +446,71 @@ Sleep(Millisecond);
 	}
 }
 
+// TestGoImportSliceResultEmitsElementMarshaling pins that a go: call returning a
+// slice of a basic lowers to bridge.SliceFromGo over the Go call, with a per-element
+// closure applying the element's own crossing, and that a slice argument lowers to
+// bridge.SliceToGo the same way (section 6.4).
+func TestGoImportSliceResultEmitsElementMarshaling(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Split, Join } from "go:strings";
+const parts = Split("a,b,c", ",");
+console.log(Join(parts, "-"));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.SliceFromGo(strings.Split(") {
+		t.Errorf("a slice result did not lower to element marshaling:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.StringFromGo(x)") {
+		t.Errorf("the slice element closure did not reuse the string crossing:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.SliceToGo(") {
+		t.Errorf("a slice argument did not lower to element marshaling:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.Guard(func() *value.Array[value.BStr]") {
+		t.Errorf("a slice result was not guarded with the array result type:\n%s", source)
+	}
+}
+
+// TestGoImportSliceRoundTripRuns proves the slice crossing end to end: a program that
+// splits a string into an array with strings.Split and joins it back with
+// strings.Join prints the joined string, so the []string result, the array
+// consumption, and the []string argument are all proven against a real build.
+func TestGoImportSliceRoundTripRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: slice test builds and runs generated Go")
+	}
+	const src = `import { Split, Join } from "go:strings";
+const parts = Split("a,b,c", ",");
+console.log(Join(parts, "-"));
+`
+	got := runProgramGo(t, src)
+	if want := "a-b-c\n"; got != want {
+		t.Fatalf("go: slice program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportSliceLengthRuns proves a slice result is a real bento array by reading
+// its length: Fields splits on whitespace and the program prints the count, so the
+// array the crossing produces carries its own length the array model gives it.
+func TestGoImportSliceLengthRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: slice test builds and runs generated Go")
+	}
+	const src = `import { Fields } from "go:strings";
+const words = Fields("one two three");
+console.log(words.length);
+`
+	got := runProgramGo(t, src)
+	if want := "3\n"; got != want {
+		t.Fatalf("go: slice-length program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportEmitsAliasedImport pins that the assembled Go imports the Go package
 // under its alias and calls it qualified by that alias through the bridge, the
 // shape section 9.1 fixes, without needing to run the program.

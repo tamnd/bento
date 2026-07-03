@@ -181,3 +181,52 @@ func TestGuard0GuardsVoidCall(t *testing.T) {
 	}()
 	Guard0(func() { panic("void boom") })
 }
+
+func TestSliceFromGoMarshalsEachElement(t *testing.T) {
+	// A Go slice crosses to a bento array, element by element, through the conversion
+	// the caller supplies: here each Go string becomes a bento string.
+	got := SliceFromGo([]string{"a", "bb"}, StringFromGo)
+	if got.Len() != 2 {
+		t.Fatalf("array length = %v, want 2", got.Len())
+	}
+	if StringToGo(got.At(0)) != "a" || StringToGo(got.At(1)) != "bb" {
+		t.Errorf("array elements = %q %q, want a bb", StringToGo(got.At(0)), StringToGo(got.At(1)))
+	}
+}
+
+func TestSliceFromGoNilIsEmptyArray(t *testing.T) {
+	// A nil Go slice crosses as an empty array, because a bento array has no nil.
+	got := SliceFromGo([]int(nil), func(n int) float64 { return float64(n) })
+	if got == nil || got.Len() != 0 {
+		t.Errorf("nil slice crossed to %v, want an empty array", got)
+	}
+}
+
+func TestSliceToGoMarshalsEachElement(t *testing.T) {
+	// A bento array crosses to a Go slice, element by element, through the conversion
+	// the caller supplies: here each bento string becomes a Go string.
+	arr := value.NewArray(StringFromGo("x"), StringFromGo("yy"))
+	got := SliceToGo(arr, StringToGo)
+	if len(got) != 2 || got[0] != "x" || got[1] != "yy" {
+		t.Errorf("slice = %q, want [x yy]", got)
+	}
+}
+
+func TestSliceToGoNilArrayIsNilSlice(t *testing.T) {
+	// A nil array (which a dense array never is, but the crossing tolerates) becomes a
+	// nil Go slice, so a Go function that branches on nil sees it.
+	var arr *value.Array[value.BStr]
+	if got := SliceToGo(arr, StringToGo); got != nil {
+		t.Errorf("nil array crossed to %v, want a nil slice", got)
+	}
+}
+
+func TestSliceRoundTripThroughGo(t *testing.T) {
+	// A bento array to a Go slice and back is the identity on its elements, the shape a
+	// []T parameter and a []T result share.
+	arr := value.NewArray(StringFromGo("one"), StringFromGo("two"))
+	back := SliceFromGo(SliceToGo(arr, StringToGo), StringFromGo)
+	if back.Len() != 2 || StringToGo(back.At(0)) != "one" || StringToGo(back.At(1)) != "two" {
+		t.Errorf("round trip = %q %q, want one two", StringToGo(back.At(0)), StringToGo(back.At(1)))
+	}
+}
