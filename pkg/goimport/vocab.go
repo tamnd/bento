@@ -72,7 +72,7 @@ export interface GoReadWriter extends GoReader, GoWriter {}
 export declare class GoError extends Error {
   readonly message: string;
   readonly goError: GoOpaque<"error">;
-  is(target: GoOpaque<"error">): boolean;
+  is(target: GoError): boolean;
   as<T>(ctor: { readonly __goType: string }): T | null;
 }
 

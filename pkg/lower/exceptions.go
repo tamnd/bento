@@ -85,6 +85,16 @@ func (r *Renderer) errorInstanceof(left, right frontend.Node) (ast.Expr, bool, e
 		return nil, false, nil
 	}
 	ctor := r.prog.Text(right)
+	// e instanceof GoError narrows a catch binding to the Go-error surface of section
+	// 7.7, the guard an author writes before reading err.is. It lowers to the
+	// *value.Error IsGoError test, which is true when the caught error carries a Go
+	// error behind it: a caught go: failure narrows through, a program-thrown error
+	// does not. GoError is the bento:go vocabulary class, not a built-in error, so it
+	// routes before the errorCtors check below.
+	if ctor == "GoError" {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsGoError")}}, true, nil
+	}
 	if _, isErr := errorCtors[ctor]; !isErr {
 		return nil, false, &NotYetLowerable{Reason: "instanceof a class other than a built-in error on a caught error is a later slice"}
 	}
@@ -93,6 +103,33 @@ func (r *Renderer) errorInstanceof(left, right frontend.Node) (ast.Expr, bool, e
 		Fun:  &ast.SelectorExpr{X: ident(name), Sel: ident("IsA")},
 		Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(ctor)}},
 	}, true, nil
+}
+
+// errorMethodCall lowers a method call on a caught error, the error-identity
+// surface of section 7.7. Only is() is covered here: err.is(sentinel) lowers to
+// the *value.Error Is method against the Go error the caught error carries, so the
+// comparison is errors.Is against the original error and a caught go: failure
+// branches on identity the way Go code does. The argument must be a reference to a
+// go: sentinel error variable (io.EOF and its kind); anything else hands back,
+// since a comparison against a value that is not a Go error would be unsound. as()
+// waits on the concrete-struct projection it unwraps into, and any other method on
+// a caught error is its own later slice.
+func (r *Renderer) errorMethodCall(name, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "is":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "err.is takes exactly one sentinel argument"}
+		}
+		sentinel, ok := r.goErrorSentinelRef(argNodes[0])
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "err.is against a value that is not a go: sentinel error is a later slice"}
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Is")}, Args: []ast.Expr{sentinel}}, nil
+	case "as":
+		return nil, &NotYetLowerable{Reason: "err.as waits on concrete Go error type projection"}
+	default:
+		return nil, &NotYetLowerable{Reason: "a caught error's ." + method + "() is a later slice"}
+	}
 }
 
 // lowerThrow lowers a throw statement to a panic carrying the thrown error, the
