@@ -184,9 +184,9 @@ func classifySignature(sig *types.Signature) FuncSig {
 			resultElems = append(resultElems, elem)
 			continue
 		}
-		if path, name, fields, good := sliceStructCrossing(t); good {
+		if path, name, fields, ptr, good := sliceStructCrossing(t); good {
 			results = append(results, "structslice")
-			resultElems = append(resultElems, StructElem(path, name, fields))
+			resultElems = append(resultElems, StructElem(path, name, fields, ptr))
 			continue
 		}
 		if key, val, good := mapCrossing(t); good {
@@ -194,9 +194,9 @@ func classifySignature(sig *types.Signature) FuncSig {
 			resultElems = append(resultElems, MapElem(key, val))
 			continue
 		}
-		if path, name, fields, good := structCrossing(t); good {
+		if path, name, fields, ptr, good := structCrossing(t); good {
 			results = append(results, "struct")
-			resultElems = append(resultElems, StructElem(path, name, fields))
+			resultElems = append(resultElems, StructElem(path, name, fields, ptr))
 			continue
 		}
 		if anyCrossing(t) {
@@ -241,8 +241,8 @@ func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, 
 	if e, good := sliceCrossing(t); good {
 		return "slice", DefinedConv{}, e, true
 	}
-	if path, name, fields, good := sliceStructCrossing(t); good {
-		return "structslice", DefinedConv{}, StructElem(path, name, fields), true
+	if path, name, fields, ptr, good := sliceStructCrossing(t); good {
+		return "structslice", DefinedConv{}, StructElem(path, name, fields, ptr), true
 	}
 	if key, val, good := mapCrossing(t); good {
 		return "map", DefinedConv{}, MapElem(key, val), true
@@ -250,8 +250,8 @@ func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, 
 	if anyCrossing(t) {
 		return "any", DefinedConv{}, "", true
 	}
-	if path, name, fields, good := structCrossing(t); good {
-		return "struct", DefinedConv{}, StructElem(path, name, fields), true
+	if path, name, fields, ptr, good := structCrossing(t); good {
+		return "struct", DefinedConv{}, StructElem(path, name, fields, ptr), true
 	}
 	if params, result, good := funcCrossing(t); good {
 		return "func", DefinedConv{}, FuncElem(params, result), true
@@ -393,19 +393,20 @@ func sliceCrossing(t types.Type) (string, bool) {
 
 // sliceStructCrossing classifies a slice whose element is a struct crossing, the
 // []Point shape, returning the element struct's import path, Go name, and exported
-// fields and true so the lowerer marshals the slice element by element into a bento
-// array of read-only object boxes (sections 6.4, 6.7). It fires only where
-// sliceCrossing does not: a slice of a plain basic is the scalar slice crossing, and
-// a []byte is the Uint8Array crossing, so both are already claimed before this is
-// reached. The element must be a struct structCrossing accepts, an exported named
-// type with at least one exported field, every field a plain basic; a slice of a
-// struct with a composite field hands back with structCrossing, and a slice of a
-// slice or a map awaits its own slice. This is the result direction only: a []Point
-// argument (a bento array crossing into a Go slice of structs) is a later slice.
-func sliceStructCrossing(t types.Type) (string, string, []StructField, bool) {
-	s, ok := t.(*types.Slice)
-	if !ok {
-		return "", "", nil, false
+// fields, whether the element is a pointer to the struct, and true so the lowerer
+// marshals the slice element by element into a bento array of read-only object boxes
+// (sections 6.4, 6.7). It fires only where sliceCrossing does not: a slice of a plain
+// basic is the scalar slice crossing, and a []byte is the Uint8Array crossing, so
+// both are already claimed before this is reached. The element must be a struct
+// structCrossing accepts, an exported named type (or a pointer to one) with at least
+// one exported field, every field a plain basic; a slice of a struct with a composite
+// field hands back with structCrossing, and a slice of a slice or a map awaits its own
+// slice. Both directions cross: a []Point result becomes an array of boxes, and a
+// []Point argument marshals a bento array of objects back into the Go slice.
+func sliceStructCrossing(t types.Type) (path, typeName string, fields []StructField, ptr, ok bool) {
+	s, isSlice := t.(*types.Slice)
+	if !isSlice {
+		return "", "", nil, false, false
 	}
 	return structCrossing(s.Elem())
 }
@@ -457,23 +458,34 @@ type StructField struct {
 // slice cannot cross; those await their own slices. Methods are allowed and ignored:
 // this slice reads a struct's data, and calling its methods is a later slice, so a
 // struct with methods still crosses as the data an author reads.
-func structCrossing(t types.Type) (string, string, []StructField, bool) {
+func structCrossing(t types.Type) (path, typeName string, fields []StructField, ptr, ok bool) {
+	// A single pointer to a named struct crosses exactly as the value struct does: a
+	// JavaScript object already has reference identity, so *Point and Point both
+	// project to the same object box, and Go auto-dereferences a pointer for a field
+	// read. The pointer bit is carried through so the argument direction builds a
+	// &Point{...} the Go call takes by pointer and the slice-result direction types
+	// each element *Point. A pointer to a pointer is not this crossing and stays a
+	// hand-back. The spec's own (T, error) example returns *Config (section 6.6), so
+	// this is the common constructor shape, not an edge.
+	if p, isPtr := t.(*types.Pointer); isPtr {
+		ptr = true
+		t = p.Elem()
+	}
 	named, ok := t.(*types.Named)
 	if !ok {
-		return "", "", nil, false
+		return "", "", nil, false, false
 	}
 	obj := named.Obj()
 	if obj == nil || obj.Pkg() == nil || !obj.Exported() {
-		return "", "", nil, false
+		return "", "", nil, false, false
 	}
 	if isErrorType(named) {
-		return "", "", nil, false
+		return "", "", nil, false, false
 	}
 	st, ok := named.Underlying().(*types.Struct)
 	if !ok {
-		return "", "", nil, false
+		return "", "", nil, false, false
 	}
-	var fields []StructField
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
 		if !f.Exported() {
@@ -483,15 +495,15 @@ func structCrossing(t types.Type) (string, string, []StructField, bool) {
 		if kw == "" {
 			// An exported field of a composite type has no scalar crossing here, so the
 			// whole struct hands back until its own slice marshals that field.
-			return "", "", nil, false
+			return "", "", nil, false, false
 		}
 		fields = append(fields, StructField{Name: f.Name(), Keyword: kw})
 	}
 	if len(fields) == 0 {
 		// A struct with no exported field is a pure token, left to opaqueCrossing.
-		return "", "", nil, false
+		return "", "", nil, false, false
 	}
-	return obj.Pkg().Path(), obj.Name(), fields, true
+	return obj.Pkg().Path(), obj.Name(), fields, ptr, true
 }
 
 // StructElem packs a struct crossing's import path, Go type name, and exported fields
@@ -500,8 +512,14 @@ func structCrossing(t types.Type) (string, string, []StructField, bool) {
 // path and name lead, then one entry per field spelled name:keyword, all joined by a
 // NUL, which never appears in a Go import path, identifier, or type keyword, so the
 // split is exact. A field name and its keyword are joined by a colon, which a Go
-// identifier and a type keyword never contain, so that split is exact too.
-func StructElem(path, name string, fields []StructField) string {
+// identifier and a type keyword never contain, so that split is exact too. A pointer
+// crossing (the *Point shape) prefixes the packed name with a star, which a Go type
+// name never carries, so the lowerer recovers the pointer bit without a parallel
+// slice and the split stays exact.
+func StructElem(path, name string, fields []StructField, ptr bool) string {
+	if ptr {
+		name = "*" + name
+	}
 	parts := make([]string, 0, len(fields)+2)
 	parts = append(parts, path, name)
 	for _, f := range fields {
@@ -510,20 +528,27 @@ func StructElem(path, name string, fields []StructField) string {
 	return strings.Join(parts, "\x00")
 }
 
-// SplitStructElem recovers the import path, Go type name, and exported fields
-// StructElem packed, for the lowerer to build the interned struct reference and the
-// per-field crossings.
-func SplitStructElem(elem string) (string, string, []StructField) {
+// SplitStructElem recovers the import path, Go type name, exported fields, and
+// whether the crossing is a pointer to the struct that StructElem packed, for the
+// lowerer to build the interned struct reference and the per-field crossings. The
+// star prefix a pointer crossing carries is stripped off the name and returned as the
+// pointer bit.
+func SplitStructElem(elem string) (path, name string, fields []StructField, ptr bool) {
 	parts := strings.Split(elem, "\x00")
 	if len(parts) < 2 {
-		return "", "", nil
+		return "", "", nil, false
 	}
-	fields := make([]StructField, 0, len(parts)-2)
+	name = parts[1]
+	if strings.HasPrefix(name, "*") {
+		ptr = true
+		name = name[1:]
+	}
+	fields = make([]StructField, 0, len(parts)-2)
 	for _, p := range parts[2:] {
-		name, kw, _ := strings.Cut(p, ":")
-		fields = append(fields, StructField{Name: name, Keyword: kw})
+		fname, kw, _ := strings.Cut(p, ":")
+		fields = append(fields, StructField{Name: fname, Keyword: kw})
 	}
-	return parts[0], parts[1], fields
+	return parts[0], name, fields, ptr
 }
 
 // opaqueCrossing classifies a foreign named type the bridge does not project as an

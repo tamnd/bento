@@ -790,6 +790,65 @@ console.log(Describe({ Name: "bob", Age: 5, Active: false }));
 	}
 }
 
+// TestGoImportStructPtrResultRuns proves a *Point result crosses back exactly like a
+// value Point: MakePointPtr hands back a pointer, and the bento program reads p.X and
+// p.Y off the same object box, because a field read auto-derefs on the Go side and a
+// bento object is already a reference (section 6.6).
+func TestGoImportStructPtrResultRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct test builds and runs generated Go")
+	}
+	const src = `import { MakePointPtr } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const p = MakePointPtr(3, 4);
+console.log(p.X + p.Y);
+`
+	got := runProgramGo(t, src)
+	if want := "7\n"; got != want {
+		t.Fatalf("go: *struct result program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportStructPtrParamEmitsAddressOf pins that a bento object passed to a Go
+// *Point parameter lowers to a closure returning *structfixture.Point that takes the
+// address of a fresh struct literal, so the pointer direction differs from the value
+// direction only by the & and the *T result type.
+func TestGoImportStructPtrParamEmitsAddressOf(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { SumPtr } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+console.log(SumPtr({ X: 10, Y: 20 }));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func(o *ObjXY) *structfixture.Point") {
+		t.Errorf("a *struct argument did not lower to a pointer-returning closure:\n%s", source)
+	}
+	if !strings.Contains(source, "&structfixture.Point{X: int(o.X), Y: int(o.Y)}") {
+		t.Errorf("a *struct argument did not take the address of the struct literal:\n%s", source)
+	}
+}
+
+// TestGoImportStructPtrParamRuns proves the *Point-parameter crossing end to end: a
+// fresh object literal passes into SumPtr, which reads the fields through the pointer
+// on the Go side, so an object box crosses in as a &Point.
+func TestGoImportStructPtrParamRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct test builds and runs generated Go")
+	}
+	const src = `import { MakePointPtr, SumPtr } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const p = MakePointPtr(3, 4);
+console.log(SumPtr(p));
+console.log(SumPtr({ X: 10, Y: 20 }));
+`
+	got := runProgramGo(t, src)
+	if want := "7\n30\n"; got != want {
+		t.Fatalf("go: *struct-parameter program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportVariadicStructRuns proves the struct crossing composes with the
 // variadic spread: SumAll takes any number of Points, and each object literal spread
 // into it marshals through the struct crossing on its own, so the Go side reads every
