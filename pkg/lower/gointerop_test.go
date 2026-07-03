@@ -809,6 +809,75 @@ console.log(SumAll());
 	}
 }
 
+// TestGoImportStructSliceResultEmitsArrayOfBoxes pins that a []struct result lowers
+// to bridge.SliceFromGo over a per-element closure that boxes each Go struct into the
+// interned pointer the array's element type interns to, wrapped in the boundary
+// recover. Diagonal returns []Point, so each element crosses exactly as a lone Point
+// result does (sections 6.4, 6.7).
+func TestGoImportStructSliceResultEmitsArrayOfBoxes(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Diagonal } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const pts = Diagonal(3);
+console.log(pts.length);
+console.log(pts[1].X + pts[1].Y);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.SliceFromGo(structfixture.Diagonal(") {
+		t.Errorf("a []struct result did not marshal through SliceFromGo over the Go call:\n%s", source)
+	}
+	if !strings.Contains(source, "func(v structfixture.Point) *") {
+		t.Errorf("a []struct result did not build a per-element boxing closure:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.Guard(func() *value.Array[*") {
+		t.Errorf("a []struct result was not guarded with an array-of-boxes result type:\n%s", source)
+	}
+}
+
+// TestGoImportStructSliceResultRuns proves the []struct crossing end to end: Diagonal
+// returns three Points on y=x, the bento program reads the array's length and indexes
+// an element to read its fields off the box, so the Go slice, the array of interned
+// boxes, and the per-element field access are all proven against a real build.
+func TestGoImportStructSliceResultRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct-slice test builds and runs generated Go")
+	}
+	const src = `import { Diagonal } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const pts = Diagonal(3);
+console.log(pts.length);
+console.log(pts[1].X + pts[1].Y);
+console.log(pts[2].X);
+`
+	got := runProgramGo(t, src)
+	if want := "3\n2\n2\n"; got != want {
+		t.Fatalf("go: struct-slice program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportStructSliceMixedFieldsRun proves the []struct crossing carries every
+// basic field kind: Profiles returns a roster of Profiles with a string, a number,
+// and a boolean field each, and the bento program reads all three off an indexed
+// element, so each field marshals by its own keyword inside the array's boxes.
+func TestGoImportStructSliceMixedFieldsRun(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: struct-slice test builds and runs generated Go")
+	}
+	const src = `import { Profiles } from "go:github.com/tamnd/bento/pkg/goimport/structfixture";
+const rows = Profiles();
+console.log(rows.length);
+console.log(rows[0].Name + " " + rows[0].Age + " " + rows[0].Active);
+console.log(rows[1].Name + " " + rows[1].Age + " " + rows[1].Active);
+`
+	got := runProgramGo(t, src)
+	if want := "2\nada 36 true\nlinus 21 false\n"; got != want {
+		t.Fatalf("go: struct-slice mixed-field program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportVariadicEmitsSpreadCall pins that a call to a variadic Go function
 // spreads its arguments positionally into the Go call: path.Join is func(...string),
 // so each argument marshals through StringToGo on its own and Go reassembles the

@@ -269,6 +269,9 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, call fro
 		if sig.Results[0] == "struct" {
 			return r.guardStructResult(resultElem, must, call)
 		}
+		if sig.Results[0] == "structslice" {
+			return r.guardStructSliceResult(resultElem, must, call)
+		}
 		marshaled, err := r.marshalResultFromGo(sig.Results[0], resultElem, r.stripResultBrand(sig, must))
 		if err != nil {
 			return nil, err
@@ -283,6 +286,9 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, call fro
 	}
 	if sig.Results[0] == "struct" {
 		return r.guardStructResult(resultElem, goCall, call)
+	}
+	if sig.Results[0] == "structslice" {
+		return r.guardStructSliceResult(resultElem, goCall, call)
 	}
 	marshaled, err := r.marshalResultFromGo(sig.Results[0], resultElem, r.stripResultBrand(sig, goCall))
 	if err != nil {
@@ -305,18 +311,9 @@ func (r *Renderer) guardStructResult(elem string, goResult ast.Expr, call fronte
 	if err != nil {
 		return nil, err
 	}
-	elts := make([]ast.Expr, 0, len(fields))
-	for _, f := range fields {
-		read := &ast.SelectorExpr{X: ident("v"), Sel: ident(f.Name)}
-		val, err := r.marshalResultFromGo(f.Keyword, "", read)
-		if err != nil {
-			return nil, err
-		}
-		field, ok := exportedField(f.Name)
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "go: struct field " + f.Name + " is not a Go identifier"}
-		}
-		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+	elts, err := r.structBoxElts(fields, "v")
+	if err != nil {
+		return nil, err
 	}
 	r.usesThrow = true
 	r.requireImport(bridgePkg)
@@ -339,6 +336,83 @@ func (r *Renderer) guardStructResult(elem string, goResult ast.Expr, call fronte
 				Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
 			},
 			Body: &ast.BlockStmt{List: body},
+		}},
+	}, nil
+}
+
+// structBoxElts builds the composite-literal elements a struct crossing fills its
+// interned box with: one keyed entry per exported field, reading the field off a Go
+// struct value named recvName and marshaling it back to a bento value by its keyword
+// (sections 6.7, 7.4). It is the field loop shared by the single-struct result
+// (guardStructResult reads a bound Go result) and the struct-slice result
+// (guardStructSliceResult reads each element of the slice), so both box a struct the
+// same way. A field whose Go name is not a Go identifier hands back.
+func (r *Renderer) structBoxElts(fields []goimport.StructField, recvName string) ([]ast.Expr, error) {
+	elts := make([]ast.Expr, 0, len(fields))
+	for _, f := range fields {
+		read := &ast.SelectorExpr{X: ident(recvName), Sel: ident(f.Name)}
+		val, err := r.marshalResultFromGo(f.Keyword, "", read)
+		if err != nil {
+			return nil, err
+		}
+		field, ok := exportedField(f.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "go: struct field " + f.Name + " is not a Go identifier"}
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+	}
+	return elts, nil
+}
+
+// guardStructSliceResult lowers a go: call whose Go result is a slice of a struct,
+// the []Point shape, into a bento array of read-only object boxes (sections 6.4,
+// 6.7, 7.4). Each element crosses exactly as a single struct result does: a per
+// element closure binds one Go struct value and returns a pointer to the interned
+// struct the array's element type interns to, so property access on an element
+// resolves against one Go type, the same type a lone struct result would intern to.
+// bridge.SliceFromGo runs that closure over the slice and builds the bento array, and
+// the whole thing wraps in the boundary recover so a panic in the Go call, or a
+// per-element range check that throws, reports as a thrown value. This is the result
+// direction: a []struct argument is a later slice.
+func (r *Renderer) guardStructSliceResult(elem string, goSlice ast.Expr, call frontend.Node) (ast.Expr, error) {
+	path, typeName, fields := goimport.SplitStructElem(elem)
+	et, ok := r.prog.ElementType(r.prog.TypeAt(call))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "go: a []struct result must have an array element type"}
+	}
+	interned, err := r.decls.internStruct(r, et)
+	if err != nil {
+		return nil, err
+	}
+	elts, err := r.structBoxElts(fields, "v")
+	if err != nil {
+		return nil, err
+	}
+	r.usesThrow = true
+	r.requireImport(bridgePkg)
+	r.requireImport(valuePkg)
+	alias := r.requireGoImport(path)
+	internedPtr := star(ident(interned))
+	// conv := func(v alias.Type) *interned { return &interned{...fields...} }
+	conv := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("v")}, Type: sel(alias, typeName)}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: internedPtr}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(interned), Elts: elts}},
+		}}}},
+	}
+	fromGo := &ast.CallExpr{Fun: sel("bridge", "SliceFromGo"), Args: []ast.Expr{goSlice, conv}}
+	arrType := star(index(sel("value", "Array"), internedPtr))
+	return &ast.CallExpr{
+		Fun: sel("bridge", "Guard"),
+		Args: []ast.Expr{&ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: arrType}}},
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{fromGo}}}},
 		}},
 	}, nil
 }
