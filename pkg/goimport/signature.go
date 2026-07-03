@@ -242,6 +242,9 @@ func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, 
 	if anyCrossing(t) {
 		return "any", DefinedConv{}, "", true
 	}
+	if path, name, fields, good := structCrossing(t); good {
+		return "struct", DefinedConv{}, StructElem(path, name, fields), true
+	}
 	if path, name, good := opaqueCrossing(t); good {
 		return "opaque", DefinedConv{}, OpaqueElem(path, name), true
 	}
