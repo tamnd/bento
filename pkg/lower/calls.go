@@ -95,20 +95,24 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
 	}
-	// Arguments lower positionally with no coercion step, so a class instance
-	// passed where the declaration names a different class (a derived for a
-	// base parameter) is guarded here rather than emitting Go that would not
-	// compile.
+	// Arguments lower positionally, each bridged against its declared
+	// parameter, so a derived instance passed for a base parameter upcasts to
+	// the embedded base the same way an assignment would.
+	var params []frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
-		if err := r.guardClassArgs(kids[1:], sig.Params); err != nil {
-			return nil, err
-		}
+		params = sig.Params
 	}
 	args := make([]ast.Expr, 0, len(kids)-1)
-	for _, a := range kids[1:] {
+	for i, a := range kids[1:] {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
+		}
+		if i < len(params) {
+			lowered, err = r.bridgeClassBinding(lowered, a, params[i].Type)
+			if err != nil {
+				return nil, err
+			}
 		}
 		args = append(args, lowered)
 	}
@@ -196,7 +200,7 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		if err != nil {
 			return nil, err
 		}
-		return r.classMethodCall(info, recv, method, argNodes)
+		return r.classMethodCall(info, recv, method, argNodes, recvNode.Kind() == frontend.NodeSuperKeyword)
 	}
 	// A method on an array receiver lowers to a value.Array method. This routes
 	// before the primitive and string paths, which expect a number, boolean, or
@@ -386,6 +390,13 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 	case "stringify":
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer or space argument is a later slice"}
+		}
+		// A value statically typed as an extended class may hold a subclass at
+		// runtime, and JavaScript would serialize the subclass's own fields
+		// while the reflection walk over the base struct cannot see them, so
+		// the call hands back rather than printing the wrong object.
+		if info, ok := r.classOfNode(argNodes[0]); ok && info.extended {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify of a value typed as class " + info.name + ", which another class extends, is a later slice"}
 		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {

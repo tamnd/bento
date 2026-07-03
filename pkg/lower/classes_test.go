@@ -259,19 +259,34 @@ func TestClassHandsBack(t *testing.T) {
 			"not a class this slice lowers",
 		},
 		{
-			"overrideMethod",
-			"class A { m(): number { return 1; } }\nclass B extends A { m(): number { return 2; } }\nconsole.log(new B().m());\n",
-			"vtable",
-		},
-		{
 			"shadowField",
 			"class A { x: number = 1; }\nclass B extends A { x: number = 2; }\nconsole.log(new B().x);\n",
-			"vtable",
+			"only a method overriding a same-named base method",
 		},
 		{
 			"crossCaseShadow",
 			"class A { total(): number { return 1; } }\nclass B extends A { Total: number = 2; }\nconsole.log(new B().Total);\n",
-			"vtable",
+			"only a method overriding a same-named base method",
+		},
+		{
+			"midChainOverride",
+			"class A { }\nclass B extends A { m(): number { return 1; } }\nclass C extends B { m(): number { return 2; } }\nconsole.log(new C().m());\n",
+			"mid-chain virtual method",
+		},
+		{
+			"overrideSignatureDiffers",
+			"class A { m(x: number): number { return x; } }\nclass B extends A { m(): number { return 2; } }\nconsole.log(new B().m());\n",
+			"differs from A's",
+		},
+		{
+			"accessorOverride",
+			"class A { get n(): number { return 1; } }\nclass B extends A { get n(): number { return 2; } }\nconsole.log(new B().n);\n",
+			"only a method overriding a same-named base method",
+		},
+		{
+			"stringifyExtendedClass",
+			"class A { x: number = 1; }\nclass B extends A { }\nconsole.log(JSON.stringify(new A()));\n",
+			"JSON.stringify of a value typed as class A",
 		},
 		{
 			"memberSpellsBaseName",
@@ -282,16 +297,6 @@ func TestClassHandsBack(t *testing.T) {
 			"superNotFirst",
 			"class A { x: number = 1; }\nclass B extends A { constructor() { console.log(0); super(); } }\nconsole.log(new B().x);\n",
 			"first statement is not super()",
-		},
-		{
-			"derivedToBaseBinding",
-			"class A { x: number = 1; }\nclass B extends A { }\nconst a: A = new B();\nconsole.log(a.x);\n",
-			"binding a B instance to a A-typed slot",
-		},
-		{
-			"derivedForBaseParam",
-			"class A { x: number = 1; }\nclass B extends A { }\nfunction f(a: A): number { return a.x; }\nconsole.log(f(new B()));\n",
-			"passing a B instance for a A parameter",
 		},
 		{
 			"superSetterStore",
@@ -907,5 +912,236 @@ console.log(p.count() + p.tricks);
 		"5\n"
 	if got != want {
 		t.Fatalf("inheritance program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassVirtualEmitsVTable pins the virtual dispatch lowering on the
+// canonical override: the root grows a vtable struct and an unexported vtable
+// pointer, the overridden method's body moves to its Impl name while the
+// original name becomes the one-line dispatching entry, the root and the
+// override each fill a vtable var (the override through the unsafe downcast
+// wrapper), construction splits so the vtable is pinned before init runs, and
+// a derived instance bound to a base-typed local upcasts to its embedded base.
+func TestClassVirtualEmitsVTable(t *testing.T) {
+	const src = `class Animal {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  speak(): string {
+    return this.name + " makes a sound";
+  }
+}
+class Dog extends Animal {
+  speak(): string {
+    return this.name + " barks";
+  }
+}
+const pet: Animal = new Dog("Rex");
+console.log(pet.speak());
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"type animalVTable struct {",                     // the root's vtable struct
+		"speak func(a *Animal) value.BStr",               // one slot per overridden method
+		"vtable *animalVTable",                           // the root's unexported pointer field
+		"var animalBaseVTable = animalVTable{speak: (*Animal).speakImpl}", // the root's slots are method expressions
+		"var dogVTable = animalVTable{",                  // the override's own var
+		"(*Dog)(unsafe.Pointer(a)).speakImpl()",          // the downcast wrapper behind the shared start address
+		"func (a *Animal) Speak() value.BStr {",          // the entry keeps the exported name
+		"return a.vtable.speak(a)",                       // and only dispatches
+		"func (a *Animal) speakImpl() value.BStr {",      // the root body under its Impl name
+		"func (d *Dog) speakImpl() value.BStr {",         // the override body likewise
+		"a.vtable = &animalBaseVTable",                   // each constructor pins its class's vtable
+		"d.vtable = &dogVTable",
+		"func initAnimal(a *Animal, name value.BStr) {",  // the extended root splits out init
+		"initAnimal(&d.Animal, name)",                    // which the derived constructor runs on the embedded base
+		"pet := &NewDog(value.FromGoString(\"Rex\")).Animal", // the upcast is the embedded base's address
+		"pet.Speak()",                                    // and the call keeps its spelling
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("virtual dispatch did not print %q:\n%s", want, source)
+		}
+	}
+	// The vtable must be pinned before init runs, so a virtual call inside the
+	// base constructor already sees the derived override, the JavaScript order.
+	pin := strings.Index(source, "d.vtable = &dogVTable")
+	init := strings.Index(source, "initAnimal(&d.Animal, name)")
+	if pin < 0 || init < 0 || pin > init {
+		t.Errorf("constructor did not pin the vtable before running init:\n%s", source)
+	}
+}
+
+// TestClassVirtualSuperCallsImpl pins super.m() on a virtual method: the entry
+// would re-dispatch through the instance's own vtable and recurse into the
+// caller, so the super call goes to the base's Impl directly through the
+// embedded base selector.
+func TestClassVirtualSuperCallsImpl(t *testing.T) {
+	const src = `class Base {
+  greet(): string {
+    return "base";
+  }
+}
+class Loud extends Base {
+  greet(): string {
+    return super.greet() + "!";
+  }
+}
+const l: Loud = new Loud();
+console.log(l.greet());
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "l.Base.greetImpl()") {
+		t.Errorf("super on a virtual method did not call the base Impl:\n%s", source)
+	}
+	if strings.Contains(source, "initBase") || strings.Contains(source, "initLoud") {
+		t.Errorf("a chain with nothing to initialize split out init functions:\n%s", source)
+	}
+}
+
+// TestClassVirtualRuns builds and runs virtual dispatch end to end: a
+// base-typed parameter dispatches to each override, a base method calling a
+// virtual sibling picks the override, a grandchild without its own overrides
+// shares its parent's vtable, and a virtual call inside the base constructor
+// already sees the derived override, printing exactly what node prints.
+func TestClassVirtualRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `class Shape {
+  kind: string;
+  constructor(kind: string) {
+    this.kind = kind;
+  }
+  area(): number {
+    return 0;
+  }
+  describe(): string {
+    return this.kind + ":" + this.area();
+  }
+}
+class Square extends Shape {
+  side: number;
+  constructor(side: number) {
+    super("square");
+    this.side = side;
+  }
+  area(): number {
+    return this.side * this.side;
+  }
+}
+class Grid extends Square {
+}
+function show(s: Shape): string {
+  return s.describe();
+}
+console.log(show(new Shape("dot")));
+console.log(show(new Square(3)));
+console.log(show(new Grid(4)));
+const s: Shape = new Square(5);
+console.log(s.area());
+`
+	got := runProgramGo(t, src)
+	want := "dot:0\n" +
+		"square:9\n" +
+		"square:16\n" +
+		"25\n"
+	if got != want {
+		t.Fatalf("virtual dispatch program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassVirtualCtorDispatchRuns builds and runs the construction-order
+// half: JavaScript dispatches to the derived override from the first line of
+// the base constructor (the instance is its final class immediately, unlike
+// C++), which is exactly what pinning the vtable before init preserves.
+func TestClassVirtualCtorDispatchRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `class Animal {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+    console.log(this.tag());
+  }
+  tag(): string {
+    return "animal " + this.name;
+  }
+}
+class Dog extends Animal {
+  tag(): string {
+    return "dog " + this.name;
+  }
+}
+const a: Animal = new Animal("generic");
+const d: Dog = new Dog("rex");
+console.log(a.tag());
+console.log(d.tag());
+`
+	got := runProgramGo(t, src)
+	want := "animal generic\n" +
+		"dog rex\n" +
+		"animal generic\n" +
+		"dog rex\n"
+	if got != want {
+		t.Fatalf("constructor dispatch program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassVirtualSuperChainRuns builds and runs a three-deep override chain:
+// each super.greet() reaches the next ancestor's Impl through promotion, and
+// JSON.stringify of a leaf instance flattens the embedded base and skips the
+// vtable pointer, printing exactly what node prints.
+func TestClassVirtualSuperChainRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `class Base {
+  greet(): string {
+    return "base";
+  }
+}
+class Loud extends Base {
+  greet(): string {
+    return super.greet() + "!";
+  }
+}
+class Louder extends Loud {
+  greet(): string {
+    return super.greet() + "!";
+  }
+}
+console.log(new Loud().greet());
+console.log(new Louder().greet());
+class Animal {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  speak(): string {
+    return "...";
+  }
+}
+class Dog extends Animal {
+  tricks: number = 0;
+  speak(): string {
+    return "woof";
+  }
+}
+const d: Dog = new Dog("rex");
+console.log(d.speak());
+console.log(JSON.stringify(d));
+`
+	got := runProgramGo(t, src)
+	want := "base!\n" +
+		"base!!\n" +
+		"woof\n" +
+		"{\"name\":\"rex\",\"tricks\":0}\n"
+	if got != want {
+		t.Fatalf("super chain program printed %q, want %q", got, want)
 	}
 }

@@ -173,6 +173,11 @@ type Renderer struct {
 	classOrder []string
 	curClass   *classInfo
 	thisName   string
+	// classTaken is the spoken-identifier set the class pre-pass built, kept
+	// so the vtable machinery can check the names it mints at render time
+	// (the vtable type and vars, the init functions) the same way
+	// registration checks a constructor's name.
+	classTaken map[string]bool
 }
 
 // NewRenderer builds a renderer over a checked program.
