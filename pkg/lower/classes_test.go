@@ -942,22 +942,22 @@ console.log(pet.speak());
 `
 	source := renderProgram(t, src)
 	for _, want := range []string{
-		"type animalVTable struct {",                     // the root's vtable struct
-		"speak func(a *Animal) value.BStr",               // one slot per overridden method
-		"vtable *animalVTable",                           // the root's unexported pointer field
+		"type animalVTable struct {",                                      // the root's vtable struct
+		"speak func(a *Animal) value.BStr",                                // one slot per overridden method
+		"vtable *animalVTable",                                            // the root's unexported pointer field
 		"var animalBaseVTable = animalVTable{speak: (*Animal).speakImpl}", // the root's slots are method expressions
-		"var dogVTable = animalVTable{",                  // the override's own var
-		"(*Dog)(unsafe.Pointer(a)).speakImpl()",          // the downcast wrapper behind the shared start address
-		"func (a *Animal) Speak() value.BStr {",          // the entry keeps the exported name
-		"return a.vtable.speak(a)",                       // and only dispatches
-		"func (a *Animal) speakImpl() value.BStr {",      // the root body under its Impl name
-		"func (d *Dog) speakImpl() value.BStr {",         // the override body likewise
-		"a.vtable = &animalBaseVTable",                   // each constructor pins its class's vtable
+		"var dogVTable = animalVTable{",                                   // the override's own var
+		"(*Dog)(unsafe.Pointer(a)).speakImpl()",                           // the downcast wrapper behind the shared start address
+		"func (a *Animal) Speak() value.BStr {",                           // the entry keeps the exported name
+		"return a.vtable.speak(a)",                                        // and only dispatches
+		"func (a *Animal) speakImpl() value.BStr {",                       // the root body under its Impl name
+		"func (d *Dog) speakImpl() value.BStr {",                          // the override body likewise
+		"a.vtable = &animalBaseVTable",                                    // each constructor pins its class's vtable
 		"d.vtable = &dogVTable",
-		"func initAnimal(a *Animal, name value.BStr) {",  // the extended root splits out init
-		"initAnimal(&d.Animal, name)",                    // which the derived constructor runs on the embedded base
+		"func initAnimal(a *Animal, name value.BStr) {",      // the extended root splits out init
+		"initAnimal(&d.Animal, name)",                        // which the derived constructor runs on the embedded base
 		"pet := &NewDog(value.FromGoString(\"Rex\")).Animal", // the upcast is the embedded base's address
-		"pet.Speak()",                                    // and the call keeps its spelling
+		"pet.Speak()", // and the call keeps its spelling
 	} {
 		if !strings.Contains(source, want) {
 			t.Errorf("virtual dispatch did not print %q:\n%s", want, source)
