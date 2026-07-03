@@ -1,5 +1,5 @@
 func Total(n float64) float64 {
-	var ys *value.Array[float64] = value.NewArray[float64](10, 20, 30, 40)
+	ys := value.NewArray[float64](10, 20, 30, 40)
 	t := 0.0
 	for _, x := range ys.Elems() {
 		t += x * n

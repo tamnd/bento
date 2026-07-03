@@ -1,5 +1,5 @@
 func Drain(n float64) float64 {
-	var xs *value.Array[float64] = value.NewArray[float64](n, n+1, n+2)
+	xs := value.NewArray[float64](n, n+1, n+2)
 	count := 0.0
 	for !xs.Pop().IsUndefined() {
 		count++

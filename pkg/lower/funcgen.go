@@ -358,6 +358,13 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	if short, ok := r.foldFloatDecl(decls); ok {
 		return short, nil
 	}
+	// A lone binding whose initializer already carries the binding's own type reads
+	// better as name := value than as var name T = value, and infers the same type.
+	// This covers a string, an array, or any local built from a constructor or a
+	// bridged call, everything past the numeric literals foldFloatDecl keeps.
+	if short, ok := r.foldShortDecl(decls); ok {
+		return short, nil
+	}
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
 		kids := r.prog.Children(d)
@@ -848,6 +855,42 @@ func (r *Renderer) foldFloatDecl(decls []frontend.Node) (ast.Stmt, bool) {
 		return nil, false
 	}
 	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{finit}}, true
+}
+
+// foldShortDecl builds a Go short variable declaration for a lone binding whose
+// initializer already carries the binding's own Go type, so name := value stands in
+// for var name T = value and infers the same T. It reaches every local past the
+// numeric literals: a string built from value.FromGoString, an array from
+// value.NewArray, a directory from a bridged call. The safety rests on bindingInit,
+// which coerces the initializer to the binding's type, so the lowered initializer is
+// already of type T and := infers T exactly.
+//
+// It declines three shapes. More than one binding stays a grouped var. An
+// int32-specialized counter keeps its explicit int32, which documents the
+// specialization the analysis chose. A bare literal initializer hands back, because a
+// Go untyped integer constant infers int under := where the binding means float64;
+// foldFloatDecl runs first and floatifies the ones it can, and the rest keep the
+// typed var.
+func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
+	if len(decls) != 1 {
+		return nil, false
+	}
+	kids := r.prog.Children(decls[0])
+	if len(kids) != 2 && len(kids) != 3 {
+		return nil, false
+	}
+	name, ok := localName(r.prog.Text(kids[0]))
+	if !ok || r.int32Locals[name] {
+		return nil, false
+	}
+	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
+	if err != nil {
+		return nil, false
+	}
+	if _, isLit := init.(*ast.BasicLit); isLit {
+		return nil, false
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{init}}, true
 }
 
 // isFloat64Ident reports whether a lowered type expression is the bare float64 type,

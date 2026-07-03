@@ -1,5 +1,5 @@
 func Join(a value.BStr, b value.BStr) value.BStr {
-	var s value.BStr = a
+	s := a
 	s = value.Concat(s, b)
 	return s
 }
