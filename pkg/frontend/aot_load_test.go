@@ -74,6 +74,52 @@ func TestLoadReportsTypeErrors(t *testing.T) {
 	}
 }
 
+// TestLoadResolvesBentoGoVocabulary proves the ambient overlay serves the
+// bento:go module: a program that imports a helper from it type-checks clean and
+// the checker sees the helper's real shape, so a correct use of GoReader.Read
+// carries no diagnostic. This is what makes a generated .d.ts's
+// `import { GoReader } from "bento:go"` resolve instead of erroring on a missing
+// module.
+func TestLoadResolvesBentoGoVocabulary(t *testing.T) {
+	fs := mapFS{files: map[string]string{
+		"/app/main.ts": "import { GoReader } from \"bento:go\";\n" +
+			"export function first(r: GoReader): number { return r.Read(new Uint8Array(8)); }\n",
+	}}
+	prog, err := Load(LoadOptions{Dir: "/app", Roots: []string{"/app/main.ts"}, FS: fs})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, d := range prog.Diagnostics() {
+		if d.Category == CategoryError {
+			t.Errorf("unexpected error diagnostic against bento:go: %s", d.Message)
+		}
+	}
+}
+
+// TestLoadBentoGoVocabularyIsTyped proves the served module is a real typed shape,
+// not an untyped escape hatch: reaching for a method GoReader does not have is a
+// checker error, so the vocabulary constrains a program the way its declarations
+// promise.
+func TestLoadBentoGoVocabularyIsTyped(t *testing.T) {
+	fs := mapFS{files: map[string]string{
+		"/app/main.ts": "import { GoReader } from \"bento:go\";\n" +
+			"export function bad(r: GoReader): number { return r.Write(new Uint8Array(8)); }\n",
+	}}
+	prog, err := Load(LoadOptions{Dir: "/app", Roots: []string{"/app/main.ts"}, FS: fs})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	found := false
+	for _, d := range prog.Diagnostics() {
+		if d.Category == CategoryError {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected an error for calling GoReader.Write, which the vocabulary does not declare")
+	}
+}
+
 // TestLoadRequiresRoots holds the documented contract that Load needs explicit
 // roots until tsconfig include discovery lands.
 func TestLoadRequiresRoots(t *testing.T) {
