@@ -1,6 +1,10 @@
 package value
 
-import "testing"
+import (
+	"math"
+	"math/big"
+	"testing"
+)
 
 // TestBigIntFromInt64String proves an int64-built bigint renders as its decimal
 // digits with no suffix, so String(b) and a template read the bare number.
@@ -122,4 +126,210 @@ func TestBigIntToNumberThrows(t *testing.T) {
 		}
 	}()
 	ToNumber(BigIntFromInt64(3))
+}
+
+// bigThrown runs fn, which must throw, and returns the *Error it threw. It is
+// the harness for the conversion and operator helpers whose JavaScript behavior
+// is a RangeError or SyntaxError on a bad input.
+func bigThrown(t *testing.T, what string, fn func()) *Error {
+	t.Helper()
+	var caught *Error
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			e, ok := r.(*Error)
+			if !ok {
+				t.Fatalf("%s threw %T, want *Error", what, r)
+			}
+			caught = e
+		}()
+		fn()
+	}()
+	if caught == nil {
+		t.Fatalf("%s did not throw", what)
+	}
+	return caught
+}
+
+// TestNumberToBigIntExact proves an integral number converts exactly, including
+// an integer past int64 where the conversion must go through the full float64
+// magnitude rather than a truncating cast.
+func TestNumberToBigIntExact(t *testing.T) {
+	for _, tc := range []struct {
+		f    float64
+		want string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{-1, "-1"},
+		{9007199254740992, "9007199254740992"}, // 2^53
+		{1e21, "1000000000000000000000"},
+		{-1e21, "-1000000000000000000000"},
+	} {
+		if got := NumberToBigInt(tc.f).String(); got != tc.want {
+			t.Errorf("NumberToBigInt(%v) = %s, want %s", tc.f, got, tc.want)
+		}
+	}
+}
+
+// TestNumberToBigIntThrows proves the non-integral numbers throw the RangeError
+// JavaScript raises, since a bigint has no way to hold them.
+func TestNumberToBigIntThrows(t *testing.T) {
+	for _, f := range []float64{1.5, -0.25, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		e := bigThrown(t, "NumberToBigInt", func() { NumberToBigInt(f) })
+		if e.Name().ToGoString() != "RangeError" {
+			t.Errorf("NumberToBigInt(%v) threw %s, want RangeError", f, e.Name().ToGoString())
+		}
+	}
+}
+
+// TestStringToBigIntGrammar proves the ECMAScript StringToBigInt grammar: trimmed
+// whitespace, the empty remainder as 0n, one sign on a decimal form, and the
+// unsigned radix prefixes.
+func TestStringToBigIntGrammar(t *testing.T) {
+	for _, tc := range []struct {
+		s    string
+		want string
+	}{
+		{"", "0"},
+		{"   ", "0"},
+		{"  42  ", "42"},
+		{"-7", "-7"},
+		{"+8", "8"},
+		{"0x10", "16"},
+		{"0X1f", "31"},
+		{"0o17", "15"},
+		{"0b101", "5"},
+		{"123456789012345678901234567890", "123456789012345678901234567890"},
+	} {
+		if got := StringToBigInt(FromGoString(tc.s)).String(); got != tc.want {
+			t.Errorf("StringToBigInt(%q) = %s, want %s", tc.s, got, tc.want)
+		}
+	}
+}
+
+// TestStringToBigIntRejects proves everything outside the grammar throws the
+// SyntaxError JavaScript raises: a fraction, an exponent, a digit separator, a
+// signed or empty radix form, a stray character. Unlike Number(s) there is no NaN
+// to fall back to.
+func TestStringToBigIntRejects(t *testing.T) {
+	for _, s := range []string{"nope", "1.5", "1e3", "1_000", "0x", "-0x10", "0x-1", "12n", "1 2", "Infinity"} {
+		e := bigThrown(t, "StringToBigInt", func() { StringToBigInt(FromGoString(s)) })
+		if e.Name().ToGoString() != "SyntaxError" {
+			t.Errorf("StringToBigInt(%q) threw %s, want SyntaxError", s, e.Name().ToGoString())
+		}
+	}
+}
+
+// TestBoolToBigInt proves the boolean conversion: true is 1n, false is 0n.
+func TestBoolToBigInt(t *testing.T) {
+	if got := BoolToBigInt(true).String(); got != "1" {
+		t.Errorf("BoolToBigInt(true) = %s, want 1", got)
+	}
+	if got := BoolToBigInt(false).String(); got != "0" {
+		t.Errorf("BoolToBigInt(false) = %s, want 0", got)
+	}
+}
+
+// TestBigIntToNumberRounds proves Number(b) rounds to the nearest float64 the way
+// JavaScript does: 2^53+1 ties to even and loses its low bit, and a magnitude past
+// the float64 range becomes an infinity.
+func TestBigIntToNumberRounds(t *testing.T) {
+	odd, _ := new(big.Int).SetString("9007199254740993", 10) // 2^53 + 1
+	if got := BigIntToNumber(odd); got != 9007199254740992 {
+		t.Errorf("Number(2^53+1) = %v, want 9007199254740992", got)
+	}
+	if got := BigIntToNumber(big.NewInt(-7)); got != -7 {
+		t.Errorf("Number(-7n) = %v, want -7", got)
+	}
+	huge := new(big.Int).Exp(big.NewInt(10), big.NewInt(400), nil)
+	if got := BigIntToNumber(huge); !math.IsInf(got, 1) {
+		t.Errorf("Number(10^400) = %v, want +Inf", got)
+	}
+	if got := BigIntToNumber(new(big.Int).Neg(huge)); !math.IsInf(got, -1) {
+		t.Errorf("Number(-10^400) = %v, want -Inf", got)
+	}
+}
+
+// TestBigIntToBool proves the typed-side truthiness: only 0n is false.
+func TestBigIntToBool(t *testing.T) {
+	if BigIntToBool(new(big.Int)) {
+		t.Error("Boolean(0n) = true, want false")
+	}
+	if !BigIntToBool(big.NewInt(-1)) {
+		t.Error("Boolean(-1n) = false, want true")
+	}
+}
+
+// TestBigIntPow proves ** on bigints: the plain powers, the 0n ** 0n === 1n edge,
+// a negative base, and the two throws, a negative exponent and a result past the
+// size cap, both RangeErrors and the second raised before any giant allocation.
+func TestBigIntPow(t *testing.T) {
+	for _, tc := range []struct {
+		x, y int64
+		want string
+	}{
+		{2, 10, "1024"},
+		{7, 0, "1"},
+		{0, 0, "1"},
+		{-2, 3, "-8"},
+		{1, 1 << 30, "1"}, // |x| <= 1 is exempt from the size cap
+	} {
+		if got := BigIntPow(big.NewInt(tc.x), big.NewInt(tc.y)).String(); got != tc.want {
+			t.Errorf("%dn ** %dn = %s, want %s", tc.x, tc.y, got, tc.want)
+		}
+	}
+	e := bigThrown(t, "2n ** -1n", func() { BigIntPow(big.NewInt(2), big.NewInt(-1)) })
+	if e.Name().ToGoString() != "RangeError" || e.Message().ToGoString() != "Exponent must be non-negative" {
+		t.Errorf("2n ** -1n threw %s: %s, want the negative-exponent RangeError", e.Name().ToGoString(), e.Message().ToGoString())
+	}
+	e = bigThrown(t, "2n ** 2^30n", func() { BigIntPow(big.NewInt(2), big.NewInt(1<<30)) })
+	if e.Name().ToGoString() != "RangeError" || e.Message().ToGoString() != "Maximum BigInt size exceeded" {
+		t.Errorf("2n ** 2^30n threw %s: %s, want the size-cap RangeError", e.Name().ToGoString(), e.Message().ToGoString())
+	}
+}
+
+// TestBigIntShifts proves the JavaScript shift semantics: a negative count
+// reverses direction, >> is the arithmetic floor shift so -7n >> 1n is -4n, a
+// right shift past every bit floors to 0 or -1 by sign even when the count does
+// not fit an int64, and a left shift that would clear the size cap throws before
+// allocating.
+func TestBigIntShifts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  *big.Int
+		want string
+	}{
+		{"1n << 10n", BigIntLsh(big.NewInt(1), big.NewInt(10)), "1024"},
+		{"8n << -1n", BigIntLsh(big.NewInt(8), big.NewInt(-1)), "4"},
+		{"0n << 2^40n", BigIntLsh(new(big.Int), big.NewInt(1<<40)), "0"},
+		{"7n >> 1n", BigIntRsh(big.NewInt(7), big.NewInt(1)), "3"},
+		{"-7n >> 1n", BigIntRsh(big.NewInt(-7), big.NewInt(1)), "-4"},
+		{"5n >> 100n", BigIntRsh(big.NewInt(5), big.NewInt(100)), "0"},
+		{"-1n >> 100n", BigIntRsh(big.NewInt(-1), big.NewInt(100)), "-1"},
+		{"3n >> -2n", BigIntRsh(big.NewInt(3), big.NewInt(-2)), "12"},
+	} {
+		if tc.got.String() != tc.want {
+			t.Errorf("%s = %s, want %s", tc.name, tc.got.String(), tc.want)
+		}
+	}
+	// A count too big for int64 still right-shifts to the floor values by sign.
+	hugeCount := new(big.Int).Lsh(big.NewInt(1), 80)
+	if got := BigIntRsh(big.NewInt(-9), hugeCount).String(); got != "-1" {
+		t.Errorf("-9n >> 2^80n = %s, want -1", got)
+	}
+	if got := BigIntRsh(big.NewInt(9), hugeCount).String(); got != "0" {
+		t.Errorf("9n >> 2^80n = %s, want 0", got)
+	}
+	e := bigThrown(t, "1n << 2^30n", func() { BigIntLsh(big.NewInt(1), big.NewInt(1<<30)) })
+	if e.Name().ToGoString() != "RangeError" || e.Message().ToGoString() != "Maximum BigInt size exceeded" {
+		t.Errorf("1n << 2^30n threw %s: %s, want the size-cap RangeError", e.Name().ToGoString(), e.Message().ToGoString())
+	}
+	e = bigThrown(t, "1n << 2^80n", func() { BigIntLsh(big.NewInt(1), hugeCount) })
+	if e.Name().ToGoString() != "RangeError" {
+		t.Errorf("1n << 2^80n threw %s, want RangeError", e.Name().ToGoString())
+	}
 }

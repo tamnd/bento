@@ -19,14 +19,15 @@ import (
 
 // errorCtors maps a built-in error constructor name to the value constructor its
 // new expression lowers to. Only the errors bento's own lowerings raise (a plain
-// Error, a TypeError from a failed guard, a RangeError from a range check) are
-// covered; the DOM and Node error subclasses are a later slice, and an unlisted
-// name hands back so a user class named Error-something is never mistaken for a
-// built-in.
+// Error, a TypeError from a failed guard, a RangeError from a range check, a
+// SyntaxError from BigInt string parsing) are covered; the DOM and Node error
+// subclasses are a later slice, and an unlisted name hands back so a user class
+// named Error-something is never mistaken for a built-in.
 var errorCtors = map[string]string{
-	"Error":      "NewError",
-	"TypeError":  "NewTypeError",
-	"RangeError": "NewRangeError",
+	"Error":       "NewError",
+	"TypeError":   "NewTypeError",
+	"RangeError":  "NewRangeError",
+	"SyntaxError": "NewSyntaxError",
 }
 
 // newExpr lowers a new expression. Only the built-in error constructors are

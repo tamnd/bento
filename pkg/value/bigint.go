@@ -1,6 +1,7 @@
 package value
 
 import (
+	"math"
 	"math/big"
 	"unsafe"
 )
@@ -76,4 +77,156 @@ func BigIntToString(b *big.Int) BStr {
 // which is why it is its own helper and not BigIntToString.
 func BigIntToConsole(b *big.Int) BStr {
 	return FromGoString(b.String() + "n")
+}
+
+// maxBigIntBits caps how large a bigint an operator may build, the same order of
+// bound V8 applies (2^30 bits, 128 MiB of magnitude). A shift or exponent that
+// would clear it throws a RangeError instead of exhausting memory, the "Maximum
+// BigInt size exceeded" JavaScript raises.
+const maxBigIntBits = 1 << 30
+
+// BigIntMustParse parses the decimal digits of a wide bigint literal, the form
+// the lowering emits as a package-level var so a literal past int64 is parsed
+// once at init and reused (05_type_lowering section 4). The digits come from the
+// compiler, which already normalized radix prefixes and separators away, so a
+// parse failure is a lowering bug and panics rather than throwing.
+func BigIntMustParse(s string) *big.Int {
+	i, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		panic("value.BigIntMustParse: the compiler emitted a malformed bigint literal: " + s)
+	}
+	return i
+}
+
+// NumberToBigInt converts a number to a bigint, the lowering of BigInt(n). Only a
+// finite integral number converts; a fractional value, NaN, or an infinity throws
+// the RangeError JavaScript raises, because a bigint has no way to hold it. The
+// conversion goes through big.Float so an integral number past int64 (1e21) still
+// converts exactly.
+func NumberToBigInt(f float64) *big.Int {
+	if math.IsNaN(f) || math.IsInf(f, 0) || math.Trunc(f) != f {
+		Throw(NewRangeError(FromGoString("The number " + NumberToString(f).ToGoString() + " cannot be converted to a BigInt because it is not an integer")))
+	}
+	i, _ := new(big.Float).SetFloat64(f).Int(nil)
+	return i
+}
+
+// StringToBigInt converts a string to a bigint, the lowering of BigInt(s). It
+// implements the ECMAScript StringToBigInt grammar: whitespace trims away, the
+// empty remainder is 0n, a decimal form may carry one sign, and the 0x, 0o, and 0b
+// radix prefixes are read unsigned. Anything else, a trailing character, a digit
+// separator, or a sign on a prefixed form, throws the SyntaxError JavaScript
+// raises, since unlike Number(s) there is no NaN to fall back to.
+func StringToBigInt(s BStr) *big.Int {
+	text := s.Trim().ToGoString()
+	if text == "" {
+		return new(big.Int)
+	}
+	base := 10
+	digits := text
+	if len(text) >= 2 && text[0] == '0' {
+		switch text[1] {
+		case 'x', 'X':
+			base, digits = 16, text[2:]
+		case 'o', 'O':
+			base, digits = 8, text[2:]
+		case 'b', 'B':
+			base, digits = 2, text[2:]
+		}
+	}
+	// A prefixed form takes no sign, and big.Int.SetString would accept one, so
+	// reject it here. SetString with an explicit base already rejects a digit
+	// separator, an empty digit run, and a stray character.
+	if base != 10 && (digits == "" || digits[0] == '+' || digits[0] == '-') {
+		Throw(NewSyntaxError(FromGoString("Cannot convert " + text + " to a BigInt")))
+	}
+	i, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		Throw(NewSyntaxError(FromGoString("Cannot convert " + text + " to a BigInt")))
+	}
+	return i
+}
+
+// BoolToBigInt converts a boolean to a bigint, the lowering of BigInt(b): true is
+// 1n and false is 0n.
+func BoolToBigInt(b bool) *big.Int {
+	if b {
+		return big.NewInt(1)
+	}
+	return new(big.Int)
+}
+
+// BigIntToNumber converts a bigint to a number, the lowering of Number(b). The
+// conversion rounds to the nearest float64 the way JavaScript does, so a bigint
+// past 2^53 loses its low bits and a bigint past the float64 range becomes an
+// infinity; big.Float's round-to-nearest-even is exactly that rounding.
+func BigIntToNumber(b *big.Int) float64 {
+	f, _ := new(big.Float).SetInt(b).Float64()
+	return f
+}
+
+// BigIntToBool is the truthiness of a bigint, the lowering of Boolean(b) and a
+// bigint in condition position: only 0n is false.
+func BigIntToBool(b *big.Int) bool {
+	return b.Sign() != 0
+}
+
+// BigIntPow computes x ** y on bigints. A negative exponent throws the RangeError
+// JavaScript raises, since a bigint cannot hold a fraction, and an exponent that
+// would build a result past the size cap throws the size RangeError rather than
+// exhaust memory. The |x| <= 1 bases are exempt from the cap because their powers
+// never grow.
+func BigIntPow(x, y *big.Int) *big.Int {
+	if y.Sign() < 0 {
+		Throw(NewRangeError(FromGoString("Exponent must be non-negative")))
+	}
+	if x.BitLen() > 1 && (!y.IsInt64() || y.Int64()*int64(x.BitLen()) > maxBigIntBits) {
+		Throw(NewRangeError(FromGoString("Maximum BigInt size exceeded")))
+	}
+	return new(big.Int).Exp(x, y, nil)
+}
+
+// BigIntLsh computes x << n on bigints. A negative count shifts the other way,
+// the JavaScript rule that makes x << -1n mean x >> 1n, and a shift that would
+// build a result past the size cap throws the size RangeError.
+func BigIntLsh(x, n *big.Int) *big.Int {
+	if n.Sign() < 0 {
+		return bigRshMag(x, new(big.Int).Neg(n))
+	}
+	return bigLshMag(x, n)
+}
+
+// BigIntRsh computes x >> n on bigints, the arithmetic (floor) shift JavaScript
+// defines, so -7n >> 1n is -4n. A negative count shifts the other way.
+func BigIntRsh(x, n *big.Int) *big.Int {
+	if n.Sign() < 0 {
+		return bigLshMag(x, new(big.Int).Neg(n))
+	}
+	return bigRshMag(x, n)
+}
+
+// bigLshMag is the left shift by a non-negative count. Zero shifts to zero no
+// matter the count; any other value is capped so the result stays under
+// maxBigIntBits.
+func bigLshMag(x, n *big.Int) *big.Int {
+	if x.Sign() == 0 {
+		return new(big.Int)
+	}
+	if !n.IsInt64() || n.Int64()+int64(x.BitLen()) > maxBigIntBits {
+		Throw(NewRangeError(FromGoString("Maximum BigInt size exceeded")))
+	}
+	return new(big.Int).Lsh(x, uint(n.Int64()))
+}
+
+// bigRshMag is the arithmetic right shift by a non-negative count. A count past
+// every bit of x needs no big shift at all: the floor result is 0 for a
+// non-negative x and -1 for a negative one.
+func bigRshMag(x, n *big.Int) *big.Int {
+	if !n.IsInt64() || n.Int64() > int64(x.BitLen()) {
+		if x.Sign() < 0 {
+			return big.NewInt(-1)
+		}
+		return new(big.Int)
+	}
+	return new(big.Int).Rsh(x, uint(n.Int64()))
 }
