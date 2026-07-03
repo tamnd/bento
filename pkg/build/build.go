@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/goimport"
 	"github.com/tamnd/bento/pkg/lower"
 )
 
@@ -109,11 +110,36 @@ func Compile(entry string) (string, error) {
 	}
 
 	r := lower.NewRenderer(prog)
+	r.SetGoSignatures(goSignatureResolver())
 	p, err := r.RenderProgram(files[0])
 	if err != nil {
 		return "", fmt.Errorf("bento build: %s: %w", entry, err)
 	}
 	return p.Source, nil
+}
+
+// goSignatureResolver builds the resolver the lowerer marshals go: number
+// crossings against. It loads each Go package's signatures once and memoizes them,
+// including a failed load as an empty set, so a program importing several functions
+// from one package pays the go/packages load a single time and a package that will
+// not load degrades to the string and boolean crossings rather than failing the
+// whole build. The build is single-threaded through here, so the memo needs no
+// lock.
+func goSignatureResolver() func(importPath, name string) (goimport.FuncSig, bool) {
+	memo := map[string]map[string]goimport.FuncSig{}
+	return func(importPath, name string) (goimport.FuncSig, bool) {
+		sigs, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			sigs, err = goimport.Signatures(importPath)
+			if err != nil {
+				sigs = map[string]goimport.FuncSig{}
+			}
+			memo[importPath] = sigs
+		}
+		sig, ok := sigs[name]
+		return sig, ok
+	}
 }
 
 // isJavaScript reports whether the entry is a JavaScript module by extension, so

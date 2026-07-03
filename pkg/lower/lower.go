@@ -24,6 +24,7 @@ import (
 	"sort"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/goimport"
 )
 
 // valuePkg is the import path of the shared value model, the package that
@@ -75,6 +76,13 @@ type Renderer struct {
 	// package emits no import. Every call into one package renders the same alias, so
 	// the qualifier a call emits and the import spec the file carries agree.
 	goAliases map[string]string
+	// goSigs resolves the Go signature of a go: function so a call marshals numbers
+	// by the Go type the TypeScript number cannot distinguish (int, int64, float64
+	// all project to number). It is optional: with no resolver, a go: call lowers
+	// only the crossings the TypeScript type settles on its own (string, boolean),
+	// which keeps the renderer usable without the Go toolchain at hand. The build
+	// wires it from the same package load the declaration generator ran.
+	goSigs func(importPath, name string) (goimport.FuncSig, bool)
 	// retType is the declared return type of the function whose body is currently
 	// being lowered, so a return statement can coerce its value across the dynamic
 	// boundary the way an assignment does. It is the zero type outside a function
@@ -109,6 +117,15 @@ type Renderer struct {
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
 	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goAliases: map[string]string{}}
+}
+
+// SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go
+// int, int64, and float64 (all one TypeScript number) each cross the boundary with
+// the right conversion and range check. The build sets it from the Go package load
+// the declaration generator already ran; a renderer with no resolver lowers only
+// the string and boolean crossings a TypeScript type settles on its own.
+func (r *Renderer) SetGoSignatures(resolve func(importPath, name string) (goimport.FuncSig, bool)) {
+	r.goSigs = resolve
 }
 
 // requireImport records that the Go the renderer has emitted refers to a
