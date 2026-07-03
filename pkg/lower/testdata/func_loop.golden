@@ -1,6 +1,6 @@
 func Score(n float64) float64 {
-	var total float64 = 0
-	var i float64 = 1
+	total := 0.0
+	i := 1.0
 	for i <= n {
 		if i == 3 {
 			total += 10

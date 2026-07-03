@@ -351,6 +351,13 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	if len(decls) == 0 {
 		return nil, &NotYetLowerable{Reason: "variable declaration has no binding"}
 	}
+	// A lone float64 binding off a decimal literal reads better as name := 0.0 than as
+	// var name float64 = 0, and the two declare the same block-scoped variable. Every
+	// shape the fold declines (an int32 counter, a multi-binding statement, a non-decimal
+	// initializer) keeps the typed var form below.
+	if short, ok := r.foldFloatDecl(decls); ok {
+		return short, nil
+	}
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
 		kids := r.prog.Children(d)
@@ -765,21 +772,23 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	// declines (an int32-specialized counter, a hex or non-literal initializer, more
 	// than one loop variable), because Go's := would infer int for those and lose the
 	// declared type the block's var keeps.
-	if init, ok := r.foldForInit(decls); ok {
+	if init, ok := r.foldFloatDecl(decls); ok {
 		return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
 	}
 	loop := &ast.ForStmt{Cond: cond, Post: post, Body: body}
 	return &ast.BlockStmt{List: []ast.Stmt{initDecl, loop}}, nil
 }
 
-// foldForInit builds a Go short-variable-declaration for a for loop's init clause
-// from a single float64 loop variable, so the declaration folds into the for
-// statement instead of a wrapping block. It returns false, and the caller keeps the
-// block form, unless the loop declares exactly one variable, that variable is a plain
-// float64 (not an int32-specialized counter), and its initializer is a decimal
-// literal floatLiteral can retype: Go's := infers int from a bare 0, so the fold is
-// sound only when the initializer already denotes, or can be spelled as, a float64.
-func (r *Renderer) foldForInit(decls []frontend.Node) (ast.Stmt, bool) {
+// foldFloatDecl builds a Go short variable declaration from a single float64
+// binding, so name := 0.0 stands in for var name float64 = 0. It serves both a
+// for loop's init clause, where the short form folds into the for statement, and a
+// plain const or let statement, where it reads the way a person would write it. It
+// returns false, and the caller keeps the typed var form, unless there is exactly
+// one binding, that binding is a plain float64 (not an int32-specialized counter),
+// and its initializer is a decimal literal floatLiteral can retype: Go's := infers
+// int from a bare 0, so the fold is sound only when the initializer already denotes,
+// or can be spelled as, a float64.
+func (r *Renderer) foldFloatDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if len(decls) != 1 {
 		return nil, false
 	}
