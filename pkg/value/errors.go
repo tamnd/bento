@@ -29,50 +29,93 @@ type Thrown interface {
 }
 
 // Error is a thrown JavaScript error in the typed world: a constructor name and a
-// message, the two fields every built-in error carries. It is a pointer type so a
-// caught error compares by identity the way a JavaScript object does, and it
-// implements the Go error interface so it round-trips through panic and recover
-// and reads cleanly if it ever reaches Go-level logging.
+// message, the two properties every built-in error carries. Both are held as bento
+// strings, so a catch that reads err.name or err.message gets the JavaScript string
+// with no re-transcoding on the read path. It is a pointer type so a caught error
+// compares by identity the way a JavaScript object does, and it implements the Go
+// error interface so it round-trips through panic and recover and reads cleanly if
+// it ever reaches Go-level logging.
 type Error struct {
-	Name    string
-	Message string
+	name    BStr
+	message BStr
 }
 
-// ErrorName reports the error's constructor name (Error, TypeError, RangeError),
-// the value JavaScript's err.name exposes.
-func (e *Error) ErrorName() string { return e.Name }
+// Name reports the error's constructor name as a bento string, the lowering of
+// JavaScript's err.name.
+func (e *Error) Name() BStr { return e.name }
 
-// ErrorMessage reports the error's message, the value JavaScript's err.message
-// exposes.
-func (e *Error) ErrorMessage() string { return e.Message }
+// Message reports the error's message as a bento string, the lowering of
+// JavaScript's err.message.
+func (e *Error) Message() BStr { return e.message }
+
+// ErrorName reports the error's constructor name as a Go string, the form the
+// Thrown marker and the top-level reporter read.
+func (e *Error) ErrorName() string { return e.name.ToGoString() }
+
+// ErrorMessage reports the error's message as a Go string, the form the Thrown
+// marker and the top-level reporter read.
+func (e *Error) ErrorMessage() string { return e.message.ToGoString() }
 
 // Error formats the error the way JavaScript's Error.prototype.toString does: the
 // name, then ": " and the message when the message is non-empty, or just the name
 // when it is empty.
 func (e *Error) Error() string {
-	if e.Message == "" {
-		return e.Name
+	name := e.name.ToGoString()
+	msg := e.message.ToGoString()
+	if msg == "" {
+		return name
 	}
-	return e.Name + ": " + e.Message
+	return name + ": " + msg
 }
 
-// NewError constructs a plain Error, the lowering of new Error(message). The
-// message is a bento string transcoded to Go, the same crossing every string
-// takes into a Go field.
+// IsA reports whether the error is an instance of the named built-in error
+// constructor, the lowering of e instanceof Error and its TypeError and
+// RangeError siblings on a caught error. Every built-in error is an Error, so the
+// base name always matches; a specific name matches only the error the matching
+// constructor built, which is how instanceof narrows a caught error to the
+// subclass a catch handles. The runtime models the error family as one type with
+// a name field rather than distinct Go types, so the test is a name comparison
+// rather than a type assertion.
+func (e *Error) IsA(name string) bool {
+	if name == "Error" {
+		return true
+	}
+	return e.name.ToGoString() == name
+}
+
+// NewError constructs a plain Error, the lowering of new Error(message).
 func NewError(message BStr) *Error {
-	return &Error{Name: "Error", Message: message.ToGoString()}
+	return &Error{name: FromGoString("Error"), message: message}
 }
 
 // NewTypeError constructs a TypeError, the lowering of new TypeError(message) and
 // the error a failed type guard raises.
 func NewTypeError(message BStr) *Error {
-	return &Error{Name: "TypeError", Message: message.ToGoString()}
+	return &Error{name: FromGoString("TypeError"), message: message}
 }
 
 // NewRangeError constructs a RangeError, the lowering of new RangeError(message)
 // and the error a numeric range check raises.
 func NewRangeError(message BStr) *Error {
-	return &Error{Name: "RangeError", Message: message.ToGoString()}
+	return &Error{name: FromGoString("RangeError"), message: message}
+}
+
+// Caught converts a recovered panic payload into the *Error a catch binds. A
+// thrown *Error binds unchanged, so identity is preserved; a boundary Thrown (a
+// go: failure, a range check) binds as an Error carrying its name and message, so a
+// catch handles it like any other error. A payload that is not a thrown value is a
+// Go runtime panic, a bug in the runtime rather than a program throw, so it is
+// re-panicked to keep its original stack rather than be caught as a JavaScript
+// error.
+func Caught(r any) *Error {
+	switch t := r.(type) {
+	case *Error:
+		return t
+	case Thrown:
+		return &Error{name: FromGoString(t.ErrorName()), message: FromGoString(t.ErrorMessage())}
+	default:
+		panic(r)
+	}
 }
 
 // Throw raises a thrown error so an enclosing catch recovers it or the top-level
