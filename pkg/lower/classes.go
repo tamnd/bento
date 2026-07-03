@@ -74,6 +74,10 @@ type classInfo struct {
 	vprops    map[string]bool
 	overrides map[string]bool
 	extended  bool
+	// abstract marks an abstract class: it emits no NewX (the checker rejects
+	// new on it), only the init function its concrete subclasses run on the
+	// embedded base, and its abstract methods hold vtable slots with no body.
+	abstract bool
 }
 
 // classField is one instance field, in declaration order.
@@ -84,11 +88,14 @@ type classField struct {
 	init   frontend.Node // the initializer expression, nil when none
 }
 
-// classMethod is one instance method.
+// classMethod is one instance method. An abstract method has no body: it
+// declares a vtable slot on the hierarchy root that every concrete subclass
+// fills, so it emits the dispatching entry but no Impl.
 type classMethod struct {
-	prop   string
-	goName string
-	node   frontend.Node
+	prop     string
+	goName   string
+	node     frontend.Node
+	abstract bool
 }
 
 // classSetter is one set accessor; param is its single parameter's name node,
@@ -249,6 +256,13 @@ func (r *Renderer) collectClasses(entry frontend.Node) error {
 // the wrong semantics.
 func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) error {
 	kids := r.prog.Children(decl)
+	// The abstract modifier surfaces as an unnamed node before the name, the
+	// same shape a member's static modifier takes.
+	abstract := false
+	if len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown && strings.TrimSpace(r.prog.Text(kids[0])) == "abstract" {
+		abstract = true
+		kids = kids[1:]
+	}
 	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
 		return &NotYetLowerable{Reason: "a class without a name is a later slice"}
 	}
@@ -260,17 +274,17 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 	if _, dup := r.classes[name]; dup {
 		return &NotYetLowerable{Reason: "two classes named " + name + " in one module is a later slice"}
 	}
-	head, _, _ := strings.Cut(r.prog.Text(decl), "{")
-	if strings.Contains(head, "abstract") {
-		return &NotYetLowerable{Reason: "an abstract class is a later slice"}
-	}
-	if ctorName := "New" + goName; taken[ctorName] {
-		return &NotYetLowerable{Reason: "the module already speaks " + ctorName + ", the name class " + name + "'s constructor needs"}
-	} else {
-		taken[ctorName] = true
+	// An abstract class mints no constructor name: the checker rejects new on
+	// it, so only its init function ever exists at package level.
+	if !abstract {
+		if ctorName := "New" + goName; taken[ctorName] {
+			return &NotYetLowerable{Reason: "the module already speaks " + ctorName + ", the name class " + name + "'s constructor needs"}
+		} else {
+			taken[ctorName] = true
+		}
 	}
 
-	info := &classInfo{name: name, goName: goName, decl: decl}
+	info := &classInfo{name: name, goName: goName, decl: decl, abstract: abstract}
 	var paramProps []classField
 	for _, m := range kids[1:] {
 		switch m.Kind() {
@@ -370,6 +384,23 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 		}
 	}
 	info.fields = append(paramProps, info.fields...)
+	// An abstract method is virtual by declaration: it claims its vtable slot
+	// here, before any subclass registers, so the vtable exists even when no
+	// override is in this module. Only the root may declare one; an abstract
+	// method further down would need a slot the root's vtable does not have,
+	// the same mid-chain gap an override of a mid-chain method hits.
+	for _, m := range info.methods {
+		if !m.abstract {
+			continue
+		}
+		if info.base != nil {
+			return &NotYetLowerable{Reason: "class " + name + " declares abstract ." + m.prop + " below the hierarchy root; a mid-chain virtual method is a later slice"}
+		}
+		if info.vprops == nil {
+			info.vprops = map[string]bool{}
+		}
+		info.vprops[m.prop] = true
+	}
 	if err := r.checkAccessorClashes(info); err != nil {
 		return err
 	}
@@ -617,6 +648,20 @@ func (r *Renderer) memberIsStatic(m frontend.Node) bool {
 		strings.TrimSpace(r.prog.Text(kids[0])) == "static"
 }
 
+// memberHasMod reports whether the member carries the named modifier, which
+// the frontend surfaces as one unnamed node per keyword before the name.
+func (r *Renderer) memberHasMod(m frontend.Node, mod string) bool {
+	for _, k := range r.prog.Children(m) {
+		if k.Kind() != frontend.NodeUnknown {
+			return false
+		}
+		if strings.TrimSpace(r.prog.Text(k)) == mod {
+			return true
+		}
+	}
+	return false
+}
+
 // classFieldOf reads one property declaration into a classField. The member's
 // children are the name, an optional type annotation (an unnamed node), and an
 // optional initializer expression. An initializer bento's node vocabulary does
@@ -629,6 +674,11 @@ func (r *Renderer) classFieldOf(m frontend.Node) (classField, error) {
 	text := strings.TrimSpace(r.prog.Text(m))
 	if w := firstWord(text); w == "static" || w == "declare" || w == "accessor" {
 		return classField{}, &NotYetLowerable{Reason: "a " + w + " class field is a later slice"}
+	}
+	if r.memberHasMod(m, "abstract") {
+		// An abstract field has no runtime presence on the base; the concrete
+		// declaration lives on the subclass, a layout this slice does not build.
+		return classField{}, &NotYetLowerable{Reason: "an abstract field is a later slice"}
 	}
 	kids := r.prog.Children(m)
 	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
@@ -751,10 +801,20 @@ func (r *Renderer) plainParam(p frontend.Node) error {
 
 // classMethodOf reads one method declaration into a classMethod.
 func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
-	if w := firstWord(strings.TrimSpace(r.prog.Text(m))); w == "static" || w == "async" {
-		return classMethod{}, &NotYetLowerable{Reason: "a " + w + " method is a later slice"}
-	}
+	// Modifiers surface as unnamed nodes before the name. Only abstract is
+	// modeled here; any other modifier changes semantics this slice does not
+	// build (async a coroutine, an access keyword a lowercase spelling) and
+	// hands back by its keyword.
 	kids := r.prog.Children(m)
+	abstract := false
+	for len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown {
+		w := strings.TrimSpace(r.prog.Text(kids[0]))
+		if w != "abstract" {
+			return classMethod{}, &NotYetLowerable{Reason: "a " + w + " method is a later slice"}
+		}
+		abstract = true
+		kids = kids[1:]
+	}
 	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
 		return classMethod{}, &NotYetLowerable{Reason: "a method without a plain identifier name is a later slice"}
 	}
@@ -763,7 +823,19 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	if !ok {
 		return classMethod{}, &NotYetLowerable{Reason: "method name is not a Go identifier"}
 	}
-	return classMethod{prop: prop, goName: goName, node: m}, nil
+	// A body-less non-abstract declaration is an overload signature, whose
+	// call-site selection is a later slice; an abstract method is exactly the
+	// body-less form, its body being the slot a subclass fills.
+	hasBody := false
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeBlock {
+			hasBody = true
+		}
+	}
+	if !abstract && !hasBody {
+		return classMethod{}, &NotYetLowerable{Reason: "a method overload signature is a later slice"}
+	}
+	return classMethod{prop: prop, goName: goName, node: m, abstract: abstract}, nil
 }
 
 // staticFieldOf reads one static field into a classField whose goName is the
@@ -864,6 +936,9 @@ func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[st
 // same method path an ordinary method takes, since a getter is a method whose
 // call the source spells as a read.
 func (r *Renderer) getterOf(m frontend.Node) (classMethod, error) {
+	if r.memberHasMod(m, "abstract") {
+		return classMethod{}, &NotYetLowerable{Reason: "an abstract accessor is a later slice"}
+	}
 	kids := r.prog.Children(m)
 	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
 		return classMethod{}, &NotYetLowerable{Reason: "a get accessor without a plain identifier name is a later slice"}
@@ -881,6 +956,9 @@ func (r *Renderer) getterOf(m frontend.Node) (classMethod, error) {
 // keeps, and its name node is retained so a store coerces the value against
 // the declared parameter type.
 func (r *Renderer) setterOf(m frontend.Node) (classSetter, error) {
+	if r.memberHasMod(m, "abstract") {
+		return classSetter{}, &NotYetLowerable{Reason: "an abstract accessor is a later slice"}
+	}
 	kids := r.prog.Children(m)
 	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
 		return classSetter{}, &NotYetLowerable{Reason: "a set accessor without a plain identifier name is a later slice"}
@@ -1070,7 +1148,9 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 	for _, m := range info.methods {
 		// A virtual method's body emits under its Impl name; the root also
 		// gains the entry method under the original name, so every call site
-		// keeps its spelling and dispatch runs through the vtable.
+		// keeps its spelling and dispatch runs through the vtable. An abstract
+		// method is the entry alone: it has no body, its slot panics until a
+		// concrete subclass's vtable fills it.
 		name := m.goName
 		if info.vprops[m.prop] {
 			entry, err := r.virtualEntryDecl(info, m)
@@ -1078,6 +1158,9 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 				return nil, err
 			}
 			out = append(out, entry)
+			if m.abstract {
+				continue
+			}
 			name = implName(m)
 		} else if info.overrides[m.prop] {
 			name = implName(m)
@@ -1210,13 +1293,15 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 	r.curClass, r.thisName = info, info.recv
 	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 
-	if info.hasVTable() {
+	if info.hasVTable() || info.chainHasAbstract() {
 		// A virtual hierarchy splits construction: NewX allocates and pins the
 		// class's vtable before any initializer runs, so a virtual call inside a
 		// base constructor already dispatches to the derived override, the order
 		// JavaScript runs (a JS instance is its final class from the first line
-		// of the base constructor, unlike C++).
-		return r.vtableCtorDecls(info, params)
+		// of the base constructor, unlike C++). An abstract chain takes the same
+		// split even without a vtable, because an abstract base has no NewX to
+		// fold or copy from, only its init to run on the embedded base in place.
+		return r.splitCtorDecls(info, params)
 	}
 	body, err := r.ctorBody(info)
 	if err != nil {
@@ -1615,6 +1700,11 @@ func (r *Renderer) staticFuncDecl(m classMethod) (ast.Decl, error) {
 // The argument count must match the constructor exactly; optional and default
 // parameters are the same later slice they are for functions.
 func (r *Renderer) newClass(info *classInfo, argNodes []frontend.Node) (ast.Expr, error) {
+	// The checker rejects new on an abstract class; this guard keeps a unit
+	// that somehow carries one from referencing the NewX that does not exist.
+	if info.abstract {
+		return nil, &NotYetLowerable{Reason: "constructing the abstract class " + info.name + " is not lowerable"}
+	}
 	if len(argNodes) != len(info.ctorParams) {
 		return nil, &NotYetLowerable{Reason: "new " + info.name + " with an argument count that differs from the constructor is a later slice"}
 	}
