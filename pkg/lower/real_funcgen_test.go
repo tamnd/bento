@@ -267,6 +267,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "object_literal", file: "func_object_literal"},
 		// map over a concise-body arrow lowers to the value.Array Map method taking a Go function literal, the arrow's parameter typed from the checker and its body returning the element type.
 		{name: "array_map", file: "func_array_map"},
+		// a map whose callback returns a different type than the element (number to string here) cannot use the Map method, since a Go method may not add a type parameter, so it lowers to the free function value.MapArray[float64, value.BStr] with both type arguments named.
+		{name: "array_map_change", file: "func_array_map_change"},
 		// filter over a concise-body arrow lowers to the value.Array Filter method, the callback returning a bool with no same-type restriction.
 		{name: "array_filter", file: "func_array_filter"},
 		// slice lowers to the value.Array Slice method taking its zero, one, or two number bounds variadically, so slice(), slice(start), and slice(start, end) all reach the one method.

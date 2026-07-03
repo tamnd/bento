@@ -93,6 +93,22 @@ func (a *Array[T]) Map(f func(T) T) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// MapArray is the type-changing form of Map: it builds a fresh Array[U] by
+// applying f to each element of a, the lowering of Array.prototype.map when the
+// callback returns a different type than the element (number[].map(n =>
+// n.toString()) is string[]). Map cannot express this because a Go method may
+// not introduce a new type parameter, so the lowerer emits this free function
+// with both type arguments spelled out whenever the callback's result type does
+// not match the element type. As with Map the callback takes only the element,
+// and the receiver is unchanged since the result is a new array.
+func MapArray[T, U any](a *Array[T], f func(T) U) *Array[U] {
+	out := make([]U, len(a.elems))
+	for i, x := range a.elems {
+		out[i] = f(x)
+	}
+	return &Array[U]{elems: out}
+}
+
 // Filter returns a new array of the elements for which f returns true, in order,
 // the lowering of Array.prototype.filter. As with Map, the callback takes only
 // the element for now. The result is a fresh array, so the receiver is
