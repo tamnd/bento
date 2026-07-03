@@ -1,6 +1,9 @@
 package goimport
 
-import "go/types"
+import (
+	"go/types"
+	"strings"
+)
 
 // This file exposes a go: function's parameter and result types to the lowerer,
 // which the generated .d.ts alone cannot carry. Go's int, int64, and float64 all
@@ -39,6 +42,14 @@ import "go/types"
 // element (section 6.4); for a scalar crossing the element is the empty string. A
 // []byte is deliberately not a slice crossing, because it projects to a Uint8Array
 // (section 7.3), a later slice, so it clears OK and hands the call back.
+//
+// An opaque handle (section 6.13), a foreign named type the bridge does not project
+// (a struct with no exported fields or methods, or a named func type), carries the
+// keyword "opaque" in Params or Results with its import path and Go name packed into
+// the parallel element slot by OpaqueElem. The value crosses by identity: bento
+// holds the real Go value as a token and hands it back to another go: call without
+// ever inspecting it, so the lowerer emits no conversion and only names the foreign
+// Go type where the guard closure needs it.
 type FuncSig struct {
 	Params        []string
 	ParamConv     []DefinedConv
@@ -111,6 +122,12 @@ func classifySignature(sig *types.Signature) FuncSig {
 			paramElems = append(paramElems, elem)
 			continue
 		}
+		if path, name, good := opaqueCrossing(t); good {
+			params = append(params, "opaque")
+			convs = append(convs, DefinedConv{})
+			paramElems = append(paramElems, OpaqueElem(path, name))
+			continue
+		}
 		kw, conv, good := crossingType(t)
 		if !good {
 			ok = false
@@ -139,6 +156,11 @@ func classifySignature(sig *types.Signature) FuncSig {
 		if elem, good := sliceCrossing(t); good {
 			results = append(results, "slice")
 			resultElems = append(resultElems, elem)
+			continue
+		}
+		if path, name, good := opaqueCrossing(t); good {
+			results = append(results, "opaque")
+			resultElems = append(resultElems, OpaqueElem(path, name))
 			continue
 		}
 		kw, conv, good := crossingType(t)
@@ -204,6 +226,91 @@ func sliceCrossing(t types.Type) (string, bool) {
 		return "", false
 	}
 	return kw, true
+}
+
+// opaqueCrossing classifies a foreign named type the bridge does not project as an
+// opaque handle, returning its import path and Go name and true so the lowerer holds
+// it as a token and hands it back untouched (section 6.13). It fires only for the
+// types that unambiguously have no richer projection: an exported named type whose
+// underlying is a struct with no exported fields and whose method set is empty, or a
+// named func type with no methods. Those are the option-value and hidden-concrete
+// shapes an author receives from one call and passes to another. Everything with a
+// faithful projection returns false so its own slice marshals it: error and the
+// well-known interfaces have named helpers, a defined type over a basic is the
+// branded number of section 6.11, an empty interface is any (section 6.12), and a
+// struct with exported fields or methods is a class (section 6.7). Being conservative
+// keeps the crossing sound: a type this does not claim hands the call back rather
+// than cross a shape bento cannot honor.
+func opaqueCrossing(t types.Type) (string, string, bool) {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return "", "", false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil || !obj.Exported() {
+		return "", "", false
+	}
+	if isErrorType(named) {
+		return "", "", false
+	}
+	// A well-known interface (io.Reader, context.Context) has a vocabulary projection,
+	// not an opaque token, so it is left to that helper.
+	short := obj.Pkg().Name() + "." + obj.Name()
+	qualified := obj.Pkg().Path() + "." + obj.Name()
+	if _, known := wellKnown[short]; known {
+		return "", "", false
+	}
+	if _, known := wellKnown[qualified]; known {
+		return "", "", false
+	}
+	// A method on the named type means the author can call into it, which is a class or
+	// interface projection, not an opaque handle.
+	if named.NumMethods() > 0 {
+		return "", "", false
+	}
+	switch u := named.Underlying().(type) {
+	case *types.Struct:
+		// A struct with an exported field is a shape the author reads, a class (section
+		// 6.7); only a field-free struct is a pure token.
+		if hasExportedField(u) {
+			return "", "", false
+		}
+	case *types.Signature:
+		// A named func type carries a callback the bento side never calls itself; it holds
+		// it and hands it back, the option-value shape.
+	default:
+		// A basic underlying is the branded number of section 6.11, an interface is any or
+		// a method set (sections 6.12, 6.8), and a slice, map, array, or channel has its
+		// own structural projection, so none of them is an opaque token.
+		return "", "", false
+	}
+	return obj.Pkg().Path(), obj.Name(), true
+}
+
+// hasExportedField reports whether a struct type has any exported field, the mark
+// that separates a class projection (a shape the author reads) from an opaque token.
+func hasExportedField(st *types.Struct) bool {
+	for i := 0; i < st.NumFields(); i++ {
+		if st.Field(i).Exported() {
+			return true
+		}
+	}
+	return false
+}
+
+// OpaqueElem packs a foreign type's import path and Go name into the single element
+// string an opaque crossing rides in ParamElem or ResultElem, so the lowerer can name
+// the type in the guard closure without a second parallel slice. The separator is a
+// NUL, which never appears in a Go import path or identifier, so the split is exact.
+func OpaqueElem(path, name string) string {
+	return path + "\x00" + name
+}
+
+// SplitOpaqueElem recovers the import path and Go name OpaqueElem packed, for the
+// lowerer to build the qualified type reference.
+func SplitOpaqueElem(elem string) (string, string) {
+	path, name, _ := strings.Cut(elem, "\x00")
+	return path, name
 }
 
 // basicKeyword returns the Go type keyword for a plain basic type, and "" for

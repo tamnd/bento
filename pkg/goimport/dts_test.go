@@ -51,6 +51,24 @@ func (p Point) unexported() {}
 	}
 }
 
+func TestGenerateOpaqueStruct(t *testing.T) {
+	// A struct with no exported fields and no exported methods has no shape the author
+	// can read or call, so it projects as an opaque token rather than an empty
+	// interface (section 6.13).
+	src := `package zstd
+type DOption struct {
+	level int
+}
+func (o DOption) apply() {}
+`
+	pkg := checkSource(t, src)
+	dts := Generate(pkg, GenOptions{ImportPath: "example.com/zstd"})
+	contains(t, dts, `export type DOption = GoOpaque<"zstd.DOption">;`)
+	if strings.Contains(dts, "export interface DOption") {
+		t.Errorf("a field-free method-free struct projected as an interface, not an opaque token:\n%s", dts)
+	}
+}
+
 func TestGenerateNamedInterface(t *testing.T) {
 	src := `package p
 type Reader interface {

@@ -88,6 +88,35 @@ func SliceFromGo[G any, B any](s []G, conv func(G) B) *value.Array[B] {
 	return value.NewArray(out...)
 }
 
+// Opaque is a token for a Go value the bridge does not project (section 6.13). It
+// holds the real Go value the bento side received from one go: call and hands to
+// another, never dereferenced: an option value, an unexported concrete type behind
+// an interface, or a struct with no exported surface. Holding it as a Go interface
+// keeps the value reachable, so the garbage collector keeps it alive as long as the
+// bento program holds the token, which is the value model's GC integration the
+// handle depends on (section 7.8). Every opaque handle crosses as this one type, so
+// a bento local that holds a token has a single stable Go type whatever the foreign
+// type is; the concrete type is recovered only where the token crosses back into Go.
+type Opaque struct {
+	v any
+}
+
+// OpaqueFromGo boxes a Go value returned from a go: call as an opaque token, the
+// result crossing for a type the bridge does not project (section 6.13). The value
+// is stored as-is and never inspected, so any Go type crosses.
+func OpaqueFromGo[T any](v T) Opaque {
+	return Opaque{v: v}
+}
+
+// OpaqueToGo recovers the Go value an opaque token holds for the crossing back into
+// Go, where the emitted call names the concrete type as the type argument (section
+// 6.13). The token only ever holds the type the signature says it does, because a
+// bento program cannot construct one or change what it holds, so the assertion is
+// sound.
+func OpaqueToGo[T any](o Opaque) T {
+	return o.v.(T)
+}
+
 // Must returns v, or raises when err is non-nil: the throw-mode bridge for a Go
 // (T, error) result projected as a T that throws (section 6.6). A go: call whose
 // Go signature ends in error lowers to a call to this, so the TypeScript author

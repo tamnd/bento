@@ -107,6 +107,69 @@ func F(m [][]int) int { return 0 }`, "F"); sig.OK {
 	}
 }
 
+// TestClassifyOpaqueHandle proves a foreign named type the bridge does not project,
+// a field-free struct or a named func type, classifies as an opaque crossing that
+// carries its import path and Go name, both as a parameter and a result, so the
+// lowerer holds it as a token and hands it back (section 6.13).
+func TestClassifyOpaqueHandle(t *testing.T) {
+	sig := sigOf(t, `package p
+type Level struct{ n int }
+func F(opt Level) Level { return opt }
+`, "F")
+	if !sig.OK {
+		t.Fatal("opaque-handle signature classified as not lowerable")
+	}
+	if want := []string{"opaque"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	if want := []string{"opaque"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+	path, name := SplitOpaqueElem(sig.ResultElem[0])
+	if name != "Level" || path == "" {
+		t.Errorf("result opaque element = %q.%q, want a package path and Level", path, name)
+	}
+	if p2, n2 := SplitOpaqueElem(sig.ParamElem[0]); p2 != path || n2 != name {
+		t.Errorf("param opaque element = %q.%q, want the same %q.%q", p2, n2, path, name)
+	}
+
+	fn := sigOf(t, `package p
+type Option func(n int)
+func F() Option { return nil }
+`, "F")
+	if !fn.OK || !slices.Equal(fn.Results, []string{"opaque"}) {
+		t.Errorf("named func type classified OK=%v results=%v, want an opaque result", fn.OK, fn.Results)
+	}
+}
+
+// TestClassifyRejectsClassAndInterface holds the boundary between an opaque token
+// and a richer projection: a struct with an exported field or an exported method is
+// a class (section 6.7), a named interface is the interface projection (section 6.8),
+// and an empty interface is any (section 6.12), so none of them is an opaque handle
+// and each clears OK in this slice.
+func TestClassifyRejectsClassAndInterface(t *testing.T) {
+	cases := map[string]string{
+		"exported field": `package p
+type T struct{ X int }
+func F() T { return T{} }`,
+		"exported method": `package p
+type T struct{ n int }
+func (t T) M() int { return t.n }
+func F() T { return T{} }`,
+		"named interface": `package p
+type I interface{ M() int }
+func F() I { return nil }`,
+		"empty interface": `package p
+type Any interface{}
+func F() Any { return nil }`,
+	}
+	for name, src := range cases {
+		if sig := sigOf(t, src, "F"); sig.OK {
+			t.Errorf("%s: classified as lowerable, want a hand-back", name)
+		}
+	}
+}
+
 // TestClassifyVoidResult checks a function with no result is lowerable with an
 // empty result list, the void-call shape.
 func TestClassifyVoidResult(t *testing.T) {

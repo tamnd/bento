@@ -343,6 +343,12 @@ func (r *Renderer) bentoResultType(goResult, elem string) ast.Expr {
 		// (section 6.4).
 		r.requireImport(valuePkg)
 		return star(index(sel("value", "Array"), r.bentoResultType(elem, "")))
+	case "opaque":
+		// An opaque handle is held as the uniform token type, so the guard closure returns
+		// a bridge.Opaque whatever the foreign Go type is; the concrete type is named only
+		// where the token crosses back into Go (section 6.13).
+		r.requireImport(bridgePkg)
+		return sel("bridge", "Opaque")
 	default:
 		return ident("float64")
 	}
@@ -387,6 +393,18 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 		return &ast.CallExpr{
 			Fun:  sel("bridge", "SliceToGo"),
 			Args: []ast.Expr{arg, r.elemConv(r.bentoResultType(elem, ""), ident(elem), body)},
+		}, nil
+	}
+	if goType == "opaque" {
+		// An opaque handle crosses back into Go by recovering the real value the token
+		// holds: bento held it as a bridge.Opaque, and OpaqueToGo asserts it back to the
+		// concrete foreign type the emitted call names as its type argument (section 6.13).
+		// The element string packs that type's import path and Go name.
+		r.requireImport(bridgePkg)
+		path, name := goimport.SplitOpaqueElem(elem)
+		return &ast.CallExpr{
+			Fun:  &ast.IndexExpr{X: sel("bridge", "OpaqueToGo"), Index: sel(r.requireGoImport(path), name)},
+			Args: []ast.Expr{arg},
 		}, nil
 	}
 	if conv.Name != "" {
@@ -439,6 +457,15 @@ func (r *Renderer) marshalResultFromGo(goType, elem string, goCall ast.Expr) (as
 			Fun:  sel("bridge", "SliceFromGo"),
 			Args: []ast.Expr{goCall, r.elemConv(ident(elem), r.bentoResultType(elem, ""), body)},
 		}, nil
+	}
+	if goType == "opaque" {
+		// An opaque handle crosses back as a token: bento never inspects it, so the Go
+		// result is boxed into a bridge.Opaque that holds the value and keeps it alive
+		// while the bento program holds the token (section 6.13). The token has one Go
+		// type whatever the foreign type is, so a local that holds it needs no per-type
+		// declaration.
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "OpaqueFromGo"), Args: []ast.Expr{goCall}}, nil
 	}
 	switch goType {
 	case "string":
