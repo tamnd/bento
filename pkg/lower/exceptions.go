@@ -39,6 +39,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if len(kids) == 0 {
 		return nil, &NotYetLowerable{Reason: "new expression did not expose a constructor"}
 	}
+	if r.prog.Text(kids[0]) == "Uint8Array" {
+		return r.newUint8Array(kids[1:])
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}
@@ -64,6 +67,49 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", ctor), Args: []ast.Expr{message}}, nil
+}
+
+// newUint8Array lowers a Uint8Array construction, the byte buffer of section 6.3.
+// Two forms are covered. new Uint8Array(n) allocates a zeroed buffer of length n,
+// so a single Number argument lowers to value.NewUint8Array(n). new Uint8Array([a,
+// b, c]) fills a buffer from a list of byte values, so a single array-literal
+// argument lowers to value.Uint8ArrayOf(a, b, c) with each element coerced by the
+// runtime's ToUint8. The two are told apart by the argument's syntax, an array
+// literal versus anything else, so a length that happens to be a variable still
+// takes the length form. The other overloads (a copy from another typed array, a
+// view over an ArrayBuffer with an offset and length) are later slices and hand
+// back, as does a call with no argument or more than one.
+func (r *Renderer) newUint8Array(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 1 {
+		return nil, &NotYetLowerable{Reason: "only new Uint8Array(length) and new Uint8Array([...]) are lowered yet"}
+	}
+	r.requireImport(valuePkg)
+	if args[0].Kind() == frontend.NodeArrayLiteralExpression {
+		elems := r.prog.Children(args[0])
+		lowered := make([]ast.Expr, 0, len(elems))
+		for _, e := range elems {
+			if e.Kind() == frontend.NodeSpreadElement {
+				return nil, &NotYetLowerable{Reason: "spread element in a Uint8Array initializer is a later slice"}
+			}
+			if !r.isNumber(e) {
+				return nil, &NotYetLowerable{Reason: "a Uint8Array initialized from a non-number element is a later slice"}
+			}
+			v, err := r.lowerExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			lowered = append(lowered, v)
+		}
+		return &ast.CallExpr{Fun: sel("value", "Uint8ArrayOf"), Args: lowered}, nil
+	}
+	if !r.isNumber(args[0]) {
+		return nil, &NotYetLowerable{Reason: "a Uint8Array length that is not a number is a later slice"}
+	}
+	length, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewUint8Array"), Args: []ast.Expr{length}}, nil
 }
 
 // errorInstanceof lowers `e instanceof Error` on a caught error, the guard a
