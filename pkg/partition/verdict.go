@@ -112,6 +112,23 @@ func (k ReasonKind) Severity() Severity {
 	}
 }
 
+// Guardable reports whether a soft blocker is one a runtime guard can stand in
+// for, which is what makes it a real speculation rather than a coverage gap. An
+// untyped value can be guarded by checking its shape on entry, and a control
+// inversion by guarding the inverted entry, so both are guardable. An unlowerable
+// type or an unsupported construct is not a wrong assumption a guard can catch; it
+// is lowering that does not reach that shape yet, so Pass C leaves those
+// interpreted until the lowering set grows rather than wrapping them in a guard
+// that can never miss. A hard blocker is never guardable.
+func (k ReasonKind) Guardable() bool {
+	switch k {
+	case ReasonUntypedValue, ReasonControlInversion:
+		return true
+	default:
+		return false
+	}
+}
+
 func (k ReasonKind) String() string {
 	switch k {
 	case ReasonEval:
