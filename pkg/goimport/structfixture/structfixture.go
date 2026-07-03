@@ -82,6 +82,20 @@ func DescribeAll(us []Profile) string {
 	return out
 }
 
+// SumPtr adds the coordinates of a Point through a pointer, so an object box crosses
+// in as a Go *Point parameter: the closure takes the address of a fresh struct and
+// the call reads its integer fields back on the Go side.
+func SumPtr(p *Point) int {
+	return p.X + p.Y
+}
+
+// MakePointPtr builds a Point and hands back its address, so a Go *Point result
+// crosses back as a read-only object box the caller reads field by field, the same
+// shape as a value Point.
+func MakePointPtr(x, y int) *Point {
+	return &Point{X: x, Y: y}
+}
+
 // Diagonal returns the first n points on the line y=x, so a Go []Point result
 // crosses back as a bento array of read-only struct boxes the caller reads element
 // by element.
