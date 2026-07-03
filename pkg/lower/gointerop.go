@@ -64,7 +64,16 @@ func (r *Renderer) recordGoImport(module string, clause frontend.Node, haveClaus
 	}
 	named, ok := namedImportsNode(r.prog, clause)
 	if !ok {
-		return &NotYetLowerable{Reason: "default or namespace import of " + module + " is a later slice"}
+		// A namespace import (import * as zstd from "go:...") binds the package's whole
+		// exported surface to one name, and a member call on it lowers the same way a
+		// named import does. It has no named-imports node, so it is recognized by its
+		// "* as name" clause and recorded as a namespace binding; a default import,
+		// which a Go package has no export for, still hands back.
+		if binding, ok := namespaceBinding(r.prog, clause); ok {
+			r.goNamespaces[binding] = importPath
+			return nil
+		}
+		return &NotYetLowerable{Reason: "default import of " + module + " is a later slice"}
 	}
 	for _, spec := range r.prog.Children(named) {
 		names := identChildren(r.prog, spec)
@@ -76,6 +85,55 @@ func (r *Renderer) recordGoImport(module string, clause frontend.Node, haveClaus
 		r.goImports[local] = goBuiltin{importPath: importPath, name: exported}
 	}
 	return nil
+}
+
+// namespaceBinding returns the local name a namespace import binds, the name in
+// import * as name from "go:...". The clause of a namespace import renders as
+// "* as name" and holds a single identifier descendant, the binding; a named or
+// default import does not start with the star, so it reports not found and the
+// caller routes it elsewhere.
+func namespaceBinding(prog *frontend.Program, clause frontend.Node) (string, bool) {
+	if !strings.HasPrefix(strings.TrimSpace(prog.Text(clause)), "*") {
+		return "", false
+	}
+	if id, ok := firstIdentifier(prog, clause); ok {
+		return id, true
+	}
+	return "", false
+}
+
+// firstIdentifier returns the text of the first identifier in a subtree, in a
+// pre-order walk. It pulls the binding name out of a namespace import clause, whose
+// only identifier is the bound name.
+func firstIdentifier(prog *frontend.Program, n frontend.Node) (string, bool) {
+	if n.Kind() == frontend.NodeIdentifier {
+		return prog.Text(n), true
+	}
+	for _, c := range prog.Children(n) {
+		if id, ok := firstIdentifier(prog, c); ok {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// namespaceGoCall resolves a member callee against the namespace go: imports: when
+// the callee is name.Member and name is a namespace binding, it returns the
+// goBuiltin for Member in that package, the same shape a named import's binding
+// carries. The property access's two identifier children are the namespace binding
+// and the exported Go name; anything else (a deeper access, a non-identifier
+// object) is not a namespace call and reports not found so the method-call path
+// takes it.
+func (r *Renderer) namespaceGoCall(access frontend.Node) (goBuiltin, bool) {
+	kids := r.prog.Children(access)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier || kids[1].Kind() != frontend.NodeIdentifier {
+		return goBuiltin{}, false
+	}
+	importPath, ok := r.goNamespaces[r.prog.Text(kids[0])]
+	if !ok {
+		return goBuiltin{}, false
+	}
+	return goBuiltin{importPath: importPath, name: r.prog.Text(kids[1])}, true
 }
 
 // goImportCall lowers a call to a name bound by a go: import to a direct call into
