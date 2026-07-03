@@ -1,4 +1,4 @@
 func Money(n float64) value.BStr {
-	var v float64 = n / 8
+	v := n / 8
 	return value.NumberToFixed(v, 0).ConcatN(value.FromGoString(" "), value.NumberToFixed(v, 2), value.FromGoString(" "), value.NumberToFixed(v, 4))
 }

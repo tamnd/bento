@@ -1,6 +1,6 @@
 func Scaled(n float64) float64 {
-	var xs *value.Array[float64] = value.NewArray[float64](1, 2, 3)
-	var ys *value.Array[float64] = xs.Map(func(x float64) float64 {
+	xs := value.NewArray[float64](1, 2, 3)
+	ys := xs.Map(func(x float64) float64 {
 		return x * n
 	})
 	t := 0.0

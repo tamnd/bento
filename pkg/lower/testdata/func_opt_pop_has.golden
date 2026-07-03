@@ -1,5 +1,5 @@
 func HasLast(n float64) bool {
-	var xs *value.Array[float64] = value.NewArray[float64](n, n+1)
-	var last value.Opt[float64] = xs.Pop()
+	xs := value.NewArray[float64](n, n+1)
+	last := xs.Pop()
 	return !last.IsUndefined()
 }

@@ -5,9 +5,9 @@ import (
 )
 
 func main() {
-	var dir value.BStr = value.Mkdtemp(value.PathJoin(value.Tmpdir(), value.FromGoString("bento-bench-")))
+	dir := value.Mkdtemp(value.PathJoin(value.Tmpdir(), value.FromGoString("bento-bench-")))
 	count := 200.0
-	var payload value.BStr = value.FromGoString("x").Repeat(512)
+	payload := value.FromGoString("x").Repeat(512)
 	bytes := 0.0
 	for pass := 0.0; pass < 3; pass++ {
 		for i := 0.0; i < count; i++ {

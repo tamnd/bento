@@ -955,8 +955,11 @@ console.log(Describe(opt));
 	if !strings.Contains(source, "bridge.OpaqueFromGo(optfixture.WithLevel(") {
 		t.Errorf("an opaque result was not boxed into a token:\n%s", source)
 	}
-	if !strings.Contains(source, "var opt bridge.Opaque = ") {
-		t.Errorf("a local holding an opaque token was not typed bridge.Opaque:\n%s", source)
+	// The local folds to opt := ..., so its type is inferred from the OpaqueFromGo box
+	// asserted just above rather than spelled out; seeing the short declaration for opt
+	// confirms the boxed token is what the local binds.
+	if !strings.Contains(source, "opt := bridge.") {
+		t.Errorf("a local holding an opaque token was not bound to a bridge box:\n%s", source)
 	}
 	if !strings.Contains(source, "bridge.OpaqueToGo[optfixture.Level](opt)") {
 		t.Errorf("an opaque argument did not recover its concrete Go type on the way back:\n%s", source)

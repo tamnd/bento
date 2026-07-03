@@ -1,4 +1,4 @@
 func Radices(n float64) value.BStr {
-	var m float64 = float64(value.ToInt32(n) & value.ToInt32(0xff))
+	m := float64(value.ToInt32(n) & value.ToInt32(0xff))
 	return value.NumberToStringRadix(m, 16).ConcatN(value.FromGoString(" "), value.NumberToStringRadix(m, 2), value.FromGoString(" "), value.NumberToString(m))
 }
