@@ -54,25 +54,36 @@ func TestResolveGo(t *testing.T) {
 
 func TestResolveGoInvalid(t *testing.T) {
 	r := newTestResolver(newMemFS(), true)
-	// No dotted host, so it is not a valid go import path.
-	_, err := r.Resolve("go:notahost/x", nil)
+	// An empty path segment is a malformed import path. A bare standard-library
+	// name like "io" is now valid, so the invalidity has to come from the path
+	// shape rather than from a missing dotted host.
+	_, err := r.Resolve("go:double//slash", nil)
 	if err == nil {
 		t.Fatal("an invalid go: path should error")
 	}
 }
 
-func TestValidGoImportPath(t *testing.T) {
-	cases := map[string]bool{
-		"github.com/x/y":    true,
-		"golang.org/x/net":  true,
-		"notahost/x":        false,
-		"":                  false,
-		"github.com":        false,
-		"github.com//empty": false,
+func TestResolveGoStdlib(t *testing.T) {
+	r := newTestResolver(newMemFS(), true)
+	got, err := r.Resolve("go:crypto/sha256", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for in, want := range cases {
-		if got := validGoImportPath(in); got != want {
-			t.Errorf("validGoImportPath(%q) = %v, want %v", in, got, want)
-		}
+	if got.Kind != KindGo || got.Path != "crypto/sha256" {
+		t.Errorf("unexpected go stdlib resolution: %+v", got)
+	}
+}
+
+func TestResolveGoPinnedVersion(t *testing.T) {
+	r := newTestResolver(newMemFS(), true)
+	got, err := r.Resolve("go:github.com/klauspost/compress/zstd@v1.17.9", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "github.com/klauspost/compress/zstd" {
+		t.Errorf("path = %q, want the import path with the version split off", got.Path)
+	}
+	if got.GoVersion != "v1.17.9" {
+		t.Errorf("GoVersion = %q, want v1.17.9", got.GoVersion)
 	}
 }
