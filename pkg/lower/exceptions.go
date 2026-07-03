@@ -45,7 +45,7 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	// local class named Map or Uint8Array still constructs as the class and never
 	// falls through to a built-in with the same name.
 	if kids[0].Kind() == frontend.NodeIdentifier {
-		if info, ok := r.classCtorRef(kids[0]); ok {
+		if info, ok := r.classNameRef(kids[0]); ok {
 			return r.newClass(info, kids[1:])
 		}
 	}

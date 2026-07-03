@@ -254,19 +254,49 @@ func TestClassHandsBack(t *testing.T) {
 			"heritage",
 		},
 		{
-			"staticField",
-			"class A { static n: number = 1; }\nconsole.log(A.n);\n",
-			"static",
+			"staticAccessor",
+			"class A { static get n(): number { return 1; } }\nconsole.log(A.n);\n",
+			"static accessor",
 		},
 		{
-			"staticMethod",
-			"class A { static f(): number { return 1; } }\nconsole.log(A.f());\n",
-			"static",
+			"staticAsyncMethod",
+			"class A { static async f(): Promise<void> { } }\nA.f();\n",
+			"static async",
 		},
 		{
-			"getter",
-			"class A { x: number = 1; get twice(): number { return this.x * 2; } }\nconsole.log(new A().twice);\n",
-			"accessor",
+			"uninitializedStaticField",
+			"class A { static n: number; }\nconsole.log(A.n);\n",
+			"without an initializer",
+		},
+		{
+			"staticInitReadsName",
+			"const base: number = 5;\nclass A { static n: number = base; }\nconsole.log(A.n);\n",
+			"constant expression",
+		},
+		{
+			"thisInStaticMethod",
+			"class A { static f(): void { console.log(this); } }\nA.f();\n",
+			"outside a lowered class body",
+		},
+		{
+			"compoundThroughSetter",
+			"class A { n: number = 1; get x(): number { return this.n; } set x(v: number) { this.n = v; } }\nconst a: A = new A();\na.x += 1;\nconsole.log(a.n);\n",
+			"through the .x accessor",
+		},
+		{
+			"staticMethodAsValue",
+			"class A { static f(): number { return 1; } }\nconst g: () => number = A.f;\nconsole.log(g());\n",
+			"read as a value",
+		},
+		{
+			"methodCollidesWithSetter",
+			"class A { n: number = 0; set x(v: number) { this.n = v; } setX(m: number): void { this.n = m; } }\nconst a: A = new A();\na.setX(1);\nconsole.log(a.n);\n",
+			"setter's Go name",
+		},
+		{
+			"moduleSpeaksNewName",
+			"function NewA(): number { return 7; }\nclass A { n: number = 1; }\nconsole.log(NewA() + new A().n);\n",
+			"already speaks NewA",
 		},
 		{
 			"definiteAssignment",
@@ -301,6 +331,134 @@ func TestClassHandsBack(t *testing.T) {
 				t.Errorf("hand-back reason %q does not name %q", reason, tc.want)
 			}
 		})
+	}
+}
+
+// TestClassStaticFieldEmitsPackageVar pins the static field lowering: the
+// field becomes a package var named after the class, its initializer runs as
+// the var initializer, and reads and stores route to the var, with the
+// compound and step-of-one collapses a local's stores get.
+func TestClassStaticFieldEmitsPackageVar(t *testing.T) {
+	const src = `class A {
+  static total: number = 0;
+}
+A.total = 5;
+A.total += 3;
+A.total++;
+A.total = A.total + 1;
+console.log(A.total);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"var aTotal float64 = 0", // the static becomes a package var with the initializer
+		"aTotal = 5",             // a plain store writes the var
+		"aTotal += 3",            // a compound store keeps the compound operator
+		"aTotal++",               // the step of one collapses, on ++ and on the spelled-out form
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("static field did not print %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestClassStaticMethodEmitsFunc pins the static method lowering: the method
+// becomes a package function named after the class, and a static store inside
+// its body routes to the package var.
+func TestClassStaticMethodEmitsFunc(t *testing.T) {
+	const src = `class A {
+  static total: number = 0;
+  static bump(): number {
+    A.total = A.total + 1;
+    return A.total;
+  }
+}
+console.log(A.bump());
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func ABump() float64 {") {
+		t.Errorf("static method did not lower to a package function:\n%s", source)
+	}
+	if !strings.Contains(source, "aTotal++") {
+		t.Errorf("static store inside the static body did not collapse to the increment:\n%s", source)
+	}
+	if !strings.Contains(source, "return aTotal") {
+		t.Errorf("static read inside the static body did not route to the package var:\n%s", source)
+	}
+	if !strings.Contains(source, "ABump()") {
+		t.Errorf("static call did not dispatch to the package function:\n%s", source)
+	}
+}
+
+// TestClassStaticNameAvoidsCollision pins the static var naming rule: when the
+// module already speaks the short name, the var falls back to the class-cased
+// spelling rather than shadow it.
+func TestClassStaticNameAvoidsCollision(t *testing.T) {
+	const src = `const aTotal: number = 1;
+class A {
+  static total: number = 2;
+}
+console.log(aTotal + A.total);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "var ATotal float64 = 2") {
+		t.Errorf("static var did not fall back past the taken short name:\n%s", source)
+	}
+	if !strings.Contains(source, "aTotal + ATotal") {
+		t.Errorf("the local and the static did not keep their distinct names:\n%s", source)
+	}
+}
+
+// TestClassStaticRoutesBeforeInstance pins the routing order: the class name's
+// type shares the class symbol an instance type walks to, so a static access
+// must resolve through the class name first or B.v would read the instance
+// field.
+func TestClassStaticRoutesBeforeInstance(t *testing.T) {
+	const src = `class B {
+  v: number = 1;
+  static v: number = 2;
+}
+const b: B = new B();
+console.log(b.v + B.v);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "var bV float64 = 2") {
+		t.Errorf("static v did not become its own package var:\n%s", source)
+	}
+	if !strings.Contains(source, "b.V + bV") {
+		t.Errorf("the instance read and the static read did not split:\n%s", source)
+	}
+}
+
+// TestClassAccessorsEmitMethods pins the accessor lowering: a getter becomes a
+// plain method, a setter its Set-prefixed sibling, a property read becomes the
+// getter call, and a plain store becomes the setter call.
+func TestClassAccessorsEmitMethods(t *testing.T) {
+	const src = `class Temp {
+  c: number = 0;
+  get f(): number {
+    return this.c * 9 / 5 + 32;
+  }
+  set f(v: number) {
+    this.c = (v - 32) * 5 / 9;
+  }
+}
+const t: Temp = new Temp();
+t.f = 212;
+console.log(t.c);
+console.log(t.f);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func (t *Temp) F() float64 {") {
+		t.Errorf("getter did not lower to a plain method:\n%s", source)
+	}
+	if !strings.Contains(source, "func (t *Temp) SetF(v float64) {") {
+		t.Errorf("setter did not lower to the Set-prefixed method:\n%s", source)
+	}
+	if !strings.Contains(source, "t.SetF(212)") {
+		t.Errorf("property store did not lower to the setter call:\n%s", source)
+	}
+	if !strings.Contains(source, "t.F()") {
+		t.Errorf("property read did not lower to the getter call:\n%s", source)
 	}
 }
 
@@ -363,5 +521,43 @@ console.log(q.x);
 		"7\n"
 	if got != want {
 		t.Fatalf("class completion program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassStaticsAccessorsRun builds and runs the statics-and-accessors slice
+// end to end: a setter store and getter read round-trip through the instance,
+// and a static method mutates the static field the class owns, printing what
+// node prints.
+func TestClassStaticsAccessorsRun(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `class A {
+  static total: number = 0;
+  n: number = 1;
+  static bump(): number {
+    A.total = A.total + 1;
+    return A.total;
+  }
+  get twice(): number {
+    return this.n * 2;
+  }
+  set twice(v: number) {
+    this.n = v / 2;
+  }
+}
+const a: A = new A();
+a.twice = 10;
+console.log(a.twice);
+console.log(A.bump());
+console.log(A.total);
+`
+	got := runProgramGo(t, src)
+	want := "10\n" +
+		"1\n" +
+		"1\n"
+	if got != want {
+		t.Fatalf("statics and accessors program printed %q, want %q", got, want)
 	}
 }

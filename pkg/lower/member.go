@@ -60,22 +60,45 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, nil
 	}
+	// A static read A.total lowers to the package var the static field became.
+	// The receiver here is the class name itself, whose type shares the class
+	// symbol an instance type walks to, so this routes before the instance path
+	// below or the read would resolve against the instance fields.
+	if obj.Kind() == frontend.NodeIdentifier {
+		if info, ok := r.classNameRef(obj); ok {
+			if f, ok := info.staticByName(prop); ok {
+				return ident(f.goName), nil
+			}
+			if _, isMethod := info.staticMethodByName(prop); isMethod {
+				return nil, &NotYetLowerable{Reason: "a static method of class " + info.name + " read as a value is a later slice"}
+			}
+			return nil, &NotYetLowerable{Reason: "class " + info.name + " has no static ." + prop + " this slice lowers"}
+		}
+	}
 	// A field read on a class instance, this.x inside a class body or p.x on an
-	// instance, lowers to the Go struct field the class declared. It routes before
-	// the length, size, and interned-shape paths so a class whose fields happen to
-	// spell one of those fingerprints is still read as the class it is. A method
-	// read without a call is a bound-function value, a later slice.
+	// instance, lowers to the Go struct field the class declared, and a getter
+	// read to the method call the accessor became. It routes before the length,
+	// size, and interned-shape paths so a class whose fields happen to spell one
+	// of those fingerprints is still read as the class it is. A method read
+	// without a call is a bound-function value, a later slice.
 	if info, ok := r.classReceiver(obj); ok {
-		f, ok := info.fieldByName(prop)
-		if !ok {
+		f, isField := info.fieldByName(prop)
+		g, isGetter := info.getterByName(prop)
+		if !isField && !isGetter {
 			if _, isMethod := info.methodByName(prop); isMethod {
 				return nil, &NotYetLowerable{Reason: "a method of class " + info.name + " read as a value is a later slice"}
+			}
+			if _, isSetter := info.setterByName(prop); isSetter {
+				return nil, &NotYetLowerable{Reason: "reading the write-only accessor ." + prop + " of class " + info.name + " is a later slice"}
 			}
 			return nil, &NotYetLowerable{Reason: "class " + info.name + " has no property ." + prop + " this slice lowers"}
 		}
 		recv, err := r.lowerExpr(obj)
 		if err != nil {
 			return nil, err
+		}
+		if isGetter {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(g.goName)}}, nil
 		}
 		return &ast.SelectorExpr{X: recv, Sel: ident(f.goName)}, nil
 	}
