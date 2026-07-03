@@ -701,6 +701,27 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: inner}}},
 			}, nil
 		}
+		if resultKw == "error" {
+			// A throwing callback returns error to Go: the bento callback returns nothing,
+			// so the wrapper runs it inside bridge.CallbackError, which returns nil when it
+			// returns normally and the thrown value converted to a Go error when it throws
+			// (section 7.6). The Go library calling the wrapper sees the failure as its own
+			// error return, the inverse of the (T, error) result crossing.
+			r.requireImport(bridgePkg)
+			runner := &ast.FuncLit{
+				Type: &ast.FuncType{Params: &ast.FieldList{}},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: inner}}},
+			}
+			return &ast.FuncLit{
+				Type: &ast.FuncType{
+					Params:  &ast.FieldList{List: fields},
+					Results: &ast.FieldList{List: []*ast.Field{{Type: ident("error")}}},
+				},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+					&ast.CallExpr{Fun: sel("bridge", "CallbackError"), Args: []ast.Expr{runner}},
+				}}}},
+			}, nil
+		}
 		// The bento result crosses back to the Go return type, the same bento-to-Go
 		// crossing an argument takes, so a Go caller sees the return type it declared.
 		goRet, err := r.marshalArgToGo(resultKw, "", goimport.DefinedConv{}, inner, nil)
