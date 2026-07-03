@@ -174,6 +174,14 @@ func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
 	prevSB := r.strBuilders
 	r.strBuilders = nil
 	defer func() { r.strBuilders = prevSB }()
+
+	// The bigint ownership set is scoped to this body the same way, so a
+	// self-referential bigint update anywhere in the body mutates in place exactly
+	// when this body proves the local unshared, and one function's owned locals do
+	// not leak into another.
+	prevBig := r.bigOwned
+	r.bigOwned = r.bigOwnedLocalsOf(r.prog.Children(block))
+	defer func() { r.bigOwned = prevBig }()
 	body, err := r.lowerBlock(block)
 	if err != nil {
 		return nil, err
@@ -481,6 +489,9 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 	switch n.Kind() {
 	case frontend.NodeBinaryExpression:
 		if stmt, ok, err := r.bytesElementAssign(n); ok || err != nil {
+			return stmt, err
+		}
+		if stmt, ok, err := r.bigIntInPlaceAssign(n); ok || err != nil {
 			return stmt, err
 		}
 		assign, err := r.lowerAssign(n)
@@ -1416,6 +1427,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Boolean" && r.isAmbientGlobal(kids[0]) {
 		return r.booleanCoercion(kids[1:])
 	}
+	// BigInt(x) called as a function converts a number, string, or boolean to a
+	// bigint, and routes the same way as the other three coercions before the user
+	// path.
+	if r.prog.Text(kids[0]) == "BigInt" && r.isAmbientGlobal(kids[0]) {
+		return r.bigIntCoercion(kids[1:])
+	}
 	// parseFloat is a bare ambient global that reads a number from the front of a
 	// string, so it routes like the coercions before the user path.
 	if r.prog.Text(kids[0]) == "parseFloat" && r.isAmbientGlobal(kids[0]) {
@@ -2170,6 +2187,12 @@ func (r *Renderer) numberCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	case r.isBool(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{lowered}}, nil
+	case r.isBigInt(arg):
+		// Number(b) rounds the bigint to the nearest float64 the way JavaScript
+		// does, losing low bits past 2^53 and saturating to an infinity past the
+		// float64 range; value.BigIntToNumber is that rounding.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BigIntToNumber"), Args: []ast.Expr{lowered}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Number() on this argument type is a later slice"}
 	}
@@ -2200,6 +2223,10 @@ func (r *Renderer) booleanCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	case r.isString(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "StringToBool"), Args: []ast.Expr{lowered}}, nil
+	case r.isBigInt(arg):
+		// Boolean(b) is the bigint truthiness: only 0n is false, a sign test.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BigIntToBool"), Args: []ast.Expr{lowered}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Boolean() on this argument type is a later slice"}
 	}
@@ -2404,6 +2431,18 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.UnaryExpr{Op: token.NOT, X: x}, nil
 	case "~":
+		// A bigint ~ is infinite two's complement, -(x+1) with no 32-bit window, which
+		// is exactly big.Int's Not, so it lowers to new(big.Int).Not(x), a fresh value
+		// the way every bigint operator returns one.
+		if r.isBigInt(operand) {
+			x, err := r.lowerExpr(operand)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport("math/big")
+			fresh := &ast.CallExpr{Fun: ident("new"), Args: []ast.Expr{sel("big", "Int")}}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: fresh, Sel: ident("Not")}, Args: []ast.Expr{x}}, nil
+		}
 		// Bitwise NOT is the unary member of the bitwise family: it coerces its
 		// operand to a 32-bit integer, complements it, and returns the result as a
 		// number, so it lowers to float64(^value.ToInt32(x)), the same coercion the
@@ -2842,20 +2881,40 @@ func (r *Renderer) numericLiteral(n frontend.Node) (ast.Expr, error) {
 // same value (section 4). The trailing n marks the type and is dropped, digit
 // separators are stripped, and a radix prefix (0x, 0o, 0b) is read, the same grammar
 // a numeric literal accepts minus the fraction and exponent forms a bigint cannot
-// take. A value that fits an int64 becomes big.NewInt(v), the readable one-call form;
-// a literal past the 64-bit range is a later slice and hands back rather than emit a
-// less direct construction.
+// take. A value that fits an int64 becomes big.NewInt(v), the readable one-call form.
+// A wider literal has no one-call construction, so it is interned as a package-level
+// var parsed once at init by value.BigIntMustParse, and the site reads the var; two
+// sites naming the same value share one var. The interned var is shared, so a read
+// of it is never a fresh value, which bigExprIsFresh accounts for.
 func (r *Renderer) bigIntLiteral(n frontend.Node) (ast.Expr, error) {
 	text := r.prog.Text(n)
-	v, ok := bigIntLiteralInt64(text)
+	v, ok := bigIntLiteralValue(text)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "bigint literal " + text + " does not fit int64, a later slice"}
+		return nil, &NotYetLowerable{Reason: "bigint literal " + text + " is not a well-formed integer"}
 	}
-	r.requireImport("math/big")
-	return &ast.CallExpr{
-		Fun:  sel("big", "NewInt"),
-		Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.FormatInt(v, 10)}},
-	}, nil
+	if v.IsInt64() {
+		r.requireImport("math/big")
+		return &ast.CallExpr{
+			Fun:  sel("big", "NewInt"),
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.FormatInt(v.Int64(), 10)}},
+		}, nil
+	}
+	return ident(r.internBigLit(v.String())), nil
+}
+
+// internBigLit returns the package-level var name holding the wide bigint literal
+// with these decimal digits, creating it on first use. The vars are named bigLit1,
+// bigLit2, ... in first-use order, and RenderProgram emits one var declaration per
+// entry, so a constant named in ten places parses once at init.
+func (r *Renderer) internBigLit(decimal string) string {
+	if name, ok := r.bigLits[decimal]; ok {
+		return name
+	}
+	name := "bigLit" + itoa(len(r.bigLitOrder)+1)
+	r.bigLits[decimal] = name
+	r.bigLitOrder = append(r.bigLitOrder, decimal)
+	r.requireImport(valuePkg)
+	return name
 }
 
 // binaryExpr lowers a binary expression on two operands of the same primitive
@@ -3103,12 +3162,16 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 }
 
 // bigIntBinary lowers a binary operator on two bigints to the *big.Int form with
-// the same meaning. The arithmetic operators map to a fresh new(big.Int).Op(l, r):
-// Add, Sub, Mul, Quo (truncated toward zero, the way BigInt / divides), and Rem
-// (the sign of the dividend, the way BigInt % takes it). The relational operators
-// map to a Cmp against zero, and === / !== to Cmp == 0 / != 0, so two bigints of the
-// same value compare equal regardless of which allocation holds them. The bitwise
-// operators and ** are a later slice and hand back.
+// the same meaning. The arithmetic and bitwise operators map to a fresh
+// new(big.Int).Op(l, r): Add, Sub, Mul, Quo (truncated toward zero, the way BigInt
+// / divides), Rem (the sign of the dividend, the way BigInt % takes it), and
+// And/Or/Xor, whose big.Int forms compute on the infinite two's complement a
+// negative JavaScript bigint means. The relational operators map to a Cmp against
+// zero, and === / !== to Cmp == 0 / != 0, so two bigints of the same value compare
+// equal regardless of which allocation holds them. ** and the shifts go through
+// value helpers because each has a throw path (a negative exponent, a result past
+// the size cap) and the shifts a sign-of-count rule big.Int does not carry, so the
+// program defers the uncaught reporter.
 func (r *Renderer) bigIntBinary(opText string, left, right frontend.Node) (ast.Expr, error) {
 	l, err := r.lowerExpr(left)
 	if err != nil {
@@ -3126,6 +3189,11 @@ func (r *Renderer) bigIntBinary(opText string, left, right frontend.Node) (ast.E
 			Args: []ast.Expr{l, rr},
 		}, nil
 	}
+	if helper, ok := bigIntHelperOp(opText); ok {
+		r.usesThrow = true
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", helper), Args: []ast.Expr{l, rr}}, nil
+	}
 	cmp := &ast.CallExpr{Fun: &ast.SelectorExpr{X: l, Sel: ident("Cmp")}, Args: []ast.Expr{rr}}
 	if relOp, ok := relationalToken(opText); ok {
 		return &ast.BinaryExpr{X: cmp, Op: relOp, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}}, nil
@@ -3139,10 +3207,11 @@ func (r *Renderer) bigIntBinary(opText string, left, right frontend.Node) (ast.E
 	return nil, &NotYetLowerable{Reason: "bigint operator " + opText + " is a later slice"}
 }
 
-// bigIntArithMethod maps a bigint arithmetic operator to the *big.Int method that
-// computes it, or reports false for an operator that is not one of the five basic
-// arithmetic forms. Quo and Rem are the truncated-toward-zero pair, which match the
-// way BigInt / and % behave, so no sign correction is needed.
+// bigIntArithMethod maps a bigint operator to the *big.Int method that computes
+// it, or reports false for an operator with no direct method form. Quo and Rem are
+// the truncated-toward-zero pair, which match the way BigInt / and % behave, so no
+// sign correction is needed; And, Or, and Xor compute on big.Int's infinite two's
+// complement, which is exactly the bit model a negative JavaScript bigint means.
 func bigIntArithMethod(opText string) (string, bool) {
 	switch opText {
 	case "+":
@@ -3155,6 +3224,29 @@ func bigIntArithMethod(opText string) (string, bool) {
 		return "Quo", true
 	case "%":
 		return "Rem", true
+	case "&":
+		return "And", true
+	case "|":
+		return "Or", true
+	case "^":
+		return "Xor", true
+	default:
+		return "", false
+	}
+}
+
+// bigIntHelperOp maps a bigint operator to the value helper that computes it, for
+// the operators a bare *big.Int method cannot express: ** throws on a negative
+// exponent, and the shifts reverse direction on a negative count and cap the
+// result size, so each is a small runtime function rather than inline Go.
+func bigIntHelperOp(opText string) (string, bool) {
+	switch opText {
+	case "**":
+		return "BigIntPow", true
+	case "<<":
+		return "BigIntLsh", true
+	case ">>":
+		return "BigIntRsh", true
 	default:
 		return "", false
 	}

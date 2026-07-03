@@ -112,6 +112,13 @@ func NewRangeError(message BStr) *Error {
 	return &Error{name: FromGoString("RangeError"), message: message}
 }
 
+// NewSyntaxError constructs a SyntaxError, the error a runtime parse raises: a
+// BigInt(s) whose string is not an integer literal, or a JSON.parse on malformed
+// input once its throw path lands.
+func NewSyntaxError(message BStr) *Error {
+	return &Error{name: FromGoString("SyntaxError"), message: message}
+}
+
 // Caught converts a recovered panic payload into the *Error a catch binds. A
 // thrown *Error binds unchanged, so identity is preserved; a boundary Thrown (a
 // go: failure, a range check) binds as an Error carrying its name and message, so a
