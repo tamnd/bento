@@ -56,6 +56,32 @@ func SumAll(pts ...Point) int {
 	return total
 }
 
+// SumSlice adds the coordinates of every Point in a slice, so a bento array of
+// objects crosses in as a Go []Point parameter and the call reads each element's
+// integer fields back on the Go side. This is the argument-direction inverse of
+// Diagonal's []Point result.
+func SumSlice(pts []Point) int {
+	total := 0
+	for _, p := range pts {
+		total += p.X + p.Y
+	}
+	return total
+}
+
+// DescribeAll renders every Profile in a slice to one comma-joined string, so a
+// bento array of mixed-field objects crosses in as a Go []Profile parameter and the
+// call reads a string, a numeric, and a boolean field off each element.
+func DescribeAll(us []Profile) string {
+	out := ""
+	for i, u := range us {
+		if i > 0 {
+			out += ", "
+		}
+		out += Describe(u)
+	}
+	return out
+}
+
 // Diagonal returns the first n points on the line y=x, so a Go []Point result
 // crosses back as a bento array of read-only struct boxes the caller reads element
 // by element.
