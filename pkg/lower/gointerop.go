@@ -417,6 +417,46 @@ func (r *Renderer) guardStructSliceResult(elem string, goSlice ast.Expr, call fr
 	}, nil
 }
 
+// structArgConv builds the closure a struct argument crosses through: func(o
+// *interned) alias.Type { return alias.Type{...fields...} }, reading each exported
+// field off the boxed object and marshaling it by its keyword into the matching Go
+// field (section 6.7). The box is the interned struct the object's shape interns
+// to, named by boxType, so the field the closure reads and the Go field it fills
+// line up by name. The single-struct argument calls this closure directly on the
+// box; the []struct argument hands it to bridge.SliceToGo to run over each element,
+// so both marshal a struct the same way.
+func (r *Renderer) structArgConv(elem string, boxType frontend.Type) (*ast.FuncLit, error) {
+	path, typeName, fields := goimport.SplitStructElem(elem)
+	interned, err := r.decls.internStruct(r, boxType)
+	if err != nil {
+		return nil, err
+	}
+	alias := r.requireGoImport(path)
+	elts := make([]ast.Expr, 0, len(fields))
+	for _, f := range fields {
+		boxField, ok := exportedField(f.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "go: struct field " + f.Name + " is not a Go identifier"}
+		}
+		read := &ast.SelectorExpr{X: ident("o"), Sel: ident(boxField)}
+		val, err := r.marshalArgToGo(f.Keyword, "", goimport.DefinedConv{}, read, nil)
+		if err != nil {
+			return nil, err
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(f.Name), Value: val})
+	}
+	goStruct := sel(alias, typeName)
+	return &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("o")}, Type: star(ident(interned))}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: goStruct}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.CompositeLit{Type: goStruct, Elts: elts},
+		}}}},
+	}, nil
+}
+
 // marshalCallArgs lowers and marshals each argument of a go: call against the Go
 // signature, returning the positional Go arguments the call passes. A fixed
 // signature demands an exact argument count. A variadic signature (section 6.9)
@@ -666,38 +706,33 @@ func (r *Renderer) marshalArgToGo(goType, elem string, conv goimport.DefinedConv
 		if argNode == nil {
 			return nil, &NotYetLowerable{Reason: "go: a struct argument must be a top-level argument"}
 		}
-		path, typeName, fields := goimport.SplitStructElem(elem)
-		interned, err := r.decls.internStruct(r, r.prog.TypeAt(argNode))
+		conv, err := r.structArgConv(elem, r.prog.TypeAt(argNode))
 		if err != nil {
 			return nil, err
 		}
-		alias := r.requireGoImport(path)
-		elts := make([]ast.Expr, 0, len(fields))
-		for _, f := range fields {
-			boxField, ok := exportedField(f.Name)
-			if !ok {
-				return nil, &NotYetLowerable{Reason: "go: struct field " + f.Name + " is not a Go identifier"}
-			}
-			read := &ast.SelectorExpr{X: ident("o"), Sel: ident(boxField)}
-			val, err := r.marshalArgToGo(f.Keyword, "", goimport.DefinedConv{}, read, nil)
-			if err != nil {
-				return nil, err
-			}
-			elts = append(elts, &ast.KeyValueExpr{Key: ident(f.Name), Value: val})
+		return &ast.CallExpr{Fun: conv, Args: []ast.Expr{arg}}, nil
+	}
+	if goType == "structslice" {
+		// A bento array of objects crosses into a Go slice of structs element by element,
+		// the inverse of the []struct result: bridge.SliceToGo runs the same per-object
+		// closure the single-struct argument builds over the array and collects the Go
+		// structs into a fresh slice (sections 6.4, 6.7). The element boxes are the same
+		// interned struct the array's element type interns to, so the closure reads and
+		// fills fields by name exactly as a lone struct argument would. The array crosses
+		// only as a top-level argument, so a missing argument node hands back.
+		if argNode == nil {
+			return nil, &NotYetLowerable{Reason: "go: a []struct argument must be a top-level argument"}
 		}
-		goStruct := sel(alias, typeName)
-		return &ast.CallExpr{
-			Fun: &ast.FuncLit{
-				Type: &ast.FuncType{
-					Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("o")}, Type: star(ident(interned))}}},
-					Results: &ast.FieldList{List: []*ast.Field{{Type: goStruct}}},
-				},
-				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
-					&ast.CompositeLit{Type: goStruct, Elts: elts},
-				}}}},
-			},
-			Args: []ast.Expr{arg},
-		}, nil
+		et, ok := r.prog.ElementType(r.prog.TypeAt(argNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "go: a []struct argument must have an array element type"}
+		}
+		conv, err := r.structArgConv(elem, et)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(bridgePkg)
+		return &ast.CallExpr{Fun: sel("bridge", "SliceToGo"), Args: []ast.Expr{arg, conv}}, nil
 	}
 	if goType == "any" {
 		// A Go any parameter takes a boxed bento value: bridge.AnyToGo unwraps a scalar to

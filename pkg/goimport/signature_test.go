@@ -231,15 +231,31 @@ func F(b []uint8) int { return 0 }`, "F")
 	}
 }
 
-// TestClassifyRejectsSliceOfComposite proves a slice whose element is not a plain
-// basic (a slice of a struct, a slice of a slice) is not covered by this slice, so it
-// clears OK.
-func TestClassifyRejectsSliceOfComposite(t *testing.T) {
-	if sig := sigOf(t, `package p
+// TestClassifyStructSliceParam proves a slice whose element is a struct with exported
+// basic fields classifies as the structslice parameter crossing, carrying the element
+// struct's import path, Go name, and fields so the lowerer marshals a bento array of
+// objects into the Go slice of structs (sections 6.4, 6.7).
+func TestClassifyStructSliceParam(t *testing.T) {
+	sig := sigOf(t, `package p
 type T struct{ X int }
-func F(t []T) int { return 0 }`, "F"); sig.OK {
-		t.Error("a slice of a struct classified as lowerable, want a hand-back")
+func F(t []T) int { return 0 }`, "F")
+	if !sig.OK {
+		t.Fatal("a slice of a struct classified as not lowerable")
 	}
+	if want := []string{"structslice"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	path, name, fields := SplitStructElem(sig.ParamElem[0])
+	if name != "T" || path == "" || len(fields) != 1 || fields[0].Name != "X" {
+		t.Errorf("param struct element = %q.%q fields %v, want a package path and T{X}", path, name, fields)
+	}
+}
+
+// TestClassifyRejectsSliceOfComposite proves a slice whose element is itself a
+// composite the crossings do not reach (a slice of a slice) is not covered, so it
+// clears OK. A slice of a struct is the structslice crossing, which
+// TestClassifyStructSliceParam pins, so it is not in this reject set.
+func TestClassifyRejectsSliceOfComposite(t *testing.T) {
 	if sig := sigOf(t, `package p
 func F(m [][]int) int { return 0 }`, "F"); sig.OK {
 		t.Error("a slice of a slice classified as lowerable, want a hand-back")

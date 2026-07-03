@@ -241,6 +241,9 @@ func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, 
 	if e, good := sliceCrossing(t); good {
 		return "slice", DefinedConv{}, e, true
 	}
+	if path, name, fields, good := sliceStructCrossing(t); good {
+		return "structslice", DefinedConv{}, StructElem(path, name, fields), true
+	}
 	if key, val, good := mapCrossing(t); good {
 		return "map", DefinedConv{}, MapElem(key, val), true
 	}
