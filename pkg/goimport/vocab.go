@@ -1,5 +1,7 @@
 package goimport
 
+import "strings"
+
 // This file is the bento:go vocabulary module of document 16: the small library
 // of TypeScript types that model Go concepts the language does not have natively.
 // Every generated .d.ts imports the helpers it needs from "bento:go" (section
@@ -18,6 +20,21 @@ const VocabularyModule = "bento:go"
 // imports GoReader or GoChannel type-checks, and it is the documentation of the
 // marshaling contract each helper stands for (sections 6.8, 6.13, 7.7, 8, 10).
 func Vocabulary() string { return vocabularyDTS }
+
+// AmbientModule returns the vocabulary wrapped as a TypeScript ambient module
+// declaration for "bento:go". This is the form the checker reads so an
+// `import type { GoReader } from "bento:go"` in a generated .d.ts resolves to a
+// real module rather than a missing one. The frontend serves it alongside the
+// Node ambient declarations, so a program that pulls in a go: package type-checks
+// without the vocabulary living on disk.
+//
+// A `declare module` block is already an ambient context, so the top-level
+// `declare` modifiers the standalone vocabulary carries are dropped here; leaving
+// them in is a redundant-modifier error under a strict checker.
+func AmbientModule() string {
+	body := strings.ReplaceAll(vocabularyDTS, "\nexport declare ", "\nexport ")
+	return "declare module \"" + VocabularyModule + "\" {\n" + body + "}\n"
+}
 
 const vocabularyDTS = `// The bento:go vocabulary: TypeScript types for Go concepts JavaScript lacks.
 // Generated .d.ts files for go: imports draw their helper names from here.
