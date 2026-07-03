@@ -158,7 +158,7 @@ func TestCallbackErrorRepanicsRuntimePanic(t *testing.T) {
 			t.Fatal("CallbackError swallowed a non-throw runtime panic")
 		}
 	}()
-	CallbackError(func() { panic("not a thrown value") })
+	_ = CallbackError(func() { panic("not a thrown value") })
 }
 
 // TestGuardReturnsValueWhenNoPanic proves the boundary guard is transparent on the
