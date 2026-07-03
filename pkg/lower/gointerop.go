@@ -201,18 +201,85 @@ func (r *Renderer) goImportCallBySig(b goBuiltin, sig goimport.FuncSig, argNodes
 		r.requireImport(bridgePkg)
 		if len(sig.Results) == 0 {
 			// error-only: bridge.Check(call), valid where the void call is a statement.
-			return &ast.CallExpr{Fun: sel("bridge", "Check"), Args: []ast.Expr{goCall}}, nil
+			return r.guardVoid(&ast.CallExpr{Fun: sel("bridge", "Check"), Args: []ast.Expr{goCall}}), nil
 		}
 		must := &ast.CallExpr{Fun: sel("bridge", "Must"), Args: []ast.Expr{goCall}}
-		return r.marshalResultFromGo(sig.Results[0], must)
+		marshaled, err := r.marshalResultFromGo(sig.Results[0], must)
+		if err != nil {
+			return nil, err
+		}
+		return r.guardExpr(marshaled, sig.Results[0]), nil
 	}
 	if len(sig.Results) == 0 {
 		// A Go function with no value result lowers to the bare call, valid where the
 		// TypeScript call is used as a statement, which is the only place a void call
 		// type-checks.
-		return goCall, nil
+		return r.guardVoid(goCall), nil
 	}
-	return r.marshalResultFromGo(sig.Results[0], goCall)
+	marshaled, err := r.marshalResultFromGo(sig.Results[0], goCall)
+	if err != nil {
+		return nil, err
+	}
+	return r.guardExpr(marshaled, sig.Results[0]), nil
+}
+
+// guardExpr wraps a lowered go: call result in the boundary recover of section
+// 12.3, so a panic from the Go library the call entered becomes a catchable thrown
+// GoError rather than an uncaught Go traceback. The guard closure returns the bento
+// Go type the marshaled result evaluates to (a string result is a value.BStr, a
+// boolean is a bool, every number is a float64), which the go: keyword names. A
+// guarded call can raise, so this records usesThrow to defer the top-level uncaught
+// reporter, which is what keeps the value model imported for the value.BStr result
+// type.
+func (r *Renderer) guardExpr(expr ast.Expr, goResult string) ast.Expr {
+	r.usesThrow = true
+	r.requireImport(bridgePkg)
+	return &ast.CallExpr{
+		Fun: sel("bridge", "Guard"),
+		Args: []ast.Expr{
+			&ast.FuncLit{
+				Type: &ast.FuncType{
+					Params:  &ast.FieldList{},
+					Results: &ast.FieldList{List: []*ast.Field{{Type: r.bentoResultType(goResult)}}},
+				},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{expr}}}},
+			},
+		},
+	}
+}
+
+// guardVoid is the statement form of guardExpr, wrapping a go: call that returns
+// nothing (a void Go function or the error-only bridge.Check) in bridge.Guard0 so a
+// panic from the call is converted the same way. The result is itself a call
+// expression, valid in the statement position a void go: call already occupies.
+func (r *Renderer) guardVoid(call ast.Expr) ast.Expr {
+	r.usesThrow = true
+	r.requireImport(bridgePkg)
+	return &ast.CallExpr{
+		Fun: sel("bridge", "Guard0"),
+		Args: []ast.Expr{
+			&ast.FuncLit{
+				Type: &ast.FuncType{Params: &ast.FieldList{}},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}},
+			},
+		},
+	}
+}
+
+// bentoResultType names the Go type a marshaled go: result evaluates to, the type
+// the guard closure returns: a string result crosses to a value.BStr, a boolean to
+// a bool, and every numeric result widens to a float64 bento number. The value
+// model is already imported whenever a call is guarded, because guarding records
+// usesThrow and the uncaught reporter lives in the value package.
+func (r *Renderer) bentoResultType(goResult string) ast.Expr {
+	switch goResult {
+	case "string":
+		return sel("value", "BStr")
+	case "bool":
+		return ident("bool")
+	default:
+		return ident("float64")
+	}
 }
 
 // marshalArgToGo wraps a lowered argument in the crossing its Go parameter type
@@ -317,9 +384,10 @@ func (r *Renderer) goImportCallByType(b goBuiltin, call frontend.Node, argNodes 
 	switch {
 	case rt.Flags&frontend.TypeString != 0:
 		r.requireImport(bridgePkg)
-		return &ast.CallExpr{Fun: sel("bridge", "StringFromGo"), Args: []ast.Expr{goCall}}, nil
+		fromGo := &ast.CallExpr{Fun: sel("bridge", "StringFromGo"), Args: []ast.Expr{goCall}}
+		return r.guardExpr(fromGo, "string"), nil
 	case rt.Flags&frontend.TypeBoolean != 0:
-		return goCall, nil
+		return r.guardExpr(goCall, "bool"), nil
 	default:
 		return nil, &NotYetLowerable{Reason: "go: call result of this type is a later slice"}
 	}
