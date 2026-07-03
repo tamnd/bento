@@ -29,9 +29,11 @@ type Program struct {
 // RenderProgram lowers one entry source file to a runnable Go program. Top-level
 // function declarations become package-level Go functions, and the remaining
 // top-level statements become the body of main in source order, so the module's
-// side effects run when the binary runs. A construct the statement subset does
-// not cover, or a top-level form that is neither a function nor a lowerable
-// statement (an import, an export, a class), hands back.
+// side effects run when the binary runs. Top-level classes become a struct, a
+// NewX constructor, and pointer-receiver methods (classes.go). A construct the
+// statement subset does not cover, or a top-level form that is neither a
+// function, a class, nor a lowerable statement (an import, an export), hands
+// back.
 //
 // The module's own top-level bindings are locals of main, so a top-level function
 // that reads one is not yet supported: the function is a separate Go declaration
@@ -47,6 +49,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	if err := r.collectNodeImports(entry); err != nil {
 		return Program{}, err
 	}
+	// Classes register before any body lowers, the same hoisting the imports get,
+	// so a function above a class can construct its instances.
+	if err := r.collectClasses(entry); err != nil {
+		return Program{}, err
+	}
 
 	var funcs []ast.Decl
 	var mainBody []frontend.Node
@@ -58,6 +65,10 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 				return Program{}, err
 			}
 			funcs = append(funcs, fd)
+		case frontend.NodeClassDeclaration:
+			// Already registered by collectClasses; the declarations render after
+			// every body lowers so a method body's interned shapes are collected.
+			continue
 		case frontend.NodeInterfaceDeclaration, frontend.NodeTypeAliasDeclaration:
 			// Type-level declarations carry no runtime code, so they emit nothing.
 			continue
@@ -110,6 +121,14 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		Body: &ast.BlockStmt{List: stmts},
 	}
 
+	// Class declarations render last so every use site has already lowered, but
+	// they print before the functions: each class emits its struct, constructor,
+	// and methods together, the order a hand-written Go file keeps.
+	classDecls, err := r.renderClasses()
+	if err != nil {
+		return Program{}, err
+	}
+
 	file := &ast.File{Name: ident("main")}
 	if specs := r.importSpecs(); len(specs) > 0 {
 		file.Decls = append(file.Decls, importDecl(specs))
@@ -123,6 +142,7 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// program's life. They follow the types and precede the code like any other
 	// package-level state.
 	file.Decls = append(file.Decls, r.bigLitDecls()...)
+	file.Decls = append(file.Decls, classDecls...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
 
