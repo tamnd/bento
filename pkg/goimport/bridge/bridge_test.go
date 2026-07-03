@@ -231,6 +231,72 @@ func TestSliceRoundTripThroughGo(t *testing.T) {
 	}
 }
 
+func TestMapToGoMarshalsEachEntry(t *testing.T) {
+	// A bento Map crosses to a Go map, entry by entry, through the key and value
+	// conversions the caller supplies: here each bento string key becomes a Go string
+	// and each number value a Go int.
+	m := value.NewStringMap[float64]()
+	m.Set(StringFromGo("a"), 1)
+	m.Set(StringFromGo("b"), 2)
+	got := MapToGo(m, StringToGo, func(v float64) int { return int(v) })
+	if len(got) != 2 || got["a"] != 1 || got["b"] != 2 {
+		t.Errorf("map = %v, want map[a:1 b:2]", got)
+	}
+}
+
+func TestMapToGoNilMapIsNilMap(t *testing.T) {
+	// A nil bento Map (which the map model never produces, but the crossing tolerates)
+	// becomes a nil Go map, so a Go function that branches on nil sees it.
+	var m *value.Map[value.BStr, float64]
+	if got := MapToGo(m, StringToGo, func(v float64) int { return int(v) }); got != nil {
+		t.Errorf("nil map crossed to %v, want a nil Go map", got)
+	}
+}
+
+func TestMapFromGoFillsTheDestination(t *testing.T) {
+	// A Go map crosses to the empty bento Map its key kind fixes, entry by entry,
+	// through the conversions the caller supplies. The destination carries the string
+	// key equality, so the two Go keys land as two distinct bento keys.
+	got := MapFromGo(map[string]int{"a": 1, "b": 2}, value.NewStringMap[float64](), StringFromGo, func(n int) float64 { return float64(n) })
+	if got.Size() != 2 {
+		t.Fatalf("map size = %v, want 2", got.Size())
+	}
+	if v := got.Get(StringFromGo("a")); v.IsUndefined() || v.Get() != 1 {
+		t.Errorf("get(a) = %+v, want present 1", v)
+	}
+	if v := got.Get(StringFromGo("b")); v.IsUndefined() || v.Get() != 2 {
+		t.Errorf("get(b) = %+v, want present 2", v)
+	}
+}
+
+func TestMapFromGoNilIsEmptyMap(t *testing.T) {
+	// A nil Go map crosses as the empty destination map, because a bento Map has no nil,
+	// so a Go function returning nil and one returning an empty map both hand back an
+	// empty Map.
+	got := MapFromGo(map[string]int(nil), value.NewStringMap[float64](), StringFromGo, func(n int) float64 { return float64(n) })
+	if got == nil || got.Size() != 0 {
+		t.Errorf("nil map crossed to %+v, want an empty Map", got)
+	}
+}
+
+func TestMapRoundTripThroughGo(t *testing.T) {
+	// A bento Map to a Go map and back is the identity on its entries, the shape a
+	// map[K]V parameter and a map[K]V result share.
+	m := value.NewStringMap[float64]()
+	m.Set(StringFromGo("one"), 1)
+	m.Set(StringFromGo("two"), 2)
+	back := MapFromGo(MapToGo(m, StringToGo, func(v float64) int { return int(v) }), value.NewStringMap[float64](), StringFromGo, func(n int) float64 { return float64(n) })
+	if back.Size() != 2 {
+		t.Fatalf("round trip size = %v, want 2", back.Size())
+	}
+	if v := back.Get(StringFromGo("one")); v.Get() != 1 {
+		t.Errorf("get(one) = %v, want 1", v.Get())
+	}
+	if v := back.Get(StringFromGo("two")); v.Get() != 2 {
+		t.Errorf("get(two) = %v, want 2", v.Get())
+	}
+}
+
 func TestBytesToGoCopiesTheBuffer(t *testing.T) {
 	// The default crossing copies, so a Go callee that keeps and mutates the slice
 	// cannot reach back into bento's buffer (section 7.3).

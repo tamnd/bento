@@ -617,6 +617,71 @@ console.log(words.length);
 	}
 }
 
+// TestGoImportMapResultEmitsEntryMarshaling pins that a go: call returning a map of
+// basics lowers to bridge.MapFromGo over the Go call, with a per-entry key and value
+// closure applying each element's own crossing into the empty bento Map its key kind
+// fixes, and that a map argument lowers to bridge.MapToGo the same way (section 6.5).
+func TestGoImportMapResultEmitsEntryMarshaling(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the checker needs it to generate go: declarations")
+	}
+	const src = `import { Counts, Total } from "go:github.com/tamnd/bento/pkg/goimport/mapfixture";
+const counts = Counts("a b a");
+console.log(Total(counts));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "bridge.MapFromGo(mapfixture.Counts(") {
+		t.Errorf("a map result did not lower to entry marshaling:\n%s", source)
+	}
+	if !strings.Contains(source, "value.NewStringMap[float64]()") {
+		t.Errorf("a map result did not build the string-keyed bento Map:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.MapToGo(") {
+		t.Errorf("a map argument did not lower to entry marshaling:\n%s", source)
+	}
+	if !strings.Contains(source, "bridge.Guard(func() *value.Map[value.BStr, float64]") {
+		t.Errorf("a map result was not guarded with the Map result type:\n%s", source)
+	}
+}
+
+// TestGoImportMapRoundTripRuns proves the map crossing end to end: a program that
+// counts words with mapfixture.Counts and sums the counts back with mapfixture.Total
+// prints the total, so the map[string]int result, the bento Map consumption, and the
+// map[string]int argument are all proven against a real build.
+func TestGoImportMapRoundTripRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: map test builds and runs generated Go")
+	}
+	const src = `import { Counts, Total } from "go:github.com/tamnd/bento/pkg/goimport/mapfixture";
+const counts = Counts("a b a c b a");
+console.log(Total(counts));
+`
+	got := runProgramGo(t, src)
+	if want := "6\n"; got != want {
+		t.Fatalf("go: map program printed %q, want %q", got, want)
+	}
+}
+
+// TestGoImportMapSizeRuns proves a map result is a real bento Map by reading its
+// size: Counts over three distinct words builds a Map of three entries, and the
+// program prints the size the Map model gives it.
+func TestGoImportMapSizeRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the go: map test builds and runs generated Go")
+	}
+	const src = `import { Counts } from "go:github.com/tamnd/bento/pkg/goimport/mapfixture";
+const counts = Counts("one two three two");
+console.log(counts.size);
+`
+	got := runProgramGo(t, src)
+	if want := "3\n"; got != want {
+		t.Fatalf("go: map-size program printed %q, want %q", got, want)
+	}
+}
+
 // TestGoImportVariadicEmitsSpreadCall pins that a call to a variadic Go function
 // spreads its arguments positionally into the Go call: path.Join is func(...string),
 // so each argument marshals through StringToGo on its own and Go reassembles the

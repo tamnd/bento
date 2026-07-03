@@ -78,6 +78,48 @@ func F(names []string, sizes []float64) []int { return nil }
 	}
 }
 
+// TestClassifyMapOfScalars proves a map of a plain basic key to a plain basic value
+// classifies as a map crossing carrying its key and value keywords packed together,
+// both as a parameter and a result, so the lowerer marshals a map[string]int entry
+// by entry against the right bento Map constructor (section 6.5).
+func TestClassifyMapOfScalars(t *testing.T) {
+	sig := sigOf(t, `package p
+func F(counts map[string]int) map[int]float64 { return nil }
+`, "F")
+	if !sig.OK {
+		t.Fatal("map-of-scalars signature classified as not lowerable")
+	}
+	if want := []string{"map"}; !slices.Equal(sig.Params, want) {
+		t.Errorf("params = %v, want %v", sig.Params, want)
+	}
+	if key, val := SplitMapElem(sig.ParamElem[0]); key != "string" || val != "int" {
+		t.Errorf("param map element = %q/%q, want string/int", key, val)
+	}
+	if want := []string{"map"}; !slices.Equal(sig.Results, want) {
+		t.Errorf("results = %v, want %v", sig.Results, want)
+	}
+	if key, val := SplitMapElem(sig.ResultElem[0]); key != "int" || val != "float64" {
+		t.Errorf("result map element = %q/%q, want int/float64", key, val)
+	}
+}
+
+// TestClassifyRejectsMapOfComposite proves a map whose key or value is not a plain
+// basic (a map to a slice, a map keyed by a struct) is not covered by this slice, so
+// it hands back rather than emit a half-marshaled crossing.
+func TestClassifyRejectsMapOfComposite(t *testing.T) {
+	if sig := sigOf(t, `package p
+func F() map[string][]int { return nil }
+`, "F"); sig.OK {
+		t.Error("a map to a slice classified as lowerable, want a hand-back")
+	}
+	if sig := sigOf(t, `package p
+type K struct{ A int }
+func F() map[K]int { return nil }
+`, "F"); sig.OK {
+		t.Error("a map keyed by a struct classified as lowerable, want a hand-back")
+	}
+}
+
 // TestClassifyByteSlice proves a []byte is the whole-buffer crossing, not an
 // element-by-element slice: it carries the keyword "bytes" with an empty element,
 // both as a parameter and a result, so the lowerer marshals it as one Uint8Array
