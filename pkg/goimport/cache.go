@@ -95,16 +95,16 @@ func (c *Cache) put(importPath, version, dts string) error {
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.WriteString(dts); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("write .d.ts cache temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("close .d.ts cache temp: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("commit .d.ts cache entry: %w", err)
 	}
 	return nil

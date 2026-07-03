@@ -57,9 +57,9 @@ func buildRowBuilder(sb *value.StrBuilder, i int32) value.BStr {
 		Lit(": ", 2).
 		Str(tmplWord[i&3]).
 		Lit(" = ", 3).
-		Num(float64(i) * 1.5).
+		Num(float64(i)*1.5).
 		Lit(" (", 2).
-		Bool((i & 1) == 0).
+		Bool((i&1) == 0).
 		Lit(")", 1).
 		Done()
 }
