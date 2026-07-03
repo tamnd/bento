@@ -81,3 +81,45 @@ func TestVocabularyModuleSpecifier(t *testing.T) {
 		t.Errorf("vocabulary module specifier = %q, want bento:go", VocabularyModule)
 	}
 }
+
+// TestAmbientModuleWrapsVocabulary checks the ambient form the checker reads: a
+// single `declare module "bento:go"` block that still declares every helper, with
+// the top-level declare modifiers dropped because a module block is already an
+// ambient context.
+func TestAmbientModuleWrapsVocabulary(t *testing.T) {
+	m := AmbientModule()
+	if !strings.HasPrefix(m, `declare module "bento:go" {`) {
+		t.Errorf("ambient module does not open with the bento:go declaration:\n%s", firstLines(m, 2))
+	}
+	if !strings.HasSuffix(m, "}\n") {
+		t.Errorf("ambient module is not closed:\n%s", m)
+	}
+	// Inside a declare module the context is already ambient, so a nested `declare`
+	// is a redundant-modifier error under the strict checker.
+	if strings.Contains(m, "export declare ") {
+		t.Errorf("ambient module leaves a redundant declare modifier in place:\n%s", m)
+	}
+	// Every helper the Mapper can emit is still declared, just in the ambient forms.
+	for _, h := range helperOrder {
+		name := string(h)
+		if !declaresNameAmbient(m, name) {
+			t.Errorf("ambient module does not declare the helper %q", name)
+		}
+	}
+}
+
+// declaresNameAmbient reports whether the ambient module declares a symbol of the
+// given name, in the forms a declare-module block uses (no declare modifier).
+func declaresNameAmbient(module, name string) bool {
+	for _, prefix := range []string{
+		"export interface " + name,
+		"export type " + name,
+		"export class " + name,
+		"export function " + name,
+	} {
+		if strings.Contains(module, prefix) {
+			return true
+		}
+	}
+	return false
+}
