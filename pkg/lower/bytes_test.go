@@ -23,8 +23,8 @@ console.log(lit.length);
 `
 	source := renderProgram(t, src)
 	for _, want := range []string{
-		"var buf *value.Uint8Array = value.NewUint8Array(",
-		"var lit *value.Uint8Array = value.Uint8ArrayOf(",
+		"buf := value.NewUint8Array(",
+		"lit := value.Uint8ArrayOf(",
 		"buf.SetAt(",
 		"buf.At(",
 		"buf.Len()",

@@ -1,13 +1,13 @@
 func Lengths(n float64) float64 {
-	var xs *value.Array[float64] = value.NewArray[float64](n, n+1, n+2)
-	var dashed value.BStr = xs.Join(value.FromGoString("-"), func(x float64) value.BStr {
+	xs := value.NewArray[float64](n, n+1, n+2)
+	dashed := xs.Join(value.FromGoString("-"), func(x float64) value.BStr {
 		return value.NumberToString(x)
 	})
-	var defaulted value.BStr = xs.Join(value.FromGoString(","), func(x float64) value.BStr {
+	defaulted := xs.Join(value.FromGoString(","), func(x float64) value.BStr {
 		return value.NumberToString(x)
 	})
-	var words *value.Array[value.BStr] = value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("bb"), value.FromGoString("ccc"))
-	var joinedWords value.BStr = words.Join(value.FromGoString(", "), func(x value.BStr) value.BStr {
+	words := value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("bb"), value.FromGoString("ccc"))
+	joinedWords := words.Join(value.FromGoString(", "), func(x value.BStr) value.BStr {
 		return x
 	})
 	return dashed.Length() + defaulted.Length() + joinedWords.Length()

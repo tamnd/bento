@@ -24,7 +24,7 @@ console.log(m.size);
 `
 	source := renderProgram(t, src)
 	for _, want := range []string{
-		"var m *value.Map[value.BStr, float64] = value.NewStringMap[float64]()",
+		"m := value.NewStringMap[float64]()",
 		"m.Set(value.FromGoString(\"a\"), 1)",
 		"m.Get(value.FromGoString(\"a\"))",
 		"m.Has(value.FromGoString(\"a\"))",
