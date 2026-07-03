@@ -27,6 +27,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
@@ -53,4 +54,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/microsoft/typescript-go => github.com/tamnd/typescript v0.0.0-20260701180118-497682f6991f
+replace github.com/microsoft/typescript-go => github.com/tamnd/typescript v0.0.0-20260703163125-514c6b45d639

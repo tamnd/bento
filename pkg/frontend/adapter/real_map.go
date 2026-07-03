@@ -180,6 +180,10 @@ func mapKind(k shim.Kind) NodeKind {
 		return NodeFalseKeyword
 	case shim.KindNullKeyword:
 		return NodeNullKeyword
+	case shim.KindThisKeyword:
+		return NodeThisKeyword
+	case shim.KindSuperKeyword:
+		return NodeSuperKeyword
 	default:
 		return NodeUnknown
 	}

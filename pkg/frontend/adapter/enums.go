@@ -149,6 +149,11 @@ const (
 	NodeFalseKeyword
 	NodeNullKeyword
 
+	// Class-body keywords: the receiver reference inside a method and the
+	// parent reference inside a subclass.
+	NodeThisKeyword
+	NodeSuperKeyword
+
 	// Constructs the partitioner treats as hard blockers when present.
 	NodeWithStatement
 )
