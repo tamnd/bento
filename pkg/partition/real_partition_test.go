@@ -63,6 +63,28 @@ func loadReal(t *testing.T, src string, allowDiag bool) *frontend.Program {
 	return prog
 }
 
+// loadTwo compiles a multi-file program through the real checker, for the cases
+// where a call crosses a module boundary and the callee is declared in a
+// different file than the caller. roots names the entry files in load order; the
+// checker pulls in any file they import from the same FS.
+func loadTwo(t *testing.T, files map[string]string, roots ...string) *frontend.Program {
+	t.Helper()
+	prog, err := frontend.Load(frontend.LoadOptions{
+		Dir:   "/",
+		Roots: roots,
+		FS:    realFS{files: files},
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, d := range prog.Diagnostics() {
+		if d.Category == frontend.CategoryError {
+			t.Fatalf("unexpected type error: %s", d.Message)
+		}
+	}
+	return prog
+}
+
 func resultNamed(results []Result, name string) (Result, bool) {
 	for _, r := range results {
 		if r.Unit.Name == name {
