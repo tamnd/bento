@@ -250,6 +250,10 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerFor(n)
 	case frontend.NodeForOfStatement:
 		return r.lowerForOf(n)
+	case frontend.NodeThrowStatement:
+		return r.lowerThrow(n)
+	case frontend.NodeTryStatement:
+		return r.lowerTry(n)
 	default:
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	}
@@ -754,9 +758,25 @@ func (r *Renderer) lowerCondition(n frontend.Node) (ast.Expr, error) {
 func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	switch n.Kind() {
 	case frontend.NodeIdentifier:
+		// A bare reference to a go: import binding used as a value is a constant read
+		// into the Go package, marshaled by the constant's Go type. It is checked by the
+		// binding's own text, the key the import recorded, before the local-name path,
+		// which would otherwise treat the binding as an undeclared local.
+		if expr, handled, err := r.goConstRef(r.prog.Text(n)); err != nil {
+			return nil, err
+		} else if handled {
+			return expr, nil
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
+		}
+		// A catch binding read outside of its .message or .name property (which
+		// propertyAccess handles before it reaches here) hands back, since the runtime
+		// models a caught error as a value.Error rather than a general boxed value, so
+		// passing it on or reassigning it has no lowering yet.
+		if r.errorLocals[name] {
+			return nil, &NotYetLowerable{Reason: "a caught error used other than reading .message or .name is a later slice"}
 		}
 		// A local specialized to Go int32 is read back as float64(name), so every
 		// consumer of the read (arithmetic, a Math call, console.log) sees the same
@@ -831,6 +851,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 
 	case frontend.NodeArrowFunction:
 		return r.arrowFunc(n)
+
+	case frontend.NodeNewExpression:
+		return r.newExpr(n)
 
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
@@ -984,8 +1007,14 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "call expression exposed no callee"}
 	}
 	// A member callee (s.charCodeAt(...)) is a method call, not a plain function
-	// call; the string methods are the only ones covered so far.
+	// call; the string methods are the only ones covered so far. A call on a
+	// namespace go: import (zstd.NewReader(...)) is also a member callee, but it is a
+	// direct call into the Go package the namespace names, so it routes to the interop
+	// lowering before the method-call path.
 	if kids[0].Kind() == frontend.NodePropertyAccessExpression {
+		if b, ok := r.namespaceGoCall(kids[0]); ok {
+			return r.goImportCall(b, n, kids[1:])
+		}
 		return r.methodCall(kids[0], kids[1:])
 	}
 	if kids[0].Kind() != frontend.NodeIdentifier {
@@ -996,6 +1025,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// user-function path, which would reject the alias symbol the binding carries.
 	if b, ok := r.nodeImports[r.prog.Text(kids[0])]; ok {
 		return r.nodeBuiltinCall(b, kids[1:])
+	}
+	// A call to a name bound by a go: import is a direct call into a real Go package,
+	// so it routes to the interop lowering before the user-function path, which would
+	// reject the alias symbol the binding carries.
+	if b, ok := r.goImports[r.prog.Text(kids[0])]; ok {
+		return r.goImportCall(b, n, kids[1:])
 	}
 	// A bare call to an ambient global function (isNaN, isFinite) is not a call to
 	// a user binding, so it routes to the global-function lowering before the
@@ -1060,6 +1095,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		return nil, &NotYetLowerable{Reason: "method callee did not expose a receiver and a method name"}
 	}
 	recvNode, method := kids[0], r.prog.Text(kids[1])
+	// A method on a caught error is one of the error-identity calls of section 7.7:
+	// err.is(sentinel) lowers to errors.Is against the Go error the caught error
+	// carries. It routes first because the checker types a catch binding unknown, so
+	// the receiver-value paths below would not recognize it, and because the argument
+	// is a go: sentinel reference rather than a bento value. Only a receiver the
+	// lowerer bound as a caught error takes this path.
+	if recvNode.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(recvNode)); ok && r.errorLocals[name] {
+			return r.errorMethodCall(name, method, argNodes)
+		}
+	}
 	// process.stdout.write(s) and process.stderr.write(s) are the process output
 	// streams. The receiver is not a value, it is the ambient stream, so the call
 	// lowers to a value write helper rather than a method on a runtime object.
@@ -2227,6 +2273,23 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
+	// A read of a caught error's .message or .name lowers to the matching method on
+	// the *value.Error the catch bound. It routes before the dynamic path because
+	// the checker types a catch binding unknown, which would otherwise send the read
+	// through the boxed-value Get the error value does not carry. Only these two
+	// properties are read; any other member of a caught error hands back.
+	if obj.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(obj)); ok && r.errorLocals[name] {
+			switch prop {
+			case "message":
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Message")}}, nil
+			case "name":
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Name")}}, nil
+			default:
+				return nil, &NotYetLowerable{Reason: "a caught error's ." + prop + " is a later slice"}
+			}
+		}
+	}
 	// A read o.k on a dynamic receiver (one typed any or unknown) has no static
 	// shape to intern to a Go field, so it dispatches at runtime through the boxed
 	// value's Get, which reports a string's length, an array's length and indices,
@@ -2400,6 +2463,22 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	// constructor. This routes before the static operator paths below, which read
 	// isString and isNumber that a dynamic operand answers no to. Only + is dynamic
 	// here; another operator on a dynamic operand falls through and hands back.
+	// instanceof on a caught error narrows the binding so a catch can read its
+	// .message or .name; it routes first because a catch binding is typed unknown,
+	// which the operand tests below would send down the dynamic path. Only a caught
+	// error against a built-in error constructor is covered here, and any other
+	// instanceof hands back until class-instance narrowing lands.
+	if opText == "instanceof" {
+		expr, handled, err := r.errorInstanceof(left, right)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			return expr, nil
+		}
+		return nil, &NotYetLowerable{Reason: "instanceof outside a caught built-in error is a later slice"}
+	}
+
 	if r.combineIsDynamic(opText, left, right) {
 		l, err := r.boxOperand(left)
 		if err != nil {
@@ -2866,23 +2945,43 @@ func (r *Renderer) binaryOp(opText string, left, right frontend.Node) (token.Tok
 	}
 }
 
+// primitiveFlags returns the type flags of n with a branded alias folded down to
+// its underlying primitive. A go: defined type over a basic (time.Duration over
+// int64) projects as a branded alias (number & { __brand }), an intersection whose
+// runtime value is the underlying primitive, so its primitive-member flag is folded
+// in and a consumer coerces and operates on it as the number, string, or boolean it
+// is (section 6.11). A plain type is returned unchanged.
+func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
+	t := r.prog.TypeAt(n)
+	f := t.Flags
+	if f&frontend.TypeIntersection == 0 {
+		return f
+	}
+	const prim = frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
+	for _, m := range r.prog.IntersectionMembers(t) {
+		f |= m.Flags & prim
+	}
+	return f
+}
+
 // isNumber reports whether the checker types n as number, the guard that keeps
 // the arithmetic path sound while string and mixed operands wait for their slice.
+// It sees through a branded alias to the underlying number (section 6.11).
 func (r *Renderer) isNumber(n frontend.Node) bool {
-	return r.prog.TypeAt(n).Flags&frontend.TypeNumber != 0
+	return r.primitiveFlags(n)&frontend.TypeNumber != 0
 }
 
 // isBool reports whether the checker types n as boolean, the guard that keeps a
 // control-flow condition a real Go bool rather than a coerced value.
 func (r *Renderer) isBool(n frontend.Node) bool {
-	return r.prog.TypeAt(n).Flags&frontend.TypeBoolean != 0
+	return r.primitiveFlags(n)&frontend.TypeBoolean != 0
 }
 
 // isString reports whether the checker types n as string, the guard that routes
 // + to value.Concat and .length to value.BStr.Length rather than to a number or
 // object path.
 func (r *Renderer) isString(n frontend.Node) bool {
-	return r.prog.TypeAt(n).Flags&frontend.TypeString != 0
+	return r.primitiveFlags(n)&frontend.TypeString != 0
 }
 
 // isDynamic reports whether the checker types n as any or unknown, the types that

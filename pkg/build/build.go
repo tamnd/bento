@@ -21,16 +21,22 @@ import (
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/goimport"
 	"github.com/tamnd/bento/pkg/lower"
 )
 
 // Options controls a single build. Entry is the path to the TypeScript or
 // JavaScript entry module; Output is where the native binary is written. A blank
 // Output defaults to the entry's base name without its extension, in the current
-// directory, matching how a Go or C compiler names its output.
+// directory, matching how a Go or C compiler names its output. AllowCgo
+// acknowledges that a go: import pulling in cgo forfeits the zero-cgo
+// cross-compile, letting such a build proceed instead of stopping with the section
+// 9.5 diagnostic; without it, a build sets CGO_ENABLED=0 and a cgo import fails
+// loudly at detection time rather than silently linking a cgo binary.
 type Options struct {
-	Entry  string
-	Output string
+	Entry    string
+	Output   string
+	AllowCgo bool
 }
 
 // Build type-checks the entry module, lowers it to a Go program, and compiles
@@ -57,11 +63,15 @@ func Build(opts Options) error {
 		return fmt.Errorf("bento build: output %s: %w", opts.Output, err)
 	}
 
-	source, err := Compile(entry)
+	source, goPaths, err := compileProgram(entry)
 	if err != nil {
 		return err
 	}
-	return link(source, output)
+	needsCgo, err := gateCgo(goPaths, opts.AllowCgo)
+	if err != nil {
+		return err
+	}
+	return link(source, output, needsCgo)
 }
 
 // EmitGo type-checks the entry module, lowers it to a Go program, and returns
@@ -80,7 +90,7 @@ func EmitGo(entry, stamp string) (string, error) {
 	if _, err := os.Stat(abs); err != nil {
 		return "", fmt.Errorf("bento build: %s: %w", entry, err)
 	}
-	source, err := Compile(abs)
+	source, _, err := compileProgram(abs)
 	if err != nil {
 		return "", err
 	}
@@ -92,28 +102,138 @@ func EmitGo(entry, stamp string) (string, error) {
 // it lowers to. It is the front half of Build, split out so a caller can inspect
 // or golden the generated Go without running the toolchain.
 func Compile(entry string) (string, error) {
+	source, _, err := compileProgram(entry)
+	return source, err
+}
+
+// compileProgram is the shared front half of the build: it type-checks the entry,
+// lowers it to a Go program, and returns the source together with the Go import
+// paths the program reaches through a go: call. Build consults those paths to
+// detect cgo before it runs the toolchain (section 9.5); Compile and EmitGo, which
+// stop before the toolchain, ignore them.
+func compileProgram(entry string) (string, []string, error) {
 	if isJavaScript(entry) {
-		return "", fmt.Errorf("bento build: %s: JavaScript entries are a later slice; the AOT path compiles TypeScript (.ts) today", entry)
+		return "", nil, fmt.Errorf("bento build: %s: JavaScript entries are a later slice; the AOT path compiles TypeScript (.ts) today", entry)
 	}
 	prog, err := frontend.Load(frontend.LoadOptions{Roots: []string{entry}})
 	if err != nil {
-		return "", fmt.Errorf("bento build: %s: %w", entry, err)
+		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
 	if diag := firstError(prog); diag != "" {
-		return "", fmt.Errorf("bento build: %s: %s", entry, diag)
+		return "", nil, fmt.Errorf("bento build: %s: %s", entry, diag)
 	}
 
-	files := prog.SourceFiles()
-	if len(files) != 1 {
-		return "", fmt.Errorf("bento build: %s: multi-file programs are a later slice", entry)
+	// A go: import brings its generated .d.ts into the program as a source file, so
+	// the entry is the single non-declaration file; the declaration files are the
+	// interop surface the checker read, not modules to lower. Selecting the entry
+	// this way is what lets the AOT build compile a program that imports Go, not just
+	// a self-contained one.
+	entryFile, err := entryModule(prog)
+	if err != nil {
+		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
 
 	r := lower.NewRenderer(prog)
-	p, err := r.RenderProgram(files[0])
+	r.SetGoSignatures(goSignatureResolver())
+	r.SetGoConstants(goConstantResolver())
+	r.SetGoErrorVars(goErrorVarResolver())
+	p, err := r.RenderProgram(entryFile)
 	if err != nil {
-		return "", fmt.Errorf("bento build: %s: %w", entry, err)
+		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
-	return p.Source, nil
+	return p.Source, r.GoImportPaths(), nil
+}
+
+// goSignatureResolver builds the resolver the lowerer marshals go: number
+// crossings against. It loads each Go package's signatures once and memoizes them,
+// including a failed load as an empty set, so a program importing several functions
+// from one package pays the go/packages load a single time and a package that will
+// not load degrades to the string and boolean crossings rather than failing the
+// whole build. The build is single-threaded through here, so the memo needs no
+// lock.
+func goSignatureResolver() func(importPath, name string) (goimport.FuncSig, bool) {
+	memo := map[string]map[string]goimport.FuncSig{}
+	return func(importPath, name string) (goimport.FuncSig, bool) {
+		sigs, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			sigs, err = goimport.Signatures(importPath)
+			if err != nil {
+				sigs = map[string]goimport.FuncSig{}
+			}
+			memo[importPath] = sigs
+		}
+		sig, ok := sigs[name]
+		return sig, ok
+	}
+}
+
+// goConstantResolver builds the resolver the lowerer marshals a go: constant
+// reference against, the companion to goSignatureResolver for a binding used as a
+// value. It memoizes each package's constants the same way, sharing the one
+// go/packages load and degrading a failed load to an empty set, so a reference to a
+// constant from a package that will not load simply hands back.
+func goConstantResolver() func(importPath, name string) (goimport.ConstInfo, bool) {
+	memo := map[string]map[string]goimport.ConstInfo{}
+	return func(importPath, name string) (goimport.ConstInfo, bool) {
+		consts, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			consts, err = goimport.Constants(importPath)
+			if err != nil {
+				consts = map[string]goimport.ConstInfo{}
+			}
+			memo[importPath] = consts
+		}
+		info, ok := consts[name]
+		return info, ok
+	}
+}
+
+// goErrorVarResolver builds the resolver the lowerer checks a go: sentinel against
+// when a caught error's is() names one, the companion to goConstantResolver for an
+// error variable rather than a constant. It memoizes each package's error variables
+// the same way, sharing the one go/packages load and degrading a failed load to an
+// empty set, so err.is against a sentinel from a package that will not load simply
+// hands back.
+func goErrorVarResolver() func(importPath, name string) bool {
+	memo := map[string]map[string]bool{}
+	return func(importPath, name string) bool {
+		vars, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			vars, err = goimport.ErrorVars(importPath)
+			if err != nil {
+				vars = map[string]bool{}
+			}
+			memo[importPath] = vars
+		}
+		return vars[name]
+	}
+}
+
+// entryModule returns the one source file the build lowers: the single module that
+// is not a declaration file. A go: import contributes its generated .d.ts to the
+// program as a source file, which supplies the interop types to the checker but is
+// not itself a module to lower, so declaration files are skipped here. A program
+// with no lowerable module, or with more than one, is outside today's single-entry
+// AOT path and hands back rather than pick one arbitrarily.
+func entryModule(prog *frontend.Program) (frontend.Node, error) {
+	var entry frontend.Node
+	found := false
+	for _, sf := range prog.SourceFiles() {
+		if sf.File().Kind == frontend.FileDTS {
+			continue
+		}
+		if found {
+			return nil, fmt.Errorf("multi-file programs are a later slice")
+		}
+		entry, found = sf, true
+	}
+	if !found {
+		return nil, fmt.Errorf("no lowerable entry module")
+	}
+	return entry, nil
 }
 
 // isJavaScript reports whether the entry is a JavaScript module by extension, so
@@ -141,12 +261,62 @@ func firstError(prog *frontend.Program) string {
 	return ""
 }
 
+// gateCgo detects whether any go: import the program reached pulls in cgo and
+// decides what the build does about it (section 9.5). It returns whether the link
+// must enable cgo. A cgo import is allowed to proceed only on an explicit
+// acknowledgment, allowCgo or CGO_ENABLED=1 in the environment, since taking cgo
+// forfeits the zero-cgo cross-compile bento otherwise guarantees; without that
+// acknowledgment it returns the section 9.5 diagnostic naming the cgo library and
+// the import that pulled it in, so the loss is never silent. A detector that
+// cannot run degrades to not-cgo rather than blocking the build, since a real cgo
+// import would fail the go build that follows with its own error.
+func gateCgo(goPaths []string, allowCgo bool) (bool, error) {
+	for _, path := range goPaths {
+		use, ok, err := goimport.DetectCgo(path)
+		if err != nil || !ok {
+			continue
+		}
+		if allowCgo || os.Getenv("CGO_ENABLED") == "1" {
+			return true, nil
+		}
+		return false, fmt.Errorf("bento build: %s", cgoDiagnostic(use))
+	}
+	return false, nil
+}
+
+// cgoDiagnostic is the section 9.5 message for a go: import that pulls in cgo: it
+// names the cgo library and the import that reached it, states the build has left
+// the zero-cgo path, says how to proceed, and points at a pure-Go alternative when
+// bento knows one. It is written as a human would explain the tradeoff, since this
+// is the moment an author learns their build no longer cross-compiles the easy way.
+func cgoDiagnostic(use goimport.CgoUse) string {
+	var b strings.Builder
+	b.WriteString("a go: import requires cgo, which breaks the zero-cgo cross-compile\n")
+	if use.Cgo == use.Import {
+		fmt.Fprintf(&b, "  go:%s uses cgo\n", use.Import)
+	} else {
+		fmt.Fprintf(&b, "  go:%s pulls in cgo through %s\n", use.Import, use.Cgo)
+	}
+	b.WriteString("  the default build sets CGO_ENABLED=0, so it cannot include this import\n")
+	b.WriteString("  to build anyway, pass --allow-cgo (or set CGO_ENABLED=1) with a C toolchain on the host\n")
+	if alt := goimport.PureGoAlternative(use.Cgo); alt != "" {
+		fmt.Fprintf(&b, "  for a pure-Go alternative, use %s\n", alt)
+	} else if alt := goimport.PureGoAlternative(use.Import); alt != "" {
+		fmt.Fprintf(&b, "  for a pure-Go alternative, use %s\n", alt)
+	}
+	b.WriteString("  the zero-cgo cross-compile guarantee holds only for pure-Go imports")
+	return b.String()
+}
+
 // link writes the generated Go program into a scratch directory inside the bento
 // module tree and compiles it to output with `go build`. Building inside the
 // module tree is what lets the program import bento's value package and its
 // transitive dependencies with no separate go.mod, go.sum, or module download,
-// so a build is hermetic and offline.
-func link(source, output string) error {
+// so a build is hermetic and offline. cgo selects CGO_ENABLED for the go build:
+// off by default, which keeps a pure-Go build cross-compilable and turns any
+// accidental cgo dependency into a build error, and on for a build that
+// acknowledged a cgo import so the toolchain can link it.
+func link(source, output string, cgo bool) error {
 	root, err := moduleRoot()
 	if err != nil {
 		return err
@@ -163,6 +333,11 @@ func link(source, output string) error {
 
 	cmd := exec.Command("go", "build", "-o", output, ".")
 	cmd.Dir = dir
+	enabled := "0"
+	if cgo {
+		enabled = "1"
+	}
+	cmd.Env = append(os.Environ(), "CGO_ENABLED="+enabled)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

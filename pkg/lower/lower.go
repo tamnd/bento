@@ -24,6 +24,7 @@ import (
 	"sort"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/goimport"
 )
 
 // valuePkg is the import path of the shared value model, the package that
@@ -65,6 +66,42 @@ type Renderer struct {
 	// entry module's import declarations before any body is lowered, since a
 	// function or a top-level statement may call an imported builtin.
 	nodeImports map[string]nodeBuiltin
+	// goImports maps a local binding name introduced by a go: import to the Go
+	// symbol it names, so a call to that binding lowers to a direct call into the
+	// real Go package rather than a user function. Like nodeImports it is populated
+	// once from the entry module's import declarations before any body is lowered.
+	goImports map[string]goBuiltin
+	// goNamespaces maps a local binding introduced by a namespace go: import (import
+	// * as zstd from "go:...") to the Go import path it names, so a member call on the
+	// binding (zstd.NewReader(...)) lowers to a direct call into that package. It is
+	// the namespace twin of goImports, which holds the named-import bindings; a call
+	// site consults it when the callee is a property access on a namespace binding.
+	goNamespaces map[string]string
+	// goAliases maps a Go import path to the local alias the emitted file imports it
+	// under, assigned on first call into the package so an imported-but-never-called
+	// package emits no import. Every call into one package renders the same alias, so
+	// the qualifier a call emits and the import spec the file carries agree.
+	goAliases map[string]string
+	// goSigs resolves the Go signature of a go: function so a call marshals numbers
+	// by the Go type the TypeScript number cannot distinguish (int, int64, float64
+	// all project to number). It is optional: with no resolver, a go: call lowers
+	// only the crossings the TypeScript type settles on its own (string, boolean),
+	// which keeps the renderer usable without the Go toolchain at hand. The build
+	// wires it from the same package load the declaration generator ran.
+	goSigs func(importPath, name string) (goimport.FuncSig, bool)
+	// goConsts resolves the Go type keyword of a go: constant so a reference to one
+	// marshals by the Go type the TypeScript number cannot distinguish, the same
+	// disambiguation goSigs does for a call. It is optional and wired from the same
+	// package load; with no resolver a reference to a go: binding used as a value
+	// hands back, since the renderer cannot tell a constant from a function value.
+	goConsts func(importPath, name string) (goimport.ConstInfo, bool)
+	// goErrorVars reports whether a name exported by a go: package is a sentinel
+	// error variable (io.EOF, sql.ErrNoRows), so a caught error's is() lowers to
+	// errors.Is against the real Go variable and branches on identity the way Go
+	// code does (section 7.7). It is optional and wired from the same package load;
+	// with no resolver err.is against a go: sentinel hands back, since the renderer
+	// cannot tell an error variable from any other exported binding.
+	goErrorVars func(importPath, name string) bool
 	// retType is the declared return type of the function whose body is currently
 	// being lowered, so a return statement can coerce its value across the dynamic
 	// boundary the way an assignment does. It is the zero type outside a function
@@ -86,6 +123,21 @@ type Renderer struct {
 	// stored T is pulled out of the option; a read where the type is still optional
 	// keeps the bare Opt value. A nil map (the default) unwraps nothing.
 	optLocals map[string]bool
+	// errorLocals is the set of catch-binding names in scope while a catch block is
+	// lowered, each bound to the *value.Error the catch recovered. A read of the
+	// binding's .message or .name lowers to the matching method on the error; the
+	// binding used any other way hands back, since the runtime models a caught error
+	// as a value.Error and not a general boxed value yet. It is set around a catch
+	// block and cleared after, so a binding does not leak past its clause.
+	errorLocals map[string]bool
+	// usesThrow records that the program emitted a construct that can raise a
+	// thrown value the runtime must report if it escapes: an explicit throw, or a
+	// boundary crossing that range-checks (a go: int64 result). When set, the
+	// assembled main defers value.ReportUncaught so an uncaught throw prints an
+	// uncaught-error line and exits non-zero rather than crashing with a Go stack. A
+	// program that cannot throw defers nothing, so its main and its imports are
+	// unchanged.
+	usesThrow bool
 	// strBuilders is the list of reusable value.StrBuilder variables the current
 	// body needs, one per template or number-interpolated concatenation site the
 	// lowerer chose to build through a builder. A var declaration for each is hoisted
@@ -98,7 +150,32 @@ type Renderer struct {
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}}
+}
+
+// SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go
+// int, int64, and float64 (all one TypeScript number) each cross the boundary with
+// the right conversion and range check. The build sets it from the Go package load
+// the declaration generator already ran; a renderer with no resolver lowers only
+// the string and boolean crossings a TypeScript type settles on its own.
+func (r *Renderer) SetGoSignatures(resolve func(importPath, name string) (goimport.FuncSig, bool)) {
+	r.goSigs = resolve
+}
+
+// SetGoConstants wires the resolver a go: constant reference marshals against, the
+// companion to SetGoSignatures for a binding used as a value rather than called. It
+// is set from the same Go package load; a renderer with no resolver hands a
+// reference to a go: binding back rather than guess whether it is a constant.
+func (r *Renderer) SetGoConstants(resolve func(importPath, name string) (goimport.ConstInfo, bool)) {
+	r.goConsts = resolve
+}
+
+// SetGoErrorVars wires the resolver a caught error's is() checks a go: sentinel
+// against, so err.is(EOF) lowers to errors.Is against io.EOF. It is set from the
+// same Go package load; a renderer with no resolver hands err.is back rather than
+// guess whether a bound name is an error variable.
+func (r *Renderer) SetGoErrorVars(resolve func(importPath, name string) bool) {
+	r.goErrorVars = resolve
 }
 
 // requireImport records that the Go the renderer has emitted refers to a
@@ -116,6 +193,22 @@ func (r *Renderer) requireImport(path string) {
 func (r *Renderer) Imports() []string {
 	paths := make([]string, 0, len(r.imports))
 	for p := range r.imports {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// GoImportPaths returns the Go import paths the rendered program reaches through a
+// go: interop call, sorted, with no duplicates. It reads the alias map, which is
+// populated only as a package is actually called into, so a go: import that is
+// declared but never called is not listed. The build consults this to detect
+// whether any reached package pulls in cgo before it runs the toolchain
+// (document 16 section 9.5), the one caller that needs the interop paths apart
+// from the import block importSpecs already assembles.
+func (r *Renderer) GoImportPaths() []string {
+	paths := make([]string, 0, len(r.goAliases))
+	for p := range r.goAliases {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
@@ -194,6 +287,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		if elem, ok := r.prog.ElementType(t); ok {
 			return r.renderArray(elem)
 		}
+		if r.isGoOpaqueType(t) {
+			// A go: opaque handle (section 6.13) projects to a GoOpaque object, but it is a
+			// token bento never reads, not a shape: a local that holds one is typed as the
+			// uniform bridge.Opaque the crossing produces, not a struct of its phantom brand.
+			r.requireImport(bridgePkg)
+			return sel("bridge", "Opaque"), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -245,6 +345,20 @@ func (r *Renderer) renderObject(t frontend.Type) (ast.Expr, error) {
 		return nil, err
 	}
 	return star(ident(name)), nil
+}
+
+// isGoOpaqueType reports whether an object type is a go: opaque handle, the
+// GoOpaque<Tag> the bridge projects for a Go type it does not express (section
+// 6.13). GoOpaque is { readonly __goOpaque: Tag }, so the phantom brand property is
+// its fingerprint: a real object shape never carries it. The check is by property
+// name alone, so it matches whatever the tag is without reading it.
+func (r *Renderer) isGoOpaqueType(t frontend.Type) bool {
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "__goOpaque" {
+			return true
+		}
+	}
+	return false
 }
 
 // Decls returns the generated declarations the rendered types referred to, in a

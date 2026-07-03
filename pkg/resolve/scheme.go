@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"net/url"
 	"strings"
+
+	"github.com/tamnd/bento/pkg/goimport"
 )
 
 // resolveData resolves a data: URL, decoding its body so the loader can hand the
@@ -91,43 +93,27 @@ func dataFormat(mime, specifier string) (Format, error) {
 	}
 }
 
-// resolveGo validates a go: import path and hands it off. It deliberately does
-// not touch the Go module cache or read Go source; pkg/goimport owns that.
-func resolveGo(importPath, specifier string) (Resolved, error) {
-	if !validGoImportPath(importPath) {
+// resolveGo parses a go: import through pkg/goimport, which owns the specifier
+// grammar, and hands it off. It deliberately does not touch the Go module cache or
+// read Go source; that is pkg/goimport's job at build time. The parser accepts a
+// standard-library path with no dotted host and splits an inline @version pin off
+// the import path, both of which the resolver's earlier hand-rolled check got
+// wrong. The parsed version rides along on GoVersion so the build can reconcile it
+// against go.mod (section 4.3) rather than silently dropping the pin.
+func resolveGo(rest, specifier string) (Resolved, error) {
+	spec, err := goimport.ParseBody(rest)
+	if err != nil {
 		return Resolved{}, &ResolveError{
 			Code:      "ERR_INVALID_MODULE_SPECIFIER",
 			Specifier: specifier,
-			Message:   "invalid go: import path " + importPath,
+			Message:   err.Error(),
 		}
 	}
 	return Resolved{
 		Kind:      KindGo,
 		Format:    FormatESM,
-		Path:      importPath,
+		Path:      spec.ImportPath,
+		GoVersion: spec.Version,
 		Specifier: specifier,
 	}, nil
-}
-
-// validGoImportPath is a light check that a go: path looks like a Go import
-// path: a dotted host, a slash, and no empty segments or backslashes. The full
-// validation lives in pkg/goimport; this only guards the resolver boundary.
-func validGoImportPath(p string) bool {
-	if p == "" || strings.ContainsAny(p, "\\ \t\n") {
-		return false
-	}
-	slash := strings.IndexByte(p, '/')
-	if slash <= 0 {
-		return false
-	}
-	host := p[:slash]
-	if !strings.Contains(host, ".") {
-		return false
-	}
-	for _, seg := range strings.Split(p, "/") {
-		if seg == "" {
-			return false
-		}
-	}
-	return true
 }

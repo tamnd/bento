@@ -114,7 +114,8 @@ func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Ho
 		inputs[name] = true
 	}
 
-	shimOpts := shim.Options{RootFiles: roots, Loose: !opts.Strict}
+	shimRoots := append([]string(nil), roots...)
+	shimOpts := shim.Options{RootFiles: shimRoots, Loose: !opts.Strict}
 
 	for {
 		p := shim.Compile(files, shimOpts)
@@ -137,6 +138,14 @@ func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Ho
 						files[resolved] = content
 						inputs[resolved] = true
 						added = true
+						// A go: import's declarations are an ambient module block that
+						// nothing resolves to by path, so it registers only once its
+						// file is a parsed root. Promote it so the next pass sees the
+						// declare module and binds the import.
+						if kind == ImportGo {
+							shimRoots = append(shimRoots, resolved)
+							shimOpts.RootFiles = shimRoots
+						}
 					}
 				}
 			}
@@ -360,6 +369,24 @@ func (a *RealAdapter) UnionOf(p ProgramHandle, t TypeHandle) []TypeHandle {
 	_, release := prog(p).checker()
 	defer release()
 	if ty.Flags()&shim.TypeFlagsUnion == 0 {
+		return []TypeHandle{t}
+	}
+	members := ty.Types()
+	out := make([]TypeHandle, 0, len(members))
+	for _, m := range members {
+		out = append(out, wrapType(m))
+	}
+	return out
+}
+
+func (a *RealAdapter) IntersectionOf(p ProgramHandle, t TypeHandle) []TypeHandle {
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return []TypeHandle{t}
+	}
+	_, release := prog(p).checker()
+	defer release()
+	if ty.Flags()&shim.TypeFlagsIntersection == 0 {
 		return []TypeHandle{t}
 	}
 	members := ty.Types()

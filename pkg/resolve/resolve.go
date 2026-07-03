@@ -97,6 +97,10 @@ type Resolved struct {
 	Specifier  string
 	Attributes map[string]string
 	Conditions []string
+	// GoVersion is the pinned module version of a go: import (KindGo), or "" when
+	// the import did not pin one and go.mod decides. It is empty for every other
+	// kind.
+	GoVersion string
 	// Body carries the decoded payload for data: URLs; it is nil otherwise.
 	Body []byte
 }
