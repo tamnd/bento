@@ -204,10 +204,7 @@ func (m *Mapper) ParamList(sig *types.Signature) string {
 			b.WriteString(", ")
 		}
 		p := params.At(i)
-		name := p.Name()
-		if name == "" || name == "_" {
-			name = "a" + strconv.Itoa(i)
-		}
+		name := tsParamName(p.Name(), i)
 		if sig.Variadic() && i == params.Len()-1 {
 			// A Go variadic ...T is a slice at the type level; the rest parameter
 			// wants the element type spread, so unwrap the slice.
@@ -222,6 +219,35 @@ func (m *Mapper) ParamList(sig *types.Signature) string {
 		b.WriteString(name + ": " + m.Map(p.Type()))
 	}
 	return b.String()
+}
+
+// tsParamName maps a Go parameter name to one legal in a TypeScript parameter
+// position. A parameter name in a .d.ts is only a label the type rides on, never
+// referenced by a caller, so a blank, underscore, or reserved-word name (Go's
+// `new`, `function`, and the rest are legal Go identifiers but reserved in
+// TypeScript) is replaced by a positional name rather than emitted verbatim, which
+// would make the whole declaration fail to parse.
+func tsParamName(name string, i int) string {
+	if name == "" || name == "_" || tsReserved[name] {
+		return "a" + strconv.Itoa(i)
+	}
+	return name
+}
+
+// tsReserved is the set of ECMAScript reserved words that cannot appear as a
+// binding name, so a Go parameter that happens to spell one is renamed. The
+// contextual keywords TypeScript allows as identifiers (such as `of` and `type`)
+// are deliberately left out, since they parse as parameter names and keeping the
+// original reads better.
+var tsReserved = map[string]bool{
+	"break": true, "case": true, "catch": true, "class": true, "const": true,
+	"continue": true, "debugger": true, "default": true, "delete": true, "do": true,
+	"else": true, "enum": true, "export": true, "extends": true, "false": true,
+	"finally": true, "for": true, "function": true, "if": true, "import": true,
+	"in": true, "instanceof": true, "new": true, "null": true, "return": true,
+	"super": true, "switch": true, "this": true, "throw": true, "true": true,
+	"try": true, "typeof": true, "var": true, "void": true, "while": true,
+	"with": true,
 }
 
 // Results projects a signature's result tuple in throw mode, exposed so the
