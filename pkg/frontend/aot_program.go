@@ -269,6 +269,19 @@ func (p *Program) UnionMembers(t Type) []Type {
 	return out
 }
 
+// IntersectionMembers returns the constituent types of an intersection, or a
+// single-element slice for a non-intersection. It is how the lowerer sees through a
+// branded alias (number & { __brand }) to the underlying primitive a go: defined
+// type projects to (section 6.11).
+func (p *Program) IntersectionMembers(t Type) []Type {
+	handles := p.adapter.IntersectionOf(p.handle, p.typeHandle(t))
+	out := make([]Type, len(handles))
+	for i, h := range handles {
+		out[i] = p.wrapType(h)
+	}
+	return out
+}
+
 // Properties returns the named members of an object type, each with its own type
 // and optionality.
 func (p *Program) Properties(t Type) []Property {

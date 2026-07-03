@@ -95,8 +95,12 @@ func Load(opts LoadOptions) (*Program, error) {
 	// path (real directory listings for node_modules) is unaffected. The ambient
 	// file is prepended to the roots so the checker parses it and its declarations
 	// become globals across the program.
+	// The host reads through two overlays: the ambient one adds bento's Node and
+	// bento:go declarations, and the Go one serves a generated .d.ts for each go:
+	// import at the virtual path it resolves to. The resolver keeps the raw FS so
+	// its osFileSystem fast path is unaffected.
 	host := &loadHost{
-		fs:       ambientOverlay{base: fs},
+		fs:       newGoDeclOverlay(ambientOverlay{base: fs}, goDeclCache()),
 		resolver: resolve.New(resolve.Options{FS: fsForResolver(fs), Dev: true}),
 		cwd:      cwd,
 	}

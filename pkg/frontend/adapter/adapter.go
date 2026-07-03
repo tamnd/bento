@@ -163,6 +163,7 @@ type TSAdapter interface {
 	// Structural type queries.
 	TypeFlagsOf(p ProgramHandle, t TypeHandle) TypeFlags
 	UnionOf(p ProgramHandle, t TypeHandle) []TypeHandle
+	IntersectionOf(p ProgramHandle, t TypeHandle) []TypeHandle
 	PropertiesOf(p ProgramHandle, t TypeHandle) []PropertyInfo
 	ElementOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
 	LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool)

@@ -17,6 +17,7 @@ import (
 func newBuildCmd() *cobra.Command {
 	var output string
 	var emitGo string
+	var allowCgo bool
 
 	cmd := &cobra.Command{
 		Use:   "build <entry>",
@@ -38,7 +39,7 @@ func newBuildCmd() *cobra.Command {
 				}
 				return os.WriteFile(emitGo, []byte(source), 0o644)
 			}
-			if err := build.Build(build.Options{Entry: args[0], Output: output}); err != nil {
+			if err := build.Build(build.Options{Entry: args[0], Output: output, AllowCgo: allowCgo}); err != nil {
 				return err
 			}
 			return nil
@@ -46,6 +47,7 @@ func newBuildCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "", "path of the native binary to write (default: entry base name)")
 	cmd.Flags().StringVar(&emitGo, "emit-go", "", "write the generated Go source to this path (\"-\" for stdout) instead of building a binary")
+	cmd.Flags().BoolVar(&allowCgo, "allow-cgo", false, "acknowledge that a go: import needs cgo, forfeiting the zero-cgo cross-compile, and build it anyway")
 	return cmd
 }
 

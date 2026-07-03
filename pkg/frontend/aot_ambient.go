@@ -1,5 +1,7 @@
 package frontend
 
+import "github.com/tamnd/bento/pkg/goimport"
+
 // This file gives the AOT frontend the Node globals a real program uses. The
 // TypeScript standard libraries declare Math, Number, String, and JSON, but not
 // process or its streams, so a workload that reads process.env or writes
@@ -49,6 +51,17 @@ declare module "node:path" {
 }
 `
 
+// ambientText is the full ambient library the overlay serves: the Node globals
+// above followed by the bento:go vocabulary as a declare-module block, so a
+// program that imports a go: package gets both without either living on disk. The
+// vocabulary is owned by the goimport package, which is the single source of truth
+// the generated .d.ts files draw their helper names from, so serving it from there
+// keeps the declarations a generated file imports and the declarations the checker
+// reads from ever drifting apart.
+func ambientText() string {
+	return ambientSource + goimport.AmbientModule()
+}
+
 // ambientOverlay serves the synthetic ambient library on top of a base
 // FileSystem, so the checker reads bento's Node declarations without them living
 // on disk. It overlays only the one virtual path; every other read falls through
@@ -60,7 +73,7 @@ type ambientOverlay struct{ base FileSystem }
 
 func (a ambientOverlay) ReadFile(path string) (string, bool) {
 	if path == ambientPath {
-		return ambientSource, true
+		return ambientText(), true
 	}
 	return a.base.ReadFile(path)
 }

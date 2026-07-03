@@ -74,6 +74,112 @@ func TestLoadReportsTypeErrors(t *testing.T) {
 	}
 }
 
+// TestLoadResolvesBentoGoVocabulary proves the ambient overlay serves the
+// bento:go module: a program that imports a helper from it type-checks clean and
+// the checker sees the helper's real shape, so a correct use of GoReader.Read
+// carries no diagnostic. This is what makes a generated .d.ts's
+// `import { GoReader } from "bento:go"` resolve instead of erroring on a missing
+// module.
+func TestLoadResolvesBentoGoVocabulary(t *testing.T) {
+	fs := mapFS{files: map[string]string{
+		"/app/main.ts": "import { GoReader } from \"bento:go\";\n" +
+			"export function first(r: GoReader): number { return r.Read(new Uint8Array(8)); }\n",
+	}}
+	prog, err := Load(LoadOptions{Dir: "/app", Roots: []string{"/app/main.ts"}, FS: fs})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, d := range prog.Diagnostics() {
+		if d.Category == CategoryError {
+			t.Errorf("unexpected error diagnostic against bento:go: %s", d.Message)
+		}
+	}
+}
+
+// TestLoadBentoGoVocabularyIsTyped proves the served module is a real typed shape,
+// not an untyped escape hatch: reaching for a method GoReader does not have is a
+// checker error, so the vocabulary constrains a program the way its declarations
+// promise.
+func TestLoadBentoGoVocabularyIsTyped(t *testing.T) {
+	fs := mapFS{files: map[string]string{
+		"/app/main.ts": "import { GoReader } from \"bento:go\";\n" +
+			"export function bad(r: GoReader): number { return r.Write(new Uint8Array(8)); }\n",
+	}}
+	prog, err := Load(LoadOptions{Dir: "/app", Roots: []string{"/app/main.ts"}, FS: fs})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	found := false
+	for _, d := range prog.Diagnostics() {
+		if d.Category == CategoryError {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected an error for calling GoReader.Write, which the vocabulary does not declare")
+	}
+}
+
+// TestLoadTypeChecksGoImport proves the whole go: interop type path: the resolver
+// classifies go:crypto/sha256, the frontend generates that package's declarations
+// from the real Go package and serves them at the virtual path the import resolves
+// to, and the checker binds Sum256 against its genuine signature. A call that
+// matches the signature carries no diagnostic. This test loads a real standard
+// library package, so it needs the Go toolchain but no network.
+func TestLoadTypeChecksGoImport(t *testing.T) {
+	fs := mapFS{files: map[string]string{
+		"/app/main.ts": "import { Sum256 } from \"go:crypto/sha256\";\n" +
+			"export const digest = Sum256(new Uint8Array([1, 2, 3]));\n",
+	}}
+	prog, err := Load(LoadOptions{Dir: "/app", Roots: []string{"/app/main.ts"}, FS: fs})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// The go: import resolves to its virtual declaration path and is pulled into the
+	// program as a typed input.
+	imps := prog.Imports(SourceFile{Path: "/app/main.ts", Kind: FileTS})
+	if len(imps) != 1 {
+		t.Fatalf("imports = %+v, want one go: edge", imps)
+	}
+	if imps[0].Kind != ImportGo {
+		t.Errorf("go: import kind = %v, want ImportGo", imps[0].Kind)
+	}
+	if imps[0].Resolved.Path != "/__bento_go__/crypto/sha256.d.ts" {
+		t.Errorf("go: import resolved to %q, want the virtual declaration path", imps[0].Resolved.Path)
+	}
+
+	for _, d := range prog.Diagnostics() {
+		if d.Category == CategoryError {
+			t.Errorf("unexpected error diagnostic against go:crypto/sha256: %s", d.Message)
+		}
+	}
+}
+
+// TestLoadGoImportIsTyped proves the served Go declarations are the real API and
+// not an untyped escape hatch: passing a number where Sum256 wants a Uint8Array is
+// a checker error, so a go: import constrains a program the way the package's true
+// signature does.
+func TestLoadGoImportIsTyped(t *testing.T) {
+	fs := mapFS{files: map[string]string{
+		"/app/main.ts": "import { Sum256 } from \"go:crypto/sha256\";\n" +
+			"export const digest = Sum256(42);\n",
+	}}
+	prog, err := Load(LoadOptions{Dir: "/app", Roots: []string{"/app/main.ts"}, FS: fs})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	found := false
+	for _, d := range prog.Diagnostics() {
+		if d.Category == CategoryError {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected an error for passing a number to Sum256, which wants a Uint8Array")
+	}
+}
+
 // TestLoadRequiresRoots holds the documented contract that Load needs explicit
 // roots until tsconfig include discovery lands.
 func TestLoadRequiresRoots(t *testing.T) {
