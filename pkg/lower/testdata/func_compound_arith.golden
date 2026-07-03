@@ -1,10 +1,7 @@
 func Accumulate(n float64) float64 {
 	var t float64 = 0
-	{
-		var i float64 = 0
-		for ; i < n; i++ {
-			t += i
-		}
+	for i := 0.0; i < n; i++ {
+		t += i
 	}
 	t -= 1
 	t *= 2

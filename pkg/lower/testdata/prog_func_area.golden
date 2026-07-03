@@ -9,11 +9,8 @@ func Area(w float64, h float64) float64 {
 }
 func main() {
 	var sum float64 = 0
-	{
-		var i float64 = 1
-		for ; i <= 3; i++ {
-			sum += Area(i, i)
-		}
+	for i := 1.0; i <= 3; i++ {
+		sum += Area(i, i)
 	}
 	value.ConsoleLog(value.FromGoString("total area"), value.NumberToString(sum))
 }

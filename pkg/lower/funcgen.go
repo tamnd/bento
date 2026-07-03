@@ -759,8 +759,87 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 		return nil, err
 	}
 
+	// A single float64 loop variable folds into the for's own init clause, so the
+	// loop reads for i := 0.0; i < n; i++ the way a developer writes it rather than a
+	// block wrapping a var declaration. The block form stays for everything the fold
+	// declines (an int32-specialized counter, a hex or non-literal initializer, more
+	// than one loop variable), because Go's := would infer int for those and lose the
+	// declared type the block's var keeps.
+	if init, ok := r.foldForInit(decls); ok {
+		return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
+	}
 	loop := &ast.ForStmt{Cond: cond, Post: post, Body: body}
 	return &ast.BlockStmt{List: []ast.Stmt{initDecl, loop}}, nil
+}
+
+// foldForInit builds a Go short-variable-declaration for a for loop's init clause
+// from a single float64 loop variable, so the declaration folds into the for
+// statement instead of a wrapping block. It returns false, and the caller keeps the
+// block form, unless the loop declares exactly one variable, that variable is a plain
+// float64 (not an int32-specialized counter), and its initializer is a decimal
+// literal floatLiteral can retype: Go's := infers int from a bare 0, so the fold is
+// sound only when the initializer already denotes, or can be spelled as, a float64.
+func (r *Renderer) foldForInit(decls []frontend.Node) (ast.Stmt, bool) {
+	if len(decls) != 1 {
+		return nil, false
+	}
+	kids := r.prog.Children(decls[0])
+	if len(kids) != 2 && len(kids) != 3 {
+		return nil, false
+	}
+	name, ok := localName(r.prog.Text(kids[0]))
+	if !ok || r.int32Locals[name] {
+		return nil, false
+	}
+	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
+	if err != nil || !isFloat64Ident(typ) {
+		return nil, false
+	}
+	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
+	if err != nil {
+		return nil, false
+	}
+	finit, ok := floatLiteral(init)
+	if !ok {
+		return nil, false
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{finit}}, true
+}
+
+// isFloat64Ident reports whether a lowered type expression is the bare float64 type,
+// the type every plain JavaScript number local takes. It is how the readability
+// rewrites tell a number local apart from a string, boolean, or richer type whose :=
+// inference is already exact.
+func isFloat64Ident(typ ast.Expr) bool {
+	id, ok := typ.(*ast.Ident)
+	return ok && id.Name == "float64"
+}
+
+// floatLiteral retypes a numeric initializer so Go's := infers float64 from it. A
+// literal already written as a float (it carries a point or an exponent) passes
+// through, and a plain decimal integer literal gains a trailing .0 so 0 becomes 0.0
+// and 5 becomes 5.0. A hex, binary, or octal integer literal, or anything that is not
+// a bare literal, returns false: those have no short float spelling here, so the
+// caller keeps the typed var form rather than change the value.
+func floatLiteral(init ast.Expr) (ast.Expr, bool) {
+	lit, ok := init.(*ast.BasicLit)
+	if !ok {
+		return nil, false
+	}
+	if lit.Kind == token.FLOAT {
+		return lit, true
+	}
+	if lit.Kind != token.INT {
+		return nil, false
+	}
+	for i := 0; i < len(lit.Value); i++ {
+		if lit.Value[i] < '0' || lit.Value[i] > '9' {
+			// A prefix (0x, 0b, 0o) or separator means this is not a plain decimal run,
+			// so there is no bare float spelling for it.
+			return nil, false
+		}
+	}
+	return &ast.BasicLit{Kind: token.FLOAT, Value: lit.Value + ".0"}, true
 }
 
 // loopBody lowers the body of a loop, which JavaScript allows to be either a
