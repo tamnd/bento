@@ -55,3 +55,24 @@ func SumAll(pts ...Point) int {
 	}
 	return total
 }
+
+// Diagonal returns the first n points on the line y=x, so a Go []Point result
+// crosses back as a bento array of read-only struct boxes the caller reads element
+// by element.
+func Diagonal(n int) []Point {
+	pts := make([]Point, n)
+	for i := range pts {
+		pts[i] = Point{X: i, Y: i}
+	}
+	return pts
+}
+
+// Profiles returns a fixed roster of Profiles, so a []struct result with mixed field
+// kinds crosses back as an array whose elements carry a string, a number, and a
+// boolean field each.
+func Profiles() []Profile {
+	return []Profile{
+		{Name: "ada", Age: 36, Active: true},
+		{Name: "linus", Age: 21, Active: false},
+	}
+}
