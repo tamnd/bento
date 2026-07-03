@@ -17,11 +17,18 @@ import (
 // FuncSig describes one exported function's boundary crossings by the Go type
 // keyword of each parameter and each non-error result: "string", "bool", "int",
 // "int64", "float64", and the rest of the numeric basics. OK reports whether the
-// whole signature is in a shape the lowerer marshals today; a variadic, an
-// unclassifiable parameter or result, more than one non-error result, or an error
-// in a non-trailing position clears it, so the lowerer hands the call back rather
-// than emit an unsound crossing. A cleared OK still carries whatever it classified,
-// for a diagnostic, but the lowerer reads only the flag.
+// whole signature is in a shape the lowerer marshals today; an unclassifiable
+// parameter or result, more than one non-error result, or an error in a non-trailing
+// position clears it, so the lowerer hands the call back rather than emit an unsound
+// crossing. A cleared OK still carries whatever it classified, for a diagnostic, but
+// the lowerer reads only the flag.
+//
+// Variadic reports whether the function ends in a ...T rest parameter (section 6.9).
+// When it is set the trailing entry of Params, ParamConv, and ParamElem describes the
+// element type T rather than the []T the parameter is at the Go level, so the lowerer
+// marshals each spread argument as a single T and passes them positionally into the
+// Go variadic call. A variadic whose element is itself a supported crossing keeps OK
+// set; only an unclassifiable element clears it.
 //
 // Throws reports whether the signature ends in a trailing error, the (T, error)
 // idiom that projects to a value that throws on failure (section 6.6). The error
@@ -63,6 +70,7 @@ type FuncSig struct {
 	ResultElem    []string
 	ResultDefined bool
 	Throws        bool
+	Variadic      bool
 	OK            bool
 }
 
@@ -108,44 +116,44 @@ func Signatures(importPath string) (map[string]FuncSig, error) {
 
 // classifySignature reduces a Go signature to the marshal keywords the lowerer
 // reads. It clears OK for anything outside the crossings this slice covers: a
-// variadic tail, a parameter or non-error result that is not a plain basic type,
-// more than one non-error result, or an error in a non-trailing position. A
-// trailing error is the (T, error) throw idiom (section 6.6): it is dropped from
-// Results, sets Throws, and leaves OK intact so the lowerer wraps the call in the
-// throw bridge. The keywords are filled best-effort so a diagnostic can name a
-// crossing even when OK is clear.
+// parameter or non-error result that is not a plain basic type, more than one
+// non-error result, or an error in a non-trailing position. A trailing error is the
+// (T, error) throw idiom (section 6.6): it is dropped from Results, sets Throws, and
+// leaves OK intact so the lowerer wraps the call in the throw bridge. A variadic tail
+// is classified by its element type and flagged (section 6.9), so the lowerer spreads
+// each argument as a single element into the Go call. The keywords are filled
+// best-effort so a diagnostic can name a crossing even when OK is clear.
 func classifySignature(sig *types.Signature) FuncSig {
-	ok := !sig.Variadic()
-	params := make([]string, 0, sig.Params().Len())
-	convs := make([]DefinedConv, 0, sig.Params().Len())
-	paramElems := make([]string, 0, sig.Params().Len())
-	for i := 0; i < sig.Params().Len(); i++ {
+	ok := true
+	variadic := sig.Variadic()
+	np := sig.Params().Len()
+	params := make([]string, 0, np)
+	convs := make([]DefinedConv, 0, np)
+	paramElems := make([]string, 0, np)
+	for i := 0; i < np; i++ {
 		t := sig.Params().At(i).Type()
-		if elem, good := sliceCrossing(t); good {
-			params = append(params, "slice")
-			convs = append(convs, DefinedConv{})
-			paramElems = append(paramElems, elem)
-			continue
+		if variadic && i == np-1 {
+			// The trailing parameter of a variadic function is a []T the caller spreads
+			// individual T arguments into. Classify the element T so each spread argument
+			// marshals as one T; the lowerer passes them positionally into the Go call,
+			// which reassembles the slice (section 6.9).
+			s, good := t.(*types.Slice)
+			if !good {
+				ok = false
+				params = append(params, "")
+				convs = append(convs, DefinedConv{})
+				paramElems = append(paramElems, "")
+				continue
+			}
+			t = s.Elem()
 		}
-		if anyCrossing(t) {
-			params = append(params, "any")
-			convs = append(convs, DefinedConv{})
-			paramElems = append(paramElems, "")
-			continue
-		}
-		if path, name, good := opaqueCrossing(t); good {
-			params = append(params, "opaque")
-			convs = append(convs, DefinedConv{})
-			paramElems = append(paramElems, OpaqueElem(path, name))
-			continue
-		}
-		kw, conv, good := crossingType(t)
+		kw, conv, elem, good := classifyParamType(t)
 		if !good {
 			ok = false
 		}
 		params = append(params, kw)
 		convs = append(convs, conv)
-		paramElems = append(paramElems, "")
+		paramElems = append(paramElems, elem)
 	}
 	var results []string
 	var resultElems []string
@@ -194,7 +202,28 @@ func classifySignature(sig *types.Signature) FuncSig {
 		// value (with or without a hoisted error) is marshaled today.
 		ok = false
 	}
-	return FuncSig{Params: params, ParamConv: convs, ParamElem: paramElems, Results: results, ResultElem: resultElems, ResultDefined: resultDefined, Throws: throws, OK: ok}
+	return FuncSig{Params: params, ParamConv: convs, ParamElem: paramElems, Results: results, ResultElem: resultElems, ResultDefined: resultDefined, Throws: throws, Variadic: variadic, OK: ok}
+}
+
+// classifyParamType classifies one parameter's Go type into the marshal keyword, the
+// defined-type conversion, and the element keyword the lowerer reads, reporting
+// whether the crossing is one this slice marshals. It is shared by the fixed
+// parameters and, for a variadic function, by the element type of the trailing
+// parameter, so a variadic ...string classifies its element exactly as a plain
+// string parameter would (section 6.9). The order matches the loop it replaces: a
+// slice of a basic first, then any, then an opaque handle, then a scalar crossing.
+func classifyParamType(t types.Type) (kw string, conv DefinedConv, elem string, ok bool) {
+	if e, good := sliceCrossing(t); good {
+		return "slice", DefinedConv{}, e, true
+	}
+	if anyCrossing(t) {
+		return "any", DefinedConv{}, "", true
+	}
+	if path, name, good := opaqueCrossing(t); good {
+		return "opaque", DefinedConv{}, OpaqueElem(path, name), true
+	}
+	kw, conv, good := crossingType(t)
+	return kw, conv, "", good
 }
 
 // crossingType classifies a parameter or result type for the boundary: a plain
