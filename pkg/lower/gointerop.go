@@ -136,6 +136,30 @@ func (r *Renderer) namespaceGoCall(access frontend.Node) (goBuiltin, bool) {
 	return goBuiltin{importPath: importPath, name: r.prog.Text(kids[1])}, true
 }
 
+// goConstRef lowers a reference to a name bound by a go: import that names an
+// exported Go constant to the qualified constant read, marshaled to a bento value
+// by the constant's Go type (section 6.10). It is consulted from the identifier
+// path: a bound name used as a value rather than called is a constant reference
+// when the const resolver knows its type keyword, and anything else (a function
+// used as a value, an unwired resolver) reports not handled so the caller hands the
+// reference back. A constant read cannot panic, so it needs no boundary guard.
+func (r *Renderer) goConstRef(name string) (ast.Expr, bool, error) {
+	b, ok := r.goImports[name]
+	if !ok || r.goConsts == nil {
+		return nil, false, nil
+	}
+	keyword, ok := r.goConsts(b.importPath, b.name)
+	if !ok {
+		return nil, false, nil
+	}
+	alias := r.requireGoImport(b.importPath)
+	marshaled, err := r.marshalResultFromGo(keyword, sel(alias, b.name))
+	if err != nil {
+		return nil, false, err
+	}
+	return marshaled, true, nil
+}
+
 // goImportCall lowers a call to a name bound by a go: import to a direct call into
 // the Go package. When the Go signature is in hand (the build wires it), each
 // argument and the result marshal by the Go type, so a number crosses with the

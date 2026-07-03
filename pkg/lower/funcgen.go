@@ -758,6 +758,15 @@ func (r *Renderer) lowerCondition(n frontend.Node) (ast.Expr, error) {
 func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	switch n.Kind() {
 	case frontend.NodeIdentifier:
+		// A bare reference to a go: import binding used as a value is a constant read
+		// into the Go package, marshaled by the constant's Go type. It is checked by the
+		// binding's own text, the key the import recorded, before the local-name path,
+		// which would otherwise treat the binding as an undeclared local.
+		if expr, handled, err := r.goConstRef(r.prog.Text(n)); err != nil {
+			return nil, err
+		} else if handled {
+			return expr, nil
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}

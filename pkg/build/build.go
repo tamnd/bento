@@ -111,6 +111,7 @@ func Compile(entry string) (string, error) {
 
 	r := lower.NewRenderer(prog)
 	r.SetGoSignatures(goSignatureResolver())
+	r.SetGoConstants(goConstantResolver())
 	p, err := r.RenderProgram(files[0])
 	if err != nil {
 		return "", fmt.Errorf("bento build: %s: %w", entry, err)
@@ -139,6 +140,28 @@ func goSignatureResolver() func(importPath, name string) (goimport.FuncSig, bool
 		}
 		sig, ok := sigs[name]
 		return sig, ok
+	}
+}
+
+// goConstantResolver builds the resolver the lowerer marshals a go: constant
+// reference against, the companion to goSignatureResolver for a binding used as a
+// value. It memoizes each package's constants the same way, sharing the one
+// go/packages load and degrading a failed load to an empty set, so a reference to a
+// constant from a package that will not load simply hands back.
+func goConstantResolver() func(importPath, name string) (string, bool) {
+	memo := map[string]map[string]string{}
+	return func(importPath, name string) (string, bool) {
+		consts, loaded := memo[importPath]
+		if !loaded {
+			var err error
+			consts, err = goimport.Constants(importPath)
+			if err != nil {
+				consts = map[string]string{}
+			}
+			memo[importPath] = consts
+		}
+		kw, ok := consts[name]
+		return kw, ok
 	}
 }
 

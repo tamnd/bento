@@ -89,6 +89,12 @@ type Renderer struct {
 	// which keeps the renderer usable without the Go toolchain at hand. The build
 	// wires it from the same package load the declaration generator ran.
 	goSigs func(importPath, name string) (goimport.FuncSig, bool)
+	// goConsts resolves the Go type keyword of a go: constant so a reference to one
+	// marshals by the Go type the TypeScript number cannot distinguish, the same
+	// disambiguation goSigs does for a call. It is optional and wired from the same
+	// package load; with no resolver a reference to a go: binding used as a value
+	// hands back, since the renderer cannot tell a constant from a function value.
+	goConsts func(importPath, name string) (string, bool)
 	// retType is the declared return type of the function whose body is currently
 	// being lowered, so a return statement can coerce its value across the dynamic
 	// boundary the way an assignment does. It is the zero type outside a function
@@ -147,6 +153,14 @@ func NewRenderer(prog *frontend.Program) *Renderer {
 // the string and boolean crossings a TypeScript type settles on its own.
 func (r *Renderer) SetGoSignatures(resolve func(importPath, name string) (goimport.FuncSig, bool)) {
 	r.goSigs = resolve
+}
+
+// SetGoConstants wires the resolver a go: constant reference marshals against, the
+// companion to SetGoSignatures for a binding used as a value rather than called. It
+// is set from the same Go package load; a renderer with no resolver hands a
+// reference to a go: binding back rather than guess whether it is a constant.
+func (r *Renderer) SetGoConstants(resolve func(importPath, name string) (string, bool)) {
+	r.goConsts = resolve
 }
 
 // requireImport records that the Go the renderer has emitted refers to a
