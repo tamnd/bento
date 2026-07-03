@@ -922,23 +922,22 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	}
 }
 
-// arrowFunc lowers an arrow function to a Go function literal. Only a concise
-// expression body is covered, the shape a map or filter callback almost always
-// takes; a block body, which needs the statement lowering to run inside a
-// literal, is a later slice. Each parameter takes its type from the checker,
-// which has already applied the contextual type from the call site, so a bare
-// x in xs.map(x => ...) is typed number without an annotation. The result type
-// comes from the body expression. This makes an arrow usable anywhere an
-// expression is, but its first consumers are the higher-order array methods.
+// arrowFunc lowers an arrow function to a Go function literal. Both a concise
+// expression body, the shape a map or filter callback almost always takes, and a
+// block body, which runs the statement lowering inside the literal, are covered.
+// Each parameter takes its type from the checker, which has already applied the
+// contextual type from the call site, so a bare x in xs.map(x => ...) is typed
+// number without an annotation. A concise body's result type comes from the body
+// expression; a block body's comes from the arrow's own call signature, the same
+// return the enclosed return statements coerce to. This makes an arrow usable
+// anywhere an expression is, but its first consumers are the higher-order array
+// methods and go: callbacks.
 func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
 	if len(kids) < 2 {
 		return nil, &NotYetLowerable{Reason: "arrow function did not expose parameters and a body"}
 	}
 	body := kids[len(kids)-1]
-	if body.Kind() == frontend.NodeBlock {
-		return nil, &NotYetLowerable{Reason: "arrow function with a block body is a later slice"}
-	}
 	fields := make([]*ast.Field, 0, len(kids))
 	for _, k := range kids[:len(kids)-1] {
 		if k.Kind() != frontend.NodeParameter {
@@ -970,6 +969,9 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		}
 		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
 	}
+	if body.Kind() == frontend.NodeBlock {
+		return r.blockBodyArrow(n, fields)
+	}
 	bodyType := r.prog.TypeAt(body)
 	loweredBody, err := r.lowerExpr(body)
 	if err != nil {
@@ -1000,6 +1002,57 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
 		},
 		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{loweredBody}}}},
+	}, nil
+}
+
+// arrowResultType is the Go type an arrow returns, wherever a caller needs it
+// spelled out (the type-changing map's result parameter, for one). A concise body
+// carries the result on the body expression itself, which the checker has already
+// inferred; a block body has no single body expression, so the result comes from
+// the arrow's own call signature, the same return the enclosed return statements
+// coerce to. Both routes end at the same typeExpr, so the two arrow forms give the
+// map the same U.
+func (r *Renderer) arrowResultType(arrow frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(arrow)
+	body := kids[len(kids)-1]
+	if body.Kind() == frontend.NodeBlock {
+		sig, ok := r.prog.SignatureAt(arrow)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "arrow function with a block body has no call signature"}
+		}
+		return r.typeExpr(sig.Return)
+	}
+	return r.typeExpr(r.prog.TypeAt(body))
+}
+
+// blockBodyArrow lowers an arrow whose body is a statement block, the shape a
+// callback that needs a conditional or a local takes ((i) => { if (i === 2) {
+// throw new Error(...); } }). It mirrors funcDecl: the return type comes from the
+// arrow's own call signature, stashed on retType so an enclosed return coerces
+// across the dynamic boundary the way a named function's does, and the body lowers
+// through blockOf so the int32, optional-local, and builder scoping that runs for
+// a named function runs inside the literal too. The parameters were already
+// lowered by arrowFunc from the checker's contextual types, so this only adds the
+// result and the lowered block.
+func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Expr, error) {
+	sig, ok := r.prog.SignatureAt(n)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "arrow function with a block body has no call signature"}
+	}
+	results, err := r.resultFields(sig.Return)
+	if err != nil {
+		return nil, err
+	}
+	prevRet := r.retType
+	r.retType = sig.Return
+	defer func() { r.retType = prevRet }()
+	body, err := r.blockOf(n)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}, Results: results},
+		Body: body,
 	}, nil
 }
 
@@ -3499,8 +3552,7 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 			return nil, &NotYetLowerable{Reason: "array map on a receiver whose element type did not lower"}
 		}
 		arrow := argNodes[0]
-		kids := r.prog.Children(arrow)
-		bodyType, err := r.typeExpr(r.prog.TypeAt(kids[len(kids)-1]))
+		bodyType, err := r.arrowResultType(arrow)
 		if err != nil {
 			return nil, err
 		}
