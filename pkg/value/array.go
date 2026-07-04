@@ -340,6 +340,24 @@ func (a *Array[T]) Includes(target T, eq func(T, T) bool) bool {
 	return a.IndexOf(target, eq) >= 0
 }
 
+// LastIndexOf returns the index of the last element equal to target, or -1 if
+// none is, the lowering of Array.prototype.lastIndexOf. It is IndexOf scanning
+// from the end instead of the front, and it takes the same caller-supplied
+// equality for the same reason: a Go method cannot compare two values of its
+// type parameter, and the equality is element-type-specific. lastIndexOf uses
+// strict equality like indexOf, so the lowerer passes the same closure it passes
+// for indexOf, and a NaN target is never found. The result is a Number, so it is
+// a float64. The optional fromIndex argument is a later slice; this is the
+// whole-array scan.
+func (a *Array[T]) LastIndexOf(target T, eq func(T, T) bool) float64 {
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		if eq(a.elems[i], target) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
 // Join concatenates the elements into a string separated by sep, the lowering of
 // Array.prototype.join. Each element becomes a string through str, supplied by
 // the caller for the same reason the search methods take an equality: a Go

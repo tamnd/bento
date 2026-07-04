@@ -239,6 +239,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayReduce(recvNode, argNodes)
 	case "indexOf":
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
+	case "lastIndexOf":
+		return r.arrayIndexOfIncludes(recvNode, "LastIndexOf", argNodes, false)
 	case "includes":
 		return r.arrayIndexOfIncludes(recvNode, "Includes", argNodes, true)
 	case "join":
