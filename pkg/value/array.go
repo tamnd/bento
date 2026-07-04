@@ -570,6 +570,24 @@ func (a *Array[T]) Sort(cmp func(T, T) float64) *Array[T] {
 	return a
 }
 
+// ToSorted returns a new array sorted by the comparator, the lowering of
+// Array.prototype.toSorted called with a compare function. It is the copying
+// sibling of sort: it orders a fresh copy of the elements and leaves the
+// receiver in its original order, where sort reorders in place and returns the
+// same array. The comparator has the same meaning it has for sort, negative to
+// place its first argument before its second, and the sort is stable for the
+// same reason, so equal elements keep their relative order. The result aliases
+// none of the receiver's storage, so a.toSorted(cmp) !== a and the original
+// order is still readable through the receiver.
+func (a *Array[T]) ToSorted(cmp func(T, T) float64) *Array[T] {
+	out := make([]T, len(a.elems))
+	copy(out, a.elems)
+	sort.SliceStable(out, func(i, j int) bool {
+		return cmp(out[i], out[j]) < 0
+	})
+	return &Array[T]{elems: out}
+}
+
 // IndexOf returns the index of the first element equal to target, or -1 if none
 // is, the lowering of Array.prototype.indexOf. Equality is supplied by the
 // caller through eq rather than fixed here, because a Go method cannot compare

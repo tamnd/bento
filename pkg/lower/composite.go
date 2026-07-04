@@ -420,6 +420,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToReversed")}}, nil
 	case "sort":
 		return r.arraySort(recvNode, argNodes)
+	case "toSorted":
+		return r.arraySortMethod(recvNode, "ToSorted", argNodes)
 	case "pop":
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "array pop takes no arguments"}
@@ -1147,11 +1149,21 @@ func (r *Renderer) arrayJoin(recvNode frontend.Node, argNodes []frontend.Node) (
 // through a shared helper so this slice stays independent of the predicate
 // family.
 func (r *Renderer) arraySort(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	return r.arraySortMethod(recvNode, "Sort", argNodes)
+}
+
+// arraySortMethod lowers sort and its copying sibling toSorted, which share a
+// comparator shape: both take one inline arrow of two parameters and lower to a
+// method of the same name on the array receiver. Only the Go method name and the
+// hand-back messages differ, so the method name is passed in. A missing
+// comparator needs the default string-order sort, and a comparator that is not
+// an inline two-parameter arrow is a later slice, the same limits sort had.
+func (r *Renderer) arraySortMethod(recvNode frontend.Node, goMethod string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) == 0 {
-		return nil, &NotYetLowerable{Reason: "array sort without a comparator needs the default string-order sort, a later slice"}
+		return nil, &NotYetLowerable{Reason: "array " + goMethod + " without a comparator needs the default string-order sort, a later slice"}
 	}
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
-		return nil, &NotYetLowerable{Reason: "array sort with a comparator that is not an inline arrow function is a later slice"}
+		return nil, &NotYetLowerable{Reason: "array " + goMethod + " with a comparator that is not an inline arrow function is a later slice"}
 	}
 	arrow := argNodes[0]
 	params := 0
@@ -1161,7 +1173,7 @@ func (r *Renderer) arraySort(recvNode frontend.Node, argNodes []frontend.Node) (
 		}
 	}
 	if params != 2 {
-		return nil, &NotYetLowerable{Reason: "array sort comparator that does not take exactly two parameters is a later slice"}
+		return nil, &NotYetLowerable{Reason: "array " + goMethod + " comparator that does not take exactly two parameters is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -1171,7 +1183,7 @@ func (r *Renderer) arraySort(recvNode frontend.Node, argNodes []frontend.Node) (
 	if err != nil {
 		return nil, err
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Sort")}, Args: []ast.Expr{cmp}}, nil
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{cmp}}, nil
 }
 
 // stringifyClosure builds the func(T) value.BStr the join method takes, spelling
