@@ -103,6 +103,7 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// is lowered, and the counters and accumulators of a compute loop are given a Go
 	// int32 type. The set is scoped to this lowering and needs no restore, since the
 	// program has no enclosing body.
+	r.constInt = r.constIntsOf(mainBody)
 	r.int32Locals = r.int32LocalsOf(mainBody)
 	r.counterIvl = r.counterIvlOf(mainBody)
 	r.fixedTArr = r.fixedTypedArraysOf(mainBody)

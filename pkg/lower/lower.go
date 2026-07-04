@@ -128,6 +128,15 @@ type Renderer struct {
 	// int32Locals, saved and restored around each body. A nil map takes no native slice
 	// path.
 	fixedTArr map[string]typedArrInfo
+	// constInt maps each const local in the body currently being lowered that is
+	// initialized to an integer literal in the int32 range and never reassigned to
+	// that literal value. The range analysis resolves such a name to its value where
+	// it expects an integer literal, so an idiomatic const N = 4096 used as a typed
+	// array length or a loop bound is recognized as the constant it is. It is computed
+	// once per body by constIntsOf and, like int32Locals, saved and restored around
+	// each body. A nil map resolves no names, so a body with no such const lowers
+	// exactly as before.
+	constInt map[string]int
 	// optLocals is the set of local names in the body currently being lowered that
 	// are declared with an optional type (T | undefined, lowered to value.Opt[T]).
 	// It is computed once per body by optLocalsOf and, like int32Locals, saved and

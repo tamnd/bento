@@ -298,7 +298,7 @@ func (r *Renderer) forCounter(n frontend.Node) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if !r.isInt32Literal(dkids[len(dkids)-1]) {
+	if !r.isInt32ConstOrLiteral(dkids[len(dkids)-1]) {
 		return "", false
 	}
 
@@ -314,7 +314,7 @@ func (r *Renderer) forCounter(n frontend.Node) (string, bool) {
 		return "", false
 	}
 	condName, ok := r.identName(cparts[0])
-	if !ok || condName != name || !r.isInt32Literal(cparts[2]) {
+	if !ok || condName != name || !r.isInt32ConstOrLiteral(cparts[2]) {
 		return "", false
 	}
 
@@ -703,6 +703,16 @@ func (r *Renderer) isInt32Literal(n frontend.Node) bool {
 	}
 	v, ok := parseIntegerLiteral(r.prog.Text(n))
 	return ok && v >= math.MinInt32 && v <= math.MaxInt32
+}
+
+// isInt32ConstOrLiteral reports whether a node is an int32 literal or a const local
+// bound to one, the shape that can start or bound a counter. Resolving a const N to
+// its value lets an idiomatic for (let i = 0; i < N; i++) specialize its counter to a
+// Go int32 the same way a written literal bound does. It reads the value through
+// intLiteralValue, which returns a value only for a literal or a known const.
+func (r *Renderer) isInt32ConstOrLiteral(n frontend.Node) bool {
+	_, ok := r.intLiteralValue(n)
+	return ok
 }
 
 // isZeroLiteral reports whether a node is the numeric literal 0, the right side of
