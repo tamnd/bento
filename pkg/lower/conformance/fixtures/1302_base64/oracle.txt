@@ -1,0 +1,8 @@
+== stdout:
+TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu
+Many hands make light work.
+true
+TQ== TWE= TWFu
+Man Ma
+== exit:
+0
