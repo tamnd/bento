@@ -349,6 +349,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// never re-derived structurally.
 			return star(ident(info.goName)), nil
 		}
+		if ft, ok, err := r.renderFuncType(t); err != nil {
+			return nil, err
+		} else if ok {
+			// A function type (an arrow or function value, the type of a callback
+			// parameter) lowers to a Go func type. It routes before renderObject, which
+			// would otherwise intern its call signature away and leave an empty struct.
+			return ft, nil
+		}
 		if elem, ok := r.prog.ElementType(t); ok {
 			return r.renderArray(elem)
 		}
@@ -395,6 +403,61 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	default:
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no lowering for this type"}
 	}
+}
+
+// renderFuncType lowers a function type to a Go func type, so a callback
+// parameter or a local holding an arrow reads with a callable Go type rather
+// than the empty struct renderObject would give a type it sees as a shape with
+// no fields. It reports ok=false when the type is not a plain function value, so
+// typeExpr falls through to its object handling: a callable object that also
+// carries properties, an overloaded type with more than one call signature, a
+// constructor type, or a generic or rest-or-optional-parameter signature are
+// each their own later slice. Once the type is a plain function value, a
+// parameter or return that has no lowering hands the unit back rather than
+// falling through to a wrong shape.
+func (r *Renderer) renderFuncType(t frontend.Type) (ast.Expr, bool, error) {
+	call, construct := r.prog.Signatures(t)
+	if len(call) == 0 {
+		// Not a function value (a plain object, an array, or a constructor-only
+		// type); let typeExpr's object handling take it.
+		return nil, false, nil
+	}
+	// The type is callable, so it is a function value and must not fall through to
+	// the empty-struct object lowering, which would be unsound. Only a single plain
+	// call signature lowers here; an overload set (more than one call signature), a
+	// callable object that also carries a construct signature or its own properties,
+	// or a generic or rest-or-optional-parameter signature is a later slice and
+	// hands the unit back rather than emit a wrong shape.
+	if len(call) != 1 || len(construct) != 0 || len(r.prog.Properties(t)) != 0 {
+		return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "function type with overloads, properties, or a construct signature is a later slice"}
+	}
+	sig := call[0]
+	if len(sig.TypeParams) != 0 || sig.RestParam != nil {
+		return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "generic or rest-parameter function type is a later slice"}
+	}
+	var params []*ast.Field
+	for _, p := range sig.Params {
+		if p.Optional {
+			return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "function type with an optional parameter is a later slice"}
+		}
+		pt, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, true, err
+		}
+		params = append(params, &ast.Field{Type: pt})
+	}
+	ft := &ast.FuncType{Params: &ast.FieldList{List: params}}
+	// A void return (or the zero type at a position with no value) is a Go func
+	// with no results; any other return lowers to the single Go result the
+	// signature carries.
+	if sig.Return.Flags != 0 && sig.Return.Flags&frontend.TypeVoid == 0 {
+		rt, err := r.typeExpr(sig.Return)
+		if err != nil {
+			return nil, true, err
+		}
+		ft.Results = &ast.FieldList{List: []*ast.Field{{Type: rt}}}
+	}
+	return ft, true, nil
 }
 
 // renderArray lowers an array type. The default is the Array[T] header from the
