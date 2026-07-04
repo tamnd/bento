@@ -619,6 +619,8 @@ func compoundBaseOp(op string) (string, bool) {
 		return ">>", true
 	case ">>>=":
 		return ">>>", true
+	case "**=":
+		return "**", true
 	default:
 		return "", false
 	}
