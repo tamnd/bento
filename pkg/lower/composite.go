@@ -376,6 +376,26 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arraySplice(recvNode, argNodes)
 	case "toSpliced":
 		return r.arraySpliceMethod(recvNode, "toSpliced", "ToSplicedToEnd", "ToSpliced", argNodes)
+	case "with":
+		if len(argNodes) != 2 {
+			return nil, &NotYetLowerable{Reason: "array with takes an index and a value"}
+		}
+		if !r.isNumber(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "array with a non-number index is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		idx, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		val, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: []ast.Expr{idx, val}}, nil
 	case "flat":
 		return r.arrayFlat(recvNode, argNodes)
 	case "flatMap":
