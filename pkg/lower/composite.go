@@ -291,6 +291,22 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			args = append(args, lowered)
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Slice")}, Args: args}, nil
+	case "at":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "array at takes exactly one argument"}
+		}
+		if !r.isNumber(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "array at with a non-number index is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AtOpt")}, Args: []ast.Expr{arg}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
 	}
