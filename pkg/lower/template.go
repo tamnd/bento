@@ -53,6 +53,30 @@ func (r *Renderer) hoistStrBuilders(stmts []ast.Stmt) []ast.Stmt {
 // name and which no Go string can hold, is emitted as a raw []uint16 wrapped in
 // value.FromUTF16 so the surrogate survives. A content that does not decode (a
 // malformed escape) hands back.
+// stringLiteralKey reads the property name a string-literal key spells, the value
+// between the quotes with its escapes resolved, so o["k"] can select the same Go
+// struct field o.k does. It returns false for a node that is not a plain string
+// literal, and for a key that decodes to a lone surrogate, which no Go identifier
+// could name anyway, so the caller hands such a key back rather than intern it.
+func (r *Renderer) stringLiteralKey(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodeStringLiteral {
+		return "", false
+	}
+	text := r.prog.Text(n)
+	if len(text) < 2 {
+		return "", false
+	}
+	quote := text[0]
+	if (quote != '"' && quote != '\'') || text[len(text)-1] != quote {
+		return "", false
+	}
+	units, ok := decodeJSString(text[1 : len(text)-1])
+	if !ok || hasLoneSurrogate(units) {
+		return "", false
+	}
+	return string(utf16.Decode(units)), true
+}
+
 func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
 	text := r.prog.Text(n)
 	if len(text) < 2 {
