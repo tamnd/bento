@@ -393,6 +393,22 @@ func Flat[T any](a *Array[*Array[T]]) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// FlatMap maps each element to an array and concatenates the results one level
+// deep, the lowering of Array.prototype.flatMap over a callback that returns an
+// array. It is a free function because the callback maps the element type T to an
+// array of a possibly different element type U, the two type arguments the shape
+// names, which a method could not introduce. It is the map-then-flat pair fused
+// into one pass, so no intermediate array of arrays is built. The result is a
+// fresh array; a callback returning a bare value rather than an array is a later
+// slice.
+func FlatMap[T, U any](a *Array[T], f func(T) *Array[U]) *Array[U] {
+	out := make([]U, 0, len(a.elems))
+	for _, x := range a.elems {
+		out = append(out, f(x).elems...)
+	}
+	return &Array[U]{elems: out}
+}
+
 // Reverse reverses the elements in place and returns the same array, the
 // lowering of Array.prototype.reverse. It is a pointer method because the
 // reversal mutates the receiver, and it returns the receiver rather than a copy
