@@ -376,6 +376,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arraySplice(recvNode, argNodes)
 	case "flat":
 		return r.arrayFlat(recvNode, argNodes)
+	case "flatMap":
+		return r.arrayFlatMap(recvNode, argNodes)
 	case "indexOf":
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
 	case "lastIndexOf":
@@ -942,6 +944,56 @@ func (r *Renderer) arrayFlat(recvNode frontend.Node, argNodes []frontend.Node) (
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "Flat"), innerType), Args: []ast.Expr{recv}}, nil
+}
+
+// arrayFlatMap lowers a flatMap call to the value.FlatMap free function, which
+// maps each element to an array and concatenates the results one level. The
+// function is instantiated at the element type T and the callback's inner result
+// type U, so numbers.flatMap((n) => [n, -n]) spells value.FlatMap[float64,
+// float64]. The callback must be an inline one-parameter arrow that returns an
+// array, since that is the shape FlatMap flattens; an arrow that also reads the
+// index or array parameter, or one that returns a bare value rather than an
+// array, is a later slice and hands back.
+func (r *Renderer) arrayFlatMap(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "array flatMap takes a single callback"}
+	}
+	arrow := argNodes[0]
+	if arrow.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "array flatMap with a callback that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(arrow) != 1 {
+		return nil, &NotYetLowerable{Reason: "array flatMap with a callback that reads the index or array parameter is a later slice"}
+	}
+	elemType, ok := r.arrayElem(recvNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array flatMap on a receiver whose element type did not lower"}
+	}
+	resultType, ok := r.arrowResultFrontendType(arrow)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array flatMap with a block-bodied callback that has no call signature is a later slice"}
+	}
+	innerElem, ok := r.prog.ElementType(resultType)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array flatMap with a callback that returns a value rather than an array is a later slice"}
+	}
+	innerType, err := r.typeExpr(innerElem)
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(arrow)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  &ast.IndexListExpr{X: sel("value", "FlatMap"), Indices: []ast.Expr{elemType, innerType}},
+		Args: []ast.Expr{recv, fn},
+	}, nil
 }
 
 // goTypeString renders a lowered Go type expression to its source form so two
