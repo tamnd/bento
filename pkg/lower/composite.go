@@ -307,6 +307,33 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AtOpt")}, Args: []ast.Expr{arg}}, nil
+	case "fill":
+		if len(argNodes) < 1 || len(argNodes) > 3 {
+			return nil, &NotYetLowerable{Reason: "array fill takes a value and up to two bounds"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		// The first argument is the fill value, which the checker has already typed
+		// against the element type, so it lowers straight through. The remaining
+		// arguments are the optional start and end bounds, each a Number.
+		val, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		args := []ast.Expr{val}
+		for _, b := range argNodes[1:] {
+			if !r.isNumber(b) {
+				return nil, &NotYetLowerable{Reason: "array fill with a non-number bound is a later slice"}
+			}
+			lowered, err := r.lowerExpr(b)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Fill")}, Args: args}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
 	}
