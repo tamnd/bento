@@ -8,17 +8,17 @@ import (
 
 func Run() {
 	b := value.NewInt32Array(6)
-	b.SetAt(0, 1)
+	b.Data()[0] = 1
 	{
 		var i int32 = 1
 		for ; float64(i) < 6; i++ {
-			b.SetAtI(int(i), b.AtI(int(i-1))+float64(i))
+			b.Data()[i] = b.Data()[i-1] + i
 		}
 	}
 	{
 		var j int32 = 0
 		for ; float64(j) < 6; j++ {
-			value.ConsoleLog(value.NumberToString(b.AtI(int(j))))
+			value.ConsoleLog(value.NumberToString(float64(b.Data()[j])))
 		}
 	}
 	t := value.NewInt32Array(3)
@@ -28,7 +28,7 @@ func Run() {
 			t.SetAtI(int(k), 7)
 		}
 	}
-	value.ConsoleLog(value.NumberToString(t.At(2)))
+	value.ConsoleLog(value.NumberToString(float64(t.Data()[2])))
 	value.ConsoleLog(value.NumberToString(t.Len()))
 	xs := value.NewArray[float64](10, 20, 30, 40)
 	sum := 0.0

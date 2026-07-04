@@ -414,6 +414,12 @@ func (r *Renderer) int32Producing(n frontend.Node) bool {
 	case frontend.NodeCallExpression:
 		method, _, ok := r.mathMethodCall(n)
 		return ok && (method == "imul" || method == "clz32")
+	case frontend.NodeElementAccessExpression:
+		// A proven-in-range read of an integer typed array is a native slice index
+		// widened to int32, so it stays in the integer domain and composes with the +,
+		// -, and bitwise producers around it.
+		_, _, ok := r.provenTypedRead(n)
+		return ok
 	default:
 		return false
 	}
@@ -471,6 +477,18 @@ func (r *Renderer) int32Of(n frontend.Node) (ast.Expr, error) {
 
 	case frontend.NodeCallExpression:
 		return r.int32Call(n)
+
+	case frontend.NodeElementAccessExpression:
+		// A proven-in-range integer typed-array read lowers to int32(recv.Data()[idx]):
+		// the stored element widened to int32 is the ToInt32 of the Number the read
+		// would hand out, so it stands in for the checked read with none of its bounds
+		// branch or truncation. An access that is not proven in range falls back to the
+		// ToInt32 of the ordinary At read, which is always correct.
+		if info, idxNode, ok := r.provenTypedRead(n); ok {
+			recvNode := r.prog.Children(n)[0]
+			return r.typedSliceRead(recvNode, idxNode, "int32", info)
+		}
+		return r.int32Fallback(n)
 
 	default:
 		return r.int32Fallback(n)

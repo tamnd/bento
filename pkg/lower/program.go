@@ -104,6 +104,8 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// int32 type. The set is scoped to this lowering and needs no restore, since the
 	// program has no enclosing body.
 	r.int32Locals = r.int32LocalsOf(mainBody)
+	r.counterIvl = r.counterIvlOf(mainBody)
+	r.fixedTArr = r.fixedTypedArraysOf(mainBody)
 	r.optLocals = r.optLocalsOf(mainBody)
 	r.unionLocals = r.unionLocalsOf(nil, mainBody)
 	r.bigOwned = r.bigOwnedLocalsOf(mainBody)
