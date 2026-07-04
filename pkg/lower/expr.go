@@ -29,6 +29,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		} else if handled {
 			return expr, nil
 		}
+		// A bare reference to a top-level function used as a value (passed as a
+		// callback, stored in a variable) is the function itself, so it lowers to the
+		// exported Go name its declaration takes, the same name a direct call uses. It
+		// is checked before the local-name path, which would otherwise emit the source
+		// name and miss the exported declaration.
+		if sym, ok := r.prog.SymbolAt(n); ok && sym.Flags&frontend.SymbolFunction != 0 {
+			if goName, ok := exportedField(sym.Name); ok {
+				return ident(goName), nil
+			}
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
