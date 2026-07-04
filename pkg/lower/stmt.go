@@ -86,12 +86,19 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		// function body, and lowers to a Go block either way.
 		return r.lowerBlock(n)
 	case frontend.NodeUnknown:
-		// The frontend does not name a break or continue node, so each surfaces here as
-		// an unclassified node whose text is the keyword. A bare one lowers to the Go
-		// branch that targets the same innermost loop or switch; anything else keeps the
-		// default hand-back below.
+		// The frontend leaves several control-flow statements unnamed, so each surfaces
+		// here as an unclassified node the lowering recognizes by its shape: a break or
+		// continue by its keyword text, a do...while by a body block and condition, a
+		// labeled statement by a label identifier and the statement it labels. Anything
+		// else keeps the default hand-back below.
 		if s, ok := r.lowerBranch(n); ok {
 			return s, nil
+		}
+		if s, ok, err := r.lowerDoWhile(n); ok || err != nil {
+			return s, err
+		}
+		if s, ok, err := r.lowerLabeled(n); ok || err != nil {
+			return s, err
 		}
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	default:
