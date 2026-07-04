@@ -46,3 +46,26 @@ func (o Opt[T]) IsUndefined() bool { return !o.present }
 // code the checker accepted, since it would be a use of a possibly-undefined value
 // where T is required.
 func (o Opt[T]) Get() T { return o.val }
+
+// Or returns the wrapped value when present, otherwise the fallback, the lowering
+// of a ?? b where a is T | undefined and b is T. For an optional the one nullish
+// value is undefined, so present is exactly the "not nullish" test ?? runs. The
+// fallback is passed by value, so the lowerer only emits this form when b is
+// side-effect free; a pure b evaluated eagerly cannot be observed to run early,
+// which keeps the short-circuit ?? gives observationally intact.
+func (o Opt[T]) Or(fallback T) T {
+	if o.present {
+		return o.val
+	}
+	return fallback
+}
+
+// OrOpt returns the optional itself when present, otherwise the fallback optional,
+// the lowering of a ?? b where both a and b are T | undefined, so the result is
+// still optional. The same eager-evaluation rule as Or applies to the fallback.
+func (o Opt[T]) OrOpt(fallback Opt[T]) Opt[T] {
+	if o.present {
+		return o
+	}
+	return fallback
+}

@@ -361,6 +361,14 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return nil, &NotYetLowerable{Reason: "instanceof outside a caught built-in error is a later slice"}
 	}
 
+	// Nullish coalescing is a presence test on the left, not a truthiness test,
+	// so it routes here before the operator table rather than desugaring to || .
+	// It lowers only the optional shape with a pure fallback and hands back the
+	// rest (section on null and undefined).
+	if opText == "??" {
+		return r.nullishCoalesce(left, right)
+	}
+
 	if r.combineIsDynamic(opText, left, right) {
 		l, err := r.boxOperand(left)
 		if err != nil {

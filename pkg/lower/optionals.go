@@ -1,12 +1,54 @@
 package lower
 
 import (
+	"go/ast"
+
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
 // This file handles optional locals: the analysis that finds locals holding a
 // T | undefined the pointer form models, and the undefined-comparison shapes
 // that read them.
+
+// boxToOptional wraps a value flowing into an optional slot, value.Opt[T], in the
+// Some or None constructor the slot's element type spells. It is the boxing side
+// of the optional lowering: reads unwrap with Get and presence tests use
+// IsUndefined, and this is where a bare T or a bare undefined becomes the Opt the
+// slot holds. A source already of the optional shape is the same Opt and passes
+// straight through, so an optional argument bound to an optional parameter is not
+// double-wrapped. It returns (expr, false, nil) when the target is not an optional
+// or the source is already one, leaving the caller on its existing path.
+func (r *Renderer) boxToOptional(expr ast.Expr, src frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if !r.isOptionalType(target) || r.isOptional(src) {
+		return expr, false, nil
+	}
+	inner, ok := r.optionalInner(r.prog.UnionMembers(target))
+	if !ok {
+		return expr, false, nil
+	}
+	elem, err := r.typeExpr(inner)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	// A source typed exactly undefined is the empty optional; None takes no value,
+	// so the placeholder lowering of the undefined identifier is dropped here.
+	if r.prog.TypeAt(src).Flags == frontend.TypeUndefined {
+		return &ast.CallExpr{Fun: index(sel("value", "None"), elem)}, true, nil
+	}
+	// A dynamic source has no static T to store in the slot; boxing it needs the
+	// dynamic-to-static coercion a later slice adds, so it hands back.
+	if r.isDynamic(src) {
+		return nil, false, &NotYetLowerable{Reason: "boxing a dynamic value into an optional slot is a later slice"}
+	}
+	// The source is a present value. Bridge it to the element type first so a
+	// derived instance upcasts to the base the optional declares, then wrap it.
+	bridged, err := r.bridgeClassBinding(expr, src, inner)
+	if err != nil {
+		return nil, false, err
+	}
+	return &ast.CallExpr{Fun: index(sel("value", "Some"), elem), Args: []ast.Expr{bridged}}, true, nil
+}
 
 // optionalUndefinedCompare recognizes an equality between an optional and the
 // bare undefined literal and returns the optional operand. One operand must type
