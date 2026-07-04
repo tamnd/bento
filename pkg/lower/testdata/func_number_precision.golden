@@ -1,0 +1,3 @@
+func Sig(n float64) value.BStr {
+	return value.NumberToPrecision(n, 1).ConcatN(value.FromGoString(" "), value.NumberToPrecision(n, 3), value.FromGoString(" "), value.NumberToPrecision(n, 5))
+}
