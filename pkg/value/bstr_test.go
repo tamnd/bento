@@ -382,6 +382,34 @@ func TestCharAt(t *testing.T) {
 	}
 }
 
+// TestAtOpt pins String.prototype.at: an in-range index yields the present
+// optional holding the one-code-unit string, a negative index counts from the
+// end, and an index that resolves outside the string reads as the undefined
+// optional rather than the empty string CharAt yields. A negative index into an
+// astral character returns the surrogate half at that unit, matching charAt.
+func TestAtOpt(t *testing.T) {
+	s := FromGoString("a😀") // 'a' (1 unit), emoji (2 units, a surrogate pair)
+
+	if got := s.AtOpt(0); got.IsUndefined() || got.Get().ToGoString() != "a" {
+		t.Errorf("AtOpt(0) = %+v, want Some(\"a\")", got)
+	}
+	// -1 resolves to the last code unit, the low surrogate of the emoji.
+	last := s.AtOpt(-1)
+	if last.IsUndefined() {
+		t.Fatalf("AtOpt(-1) = undefined, want the low surrogate")
+	}
+	if u := last.Get().units(); len(u) != 1 || u[0] != 0xDE00 {
+		t.Errorf("AtOpt(-1) units = %v, want [0xDE00] (low surrogate)", u)
+	}
+	// The string is three code units, so -4 counts back past the start and, like a
+	// too-large positive index, resolves out of range and reads undefined.
+	for _, idx := range []float64{3, 100, -4, -100} {
+		if got := s.AtOpt(idx); !got.IsUndefined() {
+			t.Errorf("AtOpt(%v) = %+v, want the undefined optional", idx, got)
+		}
+	}
+}
+
 // TestSearchMethods pins IndexOf, Includes, and StartsWith, including the
 // code-unit index of a match after an astral character (the emoji is two units,
 // so "b" in "a😀b" is at index 3, not 2) and the empty-search rule that matches
