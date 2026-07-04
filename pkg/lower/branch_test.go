@@ -1,7 +1,6 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -78,11 +77,10 @@ console.log(label(3));
 	}
 }
 
-// TestLabeledBranchHandsBack pins that a labeled break keeps the unit on the engine
-// rather than lowering to an unlabeled Go break that would target the wrong loop. The
-// labeled statement carries a target this slice does not model, so the whole unit
-// hands back with a NotYetLowerable.
-func TestLabeledBranchHandsBack(t *testing.T) {
+// TestLabeledBranchLowers pins that a labeled break lowers to a Go break that names
+// its label, so the branch leaves the outer loop the way the source reads it rather
+// than an unlabeled break that would leave only the inner one.
+func TestLabeledBranchLowers(t *testing.T) {
 	const src = `function f(n: number): number {
   let s = 0;
   outer: for (let i = 0; i < n; i++) {
@@ -98,10 +96,12 @@ console.log(f(4));
 	prog := compile(t, src)
 	r := NewRenderer(prog)
 	r.SetGoSignatures(testGoSignatures())
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	p, err := r.RenderProgram(entryFile(t, prog))
+	if err != nil {
+		t.Fatalf("RenderProgram: %v", err)
+	}
+	if !strings.Contains(p.Source, "break outer") || !strings.Contains(p.Source, "outer:") {
+		t.Fatalf("labeled break did not lower to a labeled Go break:\n%s", p.Source)
 	}
 }
 
