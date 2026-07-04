@@ -1,0 +1,8 @@
+== stdout:
+hi
+3
+name,age,active
+1
+z,a,m
+== exit:
+0
