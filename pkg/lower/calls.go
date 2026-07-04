@@ -297,6 +297,16 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
+	// toString and valueOf on a string are identity: both return the string itself,
+	// so they lower to the receiver expression with no call at all, which is both
+	// exact and the most readable Go. Neither takes an argument, so a call with any
+	// argument hands back rather than emitting a call the BStr type does not have.
+	if method == "toString" || method == "valueOf" {
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "string ." + method + " with an argument is a later slice"}
+		}
+		return r.lowerExpr(recvNode)
+	}
 	// replace and replaceAll with a regexp literal first argument are their own
 	// path: a plain-literal pattern (no metacharacters) is exactly the string
 	// search the value replace methods do, so it lowers when the pattern is plain
