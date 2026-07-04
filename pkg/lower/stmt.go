@@ -365,16 +365,17 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 	}
 }
 
-// bytesElementAssign lowers a Uint8Array element write a[i] = v to the buffer's
-// SetAt, the store half of the byte-buffer indexing lowered as a read by
+// bytesElementAssign lowers a typed-array element write a[i] = v to the buffer's
+// SetAt, the store half of the typed-array indexing lowered as a read by
 // elementAccess (section 6.3). It reports ok=false when the statement is not an
-// element write into a byte buffer, so lowerUpdate falls through to lowerAssign,
+// element write into a typed array, so lowerUpdate falls through to lowerAssign,
 // which handles the local-identifier assignments; only when the target is an
-// element access whose receiver the checker types a Uint8Array does this claim the
-// statement. The value coerces to a byte inside SetAt with the runtime's ToUint8,
-// so the lowering passes it as the Number the checker typed it. Only a plain "="
-// is covered: a compound write a[i] += v reads and writes the element and is a
-// later slice, so it hands back for the engine rather than dropping the read.
+// element access whose receiver the checker types a numeric typed array does this
+// claim the statement. The value coerces to the element inside SetAt with the
+// element kind's store rule, so the lowering passes it as the Number the checker
+// typed it. Only a plain "=" is covered: a compound write a[i] += v reads and
+// writes the element and is a later slice, so it hands back for the engine rather
+// than dropping the read.
 func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	parts := r.prog.Children(bin)
 	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
@@ -389,14 +390,14 @@ func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 		return nil, false, nil
 	}
 	recvNode, idxNode := idxParts[0], idxParts[1]
-	if !r.isBytes(recvNode) {
+	if !r.numericTypedArray(recvNode) {
 		return nil, false, nil
 	}
 	if !r.isNumber(idxNode) {
-		return nil, false, &NotYetLowerable{Reason: "a Uint8Array write with a non-number index is a later slice"}
+		return nil, false, &NotYetLowerable{Reason: "a typed-array write with a non-number index is a later slice"}
 	}
 	if !r.isNumber(parts[2]) {
-		return nil, false, &NotYetLowerable{Reason: "a Uint8Array write of a non-number value is a later slice"}
+		return nil, false, &NotYetLowerable{Reason: "a typed-array write of a non-number value is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -504,7 +505,7 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	if _, isArray := r.prog.ElementType(objType); isArray {
 		return nil, false, nil
 	}
-	if r.isBytes(obj) || r.isMap(obj) || r.isSet(obj) {
+	if r.isTypedArray(obj) || r.isMap(obj) || r.isSet(obj) {
 		return nil, false, nil
 	}
 	if _, ok := r.classReceiver(obj); ok {
