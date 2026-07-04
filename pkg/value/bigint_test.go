@@ -333,3 +333,109 @@ func TestBigIntShifts(t *testing.T) {
 		t.Errorf("1n << 2^80n threw %s, want RangeError", e.Name().ToGoString())
 	}
 }
+
+// bi parses a decimal string as a *big.Int for the wrap tests, panicking on a bad
+// literal since the test author writes them.
+func bi(s string) *big.Int {
+	i, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		panic("bi: bad literal " + s)
+	}
+	return i
+}
+
+// TestBigIntAsUintN proves the unsigned wrap lands in [0, 2^bits): a value that
+// fits passes through, a value past the width wraps down by the modulus, and a
+// negative value wraps up into range, so asUintN(16, -1n) is 65535n.
+func TestBigIntAsUintN(t *testing.T) {
+	for _, tc := range []struct {
+		bits float64
+		x    string
+		want string
+	}{
+		{16, "0", "0"},
+		{16, "65535", "65535"},
+		{16, "65536", "0"},
+		{16, "70000", "4464"},
+		{16, "-1", "65535"},
+		{8, "255", "255"},
+		{8, "256", "0"},
+		{0, "123", "0"},
+		{4, "-1", "15"},
+	} {
+		if got := BigIntAsUintN(tc.bits, bi(tc.x)); got.String() != tc.want {
+			t.Errorf("BigIntAsUintN(%v, %s) = %s, want %s", tc.bits, tc.x, got, tc.want)
+		}
+	}
+}
+
+// TestBigIntAsIntN proves the signed wrap lands in [-2^(bits-1), 2^(bits-1)): the
+// top half of the unsigned range folds to the negative half, so asIntN(8, 255n) is
+// -1n and asIntN(8, 128n) is -128n.
+func TestBigIntAsIntN(t *testing.T) {
+	for _, tc := range []struct {
+		bits float64
+		x    string
+		want string
+	}{
+		{8, "127", "127"},
+		{8, "128", "-128"},
+		{8, "255", "-1"},
+		{8, "256", "0"},
+		{8, "-1", "-1"},
+		{16, "-1", "-1"},
+		{0, "123", "0"},
+		{1, "1", "-1"},
+		{1, "0", "0"},
+	} {
+		if got := BigIntAsIntN(tc.bits, bi(tc.x)); got.String() != tc.want {
+			t.Errorf("BigIntAsIntN(%v, %s) = %s, want %s", tc.bits, tc.x, got, tc.want)
+		}
+	}
+}
+
+// TestBigIntWidthTruncatesAndRejects proves the width runs through ToIndex: a
+// fractional width truncates toward zero and a negative width throws a RangeError.
+func TestBigIntWidthTruncatesAndRejects(t *testing.T) {
+	if got := BigIntAsUintN(8.9, bi("255")); got.String() != "255" {
+		t.Errorf("fractional width did not truncate: got %s, want 255", got)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a negative width should throw a RangeError")
+		}
+	}()
+	BigIntAsUintN(-1, bi("1"))
+}
+
+// TestBigIntToStringRadix proves a bigint renders in the named base with the same
+// lowercase digits and leading minus V8 uses, and that a radix outside [2, 36]
+// throws a RangeError.
+func TestBigIntToStringRadix(t *testing.T) {
+	for _, tc := range []struct {
+		x     string
+		radix float64
+		want  string
+	}{
+		{"255", 10, "255"},
+		{"255", 16, "ff"},
+		{"255", 2, "11111111"},
+		{"-255", 16, "-ff"},
+		{"35", 36, "z"},
+		{"255", 16.9, "ff"}, // radix truncates toward zero
+	} {
+		if got := BigIntToStringRadix(bi(tc.x), tc.radix).ToGoString(); got != tc.want {
+			t.Errorf("BigIntToStringRadix(%s, %v) = %q, want %q", tc.x, tc.radix, got, tc.want)
+		}
+	}
+	for _, bad := range []float64{1, 0, 37, 100} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("radix %v should throw a RangeError", bad)
+				}
+			}()
+			BigIntToStringRadix(bi("5"), bad)
+		}()
+	}
+}
