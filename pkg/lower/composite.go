@@ -366,6 +366,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayMapFilter(recvNode, "Filter", argNodes, false)
 	case "reduce":
 		return r.arrayReduce(recvNode, argNodes)
+	case "reduceRight":
+		return r.arrayReduceRight(recvNode, argNodes)
 	case "indexOf":
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
 	case "lastIndexOf":
@@ -685,25 +687,33 @@ func (r *Renderer) arrowParamCount(arrow frontend.Node) int {
 	return n
 }
 
-// arrayReduce lowers a reduce call with an initial value to the free function
-// value.Reduce[T, A](recv, fn, init). It is the free function rather than a
-// method for the same reason the type-changing map is: the accumulator type A
-// may differ from the element type T, and a Go method cannot introduce the new
-// type parameter A. The element type comes from the receiver and the
-// accumulator type from the callback's result, the two the value function names
-// as its type arguments, so numbers.reduce((acc, n) => acc + n, 0) spells
-// value.Reduce[float64, float64] and a string accumulator spells its own A.
-//
-// Only the two-argument form over an inline two-parameter arrow is covered.
-// reduce without an initial value seeds the accumulator with the first element
-// and throws on an empty array, a different shape that is its own later slice,
-// so a one-argument call hands back. A callback that also reads the index or
-// array parameter needs those threaded through, so an arrow that is not exactly
-// (accumulator, element) hands back too, since the value function takes a
-// two-parameter func.
+// arrayReduce lowers a reduce call, the left-to-right fold. It shares the fold
+// machinery, naming the left-fold value function and method.
 func (r *Renderer) arrayReduce(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	return r.arrayFold(recvNode, argNodes, "Reduce", "ReduceNoInit")
+}
+
+// arrayReduceRight lowers a reduceRight call, the right-to-left sibling of
+// reduce. It shares the fold machinery, only naming the right-fold value
+// function and method.
+func (r *Renderer) arrayReduceRight(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	return r.arrayFold(recvNode, argNodes, "ReduceRight", "ReduceRightNoInit")
+}
+
+// arrayFold is the shared lowering for reduce and reduceRight. The initial-value
+// form lowers to the free function named by freeFn because the accumulator type A
+// may differ from the element type T, and a Go method cannot introduce the new
+// type parameter A. The element type comes from the receiver and the accumulator
+// type from the callback's result, the two type arguments the value function
+// names. The no-init form delegates to arrayFoldNoInit.
+//
+// Only an inline two-parameter arrow is covered. A callback that also reads the
+// index or array parameter needs those threaded through, so an arrow that is not
+// exactly (accumulator, element) hands back, since the value function takes a
+// two-parameter func.
+func (r *Renderer) arrayFold(recvNode frontend.Node, argNodes []frontend.Node, freeFn, methodFn string) (ast.Expr, error) {
 	if len(argNodes) == 1 {
-		return r.arrayReduceNoInit(recvNode, argNodes[0])
+		return r.arrayFoldNoInit(recvNode, argNodes[0], methodFn)
 	}
 	if len(argNodes) != 2 {
 		return nil, &NotYetLowerable{Reason: "array reduce with more than an initial value is a later slice"}
@@ -737,21 +747,21 @@ func (r *Renderer) arrayReduce(recvNode frontend.Node, argNodes []frontend.Node)
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{
-		Fun:  &ast.IndexListExpr{X: sel("value", "Reduce"), Indices: []ast.Expr{elemType, accType}},
+		Fun:  &ast.IndexListExpr{X: sel("value", freeFn), Indices: []ast.Expr{elemType, accType}},
 		Args: []ast.Expr{recv, fn, init},
 	}, nil
 }
 
-// arrayReduceNoInit lowers a reduce call with no initial value to the
-// value.Array.ReduceNoInit method over a lowered arrow. With no init the
-// accumulator seeds from the first element, so its type is the element type and
-// the callback is func(T, T) T, which is why this is a plain method rather than
-// the free function the initial-value form needs for a differing accumulator type.
+// arrayFoldNoInit lowers a reduce or reduceRight call with no initial value to
+// the value.Array method named by methodFn over a lowered arrow. With no init the
+// accumulator seeds from an end element, so its type is the element type and the
+// callback is func(T, T) T, which is why this is a plain method rather than the
+// free function the initial-value form needs for a differing accumulator type.
 // An empty array throws at runtime, so no compile-time handling is needed here.
 // Only an inline two-parameter arrow is covered, the same (accumulator, element)
 // shape the initial-value form requires; a named callback or one that reads the
 // index or array parameter hands back.
-func (r *Renderer) arrayReduceNoInit(recvNode frontend.Node, arrow frontend.Node) (ast.Expr, error) {
+func (r *Renderer) arrayFoldNoInit(recvNode frontend.Node, arrow frontend.Node, methodFn string) (ast.Expr, error) {
 	if arrow.Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array reduce with a callback that is not an inline arrow function is a later slice"}
 	}
@@ -767,7 +777,7 @@ func (r *Renderer) arrayReduceNoInit(recvNode frontend.Node, arrow frontend.Node
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ReduceNoInit")}, Args: []ast.Expr{fn}}, nil
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(methodFn)}, Args: []ast.Expr{fn}}, nil
 }
 
 // arrayIndexOfIncludes lowers an indexOf or includes call to the matching

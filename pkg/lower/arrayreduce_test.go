@@ -55,6 +55,44 @@ console.log([7].reduce((acc: number, n: number): number => acc + n));
 	}
 }
 
+// TestArrayReduceRightSameTypeEmitsFreeFunc pins that reduceRight over a number
+// array into a number accumulator lowers to value.ReduceRight with both type
+// arguments spelled out.
+func TestArrayReduceRightSameTypeEmitsFreeFunc(t *testing.T) {
+	src := "const a = [1, 2, 3];\nconsole.log(a.reduceRight((acc: number, n: number): number => acc - n, 0));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.ReduceRight[float64, float64](") {
+		t.Errorf("same-type reduceRight did not lower to value.ReduceRight[float64, float64]:\n%s", source)
+	}
+}
+
+// TestArrayReduceRightNoInitEmitsMethod pins that reduceRight with no initial
+// value lowers to the value.Array ReduceRightNoInit method.
+func TestArrayReduceRightNoInitEmitsMethod(t *testing.T) {
+	src := "const a = [1, 2, 3];\nconsole.log(a.reduceRight((acc: number, n: number): number => acc - n));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".ReduceRightNoInit(") {
+		t.Errorf("no-init reduceRight did not lower to ReduceRightNoInit:\n%s", source)
+	}
+}
+
+// TestArrayReduceRightRuns builds and runs reduceRight against the Node oracle,
+// covering the initial-value fold, a type-changing string fold, and the no-init
+// form that seeds from the last element.
+func TestArrayReduceRightRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const a = [1, 2, 3];
+console.log(a.reduceRight((acc: number, n: number): number => acc - n, 0));
+console.log(a.reduceRight((acc: string, n: number): string => acc + n, "="));
+console.log([1, 2, 3, 10].reduceRight((acc: number, n: number): number => acc - n));
+`
+	got := runProgramGo(t, src)
+	want := "-6\n=321\n4\n"
+	if got != want {
+		t.Fatalf("reduceRight program printed %q, want %q", got, want)
+	}
+}
+
 // TestArrayReduceRuns builds and runs reduce against the Node oracle: a numeric
 // sum, a numeric product from a non-zero seed, a string fold that changes the
 // accumulator type, and an empty array returning the initial value unchanged.
