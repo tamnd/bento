@@ -78,10 +78,10 @@ console.log(Dir.Up + Dir.Down);
 	}
 }
 
-// TestEnumHandsBack pins the boundaries of the numeric subset: a string enum and a
-// member whose initializer references another member are both a later slice, so
-// each hands the unit back with a named reason rather than emit a shape this file
-// does not build.
+// TestEnumHandsBack pins the boundaries of the lowered subset: a heterogeneous enum
+// that mixes number and string members has no single Go type, and a member whose
+// initializer references another member is a computed value, so each hands the unit
+// back with a named reason rather than emit a shape this file does not build.
 func TestEnumHandsBack(t *testing.T) {
 	cases := []struct {
 		name string
@@ -89,9 +89,9 @@ func TestEnumHandsBack(t *testing.T) {
 		want string
 	}{
 		{
-			"stringEnum",
-			"enum S { A = \"x\", B = \"y\" }\nconsole.log(1);\n",
-			"not a numeric literal",
+			"heterogeneousEnum",
+			"enum M { A = 0, B = \"b\" }\nconsole.log(1);\n",
+			"heterogeneous enum mixing number and string",
 		},
 		{
 			"memberReferenceInitializer",
@@ -112,6 +112,80 @@ func TestEnumHandsBack(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", nyl.Reason, tc.want)
 			}
 		})
+	}
+}
+
+// TestStringEnumEmits pins the shape of a plain string enum: a value.BStr var per
+// member, each initialized with the member's string content, since a bento string
+// has no Go constant form.
+func TestStringEnumEmits(t *testing.T) {
+	const src = `enum Fruit { Apple = "APPLE", Pear = "PEAR" }
+console.log(Fruit.Apple);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"var (",
+		`FruitApple = value.FromGoString("APPLE")`,
+		`FruitPear  = value.FromGoString("PEAR")`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("string enum emit did not print %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestStringEnumType pins that a string-enum-typed annotation lowers to value.BStr:
+// a parameter and a return declared with the enum name become value.BStr, since a
+// registered string enum rides the string path the checker gives its members.
+func TestStringEnumType(t *testing.T) {
+	const src = `enum Fruit { Apple = "APPLE", Pear = "PEAR" }
+function fruitName(f: Fruit): Fruit { return f; }
+console.log(fruitName(Fruit.Apple));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func FruitName(f value.BStr) value.BStr") {
+		t.Errorf("string-enum-typed signature did not lower to value.BStr:\n%s", source)
+	}
+}
+
+// TestConstStringEnumInlines pins that a const string enum emits no package-level
+// vars and inlines each member's string at the use site, the erasure TypeScript
+// performs, so a member read lowers to a plain value.FromGoString.
+func TestConstStringEnumInlines(t *testing.T) {
+	const src = `const enum Suit { Hearts = "H", Spades = "S" }
+console.log(Suit.Hearts);
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, "SuitHearts") || strings.Contains(source, "SuitSpades") {
+		t.Errorf("const string enum leaked a member var, want it inlined:\n%s", source)
+	}
+	if !strings.Contains(source, `value.FromGoString("H")`) {
+		t.Errorf("const string enum did not inline its member value:\n%s", source)
+	}
+}
+
+// TestStringEnumRuns builds and runs a string enum end to end and matches the Node
+// oracle: a member read, an enum-typed round trip through a function, a member
+// compared against its string value, and a const string enum's inlined member.
+func TestStringEnumRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `enum Fruit { Apple = "APPLE", Pear = "PEAR" }
+const enum Suit { Hearts = "H", Spades = "S" }
+function fruitName(f: Fruit): Fruit {
+  return f;
+}
+console.log(Fruit.Apple);
+console.log(fruitName(Fruit.Pear));
+console.log(Fruit.Apple === "APPLE");
+console.log(Suit.Hearts);
+`
+	got := runProgramGo(t, src)
+	want := "APPLE\n" +
+		"PEAR\n" +
+		"true\n" +
+		"H\n"
+	if got != want {
+		t.Fatalf("string enum program printed %q, want %q", got, want)
 	}
 }
 
