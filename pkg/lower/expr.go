@@ -560,6 +560,26 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return &ast.CallExpr{Fun: sel("math", "Mod"), Args: []ast.Expr{l, rr}}, nil
 	}
 
+	// Exponentiation on numbers is not a Go operator either: a ** b is defined as
+	// Math.pow(a, b) with the same result for every input, so it lowers to math.Pow,
+	// the same Go function Math.pow already lowers to, which keeps the operator and
+	// the method identical rather than growing a second spelling that could drift.
+	// Handled before the operator table for the same reason remainder is, so the
+	// number path emits the call. A bigint ** routed through its own path earlier,
+	// so both operands here are numbers.
+	if opText == "**" && r.isNumber(left) && r.isNumber(right) {
+		l, err := r.lowerExpr(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport("math")
+		return &ast.CallExpr{Fun: sel("math", "Pow"), Args: []ast.Expr{l, rr}}, nil
+	}
+
 	// The bitwise operators on numbers do not work on float64: JavaScript coerces
 	// each operand to a 32-bit integer, operates, and turns the result back into a
 	// number. So they cannot be a plain Go operator on the float64 values; they
