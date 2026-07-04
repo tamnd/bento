@@ -43,6 +43,15 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			}
 		}
 	}
+	// A member read E.M where E is a registered numeric enum lowers to the
+	// member's Go constant, or to the member's inlined value for a const enum. It
+	// routes before the dynamic and instance paths because the enum name is a value
+	// binding whose read would otherwise fall through to a property lookup.
+	if expr, ok, err := r.enumMemberRead(obj, prop); err != nil {
+		return nil, err
+	} else if ok {
+		return expr, nil
+	}
 	// A read o.k on a dynamic receiver (one typed any or unknown) has no static
 	// shape to intern to a Go field, so it dispatches at runtime through the boxed
 	// value's Get, which reports a string's length, an array's length and indices,

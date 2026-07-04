@@ -54,6 +54,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	if err := r.collectClasses(entry); err != nil {
 		return Program{}, err
 	}
+	// Enums register in the same pre-pass so a member read A.B that appears above
+	// the enum's declaration still resolves to the member's constant or value.
+	if err := r.collectEnums(entry); err != nil {
+		return Program{}, err
+	}
 
 	var funcs []ast.Decl
 	var mainBody []frontend.Node
@@ -71,6 +76,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 			continue
 		case frontend.NodeInterfaceDeclaration, frontend.NodeTypeAliasDeclaration:
 			// Type-level declarations carry no runtime code, so they emit nothing.
+			continue
+		case frontend.NodeEnumDeclaration:
+			// Already registered by collectEnums; a plain enum's const block renders
+			// with the other package-level declarations below, and a const enum emits
+			// nothing since its members inline at each use.
 			continue
 		case frontend.NodeUnknown:
 			// The parser ends a source file with an empty end-of-file token bento
@@ -142,6 +152,9 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// program's life. They follow the types and precede the code like any other
 	// package-level state.
 	file.Decls = append(file.Decls, r.bigLitDecls()...)
+	// Numeric enums emit their float64-backed const blocks with the other
+	// package-level state, before the classes and functions that read them.
+	file.Decls = append(file.Decls, r.renderEnums()...)
 	file.Decls = append(file.Decls, classDecls...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
