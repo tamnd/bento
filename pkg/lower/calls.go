@@ -1452,6 +1452,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 	case "toWellFormed":
 		// Returns a copy with each lone surrogate replaced by U+FFFD; no arguments.
 		return "ToWellFormed", nil, 0, false, true
+	case "normalize":
+		// normalize takes an optional form name and defaults to NFC when it is
+		// omitted, so it admits zero or one string argument. value.Normalize throws
+		// the RangeError for a form that is not one of the four the specification
+		// allows, so a bad name is caught at runtime rather than miscompiled.
+		return "Normalize", []argKind{argString}, 0, false, true
 	default:
 		return "", nil, 0, false, false
 	}
