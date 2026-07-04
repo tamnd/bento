@@ -144,6 +144,11 @@ func (r *Renderer) coerceDynamicToStaticFlags(expr ast.Expr, flags frontend.Type
 // runs the ToNumber family, a static value returned as any boxes, and a return
 // whose value already matches the declared type passes through unchanged.
 func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr, error) {
+	if boxed, ok, err := r.boxToOptional(expr, srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	srcDyn := r.isDynamic(srcNode)
 	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 	switch {
@@ -162,6 +167,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 // coerces through ToNumber and its siblings; a static source into a dynamic target
 // boxes through the value constructors; matching sides pass through unchanged.
 func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast.Expr, error) {
+	if boxed, ok, err := r.boxToOptional(expr, src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	srcDyn := r.isDynamic(src)
 	tgtDyn := r.isDynamic(target)
 	switch {
