@@ -186,11 +186,27 @@ type Renderer struct {
 	// read inlines the member's numeric value.
 	enums     map[string]*enumInfo
 	enumOrder []string
+	// unions interns the module's general (tagged-sum) unions in first-seen order,
+	// each emitted as a package-level tag type, discriminant const block, sum
+	// struct, and one wrapping constructor per arm. unionBySig maps a union's
+	// structural signature to its interned descriptor so two structurally equal
+	// unions share one Go type, the same shape-keyed dedup the struct interner uses.
+	// Program-scoped, not body-scoped: a union named in two functions is one type.
+	unions     []*unionInfo
+	unionBySig map[string]*unionInfo
+	// unionLocals is the set of local and parameter names in the body currently
+	// being lowered whose declared type is an interned tagged-sum union, mapped to
+	// that union's descriptor. A read of one at a point the checker narrowed to a
+	// single arm reads that arm's field off the struct; a read where the type is
+	// still the whole union keeps the bare struct. It is computed once per body and,
+	// like optLocals, saved and restored around each body. A nil map reads nothing
+	// out, so a body with no union binding lowers exactly as before.
+	unionLocals map[string]*unionInfo
 }
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
 }
 
 // SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go

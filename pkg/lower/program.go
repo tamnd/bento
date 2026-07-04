@@ -105,6 +105,7 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// program has no enclosing body.
 	r.int32Locals = r.int32LocalsOf(mainBody)
 	r.optLocals = r.optLocalsOf(mainBody)
+	r.unionLocals = r.unionLocalsOf(nil, mainBody)
 	r.bigOwned = r.bigOwnedLocalsOf(mainBody)
 	r.strBuilders = nil
 	stmts, err := r.lowerStatements(mainBody)
@@ -147,6 +148,10 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// collected after lowering, since interning happens as a use is lowered, and
 	// emitted before the functions, the conventional Go order of types then code.
 	file.Decls = append(file.Decls, r.DeclNodes()...)
+	// The tagged-sum union types the functions and the main body construct and
+	// narrow emit here, beside the interned structs, as a tag type, const block,
+	// struct, and per-arm constructors, before the code that refers to them.
+	file.Decls = append(file.Decls, r.renderUnions()...)
 	// The wide bigint literals the bodies interned emit as package vars, each parsed
 	// once at init, so a constant past int64 named in a loop costs one parse for the
 	// program's life. They follow the types and precede the code like any other

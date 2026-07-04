@@ -169,6 +169,10 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 				return nil, berr
 			} else if ok {
 				lowered = boxed
+			} else if wrapped, ok, werr := r.wrapToUnion(lowered, a, params[i].Type); werr != nil {
+				return nil, werr
+			} else if ok {
+				lowered = wrapped
 			} else {
 				lowered, err = r.bridgeClassBinding(lowered, a, params[i].Type)
 				if err != nil {
