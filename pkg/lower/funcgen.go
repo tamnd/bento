@@ -284,16 +284,31 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 // coerce to. Both routes end at the same typeExpr, so the two arrow forms give the
 // map the same U.
 func (r *Renderer) arrowResultType(arrow frontend.Node) (ast.Expr, error) {
+	rt, ok := r.arrowResultFrontendType(arrow)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "arrow function with a block body has no call signature"}
+	}
+	return r.typeExpr(rt)
+}
+
+// arrowResultFrontendType is the checker's type for what an arrow returns, the
+// frontend type behind arrowResultType. A caller that needs to inspect the result
+// type rather than just spell it (flatMap, which asks whether the result is an
+// array and takes its element type) reads it here. A concise body carries the
+// result on its body expression; a block body's result comes from the arrow's own
+// call signature. The bool is false only when a block-bodied arrow has no
+// signature to read.
+func (r *Renderer) arrowResultFrontendType(arrow frontend.Node) (frontend.Type, bool) {
 	kids := r.prog.Children(arrow)
 	body := kids[len(kids)-1]
 	if body.Kind() == frontend.NodeBlock {
 		sig, ok := r.prog.SignatureAt(arrow)
 		if !ok {
-			return nil, &NotYetLowerable{Reason: "arrow function with a block body has no call signature"}
+			return frontend.Type{}, false
 		}
-		return r.typeExpr(sig.Return)
+		return sig.Return, true
 	}
-	return r.typeExpr(r.prog.TypeAt(body))
+	return r.prog.TypeAt(body), true
 }
 
 // blockBodyArrow lowers an arrow whose body is a statement block, the shape a
