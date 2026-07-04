@@ -702,8 +702,11 @@ func (r *Renderer) arrowParamCount(arrow frontend.Node) int {
 // (accumulator, element) hands back too, since the value function takes a
 // two-parameter func.
 func (r *Renderer) arrayReduce(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 1 {
+		return r.arrayReduceNoInit(recvNode, argNodes[0])
+	}
 	if len(argNodes) != 2 {
-		return nil, &NotYetLowerable{Reason: "array reduce without an initial value is a later slice"}
+		return nil, &NotYetLowerable{Reason: "array reduce with more than an initial value is a later slice"}
 	}
 	arrow := argNodes[0]
 	if arrow.Kind() != frontend.NodeArrowFunction {
@@ -737,6 +740,34 @@ func (r *Renderer) arrayReduce(recvNode frontend.Node, argNodes []frontend.Node)
 		Fun:  &ast.IndexListExpr{X: sel("value", "Reduce"), Indices: []ast.Expr{elemType, accType}},
 		Args: []ast.Expr{recv, fn, init},
 	}, nil
+}
+
+// arrayReduceNoInit lowers a reduce call with no initial value to the
+// value.Array.ReduceNoInit method over a lowered arrow. With no init the
+// accumulator seeds from the first element, so its type is the element type and
+// the callback is func(T, T) T, which is why this is a plain method rather than
+// the free function the initial-value form needs for a differing accumulator type.
+// An empty array throws at runtime, so no compile-time handling is needed here.
+// Only an inline two-parameter arrow is covered, the same (accumulator, element)
+// shape the initial-value form requires; a named callback or one that reads the
+// index or array parameter hands back.
+func (r *Renderer) arrayReduceNoInit(recvNode frontend.Node, arrow frontend.Node) (ast.Expr, error) {
+	if arrow.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(arrow) != 2 {
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the index or array parameter is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(arrow)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ReduceNoInit")}, Args: []ast.Expr{fn}}, nil
 }
 
 // arrayIndexOfIncludes lowers an indexOf or includes call to the matching
