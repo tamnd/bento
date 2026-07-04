@@ -1,6 +1,9 @@
 package value
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Array is bento's runtime representation of a JavaScript array whose element
 // type the compiler proved, the *Array[T] header that 05_type_lowering.md
@@ -308,6 +311,26 @@ func (a *Array[T]) Fill(v T, bounds ...float64) *Array[T] {
 	for i := start; i < end; i++ {
 		a.elems[i] = v
 	}
+	return a
+}
+
+// Sort orders the array in place by a comparator and returns the array, the
+// lowering of Array.prototype.sort called with a compare function. The
+// comparator returns a Number that is negative when its first argument should
+// sort before its second, zero when their order is left as is, and positive
+// otherwise, so an element sorts before another exactly when cmp returns a
+// negative value. The sort is stable, matching the guarantee modern JavaScript
+// engines give, so two elements the comparator calls equal keep their relative
+// order. It is a pointer method returning the receiver, the same shape reverse
+// takes, so the ordering is visible through every reference and the returned
+// array is the same array, not a copy, matching JavaScript where sort mutates in
+// place and returns this. A comparator that returns NaN, which JavaScript treats
+// as zero, reads here as not-before through the NaN < 0 being false, so those
+// elements keep their order too.
+func (a *Array[T]) Sort(cmp func(T, T) float64) *Array[T] {
+	sort.SliceStable(a.elems, func(i, j int) bool {
+		return cmp(a.elems[i], a.elems[j]) < 0
+	})
 	return a
 }
 
