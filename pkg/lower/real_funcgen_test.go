@@ -127,7 +127,7 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "math_clz32", file: "func_math_clz32"},
 		// Math.imul is a two-argument 32-bit integer multiply, so it lowers to value.Imul with both arguments passed through.
 		{name: "math_imul", file: "func_math_imul"},
-		// the transcendental Math methods map straight onto the math package: sin, log, the two-argument atan2, and the two-argument hypot.
+		// the transcendental Math methods map straight onto the math package: sin, log, and the two-argument atan2.
 		{name: "math_transcendental", file: "func_math_transcendental"},
 		// String(x) on a number is the ECMAScript Number::toString, which lowers to value.NumberToString rather than strconv, whose exponent thresholds and padding differ.
 		{name: "string_of_number", file: "func_string_of_number"},

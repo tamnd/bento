@@ -1,3 +1,3 @@
 func Curve(x float64, y float64) float64 {
-	return math.Sin(x) + math.Log(y) + math.Atan2(y, x) + math.Hypot(x, y)
+	return math.Sin(x) + math.Log(y) + math.Atan2(y, x)
 }
