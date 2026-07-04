@@ -275,6 +275,29 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Pop")}}, nil
+	case "shift":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "array shift takes no arguments"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Shift")}}, nil
+	case "unshift":
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		args := make([]ast.Expr, 0, len(argNodes))
+		for _, a := range argNodes {
+			lowered, err := r.lowerExpr(a)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Unshift")}, Args: args}, nil
 	case "slice":
 		if len(argNodes) > 2 {
 			return nil, &NotYetLowerable{Reason: "array slice with more than two arguments is not valid"}
