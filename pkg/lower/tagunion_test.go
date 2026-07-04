@@ -245,6 +245,29 @@ area({ kind: "circle", r: 2 });
 	}
 }
 
+// TestDiscriminatedUnionInNarrows pins that "r" in s narrows to the arm carrying
+// the property and lowers to a tag test, and that the branch reads the arm field.
+func TestDiscriminatedUnionInNarrows(t *testing.T) {
+	const src = `interface Circle { kind: "circle"; r: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function measure(s: Shape): number {
+  if ("r" in s) {
+    return s.r;
+  }
+  return s.side;
+}
+measure({ kind: "circle", r: 2 });
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if s.tag == CircleOrSquareCircle {") {
+		t.Fatalf("in test did not lower to a tag compare\n%s", source)
+	}
+	if !strings.Contains(source, "return s.circle.R") {
+		t.Fatalf("in-narrowed read did not select the arm field\n%s", source)
+	}
+}
+
 // TestDiscriminatedUnionRuns builds and runs a discriminated-union program through
 // both the if and switch narrowing forms and checks the output matches the
 // JavaScript semantics.

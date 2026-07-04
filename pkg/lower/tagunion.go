@@ -72,8 +72,9 @@ type unionArm struct {
 	primArm
 	goType    ast.Expr
 	isObject  bool
-	disc      string // the discriminant literal value an object arm narrows on ("circle")
-	memberSig string // the structural key of an object arm's member type
+	disc      string          // the discriminant literal value an object arm narrows on ("circle")
+	memberSig string          // the structural key of an object arm's member type
+	props     map[string]bool // the property names an object arm's member carries, for in narrowing
 }
 
 // unionInfo is the interned descriptor of one tagged-sum union: the Go type name,
@@ -288,12 +289,17 @@ func (r *Renderer) internObjectUnion(t frontend.Type, sig string) (*unionInfo, e
 		if err != nil {
 			return nil, err
 		}
+		props := map[string]bool{}
+		for _, p := range r.prog.Properties(m) {
+			props[p.Name] = true
+		}
 		arms[i] = unionArm{
 			primArm:   primArm{field: unexportedName(suffix), suffix: suffix},
 			goType:    gt,
 			isObject:  true,
 			disc:      values[i],
 			memberSig: structuralKey(r.prog, m, map[int]int{}),
+			props:     props,
 		}
 		suffixes[i] = suffix
 	}
@@ -592,6 +598,56 @@ func (r *Renderer) discriminantRead(n frontend.Node) (string, *unionInfo, bool) 
 		return "", nil, false
 	}
 	return name, info, true
+}
+
+// inUnionCompare lowers a property-presence test on an object union, "r" in s, to a
+// tag test, the in-narrowing of section 9: TypeScript narrows s to the arms that
+// carry the named property, so the test lowers to comparing the tag against exactly
+// those arms rather than probing a runtime property map. The left operand must be a
+// string literal and the right a union local; the arms are split into the ones that
+// carry the property and the ones that do not. When every arm carries it or none
+// does the test does not narrow, so it falls through to the caller. Otherwise it
+// emits the disjunction s.tag == A || s.tag == B over the arms that carry it, a
+// chain of integer compares with no map lookup.
+func (r *Renderer) inUnionCompare(left, right frontend.Node) (ast.Expr, bool, error) {
+	prop, ok := r.stringLiteralValue(left)
+	if !ok || right.Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	name, ok := localName(r.prog.Text(right))
+	if !ok {
+		return nil, false, nil
+	}
+	info, ok := r.unionLocals[name]
+	if !ok || info.disc == "" {
+		return nil, false, nil
+	}
+	var have []unionArm
+	for _, a := range info.arms {
+		if a.isObject && a.props[prop] {
+			have = append(have, a)
+		}
+	}
+	// A property on every arm or on none does not tell the arms apart, so the test is
+	// a constant TypeScript does not narrow on; leave it to the caller rather than emit
+	// an always-true or always-false tag chain.
+	if len(have) == 0 || len(have) == len(info.arms) {
+		return nil, false, nil
+	}
+	var expr ast.Expr
+	for _, a := range have {
+		cmp := &ast.BinaryExpr{
+			X:  &ast.SelectorExpr{X: ident(name), Sel: ident("tag")},
+			Op: token.EQL,
+			Y:  ident(info.tagConst(a)),
+		}
+		if expr == nil {
+			expr = cmp
+		} else {
+			expr = &ast.BinaryExpr{X: expr, Op: token.LOR, Y: cmp}
+		}
+	}
+	return expr, true, nil
 }
 
 // typeofOperandAndLiteral picks the typeof operand and the string-literal tag out
