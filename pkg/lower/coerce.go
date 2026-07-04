@@ -21,14 +21,19 @@ import (
 func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
 	t := r.prog.TypeAt(n)
 	f := t.Flags
-	// A registered numeric enum is float64-backed, so a value of the enum type is a
-	// number wherever the primitive predicates ask: a member read already carries
-	// the number flag, but the whole enum type an annotation names (a parameter, a
-	// return, a typed binding) is an enum-flagged union with no number bit, so the
-	// number flag is folded in here the way a branded alias folds to its primitive.
+	// A registered enum is backed by a primitive (float64 for a numeric enum,
+	// value.BStr for a string enum), so a value of the enum type is that primitive
+	// wherever the predicates ask: a member read already carries the primitive flag,
+	// but the whole enum type an annotation names (a parameter, a return, a typed
+	// binding) is an enum-flagged union with no primitive bit, so the flag is folded
+	// in here the way a branded alias folds to its primitive.
 	if f&frontend.TypeEnum != 0 {
-		if _, ok := r.enumOfType(t); ok {
-			f |= frontend.TypeNumber
+		if info, ok := r.enumOfType(t); ok {
+			if info.isString {
+				f |= frontend.TypeString
+			} else {
+				f |= frontend.TypeNumber
+			}
 		}
 	}
 	if f&frontend.TypeIntersection == 0 {
