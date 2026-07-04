@@ -457,6 +457,28 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			args = append(args, lowered)
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Slice")}, Args: args}, nil
+	case "copyWithin":
+		if len(argNodes) < 1 || len(argNodes) > 3 {
+			return nil, &NotYetLowerable{Reason: "array copyWithin takes a target and up to two bounds"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		// The target and the optional start and end are all Numbers, the same shape
+		// slice's bounds take, so each lowers straight through once it is a number.
+		args := make([]ast.Expr, 0, len(argNodes))
+		for _, b := range argNodes {
+			if !r.isNumber(b) {
+				return nil, &NotYetLowerable{Reason: "array copyWithin with a non-number bound is a later slice"}
+			}
+			lowered, err := r.lowerExpr(b)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("CopyWithin")}, Args: args}, nil
 	case "at":
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "array at takes exactly one argument"}
