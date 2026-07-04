@@ -324,6 +324,9 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.classFieldAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		if stmt, ok, err := r.objectFieldAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		if stmt, ok, err := r.logicalAssign(n); ok || err != nil {
 			return stmt, err
 		}
@@ -458,6 +461,61 @@ func (r *Renderer) arrayElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 		Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
 		Args: []ast.Expr{idx, val},
 	}}, true, nil
+}
+
+// objectFieldAssign lowers a property write o.k = v on a plain fixed-shape object
+// to the Go struct field assignment o.K = v, the store half of the o.k read
+// propertyAccess lowers (section 4.1). A plain object lowers to a pointer to its
+// interned struct, so the field write shows through every reference to the object,
+// which is what a mutation on a JavaScript object must be. It reports ok=false when
+// the statement is not a property write into a plain object, so lowerUpdate falls
+// through to the accessor and local-identifier paths that own the other targets. A
+// class instance is claimed by classFieldAssign before this and is excluded again
+// here for good measure, and an array, a byte buffer, a Map, and a Set are not
+// plain objects, so none of them reach the field store. The value coerces to the
+// field type the same way a local assignment coerces to its target. Only a plain
+// "=" is covered: a compound write o.k += v is a later slice, so it hands back
+// rather than emitting a store that skips the read.
+func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
+	parts := r.prog.Children(bin)
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, false, nil
+	}
+	target := parts[0]
+	if target.Kind() != frontend.NodePropertyAccessExpression {
+		return nil, false, nil
+	}
+	tParts := r.prog.Children(target)
+	if len(tParts) != 2 {
+		return nil, false, nil
+	}
+	obj := tParts[0]
+	objType := r.prog.TypeAt(obj)
+	if objType.Flags&frontend.TypeObject == 0 {
+		return nil, false, nil
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return nil, false, nil
+	}
+	if r.isBytes(obj) || r.isMap(obj) || r.isSet(obj) {
+		return nil, false, nil
+	}
+	if _, ok := r.classReceiver(obj); ok {
+		return nil, false, nil
+	}
+	lhs, err := r.lowerExpr(target)
+	if err != nil {
+		return nil, false, err
+	}
+	rhs, err := r.lowerExpr(parts[2])
+	if err != nil {
+		return nil, false, err
+	}
+	rhs, err = r.coerceToTarget(rhs, parts[2], target)
+	if err != nil {
+		return nil, false, err
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}}, true, nil
 }
 
 // lowerIncDec lowers a ++ or -- applied to a local number. In statement
