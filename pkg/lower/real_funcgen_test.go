@@ -245,9 +245,9 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "compound_mod", file: "func_compound_mod"},
 		// ++ and -- on a number local map to Go's IncDecStmt, which accepts a float64.
 		{name: "incdec", file: "func_incdec"},
-		// a ternary lowers to an immediately-invoked function so only the taken branch runs; a chained ternary nests one inside the other's else return.
+		// a ternary in return position flattens to an if that returns each branch so only the taken branch runs; a chained ternary becomes a straight run of ifs, the shape a person writes.
 		{name: "conditional", file: "func_conditional"},
-		// a ternary whose branches are strings types the IIFE result as value.BStr.
+		// a ternary whose branches are strings flattens the same way, each arm returning the value.BStr its branch lowers to.
 		{name: "conditional_string", file: "func_conditional_string"},
 		// an array literal lowers to value.NewArray instantiated at the element type, .length on the array to the Len method, and for...of to a Go range over the backing slice.
 		{name: "array_forof", file: "func_array_forof"},
