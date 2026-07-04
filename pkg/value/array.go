@@ -165,6 +165,26 @@ func Reduce[T, A any](a *Array[T], f func(A, T) A, init A) A {
 	return acc
 }
 
+// ReduceNoInit folds the array left to right with no initial value, the lowering
+// of Array.prototype.reduce called with only a callback. With no init the
+// accumulator seeds from the first element and the fold runs from the second, so
+// the accumulator type is the element type T and the callback is func(T, T) T,
+// unlike the initial-value form whose accumulator may be a different type A. That
+// same difference is why this is a method: the accumulator type does not vary from
+// the element type here, so no second type parameter is needed. An empty array has
+// no seed, so it throws a TypeError the way JavaScript does rather than inventing
+// one.
+func (a *Array[T]) ReduceNoInit(f func(T, T) T) T {
+	if len(a.elems) == 0 {
+		Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+	}
+	acc := a.elems[0]
+	for _, x := range a.elems[1:] {
+		acc = f(acc, x)
+	}
+	return acc
+}
+
 // Filter returns a new array of the elements for which f returns true, in order,
 // the lowering of Array.prototype.filter. As with Map, the callback takes only
 // the element for now. The result is a fresh array, so the receiver is
