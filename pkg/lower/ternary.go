@@ -85,6 +85,17 @@ func (r *Renderer) conditionalReturnStmts(node frontend.Node) ([]ast.Stmt, error
 		}
 		return []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{expr}}}, nil
 	}
+	// A condition the checker proved always truthy or always falsy collapses to the
+	// branch that runs, the same drop conditionalExpr takes for an embedded ternary:
+	// return o ? a : b over a non-null object flattens to just return a, with no test
+	// emitted, since only the taken branch ever runs. Taken only for a repeatable
+	// condition, so dropping the test loses no side effect.
+	if val, known := r.staticTruthy(cond); known && r.repeatableOperand(cond) {
+		if val {
+			return r.conditionalReturnStmts(whenTrue)
+		}
+		return r.conditionalReturnStmts(whenFalse)
+	}
 	condExpr, err := r.lowerCondition(cond)
 	if err != nil {
 		return nil, err
@@ -200,6 +211,14 @@ func (r *Renderer) conditionalAssignStmt(targetName string, node frontend.Node, 
 			return nil, err
 		}
 		return &ast.AssignStmt{Lhs: []ast.Expr{ident(targetName)}, Tok: token.ASSIGN, Rhs: []ast.Expr{val}}, nil
+	}
+	// The same always-truthy collapse the return path takes: a statically known,
+	// repeatable condition assigns only the taken branch, with no if emitted.
+	if val, known := r.staticTruthy(cond); known && r.repeatableOperand(cond) {
+		if val {
+			return r.conditionalAssignStmt(targetName, whenTrue, leaf)
+		}
+		return r.conditionalAssignStmt(targetName, whenFalse, leaf)
 	}
 	condExpr, err := r.lowerCondition(cond)
 	if err != nil {
