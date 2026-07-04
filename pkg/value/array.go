@@ -29,6 +29,17 @@ func NewArray[T any](elems ...T) *Array[T] {
 	return &Array[T]{elems: backing}
 }
 
+// ArrayFrom builds an array that takes ownership of an existing backing slice,
+// the lowering target of an array literal that splices in a spread element. The
+// spread lowering builds the backing slice with append, starting from a fresh
+// []T so the result aliases none of the spread sources, then hands that slice
+// here rather than re-copying it through NewArray's variadic. The array owns the
+// slice from this point, which is sound because the caller built it for this one
+// array and keeps no other reference to it.
+func ArrayFrom[T any](elems []T) *Array[T] {
+	return &Array[T]{elems: elems}
+}
+
 // Len is the array's length. JavaScript's .length is a Number, so it is a
 // float64 here to match the type the checker gives the property and to compose
 // with the rest of the numeric path with no conversion at the use site. It is
