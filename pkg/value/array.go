@@ -377,6 +377,22 @@ func (a *Array[T]) Concat(others ...*Array[T]) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// Flat concatenates the elements of an array of arrays into one flat array, the
+// lowering of Array.prototype.flat at its default depth of one over an array
+// whose element type is itself an array. It is a free function rather than a
+// method because it needs the inner element type T as a type argument, which the
+// receiver's *Array[*Array[T]] shape names but a method on *Array[*Array[T]]
+// could not introduce. The result is a fresh array that aliases none of the inner
+// arrays, matching flat, which copies elements into a new array. Deeper depths
+// and a mixed array of arrays and values are later slices.
+func Flat[T any](a *Array[*Array[T]]) *Array[T] {
+	out := make([]T, 0, len(a.elems))
+	for _, inner := range a.elems {
+		out = append(out, inner.elems...)
+	}
+	return &Array[T]{elems: out}
+}
+
 // Reverse reverses the elements in place and returns the same array, the
 // lowering of Array.prototype.reverse. It is a pointer method because the
 // reversal mutates the receiver, and it returns the receiver rather than a copy
