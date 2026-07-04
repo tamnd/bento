@@ -189,3 +189,93 @@ pick(true);
 		t.Fatalf("object-arm union hand-back reason = %q", reason)
 	}
 }
+
+// TestDiscriminatedUnionEmitsPointerArms pins the type half of the object-arm tagged
+// sum: a union of two objects sharing a string-literal discriminant becomes a tag
+// type, a value struct with one pointer field per arm named after the discriminant
+// value, and a constructor per arm taking that member's pointer.
+func TestDiscriminatedUnionEmitsPointerArms(t *testing.T) {
+	const src = `interface Circle { kind: "circle"; r: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function area(s: Shape): number {
+  if (s.kind === "circle") {
+    return s.r * s.r;
+  }
+  return s.side * s.side;
+}
+area({ kind: "circle", r: 2 });
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"type CircleOrSquareTag uint8",
+		"type CircleOrSquare struct {",
+		"circle *ObjKindR",
+		"square *ObjKindSide",
+		"func CircleOrSquareOfCircle(v *ObjKindR) CircleOrSquare",
+		"func CircleOrSquareOfSquare(v *ObjKindSide) CircleOrSquare",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("emitted Go missing %q\n%s", want, source)
+		}
+	}
+}
+
+// TestDiscriminatedUnionIfNarrows pins that s.kind === "circle" lowers to a tag
+// compare and that the narrowed read inside the branch selects the arm's pointer
+// field, so s.r becomes s.circle.R.
+func TestDiscriminatedUnionIfNarrows(t *testing.T) {
+	const src = `interface Circle { kind: "circle"; r: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function area(s: Shape): number {
+  if (s.kind === "circle") {
+    return s.r * s.r;
+  }
+  return s.side * s.side;
+}
+area({ kind: "circle", r: 2 });
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if s.tag == CircleOrSquareCircle {") {
+		t.Fatalf("discriminant test did not lower to a tag compare\n%s", source)
+	}
+	if !strings.Contains(source, "s.circle.R") {
+		t.Fatalf("narrowed read did not select the arm pointer field\n%s", source)
+	}
+}
+
+// TestDiscriminatedUnionRuns builds and runs a discriminated-union program through
+// both the if and switch narrowing forms and checks the output matches the
+// JavaScript semantics.
+func TestDiscriminatedUnionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `interface Circle { kind: "circle"; r: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle":
+      return s.r * s.r;
+    case "square":
+      return s.side * s.side;
+  }
+  return 0;
+}
+function run(): void {
+  const c: Shape = { kind: "circle", r: 3 };
+  const sq: Shape = { kind: "square", side: 4 };
+  console.log(String(area(c)));
+  console.log(String(area(sq)));
+}
+run();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "switch s.tag {") {
+		t.Fatalf("discriminant switch did not lower to a tag switch\n%s", source)
+	}
+	out := runProgramGo(t, src)
+	if out != "9\n16\n" {
+		t.Fatalf("unexpected output %q\n%s", out, source)
+	}
+}

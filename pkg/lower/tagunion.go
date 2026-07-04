@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"sort"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -63,10 +64,16 @@ var primArms = []primArm{
 
 // unionArm is one arm of an interned union: the primitive descriptor it matched
 // plus the Go type its field and constructor take, resolved once through typeExpr
-// so the emitted field, the constructor parameter, and any bridge agree.
+// so the emitted field, the constructor parameter, and any bridge agree. An object
+// arm sets isObject and carries the discriminant literal that selects it and the
+// structural key of its member type, so a narrowed read and a discriminant compare
+// find the arm without a primitive flag.
 type unionArm struct {
 	primArm
-	goType ast.Expr
+	goType    ast.Expr
+	isObject  bool
+	disc      string // the discriminant literal value an object arm narrows on ("circle")
+	memberSig string // the structural key of an object arm's member type
 }
 
 // unionInfo is the interned descriptor of one tagged-sum union: the Go type name,
@@ -77,6 +84,35 @@ type unionInfo struct {
 	goName  string
 	tagType string
 	arms    []unionArm
+	// disc is the discriminant property name of an object union ("kind"), the
+	// property whose string-literal value differs per arm. It is empty for a
+	// primitive union, which narrows on typeof rather than a property.
+	disc string
+}
+
+// armByDisc returns the object arm a discriminant literal selects, so a compare
+// s.kind === "circle" or a switch case "circle" maps to the arm's tag. It returns
+// false when no arm carries that literal.
+func (u *unionInfo) armByDisc(v string) (unionArm, bool) {
+	for _, a := range u.arms {
+		if a.isObject && a.disc == v {
+			return a, true
+		}
+	}
+	return unionArm{}, false
+}
+
+// armByMemberSig returns the object arm whose member type has this structural key,
+// the match a narrowed read and a construction use to pick the arm from the object
+// value's own type rather than a discriminant. It returns false when no arm's member
+// matches.
+func (u *unionInfo) armByMemberSig(sig string) (unionArm, bool) {
+	for _, a := range u.arms {
+		if a.isObject && a.memberSig == sig {
+			return a, true
+		}
+	}
+	return unionArm{}, false
 }
 
 // tagConst returns the discriminant constant name for an arm, the union name
@@ -106,19 +142,6 @@ func (u *unionInfo) armForFlags(f frontend.TypeFlags) (unionArm, bool) {
 		}
 	}
 	return unionArm{}, false
-}
-
-// isPrimitiveUnionType reports whether a type is a union every one of whose members
-// is a distinct supported primitive (number, string, boolean, bigint), the shape
-// the inline tagged-sum covers. A union with an object, array, class, null, or
-// undefined member, or fewer than two members, is not this shape and lowers
-// elsewhere or hands back.
-func (r *Renderer) isPrimitiveUnionType(t frontend.Type) bool {
-	if t.Flags&frontend.TypeUnion == 0 {
-		return false
-	}
-	_, ok := r.primUnionArms(t)
-	return ok
 }
 
 // primUnionArms classifies each member of a union to a primitive arm, returning the
@@ -191,12 +214,15 @@ func sortArmsByRank(arms []primArm) {
 	}
 }
 
-// internUnion returns the interned descriptor for a primitive tagged-sum union,
-// generating its Go type the first time it sees the shape and reusing it after,
-// keyed on the structural signature so two structurally equal unions share one
-// type. A union outside the primitive-arm subset returns a NotYetLowerable so the
-// type renderer hands the unit back rather than emit a struct for a shape the
-// construction and narrowing paths cannot serve yet.
+// internUnion returns the interned descriptor for a tagged-sum union, generating
+// its Go type the first time it sees the shape and reusing it after, keyed on the
+// structural signature so two structurally equal unions share one type. It covers
+// two shapes: a union of unlike primitives, whose arms are inline value fields
+// narrowed on typeof, and a discriminated union of objects sharing a string-literal
+// discriminant property, whose arms are pointer fields narrowed on that property. A
+// union that is neither returns a NotYetLowerable so the type renderer hands the
+// unit back rather than emit a struct for a shape the construction and narrowing
+// paths cannot serve yet.
 func (r *Renderer) internUnion(t frontend.Type) (*unionInfo, error) {
 	sig := structuralKey(r.prog, t, map[int]int{})
 	if info, ok := r.unionBySig[sig]; ok {
@@ -205,7 +231,7 @@ func (r *Renderer) internUnion(t frontend.Type) (*unionInfo, error) {
 
 	prims, ok := r.primUnionArms(t)
 	if !ok {
-		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union with a non-primitive member needs the object-arm tagged sum, a later slice"}
+		return r.internObjectUnion(t, sig)
 	}
 
 	suffixes := make([]string, len(prims))
@@ -227,6 +253,114 @@ func (r *Renderer) internUnion(t frontend.Type) (*unionInfo, error) {
 	r.unions = append(r.unions, info)
 	r.unionBySig[sig] = info
 	return info, nil
+}
+
+// internObjectUnion interns a discriminated union of objects: every member is an
+// object type, and they share one property whose value is a distinct string literal
+// per member, the discriminant. Each arm becomes a pointer field to the member's
+// interned struct, and the discriminant literal names the tag, the constructor, and
+// the field. A union that is not this shape, an object member without a common
+// discriminant or a discriminant whose value is not a Go-identifier-safe string,
+// hands back so the type renderer routes the unit to the interpreter.
+func (r *Renderer) internObjectUnion(t frontend.Type, sig string) (*unionInfo, error) {
+	members := r.prog.UnionMembers(t)
+	if len(members) < 2 {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union with a non-primitive member needs the object-arm tagged sum, a later slice"}
+	}
+	for _, m := range members {
+		if m.Flags&frontend.TypeObject == 0 || m.Flags&frontend.TypeUnion != 0 {
+			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union mixing object and non-object members is a later slice"}
+		}
+	}
+	disc, values, ok := r.discriminant(members)
+	if !ok {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union of objects without a shared string-literal discriminant is a later slice"}
+	}
+
+	arms := make([]unionArm, len(members))
+	suffixes := make([]string, len(members))
+	for i, m := range members {
+		suffix, ok := exportedField(values[i])
+		if !ok {
+			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "a discriminant value that is not a Go identifier is a later slice"}
+		}
+		gt, err := r.renderObject(m)
+		if err != nil {
+			return nil, err
+		}
+		arms[i] = unionArm{
+			primArm:   primArm{field: unexportedName(suffix), suffix: suffix},
+			goType:    gt,
+			isObject:  true,
+			disc:      values[i],
+			memberSig: structuralKey(r.prog, m, map[int]int{}),
+		}
+		suffixes[i] = suffix
+	}
+	goName := r.decls.reserveName(strings.Join(suffixes, "Or"))
+	info := &unionInfo{goName: goName, tagType: goName + "Tag", arms: arms, disc: disc}
+	r.unions = append(r.unions, info)
+	r.unionBySig[sig] = info
+	return info, nil
+}
+
+// discriminant finds the property shared by every member of an object union whose
+// value is a distinct string literal in each, the property a narrowing switch or
+// compare tests. It scans the first member's properties in a stable order and picks
+// the first that is a string literal in every member with no repeated value, so the
+// choice does not depend on checker property order. It returns the property name and
+// the per-member literal values in member order, or false when no property qualifies.
+func (r *Renderer) discriminant(members []frontend.Type) (string, []string, bool) {
+	names := make([]string, 0)
+	for _, p := range r.prog.Properties(members[0]) {
+		names = append(names, p.Name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		values := make([]string, len(members))
+		seen := map[string]bool{}
+		ok := true
+		for i, m := range members {
+			v, found := r.stringLiteralProp(m, name)
+			if !found || seen[v] {
+				ok = false
+				break
+			}
+			seen[v] = true
+			values[i] = v
+		}
+		if ok {
+			return name, values, true
+		}
+	}
+	return "", nil, false
+}
+
+// stringLiteralProp returns the string-literal value of a named property on an
+// object type, the discriminant test's per-member value. It returns false when the
+// object has no such property or the property is not a string literal.
+func (r *Renderer) stringLiteralProp(t frontend.Type, name string) (string, bool) {
+	for _, p := range r.prog.Properties(t) {
+		if p.Name != name {
+			continue
+		}
+		lit, ok := r.prog.LiteralValue(p.Type)
+		if !ok || lit.Kind != frontend.LiteralString {
+			return "", false
+		}
+		return lit.Str, true
+	}
+	return "", false
+}
+
+// unexportedName lowercases the first rune of an exported name so an object arm's
+// struct field (circle) reads as an unexported field beside the primitive arms,
+// while its tag and constructor keep the exported suffix (Circle).
+func unexportedName(name string) string {
+	if name == "" {
+		return name
+	}
+	return strings.ToLower(name[:1]) + name[1:]
 }
 
 // memberType returns the union member whose flags match a primitive arm, so the
@@ -260,7 +394,7 @@ func (r *Renderer) unionInfoOf(t frontend.Type) (*unionInfo, bool) {
 // signature) is still interned before its reads are lowered, and interning is
 // idempotent, so calling it here and again at a use site emits one type.
 func (r *Renderer) unionInfoOrIntern(t frontend.Type) (*unionInfo, bool) {
-	if !r.isPrimitiveUnionType(t) {
+	if t.Flags&frontend.TypeUnion == 0 {
 		return nil, false
 	}
 	info, err := r.internUnion(t)
@@ -285,11 +419,31 @@ func (r *Renderer) wrapToUnion(expr ast.Expr, src frontend.Node, target frontend
 	if other, ok := r.unionInfoOf(r.prog.TypeAt(src)); ok && other == info {
 		return expr, false, nil
 	}
-	arm, ok := info.armForFlags(r.primitiveFlags(src))
-	if !ok {
-		return nil, false, &NotYetLowerable{Reason: "constructing this union from its source type is a later slice"}
+	// A union local the checker narrowed to one arm at this use (a const the flow
+	// analysis pinned to its initializer's member, then passed on as the union) still
+	// holds the whole union value, so it flows on as the bare local rather than
+	// unwrapping the narrowed arm and rebuilding the same tag. This keeps the pass
+	// one struct copy instead of a field read and a reconstruction, and reads as the
+	// plain variable it is.
+	if src.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(src)); ok && r.unionLocals[name] == info {
+			return ident(name), true, nil
+		}
 	}
-	return &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{expr}}, true, nil
+	if arm, ok := info.armForFlags(r.primitiveFlags(src)); ok {
+		return &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{expr}}, true, nil
+	}
+	// An object value flowing into an object union: its structural key names the arm,
+	// and expr is already the pointer the object literal lowered to (&Struct{...}), so
+	// it drops straight into the arm's pointer-taking constructor with no extra
+	// address-of. A source whose shape matches no arm hands back rather than guess.
+	st := r.prog.TypeAt(src)
+	if st.Flags&frontend.TypeObject != 0 && st.Flags&frontend.TypeUnion == 0 {
+		if arm, ok := info.armByMemberSig(structuralKey(r.prog, st, map[int]int{})); ok {
+			return &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{expr}}, true, nil
+		}
+	}
+	return nil, false, &NotYetLowerable{Reason: "constructing this union from its source type is a later slice"}
 }
 
 // narrowedUnionRead lowers a reference to a union-typed local the checker narrowed
@@ -304,11 +458,23 @@ func (r *Renderer) narrowedUnionRead(name string, n frontend.Node) (ast.Expr, bo
 	if !ok {
 		return nil, false
 	}
-	arm, ok := info.armForFlags(r.primitiveFlags(n))
-	if !ok {
+	if arm, ok := info.armForFlags(r.primitiveFlags(n)); ok {
+		return &ast.SelectorExpr{X: ident(name), Sel: ident(arm.field)}, true
+	}
+	// An object union narrows to a single member: the checker types the reference
+	// as one object, no longer the whole union, so its structural key names the arm
+	// and the read selects that arm's pointer field (name.circle), which a following
+	// member access dots into (name.circle.R). A reference still typed as the whole
+	// union carries the union bit and matches no object arm, so the bare struct
+	// passes through.
+	nt := r.prog.TypeAt(n)
+	if nt.Flags&frontend.TypeUnion != 0 || nt.Flags&frontend.TypeObject == 0 {
 		return nil, false
 	}
-	return &ast.SelectorExpr{X: ident(name), Sel: ident(arm.field)}, true
+	if arm, ok := info.armByMemberSig(structuralKey(r.prog, nt, map[int]int{})); ok {
+		return &ast.SelectorExpr{X: ident(name), Sel: ident(arm.field)}, true
+	}
+	return nil, false
 }
 
 // typeofUnionCompare lowers a typeof test on a tagged-sum union against a string
@@ -354,6 +520,78 @@ func (r *Renderer) typeofUnionCompare(opText string, left, right frontend.Node) 
 		cmp.Op = token.NEQ
 	}
 	return cmp, true, nil
+}
+
+// discriminantUnionCompare lowers a discriminant test on an object union against a
+// string literal to a tag compare, the property-narrowing of section 9: s.kind ===
+// "circle" on a shape | circle union lowers to comparing s.tag rather than reading a
+// kind field and matching a string. One side must be a read of the union's
+// discriminant property off a union local, the other a string literal naming one of
+// the arms. It returns false for any other shape so the caller falls through to the
+// value compare, and negates the result for !==.
+func (r *Renderer) discriminantUnionCompare(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	if opText != "===" && opText != "!==" {
+		return nil, false, nil
+	}
+	name, info, lit, ok := r.discOperandAndLiteral(left, right)
+	if !ok {
+		return nil, false, nil
+	}
+	arm, ok := info.armByDisc(lit)
+	if !ok {
+		return nil, false, nil
+	}
+	cmp := &ast.BinaryExpr{
+		X:  &ast.SelectorExpr{X: ident(name), Sel: ident("tag")},
+		Op: token.EQL,
+		Y:  ident(info.tagConst(arm)),
+	}
+	if opText == "!==" {
+		cmp.Op = token.NEQ
+	}
+	return cmp, true, nil
+}
+
+// discOperandAndLiteral picks the discriminant read and the string literal out of a
+// comparison's two sides, in either order. It returns the union local name, its
+// interned descriptor, and the literal value when exactly one side reads the union's
+// discriminant property off a union local and the other is a string literal, and
+// false otherwise.
+func (r *Renderer) discOperandAndLiteral(a, b frontend.Node) (string, *unionInfo, string, bool) {
+	if name, info, ok := r.discriminantRead(a); ok {
+		if lit, ok := r.stringLiteralValue(b); ok {
+			return name, info, lit, true
+		}
+	}
+	if name, info, ok := r.discriminantRead(b); ok {
+		if lit, ok := r.stringLiteralValue(a); ok {
+			return name, info, lit, true
+		}
+	}
+	return "", nil, "", false
+}
+
+// discriminantRead reports whether a node reads the discriminant property of an
+// object union off a union local, s.kind where s is a local of an object union and
+// kind is its discriminant. It returns the local name and the union descriptor so
+// the compare can emit s.tag against the arm the literal names.
+func (r *Renderer) discriminantRead(n frontend.Node) (string, *unionInfo, bool) {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return "", nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+		return "", nil, false
+	}
+	name, ok := localName(r.prog.Text(kids[0]))
+	if !ok {
+		return "", nil, false
+	}
+	info, ok := r.unionLocals[name]
+	if !ok || info.disc == "" || r.prog.Text(kids[1]) != info.disc {
+		return "", nil, false
+	}
+	return name, info, true
 }
 
 // typeofOperandAndLiteral picks the typeof operand and the string-literal tag out
