@@ -109,9 +109,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		if i < len(params) {
-			lowered, err = r.bridgeClassBinding(lowered, a, params[i].Type)
-			if err != nil {
-				return nil, err
+			if boxed, ok, berr := r.boxToOptional(lowered, a, params[i].Type); berr != nil {
+				return nil, berr
+			} else if ok {
+				lowered = boxed
+			} else {
+				lowered, err = r.bridgeClassBinding(lowered, a, params[i].Type)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		args = append(args, lowered)
