@@ -1,6 +1,7 @@
 package value
 
 import (
+	"math"
 	"sort"
 	"strings"
 )
@@ -586,6 +587,36 @@ func (a *Array[T]) ToSplicedToEnd(start float64) *Array[T] {
 	s := relativeIndex(start, n)
 	out := make([]T, s)
 	copy(out, a.elems[:s])
+	return &Array[T]{elems: out}
+}
+
+// With returns a new array with the element at index replaced by value, the
+// lowering of Array.prototype.with. It is the copying single-index write: where
+// a[i] = v mutates in place, with leaves the receiver alone and returns a fresh
+// array, so it reads back through every reference unchanged. The index is read
+// as JavaScript reads it, truncated toward zero with NaN becoming zero, and a
+// negative index counts from the end. An index that lands outside the array
+// after that throws a RangeError rather than clamping or growing, matching with,
+// which reports the original argument in the message even when it was
+// fractional. The result aliases none of the receiver's storage.
+func (a *Array[T]) With(index float64, value T) *Array[T] {
+	n := len(a.elems)
+	rel := index
+	if rel != rel { // NaN becomes zero
+		rel = 0
+	} else {
+		rel = math.Trunc(rel)
+	}
+	actual := rel
+	if actual < 0 {
+		actual += float64(n)
+	}
+	if actual < 0 || actual >= float64(n) {
+		Throw(NewRangeError(FromGoString("Invalid index : ").ConcatN(NumberToString(index))))
+	}
+	out := make([]T, n)
+	copy(out, a.elems)
+	out[int(actual)] = value
 	return &Array[T]{elems: out}
 }
 
