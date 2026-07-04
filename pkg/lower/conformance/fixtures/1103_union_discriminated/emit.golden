@@ -51,8 +51,9 @@ func Area(s CircleOrRectOrSquare) float64 {
 		return s.square.Side * s.square.Side
 	case CircleOrRectOrSquareRect:
 		return s.rect.W * s.rect.H
+	default:
+		panic("unreachable")
 	}
-	return 0
 }
 func Label(s CircleOrRectOrSquare) value.BStr {
 	if s.tag == CircleOrRectOrSquareCircle {
