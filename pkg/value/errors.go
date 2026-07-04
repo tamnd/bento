@@ -119,6 +119,13 @@ func NewSyntaxError(message BStr) *Error {
 	return &Error{name: FromGoString("SyntaxError"), message: message}
 }
 
+// NewURIError constructs a URIError, the error the URI codec globals raise: an
+// encodeURIComponent over a lone surrogate, or a decodeURIComponent over a
+// malformed percent-escape.
+func NewURIError(message BStr) *Error {
+	return &Error{name: FromGoString("URIError"), message: message}
+}
+
 // Caught converts a recovered panic payload into the *Error a catch binds. A
 // thrown *Error binds unchanged, so identity is preserved; a boundary Thrown (a
 // go: failure, a range check) binds as an Error carrying its name and message, so a
