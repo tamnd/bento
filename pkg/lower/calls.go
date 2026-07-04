@@ -189,6 +189,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "JSON") {
 		return r.jsonCall(method, argNodes)
 	}
+	// Object.keys(o) and friends are static calls on the global Object namespace,
+	// not a method on a value, so they lower to a value constructor before the
+	// receiver-value paths below.
+	if r.isGlobalRef(recvNode, "Object") {
+		return r.objectCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.
@@ -423,6 +429,50 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 	default:
 		return nil, &NotYetLowerable{Reason: "JSON." + method + " is a later slice"}
 	}
+}
+
+// objectCall lowers a static call on the global Object namespace. Only keys is
+// covered: Object.keys(o) on a fixed-shape object returns its own enumerable
+// property names, in declaration order, which the checker knows in full at
+// compile time, so it lowers to a value.NewArray[value.BStr] of the field-name
+// literals rather than a runtime property walk. The argument is required to be a
+// plain identifier, whose type carries the shape and which has no side effect to
+// drop, since only the type is read here. An interned shape with an optional
+// property would give a key list the runtime object might not match (a missing
+// optional field is not a key), so the call gates on internStruct and hands back
+// when the shape does not lower. values and entries mix element types and wait on
+// their own slice; any other Object method is a later slice.
+func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "keys" {
+		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.keys with other than one argument is a later slice"}
+	}
+	arg := argNodes[0]
+	if arg.Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "Object.keys of an expression that is not a plain identifier is a later slice"}
+	}
+	objType := r.prog.TypeAt(arg)
+	if objType.Flags&frontend.TypeObject == 0 {
+		return nil, &NotYetLowerable{Reason: "Object.keys of a non-object is a later slice"}
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return nil, &NotYetLowerable{Reason: "Object.keys of an array is a later slice"}
+	}
+	if _, err := r.decls.internStruct(r, objType); err != nil {
+		return nil, err
+	}
+	props := r.prog.Properties(objType)
+	if len(props) == 0 {
+		return nil, &NotYetLowerable{Reason: "Object.keys of a shape with no known properties is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	keys := make([]ast.Expr, len(props))
+	for i, p := range props {
+		keys[i] = &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p.Name)}}}
+	}
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "BStr")), Args: keys}, nil
 }
 
 // primitiveValueCall lowers toString and valueOf on a number or boolean value.
