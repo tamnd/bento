@@ -1014,6 +1014,32 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{7, 3}, {-7, 3}, {7, -3}, {5.5, 2}, {10, 10}},
 		},
 		{
+			name: "exponent",
+			file: "eq_exponent",
+			// ** is Math.pow; the cases use integer and power-of-two exponents
+			// whose results are exact, so the two pow implementations cannot
+			// diverge in the last bit, plus a negative exponent whose reciprocal
+			// is exact in binary.
+			fn:   "p",
+			args: [][]any{{2, 10}, {5, 3}, {2, -2}, {9, 0}},
+		},
+		{
+			name: "exponentAssoc",
+			file: "eq_exponent_assoc",
+			// ** is right-associative, so a ** b ** c is a ** (b ** c): 2 ** 3 ** 2
+			// is 2 ** 9 (512), not (2 ** 3) ** 2 (64). The oracle pins the nesting.
+			fn:   "p",
+			args: [][]any{{2, 3, 2}, {3, 2, 2}, {2, 2, 3}, {5, 2, 1}},
+		},
+		{
+			name: "compoundExponent",
+			file: "eq_compound_exponent",
+			// **= fuses to x = x ** n, so it exercises the same math.Pow path from
+			// a statement; the reciprocal case checks the negative exponent too.
+			fn:   "grow",
+			args: [][]any{{2, 10}, {3, 4}, {5, 0}, {2, -2}},
+		},
+		{
 			name: "logical",
 			file: "eq_logical",
 			fn:   "between",
