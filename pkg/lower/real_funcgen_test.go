@@ -323,8 +323,9 @@ func TestRenderFuncVoidReturn(t *testing.T) {
 // NotYetLowerable rather than wrong or incomplete Go.
 func TestRenderFuncHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
-		// a truthy number condition needs JavaScript coercion, not a Go bool.
-		{"truthyCond", "export function t(a: number): number { if (a) { return 1; } return 0; }"},
+		// a truthy number or string condition lowers now, but an object in boolean
+		// position has a falsy rule this slice does not model, so it hands back.
+		{"truthyObject", "export function t(o: { x: number }): number { if (o) { return 1; } return 0; }"},
 		// for-of over an array lowers now, but over a string (a non-array iterable)
 		// is still a later slice, so it hands back.
 		{"forOfString", "export function s(x: string): number { let n = 0; for (const ch of x) { n = n + 1; } return n; }"},

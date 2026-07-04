@@ -872,11 +872,10 @@ func (r *Renderer) lowerWhile(n frontend.Node) (ast.Stmt, error) {
 	return &ast.ForStmt{Cond: cond, Body: body}, nil
 }
 
-// lowerCondition lowers a control-flow condition, requiring it to be typed
-// boolean so the emitted Go is a real bool and not a coerced number.
+// lowerCondition lowers a control-flow condition to a Go bool. A boolean operand
+// lowers as itself; a non-boolean rides JavaScript truthiness through lowerTruthy,
+// which reproduces the falsy set for its type, so if (n), while (s), and a ternary
+// condition over a number or string lower the way the source reads them.
 func (r *Renderer) lowerCondition(n frontend.Node) (ast.Expr, error) {
-	if !r.isBool(n) {
-		return nil, &NotYetLowerable{Reason: "non-boolean condition needs JavaScript truthiness, a later slice"}
-	}
-	return r.lowerExpr(n)
+	return r.lowerTruthy(n)
 }
