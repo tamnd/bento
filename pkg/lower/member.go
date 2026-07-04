@@ -396,6 +396,13 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	if !r.isNumber(idxNode) {
 		return nil, &NotYetLowerable{Reason: "array element access with a non-number index is a later slice"}
 	}
+	// A read of a fixed-length integer typed array at an index proven inside it reads
+	// the backing slice directly, recv.Data()[idx] widened to a Number, dropping the
+	// bounds branch and the index truncation entirely. The proof is what makes the
+	// bare slice index sound: the out-of-range read-zero At gives cannot happen here.
+	if info, idxNode2, ok := r.provenTypedRead(n); ok {
+		return r.typedSliceRead(obj, idxNode2, "float64", info)
+	}
 	recv, err := r.lowerExpr(obj)
 	if err != nil {
 		return nil, err
