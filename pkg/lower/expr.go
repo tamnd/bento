@@ -401,6 +401,22 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return nil, &NotYetLowerable{Reason: "instanceof outside a caught built-in error is a later slice"}
 	}
 
+	// "prop" in s on a discriminated object union narrows to the arms that carry the
+	// property, so it lowers to a tag disjunction, s.tag == A || s.tag == B, rather
+	// than probing a runtime property map (tagunion.go). A test over a non-union or a
+	// property that every arm or no arm carries does not narrow and hands back, since
+	// a general in on an arbitrary object is its own later slice.
+	if opText == "in" {
+		expr, handled, err := r.inUnionCompare(left, right)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			return expr, nil
+		}
+		return nil, &NotYetLowerable{Reason: "the in operator outside a discriminated-union narrowing is a later slice"}
+	}
+
 	// Nullish coalescing is a presence test on the left, not a truthiness test,
 	// so it routes here before the operator table rather than desugaring to || .
 	// It lowers only the optional shape with a pure fallback and hands back the
