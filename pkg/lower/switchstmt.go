@@ -147,13 +147,20 @@ func (r *Renderer) stripTrailingBreak(stmts []frontend.Node) ([]frontend.Node, b
 // bodyTerminates reports whether a case body cannot run off its end, so control
 // cannot fall through into the following clause. A trailing return or throw
 // terminates, and so does a trailing block whose own last statement terminates,
-// which is the "case N: { ...; return x; }" braced form. Anything else can reach
-// the end, so the caller treats it as a fall-through when a clause follows.
+// which is the "case N: { ...; return x; }" braced form. A trailing break or
+// continue terminates too: a break leaves the switch and a continue jumps to the
+// enclosing loop, so neither reaches the next clause (a trailing break is normally
+// stripped before this, but a continue is not, so this is what keeps a
+// "case N: continue;" from reading as a fall-through). Anything else can reach the
+// end, so the caller treats it as a fall-through when a clause follows.
 func (r *Renderer) bodyTerminates(stmts []frontend.Node) bool {
 	if len(stmts) == 0 {
 		return false
 	}
 	last := stmts[len(stmts)-1]
+	if _, ok := r.lowerBranch(last); ok {
+		return true
+	}
 	switch last.Kind() {
 	case frontend.NodeReturnStatement, frontend.NodeThrowStatement:
 		return true
