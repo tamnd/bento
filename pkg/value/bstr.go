@@ -310,6 +310,65 @@ func (s BStr) CodePointAtOpt(i float64) Opt[float64] {
 	return Some(float64(first))
 }
 
+// IsWellFormed reports whether the string contains no lone surrogate code unit,
+// matching String.prototype.isWellFormed. In a well-formed string every high
+// surrogate (D800..DBFF) is immediately followed by a low surrogate (DC00..DFFF)
+// and every low surrogate follows a high one; a surrogate that breaks that pairing
+// is lone and makes the string ill-formed. A string on the UTF-8 fast path cannot
+// hold a lone surrogate, because UTF-8 cannot encode one, so it answers true with
+// no scan; only a string with a raw code-unit backing is walked.
+func (s BStr) IsWellFormed() bool {
+	s = s.flat()
+	if s.utf16 == nil {
+		return true
+	}
+	units := s.utf16
+	for i := 0; i < len(units); i++ {
+		u := units[i]
+		if u < 0xD800 || u > 0xDFFF {
+			continue
+		}
+		if u >= 0xDC00 {
+			// A low surrogate with no high surrogate before it is lone.
+			return false
+		}
+		// A high surrogate must be paired with a low surrogate in the next unit.
+		if i+1 >= len(units) || units[i+1] < 0xDC00 || units[i+1] > 0xDFFF {
+			return false
+		}
+		i++
+	}
+	return true
+}
+
+// ToWellFormed returns the string with every lone surrogate replaced by U+FFFD,
+// matching String.prototype.toWellFormed. A well-formed string is returned
+// unchanged, so it keeps its backing and costs no allocation; only a string that
+// holds a lone surrogate is rebuilt, with each unpaired surrogate swapped for the
+// replacement character and every valid pair copied through untouched.
+func (s BStr) ToWellFormed() BStr {
+	s = s.flat()
+	if s.utf16 == nil || s.IsWellFormed() {
+		return s
+	}
+	units := s.utf16
+	out := make([]uint16, 0, len(units))
+	for i := 0; i < len(units); i++ {
+		u := units[i]
+		if u < 0xD800 || u > 0xDFFF {
+			out = append(out, u)
+			continue
+		}
+		if u < 0xDC00 && i+1 < len(units) && units[i+1] >= 0xDC00 && units[i+1] <= 0xDFFF {
+			out = append(out, u, units[i+1])
+			i++
+			continue
+		}
+		out = append(out, 0xFFFD)
+	}
+	return BStr{utf16: out, lengthU16: len(out)}
+}
+
 // IndexOf returns the code-unit index of the first occurrence of search at or
 // after an optional start position, or -1 if it does not occur, matching
 // String.prototype.indexOf. The position is optional, so the method is variadic:
