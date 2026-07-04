@@ -135,6 +135,56 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 	return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{acc}}, nil
 }
 
+// arrayStaticCall lowers a static call on the global Array constructor. It
+// reports handled=false when the callee is not Array.<method> on the ambient
+// global, so the caller falls through to the ordinary method-call dispatch; a
+// call that is on Array but names a method this slice does not cover reports
+// handled=true with a hand-back so it does not fall through to a misleading
+// receiver-typed error. Array.of is covered; Array.from, the runtime-tag-needing
+// Array.isArray, and the length-preallocating Array(n) wait on their own slices.
+func (r *Renderer) arrayStaticCall(call, callee frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	recvNode, method := kids[0], r.prog.Text(kids[1])
+	if !r.isGlobalRef(recvNode, "Array") {
+		return nil, false, nil
+	}
+	switch method {
+	case "of":
+		expr, err := r.arrayOf(call, argNodes)
+		return expr, true, err
+	default:
+		return nil, true, &NotYetLowerable{Reason: "Array." + method + " is a later slice"}
+	}
+}
+
+// arrayOf lowers Array.of(e0, e1, ...) to the same value.NewArray construction
+// an array literal takes: Array.of builds an array from its arguments as
+// elements, one to one, exactly what [e0, e1, ...] does (unlike Array(n), whose
+// single number argument sets a length rather than an element). The element
+// type comes from the checker's type for the whole call, not from the
+// arguments, so a widened call spells the type the checker inferred; a call
+// whose element type does not lower, such as the empty Array.of() the checker
+// leaves unknown, hands back.
+func (r *Renderer) arrayOf(call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	elemType, ok := r.arrayElem(call)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Array.of whose element type does not lower yet"}
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		e, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, e)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
 // objectLiteral lowers an object literal { k: v, ... } to a composite literal
 // that builds a pointer to the generated struct the object's shape interns to.
 // The struct name comes from the same internStruct path a variable annotated

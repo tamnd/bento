@@ -1128,6 +1128,15 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{0}, {1}, {2}, {3}, {5}, {-1}},
 		},
 		{
+			// Array.of builds an array from its arguments; the array is iterated and
+			// its length read, so the construction is observed through the engine
+			// rather than only inspected in the emitted source.
+			name: "arrayOf",
+			file: "eq_array_of",
+			fn:   "build",
+			args: [][]any{{0}, {1}, {10}, {-2}, {0.5}},
+		},
+		{
 			// a Uint8Array is allocated at a length, each byte is written with a value
 			// that overflows 0..255 so the ToUint8 wrap runs, then the bytes are read
 			// back and summed, so construction from a length, .length, the indexed
