@@ -13,11 +13,13 @@ import (
 // process, performance), the primitive coercions called as functions, and the
 // method tables that guard argument types.
 
-// callExpr lowers a call to a top-level function. The callee must be an
-// identifier that resolves to a function symbol, lowered to the same exported Go
-// name RenderFunc gives the declaration, so a call and its target agree. Calling
-// a local closure, a method, or a value is a later slice. Arguments lower
-// positionally; a spread or a defaulted or omitted argument hands back.
+// callExpr lowers a call whose callee is a bare identifier. The identifier
+// resolves either to a top-level function symbol, lowered to the same exported
+// Go name RenderFunc gives the declaration so a call and its target agree, or to
+// a value binding of function type (an arrow stored in a const, a callback
+// parameter), lowered to a direct Go call on that func value. A method call
+// routes through methodCall before here. Arguments lower positionally; a spread
+// or a defaulted or omitted argument hands back.
 func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
 	if len(kids) == 0 {
@@ -88,12 +90,40 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		return r.parseIntCall(kids[1:])
 	}
 	sym, ok := r.prog.SymbolAt(kids[0])
-	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
-		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function is a later slice"}
-	}
-	name, ok := exportedField(sym.Name)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
+		return nil, &NotYetLowerable{Reason: "call to an unresolved callee is a later slice"}
+	}
+	// The callee resolves either to a top-level function symbol, called by the
+	// exported Go name its declaration takes, or to a value binding of function
+	// type (an arrow stored in a const, a callback parameter), called directly on
+	// the Go func value the binding already lowered to. The two share the argument
+	// lowering below; only the callee spelling differs.
+	var callee ast.Expr
+	if sym.Flags&frontend.SymbolFunction != 0 {
+		name, ok := exportedField(sym.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
+		}
+		callee = ident(name)
+	} else {
+		// A bare identifier used as a callee that the checker accepted has a call
+		// signature, so the binding is a function value: an arrow or function
+		// expression stored in a local, or a parameter typed as a function. It lowers
+		// to a Go func value the same as any other read, and calling it is that value
+		// applied to the arguments. The call proceeds only when the callee's type
+		// lowers to a clean Go func type, the same shape its declaration takes, so a
+		// callable object, an overload set, or a generic function value hands back
+		// here instead of emitting a call on a wrong Go type.
+		if ft, ok, err := r.renderFuncType(r.prog.TypeAt(kids[0])); err != nil {
+			return nil, err
+		} else if !ok || ft == nil {
+			return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function or a plain function value is a later slice"}
+		}
+		lowered, err := r.lowerExpr(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		callee = lowered
 	}
 	// Arguments lower positionally, each bridged against its declared
 	// parameter, so a derived instance passed for a base parameter upcasts to
@@ -122,7 +152,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		args = append(args, lowered)
 	}
-	return &ast.CallExpr{Fun: ident(name), Args: args}, nil
+	return &ast.CallExpr{Fun: callee, Args: args}, nil
 }
 
 // methodCall lowers a call whose callee is a member expression. The only
