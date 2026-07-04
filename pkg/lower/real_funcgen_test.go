@@ -261,6 +261,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "array_strlen", file: "func_array_strlen"},
 		// push is a mutating array method called as a statement: it lowers to the value.Array Push method wrapped in an expression statement, with the variadic form passing several arguments in one call.
 		{name: "array_push", file: "func_array_push"},
+		// Array.of(...) builds an array from its arguments as elements, so it lowers to the same value.NewArray construction an array literal takes rather than any of the Array(n) length forms.
+		{name: "array_of", file: "func_array_of"},
 		// an index expression a[i] lowers to the value.Array At method: both an array variable and an array literal are indexed, and the index is a bitwise expression, so the number index threads through with no conversion.
 		{name: "array_index", file: "func_array_index"},
 		// + where one operand is a string is concatenation with coercion: a number operand becomes value.NumberToString and a boolean operand value.BoolToString before value.Concat, so a mixed "n=" + n + " even=" + even chain lowers without reaching the number/bool operator dispatch.
