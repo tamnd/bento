@@ -36,6 +36,24 @@ func (r *Renderer) valueLogical(opText string, left, right frontend.Node) (ast.E
 	if opText != "&&" && opText != "||" {
 		return nil, false, nil
 	}
+	// A left operand the checker proved always truthy or always falsy fixes which
+	// operand the result is, so the expression collapses to that operand with no test
+	// and no func: obj || x is obj and obj && x is x when obj is a non-null object.
+	// || yields the left when it is truthy and && when it is falsy, so the left is
+	// the result exactly when (op is ||) matches the left's static truthiness; the
+	// other operand is dropped, which is the short-circuit, so it need not lower. The
+	// left is dropped in the other case, sound only for a side-effect-free operand.
+	if v, known := r.staticTruthy(left); known && r.repeatableOperand(left) {
+		chosen := right
+		if (opText == "||") == v {
+			chosen = left
+		}
+		expr, err := r.lowerExpr(chosen)
+		if err != nil {
+			return nil, false, err
+		}
+		return expr, true, nil
+	}
 	// Two booleans give a boolean result, which Go's && and || return directly with
 	// the same evaluation order and short-circuit, so that stays on the operator
 	// table rather than growing a func around a value it already has.

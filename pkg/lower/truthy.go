@@ -39,6 +39,27 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 	return nil, &NotYetLowerable{Reason: "truthiness of a non-primitive (object, union, or dynamic value) is a later slice"}
 }
 
+// staticTruthy reports whether the checker proved an operand's type is always
+// truthy or always falsy, so a condition or logical operand over it collapses to
+// the branch that runs instead of testing a value whose outcome is already fixed
+// (05_type_lowering, the boolean item on collapsing truthiness to a constant). A
+// plain object type, an object literal, an array, a function, or a class instance,
+// is always truthy: it carries no null or undefined and is not a falsy primitive.
+// A type that is only null, undefined, or void is always falsy. Every other type,
+// a number or string that could be zero or empty, a boolean, a union, or a dynamic
+// value, is not statically known and reports known false, so it keeps its runtime
+// test.
+func (r *Renderer) staticTruthy(n frontend.Node) (val, known bool) {
+	f := r.prog.TypeAt(n).Flags
+	if f == frontend.TypeObject {
+		return true, true
+	}
+	if f != 0 && f&^(frontend.TypeNull|frontend.TypeUndefined|frontend.TypeVoid) == 0 {
+		return false, true
+	}
+	return false, false
+}
+
 // numberTruthy lowers a number in boolean position to its ToBoolean: false at zero
 // and NaN, true otherwise. The inlined form is x != 0 && x == x, the zero test with
 // the NaN guard riding along (x == x is false only for NaN, which a bare x != 0
