@@ -483,6 +483,29 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(digits)}},
 		}, nil
 	}
+	// number.toExponential(digits) formats in exponential notation with exactly
+	// digits fraction digits. The count must be a literal in 0..100 for the reason
+	// the toFixed count must: a value outside that range throws a RangeError, and a
+	// dynamic count cannot be range-checked at compile time. The omitted-count form
+	// uses as many digits as the value needs, a different rule, so it hands back
+	// rather than defaulting to zero the way toFixed's omitted count does. It lowers
+	// to value.NumberToExponential, which rounds the exact double the way the
+	// specification does.
+	if method == "toExponential" && len(argNodes) == 1 && r.isNumber(recvNode) {
+		digits, ok := r.literalIntArg(argNodes[0], 0, 100)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "number toExponential with a non-literal or out-of-range digit count is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "NumberToExponential"),
+			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(digits)}},
+		}, nil
+	}
 	if len(argNodes) != 0 {
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " with arguments is a later slice"}
 	}
