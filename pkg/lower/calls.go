@@ -498,8 +498,60 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectKeys(argNodes)
 	case "values":
 		return r.objectValues(argNodes)
+	case "is":
+		return r.objectIs(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
+	}
+}
+
+// objectIs lowers Object.is(a, b), the SameValue equality, over two operands the
+// checker types as the same primitive. Both operands are always evaluated, so no
+// read is dropped. For two numbers it lowers to value.NumberSameValue, which
+// treats two NaNs as equal and the signed zeros as distinct, the two points
+// SameValue parts from Go ==. For two strings it is value.BStr.Equal and for two
+// booleans a Go ==, since SameValue agrees with strict equality away from
+// numbers. Operands of different types compare false at compile time, which would
+// drop both reads, so a mixed pair hands back, and so does any non-primitive
+// operand whose SameValue is reference identity.
+func (r *Renderer) objectIs(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.is with other than two arguments is a later slice"}
+	}
+	a, b := argNodes[0], argNodes[1]
+	lowerBoth := func() (ast.Expr, ast.Expr, error) {
+		la, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, nil, err
+		}
+		lb, err := r.lowerExpr(b)
+		if err != nil {
+			return nil, nil, err
+		}
+		return la, lb, nil
+	}
+	switch {
+	case r.isNumber(a) && r.isNumber(b):
+		la, lb, err := lowerBoth()
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberSameValue"), Args: []ast.Expr{la, lb}}, nil
+	case r.isString(a) && r.isString(b):
+		la, lb, err := lowerBoth()
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: la, Sel: ident("Equal")}, Args: []ast.Expr{lb}}, nil
+	case r.isBool(a) && r.isBool(b):
+		la, lb, err := lowerBoth()
+		if err != nil {
+			return nil, err
+		}
+		return &ast.BinaryExpr{X: la, Op: token.EQL, Y: lb}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Object.is on operands that are not both the same primitive is a later slice"}
 	}
 }
 
