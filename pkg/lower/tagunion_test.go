@@ -268,6 +268,55 @@ measure({ kind: "circle", r: 2 });
 	}
 }
 
+// TestDiscriminatedUnionExhaustiveSwitch pins that a switch with a case for every
+// arm and no default, which the checker proves exhaustive so the function needs no
+// trailing return, lowers to a Go switch with a synthesized default that panics, so
+// the function ends in a terminating statement Go accepts.
+func TestDiscriminatedUnionExhaustiveSwitch(t *testing.T) {
+	const src = `interface Circle { kind: "circle"; r: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle":
+      return s.r * s.r;
+    case "square":
+      return s.side * s.side;
+  }
+}
+area({ kind: "circle", r: 2 });
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "default:") || !strings.Contains(source, `panic("unreachable")`) {
+		t.Fatalf("exhaustive switch did not synthesize a panicking default\n%s", source)
+	}
+}
+
+// TestDiscriminatedUnionNonExhaustiveSwitch pins that a switch missing an arm keeps
+// its fall-out to the code after it rather than getting a synthesized default, so a
+// value of the uncovered arm reaches the trailing statement the source wrote.
+func TestDiscriminatedUnionNonExhaustiveSwitch(t *testing.T) {
+	const src = `interface Circle { kind: "circle"; r: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle":
+      return s.r * s.r;
+  }
+  return 0;
+}
+area({ kind: "circle", r: 2 });
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, `panic("unreachable")`) {
+		t.Fatalf("non-exhaustive switch should not synthesize a default\n%s", source)
+	}
+	if !strings.Contains(source, "return 0") {
+		t.Fatalf("non-exhaustive switch dropped its trailing return\n%s", source)
+	}
+}
+
 // TestDiscriminatedUnionRuns builds and runs a discriminated-union program through
 // both the if and switch narrowing forms and checks the output matches the
 // JavaScript semantics.
