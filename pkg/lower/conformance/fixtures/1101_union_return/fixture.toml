@@ -1,0 +1,2 @@
+feature = "union.general"
+handback = "union with a non-string-literal member needs the tagged sum struct"
