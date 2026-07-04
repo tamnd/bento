@@ -61,6 +61,13 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerThrow(n)
 	case frontend.NodeTryStatement:
 		return r.lowerTry(n)
+	case frontend.NodeSwitchStatement:
+		return r.lowerSwitch(n)
+	case frontend.NodeBlock:
+		// A bare block is a lexical scope, `{ let x = 1; ... }`, which Go spells the
+		// same way. It appears as a braced case body and as a standalone scope in a
+		// function body, and lowers to a Go block either way.
+		return r.lowerBlock(n)
 	default:
 		return nil, &NotYetLowerable{Reason: "statement kind " + kindName(n.Kind()) + " is a later slice"}
 	}
