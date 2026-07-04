@@ -1226,6 +1226,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		return "TrimStart", nil, 0, false, true
 	case "trimEnd":
 		return "TrimEnd", nil, 0, false, true
+	case "isWellFormed":
+		// A lone-surrogate predicate returning a boolean; no arguments.
+		return "IsWellFormed", nil, 0, false, true
+	case "toWellFormed":
+		// Returns a copy with each lone surrogate replaced by U+FFFD; no arguments.
+		return "ToWellFormed", nil, 0, false, true
 	default:
 		return "", nil, 0, false, false
 	}
