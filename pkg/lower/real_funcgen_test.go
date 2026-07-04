@@ -265,6 +265,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "number_fixed", file: "func_number_fixed"},
 		// number.toExponential(digits) with a literal digit count lowers to value.NumberToExponential folding the count in, the exponential-notation sibling of toFixed at zero, two, and four fraction digits.
 		{name: "number_exponential", file: "func_number_exponential"},
+		// number.toPrecision(precision) with a literal precision lowers to value.NumberToPrecision folding the count in, the significant-digits sibling at one, three, and five significant digits.
+		{name: "number_precision", file: "func_number_precision"},
 		// an object literal lowers to a composite literal building a pointer to the interned struct the shape maps to, a shorthand property and a keyed property both becoming keyed fields, and a later o.field read lowers to the matching Go struct field.
 		{name: "object_literal", file: "func_object_literal"},
 		// map over a concise-body arrow lowers to the value.Array Map method taking a Go function literal, the arrow's parameter typed from the checker and its body returning the element type.
