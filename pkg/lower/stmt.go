@@ -399,6 +399,20 @@ func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 	if !r.isNumber(parts[2]) {
 		return nil, false, &NotYetLowerable{Reason: "a typed-array write of a non-number value is a later slice"}
 	}
+	// A write into a fixed-length integer typed array at a proven-in-range index whose
+	// value is itself an integer stores straight into the backing slice,
+	// recv.Data()[idx] = int8(v). The Go conversion to the element width wraps exactly
+	// as the store coercion does for an integer value, so it drops the coerce function
+	// pointer, the bounds branch, and the float round trip the read-modify-write loop
+	// otherwise pays every iteration. A non-integer value keeps SetAt, whose coercion
+	// this native store cannot stand in for.
+	if info, idxNode2, ok := r.provenTypedRead(target); ok && r.int32Producing(parts[2]) {
+		stmt, err := r.typedSliceStore(recvNode, idxNode2, parts[2], info)
+		if err != nil {
+			return nil, false, err
+		}
+		return stmt, true, nil
+	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
 		return nil, false, err

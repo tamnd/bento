@@ -109,6 +109,19 @@ func (a *TypedArray[T]) SetAtI(i int, v float64) {
 	}
 }
 
+// Data returns the backing slice, the storage a read and a write share. The
+// lowerer indexes it directly, bData[i], at an access it proved stays inside the
+// array, so the read skips the At bounds branch and the Number round trip and an
+// integer store skips the coerce function pointer: a proven-integer value goes
+// straight into the element through a Go conversion that wraps to the element
+// width exactly as the store coercion does. The slice header aliases the array's
+// own storage, so a write through the returned slice shows through the array and
+// through any other reference to it, the same as a write through SetAt. A typed
+// array never grows or reallocates its backing, so the header stays valid for the
+// life of the array; the caller only takes this path when it proved the index in
+// range, so the Go slice bounds check it still carries never trips.
+func (a *TypedArray[T]) Data() []T { return a.data }
+
 // The per-kind constructors wire the element type and its store coercion. Each is
 // a one-liner over the shared bodies so generated code names a plain
 // value.NewInt32Array(n) or value.Int32ArrayOf(1, 2, 3) rather than spell the

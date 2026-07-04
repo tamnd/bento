@@ -184,6 +184,17 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 	r.int32Locals = r.int32LocalsOf(r.prog.Children(block))
 	defer func() { r.int32Locals = prev }()
 
+	// The proven-index sets ride the same body scope: a counter's range and a
+	// fixed-length integer array are both facts about this body, so an access at a
+	// proven-in-range index anywhere in it lowers to the native slice, and one
+	// function's proofs do not leak into another's accesses.
+	prevCI := r.counterIvl
+	r.counterIvl = r.counterIvlOf(r.prog.Children(block))
+	defer func() { r.counterIvl = prevCI }()
+	prevFA := r.fixedTArr
+	r.fixedTArr = r.fixedTypedArraysOf(r.prog.Children(block))
+	defer func() { r.fixedTArr = prevFA }()
+
 	// The optional-locals set is scoped to this body the same way, so a narrowed read
 	// of an option unwraps with .Get() wherever in the body it sits and one function's
 	// options do not leak into another's reads.

@@ -14,13 +14,20 @@ import (
 // across the family; this test reads the emitted code directly so a change to the
 // shape is visible in review without running the toolchain.
 func TestTypedArrayLoweringShape(t *testing.T) {
-	const src = `const buf = new Int32Array(3);
-buf[0] = 65;
-buf[1] = buf[0] + 1;
-const lit = new Int32Array([9, 8, 7]);
-console.log(buf.length);
-console.log(buf[1]);
-console.log(lit.length);
+	// The buffer length comes from a parameter, so the array is not a compile-time
+	// fixed length and its accesses keep the checked At and SetAt rather than taking
+	// the native slice path a proven fixed-length array does.
+	const src = `function fill(n: number): number {
+  const buf = new Int32Array(n);
+  buf[0] = 65;
+  buf[1] = buf[0] + 1;
+  const lit = new Int32Array([9, 8, 7]);
+  console.log(buf.length);
+  console.log(buf[1]);
+  console.log(lit.length);
+  return buf[1];
+}
+console.log(fill(3));
 `
 	source := renderProgram(t, src)
 	for _, want := range []string{
@@ -105,11 +112,17 @@ func TestTypedArrayHandsBackUnsupportedForms(t *testing.T) {
 // gains nothing from the int form, and a dynamic index that the checker cannot prove
 // integer also keeps At.
 func TestTypedArrayIntIndexLowering(t *testing.T) {
-	const src = `const b = new Int32Array(8);
-for (let i = 1; i < 8; i++) {
-  b[i] = b[i - 1] + 1;
+	// The buffer length comes from a parameter, so the counter's range cannot be
+	// proven inside it and the access keeps the integer-index AtI and SetAtI, which
+	// still narrow the index to a Go int but keep the bounds check.
+	const src = `function run(n: number): number {
+  const b = new Int32Array(n);
+  for (let i = 1; i < 8; i++) {
+    b[i] = b[i - 1] + 1;
+  }
+  return b[7];
 }
-console.log(b[7]);
+console.log(run(8));
 `
 	source := renderProgram(t, src)
 	for _, want := range []string{
@@ -123,6 +136,89 @@ console.log(b[7]);
 	}
 	if strings.Contains(source, "b.SetAt(") {
 		t.Errorf("counter-driven write should not use the float SetAt:\n%s", source)
+	}
+}
+
+// TestTypedArrayNativeSliceLowering pins the native slice form a fixed-length integer
+// typed array takes under a proven-in-range counter. The array is a const with a
+// literal length, so an access the counter keeps inside it reads and writes the
+// backing slice directly through Data, dropping the At and SetAt method call, the
+// bounds branch, and the store coercion: an Int32Array store is a plain slice
+// assignment and its read is a plain index. The read-modify-write body b[i] =
+// b[i - 1] + i stays entirely in native int32, and a constant in-range index takes
+// the same slice form.
+func TestTypedArrayNativeSliceLowering(t *testing.T) {
+	const src = `const b = new Int32Array(8);
+b[0] = 1;
+for (let i = 1; i < 8; i++) {
+  b[i] = b[i - 1] + i;
+}
+console.log(b[7]);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"b.Data()[0] = 1",
+		"b.Data()[i] = b.Data()[i-1] + i",
+		"float64(b.Data()[7])",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("native slice lowering missing %q:\n%s", want, source)
+		}
+	}
+	for _, bad := range []string{"b.SetAt", "b.At(", "b.AtI", "b.SetAtI"} {
+		if strings.Contains(source, bad) {
+			t.Errorf("proven fixed-length access should not use %q:\n%s", bad, source)
+		}
+	}
+}
+
+// TestTypedArrayNativeSliceStoreCoercion pins that a store into a narrower integer
+// typed array wraps to the element width the way the store coercion does. A constant
+// value is folded to the element it wraps to, so an Int8Array store of 200 emits the
+// wrapped -56 rather than an int8(200) Go rejects; an out-of-element-range write into
+// a Uint16Array folds modulo 65536. A value the checker cannot fold, the counter
+// itself, takes a runtime conversion to the element type.
+func TestTypedArrayNativeSliceStoreCoercion(t *testing.T) {
+	const src = `const i8 = new Int8Array(4);
+i8[0] = 200;
+i8[1] = 1 << 8;
+const u16 = new Uint16Array(4);
+u16[0] = 70000;
+for (let i = 0; i < 4; i++) {
+  i8[i] = i | 0;
+}
+console.log(i8[0], u16[0]);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"i8.Data()[0] = -56",
+		"i8.Data()[1] = 0",
+		"u16.Data()[0] = 4464",
+		"i8.Data()[i] = int8(i)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("native store coercion missing %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestTypedArrayNativeSliceKeepsCheckedOutOfRange pins that an access the counter can
+// leave out of bounds keeps the checked store, so its out-of-range write is dropped
+// rather than panicking a native slice index. A loop that walks one past the end (k
+// up to and including the length) is not proven in range, so it stays on SetAtI.
+func TestTypedArrayNativeSliceKeepsCheckedOutOfRange(t *testing.T) {
+	const src = `const t = new Int32Array(3);
+for (let k = 0; k <= 3; k++) {
+  t[k] = 7;
+}
+console.log(t[0]);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "t.SetAtI(int(k), 7)") {
+		t.Errorf("a counter that can exceed the length should keep the checked SetAtI:\n%s", source)
+	}
+	if strings.Contains(source, "t.Data()[k]") {
+		t.Errorf("an unproven index must not take the native slice store:\n%s", source)
 	}
 }
 

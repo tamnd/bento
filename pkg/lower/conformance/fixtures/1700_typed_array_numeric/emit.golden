@@ -8,17 +8,17 @@ import (
 
 func Run() {
 	i8 := value.NewInt8Array(3)
-	i8.SetAt(0, 127)
-	i8.SetAt(1, 128)
+	i8.Data()[0] = 127
+	i8.Data()[1] = -128
 	i8.SetAt(2, -1)
-	value.ConsoleLog(value.NumberToString(i8.At(0)))
-	value.ConsoleLog(value.NumberToString(i8.At(1)))
-	value.ConsoleLog(value.NumberToString(i8.At(2)))
+	value.ConsoleLog(value.NumberToString(float64(i8.Data()[0])))
+	value.ConsoleLog(value.NumberToString(float64(i8.Data()[1])))
+	value.ConsoleLog(value.NumberToString(float64(i8.Data()[2])))
 	value.ConsoleLog(value.NumberToString(i8.Len()))
 	u16 := value.Uint16ArrayOf(65535, 65536, 65537)
-	value.ConsoleLog(value.NumberToString(u16.At(0)))
-	value.ConsoleLog(value.NumberToString(u16.At(1)))
-	value.ConsoleLog(value.NumberToString(u16.At(2)))
+	value.ConsoleLog(value.NumberToString(float64(u16.Data()[0])))
+	value.ConsoleLog(value.NumberToString(float64(u16.Data()[1])))
+	value.ConsoleLog(value.NumberToString(float64(u16.Data()[2])))
 	clamped := value.Uint8ClampedArrayOf(300, -5, 1.5)
 	value.ConsoleLog(value.NumberToString(clamped.At(0)))
 	value.ConsoleLog(value.NumberToString(clamped.At(1)))

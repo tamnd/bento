@@ -115,6 +115,19 @@ type Renderer struct {
 	// specialized locals do not leak into another. A nil map (the default) specializes
 	// nothing, so a body with no eligible local lowers exactly as before.
 	int32Locals map[string]bool
+	// counterIvl maps each bounded increasing for-counter in the body currently being
+	// lowered to the integer interval it ranges over, so an index built from a counter
+	// can be proven to sit inside a fixed-length array. It is computed once per body by
+	// counterIvlOf and, like int32Locals, saved and restored around each body. A nil
+	// map proves no ranges, so a body with no such counter lowers exactly as before.
+	counterIvl map[string]ivl
+	// fixedTArr maps each fixed-length integer typed-array local in the body currently
+	// being lowered to its length and Go element type, so an access at a proven-in-range
+	// index reads or writes the backing slice directly rather than through the checked
+	// At and SetAt. It is computed once per body by fixedTypedArraysOf and, like
+	// int32Locals, saved and restored around each body. A nil map takes no native slice
+	// path.
+	fixedTArr map[string]typedArrInfo
 	// optLocals is the set of local names in the body currently being lowered that
 	// are declared with an optional type (T | undefined, lowered to value.Opt[T]).
 	// It is computed once per body by optLocalsOf and, like int32Locals, saved and
