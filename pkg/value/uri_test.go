@@ -79,3 +79,70 @@ func TestDecodeURIComponentMalformedThrows(t *testing.T) {
 		}()
 	}
 }
+
+// TestEncodeURI checks the whole-URI encoder against Node: the reserved
+// delimiters that structure a URI pass through where encodeURIComponent would
+// escape them, and a space or a multibyte code point still escapes.
+func TestEncodeURI(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{";,/?:@&=+$#", ";,/?:@&=+$#"},
+		{"a b", "a%20b"},
+		{"http://a.b/c d?x=café&y=z#f", "http://a.b/c%20d?x=caf%C3%A9&y=z#f"},
+		{"unreserved-_.!~*'()", "unreserved-_.!~*'()"},
+	}
+	for _, c := range cases {
+		if got := EncodeURI(bs(c.in)).ToGoString(); got != c.want {
+			t.Errorf("EncodeURI(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestDecodeURI checks the whole-URI decoder against Node: a non-reserved escape
+// decodes, but an escape that names a reserved delimiter is left as its literal
+// %XX, the rule that keeps a decoded URI's structure intact.
+func TestDecodeURI(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"http://a.b/c%20d?x=caf%C3%A9&y=z#f", "http://a.b/c d?x=café&y=z#f"},
+		{"%3Bx%2Fy", "%3Bx%2Fy"},
+		{"a%20b", "a b"},
+		{"caf%C3%A9", "café"},
+	}
+	for _, c := range cases {
+		if got := DecodeURI(bs(c.in)).ToGoString(); got != c.want {
+			t.Errorf("DecodeURI(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestEncodeURIReservedDiffersFromComponent pins the one behavioral split between
+// the two encoders: encodeURI keeps the reserved delimiters, encodeURIComponent
+// escapes them.
+func TestEncodeURIReservedDiffersFromComponent(t *testing.T) {
+	const reserved = ";,/?:@&=+$#"
+	if got := EncodeURI(bs(reserved)).ToGoString(); got != reserved {
+		t.Fatalf("EncodeURI(%q) = %q, want it unchanged", reserved, got)
+	}
+	const want = "%3B%2C%2F%3F%3A%40%26%3D%2B%24%23"
+	if got := EncodeURIComponent(bs(reserved)).ToGoString(); got != want {
+		t.Fatalf("EncodeURIComponent(%q) = %q, want %q", reserved, got, want)
+	}
+}
+
+// TestDecodeURIMalformedThrows proves the whole-URI decoder raises a URIError on
+// the same malformed escapes the component decoder rejects, since both share the
+// escape parse.
+func TestDecodeURIMalformedThrows(t *testing.T) {
+	for _, in := range []string{"%", "%2", "%G0", "%E6%97", "abc%"} {
+		func() {
+			defer func() {
+				r := recover()
+				e, ok := r.(*Error)
+				if !ok || !e.IsA("URIError") {
+					t.Errorf("DecodeURI(%q): expected a URIError, got %v", in, r)
+				}
+			}()
+			DecodeURI(bs(in))
+			t.Errorf("DecodeURI(%q): expected a throw", in)
+		}()
+	}
+}
