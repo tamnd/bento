@@ -69,3 +69,19 @@ func (o Opt[T]) OrOpt(fallback Opt[T]) Opt[T] {
 	}
 	return fallback
 }
+
+// OptMap reads a member of the wrapped value when present and returns it as a new
+// optional, the lowering of a single link of an optional chain a?.b: when a holds
+// a value f reads the member off it, and when a is undefined the whole chain
+// short-circuits to undefined and f never runs, so the member read is never
+// reached on a missing receiver. It is a free function rather than a method
+// because a method cannot introduce the second type parameter the mapped element
+// needs. Longer chains compose by nesting: a?.b?.c lowers to OptMap over the
+// OptMap that produced a?.b, each link mapping only when the one before it was
+// present.
+func OptMap[T, U any](o Opt[T], f func(T) U) Opt[U] {
+	if o.present {
+		return Some(f(o.val))
+	}
+	return None[U]()
+}
