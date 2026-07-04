@@ -374,6 +374,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayConcat(recvNode, argNodes)
 	case "splice":
 		return r.arraySplice(recvNode, argNodes)
+	case "flat":
+		return r.arrayFlat(recvNode, argNodes)
 	case "indexOf":
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
 	case "lastIndexOf":
@@ -908,6 +910,38 @@ func (r *Renderer) arraySplice(recvNode frontend.Node, argNodes []frontend.Node)
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Splice")}, Args: args}, nil
+}
+
+// arrayFlat lowers a flat call at the default depth of one to the value.Flat free
+// function instantiated at the inner element type. The receiver must be an array
+// whose element type is itself an array, so that flattening one level yields an
+// array of that inner element type. A depth argument is a later slice, since a
+// depth other than one needs a different nesting of the flatten, so a flat with
+// any argument hands back. A receiver whose element type is not an array also
+// hands back, since there is nothing to flatten.
+func (r *Renderer) arrayFlat(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 0 {
+		return nil, &NotYetLowerable{Reason: "array flat with an explicit depth is a later slice"}
+	}
+	recvType := r.prog.TypeAt(recvNode)
+	elem, ok := r.prog.ElementType(recvType)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array flat on a receiver whose element type did not lower"}
+	}
+	innerElem, ok := r.prog.ElementType(elem)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array flat on an array whose elements are not arrays is a later slice"}
+	}
+	innerType, err := r.typeExpr(innerElem)
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "Flat"), innerType), Args: []ast.Expr{recv}}, nil
 }
 
 // goTypeString renders a lowered Go type expression to its source form so two
