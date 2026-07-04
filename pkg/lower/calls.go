@@ -553,13 +553,16 @@ func numberMethod(name string) (goName string, ok bool) {
 // math.Sign at all. fround, clz32, and imul map to value too, but for a different
 // reason than round: they are integer or single-precision operations, so they are
 // bit-exact and agree with the engine to the last bit the way the transcendental
-// functions cannot. The transcendental functions (cbrt, exp, expm1, the logs, the
-// trig and inverse-trig and hyperbolic families, atan2, and the two-argument
-// hypot) map straight onto the Go math package too, but their last-bit results are
-// not guaranteed identical across two libm implementations, so they are proven by
-// the equivalence harness's numeric-tolerance mode rather than by an exact match.
-// hypot stays two-argument because math.Hypot takes exactly two; the variadic
-// Math.hypot(a, b, c) hands back until a value.HypotN folds a list.
+// functions cannot. hypot also maps to value: Math.hypot takes any number of
+// arguments where math.Hypot takes exactly two, so value.HypotN folds a whole list
+// with the same +0 identity and infinity-over-NaN order, and the pairwise fold
+// avoids the overflow a naive sum of squares would hit. The transcendental
+// functions (cbrt, exp, expm1, the logs, the trig and inverse-trig and hyperbolic
+// families, and atan2) map straight onto the Go math package too, but their
+// last-bit results are not guaranteed identical across two libm implementations,
+// so they are proven by the equivalence harness's numeric-tolerance mode rather
+// than by an exact match, and value.HypotN inherits that tolerance since it folds
+// math.Hypot.
 func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok bool) {
 	switch name {
 	case "floor":
@@ -629,7 +632,7 @@ func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok boo
 	case "atanh":
 		return "math", "Atanh", 1, 1, true
 	case "hypot":
-		return "math", "Hypot", 2, 2, true
+		return valuePkg, "HypotN", 0, -1, true
 	default:
 		return "", "", 0, 0, false
 	}
