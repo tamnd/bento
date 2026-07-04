@@ -537,6 +537,46 @@ func (r *Renderer) mapMethodCall(recvNode frontend.Node, method string, argNodes
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
 }
 
+// setMethodCall lowers a method call on a Set receiver to the matching value.Set
+// method (section 6.5). Each method maps to its Go name with an exact argument
+// count: add(v) inserts and returns the set, has(v) and delete(v) report membership,
+// and clear() empties it. The checker has already typed each argument against the
+// set's own member type, so the arguments lower straight through with no extra kind
+// guard; a method or an argument count outside this set hands back. It mirrors
+// mapMethodCall, minus the keyed get and set a Set has no analogue for.
+func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	var goName string
+	var want int
+	switch method {
+	case "add":
+		goName, want = "Add", 1
+	case "has":
+		goName, want = "Has", 1
+	case "delete":
+		goName, want = "Delete", 1
+	case "clear":
+		goName, want = "Clear", 0
+	default:
+		return nil, &NotYetLowerable{Reason: "set method ." + method + " is a later slice"}
+	}
+	if len(argNodes) != want {
+		return nil, &NotYetLowerable{Reason: "set method ." + method + " with this argument count is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]ast.Expr, 0, want)
+	for _, a := range argNodes {
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+}
+
 // arrayMapFilter lowers a map or filter call to the matching value.Array method
 // over a lowered callback. Only a single arrow-function argument is covered, the
 // shape these almost always take; a callback passed as a named reference is a
