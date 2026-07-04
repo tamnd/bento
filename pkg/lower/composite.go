@@ -162,6 +162,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayMapFilter(recvNode, "Map", argNodes, true)
 	case "filter":
 		return r.arrayMapFilter(recvNode, "Filter", argNodes, false)
+	case "reduce":
+		return r.arrayReduce(recvNode, argNodes)
 	case "indexOf":
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
 	case "includes":
@@ -303,6 +305,66 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// arrayReduce lowers a reduce call with an initial value to the free function
+// value.Reduce[T, A](recv, fn, init). It is the free function rather than a
+// method for the same reason the type-changing map is: the accumulator type A
+// may differ from the element type T, and a Go method cannot introduce the new
+// type parameter A. The element type comes from the receiver and the
+// accumulator type from the callback's result, the two the value function names
+// as its type arguments, so numbers.reduce((acc, n) => acc + n, 0) spells
+// value.Reduce[float64, float64] and a string accumulator spells its own A.
+//
+// Only the two-argument form over an inline two-parameter arrow is covered.
+// reduce without an initial value seeds the accumulator with the first element
+// and throws on an empty array, a different shape that is its own later slice,
+// so a one-argument call hands back. A callback that also reads the index or
+// array parameter needs those threaded through, so an arrow that is not exactly
+// (accumulator, element) hands back too, since the value function takes a
+// two-parameter func.
+func (r *Renderer) arrayReduce(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "array reduce without an initial value is a later slice"}
+	}
+	arrow := argNodes[0]
+	if arrow.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that is not an inline arrow function is a later slice"}
+	}
+	params := 0
+	for _, k := range r.prog.Children(arrow) {
+		if k.Kind() == frontend.NodeParameter {
+			params++
+		}
+	}
+	if params != 2 {
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the index or array parameter is a later slice"}
+	}
+	elemType, ok := r.arrayElem(recvNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array reduce on a receiver whose element type did not lower"}
+	}
+	accType, err := r.arrowResultType(arrow)
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(arrow)
+	if err != nil {
+		return nil, err
+	}
+	init, err := r.lowerExpr(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  &ast.IndexListExpr{X: sel("value", "Reduce"), Indices: []ast.Expr{elemType, accType}},
+		Args: []ast.Expr{recv, fn, init},
+	}, nil
 }
 
 // arrayIndexOfIncludes lowers an indexOf or includes call to the matching

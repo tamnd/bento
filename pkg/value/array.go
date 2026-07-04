@@ -109,6 +109,24 @@ func MapArray[T, U any](a *Array[T], f func(T) U) *Array[U] {
 	return &Array[U]{elems: out}
 }
 
+// Reduce folds the array left to right into a single accumulator, the lowering
+// of Array.prototype.reduce called with an initial value. It is a free function
+// rather than a method because the accumulator type A may differ from the
+// element type T (numbers.reduce((acc, n) => acc + String(n), "") is a string
+// over a number array), and a Go method cannot introduce the new type parameter
+// A the way this function's second type argument does. The callback takes the
+// accumulator and the element, the two-parameter shape reduce needs; the index
+// and array arguments JavaScript also passes are a later slice. Starting from
+// init, each element updates the accumulator in order, and an empty array
+// returns init unchanged, matching JavaScript's reduce with an initial value.
+func Reduce[T, A any](a *Array[T], f func(A, T) A, init A) A {
+	acc := init
+	for _, x := range a.elems {
+		acc = f(acc, x)
+	}
+	return acc
+}
+
 // Filter returns a new array of the elements for which f returns true, in order,
 // the lowering of Array.prototype.filter. As with Map, the callback takes only
 // the element for now. The result is a fresh array, so the receiver is
