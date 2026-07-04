@@ -400,6 +400,18 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A proven-integer loop index reads through AtI, which takes the index already
+	// narrowed to a Go int, so the counter stays in a register and the float
+	// truncation At runs on every access is dropped. A dynamic or fractional index
+	// keeps At, which truncates the Number itself. Both bounds-check and read the
+	// same element, so the choice is a speed one, not a semantic one.
+	if r.intLoopIndex(idxNode) {
+		idx, err := r.intIndexExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AtI")}, Args: []ast.Expr{idx}}, nil
+	}
 	idx, err := r.lowerExpr(idxNode)
 	if err != nil {
 		return nil, err

@@ -403,11 +403,24 @@ func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 	if err != nil {
 		return nil, false, err
 	}
-	idx, err := r.lowerExpr(idxNode)
+	val, err := r.lowerExpr(parts[2])
 	if err != nil {
 		return nil, false, err
 	}
-	val, err := r.lowerExpr(parts[2])
+	// A proven-integer loop index writes through SetAtI, the integer-index store that
+	// takes the index already narrowed and coerces and bounds-checks exactly as SetAt
+	// does. A dynamic or fractional index keeps SetAt, which truncates the Number.
+	if r.intLoopIndex(idxNode) {
+		idx, err := r.intIndexExpr(idxNode)
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.ExprStmt{X: &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetAtI")},
+			Args: []ast.Expr{idx, val},
+		}}, true, nil
+	}
+	idx, err := r.lowerExpr(idxNode)
 	if err != nil {
 		return nil, false, err
 	}

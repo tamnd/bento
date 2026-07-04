@@ -126,6 +126,8 @@ func (r *Renderer) collectInt32Facts(n frontend.Node, f *int32Facts) {
 		if name, ok := r.forCounter(n); ok {
 			f.counterOK[name] = true
 		}
+	case frontend.NodeElementAccessExpression:
+		r.collectIndexFacts(n, f)
 	}
 	for _, c := range r.prog.Children(n) {
 		r.collectInt32Facts(c, f)
@@ -187,6 +189,44 @@ func (r *Renderer) collectBinaryFacts(bin frontend.Node, f *int32Facts) {
 	// Only the left operand is the integer use; the literal divisor is not a local.
 	if opText == "%" && r.isInt32Literal(parts[2]) && !r.isZeroLiteral(parts[2]) {
 		r.markIntUse(parts[0], f)
+	}
+}
+
+// collectIndexFacts marks the locals that drive an element-access index as integer
+// uses. An index expression a[i] reads i as an integer, so a bounded for-counter
+// that only ever indexes an array or typed array still qualifies for int32
+// specialization and lowers to a native slice index. The walk descends through the
+// arithmetic an index commonly takes, a[i - 1] or a[i + 1], so the counter inside
+// is marked even when the index is not a bare identifier. Marking a name here only
+// makes it eligible; the write and counter tests still decide specialization, so a
+// float that happens to sit in an index is never wrongly narrowed.
+func (r *Renderer) collectIndexFacts(n frontend.Node, f *int32Facts) {
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return
+	}
+	r.markIndexIdents(kids[1], f)
+}
+
+// markIndexIdents marks every identifier an index expression reads as an integer
+// use, descending through parentheses and the additive, multiplicative, bitwise,
+// and remainder operators an index is built from. A literal carries no name and a
+// shape it does not recognize simply contributes nothing.
+func (r *Renderer) markIndexIdents(n frontend.Node, f *int32Facts) {
+	switch n.Kind() {
+	case frontend.NodeParenthesizedExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 1 {
+			r.markIndexIdents(kids[0], f)
+		}
+	case frontend.NodeIdentifier:
+		r.markIntUse(n, f)
+	case frontend.NodeBinaryExpression:
+		parts := r.prog.Children(n)
+		if len(parts) == 3 {
+			r.markIndexIdents(parts[0], f)
+			r.markIndexIdents(parts[2], f)
+		}
 	}
 }
 

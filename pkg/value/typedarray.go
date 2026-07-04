@@ -85,6 +85,30 @@ func (a *TypedArray[T]) SetAt(i float64, v float64) {
 	}
 }
 
+// AtI reads the element at a Go int index, the integer-index form of At the
+// lowerer emits when the checker proved the index expression is an integer. The
+// float truncation At runs on its Number index is then dead work, so this form
+// takes the index already narrowed. The bounds check and the out-of-range 0 are
+// the same as At, so the two reads agree on every index; only the index type
+// differs, which is what keeps a proven-integer index a native slice index rather
+// than a float that round trips through typedIndex on every access.
+func (a *TypedArray[T]) AtI(i int) float64 {
+	if i >= 0 && i < len(a.data) {
+		return float64(a.data[i])
+	}
+	return 0
+}
+
+// SetAtI writes v at a Go int index, the integer-index form of SetAt. It coerces
+// the value with the element kind's store rule and drops an out-of-range write
+// exactly as SetAt does, so the only difference is that the index arrives already
+// narrowed to an int rather than truncated from a Number here.
+func (a *TypedArray[T]) SetAtI(i int, v float64) {
+	if i >= 0 && i < len(a.data) {
+		a.data[i] = a.coerce(v)
+	}
+}
+
 // The per-kind constructors wire the element type and its store coercion. Each is
 // a one-liner over the shared bodies so generated code names a plain
 // value.NewInt32Array(n) or value.Int32ArrayOf(1, 2, 3) rather than spell the

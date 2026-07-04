@@ -82,6 +82,20 @@ func (a *Array[T]) At(i float64) T {
 	return zero
 }
 
+// AtI reads the element at a Go int index, the integer-index form of At the
+// lowerer emits when the checker proved the index expression is an integer. The
+// float truncation and NaN fold At runs are then dead work, so this form takes
+// the index already narrowed. The bounds check and the zero-value out-of-range
+// result are the same as At, so the two reads agree on every index; only the
+// index type differs.
+func (a *Array[T]) AtI(i int) T {
+	if i >= 0 && i < len(a.elems) {
+		return a.elems[i]
+	}
+	var zero T
+	return zero
+}
+
 // AtOpt reads the element Array.prototype.at selects, the relative-index read
 // that counts from the end when the index is negative. It is the sibling of At:
 // At lowers the index expression a[i], whose default index signature types the
