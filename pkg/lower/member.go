@@ -230,6 +230,32 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "element access did not expose an object and an index"}
 	}
 	obj, idxNode := kids[0], kids[1]
+	// o["k"] with a string-literal key on a fixed-shape object is the struct-field
+	// read o.k spelled with brackets, so it lowers to the same selector through the
+	// same exportedField and internStruct the dotted read uses, and a read and its
+	// value agree on the field. Only a string-literal key takes this path: a dynamic
+	// key has no static field to select and is its own later slice. An array or byte
+	// buffer, which is also a TypeObject, is excluded so its numeric index still
+	// routes to the At read below.
+	if key, ok := r.stringLiteralKey(idxNode); ok {
+		objType := r.prog.TypeAt(obj)
+		if objType.Flags&frontend.TypeObject != 0 && !r.isBytes(obj) {
+			if _, isArray := r.prog.ElementType(objType); !isArray {
+				field, ok := exportedField(key)
+				if !ok {
+					return nil, &NotYetLowerable{Reason: "element access key is not a Go identifier"}
+				}
+				if _, err := r.decls.internStruct(r, objType); err != nil {
+					return nil, err
+				}
+				recv, err := r.lowerExpr(obj)
+				if err != nil {
+					return nil, err
+				}
+				return &ast.SelectorExpr{X: recv, Sel: ident(field)}, nil
+			}
+		}
+	}
 	// A Uint8Array read a[i] returns a byte as a Number through the buffer's own At,
 	// the same method name a typed Array indexes through, so the two receivers share
 	// this shape and differ only in which value type carries At. A byte buffer is not
