@@ -1,0 +1,7 @@
+== stdout:
+true
+true
+world
+2
+== exit:
+0
