@@ -374,6 +374,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayConcat(recvNode, argNodes)
 	case "splice":
 		return r.arraySplice(recvNode, argNodes)
+	case "toSpliced":
+		return r.arraySpliceMethod(recvNode, "toSpliced", "ToSplicedToEnd", "ToSpliced", argNodes)
 	case "flat":
 		return r.arrayFlat(recvNode, argNodes)
 	case "flatMap":
@@ -890,11 +892,23 @@ func (r *Renderer) arrayConcat(recvNode frontend.Node, argNodes []frontend.Node)
 // once they are numbers; the items are typed against the element type by the
 // checker, so they lower straight through as the method's variadic tail.
 func (r *Renderer) arraySplice(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	return r.arraySpliceMethod(recvNode, "splice", "SpliceToEnd", "Splice", argNodes)
+}
+
+// arraySpliceMethod lowers splice and its copying sibling toSpliced, which share
+// an argument shape: a required Number start, an optional Number delete count,
+// and any number of items typed against the element type. The one-argument form
+// lowers to the toEnd method and the longer form to the full method, so the two
+// Go method names are passed in along with the source method name used in the
+// hand-back messages. splice returns the removed elements and mutates while
+// toSpliced returns the edited array and copies, but that difference lives in the
+// runtime methods, not in how the call lowers.
+func (r *Renderer) arraySpliceMethod(recvNode frontend.Node, name, toEndMethod, fullMethod string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) == 0 {
-		return nil, &NotYetLowerable{Reason: "array splice needs at least a start index"}
+		return nil, &NotYetLowerable{Reason: "array " + name + " needs at least a start index"}
 	}
 	if !r.isNumber(argNodes[0]) {
-		return nil, &NotYetLowerable{Reason: "array splice with a non-number start is a later slice"}
+		return nil, &NotYetLowerable{Reason: "array " + name + " with a non-number start is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -905,10 +919,10 @@ func (r *Renderer) arraySplice(recvNode frontend.Node, argNodes []frontend.Node)
 		return nil, err
 	}
 	if len(argNodes) == 1 {
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("SpliceToEnd")}, Args: []ast.Expr{start}}, nil
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(toEndMethod)}, Args: []ast.Expr{start}}, nil
 	}
 	if !r.isNumber(argNodes[1]) {
-		return nil, &NotYetLowerable{Reason: "array splice with a non-number delete count is a later slice"}
+		return nil, &NotYetLowerable{Reason: "array " + name + " with a non-number delete count is a later slice"}
 	}
 	count, err := r.lowerExpr(argNodes[1])
 	if err != nil {
@@ -922,7 +936,7 @@ func (r *Renderer) arraySplice(recvNode frontend.Node, argNodes []frontend.Node)
 		}
 		args = append(args, lowered)
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Splice")}, Args: args}, nil
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(fullMethod)}, Args: args}, nil
 }
 
 // arrayFlat lowers a flat call at the default depth of one to the value.Flat free
