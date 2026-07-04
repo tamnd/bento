@@ -97,6 +97,70 @@ func TestTypedArrayHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "const b = new BigInt64Array(3); console.log(b.length);\n")
 }
 
+// TestTypedArrayIntIndexLowering pins the native-int index form. A typed-array read
+// and write driven by a bounded for-counter lower through AtI and SetAtI with the
+// index narrowed to a Go int, so the counter stays a native int32 and the float
+// truncation At and SetAt run on a Number index is dropped. The index arithmetic a
+// loop takes, b[i - 1], rides the same int form. A constant index keeps At, since it
+// gains nothing from the int form, and a dynamic index that the checker cannot prove
+// integer also keeps At.
+func TestTypedArrayIntIndexLowering(t *testing.T) {
+	const src = `const b = new Int32Array(8);
+for (let i = 1; i < 8; i++) {
+  b[i] = b[i - 1] + 1;
+}
+console.log(b[7]);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"var i int32 = 1",
+		"b.SetAtI(int(i), b.AtI(int(i-1))+1)",
+		"b.At(7)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("int-index lowering missing %q:\n%s", want, source)
+		}
+	}
+	if strings.Contains(source, "b.SetAt(") {
+		t.Errorf("counter-driven write should not use the float SetAt:\n%s", source)
+	}
+}
+
+// TestTypedArrayIntIndexKeepsFloatForm pins that an index the checker does not prove
+// integer keeps the float At. A loop counter written a fractional value never
+// specializes, so its index stays a Number and the read truncates it through At.
+func TestTypedArrayIntIndexKeepsFloatForm(t *testing.T) {
+	const src = `const b = new Int32Array(8);
+let x = 0.5;
+console.log(b[x]);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "b.At(") {
+		t.Errorf("a non-integer index should read through the float At:\n%s", source)
+	}
+	if strings.Contains(source, "b.AtI(") {
+		t.Errorf("a non-integer index should not use the native-int AtI:\n%s", source)
+	}
+}
+
+// TestArrayIntIndexReadLowering pins that a dense array read driven by a bounded
+// for-counter lowers through AtI too, since the same float truncation is dead work
+// there. The dense-array write keeps Set, whose out-of-range store grows the array
+// the way a JavaScript sparse assignment does, so it is not part of this slice.
+func TestArrayIntIndexReadLowering(t *testing.T) {
+	const src = `const a: number[] = [1, 2, 3, 4];
+let s = 0;
+for (let i = 0; i < 4; i++) {
+  s = s + a[i];
+}
+console.log(s);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "a.AtI(int(i))") {
+		t.Errorf("dense-array read under a counter should use AtI:\n%s", source)
+	}
+}
+
 // TestTypedArrayRuns builds and runs a program over several family members and
 // checks the output matches the JavaScript store semantics: an Int8Array write
 // wraps modulo 256 into signed range, a Uint8ClampedArray clamps out-of-range
