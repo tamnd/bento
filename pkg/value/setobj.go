@@ -13,6 +13,8 @@
 
 package value
 
+import "slices"
+
 // Set is bento's runtime representation of a JavaScript Set<T>. It holds its
 // members as a single slice in insertion order, the order for...of and forEach
 // observe, and an eq function that decides member identity so number, string, and
@@ -108,4 +110,123 @@ func (s *Set[T]) Range(fn func(T)) {
 	for _, v := range s.members {
 		fn(v)
 	}
+}
+
+// newLike returns an empty set that shares this set's member equality, the base
+// every algebra result builds on so the new set compares members the way its
+// operands do. The members are left empty for the caller to fill in the order the
+// operation requires.
+func (s *Set[T]) newLike() *Set[T] {
+	return &Set[T]{eq: s.eq}
+}
+
+// Union returns a new set of the members in this set or the other, the lowering of
+// set.union(other) (ES2025). The result lists this set's members in their order
+// first, then the other set's members not already present, which is the order the
+// specification builds by seeding the result with the receiver and appending the
+// argument's new members.
+func (s *Set[T]) Union(other *Set[T]) *Set[T] {
+	out := s.newLike()
+	out.members = append(out.members, s.members...)
+	for _, v := range other.members {
+		out.Add(v)
+	}
+	return out
+}
+
+// Intersection returns a new set of the members in both sets, the lowering of
+// set.intersection(other) (ES2025). The specification walks the smaller set and
+// keeps the members the larger one also holds, so the result order follows
+// whichever operand is smaller: this set's order when it is the smaller, the
+// other's order otherwise. Both operands are deduped already, so each kept member
+// is appended directly.
+func (s *Set[T]) Intersection(other *Set[T]) *Set[T] {
+	out := s.newLike()
+	if len(s.members) <= len(other.members) {
+		for _, v := range s.members {
+			if other.Has(v) {
+				out.members = append(out.members, v)
+			}
+		}
+	} else {
+		for _, v := range other.members {
+			if s.Has(v) {
+				out.members = append(out.members, v)
+			}
+		}
+	}
+	return out
+}
+
+// Difference returns a new set of the members in this set but not the other, the
+// lowering of set.difference(other) (ES2025). It keeps this set's members that the
+// other lacks, in this set's order.
+func (s *Set[T]) Difference(other *Set[T]) *Set[T] {
+	out := s.newLike()
+	for _, v := range s.members {
+		if !other.Has(v) {
+			out.members = append(out.members, v)
+		}
+	}
+	return out
+}
+
+// SymmetricDifference returns a new set of the members in exactly one of the two
+// sets, the lowering of set.symmetricDifference(other) (ES2025). It lists this
+// set's members the other lacks, in this set's order, then the other's members
+// this set lacks, in the other's order, which is the order the specification
+// builds by seeding with the receiver and toggling each of the argument's members.
+func (s *Set[T]) SymmetricDifference(other *Set[T]) *Set[T] {
+	out := s.newLike()
+	for _, v := range s.members {
+		if !other.Has(v) {
+			out.members = append(out.members, v)
+		}
+	}
+	for _, v := range other.members {
+		if !s.Has(v) {
+			out.members = append(out.members, v)
+		}
+	}
+	return out
+}
+
+// IsSubsetOf reports whether every member of this set is in the other, the
+// lowering of set.isSubsetOf(other) (ES2025). A set larger than the other cannot
+// be a subset, so the size check settles that case before the membership scan.
+func (s *Set[T]) IsSubsetOf(other *Set[T]) bool {
+	if len(s.members) > len(other.members) {
+		return false
+	}
+	for _, v := range s.members {
+		if !other.Has(v) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsSupersetOf reports whether every member of the other set is in this one, the
+// lowering of set.isSupersetOf(other) (ES2025). A set smaller than the other
+// cannot be a superset, so the size check settles that case before the scan.
+func (s *Set[T]) IsSupersetOf(other *Set[T]) bool {
+	if len(s.members) < len(other.members) {
+		return false
+	}
+	for _, v := range other.members {
+		if !s.Has(v) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsDisjointFrom reports whether the two sets share no member, the lowering of
+// set.isDisjointFrom(other) (ES2025). It scans the smaller set against the larger,
+// the work the specification does, and a single shared member settles it as false.
+func (s *Set[T]) IsDisjointFrom(other *Set[T]) bool {
+	if len(s.members) <= len(other.members) {
+		return !slices.ContainsFunc(s.members, other.Has)
+	}
+	return !slices.ContainsFunc(other.members, s.Has)
 }
