@@ -263,6 +263,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isMap(recvNode) {
 		return r.mapMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a Set receiver lowers to a value.Set method (section 6.5). Like the
+	// Map path it routes before the primitive and string paths, which expect a number,
+	// boolean, or string receiver a set is not.
+	if r.isSet(recvNode) {
+		return r.setMethodCall(recvNode, method, argNodes)
+	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
 	// bare use would take, so they route here before the string-method path.
