@@ -157,6 +157,18 @@ func (r *Renderer) conditionalExpr(n frontend.Node) (ast.Expr, error) {
 	if len(kids) != 5 || r.prog.Text(kids[1]) != "?" || r.prog.Text(kids[3]) != ":" {
 		return nil, &NotYetLowerable{Reason: "conditional expression did not expose condition, true, and false branches"}
 	}
+	// A condition the checker proved always truthy or always falsy collapses to the
+	// branch that runs, so cond ? a : b over a non-null object becomes a. Only the
+	// taken branch is lowered, which is JavaScript's laziness kept exactly: the other
+	// branch never runs, so its side effect never fires and it need not even lower.
+	// The collapse is taken only for a side-effect-free condition, so dropping the
+	// condition itself loses nothing; a condition with a side effect keeps its test.
+	if val, known := r.staticTruthy(kids[0]); known && r.repeatableOperand(kids[0]) {
+		if val {
+			return r.lowerExpr(kids[2])
+		}
+		return r.lowerExpr(kids[4])
+	}
 	cond, err := r.lowerCondition(kids[0])
 	if err != nil {
 		return nil, err
