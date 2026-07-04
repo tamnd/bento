@@ -1,0 +1,8 @@
+== stdout:
+http://a.b/c%20d?x=caf%C3%A9&y=z#f
+http://a.b/c d?x=café&y=z#f
+true
+;,/?:@&=+$#
+%3Bx%2Fy
+== exit:
+0

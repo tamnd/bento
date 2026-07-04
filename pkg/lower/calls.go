@@ -96,14 +96,18 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "parseInt" && r.isAmbientGlobal(kids[0]) {
 		return r.parseIntCall(kids[1:])
 	}
-	// encodeURIComponent and decodeURIComponent are bare ambient globals that take a
-	// single string, so they route like the coercions before the user path.
+	// The four URI codec globals are bare ambient globals that take a single string,
+	// so they route like the coercions before the user path.
 	if callee := r.prog.Text(kids[0]); r.isAmbientGlobal(kids[0]) {
 		switch callee {
 		case "encodeURIComponent":
 			return r.uriCodecCall("EncodeURIComponent", callee, kids[1:])
 		case "decodeURIComponent":
 			return r.uriCodecCall("DecodeURIComponent", callee, kids[1:])
+		case "encodeURI":
+			return r.uriCodecCall("EncodeURI", callee, kids[1:])
+		case "decodeURI":
+			return r.uriCodecCall("DecodeURI", callee, kids[1:])
 		}
 	}
 	sym, ok := r.prog.SymbolAt(kids[0])
