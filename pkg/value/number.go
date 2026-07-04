@@ -172,6 +172,22 @@ func MaxN(nums ...float64) float64 {
 	return r
 }
 
+// HypotN returns the square root of the sum of squares of its arguments,
+// Math.hypot, which takes any number of arguments rather than exactly two. The
+// identity is +0, so Math.hypot() with no arguments is +0, and folding with
+// math.Hypot carries the JavaScript rules for free: math.Hypot(0, x) is |x|, so
+// Math.hypot(x) is the magnitude of x; a ±Infinity argument makes the result
+// +Infinity even when another argument is NaN, matching the specification order
+// that infinity wins over NaN; and the pairwise fold avoids the overflow a naive
+// sum of squares would hit, since math.Hypot scales each step.
+func HypotN(nums ...float64) float64 {
+	r := 0.0
+	for _, n := range nums {
+		r = math.Hypot(r, n)
+	}
+	return r
+}
+
 // maxSafeInteger is 2^53 - 1, Number.MAX_SAFE_INTEGER: the largest integer that
 // has no other double sharing its bits, so integers up to it round-trip exactly.
 const maxSafeInteger = 9007199254740991.0
