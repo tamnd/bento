@@ -1,0 +1,3 @@
+func Sci(n float64) value.BStr {
+	return value.NumberToExponential(n, 0).ConcatN(value.FromGoString(" "), value.NumberToExponential(n, 2), value.FromGoString(" "), value.NumberToExponential(n, 4))
+}
