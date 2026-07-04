@@ -267,10 +267,10 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		}
 		return r.lowerExpr(operand)
 	case "!":
-		if !r.isBool(operand) {
-			return nil, &NotYetLowerable{Reason: "logical not on a non-boolean needs truthiness, a later slice"}
-		}
-		x, err := r.lowerExpr(operand)
+		// ! negates the operand's truthiness, so a non-boolean rides the same
+		// ToBoolean lowerCondition uses and the not wraps the resulting bool: !s is
+		// !(s.Length() > 0), the empty-string test negated.
+		x, err := r.lowerTruthy(operand)
 		if err != nil {
 			return nil, err
 		}
