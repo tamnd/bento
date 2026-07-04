@@ -627,6 +627,20 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 		goName, want = "Delete", 1
 	case "clear":
 		goName, want = "Clear", 0
+	case "union":
+		return r.setAlgebraCall(recvNode, "Union", argNodes)
+	case "intersection":
+		return r.setAlgebraCall(recvNode, "Intersection", argNodes)
+	case "difference":
+		return r.setAlgebraCall(recvNode, "Difference", argNodes)
+	case "symmetricDifference":
+		return r.setAlgebraCall(recvNode, "SymmetricDifference", argNodes)
+	case "isSubsetOf":
+		return r.setAlgebraCall(recvNode, "IsSubsetOf", argNodes)
+	case "isSupersetOf":
+		return r.setAlgebraCall(recvNode, "IsSupersetOf", argNodes)
+	case "isDisjointFrom":
+		return r.setAlgebraCall(recvNode, "IsDisjointFrom", argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "set method ." + method + " is a later slice"}
 	}
@@ -646,6 +660,57 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+}
+
+// setAlgebraCall lowers the ES2025 set-algebra methods (union, intersection,
+// difference, symmetricDifference, isSubsetOf, isSupersetOf, isDisjointFrom) to
+// the matching value.Set method over a second set. JavaScript accepts any
+// set-like as the argument, but the runtime method takes another *value.Set of
+// the receiver's member type, so the argument must itself be a Set whose member
+// type lowers to the same Go type; a non-set argument or a set of a different
+// member type hands back. The combining methods return a new set and the
+// predicates a boolean, which the method's own signature carries, so the call
+// lowers to recv.Method(other) with no extra shaping.
+func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with other than one argument is a later slice"}
+	}
+	other := argNodes[0]
+	if !r.isSet(other) {
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with an argument that is not a Set is a later slice"}
+	}
+	recvElem, ok := r.setElem(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " on a receiver whose member type did not lower"}
+	}
+	otherElem, ok := r.setElem(r.prog.TypeAt(other))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with an argument whose member type did not lower"}
+	}
+	recvElemT, err := r.typeExpr(recvElem)
+	if err != nil {
+		return nil, err
+	}
+	otherElemT, err := r.typeExpr(otherElem)
+	if err != nil {
+		return nil, err
+	}
+	same, err := sameGoType(recvElemT, otherElemT)
+	if err != nil {
+		return nil, err
+	}
+	if !same {
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " between sets of different member types is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	arg, err := r.lowerExpr(other)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: []ast.Expr{arg}}, nil
 }
 
 // arrayMapFilter lowers a map or filter call to the matching value.Array method
