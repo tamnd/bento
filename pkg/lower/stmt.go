@@ -321,6 +321,9 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.classFieldAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		if stmt, ok, err := r.logicalAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		assign, err := r.lowerAssign(n)
 		if err != nil {
 			return nil, err
@@ -529,6 +532,86 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 		Tok: tok,
 		Rhs: []ast.Expr{rhs},
 	}, nil
+}
+
+// logicalAssign lowers a logical assignment used as a statement: x ??= y, x ||= y,
+// or x &&= y. Unlike an arithmetic compound, these short-circuit: y is evaluated
+// and stored only when x has the operator's trigger value, so the whole thing is
+// an if that guards a plain assignment rather than x = x <op> y. Putting the
+// assignment inside the guard keeps the short-circuit exactly, so y may have a
+// side effect the eager forms could not admit.
+//
+// ??= assigns when x is undefined, so the target must be an optional (the
+// T | undefined the Opt models), and the guard is x.IsUndefined(). ||= assigns
+// when x is falsy and &&= when x is truthy, which needs JavaScript truthiness on
+// x; until that lands, both are taken only for a boolean target, where falsy is
+// exactly !x and truthy is x. The target must be a plain local identifier so it
+// can be named in both the guard and the assignment with no repeated side effect.
+// A non-logical operator reports ok=false so the caller falls through to the plain
+// and arithmetic-compound path.
+func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
+	parts := r.prog.Children(bin)
+	if len(parts) != 3 {
+		return nil, false, nil
+	}
+	op := r.prog.Text(parts[1])
+	if op != "??=" && op != "||=" && op != "&&=" {
+		return nil, false, nil
+	}
+	target := parts[0]
+	if target.Kind() != frontend.NodeIdentifier {
+		return nil, true, &NotYetLowerable{Reason: "logical assignment to a non-identifier target is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(target))
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "logical assignment target is not a Go identifier"}
+	}
+	// Build the guard the operator triggers on.
+	var cond ast.Expr
+	switch op {
+	case "??=":
+		if !r.isOptional(target) {
+			return nil, true, &NotYetLowerable{Reason: "??= on a target that is not the optional T | undefined is a later slice"}
+		}
+		// A definite right-hand side leaves the target definitely present, which the
+		// checker narrows to the bare T; reading it there would need a .Get() the
+		// narrowing at an assignment does not yet insert, so the emitted slot (still
+		// Opt[T]) and the narrowed use would disagree. When the right-hand side is
+		// itself optional the target stays T | undefined, no narrowing happens, and a
+		// later read flows through the existing presence test, so only that form
+		// lowers here.
+		if !r.isOptional(parts[2]) {
+			return nil, true, &NotYetLowerable{Reason: "??= with a definite right-hand side narrows the target, which needs narrowing at an assignment, a later slice"}
+		}
+		cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
+	case "||=":
+		if !r.isBool(target) {
+			return nil, true, &NotYetLowerable{Reason: "||= on a non-boolean target needs JavaScript truthiness, a later slice"}
+		}
+		cond = &ast.UnaryExpr{Op: token.NOT, X: ident(name)}
+	case "&&=":
+		if !r.isBool(target) {
+			return nil, true, &NotYetLowerable{Reason: "&&= on a non-boolean target needs JavaScript truthiness, a later slice"}
+		}
+		cond = ident(name)
+	}
+	rhs, err := r.lowerExpr(parts[2])
+	if err != nil {
+		return nil, true, err
+	}
+	rhs, err = r.coerceToTarget(rhs, parts[2], target)
+	if err != nil {
+		return nil, true, err
+	}
+	assign := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(name)},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{rhs},
+	}
+	return &ast.IfStmt{
+		Cond: cond,
+		Body: &ast.BlockStmt{List: []ast.Stmt{assign}},
+	}, true, nil
 }
 
 // incDecFromStep rewrites a compound step of one, x += 1 or x -= 1, into Go's ++
