@@ -141,11 +141,17 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 // with this shape takes, so a literal and a binding of the same shape produce
 // the same Go type and structural assignability becomes Go assignability
 // (05_type_lowering section 12). Each property lowers to a keyed field, so the
-// literal's declaration order need not match the struct's field order. Only the
-// plain identifier-keyed forms are covered: a computed or string key belongs in
-// the object side table, a spread copies another object's own fields, and a
-// method or accessor is a function member, each its own later slice, so any of
-// them hands back rather than emit a wrong or partial struct.
+// literal's declaration order need not match the struct's field order.
+//
+// A spread member { ...src } copies another object's own fields into the struct:
+// every property of the spread source becomes a keyed field reading src.Field,
+// the same struct-field access a plain o.k read lowers to. Members apply left to
+// right, so a key set by a later member wins over the same key from an earlier
+// spread, matching JavaScript, and each field is emitted once at its first
+// appearance. The spread source must be a plain identifier so reading its fields
+// one by one never re-evaluates a side-effecting expression; a spread of a call
+// or other expression is a later slice. A computed or string key, and a method
+// or accessor member, still hand back, each its own later slice.
 func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	t := r.prog.TypeAt(n)
 	if t.Flags&frontend.TypeObject == 0 {
@@ -161,9 +167,20 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	props := r.prog.Children(n)
-	elts := make([]ast.Expr, 0, len(props))
-	for _, p := range props {
+	// Collect each field's final value keyed by its Go field name, and remember the
+	// order fields first appear, so a plain literal emits its fields in source order
+	// exactly as before while a spread's fields slot in where the spread sits. A
+	// later member overwrites the value for a field an earlier one set, which is the
+	// left-to-right override JavaScript's spread has.
+	values := map[string]ast.Expr{}
+	order := make([]string, 0)
+	set := func(field string, val ast.Expr) {
+		if _, seen := values[field]; !seen {
+			order = append(order, field)
+		}
+		values[field] = val
+	}
+	for _, p := range r.prog.Children(n) {
 		if p.Kind() != frontend.NodeUnknown {
 			// A method, getter, or setter member is a function property, which the
 			// frontend names its own kind rather than a property assignment.
@@ -175,9 +192,12 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		case 1:
 			// A shorthand { x } is { x: x }: the single child is both the key and the
 			// value reference. A spread { ...o } is also a single-child member, but
-			// its text opens with the spread token, so it routes to the handback.
+			// its text opens with the spread token, so it routes to the spread copy.
 			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
-				return nil, &NotYetLowerable{Reason: "object spread in a literal is a later slice"}
+				if err := r.objectSpread(kids[0], set); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			keyNode, valNode = kids[0], kids[0]
 		case 2:
@@ -198,9 +218,68 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+		set(field, val)
+	}
+	// Every field of the target struct must have been supplied by a member; if a
+	// spread contributed fewer fields than its type names (a map-shaped source with
+	// no static properties, say), a field would be left at its zero value, so hand
+	// the whole literal back rather than emit a silently-incomplete struct.
+	for _, tp := range r.prog.Properties(t) {
+		field, ok := exportedField(tp.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
+		}
+		if _, filled := values[field]; !filled {
+			return nil, &NotYetLowerable{Reason: "object literal spread did not supply every field, a later slice"}
+		}
+	}
+	elts := make([]ast.Expr, 0, len(order))
+	for _, field := range order {
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: values[field]})
 	}
 	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, nil
+}
+
+// objectSpread copies the fields of a { ...src } member into the collector: each
+// own property of the spread source becomes a field read src.Field, the same
+// struct-field access member.go lowers a plain src.k read to, keyed by the same
+// exportedField name so the read and the struct field agree. The source must be a
+// plain identifier so its fields can be read one at a time without re-evaluating
+// a side-effecting expression, and it must be a fixed-shape object, not an array
+// or a map-shaped object, which spread by copying elements rather than fields.
+func (r *Renderer) objectSpread(srcNode frontend.Node, set func(string, ast.Expr)) error {
+	if srcNode.Kind() != frontend.NodeIdentifier {
+		return &NotYetLowerable{Reason: "object spread of an expression that is not a plain identifier is a later slice"}
+	}
+	srcType := r.prog.TypeAt(srcNode)
+	if srcType.Flags&frontend.TypeObject == 0 {
+		return &NotYetLowerable{Reason: "object spread of a non-object is a later slice"}
+	}
+	if _, isArray := r.prog.ElementType(srcType); isArray {
+		return &NotYetLowerable{Reason: "object spread of an array is a later slice"}
+	}
+	// internStruct confirms the source lowers to a struct and registers it, so the
+	// field reads below select declared fields; a source shape that does not lower
+	// hands back here rather than reading a field that was never declared.
+	if _, err := r.decls.internStruct(r, srcType); err != nil {
+		return err
+	}
+	src, err := r.lowerExpr(srcNode)
+	if err != nil {
+		return err
+	}
+	props := r.prog.Properties(srcType)
+	if len(props) == 0 {
+		return &NotYetLowerable{Reason: "object spread of a source with no static fields is a later slice"}
+	}
+	for _, sp := range props {
+		field, ok := exportedField(sp.Name)
+		if !ok {
+			return &NotYetLowerable{Reason: "object spread source has a field name that is not a Go identifier"}
+		}
+		set(field, &ast.SelectorExpr{X: src, Sel: ident(field)})
+	}
+	return nil
 }
 
 // arrayMethodCall lowers a method call on an array receiver to a value.Array
