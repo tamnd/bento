@@ -45,31 +45,15 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 // would wrongly call truthy). A side-effecting operand cannot appear twice, so it
 // calls value.NumberToBool, the same test behind one evaluation.
 func (r *Renderer) numberTruthy(n frontend.Node) (ast.Expr, error) {
+	x, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
 	if !r.pureCtorValue(n) {
-		x, err := r.lowerExpr(n)
-		if err != nil {
-			return nil, err
-		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "NumberToBool"), Args: []ast.Expr{x}}, nil
 	}
-	nonZero, err := r.lowerExpr(n)
-	if err != nil {
-		return nil, err
-	}
-	left, err := r.lowerExpr(n)
-	if err != nil {
-		return nil, err
-	}
-	right, err := r.lowerExpr(n)
-	if err != nil {
-		return nil, err
-	}
-	return &ast.BinaryExpr{
-		X:  &ast.BinaryExpr{X: nonZero, Op: token.NEQ, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}},
-		Op: token.LAND,
-		Y:  &ast.BinaryExpr{X: left, Op: token.EQL, Y: right},
-	}, nil
+	return truthyOfKind(x, "number"), nil
 }
 
 // stringTruthy lowers a string in boolean position to its ToBoolean: false only for
@@ -85,9 +69,32 @@ func (r *Renderer) stringTruthy(n frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "StringToBool"), Args: []ast.Expr{s}}, nil
 	}
-	return &ast.BinaryExpr{
-		X:  &ast.CallExpr{Fun: &ast.SelectorExpr{X: s, Sel: ident("Length")}},
-		Op: token.GTR,
-		Y:  &ast.BasicLit{Kind: token.INT, Value: "0"},
-	}, nil
+	return truthyOfKind(s, "string"), nil
+}
+
+// truthyOfKind builds the inlined ToBoolean test for a Go expression whose kind is
+// already known, the falsy set spelled out for each primitive: a number is truthy
+// when non-zero and not NaN (x != 0 && x == x), a string when non-empty
+// (s.Length() > 0), and a boolean is its own truth. The expression is named more
+// than once in the number form, so a caller passes one it can safely repeat, a
+// literal, an identifier, or a lowered pure operand. It returns nil for a kind
+// without an inline test, which no caller reaches.
+func truthyOfKind(x ast.Expr, kind string) ast.Expr {
+	switch kind {
+	case "bool":
+		return x
+	case "number":
+		return &ast.BinaryExpr{
+			X:  &ast.BinaryExpr{X: x, Op: token.NEQ, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}},
+			Op: token.LAND,
+			Y:  &ast.BinaryExpr{X: x, Op: token.EQL, Y: x},
+		}
+	case "string":
+		return &ast.BinaryExpr{
+			X:  &ast.CallExpr{Fun: &ast.SelectorExpr{X: x, Sel: ident("Length")}},
+			Op: token.GTR,
+			Y:  &ast.BasicLit{Kind: token.INT, Value: "0"},
+		}
+	}
+	return nil
 }

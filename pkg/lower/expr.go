@@ -369,6 +369,21 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return r.nullishCoalesce(left, right)
 	}
 
+	// && and || return an operand, not a boolean, so over two numbers or two strings
+	// they lower to a value-returning if rather than a Go operator (the boolean
+	// section on keeping && and || value-returning). valueLogical reports handled for
+	// that shape and leaves the two-boolean case for the operator table below, where
+	// Go's own && and || carry the boolean result with the same short-circuit.
+	if opText == "&&" || opText == "||" {
+		expr, handled, err := r.valueLogical(opText, left, right)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			return expr, nil
+		}
+	}
+
 	if r.combineIsDynamic(opText, left, right) {
 		l, err := r.boxOperand(left)
 		if err != nil {
