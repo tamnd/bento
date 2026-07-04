@@ -178,11 +178,19 @@ type Renderer struct {
 	// (the vtable type and vars, the init functions) the same way
 	// registration checks a constructor's name.
 	classTaken map[string]bool
+	// enums registers the module's top-level numeric enums by source name,
+	// collected in a pre-pass so a member read A.B below the declaration still
+	// resolves; enumOrder keeps source order so the emitted const blocks are
+	// deterministic. A non-const enum emits a float64-backed const per member and
+	// each member read lowers to that const; a const enum emits nothing and each
+	// read inlines the member's numeric value.
+	enums     map[string]*enumInfo
+	enumOrder []string
 }
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}}
 }
 
 // SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go
@@ -313,6 +321,18 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		// a pointer whose identity is the symbol's identity (section 8).
 		return star(sel("value", "Symbol")), nil
 
+	case t.Flags&frontend.TypeEnum != 0:
+		// An enum-typed slot (a parameter, return, or annotated binding typed as
+		// the enum) carries the enum flag beside a union of its members, which would
+		// otherwise route to renderUnion. A registered numeric enum is float64-backed,
+		// the same type its member reads already resolve to through the number case
+		// above, so the slot is a float64. An unregistered enum (a string enum,
+		// deferred) has no lowering here and hands back.
+		if _, ok := r.enumOfType(t); ok {
+			return ident("float64"), nil
+		}
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "enum lowering lands in a later slice"}
+
 	case t.Flags&frontend.TypeObject != 0:
 		// TypeObject covers both arrays and fixed-shape objects in the frontend
 		// vocabulary. An element type means it is an array; otherwise it is an
@@ -360,9 +380,6 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		// run first because a string literal also carries TypeString. Reaching
 		// here means a literal with no base flag bento renders yet.
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "literal type with no lowerable base"}
-
-	case t.Flags&frontend.TypeEnum != 0:
-		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "enum lowering lands in a later slice"}
 
 	case t.Flags&frontend.TypeIntersection != 0:
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "intersection lowering (merged struct) lands in a later slice"}
