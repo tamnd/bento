@@ -251,6 +251,15 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayCallbackMethod(recvNode, "Find", argNodes)
 	case "findIndex":
 		return r.arrayCallbackMethod(recvNode, "FindIndex", argNodes)
+	case "reverse":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "array reverse takes no arguments"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Reverse")}}, nil
 	case "pop":
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "array pop takes no arguments"}
