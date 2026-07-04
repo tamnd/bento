@@ -620,6 +620,42 @@ func (a *Array[T]) With(index float64, value T) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// Set writes the element a JavaScript index assignment a[i] = v selects and
+// returns the assigned value, which is what an assignment expression evaluates
+// to. It is the store half of the At read: the index truncates toward zero the
+// same way, and the two share the non-negative in-bounds convention that At's
+// documentation describes. A write inside the array overwrites in place; a write
+// at the current length extends the array by one; a write past the length grows
+// the array and fills the gap with the zero value of T, which is the absent
+// element At reads back out of range. That gap fill is where this lowering meets
+// its covered subset: JavaScript leaves those slots as holes that read undefined,
+// and the zero value stands in for them just as At returns the zero value rather
+// than undefined for an in-type read past the end. A negative index in JavaScript
+// creates a string-keyed property rather than an element and leaves the length
+// alone, which is outside the covered subset, so it writes nothing and only
+// yields the value; At is silent on the same negative index for the same reason.
+// It is a pointer method so the write is visible through every reference to the
+// array, the same way Push and the other in-place mutations are.
+func (a *Array[T]) Set(i float64, v T) T {
+	idx := int(i) // JavaScript ToInteger truncates toward zero.
+	if i != i {   // NaN truncates to 0, matching ToIntegerOrInfinity.
+		idx = 0
+	}
+	if idx < 0 {
+		return v
+	}
+	if idx < len(a.elems) {
+		a.elems[idx] = v
+		return v
+	}
+	var zero T
+	for len(a.elems) < idx {
+		a.elems = append(a.elems, zero)
+	}
+	a.elems = append(a.elems, v)
+	return v
+}
+
 // Sort orders the array in place by a comparator and returns the array, the
 // lowering of Array.prototype.sort called with a compare function. The
 // comparator returns a Number that is negative when its first argument should
