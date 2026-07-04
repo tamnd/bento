@@ -27,12 +27,12 @@ func TestNumberToPrecision(t *testing.T) {
 		{100, 5, "100.00"},
 		{1, 3, "1.00"},
 		{5, 1, "5"},
-		{9.99, 2, "10"},   // rounding carries to a clean power
-		{1.5, 1, "2"},     // exact tie rounds up
+		{9.99, 2, "10"}, // rounding carries to a clean power
+		{1.5, 1, "2"},   // exact tie rounds up
 		{12345, 3, "1.23e+4"},
 		{0.00001234, 2, "0.000012"},
-		{0.000001, 2, "0.0000010"},  // exponent -6 stays in the fixed window
-		{0.0000001, 2, "1.0e-7"},    // exponent -7 tips into exponential
+		{0.000001, 2, "0.0000010"}, // exponent -6 stays in the fixed window
+		{0.0000001, 2, "1.0e-7"},   // exponent -7 tips into exponential
 		{0.0001, 1, "0.0001"},
 		{-0.5, 1, "-0.5"},
 		{0, 1, "0"},
