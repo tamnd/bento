@@ -1,0 +1,10 @@
+== stdout:
+unreserved-_.!~*'()
+a%20b%2Fc%3Fd%3De%26f
+caf%C3%A9%E6%97%A5%E6%9C%AC
+a b/c
+café日本
+name%3DAda%20Lovelace%20%26%20id%3D42
+true
+== exit:
+0
