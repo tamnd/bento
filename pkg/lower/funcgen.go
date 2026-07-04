@@ -74,6 +74,18 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
 
+	// The union-locals set is scoped to this body the same way retType is, built
+	// from both the signature parameters and the body declarations so a narrowed
+	// read of either unwraps to the arm's field wherever it sits, and one function's
+	// union bindings do not leak into another's reads.
+	prevUnion := r.unionLocals
+	var bodyStmts []frontend.Node
+	if block, ok := r.funcBodyBlock(fn); ok {
+		bodyStmts = r.prog.Children(block)
+	}
+	r.unionLocals = r.unionLocalsOf(sig.Params, bodyStmts)
+	defer func() { r.unionLocals = prevUnion }()
+
 	body, err := r.blockOf(fn)
 	if err != nil {
 		return nil, err
@@ -138,16 +150,25 @@ func isVoidReturn(ret frontend.Type) bool {
 // blockOf finds the function's body block and lowers it. A function with no body
 // (an overload signature or a declare) is not a lowerable unit.
 func (r *Renderer) blockOf(fn frontend.Node) (*ast.BlockStmt, error) {
+	block, ok := r.funcBodyBlock(fn)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "function has no body block (declare or overload)"}
+	}
+	return r.scopedBlock(block, 0)
+}
+
+// funcBodyBlock returns a function's body block node, and ok=false when the
+// function has none (an overload signature or a declare). It is the one place the
+// body block is found, shared by blockOf and the union-locals pre-pass so both read
+// the same block.
+func (r *Renderer) funcBodyBlock(fn frontend.Node) (frontend.Node, bool) {
 	var block frontend.Node
 	for _, c := range r.prog.Children(fn) {
 		if c.Kind() == frontend.NodeBlock {
 			block = c
 		}
 	}
-	if block == nil {
-		return nil, &NotYetLowerable{Reason: "function has no body block (declare or overload)"}
-	}
-	return r.scopedBlock(block, 0)
+	return block, block != nil
 }
 
 // scopedBlock lowers a body block with the per-body analysis sets scoped to

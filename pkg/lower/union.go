@@ -40,12 +40,26 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 	}
 
 	values := make([]string, 0, len(members))
+	allStringLiterals := true
 	for _, m := range members {
 		lit, ok := r.prog.LiteralValue(m)
 		if !ok || lit.Kind != frontend.LiteralString {
-			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union with a non-string-literal member needs the tagged sum struct, a later slice"}
+			allStringLiterals = false
+			break
 		}
 		values = append(values, lit.Str)
+	}
+	// A union that is not a closed set of string literals routes to the general
+	// tagged-sum struct: a union of unlike primitive arms lowers to a discriminant
+	// tag plus one inline field per arm (tagunion.go). internUnion hands back for a
+	// union outside the primitive-arm subset, so a shape it cannot represent still
+	// defers to the interpreter rather than emit a wrong Go type.
+	if !allStringLiterals {
+		info, err := r.internUnion(t)
+		if err != nil {
+			return nil, err
+		}
+		return ident(info.goName), nil
 	}
 	if len(values) == 0 {
 		// A union the checker reports with no members is degenerate (never), which

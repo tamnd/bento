@@ -276,7 +276,7 @@ func TestRealNonIdentifierStringUnionHandsBack(t *testing.T) {
 // rather than a wrong Go type.
 func TestRealUnlowerableHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
-		{"union", "const x: number | string = 1;"},
+		{"union", "const x: number | number[] = 1;"},
 		{"typeParameter", "function f<T>(a: T) { const x = a; return x; }"},
 	}
 	for _, tc := range cases {
