@@ -451,6 +451,40 @@ func (a *Array[T]) Pop() Opt[T] {
 	return Some(last)
 }
 
+// Shift removes the first element and returns it, the lowering of
+// Array.prototype.shift. It is the front-of-array sibling of Pop: like pop its
+// declared type is T | undefined, so it returns an Opt[T], a present optional
+// holding the removed element on a non-empty array and the undefined optional on
+// an empty array, where JavaScript shift returns undefined and leaves the array
+// empty. It is a pointer method because the removal must be visible through every
+// reference to the array, the same reason Push and Pop are. The backing slice is
+// advanced by one, so every remaining element's index drops by one, which is the
+// downward shift JavaScript names the method for.
+func (a *Array[T]) Shift() Opt[T] {
+	if len(a.elems) == 0 {
+		return None[T]()
+	}
+	first := a.elems[0]
+	a.elems = a.elems[1:]
+	return Some(first)
+}
+
+// Unshift prepends its arguments to the front of the array in order and returns
+// the new length as a Number, the lowering of Array.prototype.unshift. It is the
+// front-of-array sibling of Push, and like Push it is a pointer method so the
+// insertion is visible through every reference. The arguments keep their order,
+// so unshift(1, 2) on [3] yields [1, 2, 3]. A fresh backing slice is built with
+// the arguments ahead of the existing elements rather than prepending in place,
+// so the caller's variadic argument array is never aliased or mutated, the same
+// ownership NewArray keeps.
+func (a *Array[T]) Unshift(xs ...T) float64 {
+	combined := make([]T, 0, len(xs)+len(a.elems))
+	combined = append(combined, xs...)
+	combined = append(combined, a.elems...)
+	a.elems = combined
+	return float64(len(a.elems))
+}
+
 // relativeIndex resolves a JavaScript slice bound against a length: it truncates
 // the Number toward zero, treats a negative value as counting back from the end,
 // and clamps the result into [0, length]. This is the shared step
