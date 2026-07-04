@@ -324,11 +324,16 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	case t.Flags&frontend.TypeEnum != 0:
 		// An enum-typed slot (a parameter, return, or annotated binding typed as
 		// the enum) carries the enum flag beside a union of its members, which would
-		// otherwise route to renderUnion. A registered numeric enum is float64-backed,
-		// the same type its member reads already resolve to through the number case
-		// above, so the slot is a float64. An unregistered enum (a string enum,
-		// deferred) has no lowering here and hands back.
-		if _, ok := r.enumOfType(t); ok {
+		// otherwise route to renderUnion. A registered numeric enum is float64-backed
+		// and a string enum is value.BStr-backed, the same types their member reads
+		// already resolve to, so the slot takes that primitive. An enum this file
+		// declined to register (a heterogeneous or computed one) has no lowering here
+		// and hands back.
+		if info, ok := r.enumOfType(t); ok {
+			if info.isString {
+				r.requireImport(valuePkg)
+				return sel("value", "BStr"), nil
+			}
 			return ident("float64"), nil
 		}
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "enum lowering lands in a later slice"}
