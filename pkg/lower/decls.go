@@ -187,12 +187,22 @@ func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) st
 // base is already taken by a different shape, and records it as used and in
 // emission order.
 func (d *declSet) reserve(base string) string {
+	name := d.reserveName(base)
+	d.order = append(d.order, name)
+	return name
+}
+
+// reserveName claims a unique package-level name from a base and records it as
+// used, but does not enter it in the struct/enum emission order the way reserve
+// does. It is for declarations that emit through their own channel (the tagged
+// union types render as a group in renderUnions), yet must still not collide with
+// an interned struct or enum name, so they draw from the same used set.
+func (d *declSet) reserveName(base string) string {
 	name := base
 	for n := 2; d.used[name]; n++ {
 		name = base + "_" + itoa(n)
 	}
 	d.used[name] = true
-	d.order = append(d.order, name)
 	return name
 }
 

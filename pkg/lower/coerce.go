@@ -164,6 +164,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	} else if ok {
 		return boxed, nil
 	}
+	if wrapped, ok, err := r.wrapToUnion(expr, srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return wrapped, nil
+	}
 	srcDyn := r.isDynamic(srcNode)
 	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 	switch {
@@ -186,6 +191,11 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 		return nil, err
 	} else if ok {
 		return boxed, nil
+	}
+	if wrapped, ok, err := r.wrapToUnion(expr, src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return wrapped, nil
 	}
 	srcDyn := r.isDynamic(src)
 	tgtDyn := r.isDynamic(target)

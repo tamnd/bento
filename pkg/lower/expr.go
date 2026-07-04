@@ -66,6 +66,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.optLocals[name] && !r.isOptional(n) {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Get")}}, nil
 		}
+		// A local or parameter of a tagged-sum union type that the checker narrowed
+		// to one arm at this use reads that arm's field off the struct, the same
+		// unwrap the optional does with .Get() but for a discriminated member: past
+		// a typeof or discriminant guard the reference is a plain number or string,
+		// so it lowers to name.num or name.str. A reference where the type is still
+		// the whole union keeps the bare struct for an assignment or a pass-through.
+		if read, ok := r.narrowedUnionRead(name, n); ok {
+			return read, nil
+		}
 		return ident(name), nil
 
 	case frontend.NodeParenthesizedExpression:
@@ -460,6 +469,20 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 			return &ast.CallExpr{Fun: sel("value", "Concat"), Args: pieces}, nil
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: pieces[0], Sel: ident("ConcatN")}, Args: pieces[1:]}, nil
+	}
+
+	// typeof x === "string" on a tagged-sum union lowers to a discriminant compare,
+	// x.tag == UnionStr, rather than building the "string" tag and matching it: the
+	// union carries a tag that already distinguishes the arms, so the narrowing is
+	// one integer compare (tagunion.go). It routes before the string-equality path
+	// below because the right side is a string literal that path would otherwise
+	// try to compare against a built "string" value. A typeof against a non-arm tag,
+	// or over an operand that is not a union local, returns not-handled and falls
+	// through to typeof's own folding and the value compare.
+	if expr, handled, err := r.typeofUnionCompare(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
 	}
 
 	// === and !== on two strings compare by UTF-16 code unit, which is what
