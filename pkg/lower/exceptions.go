@@ -55,6 +55,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "Set" {
+		return r.newSet(n, kids[1:])
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}
@@ -170,6 +173,47 @@ func (r *Renderer) newMap(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", ctor), Index: vExpr}}, nil
+}
+
+// newSet lowers a Set construction, the collection of unique members of section
+// 6.5. Only the empty new Set<T>() is covered: it picks the value constructor for
+// the member kind (a number, string, or boolean member each compares by its own
+// SameValueZero), so new Set<string>() lowers to value.NewStringSet(). Unlike a Map,
+// whose value type is free and so needs a type argument, the member type fully
+// determines the Set constructor, so the call carries no instantiation. The member
+// type comes from the set's own type at this node, read off its add signature the
+// same way renderSet reads it. The iterable-argument form (new Set([a, b, c])) and a
+// non-primitive member are later slices and hand back.
+func (r *Renderer) newSet(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
+	// As with new Map, the written type argument (new Set<string>()) reads as a
+	// NodeUnknown child ahead of any value argument, so counting the named children is
+	// what tells the empty constructor from the iterable form.
+	valueArgs := 0
+	for _, a := range args {
+		if a.Kind() != frontend.NodeUnknown {
+			valueArgs++
+		}
+	}
+	if valueArgs != 0 {
+		return nil, &NotYetLowerable{Reason: "only the empty new Set() is lowered yet, not the iterable-argument form"}
+	}
+	elem, ok := r.setElem(r.prog.TypeAt(n))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "new Set did not expose its member type"}
+	}
+	var ctor string
+	switch {
+	case elem.Flags&frontend.TypeNumber != 0:
+		ctor = "NewNumberSet"
+	case elem.Flags&frontend.TypeString != 0:
+		ctor = "NewStringSet"
+	case elem.Flags&frontend.TypeBoolean != 0:
+		ctor = "NewBoolSet"
+	default:
+		return nil, &NotYetLowerable{Reason: "a Set with a member that is not a number, string, or boolean is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", ctor)}, nil
 }
 
 // errorInstanceof lowers `e instanceof Error` on a caught error, the guard a

@@ -1178,6 +1178,26 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 			args: [][]any{{1}, {2}, {5}},
 		},
 		{
+			// a Set with number members is filled in a loop that adds every value twice, so
+			// the dedup must drop the repeats, then has probes a present and an absent member
+			// and the size folds in, so add's dedup, has, and size all run through the engine
+			// against a real JavaScript Set whose member identity must agree with the runtime.
+			name: "setNumber",
+			file: "eq_set_number",
+			fn:   "distinct",
+			args: [][]any{{0}, {1}, {4}, {10}},
+		},
+		{
+			// a Set with string members probes has for a present and an absent member, adds a
+			// duplicate to prove the dedup, deletes a member and confirms its absence, and
+			// folds in the post-delete size, so add, has, delete, and size run against the
+			// engine and the string comparison must match the runtime's BStr identity.
+			name: "setString",
+			file: "eq_set_string",
+			fn:   "tags",
+			args: [][]any{{1}, {2}, {5}},
+		},
+		{
 			// an object literal is built with a shorthand and a keyed property, then two
 			// of its fields are read back, so the composite-literal construction and the
 			// struct-field read both run through the engine against TypeScript.

@@ -382,6 +382,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// renderObject would intern its method interface as fields.
 			return r.renderMap(t)
 		}
+		if r.isSetType(t) {
+			// A Set<T> (section 6.5) is the value model's collection of unique members,
+			// spelled as a pointer to the generic value.Set header. Like Map it is not a
+			// struct shape, so it routes here before renderObject would intern its method
+			// interface as fields. Its fingerprint is disjoint from a Map's, so the order
+			// against the Map check above does not matter.
+			return r.renderSet(t)
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -606,6 +614,86 @@ func (r *Renderer) mapKeyVal(t frontend.Type) (key, val frontend.Type, ok bool) 
 		return frontend.Type{}, frontend.Type{}, false
 	}
 	return call[0].Params[0].Type, call[0].Params[1].Type, true
+}
+
+// renderSet lowers a Set<T> type to a pointer to the generic value.Set header
+// (section 6.5). It reads the member type off the set's add signature and renders
+// it through typeExpr, so a Set<string> becomes a *value.Set[value.BStr] and the
+// member type carries whatever its own lowering is. A member type that has no
+// lowering yet hands back through the same NotYetLowerable typeExpr returns for it.
+func (r *Renderer) renderSet(t frontend.Type) (ast.Expr, error) {
+	elem, ok := r.setElem(t)
+	if !ok {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "Set type did not expose its member through an add signature"}
+	}
+	eExpr, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return star(index(sel("value", "Set"), eExpr)), nil
+}
+
+// isSetType reports whether an object type is a JavaScript Set, the collection of
+// unique members bento maps to value.Set (section 6.5). The standard library types
+// a Set with add, has, and size together: add separates it from a Map (which has
+// get and set, not add) and from an Array, size separates it from a WeakSet (which
+// has no size), so the three names together are the fingerprint, read the same way
+// isMapType reads its own. A caller must have already ruled the type out as an
+// array, so this runs only for the non-array object shapes.
+func (r *Renderer) isSetType(t frontend.Type) bool {
+	var hasAdd, hasHas, hasSize bool
+	for _, p := range r.prog.Properties(t) {
+		switch p.Name {
+		case "add":
+			hasAdd = true
+		case "has":
+			hasHas = true
+		case "size":
+			hasSize = true
+		}
+	}
+	return hasAdd && hasHas && hasSize
+}
+
+// isSet reports whether the checker types a node as a Set, the receiver test the
+// set lowerings share (a new expression's target, a .add or .has call, a .size
+// read). It is the node-level companion to isSetType: it reads the node's type and
+// applies the same fingerprint, first ruling out an array so an array is never
+// mistaken for a set.
+func (r *Renderer) isSet(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isSetType(t)
+}
+
+// setElem returns the member type of a Set type, read off its add method whose
+// signature is add(value: T): this. The standard library declares add on every Set,
+// so its first parameter carries T exactly, which is more direct than reconstructing
+// it from the values iterator. It reports false for a type with no such add
+// signature, which a non-set object is.
+func (r *Renderer) setElem(t frontend.Type) (elem frontend.Type, ok bool) {
+	var addType frontend.Type
+	found := false
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "add" {
+			addType, found = p.Type, true
+			break
+		}
+	}
+	if !found {
+		return frontend.Type{}, false
+	}
+	call, _ := r.prog.Signatures(addType)
+	if len(call) == 0 || len(call[0].Params) < 1 {
+		return frontend.Type{}, false
+	}
+	return call[0].Params[0].Type, true
 }
 
 // isBytes reports whether the checker types a node as a Uint8Array, the receiver
