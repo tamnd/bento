@@ -1044,6 +1044,12 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 		return "AtOpt", []argKind{argNumber}, 1, false, true
 	case "charCodeAt":
 		return "CharCodeAt", []argKind{argNumber}, 1, false, true
+	case "codePointAt":
+		// codePointAt returns number | undefined, so the Go method returns an
+		// Opt[float64], consumed through the same !== undefined narrowing; it combines
+		// a surrogate pair into the astral code point rather than reading one unit. It
+		// takes exactly one number.
+		return "CodePointAtOpt", []argKind{argNumber}, 1, false, true
 	case "charAt":
 		return "CharAt", []argKind{argNumber}, 1, false, true
 	case "indexOf":

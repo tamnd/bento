@@ -243,6 +243,39 @@ func (s BStr) AtOpt(i float64) Opt[BStr] {
 	return Some(FromUTF16([]uint16{s.units()[int(i)]}))
 }
 
+// CodePointAtOpt returns the Unicode code point that begins at code-unit index i
+// as a number, matching String.prototype.codePointAt. Its declared type is number
+// | undefined, so it returns an Opt[float64]: the undefined optional when the
+// index is outside [0, length), and the present optional otherwise. When the unit
+// at i is a high surrogate and the next unit is a low surrogate, the two combine
+// into the single astral code point they encode, which is the difference from
+// charCodeAt; a high surrogate with no following low half, a lone low surrogate,
+// or any BMP unit reads as that unit's own value. The index is coerced to an
+// integer the same way charCodeAt coerces it, and the range test is on the float
+// before the int conversion so a huge index cannot overflow int on the way in.
+func (s BStr) CodePointAtOpt(i float64) Opt[float64] {
+	if math.IsNaN(i) {
+		i = 0
+	}
+	i = math.Trunc(i)
+	if i < 0 || i >= float64(s.lengthU16) {
+		return None[float64]()
+	}
+	idx := int(i)
+	units := s.units()
+	first := units[idx]
+	// A high surrogate followed by a low surrogate is one astral code point; any
+	// other unit, including an unpaired surrogate, stands for itself.
+	if first >= 0xD800 && first <= 0xDBFF && idx+1 < len(units) {
+		second := units[idx+1]
+		if second >= 0xDC00 && second <= 0xDFFF {
+			cp := (int(first)-0xD800)*0x400 + (int(second) - 0xDC00) + 0x10000
+			return Some(float64(cp))
+		}
+	}
+	return Some(float64(first))
+}
+
 // IndexOf returns the code-unit index of the first occurrence of search at or
 // after an optional start position, or -1 if it does not occur, matching
 // String.prototype.indexOf. The position is optional, so the method is variadic:
