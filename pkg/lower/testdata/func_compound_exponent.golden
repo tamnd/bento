@@ -1,0 +1,4 @@
+func Grow(x float64, n float64) float64 {
+	x = math.Pow(x, n)
+	return x
+}

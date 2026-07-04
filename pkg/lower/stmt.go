@@ -641,8 +641,9 @@ func incDecFromStep(a *ast.AssignStmt) (*ast.IncDecStmt, bool) {
 
 // compoundBaseOp maps a compound assignment operator to the binary operator it
 // fuses, so combineBinary can build the x <op> rhs half of x <op>= rhs. Every
-// arithmetic and bitwise compound is here; the plain "=" is not a compound and
-// returns false.
+// arithmetic and bitwise compound is here, including **= which fuses to the **
+// combineBinary lowers to math.Pow; the plain "=" is not a compound and returns
+// false.
 // compoundAssignToken maps a native Go binary operator to its compound-assignment
 // form (ADD to +=, SHL to <<=, and so on), reporting whether one exists. It is the
 // peephole that lets total = total + i print as total += i: every arithmetic and
@@ -686,6 +687,8 @@ func compoundBaseOp(op string) (string, bool) {
 		return "-", true
 	case "*=":
 		return "*", true
+	case "**=":
+		return "**", true
 	case "/=":
 		return "/", true
 	case "%=":
@@ -702,8 +705,6 @@ func compoundBaseOp(op string) (string, bool) {
 		return ">>", true
 	case ">>>=":
 		return ">>>", true
-	case "**=":
-		return "**", true
 	default:
 		return "", false
 	}
