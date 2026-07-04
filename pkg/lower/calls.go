@@ -251,6 +251,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Object") {
 		return r.objectCall(method, argNodes)
 	}
+	// BigInt.asIntN(bits, x) and BigInt.asUintN(bits, x) are static calls on the
+	// global BigInt, not a method on a value, so they lower to the value wrap
+	// helpers. BigInt as a namespace routes here; BigInt(x) as a conversion function
+	// is handled at the bare-call path above.
+	if r.isGlobalRef(recvNode, "BigInt") {
+		return r.bigIntStaticCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.
@@ -293,6 +300,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// bare use would take, so they route here before the string-method path.
 	if r.isNumber(recvNode) || r.isBool(recvNode) {
 		return r.primitiveValueCall(recvNode, method, argNodes)
+	}
+	// toString and valueOf on a bigint value: valueOf is identity, so it lowers to the
+	// receiver with no call, and toString renders the digits, in base 10 by default or
+	// the base a radix argument names. They route here before the string-method path,
+	// which expects a string receiver a bigint is not.
+	if r.isBigInt(recvNode) {
+		return r.bigIntValueCall(recvNode, method, argNodes)
 	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
@@ -433,6 +447,74 @@ func (r *Renderer) numberCall(method string, argNodes []frontend.Node) (ast.Expr
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// bigIntValueCall lowers toString and valueOf on a bigint value. valueOf is the
+// identity, so it lowers to the receiver with no call. toString with no argument
+// renders the decimal digits through value.BigIntToString, the same digits String(b)
+// produces; toString(radix) renders the digits in the named base through
+// value.BigIntToStringRadix, which validates the radix and throws the RangeError a
+// base outside [2, 36] raises. Anything else on a bigint hands back.
+func (r *Renderer) bigIntValueCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	switch method {
+	case "valueOf":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "bigint valueOf with an argument is a later slice"}
+		}
+		return recv, nil
+	case "toString":
+		r.requireImport(valuePkg)
+		if len(argNodes) == 0 {
+			return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{recv}}, nil
+		}
+		if len(argNodes) != 1 || !r.isNumber(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "bigint toString with this argument is a later slice"}
+		}
+		radix, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "BigIntToStringRadix"), Args: []ast.Expr{recv, radix}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "bigint method ." + method + " is a later slice"}
+	}
+}
+
+// bigIntStaticCall lowers a static call on the global BigInt namespace. asIntN and
+// asUintN take a bit width and a bigint and wrap the bigint into a fixed-width
+// signed or unsigned integer, so each maps to its value wrap helper. The width is a
+// number and the value a bigint, so the first argument lowers as a number and the
+// second as a bigint; a call whose arguments do not have those types hands back.
+func (r *Renderer) bigIntStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	var goName string
+	switch method {
+	case "asIntN":
+		goName = "BigIntAsIntN"
+	case "asUintN":
+		goName = "BigIntAsUintN"
+	default:
+		return nil, &NotYetLowerable{Reason: "BigInt." + method + " is a later slice"}
+	}
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "BigInt." + method + " with this argument count is a later slice"}
+	}
+	if !r.isNumber(argNodes[0]) || !r.isBigInt(argNodes[1]) {
+		return nil, &NotYetLowerable{Reason: "BigInt." + method + " expects a number width and a bigint value"}
+	}
+	bits, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	x, err := r.lowerExpr(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{bits, x}}, nil
 }
 
 // stringStaticCall lowers a static call on the global String constructor.

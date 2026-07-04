@@ -71,6 +71,22 @@ func BigIntToString(b *big.Int) BStr {
 	return FromGoString(b.String())
 }
 
+// BigIntToStringRadix renders a bigint in the given base, the lowering of
+// b.toString(radix). The radix runs through ToIntegerOrInfinity and must land in
+// [2, 36], else it throws the RangeError JavaScript raises. big.Int.Text uses the
+// same 0-9a-z digits JavaScript does for those bases, and it keeps the leading
+// minus, so (-255n).toString(16) is "-ff" the same as V8.
+func BigIntToStringRadix(b *big.Int, radix float64) BStr {
+	r := math.Trunc(radix)
+	if math.IsNaN(radix) {
+		r = 0
+	}
+	if r < 2 || r > 36 {
+		Throw(NewRangeError(FromGoString("toString() radix must be between 2 and 36")))
+	}
+	return FromGoString(b.Text(int(r)))
+}
+
 // BigIntToConsole renders a *big.Int the way console.log inspects a bigint: the
 // decimal digits with a trailing "n", so console.log(10n) prints "10n" while
 // String(10n) and `${10n}` stay "10". Only the console inspector adds the suffix,
@@ -184,6 +200,61 @@ func BigIntPow(x, y *big.Int) *big.Int {
 		Throw(NewRangeError(FromGoString("Maximum BigInt size exceeded")))
 	}
 	return new(big.Int).Exp(x, y, nil)
+}
+
+// bigIntWidth reads the bit width the asIntN and asUintN statics take as their
+// first argument. The width is a number, and JavaScript runs it through ToIndex: a
+// fractional value truncates toward zero, NaN reads as 0, and a negative,
+// infinite, or past-2^53 value throws the RangeError ToIndex raises. A width past
+// the size cap would build a modulus too large to hold, so it throws the same size
+// RangeError the shift and exponent operators do rather than exhaust memory.
+func bigIntWidth(bits float64) int {
+	if math.IsNaN(bits) {
+		return 0
+	}
+	w := math.Trunc(bits)
+	if w < 0 || math.IsInf(w, 0) || w > 1<<53-1 {
+		Throw(NewRangeError(FromGoString("Invalid value: not (convertible to) a safe integer")))
+	}
+	if w > maxBigIntBits {
+		Throw(NewRangeError(FromGoString("Maximum BigInt size exceeded")))
+	}
+	return int(w)
+}
+
+// BigIntAsUintN wraps a bigint to the unsigned integer of the given bit width, the
+// lowering of BigInt.asUintN(bits, x). The result is x modulo 2^bits, taken as the
+// Euclidean remainder so it lands in [0, 2^bits) whatever the sign of x. A width of
+// zero wraps everything to 0n, and a non-negative x that already fits the width
+// passes through without building the modulus.
+func BigIntAsUintN(bits float64, x *big.Int) *big.Int {
+	n := bigIntWidth(bits)
+	if n == 0 {
+		return new(big.Int)
+	}
+	if x.Sign() >= 0 && x.BitLen() <= n {
+		return new(big.Int).Set(x)
+	}
+	mod := new(big.Int).Lsh(big.NewInt(1), uint(n))
+	return new(big.Int).Mod(x, mod)
+}
+
+// BigIntAsIntN wraps a bigint to the signed two's-complement integer of the given
+// bit width, the lowering of BigInt.asIntN(bits, x). It reads the unsigned wrap
+// first, then folds the top half of the range down by one modulus so the result
+// lands in [-2^(bits-1), 2^(bits-1)); asIntN(8, 255n) is -1n. A width of zero wraps
+// everything to 0n.
+func BigIntAsIntN(bits float64, x *big.Int) *big.Int {
+	n := bigIntWidth(bits)
+	if n == 0 {
+		return new(big.Int)
+	}
+	u := BigIntAsUintN(bits, x)
+	half := new(big.Int).Lsh(big.NewInt(1), uint(n-1))
+	if u.Cmp(half) >= 0 {
+		u.Sub(u, new(big.Int).Lsh(big.NewInt(1), uint(n)))
+	}
+	return u
 }
 
 // BigIntLsh computes x << n on bigints. A negative count shifts the other way,
