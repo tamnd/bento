@@ -1036,6 +1036,12 @@ func (r *Renderer) argHasKind(n frontend.Node, k argKind) bool {
 // the emitted call form is the same whether the method is variadic or not.
 func stringMethod(name string) (goName string, params []argKind, minArgs int, variadic bool, ok bool) {
 	switch name {
+	case "at":
+		// at returns string | undefined, so the Go method returns an Opt[BStr]; a
+		// negative index counts from the end and an out-of-range index reads as the
+		// undefined optional, consumed through the same !== undefined narrowing the
+		// array at read uses. It takes exactly one number.
+		return "AtOpt", []argKind{argNumber}, 1, false, true
 	case "charCodeAt":
 		return "CharCodeAt", []argKind{argNumber}, 1, false, true
 	case "charAt":
