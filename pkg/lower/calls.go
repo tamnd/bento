@@ -506,6 +506,29 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(digits)}},
 		}, nil
 	}
+	// number.toPrecision(precision) formats with a fixed number of significant
+	// digits, choosing fixed or exponential notation the way the specification does.
+	// The precision must be a literal in 1..100 (not 0..100 like the other two: zero
+	// significant digits is not a valid precision and throws), for the same reason
+	// the others take a literal in range: a value outside throws a RangeError and a
+	// dynamic count cannot be range-checked at compile time. The omitted form is
+	// Number::toString, a different rule, so it hands back rather than defaulting. It
+	// lowers to value.NumberToPrecision, which shares toExponential's exact rounding.
+	if method == "toPrecision" && len(argNodes) == 1 && r.isNumber(recvNode) {
+		precision, ok := r.literalIntArg(argNodes[0], 1, 100)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "number toPrecision with a non-literal or out-of-range precision is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "NumberToPrecision"),
+			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(precision)}},
+		}, nil
+	}
 	if len(argNodes) != 0 {
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " with arguments is a later slice"}
 	}

@@ -61,27 +61,10 @@ func expZero(f int) string {
 }
 
 // expDigits formats a positive finite double with f fraction digits in
-// exponential notation. It finds the decimal exponent e and the f+1 significant
-// digits n such that n rounded from the exact value has exactly f+1 digits, which
-// pins e even when rounding carries a nine up into a new place (9.99 to 1.0e+1).
-// The exponent estimate comes from log10 and is corrected by the digit count, so
-// a float rounding error in the estimate cannot make the significand a digit too
-// long or too short.
+// exponential notation, one integer digit before the point and f after it, so
+// its significand is f+1 significant digits.
 func expDigits(x float64, f int) string {
-	r := new(big.Rat).SetFloat64(x) // exact: a float64 is a dyadic rational
-	e := int(math.Floor(math.Log10(x)))
-	var s string
-	for i := 0; i < 4; i++ {
-		s = scaleRound(r, f-e).String()
-		if len(s) == f+1 {
-			break
-		}
-		if len(s) > f+1 {
-			e++
-		} else {
-			e--
-		}
-	}
+	s, e := significand(x, f+1)
 	var m string
 	if f == 0 {
 		m = s
@@ -89,6 +72,37 @@ func expDigits(x float64, f int) string {
 		m = s[:1] + "." + s[1:]
 	}
 	return m + "e" + expPart(e)
+}
+
+// significand returns the sig most significant decimal digits of a positive
+// finite double and its decimal exponent e, where the value is s × 10^(e-sig+1)
+// and s has exactly sig digits. It rounds the exact value with ties toward the
+// larger significand, and it pins e even when rounding carries a nine up into a
+// new place (9.99 to two digits is "10", exponent 1, which normalizes to "10"
+// having three digits so e is bumped and the significand becomes "10" of the
+// right length). The exponent estimate comes from log10 and is corrected by the
+// digit count of the rounded significand, so a float rounding error in the
+// estimate cannot leave the significand a digit too long or too short. It is the
+// shared core of toExponential and toPrecision, which differ only in how they lay
+// the digits and the exponent out.
+func significand(x float64, sig int) (string, int) {
+	r := new(big.Rat).SetFloat64(x) // exact: a float64 is a dyadic rational
+	e := int(math.Floor(math.Log10(x)))
+	var s string
+	for i := 0; i < 4; i++ {
+		// sig significant digits with the point after the first means rounding to
+		// (sig-1) - e places past the decimal point.
+		s = scaleRound(r, (sig-1)-e).String()
+		if len(s) == sig {
+			break
+		}
+		if len(s) > sig {
+			e++
+		} else {
+			e--
+		}
+	}
+	return s, e
 }
 
 // scaleRound returns floor(r * 10^k + 1/2) for a non-negative rational r, the
