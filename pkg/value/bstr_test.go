@@ -254,6 +254,62 @@ func TestFromCharCode(t *testing.T) {
 	}
 }
 
+// TestFromCodePoint pins String.fromCodePoint: a BMP point is one code unit, an
+// astral point above U+FFFF splits into the surrogate pair that spells it, a mix
+// concatenates in order, and the empty call is the empty string.
+func TestFromCodePoint(t *testing.T) {
+	if got := FromCodePoint(); got.ToGoString() != "" || got.Length() != 0 {
+		t.Errorf("FromCodePoint() = %q len %v, want empty", got.ToGoString(), got.Length())
+	}
+	if got := FromCodePoint(72, 105); got.ToGoString() != "Hi" {
+		t.Errorf("FromCodePoint(72, 105) = %q, want \"Hi\"", got.ToGoString())
+	}
+	// An astral code point becomes a surrogate pair, so it occupies two code units
+	// but reads back as the single rune.
+	astral := FromCodePoint(0x1F600)
+	if astral.ToGoString() != "\U0001F600" || astral.Length() != 2 {
+		t.Errorf("FromCodePoint(0x1F600) = %q len %v, want the emoji and length 2", astral.ToGoString(), astral.Length())
+	}
+	if got := FromCodePoint(65, 0x1F4A9, 66); got.ToGoString() != "A\U0001F4A9B" {
+		t.Errorf("FromCodePoint(65, 0x1F4A9, 66) = %q, want A<pile>B", got.ToGoString())
+	}
+}
+
+// TestFromCodePointThrows pins that an out-of-range code point throws a
+// RangeError the way JavaScript does, rather than wrapping the way fromCharCode
+// does: a negative, a fraction, and a value past U+10FFFF are all rejected.
+func TestFromCodePointThrows(t *testing.T) {
+	for _, c := range []float64{-1, 1.5, 0x110000} {
+		e := codePointThrown(t, c)
+		if e.Name().ToGoString() != "RangeError" {
+			t.Errorf("FromCodePoint(%v) threw %s, want RangeError", c, e.Name().ToGoString())
+		}
+	}
+}
+
+func codePointThrown(t *testing.T, c float64) *Error {
+	t.Helper()
+	var caught *Error
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			e, ok := r.(*Error)
+			if !ok {
+				t.Fatalf("FromCodePoint(%v) threw %T, want *Error", c, r)
+			}
+			caught = e
+		}()
+		FromCodePoint(c)
+	}()
+	if caught == nil {
+		t.Fatalf("FromCodePoint(%v) did not throw", c)
+	}
+	return caught
+}
+
 // TestReplace pins String.prototype.replace with two strings: only the first
 // occurrence is replaced, a missing search returns the receiver, an empty search
 // inserts at the front, and the substitution patterns $$, $&, $` and $' expand

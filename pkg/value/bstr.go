@@ -165,6 +165,40 @@ func FromCharCode(codes ...float64) BStr {
 	return BStr{utf16: units, lengthU16: len(units)}
 }
 
+// FromCodePoint builds a string from Unicode code points, String.fromCodePoint.
+// Unlike fromCharCode, each argument is a full code point, not a code unit, so an
+// astral point above U+FFFF is encoded as the surrogate pair that spells it in
+// UTF-16 and adds two code units, not one. Each argument must be an integer in
+// [0, 0x10FFFF]; a negative number, a fraction, or a value past the last code
+// point is not a valid code point, so it throws a RangeError the way the
+// specification requires rather than wrapping the way fromCharCode does. The
+// units are taken verbatim into the code-unit view, so a lone surrogate passed
+// directly is preserved. It is a free function for the same reason fromCharCode
+// is: fromCodePoint is a static on the String constructor with no receiver.
+func FromCodePoint(codePoints ...float64) BStr {
+	units := make([]uint16, 0, len(codePoints))
+	for _, c := range codePoints {
+		if math.IsNaN(c) || math.Trunc(c) != c || c < 0 || c > 0x10FFFF {
+			Throw(NewRangeError(FromGoString("Invalid code point " + formatCodePoint(c))))
+		}
+		cp := uint32(c)
+		if cp <= 0xFFFF {
+			units = append(units, uint16(cp))
+			continue
+		}
+		cp -= 0x10000
+		units = append(units, uint16(0xD800+(cp>>10)), uint16(0xDC00+(cp&0x3FF)))
+	}
+	return BStr{utf16: units, lengthU16: len(units)}
+}
+
+// formatCodePoint renders a rejected code point for the RangeError message the
+// way JavaScript prints it: an integer with no fraction, a fraction as its
+// shortest decimal, so String.fromCodePoint(-1) reports "Invalid code point -1".
+func formatCodePoint(c float64) string {
+	return NumberToString(c).ToGoString()
+}
+
 // Length returns the number of UTF-16 code units, String.prototype.length. It is
 // a JavaScript number, so it is returned as a float64 to match the lowered type
 // of a number without a conversion at the use site.

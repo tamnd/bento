@@ -206,6 +206,8 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "string_fromcharcode", file: "func_string_fromcharcode"},
 		// with no arguments fromCharCode is still value.FromCharCode, an empty call that yields the empty string.
 		{name: "string_fromcharcode_empty", file: "func_string_fromcharcode_empty"},
+		// String.fromCodePoint is the code-point sibling of fromCharCode, so it lowers to the variadic value.FromCodePoint with each number argument passed through; an astral argument becomes a surrogate pair and an out-of-range one throws at runtime.
+		{name: "string_fromcodepoint", file: "func_string_fromcodepoint"},
 		// the string-string form of replace lowers to value.BStr.Replace; a regexp or function argument would not type as a string and would hand back.
 		{name: "string_replace", file: "func_string_replace"},
 		// replaceAll lowers to value.BStr.ReplaceAll the same way.

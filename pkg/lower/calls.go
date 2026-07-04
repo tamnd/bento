@@ -357,21 +357,28 @@ func (r *Renderer) numberCall(method string, argNodes []frontend.Node) (ast.Expr
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
 }
 
-// stringStaticCall lowers a static call on the global String constructor. Only
-// fromCharCode is covered here: it takes any number of number arguments, coerces
-// each to a UTF-16 code unit, and returns a string, so it maps to the variadic
-// value.FromCharCode. fromCodePoint waits for the exception machinery, since it
-// throws a RangeError on a code point outside the Unicode range. Like Math and
-// Number, String is a namespace on this path, not a value, so the receiver is
-// not lowered.
+// stringStaticCall lowers a static call on the global String constructor.
+// fromCharCode takes any number of number arguments, coerces each to a UTF-16
+// code unit, and returns a string, so it maps to the variadic value.FromCharCode.
+// fromCodePoint is its code-point sibling: each argument is a full Unicode code
+// point rather than a code unit, an astral point becomes a surrogate pair, and a
+// code point outside [0, 0x10FFFF] throws a RangeError, so it maps to the
+// variadic value.FromCodePoint. Like Math and Number, String is a namespace on
+// this path, not a value, so the receiver is not lowered.
 func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
-	if method != "fromCharCode" {
+	var goName string
+	switch method {
+	case "fromCharCode":
+		goName = "FromCharCode"
+	case "fromCodePoint":
+		goName = "FromCodePoint"
+	default:
 		return nil, &NotYetLowerable{Reason: "String." + method + " is a later slice"}
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {
 		if !r.isNumber(a) {
-			return nil, &NotYetLowerable{Reason: "String.fromCharCode with a non-number argument is a later slice"}
+			return nil, &NotYetLowerable{Reason: "String." + method + " with a non-number argument is a later slice"}
 		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
@@ -380,7 +387,7 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 		args = append(args, lowered)
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "FromCharCode"), Args: args}, nil
+	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
 }
 
 // jsonCall lowers a static call on the global JSON namespace. stringify takes a
