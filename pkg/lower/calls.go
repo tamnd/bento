@@ -500,6 +500,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectOwnNameArray("getOwnPropertyNames", argNodes)
 	case "values":
 		return r.objectValues(argNodes)
+	case "hasOwn":
+		return r.objectHasOwn(argNodes)
 	case "is":
 		return r.objectIs(argNodes)
 	default:
@@ -567,7 +569,16 @@ func (r *Renderer) objectShapeArg(method string, argNodes []frontend.Node) ([]fr
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "Object." + method + " with other than one argument is a later slice"}
 	}
-	arg := argNodes[0]
+	return r.fixedShapeProps(method, argNodes[0])
+}
+
+// fixedShapeProps reads the properties of a single fixed-shape object argument,
+// the shape check the Object statics share. The argument must be a plain
+// identifier, whose type carries the shape and which has no side effect to drop
+// since only the type is read, and its type must be a non-array object with
+// known properties whose interned struct lowers. It returns the properties in
+// declaration order, the own enumerable key order these statics walk.
+func (r *Renderer) fixedShapeProps(method string, arg frontend.Node) ([]frontend.Property, error) {
 	if arg.Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "Object." + method + " of an expression that is not a plain identifier is a later slice"}
 	}
@@ -586,6 +597,37 @@ func (r *Renderer) objectShapeArg(method string, argNodes []frontend.Node) ([]fr
 		return nil, &NotYetLowerable{Reason: "Object." + method + " of a shape with no known properties is a later slice"}
 	}
 	return props, nil
+}
+
+// objectHasOwn lowers Object.hasOwn(o, key) on a fixed-shape object with a
+// string-literal key to the compile-time answer, since the shape names every own
+// key. A key that matches a required field is always present, so it folds to
+// true, and a key the shape does not have folds to false. Both operands are read
+// only for their static value, the identifier's shape and the literal's text, so
+// dropping the reads loses nothing. An optional field might be absent at runtime,
+// which the shape cannot settle, so a key that names one hands back, and so does
+// a dynamic key or a receiver that is not a fixed-shape identifier.
+func (r *Renderer) objectHasOwn(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.hasOwn with other than two arguments is a later slice"}
+	}
+	props, err := r.fixedShapeProps("hasOwn", argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	key, ok := r.stringLiteralKey(argNodes[1])
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Object.hasOwn with a key that is not a string literal is a later slice"}
+	}
+	for _, p := range props {
+		if p.Name == key {
+			if p.Optional {
+				return nil, &NotYetLowerable{Reason: "Object.hasOwn on an optional property, whose presence is not known at compile time, is a later slice"}
+			}
+			return ident("true"), nil
+		}
+	}
+	return ident("false"), nil
 }
 
 // objectOwnNameArray lowers Object.keys(o) and Object.getOwnPropertyNames(o) on
