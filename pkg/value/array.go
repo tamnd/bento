@@ -248,6 +248,36 @@ func (a *Array[T]) FindIndex(f func(T) bool) float64 {
 	return -1
 }
 
+// FindLast returns the last element the callback accepts, the lowering of
+// Array.prototype.findLast. Like find its declared type is T | undefined, so it
+// returns an Opt[T], present with the matching element or the undefined optional
+// when none passes. It walks from the end and short-circuits on the first match,
+// matching JavaScript, which visits indices in descending order. The callback
+// takes only the element; the index and array arguments are a later slice.
+func (a *Array[T]) FindLast(f func(T) bool) Opt[T] {
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		if f(a.elems[i]) {
+			return Some(a.elems[i])
+		}
+	}
+	return None[T]()
+}
+
+// FindLastIndex returns the index of the last element the callback accepts, or -1
+// when none does, the lowering of Array.prototype.findLastIndex. Like findIndex the
+// result is a Number, so it is a float64 with -1 as the not-found sentinel, and no
+// optional is needed. It walks from the end and short-circuits on the first match,
+// matching JavaScript's descending visit order. The callback takes only the
+// element; the index and array arguments are a later slice.
+func (a *Array[T]) FindLastIndex(f func(T) bool) float64 {
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		if f(a.elems[i]) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
 // Slice returns a shallow copy of a portion of the array into a new array, the
 // lowering of Array.prototype.slice. It takes zero, one, or two Number bounds,
 // matching the source call, since JavaScript's slice has both arguments

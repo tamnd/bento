@@ -384,6 +384,10 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayCallbackMethod(recvNode, "Find", argNodes)
 	case "findIndex":
 		return r.arrayCallbackMethod(recvNode, "FindIndex", argNodes)
+	case "findLast":
+		return r.arrayCallbackMethod(recvNode, "FindLast", argNodes)
+	case "findLastIndex":
+		return r.arrayCallbackMethod(recvNode, "FindLastIndex", argNodes)
 	case "reverse":
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "array reverse takes no arguments"}
