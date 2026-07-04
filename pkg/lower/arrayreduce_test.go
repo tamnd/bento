@@ -28,11 +28,31 @@ func TestArrayReduceChangingTypeEmitsAccType(t *testing.T) {
 	}
 }
 
-// TestArrayReduceNoInitHandsBack pins that reduce without an initial value, the
-// first-element-seed form that throws on an empty array, hands the unit back.
-func TestArrayReduceNoInitHandsBack(t *testing.T) {
+// TestArrayReduceNoInitEmitsMethod pins that reduce without an initial value, the
+// first-element-seed form that throws on an empty array, lowers to the
+// value.Array ReduceNoInit method rather than the two-type-argument free function.
+func TestArrayReduceNoInitEmitsMethod(t *testing.T) {
 	src := "const a = [1, 2, 3];\nconsole.log(a.reduce((acc: number, n: number): number => acc + n));\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".ReduceNoInit(") {
+		t.Errorf("no-init reduce did not lower to ReduceNoInit:\n%s", source)
+	}
+}
+
+// TestArrayReduceNoInitRuns builds and runs the no-init form against the Node
+// oracle: a sum that seeds from the first element and a single-element array that
+// returns its element without running the callback.
+func TestArrayReduceNoInitRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const a = [1, 2, 3, 4];
+console.log(a.reduce((acc: number, n: number): number => acc + n));
+console.log([7].reduce((acc: number, n: number): number => acc + n));
+`
+	got := runProgramGo(t, src)
+	want := "10\n7\n"
+	if got != want {
+		t.Fatalf("no-init reduce program printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayReduceRuns builds and runs reduce against the Node oracle: a numeric
