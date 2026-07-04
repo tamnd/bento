@@ -382,6 +382,38 @@ func TestCharAt(t *testing.T) {
 	}
 }
 
+// TestCodePointAtOpt pins String.prototype.codePointAt: a BMP character reads as
+// its own code point, a high surrogate followed by a low surrogate combines into
+// the astral code point they encode (the difference from charCodeAt), an unpaired
+// surrogate stands for its own unit value, and an index outside the string reads
+// as the undefined optional.
+func TestCodePointAtOpt(t *testing.T) {
+	s := FromGoString("a😀") // 'a' (1 unit), emoji U+1F600 (D83D DE00, two units)
+
+	if got := s.CodePointAtOpt(0); got.IsUndefined() || got.Get() != 97 {
+		t.Errorf("CodePointAtOpt(0) = %+v, want Some(97)", got)
+	}
+	// Index 1 is the high surrogate that starts the pair, so it reads the whole
+	// astral code point, not the surrogate value charCodeAt would give.
+	if got := s.CodePointAtOpt(1); got.IsUndefined() || got.Get() != 0x1F600 {
+		t.Errorf("CodePointAtOpt(1) = %+v, want Some(128512)", got)
+	}
+	// Index 2 is the trailing low surrogate on its own, so it reads that unit value.
+	if got := s.CodePointAtOpt(2); got.IsUndefined() || got.Get() != 0xDE00 {
+		t.Errorf("CodePointAtOpt(2) = %+v, want Some(0xDE00)", got)
+	}
+	for _, idx := range []float64{-1, 3, 100} {
+		if got := s.CodePointAtOpt(idx); !got.IsUndefined() {
+			t.Errorf("CodePointAtOpt(%v) = %+v, want the undefined optional", idx, got)
+		}
+	}
+	// A lone high surrogate with no following unit reads as its own value, not undefined.
+	lone := FromUTF16([]uint16{0xD83D})
+	if got := lone.CodePointAtOpt(0); got.IsUndefined() || got.Get() != 0xD83D {
+		t.Errorf("CodePointAtOpt on a lone high surrogate = %+v, want Some(0xD83D)", got)
+	}
+}
+
 // TestSearchMethods pins IndexOf, Includes, and StartsWith, including the
 // code-unit index of a match after an astral character (the emoji is two units,
 // so "b" in "a😀b" is at index 3, not 2) and the empty-search rule that matches
