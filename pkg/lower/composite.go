@@ -39,19 +39,21 @@ func (r *Renderer) arrayElem(n frontend.Node) (ast.Expr, bool) {
 // type for the whole literal, not guessed from the elements, so a widened or
 // empty literal is spelled the way the checker sees it and NewArray's type
 // argument is explicit rather than inferred from a possibly empty argument list.
-// Only a literal of plain element expressions whose element type lowers is
-// covered; a spread element or an elided hole hands back to a later slice.
+// A literal that splices in a spread element takes the arraySpread path instead;
+// an elided hole still hands back to a later slice.
 func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 	elemType, ok := r.arrayElem(n)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "array literal whose element type does not lower yet"}
 	}
 	kids := r.prog.Children(n)
-	args := make([]ast.Expr, 0, len(kids))
 	for _, k := range kids {
 		if k.Kind() == frontend.NodeSpreadElement {
-			return nil, &NotYetLowerable{Reason: "spread element in an array literal is a later slice"}
+			return r.arraySpread(n, elemType, kids)
 		}
+	}
+	args := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
 		e, err := r.lowerExpr(k)
 		if err != nil {
 			return nil, err
@@ -60,6 +62,77 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
+// arraySpread lowers an array literal that splices in one or more spread
+// elements, [a, ...b, c], to a []T built with append and wrapped once by
+// value.ArrayFrom. The backing slice starts as a fresh []T literal, so the
+// result aliases none of the spread sources: a run of plain elements folds into
+// one append with those elements as arguments (or into the seed literal when it
+// leads), and each spread appends its source's backing slice with append's
+// variadic form. A person splicing arrays in Go writes this same append chain,
+// and ArrayFrom then takes the finished slice without a second copy.
+//
+// Only a spread of another array whose element Go type matches the literal's is
+// covered, since that is what append's variadic form takes; a spread of a string
+// or another iterable, or of an array with a different element type, hands back.
+func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []frontend.Node) (ast.Expr, error) {
+	seedType := &ast.ArrayType{Elt: elemType}
+	var acc ast.Expr
+	var pending []ast.Expr
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if acc == nil {
+			acc = &ast.CompositeLit{Type: seedType, Elts: pending}
+		} else {
+			acc = &ast.CallExpr{Fun: ident("append"), Args: append([]ast.Expr{acc}, pending...)}
+		}
+		pending = nil
+	}
+	for _, k := range kids {
+		if k.Kind() != frontend.NodeSpreadElement {
+			e, err := r.lowerExpr(k)
+			if err != nil {
+				return nil, err
+			}
+			pending = append(pending, e)
+			continue
+		}
+		operands := r.prog.Children(k)
+		if len(operands) != 1 {
+			return nil, &NotYetLowerable{Reason: "spread element with an unexpected shape is a later slice"}
+		}
+		operand := operands[0]
+		opElemType, ok := r.arrayElem(operand)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "spread of a non-array value in an array literal is a later slice"}
+		}
+		same, err := sameGoType(elemType, opElemType)
+		if err != nil {
+			return nil, err
+		}
+		if !same {
+			return nil, &NotYetLowerable{Reason: "spread of an array with a different element type is a later slice"}
+		}
+		spreadVal, err := r.lowerExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		flush()
+		if acc == nil {
+			acc = &ast.CompositeLit{Type: seedType}
+		}
+		elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: spreadVal, Sel: ident("Elems")}}
+		acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, elems}, Ellipsis: token.Pos(1)}
+	}
+	flush()
+	if acc == nil {
+		acc = &ast.CompositeLit{Type: seedType}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{acc}}, nil
 }
 
 // objectLiteral lowers an object literal { k: v, ... } to a composite literal
