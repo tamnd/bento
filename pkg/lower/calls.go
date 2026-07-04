@@ -96,18 +96,23 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "parseInt" && r.isAmbientGlobal(kids[0]) {
 		return r.parseIntCall(kids[1:])
 	}
-	// The four URI codec globals are bare ambient globals that take a single string,
-	// so they route like the coercions before the user path.
+	// The URI and base64 codec globals are bare ambient globals that take a single
+	// string and return a string, so they route like the coercions before the user
+	// path.
 	if callee := r.prog.Text(kids[0]); r.isAmbientGlobal(kids[0]) {
 		switch callee {
 		case "encodeURIComponent":
-			return r.uriCodecCall("EncodeURIComponent", callee, kids[1:])
+			return r.unaryStringGlobal("EncodeURIComponent", callee, kids[1:])
 		case "decodeURIComponent":
-			return r.uriCodecCall("DecodeURIComponent", callee, kids[1:])
+			return r.unaryStringGlobal("DecodeURIComponent", callee, kids[1:])
 		case "encodeURI":
-			return r.uriCodecCall("EncodeURI", callee, kids[1:])
+			return r.unaryStringGlobal("EncodeURI", callee, kids[1:])
 		case "decodeURI":
-			return r.uriCodecCall("DecodeURI", callee, kids[1:])
+			return r.unaryStringGlobal("DecodeURI", callee, kids[1:])
+		case "btoa":
+			return r.unaryStringGlobal("Btoa", callee, kids[1:])
+		case "atob":
+			return r.unaryStringGlobal("Atob", callee, kids[1:])
 		}
 	}
 	sym, ok := r.prog.SymbolAt(kids[0])
@@ -1278,12 +1283,13 @@ func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{lowered}}, nil
 }
 
-// uriCodecCall lowers a single-argument URI codec global, encodeURIComponent or
-// decodeURIComponent, to its value runtime function. Both take exactly one string;
-// a different arity, or a non-string argument (which the global would coerce to a
+// unaryStringGlobal lowers a bare global that takes exactly one string and returns
+// one string to its value runtime function: the URI codecs encodeURIComponent /
+// decodeURIComponent / encodeURI / decodeURI and the base64 codecs btoa / atob. A
+// different arity, or a non-string argument (which the global would coerce to a
 // string first, running that conversion), hands back. goName is the runtime
 // function to call and jsName names the global for the handback reason.
-func (r *Renderer) uriCodecCall(goName, jsName string, argNodes []frontend.Node) (ast.Expr, error) {
+func (r *Renderer) unaryStringGlobal(goName, jsName string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: jsName + " with this argument count is a later slice"}
 	}
