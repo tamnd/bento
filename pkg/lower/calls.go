@@ -901,7 +901,10 @@ func numberMethod(name string) (goName string, ok bool) {
 // last-bit results are not guaranteed identical across two libm implementations,
 // so they are proven by the equivalence harness's numeric-tolerance mode rather
 // than by an exact match, and value.HypotN inherits that tolerance since it folds
-// math.Hypot.
+// math.Hypot. random maps to value.MathRandom, the one Math method that is not a
+// function of its arguments: it draws a fresh number on every call, so the two
+// runtimes cannot agree on its output and the differential oracle checks its shape
+// (range and non-constancy) rather than an exact value.
 func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok bool) {
 	switch name {
 	case "floor":
@@ -972,6 +975,8 @@ func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok boo
 		return "math", "Atanh", 1, 1, true
 	case "hypot":
 		return valuePkg, "HypotN", 0, -1, true
+	case "random":
+		return valuePkg, "MathRandom", 0, 0, true
 	default:
 		return "", "", 0, 0, false
 	}
