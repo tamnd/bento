@@ -1,0 +1,7 @@
+== stdout:
+ada
+36
+true
+10 2
+== exit:
+0
