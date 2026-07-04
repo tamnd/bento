@@ -8,9 +8,9 @@ import "testing"
 // the fi ligature to the two letters f and i, which the canonical forms leave
 // alone.
 func TestNormalizeForms(t *testing.T) {
-	precomposed := "Å"       // A with ring above, one code point
-	decomposed := "Å"       // A followed by combining ring above
-	ligature := "ﬁ"          // the fi ligature, one code point
+	precomposed := "Å" // A with ring above, one code point
+	decomposed := "Å" // A followed by combining ring above
+	ligature := "ﬁ"    // the fi ligature, one code point
 	cases := []struct {
 		form, in, want string
 	}{
