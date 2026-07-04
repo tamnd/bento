@@ -168,6 +168,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayIndexOfIncludes(recvNode, "Includes", argNodes, true)
 	case "join":
 		return r.arrayJoin(recvNode, argNodes)
+	case "sort":
+		return r.arraySort(recvNode, argNodes)
 	case "pop":
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "array pop takes no arguments"}
@@ -419,6 +421,47 @@ func (r *Renderer) arrayJoin(recvNode frontend.Node, argNodes []frontend.Node) (
 		sep = &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: `","`}}}
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Join")}, Args: []ast.Expr{sep, str}}, nil
+}
+
+// arraySort lowers a sort call to the value.Array Sort method over a lowered
+// comparator. Only the comparator form is covered, and only when the comparator
+// is a single inline two-parameter arrow, the shape a sort almost always takes:
+// sort in place ordering by a compare function. sort() with no comparator is the
+// default lexicographic order, which coerces every element to a string and
+// compares by UTF-16 code unit ([1, 10, 2] sorts as "1", "10", "2"), a different
+// element-to-string path that is its own later slice, so a zero-argument call
+// hands back. A comparator that is not an inline arrow, or an arrow whose
+// parameter count is not two, also hands back: the value method's comparator is
+// func(T, T) float64, so a callback that reads a different arity would not fit
+// its signature. The two-parameter count is checked inline here rather than
+// through a shared helper so this slice stays independent of the predicate
+// family.
+func (r *Renderer) arraySort(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "array sort without a comparator needs the default string-order sort, a later slice"}
+	}
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "array sort with a comparator that is not an inline arrow function is a later slice"}
+	}
+	arrow := argNodes[0]
+	params := 0
+	for _, k := range r.prog.Children(arrow) {
+		if k.Kind() == frontend.NodeParameter {
+			params++
+		}
+	}
+	if params != 2 {
+		return nil, &NotYetLowerable{Reason: "array sort comparator that does not take exactly two parameters is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	cmp, err := r.lowerExpr(arrow)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Sort")}, Args: []ast.Expr{cmp}}, nil
 }
 
 // stringifyClosure builds the func(T) value.BStr the join method takes, spelling
