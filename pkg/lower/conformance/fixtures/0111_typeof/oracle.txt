@@ -1,0 +1,14 @@
+== stdout:
+number
+string
+boolean
+bigint
+function
+number
+string
+boolean
+object
+object
+object
+== exit:
+0

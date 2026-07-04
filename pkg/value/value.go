@@ -98,6 +98,35 @@ func (v Value) IsUndefined() bool { return v.kind == KindUndefined }
 func (v Value) IsNull() bool      { return v.kind == KindNull }
 func (v Value) IsNullish() bool   { return v.kind == KindUndefined || v.kind == KindNull }
 
+// TypeOf returns the JavaScript typeof string for the boxed value, the lowering
+// of typeof x when the operand is dynamic and its kind is only known at runtime.
+// The mapping is the language's, not Go's: null reports "object" (the historical
+// wart), an array is an "object" like any other, and only a callable is
+// "function". A static operand never reaches here; the lowerer folds typeof to a
+// string constant when the checker already knows the kind, and emits this call
+// only when the operand is any or unknown.
+func (v Value) TypeOf() BStr {
+	switch v.kind {
+	case KindUndefined:
+		return FromGoString("undefined")
+	case KindBool:
+		return FromGoString("boolean")
+	case KindNumber:
+		return FromGoString("number")
+	case KindBigInt:
+		return FromGoString("bigint")
+	case KindString:
+		return FromGoString("string")
+	case KindSymbol:
+		return FromGoString("symbol")
+	case KindFunc:
+		return FromGoString("function")
+	default:
+		// null, object, and array all report "object".
+		return FromGoString("object")
+	}
+}
+
 // AsNumber returns the double a number box holds, decoding the raw bits. It is
 // only valid on a KindNumber value; the caller checks the kind first, or reaches
 // for ToNumber when the kind is not known.

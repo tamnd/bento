@@ -148,6 +148,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeNewExpression:
 		return r.newExpr(n)
 
+	case frontend.NodeUnknown:
+		// typeof and a handful of other prefix operators the shim does not give a
+		// distinct kind surface as the catch-all node, told apart by the keyword their
+		// source text leads with. Only typeof lowers today; the rest hand back.
+		if r.isTypeofExpr(n) {
+			return r.typeofExpr(n)
+		}
+		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
+
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
 	}
