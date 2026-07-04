@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"math/bits"
 	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/value"
@@ -336,8 +337,14 @@ func (r *Renderer) newTypedArrayLen(init frontend.Node) (int, bool) {
 
 // intLiteralValue reads a numeric literal that is an exact integer in the int32
 // range and returns its value, the shape a counter start, a counter bound, and a
-// constructor length are each written with. A parenthesized literal reads through.
+// constructor length are each written with. A parenthesized literal reads through,
+// and a const local bound to such a literal resolves to its value, so an idiomatic
+// const N = 4096 used as a length or a bound is recognized as the constant it is.
 func (r *Renderer) intLiteralValue(n frontend.Node) (int, bool) {
+	if name, ok := r.identName(n); ok {
+		v, ok := r.constInt[name]
+		return v, ok
+	}
 	if !r.isInt32Literal(n) {
 		return 0, false
 	}
@@ -347,6 +354,87 @@ func (r *Renderer) intLiteralValue(n frontend.Node) (int, bool) {
 			return 0, false
 		}
 		return r.intLiteralValue(kids[0])
+	}
+	v, ok := parseIntegerLiteral(r.prog.Text(n))
+	if !ok {
+		return 0, false
+	}
+	return int(v), true
+}
+
+// constIntsOf returns, for each const local in the body bound to an integer literal
+// in the int32 range, the value it holds. The range analysis resolves such a name to
+// its value where it expects an integer literal, so an idiomatic const N = 4096 used
+// as a typed-array length or a loop bound is the constant 4096. A name declared more
+// than once in the body is dropped, since a shadowing binding cannot be told from the
+// first by name alone; a name the body ever assigns is dropped too, which a real const
+// never is but a same-named let could be. The initializer is read as a plain literal
+// here, not through the const resolution, so the map does not depend on the order the
+// consts are visited.
+func (r *Renderer) constIntsOf(body []frontend.Node) map[string]int {
+	out := map[string]int{}
+	declCount := map[string]int{}
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeVariableStatement && r.isConstStatement(n) {
+			var decls []frontend.Node
+			collectVarDecls(r.prog, n, &decls)
+			for _, d := range decls {
+				dkids := r.prog.Children(d)
+				if len(dkids) < 2 || dkids[0].Kind() != frontend.NodeIdentifier {
+					continue
+				}
+				name, ok := localName(r.prog.Text(dkids[0]))
+				if !ok {
+					continue
+				}
+				declCount[name]++
+				if v, ok := r.constIntLiteral(dkids[len(dkids)-1]); ok {
+					out[name] = v
+				}
+			}
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c)
+		}
+	}
+	for _, n := range body {
+		walk(n)
+	}
+	for name := range out {
+		if declCount[name] != 1 || r.mutationCount(body, name) != 0 {
+			delete(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// isConstStatement reports whether a variable statement is a const declaration, so
+// its bindings cannot be reassigned. An export const is a const too. The kind is read
+// from the statement text, since the const keyword is a leading token bento does not
+// name as its own node.
+func (r *Renderer) isConstStatement(n frontend.Node) bool {
+	text := strings.TrimSpace(r.prog.Text(n))
+	text = strings.TrimPrefix(text, "export ")
+	return strings.HasPrefix(text, "const ")
+}
+
+// constIntLiteral reads a plain integer literal initializer for a const, without the
+// const resolution intLiteralValue does, so building the const map does not depend on
+// which const is visited first. A parenthesized literal reads through.
+func (r *Renderer) constIntLiteral(n frontend.Node) (int, bool) {
+	if n.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(n)
+		if len(kids) != 1 {
+			return 0, false
+		}
+		return r.constIntLiteral(kids[0])
+	}
+	if !r.isInt32Literal(n) {
+		return 0, false
 	}
 	v, ok := parseIntegerLiteral(r.prog.Text(n))
 	if !ok {

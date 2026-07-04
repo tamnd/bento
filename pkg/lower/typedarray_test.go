@@ -222,6 +222,77 @@ console.log(t[0]);
 	}
 }
 
+// TestTypedArrayConstLengthNativeSlice pins that a const bound to an integer literal
+// works as a typed-array length and a loop bound the same way a written literal does.
+// An idiomatic const N sizes the array and bounds the counter, so the counter
+// specializes to a Go int32 and the array's accesses take the native slice path: the
+// length and the counter range are both resolved from N, the index is proven inside
+// the array, and the read-modify-write body lowers to a plain slice assignment with no
+// checked method call.
+func TestTypedArrayConstLengthNativeSlice(t *testing.T) {
+	const src = `const N = 6;
+const b = new Int32Array(N);
+b[0] = 1;
+for (let i = 1; i < N; i++) {
+  b[i] = b[i - 1] + i;
+}
+console.log(b[5]);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"var i int32 = 1",
+		"b.Data()[i] = b.Data()[i-1] + i",
+		"float64(b.Data()[5])",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("const-length native slice missing %q:\n%s", want, source)
+		}
+	}
+	for _, bad := range []string{"b.SetAt", "b.At(", "b.AtI", "b.SetAtI"} {
+		if strings.Contains(source, bad) {
+			t.Errorf("a const-length array under a const bound should not use %q:\n%s", bad, source)
+		}
+	}
+}
+
+// TestConstIntBoundSpecializesCounter pins that a for-counter bounded by a const
+// integer specializes to a Go int32, the step that lets the const-length array's body
+// stay native. A let counter reassigned a fractional value never specializes, and a
+// const bound does not change that, so the reused-name safeguard the analysis keeps is
+// unaffected by resolving the bound.
+func TestConstIntBoundSpecializesCounter(t *testing.T) {
+	const src = `const LIMIT = 100;
+let acc = 0;
+for (let i = 0; i < LIMIT; i++) {
+  acc = acc ^ i;
+}
+console.log(acc);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "var i int32 = 0") {
+		t.Errorf("a counter bounded by a const int should specialize to int32:\n%s", source)
+	}
+}
+
+// TestConstIntKeepsCheckedWhenReassigned pins that a name that looks like a const but
+// is a reassigned let does not resolve to its initializer. A let N written after its
+// declaration is not a constant, so the array it sizes is not proven fixed-length and
+// its accesses keep the checked path.
+func TestConstIntKeepsCheckedWhenReassigned(t *testing.T) {
+	const src = `let n = 8;
+n = n + 1;
+const b = new Int32Array(n);
+for (let i = 0; i < 4; i++) {
+  b[i] = i;
+}
+console.log(b[0]);
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, "b.Data()[i]") {
+		t.Errorf("an array sized by a reassigned let must not take the native slice store:\n%s", source)
+	}
+}
+
 // TestTypedArrayIntIndexKeepsFloatForm pins that an index the checker does not prove
 // integer keeps the float At. A loop counter written a fractional value never
 // specializes, so its index stays a Number and the read truncates it through At.

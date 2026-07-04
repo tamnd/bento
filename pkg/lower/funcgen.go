@@ -180,6 +180,13 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 	// the duration of this function, so a counter declared in a nested loop is seen
 	// and the nested block inherits the same set. It is saved and restored like
 	// retType so one function's specialized locals do not leak into another.
+	// The const-integer map is set first, since the int32 specialization and the
+	// counter and fixed-array proofs all read it to resolve a const N used as a bound
+	// or a length to its literal value.
+	prevCN := r.constInt
+	r.constInt = r.constIntsOf(r.prog.Children(block))
+	defer func() { r.constInt = prevCN }()
+
 	prev := r.int32Locals
 	r.int32Locals = r.int32LocalsOf(r.prog.Children(block))
 	defer func() { r.int32Locals = prev }()
