@@ -28,13 +28,30 @@ func (r *Renderer) lowerBlock(block frontend.Node) (*ast.BlockStmt, error) {
 func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 	out := make([]ast.Stmt, 0, len(nodes))
 	for _, n := range nodes {
-		s, err := r.lowerStatement(n)
+		stmts, err := r.lowerStatementMulti(n)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, s)
+		out = append(out, stmts...)
 	}
 	return out, nil
+}
+
+// lowerStatementMulti lowers one statement, letting it expand into more than one Go
+// statement. A statement-position ternary flattens here to an if plus the arms that
+// return or assign each branch; every other statement lowers to the single Go
+// statement lowerStatement builds and comes back as a one-element slice.
+func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
+	if stmts, ok, err := r.flattenConditionalStatement(n); err != nil {
+		return nil, err
+	} else if ok {
+		return stmts, nil
+	}
+	s, err := r.lowerStatement(n)
+	if err != nil {
+		return nil, err
+	}
+	return []ast.Stmt{s}, nil
 }
 
 // lowerStatement lowers one statement. The covered set is the straight-line and
@@ -772,11 +789,11 @@ func (r *Renderer) loopBody(n frontend.Node) (*ast.BlockStmt, error) {
 	if n.Kind() == frontend.NodeBlock {
 		return r.lowerBlock(n)
 	}
-	stmt, err := r.lowerStatement(n)
+	stmts, err := r.lowerStatementMulti(n)
 	if err != nil {
 		return nil, err
 	}
-	return &ast.BlockStmt{List: []ast.Stmt{stmt}}, nil
+	return &ast.BlockStmt{List: stmts}, nil
 }
 
 // lowerIf lowers an if, with an optional else that is itself a block or a
@@ -830,11 +847,11 @@ func (r *Renderer) lowerBodyBlock(n frontend.Node) (*ast.BlockStmt, error) {
 	if n.Kind() == frontend.NodeBlock {
 		return r.lowerBlock(n)
 	}
-	s, err := r.lowerStatement(n)
+	stmts, err := r.lowerStatementMulti(n)
 	if err != nil {
 		return nil, err
 	}
-	return &ast.BlockStmt{List: []ast.Stmt{s}}, nil
+	return &ast.BlockStmt{List: stmts}, nil
 }
 
 // lowerWhile lowers a while to a Go for with only a condition, Go's spelling of

@@ -1,8 +1,6 @@
 func Label(n float64) value.BStr {
-	return func() value.BStr {
-		if n > 0 {
-			return value.FromGoString("positive")
-		}
-		return value.FromGoString("nonpositive")
-	}()
+	if n > 0 {
+		return value.FromGoString("positive")
+	}
+	return value.FromGoString("nonpositive")
 }
