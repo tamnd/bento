@@ -116,8 +116,8 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 // written for it.
 func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
-	if len(kids) != 3 || kids[2].Kind() != frontend.NodeBlock {
-		return nil, &NotYetLowerable{Reason: "only for...of with a declaration and a block body is lowered yet"}
+	if len(kids) != 3 {
+		return nil, &NotYetLowerable{Reason: "only for...of with a declaration and a body is lowered yet"}
 	}
 	var decls []frontend.Node
 	collectVarDecls(r.prog, kids[0], &decls)
@@ -139,7 +139,7 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, err := r.lowerBlock(kids[2])
+	body, err := r.loopBody(kids[2])
 	if err != nil {
 		return nil, err
 	}
@@ -1094,14 +1094,14 @@ func (r *Renderer) lowerBodyBlock(n frontend.Node) (*ast.BlockStmt, error) {
 // the same loop. The condition must be boolean, as for an if.
 func (r *Renderer) lowerWhile(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
-	if len(kids) != 2 || kids[1].Kind() != frontend.NodeBlock {
-		return nil, &NotYetLowerable{Reason: "while statement did not expose a condition and block body"}
+	if len(kids) != 2 {
+		return nil, &NotYetLowerable{Reason: "while statement did not expose a condition and body"}
 	}
 	cond, err := r.lowerCondition(kids[0])
 	if err != nil {
 		return nil, err
 	}
-	body, err := r.lowerBlock(kids[1])
+	body, err := r.loopBody(kids[1])
 	if err != nil {
 		return nil, err
 	}
