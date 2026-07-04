@@ -123,6 +123,75 @@ func (a *Array[T]) Filter(f func(T) bool) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// Some reports whether at least one element satisfies the predicate, the
+// lowering of Array.prototype.some. It short-circuits on the first element the
+// callback accepts, matching JavaScript, and an empty array is false because no
+// element passes. The callback here takes only the element, the common shape;
+// the index and array arguments JavaScript also passes are a later slice.
+func (a *Array[T]) Some(f func(T) bool) bool {
+	for _, x := range a.elems {
+		if f(x) {
+			return true
+		}
+	}
+	return false
+}
+
+// Every reports whether all elements satisfy the predicate, the lowering of
+// Array.prototype.every. It short-circuits on the first element the callback
+// rejects, matching JavaScript, and an empty array is true because no element
+// fails, the vacuous case JavaScript also returns true for. The callback takes
+// only the element; the index and array arguments are a later slice.
+func (a *Array[T]) Every(f func(T) bool) bool {
+	for _, x := range a.elems {
+		if !f(x) {
+			return false
+		}
+	}
+	return true
+}
+
+// ForEach runs the callback for each element in order for its side effect, the
+// lowering of Array.prototype.forEach. It returns nothing, matching the method's
+// undefined result, so a call stands in the statement position. The callback
+// takes only the element; the index and array arguments are a later slice, and
+// forEach cannot be stopped early, matching JavaScript.
+func (a *Array[T]) ForEach(f func(T)) {
+	for _, x := range a.elems {
+		f(x)
+	}
+}
+
+// Find returns the first element the callback accepts, the lowering of
+// Array.prototype.find. Its declared type is T | undefined, so it returns an
+// Opt[T]: a present optional holding that element, or the undefined optional
+// when no element passes, where JavaScript find returns undefined. It
+// short-circuits on the first match, matching JavaScript. The callback takes
+// only the element; the index and array arguments are a later slice.
+func (a *Array[T]) Find(f func(T) bool) Opt[T] {
+	for _, x := range a.elems {
+		if f(x) {
+			return Some(x)
+		}
+	}
+	return None[T]()
+}
+
+// FindIndex returns the index of the first element the callback accepts, or -1
+// when none does, the lowering of Array.prototype.findIndex. The result is a
+// Number, so it is a float64, and -1 is the not-found sentinel JavaScript uses,
+// so no optional is needed the way find's element result needs one. It
+// short-circuits on the first match. The callback takes only the element; the
+// index and array arguments are a later slice.
+func (a *Array[T]) FindIndex(f func(T) bool) float64 {
+	for i, x := range a.elems {
+		if f(x) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
 // Slice returns a shallow copy of a portion of the array into a new array, the
 // lowering of Array.prototype.slice. It takes zero, one, or two Number bounds,
 // matching the source call, since JavaScript's slice has both arguments
