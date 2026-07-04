@@ -126,6 +126,16 @@ func NewURIError(message BStr) *Error {
 	return &Error{name: FromGoString("URIError"), message: message}
 }
 
+// NewInvalidCharacterError constructs an InvalidCharacterError, the DOMException
+// the base64 globals raise: a btoa over a code unit above the Latin1 range, or an
+// atob over base64 that is the wrong length or holds a character outside the
+// alphabet. It is a DOMException rather than an ECMAScript error, but the runtime
+// models every thrown error as a name and a message, so a catch reads err.name as
+// "InvalidCharacterError" the way it would in Node.
+func NewInvalidCharacterError() *Error {
+	return &Error{name: FromGoString("InvalidCharacterError"), message: FromGoString("Invalid character")}
+}
+
 // Caught converts a recovered panic payload into the *Error a catch binds. A
 // thrown *Error binds unchanged, so identity is preserved; a boundary Thrown (a
 // go: failure, a range check) binds as an Error carrying its name and message, so a
