@@ -383,13 +383,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(bridgePkg)
 			return sel("bridge", "Opaque"), nil
 		}
-		if r.isBytesType(t) {
-			// A Uint8Array (section 6.3) is the value model's byte buffer, spelled as a
-			// pointer the same way a typed Array is, and the type a Go []byte projects to
-			// across the boundary (section 7.3). It is not a struct shape, so it routes
-			// here before renderObject would intern its interface as fields.
-			r.requireImport(valuePkg)
-			return star(sel("value", "Uint8Array")), nil
+		if name, ok := r.typedArrayName(t); ok {
+			// A typed array (section 6.3) is the value model's fixed-width numeric buffer,
+			// spelled as a pointer the same way a typed Array is. Uint8Array carries its own
+			// []byte representation for the go: boundary (section 7.3); the rest of the
+			// numeric family share the generic value.TypedArray[T]. It is not a struct shape,
+			// so it routes here before renderObject would intern its interface as fields.
+			return r.renderTypedArray(name)
 		}
 		if r.isMapType(t) {
 			// A Map<K, V> (section 6.5) is the value model's keyed collection, spelled as a
@@ -548,24 +548,105 @@ func (r *Renderer) isGoOpaqueType(t frontend.Type) bool {
 	return false
 }
 
-// isBytesType reports whether an object type is a Uint8Array, the JavaScript byte
-// buffer bento maps to value.Uint8Array (section 6.3). The standard library types
-// the typed-array family with a BYTES_PER_ELEMENT constant no plain object or the
-// generic Array carries, so that property is the fingerprint here, read by name
-// the same way isGoOpaqueType reads its brand. The family shares this property, so
-// the fingerprint alone does not tell Uint8Array from an Int8Array; bento only
-// lowers Uint8Array, and construction is gated on the Uint8Array name at the new
-// expression, so no other typed array reaches a position that would consult this,
-// which keeps the ambiguity unreachable rather than merely unlikely. A caller
-// must have already ruled the type out as an array (its ElementType is not an
-// array element), so this runs only for the non-array object shapes.
-func (r *Renderer) isBytesType(t frontend.Type) bool {
+// typedArrayName reports whether an object type is a member of the typed-array
+// family and returns its name (Uint8Array, Int32Array, Float64Array, and the
+// rest). The standard library types the family with a BYTES_PER_ELEMENT constant
+// no plain object or the generic Array carries, so that property is the
+// fingerprint, and the type's own symbol names which member it is, so Int8Array is
+// told from Float64Array by name rather than left ambiguous. A caller must have
+// already ruled the type out as an array (its ElementType is not an array
+// element), so this runs only for the non-array object shapes.
+func (r *Renderer) typedArrayName(t frontend.Type) (string, bool) {
+	if t.Flags&frontend.TypeObject == 0 {
+		return "", false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return "", false
+	}
+	hasBytesPerElement := false
 	for _, p := range r.prog.Properties(t) {
 		if p.Name == "BYTES_PER_ELEMENT" {
-			return true
+			hasBytesPerElement = true
+			break
 		}
 	}
-	return false
+	if !hasBytesPerElement {
+		return "", false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	if !ok {
+		return "", false
+	}
+	return sym.Name, true
+}
+
+// renderTypedArray maps a typed-array name to its Go value type: Uint8Array to the
+// *value.Uint8Array byte buffer, and each numeric-family member to a
+// *value.TypedArray[T] over the element's Go type. A bigint-element array
+// (BigInt64Array, BigUint64Array) has no lowering yet and hands back.
+func (r *Renderer) renderTypedArray(name string) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	if name == "Uint8Array" {
+		return star(sel("value", "Uint8Array")), nil
+	}
+	elem, ok := typedArrayElemGo(name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "the " + name + " typed array is a later slice"}
+	}
+	return star(index(sel("value", "TypedArray"), ident(elem))), nil
+}
+
+// typedArrayElemGo maps a numeric typed-array name to the Go element type of its
+// value.TypedArray representation, and ok=false for a name outside that family:
+// Uint8Array has its own []byte representation, and the bigint-element arrays are
+// a later slice. Uint8ClampedArray stores a uint8 like Uint8Array but through the
+// generic buffer with the clamp coercion, so the two are distinct Go types.
+func typedArrayElemGo(name string) (string, bool) {
+	switch name {
+	case "Int8Array":
+		return "int8", true
+	case "Uint8ClampedArray":
+		return "uint8", true
+	case "Int16Array":
+		return "int16", true
+	case "Uint16Array":
+		return "uint16", true
+	case "Int32Array":
+		return "int32", true
+	case "Uint32Array":
+		return "uint32", true
+	case "Float32Array":
+		return "float32", true
+	case "Float64Array":
+		return "float64", true
+	default:
+		return "", false
+	}
+}
+
+// numericTypedArray reports whether a node's type is a typed array bento lowers to
+// an indexable numeric buffer, Uint8Array or a numeric-family member, the receiver
+// test the index read, index write, and .length lowerings share. A bigint-element
+// array is excluded: its elements are not Numbers, so it does not index through the
+// float64 At and SetAt the numeric buffers share.
+func (r *Renderer) numericTypedArray(n frontend.Node) bool {
+	name, ok := r.typedArrayName(r.prog.TypeAt(n))
+	if !ok {
+		return false
+	}
+	if name == "Uint8Array" {
+		return true
+	}
+	_, ok = typedArrayElemGo(name)
+	return ok
+}
+
+// isTypedArray reports whether a node's type is any typed-array family member, the
+// exclusion test the struct-field read and write paths use to keep a typed array,
+// which is also a TypeObject, from being mistaken for a fixed-shape struct.
+func (r *Renderer) isTypedArray(n frontend.Node) bool {
+	_, ok := r.typedArrayName(r.prog.TypeAt(n))
+	return ok
 }
 
 // isMapType reports whether an object type is a JavaScript Map, the keyed
@@ -573,7 +654,7 @@ func (r *Renderer) isBytesType(t frontend.Type) bool {
 // Map with get, set, has, and size together: get and set separate it from a Set
 // (which has add, not get) and an Array, size separates it from a WeakMap (which
 // has no size), so the four names together are the fingerprint, read the same way
-// isBytesType reads BYTES_PER_ELEMENT. A caller must have already ruled the type
+// typedArrayName reads BYTES_PER_ELEMENT. A caller must have already ruled the type
 // out as an array, so this runs only for the non-array object shapes.
 func (r *Renderer) isMapType(t frontend.Type) bool {
 	var hasGet, hasSet, hasHas, hasSize bool
@@ -710,23 +791,6 @@ func (r *Renderer) setElem(t frontend.Type) (elem frontend.Type, ok bool) {
 		return frontend.Type{}, false
 	}
 	return call[0].Params[0].Type, true
-}
-
-// isBytes reports whether the checker types a node as a Uint8Array, the receiver
-// test the byte-buffer lowerings share (a new expression's target, an indexed read
-// or write, a .length). It is the node-level companion to isBytesType: it reads the
-// node's type and applies the same fingerprint, first ruling out an array so a real
-// typed array (which is an object with an element type) is never mistaken for the
-// byte buffer.
-func (r *Renderer) isBytes(n frontend.Node) bool {
-	t := r.prog.TypeAt(n)
-	if t.Flags&frontend.TypeObject == 0 {
-		return false
-	}
-	if _, isArray := r.prog.ElementType(t); isArray {
-		return false
-	}
-	return r.isBytesType(t)
 }
 
 // Decls returns the generated declarations the rendered types referred to, in a

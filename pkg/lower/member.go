@@ -127,7 +127,7 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	if prop == "length" {
 		_, isArray := r.arrayElem(obj)
-		if isArray || r.isBytes(obj) {
+		if isArray || r.numericTypedArray(obj) {
 			recv, err := r.lowerExpr(obj)
 			if err != nil {
 				return nil, err
@@ -361,12 +361,12 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// read o.k spelled with brackets, so it lowers to the same selector through the
 	// same exportedField and internStruct the dotted read uses, and a read and its
 	// value agree on the field. Only a string-literal key takes this path: a dynamic
-	// key has no static field to select and is its own later slice. An array or byte
-	// buffer, which is also a TypeObject, is excluded so its numeric index still
+	// key has no static field to select and is its own later slice. An array or typed
+	// array, which is also a TypeObject, is excluded so its numeric index still
 	// routes to the At read below.
 	if key, ok := r.stringLiteralKey(idxNode); ok {
 		objType := r.prog.TypeAt(obj)
-		if objType.Flags&frontend.TypeObject != 0 && !r.isBytes(obj) {
+		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {
 				field, ok := exportedField(key)
 				if !ok {
@@ -383,12 +383,12 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			}
 		}
 	}
-	// A Uint8Array read a[i] returns a byte as a Number through the buffer's own At,
-	// the same method name a typed Array indexes through, so the two receivers share
-	// this shape and differ only in which value type carries At. A byte buffer is not
+	// A typed-array read a[i] returns its element as a Number through the buffer's own
+	// At, the same method name a typed Array indexes through, so the receivers share
+	// this shape and differ only in which value type carries At. A typed array is not
 	// an array in the checker's vocabulary (it has no element type), so it is tested
 	// here explicitly rather than falling through arrayElem.
-	if !r.isBytes(obj) {
+	if !r.numericTypedArray(obj) {
 		if _, ok := r.arrayElem(obj); !ok {
 			return nil, &NotYetLowerable{Reason: "element access on a non-array receiver is a later slice"}
 		}

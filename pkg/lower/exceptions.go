@@ -50,7 +50,10 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 		}
 	}
 	if r.prog.Text(kids[0]) == "Uint8Array" {
-		return r.newUint8Array(kids[1:])
+		return r.newTypedArray("Uint8Array", kids[1:])
+	}
+	if _, ok := typedArrayElemGo(r.prog.Text(kids[0])); ok {
+		return r.newTypedArray(r.prog.Text(kids[0]), kids[1:])
 	}
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
@@ -85,19 +88,21 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: sel("value", ctor), Args: []ast.Expr{message}}, nil
 }
 
-// newUint8Array lowers a Uint8Array construction, the byte buffer of section 6.3.
-// Two forms are covered. new Uint8Array(n) allocates a zeroed buffer of length n,
-// so a single Number argument lowers to value.NewUint8Array(n). new Uint8Array([a,
-// b, c]) fills a buffer from a list of byte values, so a single array-literal
-// argument lowers to value.Uint8ArrayOf(a, b, c) with each element coerced by the
-// runtime's ToUint8. The two are told apart by the argument's syntax, an array
-// literal versus anything else, so a length that happens to be a variable still
-// takes the length form. The other overloads (a copy from another typed array, a
-// view over an ArrayBuffer with an offset and length) are later slices and hand
-// back, as does a call with no argument or more than one.
-func (r *Renderer) newUint8Array(args []frontend.Node) (ast.Expr, error) {
+// newTypedArray lowers a typed-array construction, the fixed-width numeric buffers
+// of section 6.3, for the whole family by name. Two forms are covered. new
+// Int32Array(n) allocates a zeroed buffer of length n, so a single Number argument
+// lowers to value.NewInt32Array(n). new Int32Array([a, b, c]) fills a buffer from a
+// list of values, so a single array-literal argument lowers to value.Int32ArrayOf(a,
+// b, c) with each element coerced by the element kind's store rule. The two are told
+// apart by the argument's syntax, an array literal versus anything else, so a length
+// that happens to be a variable still takes the length form. The constructor names
+// follow the New<Name> and <Name>Of scheme every family member shares, so the name
+// alone selects them. The other overloads (a copy from another typed array, a view
+// over an ArrayBuffer with an offset and length) are later slices and hand back, as
+// does a call with no argument or more than one.
+func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, error) {
 	if len(args) != 1 {
-		return nil, &NotYetLowerable{Reason: "only new Uint8Array(length) and new Uint8Array([...]) are lowered yet"}
+		return nil, &NotYetLowerable{Reason: "only new " + name + "(length) and new " + name + "([...]) are lowered yet"}
 	}
 	r.requireImport(valuePkg)
 	if args[0].Kind() == frontend.NodeArrayLiteralExpression {
@@ -105,10 +110,10 @@ func (r *Renderer) newUint8Array(args []frontend.Node) (ast.Expr, error) {
 		lowered := make([]ast.Expr, 0, len(elems))
 		for _, e := range elems {
 			if e.Kind() == frontend.NodeSpreadElement {
-				return nil, &NotYetLowerable{Reason: "spread element in a Uint8Array initializer is a later slice"}
+				return nil, &NotYetLowerable{Reason: "spread element in a " + name + " initializer is a later slice"}
 			}
 			if !r.isNumber(e) {
-				return nil, &NotYetLowerable{Reason: "a Uint8Array initialized from a non-number element is a later slice"}
+				return nil, &NotYetLowerable{Reason: "a " + name + " initialized from a non-number element is a later slice"}
 			}
 			v, err := r.lowerExpr(e)
 			if err != nil {
@@ -116,16 +121,16 @@ func (r *Renderer) newUint8Array(args []frontend.Node) (ast.Expr, error) {
 			}
 			lowered = append(lowered, v)
 		}
-		return &ast.CallExpr{Fun: sel("value", "Uint8ArrayOf"), Args: lowered}, nil
+		return &ast.CallExpr{Fun: sel("value", name+"Of"), Args: lowered}, nil
 	}
 	if !r.isNumber(args[0]) {
-		return nil, &NotYetLowerable{Reason: "a Uint8Array length that is not a number is a later slice"}
+		return nil, &NotYetLowerable{Reason: "a " + name + " length that is not a number is a later slice"}
 	}
 	length, err := r.lowerExpr(args[0])
 	if err != nil {
 		return nil, err
 	}
-	return &ast.CallExpr{Fun: sel("value", "NewUint8Array"), Args: []ast.Expr{length}}, nil
+	return &ast.CallExpr{Fun: sel("value", "New"+name), Args: []ast.Expr{length}}, nil
 }
 
 // newMap lowers a Map construction, the keyed collection of section 6.5. Only the
