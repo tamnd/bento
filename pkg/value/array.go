@@ -150,6 +150,19 @@ func (a *Array[T]) Slice(bounds ...float64) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// Reverse reverses the elements in place and returns the same array, the
+// lowering of Array.prototype.reverse. It is a pointer method because the
+// reversal mutates the receiver, and it returns the receiver rather than a copy
+// so that a.reverse() === a holds, matching JavaScript, where reverse returns a
+// reference to the same array it reordered. An empty or single-element array is
+// unchanged.
+func (a *Array[T]) Reverse() *Array[T] {
+	for i, j := 0, len(a.elems)-1; i < j; i, j = i+1, j-1 {
+		a.elems[i], a.elems[j] = a.elems[j], a.elems[i]
+	}
+	return a
+}
+
 // IndexOf returns the index of the first element equal to target, or -1 if none
 // is, the lowering of Array.prototype.indexOf. Equality is supplied by the
 // caller through eq rather than fixed here, because a Go method cannot compare
