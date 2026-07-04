@@ -319,6 +319,25 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no type at this position (void or statement)"}
 	}
 
+	// A union whose members all share a primitive facet (a numeric-literal union
+	// like 1 | 2 | 3 is a number, true | false is a boolean) widens to that
+	// primitive's Go type, the same type the predicates fold it to, so a function
+	// returning such a union gets a float64 or bool result rather than routing to
+	// the tagged-sum machinery a real object union needs. A closed string-literal
+	// union is deliberately left out: it lowers to an integer tag enum below, not a
+	// primitive. A union that folds nothing (a mixed or optional union) keeps its
+	// own flags and falls through to the union handling.
+	if t.Flags&frontend.TypeUnion != 0 {
+		if pf := r.primitiveFlagsOfType(t); pf != t.Flags {
+			switch {
+			case pf&frontend.TypeNumber != 0:
+				return ident("float64"), nil
+			case pf&frontend.TypeBoolean != 0:
+				return ident("bool"), nil
+			}
+		}
+	}
+
 	switch {
 	case t.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
 		// any and unknown have no static shape, so a value of one is self-describing
