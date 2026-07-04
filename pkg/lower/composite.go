@@ -372,6 +372,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayReduceRight(recvNode, argNodes)
 	case "concat":
 		return r.arrayConcat(recvNode, argNodes)
+	case "splice":
+		return r.arraySplice(recvNode, argNodes)
 	case "indexOf":
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
 	case "lastIndexOf":
@@ -863,6 +865,49 @@ func (r *Renderer) arrayConcat(recvNode frontend.Node, argNodes []frontend.Node)
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Concat")}, Args: args}, nil
+}
+
+// arraySplice lowers a splice call to the value.Array method that matches its
+// argument shape. The one-argument splice(start) form, where the delete count is
+// omitted and defaults to the rest of the array, lowers to SpliceToEnd. The form
+// with a delete count lowers to Splice, passing the start, the count, and any
+// items to insert. The start and count are Numbers and lower straight through
+// once they are numbers; the items are typed against the element type by the
+// checker, so they lower straight through as the method's variadic tail.
+func (r *Renderer) arraySplice(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "array splice needs at least a start index"}
+	}
+	if !r.isNumber(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "array splice with a non-number start is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	start, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(argNodes) == 1 {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("SpliceToEnd")}, Args: []ast.Expr{start}}, nil
+	}
+	if !r.isNumber(argNodes[1]) {
+		return nil, &NotYetLowerable{Reason: "array splice with a non-number delete count is a later slice"}
+	}
+	count, err := r.lowerExpr(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	args := []ast.Expr{start, count}
+	for _, item := range argNodes[2:] {
+		lowered, err := r.lowerExpr(item)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Splice")}, Args: args}, nil
 }
 
 // goTypeString renders a lowered Go type expression to its source form so two

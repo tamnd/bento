@@ -456,6 +456,52 @@ func (a *Array[T]) CopyWithin(bounds ...float64) *Array[T] {
 	return a
 }
 
+// Splice removes deleteCount elements starting at start, inserts items in their
+// place, and returns the removed elements as a new array, the lowering of
+// Array.prototype.splice called with a delete count. The start goes through
+// relativeIndex, so a negative one counts from the end, and the count is clamped
+// into [0, len-start] so it never runs past the end nor goes negative. The array
+// is rebuilt into a fresh backing slice of the head, the inserted items, and the
+// tail, so the result and the receiver share no storage with each other or with
+// the items. It is a pointer method that replaces the receiver's backing slice,
+// so the change is visible through every reference, matching JavaScript where
+// splice mutates in place and returns the removed elements.
+func (a *Array[T]) Splice(start, deleteCount float64, items ...T) *Array[T] {
+	n := len(a.elems)
+	s := relativeIndex(start, n)
+	count := int(deleteCount)
+	if deleteCount != deleteCount || count < 0 { // NaN or negative removes nothing
+		count = 0
+	}
+	if count > n-s {
+		count = n - s
+	}
+	removed := make([]T, count)
+	copy(removed, a.elems[s:s+count])
+	rebuilt := make([]T, 0, n-count+len(items))
+	rebuilt = append(rebuilt, a.elems[:s]...)
+	rebuilt = append(rebuilt, items...)
+	rebuilt = append(rebuilt, a.elems[s+count:]...)
+	a.elems = rebuilt
+	return &Array[T]{elems: removed}
+}
+
+// SpliceToEnd removes every element from start to the end and returns them as a
+// new array, the lowering of the one-argument splice(start) form where the delete
+// count is omitted and defaults to the rest of the array. The start goes through
+// relativeIndex the same way Splice reads it. The removed elements are copied out
+// before the receiver is truncated, so the result aliases none of the receiver's
+// storage. It is a pointer method that shrinks the receiver in place, matching
+// JavaScript where splice mutates the array and returns what it removed.
+func (a *Array[T]) SpliceToEnd(start float64) *Array[T] {
+	n := len(a.elems)
+	s := relativeIndex(start, n)
+	removed := make([]T, n-s)
+	copy(removed, a.elems[s:])
+	a.elems = a.elems[:s:s]
+	return &Array[T]{elems: removed}
+}
+
 // Sort orders the array in place by a comparator and returns the array, the
 // lowering of Array.prototype.sort called with a compare function. The
 // comparator returns a Number that is negative when its first argument should
