@@ -550,6 +550,45 @@ func (a *Array[T]) SpliceToEnd(start float64) *Array[T] {
 	return &Array[T]{elems: removed}
 }
 
+// ToSpliced returns a new array with deleteCount elements removed at start and
+// items inserted in their place, the lowering of Array.prototype.toSpliced
+// called with a delete count. It is the copying sibling of splice: where splice
+// mutates the receiver and returns what it removed, toSpliced leaves the
+// receiver alone and returns the array that results from the edit. The start and
+// count are read exactly as Splice reads them, so a negative start counts from
+// the end and the count is clamped into [0, len-start]. The result is built into
+// a fresh backing slice of the head, the inserted items, and the tail, so it
+// aliases neither the receiver nor the items.
+func (a *Array[T]) ToSpliced(start, deleteCount float64, items ...T) *Array[T] {
+	n := len(a.elems)
+	s := relativeIndex(start, n)
+	count := int(deleteCount)
+	if deleteCount != deleteCount || count < 0 { // NaN or negative removes nothing
+		count = 0
+	}
+	if count > n-s {
+		count = n - s
+	}
+	out := make([]T, 0, n-count+len(items))
+	out = append(out, a.elems[:s]...)
+	out = append(out, items...)
+	out = append(out, a.elems[s+count:]...)
+	return &Array[T]{elems: out}
+}
+
+// ToSplicedToEnd returns a new array with every element from start to the end
+// removed, the lowering of the one-argument toSpliced(start) form where the
+// delete count defaults to the rest of the array. It is the copying sibling of
+// SpliceToEnd: the head up to start is copied into a fresh slice and the
+// receiver is left untouched.
+func (a *Array[T]) ToSplicedToEnd(start float64) *Array[T] {
+	n := len(a.elems)
+	s := relativeIndex(start, n)
+	out := make([]T, s)
+	copy(out, a.elems[:s])
+	return &Array[T]{elems: out}
+}
+
 // Sort orders the array in place by a comparator and returns the array, the
 // lowering of Array.prototype.sort called with a compare function. The
 // comparator returns a Number that is negative when its first argument should
