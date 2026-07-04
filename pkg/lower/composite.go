@@ -1,7 +1,9 @@
 package lower
 
 import (
+	"bytes"
 	"go/ast"
+	"go/printer"
 	"go/token"
 	"strings"
 
@@ -368,6 +370,8 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayReduce(recvNode, argNodes)
 	case "reduceRight":
 		return r.arrayReduceRight(recvNode, argNodes)
+	case "concat":
+		return r.arrayConcat(recvNode, argNodes)
 	case "indexOf":
 		return r.arrayIndexOfIncludes(recvNode, "IndexOf", argNodes, false)
 	case "lastIndexOf":
@@ -778,6 +782,77 @@ func (r *Renderer) arrayFoldNoInit(recvNode frontend.Node, arrow frontend.Node, 
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(methodFn)}, Args: []ast.Expr{fn}}, nil
+}
+
+// arrayConcat lowers a concat call to the value.Array Concat method, which takes
+// the argument arrays to splice onto a copy of the receiver. JavaScript's concat
+// spreads an array argument one level and appends a non-array argument as a
+// single element, so each argument is classified by its checker type: an argument
+// that is an array of the receiver's element type passes through as an array to
+// spread, and an argument that is the element type is wrapped in a one-element
+// array so the runtime method sees a uniform list of arrays.
+//
+// The classification leans on the argument's lowered Go type, so an argument
+// that is neither the element type nor an array of it, such as a concat that
+// mixes element types or a spread of a non-array iterable, hands back. A concat
+// with no arguments lowers to a bare Concat call, which returns a shallow copy of
+// the receiver the way a.concat() does in JavaScript.
+func (r *Renderer) arrayConcat(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	recvType := r.prog.TypeAt(recvNode)
+	elem, ok := r.prog.ElementType(recvType)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array concat on a receiver whose element type did not lower"}
+	}
+	elemType, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	elemStr := goTypeString(elemType)
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	// An argument is classified by its lowered Go type rather than checker
+	// identity, so a number literal argument reads as float64 the same way the
+	// element does. An array of that Go type spreads, a bare value of it wraps in
+	// a one-element array, and anything else hands back.
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, an := range argNodes {
+		lowered, err := r.lowerExpr(an)
+		if err != nil {
+			return nil, err
+		}
+		at := r.prog.TypeAt(an)
+		if ae, ok := r.prog.ElementType(at); ok {
+			if aeType, err := r.typeExpr(ae); err == nil && goTypeString(aeType) == elemStr {
+				args = append(args, lowered)
+				continue
+			}
+		}
+		if atType, err := r.typeExpr(at); err == nil && goTypeString(atType) == elemStr {
+			wrapType, err := r.typeExpr(elem)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, &ast.CallExpr{Fun: index(sel("value", "NewArray"), wrapType), Args: []ast.Expr{lowered}})
+			continue
+		}
+		return nil, &NotYetLowerable{Reason: "array concat with an argument that is neither the element type nor an array of it is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Concat")}, Args: args}, nil
+}
+
+// goTypeString renders a lowered Go type expression to its source form so two
+// types can be compared by spelling. It is used where checker type identity is
+// too strict, such as telling a number literal argument apart from the element
+// type it widens to, since both render to the same Go type.
+func goTypeString(e ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, token.NewFileSet(), e); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 
 // arrayIndexOfIncludes lowers an indexOf or includes call to the matching

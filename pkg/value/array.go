@@ -356,6 +356,27 @@ func (a *Array[T]) Slice(bounds ...float64) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// Concat returns a new array formed by appending the elements of each argument
+// array to a copy of the receiver, the lowering of Array.prototype.concat. In
+// JavaScript concat spreads array arguments one level and appends non-array
+// arguments as single elements. The lowering wraps a non-array argument in a
+// one-element array at the call site, so by the time control reaches here every
+// argument is an *Array[T] whose elements splice in. The result is a fresh array
+// that aliases none of its sources, matching concat, which never mutates the
+// arrays it reads.
+func (a *Array[T]) Concat(others ...*Array[T]) *Array[T] {
+	n := len(a.elems)
+	for _, o := range others {
+		n += len(o.elems)
+	}
+	out := make([]T, 0, n)
+	out = append(out, a.elems...)
+	for _, o := range others {
+		out = append(out, o.elems...)
+	}
+	return &Array[T]{elems: out}
+}
+
 // Reverse reverses the elements in place and returns the same array, the
 // lowering of Array.prototype.reverse. It is a pointer method because the
 // reversal mutates the receiver, and it returns the receiver rather than a copy
