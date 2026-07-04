@@ -1,0 +1,177 @@
+package lower
+
+import (
+	"go/ast"
+	"strings"
+
+	"github.com/tamnd/bento/pkg/frontend"
+)
+
+// This file lowers a switch statement to a Go switch. JavaScript and Go switch
+// differ in one fundamental way: a JavaScript case falls through into the next
+// unless it breaks, while a Go case never falls through. This lowering targets the
+// break-terminated subset, where the two line up exactly. A case whose body ends
+// in break (or returns, or throws) becomes a Go case with the break dropped, since
+// Go breaks for it. A run of empty cases that share the following body merges into
+// one Go case with several expressions, the "case 2: case 3: body" share form. A
+// body that runs off its end into the next case is genuine fall-through, a
+// different control shape, and hands the unit back rather than emit a Go switch
+// that would silently break where the source meant to continue.
+
+// lowerSwitch lowers a switch over a number, which includes a numeric enum since an
+// enum value is a float64, to a Go switch on the same value. The discriminant must
+// be a number so the tag and the case constants compare as Go float64s; a string,
+// boolean, or dynamic discriminant compares differently and is a later slice, as is
+// a case label that is not a number.
+func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return nil, &NotYetLowerable{Reason: "switch statement did not expose a discriminant and a case block"}
+	}
+	disc, caseBlock := kids[0], kids[1]
+	if !r.isNumber(disc) {
+		return nil, &NotYetLowerable{Reason: "a switch on a non-number discriminant is a later slice"}
+	}
+	tag, err := r.lowerExpr(disc)
+	if err != nil {
+		return nil, err
+	}
+
+	clauses := r.prog.Children(caseBlock)
+	body := &ast.BlockStmt{}
+	// pending holds the case labels of empty case clauses waiting to merge into the
+	// next clause that carries a body, the JavaScript "case 2: case 3: body" share
+	// form, which Go writes as one case with several expressions.
+	var pending []ast.Expr
+	for i, clause := range clauses {
+		isDefault := r.isDefaultClause(clause)
+		exprNodes, stmtNodes := r.splitCaseClause(clause, isDefault)
+		isLast := i == len(clauses)-1
+
+		var labels []ast.Expr
+		for _, e := range exprNodes {
+			if !r.isNumber(e) {
+				return nil, &NotYetLowerable{Reason: "a switch case label that is not a number is a later slice"}
+			}
+			label, err := r.lowerExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, label)
+		}
+
+		stmtNodes, brokeOut := r.stripTrailingBreak(stmtNodes)
+		terminated := brokeOut || r.bodyTerminates(stmtNodes)
+
+		if isDefault {
+			// A default that runs off its end into a following clause is fall-through,
+			// which includes an empty default in the middle, so a non-terminated default
+			// that is not last hands back. A default cannot carry the labels of empty
+			// cases that precede it, so a fall-through from a case into default does too.
+			if !terminated && !isLast {
+				return nil, &NotYetLowerable{Reason: "a switch default that falls through into the next case is a later slice"}
+			}
+			if len(pending) > 0 {
+				return nil, &NotYetLowerable{Reason: "a switch case that falls through into default is a later slice"}
+			}
+		} else {
+			// An empty case with no body of its own shares the next clause's body, so its
+			// label is held and merged forward. As the last clause it has nothing to fall
+			// into, so it stays an empty Go case that matches and does nothing.
+			if len(stmtNodes) == 0 && !isLast {
+				pending = append(pending, labels...)
+				continue
+			}
+			if len(stmtNodes) > 0 && !terminated && !isLast {
+				return nil, &NotYetLowerable{Reason: "a switch case that falls through into the next is a later slice"}
+			}
+		}
+
+		lowered, err := r.lowerStatements(stmtNodes)
+		if err != nil {
+			return nil, err
+		}
+		clauseOut := &ast.CaseClause{Body: lowered}
+		if !isDefault {
+			clauseOut.List = append(pending, labels...)
+		}
+		pending = nil
+		body.List = append(body.List, clauseOut)
+	}
+	// Empty cases trailing the last body have no clause to merge into, so they become
+	// one empty Go case that matches and does nothing, the JavaScript behavior.
+	if len(pending) > 0 {
+		body.List = append(body.List, &ast.CaseClause{List: pending})
+	}
+	return &ast.SwitchStmt{Tag: tag, Body: body}, nil
+}
+
+// isDefaultClause reports whether a clause of a case block is the default clause,
+// read from its leading keyword. A case clause carries a label expression before
+// its body; the default clause carries only a body, so the two are told apart by
+// the keyword the clause opens with.
+func (r *Renderer) isDefaultClause(clause frontend.Node) bool {
+	return strings.HasPrefix(strings.TrimSpace(r.prog.Text(clause)), "default")
+}
+
+// splitCaseClause separates a clause into its label expressions and its body
+// statements. A case clause opens with a single label expression, its first child,
+// and the rest are the body; a default clause has no label, so every child is a
+// body statement.
+func (r *Renderer) splitCaseClause(clause frontend.Node, isDefault bool) (exprs, stmts []frontend.Node) {
+	kids := r.prog.Children(clause)
+	if isDefault {
+		return nil, kids
+	}
+	if len(kids) == 0 {
+		return nil, nil
+	}
+	return kids[:1], kids[1:]
+}
+
+// stripTrailingBreak drops a case body's trailing break, the JavaScript terminator
+// a Go case does not need, and reports whether it dropped one. Only the top-level
+// break is dropped, which is where the idiomatic case terminator sits; a break
+// nested inside a block stays where it is and hands back through the statement
+// lowering rather than be silently removed.
+func (r *Renderer) stripTrailingBreak(stmts []frontend.Node) ([]frontend.Node, bool) {
+	if len(stmts) == 0 {
+		return stmts, false
+	}
+	if r.isBreakStatement(stmts[len(stmts)-1]) {
+		return stmts[:len(stmts)-1], true
+	}
+	return stmts, false
+}
+
+// bodyTerminates reports whether a case body cannot run off its end, so control
+// cannot fall through into the following clause. A trailing return or throw
+// terminates, and so does a trailing block whose own last statement terminates,
+// which is the "case N: { ...; return x; }" braced form. Anything else can reach
+// the end, so the caller treats it as a fall-through when a clause follows.
+func (r *Renderer) bodyTerminates(stmts []frontend.Node) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	last := stmts[len(stmts)-1]
+	switch last.Kind() {
+	case frontend.NodeReturnStatement, frontend.NodeThrowStatement:
+		return true
+	case frontend.NodeBlock:
+		return r.bodyTerminates(r.prog.Children(last))
+	default:
+		return false
+	}
+}
+
+// isBreakStatement reports whether a statement is a bare break. The frontend does
+// not name a break node, so it surfaces as an unclassified node whose text is the
+// keyword; a labeled break carries a target and does not match, so it stays
+// unlowered rather than be mistaken for the plain switch terminator.
+func (r *Renderer) isBreakStatement(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeUnknown {
+		return false
+	}
+	text := strings.TrimSpace(r.prog.Text(n))
+	return text == "break;" || text == "break"
+}
