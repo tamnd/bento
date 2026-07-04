@@ -147,6 +147,21 @@ func Sign(x float64) float64 {
 	return x
 }
 
+// NumberSameValue reports whether two numbers are the same value under the
+// SameValue algorithm, the number case of Object.is. It differs from the strict
+// equality Go == gives at exactly the two points JavaScript's === also differs:
+// two NaNs are the same value, where == calls them unequal, and +0 and -0 are
+// distinct values, where == calls them equal. The sign-bit compare only decides
+// the zero case, since for any two equal non-zero numbers the sign bits already
+// agree, so a == b with matching sign bits is the same value, and two NaNs are
+// caught first.
+func NumberSameValue(a, b float64) bool {
+	if math.IsNaN(a) && math.IsNaN(b) {
+		return true
+	}
+	return a == b && math.Signbit(a) == math.Signbit(b)
+}
+
 // MinN returns the smallest of its arguments, Math.min, which takes any number of
 // arguments rather than exactly two. The identity is +Infinity, so Math.min() with
 // no arguments is +Infinity, and folding with math.Min carries the JavaScript
