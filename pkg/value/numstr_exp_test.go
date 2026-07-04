@@ -22,8 +22,8 @@ func TestNumberToExponential(t *testing.T) {
 		{1234.5, 0, "1e+3"},
 		{5, 3, "5.000e+0"},
 		{0.0001234, 2, "1.23e-4"},
-		{9.99, 1, "1.0e+1"},   // rounding carries a nine up into a new place
-		{99999, 1, "1.0e+5"},  // and lifts the exponent
+		{9.99, 1, "1.0e+1"},  // rounding carries a nine up into a new place
+		{99999, 1, "1.0e+5"}, // and lifts the exponent
 		{123456, 4, "1.2346e+5"},
 		{2.5, 0, "3e+0"},      // exact tie rounds up
 		{1.005, 2, "1.00e+0"}, // nearest double is below 1.005
