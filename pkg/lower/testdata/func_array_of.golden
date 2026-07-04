@@ -1,0 +1,3 @@
+func Trio() *value.Array[float64] {
+	return value.NewArray[float64](1, 2, 3)
+}

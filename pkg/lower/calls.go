@@ -32,6 +32,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if b, ok := r.namespaceGoCall(kids[0]); ok {
 			return r.goImportCall(b, n, kids[1:])
 		}
+		// A static call on the global Array constructor (Array.of, Array.isArray)
+		// is not a method on a value receiver, so it routes here before methodCall,
+		// which expects a string, array, map, or class receiver. It needs the whole
+		// call node n for Array.of's element type, which methodCall does not receive.
+		if expr, handled, err := r.arrayStaticCall(n, kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
 		return r.methodCall(kids[0], kids[1:])
 	}
 	if kids[0].Kind() != frontend.NodeIdentifier {
