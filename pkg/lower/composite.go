@@ -168,6 +168,16 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		return r.arrayIndexOfIncludes(recvNode, "Includes", argNodes, true)
 	case "join":
 		return r.arrayJoin(recvNode, argNodes)
+	case "some":
+		return r.arrayCallbackMethod(recvNode, "Some", argNodes)
+	case "every":
+		return r.arrayCallbackMethod(recvNode, "Every", argNodes)
+	case "forEach":
+		return r.arrayCallbackMethod(recvNode, "ForEach", argNodes)
+	case "find":
+		return r.arrayCallbackMethod(recvNode, "Find", argNodes)
+	case "findIndex":
+		return r.arrayCallbackMethod(recvNode, "FindIndex", argNodes)
 	case "pop":
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "array pop takes no arguments"}
@@ -303,6 +313,49 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// arrayCallbackMethod lowers a predicate-or-effect array method whose only
+// argument is a single-element callback, some, every, and forEach, to the
+// matching value.Array method over a lowered arrow. some and every take a
+// func(T) bool and short-circuit, forEach takes a func(T) and runs for effect,
+// so each is the receiver method applied to the lowered callback with no result
+// juggling map's type-changing form needs. Only an inline arrow taking exactly
+// the element is covered: a callback passed as a named reference is a later
+// slice, since it needs the reference resolved to a func value first, and a
+// callback that also reads the index or array parameter needs those threaded
+// through, a later slice too, so a two-parameter arrow hands back rather than
+// emit a call the value method's one-parameter func could not take.
+func (r *Renderer) arrayCallbackMethod(recvNode frontend.Node, goMethod string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(argNodes[0]) != 1 {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the index or array parameter is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// arrowParamCount reports how many parameters an arrow declares, the count the
+// higher-order methods check to keep a callback to the single-element shape the
+// value methods take. It counts the parameter children rather than reading the
+// signature, so it needs no checker query.
+func (r *Renderer) arrowParamCount(arrow frontend.Node) int {
+	n := 0
+	for _, k := range r.prog.Children(arrow) {
+		if k.Kind() == frontend.NodeParameter {
+			n++
+		}
+	}
+	return n
 }
 
 // arrayIndexOfIncludes lowers an indexOf or includes call to the matching
