@@ -315,6 +315,9 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.bytesElementAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		if stmt, ok, err := r.arrayElementAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		if stmt, ok, err := r.bigIntInPlaceAssign(n); ok || err != nil {
 			return stmt, err
 		}
@@ -399,6 +402,60 @@ func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 	}
 	return &ast.ExprStmt{X: &ast.CallExpr{
 		Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetAt")},
+		Args: []ast.Expr{idx, val},
+	}}, true, nil
+}
+
+// arrayElementAssign lowers a general array element write a[i] = v to the array's
+// Set, the store half of the At read elementAccess lowers (section 4.0). It reports
+// ok=false when the statement is not an element write into an array, so lowerUpdate
+// falls through to the byte-buffer, class-field, and local-identifier paths that
+// own the other targets; only when the target is an element access whose receiver
+// the checker types an array does this claim the statement. A byte buffer is
+// handled by bytesElementAssign before this and is not an array in the checker's
+// vocabulary, so it never reaches here. The value coerces to the element type the
+// same way a local assignment coerces to its target, so a widening or a boxing the
+// element type needs is applied rather than dropped. Only a plain "=" is covered: a
+// compound write a[i] += v reads and writes the element and is a later slice, so it
+// hands back for the engine rather than dropping the read.
+func (r *Renderer) arrayElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
+	parts := r.prog.Children(bin)
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, false, nil
+	}
+	target := parts[0]
+	if target.Kind() != frontend.NodeElementAccessExpression {
+		return nil, false, nil
+	}
+	idxParts := r.prog.Children(target)
+	if len(idxParts) != 2 {
+		return nil, false, nil
+	}
+	recvNode, idxNode := idxParts[0], idxParts[1]
+	if _, ok := r.arrayElem(recvNode); !ok {
+		return nil, false, nil
+	}
+	if !r.isNumber(idxNode) {
+		return nil, false, &NotYetLowerable{Reason: "an array write with a non-number index is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, false, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, false, err
+	}
+	val, err := r.lowerExpr(parts[2])
+	if err != nil {
+		return nil, false, err
+	}
+	val, err = r.coerceToTarget(val, parts[2], target)
+	if err != nil {
+		return nil, false, err
+	}
+	return &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
 		Args: []ast.Expr{idx, val},
 	}}, true, nil
 }
