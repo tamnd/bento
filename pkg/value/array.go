@@ -422,6 +422,22 @@ func (a *Array[T]) Reverse() *Array[T] {
 	return a
 }
 
+// ToReversed returns a new array with the elements in reverse order, the
+// lowering of Array.prototype.toReversed. It is the copying sibling of reverse:
+// where reverse reorders in place and returns the same array, toReversed leaves
+// the receiver untouched and returns a fresh array, so a.toReversed() !== a and
+// the original order is still readable through the receiver. It writes the
+// elements back to front into a new slice in one pass rather than copying then
+// reversing. An empty or single-element array yields an equal fresh copy.
+func (a *Array[T]) ToReversed() *Array[T] {
+	n := len(a.elems)
+	out := make([]T, n)
+	for i, x := range a.elems {
+		out[n-1-i] = x
+	}
+	return &Array[T]{elems: out}
+}
+
 // Fill overwrites a range of the array with a single value in place and returns
 // the array, the lowering of Array.prototype.fill. It takes the fill value and
 // zero, one, or two Number bounds, matching the source call, since fill's start
