@@ -493,29 +493,58 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 // when the shape does not lower. values and entries mix element types and wait on
 // their own slice; any other Object method is a later slice.
 func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
-	if method != "keys" {
+	switch method {
+	case "keys":
+		return r.objectKeys(argNodes)
+	case "values":
+		return r.objectValues(argNodes)
+	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
+}
+
+// objectShapeArg reads the single fixed-shape argument shared by the Object
+// statics that fold at compile time. The argument must be a plain identifier,
+// whose type carries the shape and which has no side effect to drop since only
+// the type is read, and its type must be a non-array object with known
+// properties whose interned struct lowers. It returns the properties in
+// declaration order, which is the own enumerable key order these statics walk.
+func (r *Renderer) objectShapeArg(method string, argNodes []frontend.Node) ([]frontend.Property, error) {
 	if len(argNodes) != 1 {
-		return nil, &NotYetLowerable{Reason: "Object.keys with other than one argument is a later slice"}
+		return nil, &NotYetLowerable{Reason: "Object." + method + " with other than one argument is a later slice"}
 	}
 	arg := argNodes[0]
 	if arg.Kind() != frontend.NodeIdentifier {
-		return nil, &NotYetLowerable{Reason: "Object.keys of an expression that is not a plain identifier is a later slice"}
+		return nil, &NotYetLowerable{Reason: "Object." + method + " of an expression that is not a plain identifier is a later slice"}
 	}
 	objType := r.prog.TypeAt(arg)
 	if objType.Flags&frontend.TypeObject == 0 {
-		return nil, &NotYetLowerable{Reason: "Object.keys of a non-object is a later slice"}
+		return nil, &NotYetLowerable{Reason: "Object." + method + " of a non-object is a later slice"}
 	}
 	if _, isArray := r.prog.ElementType(objType); isArray {
-		return nil, &NotYetLowerable{Reason: "Object.keys of an array is a later slice"}
+		return nil, &NotYetLowerable{Reason: "Object." + method + " of an array is a later slice"}
 	}
 	if _, err := r.decls.internStruct(r, objType); err != nil {
 		return nil, err
 	}
 	props := r.prog.Properties(objType)
 	if len(props) == 0 {
-		return nil, &NotYetLowerable{Reason: "Object.keys of a shape with no known properties is a later slice"}
+		return nil, &NotYetLowerable{Reason: "Object." + method + " of a shape with no known properties is a later slice"}
+	}
+	return props, nil
+}
+
+// objectKeys lowers Object.keys(o) on a fixed-shape object to its own enumerable
+// property names, in declaration order, which the checker knows in full at
+// compile time, so it lowers to a value.NewArray[value.BStr] of the field-name
+// literals rather than a runtime property walk. An interned shape with an
+// optional property would give a key list the runtime object might not match (a
+// missing optional field is not a key), which objectShapeArg already gates
+// through internStruct.
+func (r *Renderer) objectKeys(argNodes []frontend.Node) (ast.Expr, error) {
+	props, err := r.objectShapeArg("keys", argNodes)
+	if err != nil {
+		return nil, err
 	}
 	r.requireImport(valuePkg)
 	keys := make([]ast.Expr, len(props))
@@ -523,6 +552,52 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		keys[i] = &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p.Name)}}}
 	}
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "BStr")), Args: keys}, nil
+}
+
+// objectValues lowers Object.values(o) on a fixed-shape object to the field
+// reads in declaration order, gathered into one array. The values become the
+// elements of a single array, so they must share one Go element type: a shape
+// whose field types differ would need a mixed-element array, its own slice, so a
+// heterogeneous shape hands back. An optional field might be absent, in which
+// case it is not a value, so a shape with an optional field hands back too. The
+// field types are compared through their rendered Go source so a number-literal
+// field type and a widened number field type read as the same element type.
+func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
+	props, err := r.objectShapeArg("values", argNodes)
+	if err != nil {
+		return nil, err
+	}
+	elemType, err := r.typeExpr(props[0].Type)
+	if err != nil {
+		return nil, err
+	}
+	elemGo := goTypeString(elemType)
+	for _, p := range props {
+		if p.Optional {
+			return nil, &NotYetLowerable{Reason: "Object.values of a shape with an optional field is a later slice"}
+		}
+		t, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, err
+		}
+		if goTypeString(t) != elemGo {
+			return nil, &NotYetLowerable{Reason: "Object.values of a shape whose field types differ is a later slice"}
+		}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	vals := make([]ast.Expr, len(props))
+	for i, p := range props {
+		field, ok := exportedField(p.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Object.values field name is not a Go identifier"}
+		}
+		vals[i] = &ast.SelectorExpr{X: recv, Sel: ident(field)}
+	}
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: vals}, nil
 }
 
 // primitiveValueCall lowers toString and valueOf on a number or boolean value.

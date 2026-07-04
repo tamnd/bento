@@ -27,20 +27,6 @@ console.log(ks.length);
 	}
 }
 
-// TestObjectValuesHandsBack pins that Object.values, which mixes element types,
-// is not lowered by this slice.
-func TestObjectValuesHandsBack(t *testing.T) {
-	src := `
-const o = { a: 1, b: 2 };
-const vs = Object.values(o);
-console.log(vs.length);
-`
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "Object.values") {
-		t.Fatalf("expected an Object.values handback, got: %q", reason)
-	}
-}
-
 // TestObjectKeysDynamicHandsBack pins that Object.keys of an expression that is
 // not a plain identifier hands back, since only the argument's type is read and a
 // non-identifier could carry a side effect this slice would drop.
