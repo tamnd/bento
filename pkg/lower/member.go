@@ -21,6 +21,13 @@ import (
 // slice and hands back.
 func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
+	// An optional property access a?.b carries a ?. token between the receiver and
+	// the name, so the node exposes three children rather than two. The token is a
+	// leaf bento does not name, recognized by its source text; when it is present
+	// the access short-circuits on a nullish receiver and routes to its own lowering.
+	if len(kids) == 3 && r.isQuestionDotToken(kids[1]) {
+		return r.optionalChainAccess(kids[0], kids[2])
+	}
 	if len(kids) != 2 {
 		return nil, &NotYetLowerable{Reason: "property access did not expose an object and a property name"}
 	}
@@ -187,6 +194,107 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
+}
+
+// isQuestionDotToken reports whether a node is the ?. token that marks an
+// optional chain. The token is a leaf the adapter does not give its own kind, so
+// it surfaces as the unnamed fallback kind carrying the source text ?., which is
+// what this checks; a plain member access a.b never exposes it.
+func (r *Renderer) isQuestionDotToken(n frontend.Node) bool {
+	return n.Kind() == frontend.NodeUnknown && r.prog.Text(n) == "?."
+}
+
+// optionalChainAccess lowers one link of an optional property chain, a?.b, where
+// the receiver is a T | undefined optional of a lowered class instance or a
+// fixed-shape object. The whole chain is nullish-poisoned: when the receiver is
+// undefined the result is undefined and the member is never read, so the link
+// lowers to value.OptMap over the receiver optional with the mapping function
+// reading the one field. Longer chains compose because the receiver of an outer
+// link is itself an optional-access node whose lowering is another Opt, so
+// a?.b?.c nests one OptMap inside the next.
+//
+// The tractable slice is a receiver that is exactly T | undefined over a class or
+// object shape whose member is a plain, non-optional field. A member that is
+// itself optional (which would double-wrap under OptMap), a getter or method, an
+// optional call a?.(), an optional element read a?.[i], and a receiver outside the
+// class or object shapes all hand back to their own later slices.
+func (r *Renderer) optionalChainAccess(recvNode, nameNode frontend.Node) (ast.Expr, error) {
+	prop := r.prog.Text(nameNode)
+	inner, ok := r.optionalInner(r.prog.UnionMembers(r.prog.TypeAt(recvNode)))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "optional chain ?." + prop + " on a receiver that is not a T | undefined optional is a later slice"}
+	}
+	fieldGo, memberType, ok, err := r.optionalMember(inner, prop)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "optional chain member ?." + prop + " on this receiver type is a later slice"}
+	}
+	// A member that is itself optional would make the field read an Opt, so mapping
+	// it under OptMap would nest one optional inside another. Flattening that is a
+	// later slice, so it hands back and only the plain-field link lowers here.
+	if _, memberOptional := r.optionalInner(r.prog.UnionMembers(memberType)); memberOptional {
+		return nil, &NotYetLowerable{Reason: "optional chain onto an optional member ?." + prop + " needs the flattening OptFlatMap, a later slice"}
+	}
+	recvExpr, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	paramType, err := r.typeExpr(inner)
+	if err != nil {
+		return nil, err
+	}
+	retType, err := r.typeExpr(memberType)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	// value.OptMap(recv, func(v A) B { return v.Field }): the mapping function reads
+	// the one field off the unwrapped receiver, and OptMap runs it only when the
+	// receiver is present, propagating undefined otherwise.
+	mapFn := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("v")}, Type: paramType}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{&ast.SelectorExpr{X: ident("v"), Sel: ident(fieldGo)}}}}},
+	}
+	return &ast.CallExpr{Fun: sel("value", "OptMap"), Args: []ast.Expr{recvExpr, mapFn}}, nil
+}
+
+// optionalMember resolves the field read by an optional-chain link on the
+// receiver's non-undefined type: it returns the Go field name and the member's
+// declared type for a plain field of a lowered class instance or fixed-shape
+// object, and reports not-ok for a getter, a method, an array or other receiver
+// shape, or a name that is not a Go field, so those hand back rather than read a
+// field that was never declared.
+func (r *Renderer) optionalMember(inner frontend.Type, prop string) (string, frontend.Type, bool, error) {
+	if info, ok := r.classOfType(inner); ok {
+		f, isField := info.lookupField(prop)
+		if !isField {
+			return "", frontend.Type{}, false, nil
+		}
+		return f.goName, r.prog.TypeAt(f.ident), true, nil
+	}
+	if inner.Flags&frontend.TypeObject != 0 {
+		if _, isArray := r.prog.ElementType(inner); isArray {
+			return "", frontend.Type{}, false, nil
+		}
+		field, ok := exportedField(prop)
+		if !ok {
+			return "", frontend.Type{}, false, nil
+		}
+		for _, p := range r.prog.Properties(inner) {
+			if p.Name == prop {
+				if _, err := r.decls.internStruct(r, inner); err != nil {
+					return "", frontend.Type{}, false, err
+				}
+				return field, p.Type, true, nil
+			}
+		}
+	}
+	return "", frontend.Type{}, false, nil
 }
 
 // mathConstant maps a Math namespace property name to the value-package constant
