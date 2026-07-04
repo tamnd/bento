@@ -220,6 +220,29 @@ func (s BStr) CharAt(i float64) BStr {
 	return FromUTF16([]uint16{s.units()[int(i)]})
 }
 
+// AtOpt returns the one-code-unit string at the relative index i, matching
+// String.prototype.at. Its declared type is string | undefined, so it returns an
+// Opt[BStr]: a present optional holding the single-code-unit string when the
+// resolved index falls in range, and the undefined optional otherwise. The index
+// is coerced to an integer the same way CharAt coerces it, then a negative index
+// counts back from the end. An index still outside [0, length) reads as the
+// undefined optional rather than the empty string CharAt yields, matching at's
+// out-of-range result. The single unit may be a lone surrogate, so it is rebuilt
+// through FromUTF16, which preserves a surrogate FromGoString could not.
+func (s BStr) AtOpt(i float64) Opt[BStr] {
+	if math.IsNaN(i) {
+		i = 0
+	}
+	i = math.Trunc(i)
+	if i < 0 {
+		i += float64(s.lengthU16)
+	}
+	if i < 0 || i >= float64(s.lengthU16) {
+		return None[BStr]()
+	}
+	return Some(FromUTF16([]uint16{s.units()[int(i)]}))
+}
+
 // IndexOf returns the code-unit index of the first occurrence of search at or
 // after an optional start position, or -1 if it does not occur, matching
 // String.prototype.indexOf. The position is optional, so the method is variadic:
