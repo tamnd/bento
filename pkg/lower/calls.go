@@ -495,7 +495,9 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "keys":
-		return r.objectKeys(argNodes)
+		return r.objectOwnNameArray("keys", argNodes)
+	case "getOwnPropertyNames":
+		return r.objectOwnNameArray("getOwnPropertyNames", argNodes)
 	case "values":
 		return r.objectValues(argNodes)
 	case "is":
@@ -586,15 +588,18 @@ func (r *Renderer) objectShapeArg(method string, argNodes []frontend.Node) ([]fr
 	return props, nil
 }
 
-// objectKeys lowers Object.keys(o) on a fixed-shape object to its own enumerable
-// property names, in declaration order, which the checker knows in full at
-// compile time, so it lowers to a value.NewArray[value.BStr] of the field-name
-// literals rather than a runtime property walk. An interned shape with an
-// optional property would give a key list the runtime object might not match (a
-// missing optional field is not a key), which objectShapeArg already gates
-// through internStruct.
-func (r *Renderer) objectKeys(argNodes []frontend.Node) (ast.Expr, error) {
-	props, err := r.objectShapeArg("keys", argNodes)
+// objectOwnNameArray lowers Object.keys(o) and Object.getOwnPropertyNames(o) on
+// a fixed-shape object to its own property names, in declaration order, which
+// the checker knows in full at compile time, so it lowers to a
+// value.NewArray[value.BStr] of the field-name literals rather than a runtime
+// property walk. The two statics differ only for the reference-object features
+// keys omits, non-enumerable properties and symbol keys, and a struct shape has
+// neither, so on a fixed shape both return the same name list. An interned shape
+// with an optional property would give a key list the runtime object might not
+// match (a missing optional field is not a key), which objectShapeArg already
+// gates through internStruct.
+func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	props, err := r.objectShapeArg(method, argNodes)
 	if err != nil {
 		return nil, err
 	}
