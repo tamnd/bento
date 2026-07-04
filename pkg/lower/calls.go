@@ -96,6 +96,16 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "parseInt" && r.isAmbientGlobal(kids[0]) {
 		return r.parseIntCall(kids[1:])
 	}
+	// encodeURIComponent and decodeURIComponent are bare ambient globals that take a
+	// single string, so they route like the coercions before the user path.
+	if callee := r.prog.Text(kids[0]); r.isAmbientGlobal(kids[0]) {
+		switch callee {
+		case "encodeURIComponent":
+			return r.uriCodecCall("EncodeURIComponent", callee, kids[1:])
+		case "decodeURIComponent":
+			return r.uriCodecCall("DecodeURIComponent", callee, kids[1:])
+		}
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "call to an unresolved callee is a later slice"}
@@ -1262,6 +1272,27 @@ func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{lowered}}, nil
+}
+
+// uriCodecCall lowers a single-argument URI codec global, encodeURIComponent or
+// decodeURIComponent, to its value runtime function. Both take exactly one string;
+// a different arity, or a non-string argument (which the global would coerce to a
+// string first, running that conversion), hands back. goName is the runtime
+// function to call and jsName names the global for the handback reason.
+func (r *Renderer) uriCodecCall(goName, jsName string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: jsName + " with this argument count is a later slice"}
+	}
+	arg := argNodes[0]
+	if !r.isString(arg) {
+		return nil, &NotYetLowerable{Reason: jsName + " on a non-string argument is a later slice"}
+	}
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{lowered}}, nil
 }
 
 // parseIntCall lowers parseInt(s) and parseInt(s, radix) to value.ParseInt. The
