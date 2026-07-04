@@ -1,0 +1,9 @@
+== stdout:
+Ada
+nobody
+London
+unknown
+9
+-1
+== exit:
+0
