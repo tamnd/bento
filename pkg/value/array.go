@@ -67,6 +67,30 @@ func (a *Array[T]) At(i float64) T {
 	return zero
 }
 
+// AtOpt reads the element Array.prototype.at selects, the relative-index read
+// that counts from the end when the index is negative. It is the sibling of At:
+// At lowers the index expression a[i], whose default index signature types the
+// read as T, so At returns a bare T with the zero value out of range; at is a
+// method whose declared type is T | undefined, so AtOpt returns an Opt[T], a
+// present optional in range and the undefined optional outside it. JavaScript
+// truncates the index toward zero and adds the length once to a negative index,
+// so at(-1) is the last element; an index still out of range after that, or a
+// NaN that truncates to zero on an empty array, yields undefined. The receiver
+// is unchanged, since at only reads.
+func (a *Array[T]) AtOpt(i float64) Opt[T] {
+	idx := int(i) // JavaScript ToInteger truncates toward zero.
+	if i != i {   // NaN truncates to 0, matching ToIntegerOrInfinity.
+		idx = 0
+	}
+	if idx < 0 {
+		idx += len(a.elems)
+	}
+	if idx >= 0 && idx < len(a.elems) {
+		return Some(a.elems[idx])
+	}
+	return None[T]()
+}
+
 // Push appends its arguments to the end of the array and returns the new length
 // as a Number, matching JavaScript's Array.prototype.push. It is a pointer
 // method so the append is visible through every reference to the array, which is
