@@ -409,6 +409,15 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Reverse")}}, nil
+	case "toReversed":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "array toReversed takes no arguments"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToReversed")}}, nil
 	case "sort":
 		return r.arraySort(recvNode, argNodes)
 	case "pop":
