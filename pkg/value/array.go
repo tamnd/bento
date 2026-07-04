@@ -150,6 +150,32 @@ func (a *Array[T]) Slice(bounds ...float64) *Array[T] {
 	return &Array[T]{elems: out}
 }
 
+// Fill overwrites a range of the array with a single value in place and returns
+// the array, the lowering of Array.prototype.fill. It takes the fill value and
+// zero, one, or two Number bounds, matching the source call, since fill's start
+// and end are both optional: fill(v) fills the whole array, fill(v, start) runs
+// to the end, and fill(v, start, end) is the half-open range. The bounds are
+// read through relativeIndex, the same step slice uses, so a negative bound
+// counts from the end and an out-of-range or crossed pair fills nothing rather
+// than panicking. It is a pointer method returning the receiver, so the write is
+// visible through every reference and a.fill(0) can be read on as the same
+// array, matching JavaScript where fill mutates in place and returns this.
+func (a *Array[T]) Fill(v T, bounds ...float64) *Array[T] {
+	n := len(a.elems)
+	start := 0
+	end := n
+	if len(bounds) >= 1 {
+		start = relativeIndex(bounds[0], n)
+	}
+	if len(bounds) >= 2 {
+		end = relativeIndex(bounds[1], n)
+	}
+	for i := start; i < end; i++ {
+		a.elems[i] = v
+	}
+	return a
+}
+
 // IndexOf returns the index of the first element equal to target, or -1 if none
 // is, the lowering of Array.prototype.indexOf. Equality is supplied by the
 // caller through eq rather than fixed here, because a Go method cannot compare
