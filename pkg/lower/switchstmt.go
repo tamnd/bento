@@ -29,6 +29,14 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 		return nil, &NotYetLowerable{Reason: "switch statement did not expose a discriminant and a case block"}
 	}
 	disc, caseBlock := kids[0], kids[1]
+	// A switch over the discriminant of an object union, switch (s.kind), lowers to a
+	// Go switch on the tag, switch s.tag, with each string-literal case label mapped
+	// to the arm's tag constant: the same one-integer narrowing the if form takes,
+	// extended to the multi-way shape (tagunion.go). Inside each case the union local
+	// is narrowed to that arm, so a read of it selects the arm's field.
+	if name, info, ok := r.discriminantRead(disc); ok {
+		return r.lowerDiscriminantSwitch(name, info, caseBlock)
+	}
 	if !r.isNumber(disc) {
 		return nil, &NotYetLowerable{Reason: "a switch on a non-number discriminant is a later slice"}
 	}
@@ -38,6 +46,48 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 	}
 
 	clauses := r.prog.Children(caseBlock)
+	body, err := r.switchClauses(clauses, func(e frontend.Node) (ast.Expr, error) {
+		if !r.isNumber(e) {
+			return nil, &NotYetLowerable{Reason: "a switch case label that is not a number is a later slice"}
+		}
+		return r.lowerExpr(e)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ast.SwitchStmt{Tag: tag, Body: body}, nil
+}
+
+// lowerDiscriminantSwitch lowers a switch over an object union's discriminant to a
+// Go switch on the tag, mapping each string-literal case label to the arm's tag
+// constant. A case label that is not a string literal, or names no arm, hands back.
+func (r *Renderer) lowerDiscriminantSwitch(name string, info *unionInfo, caseBlock frontend.Node) (ast.Stmt, error) {
+	clauses := r.prog.Children(caseBlock)
+	body, err := r.switchClauses(clauses, func(e frontend.Node) (ast.Expr, error) {
+		lit, ok := r.stringLiteralValue(e)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a discriminant switch case label that is not a string literal is a later slice"}
+		}
+		arm, ok := info.armByDisc(lit)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a discriminant switch case naming no union arm is a later slice"}
+		}
+		return ident(info.tagConst(arm)), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	tag := &ast.SelectorExpr{X: ident(name), Sel: ident("tag")}
+	return &ast.SwitchStmt{Tag: tag, Body: body}, nil
+}
+
+// switchClauses builds the Go case-clause list shared by the numeric and
+// discriminant switch lowerings, applying lowerLabel to each case label so the
+// caller controls whether a label is a number, a tag constant, or another form. It
+// carries the JavaScript-to-Go fall-through rules: a break-terminated case drops its
+// break, a run of empty cases merges its labels into the next body, and a body that
+// runs off its end into the next case hands back.
+func (r *Renderer) switchClauses(clauses []frontend.Node, lowerLabel func(frontend.Node) (ast.Expr, error)) (*ast.BlockStmt, error) {
 	body := &ast.BlockStmt{}
 	// pending holds the case labels of empty case clauses waiting to merge into the
 	// next clause that carries a body, the JavaScript "case 2: case 3: body" share
@@ -50,10 +100,7 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 
 		var labels []ast.Expr
 		for _, e := range exprNodes {
-			if !r.isNumber(e) {
-				return nil, &NotYetLowerable{Reason: "a switch case label that is not a number is a later slice"}
-			}
-			label, err := r.lowerExpr(e)
+			label, err := lowerLabel(e)
 			if err != nil {
 				return nil, err
 			}
@@ -103,7 +150,7 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 	if len(pending) > 0 {
 		body.List = append(body.List, &ast.CaseClause{List: pending})
 	}
-	return &ast.SwitchStmt{Tag: tag, Body: body}, nil
+	return body, nil
 }
 
 // isDefaultClause reports whether a clause of a case block is the default clause,

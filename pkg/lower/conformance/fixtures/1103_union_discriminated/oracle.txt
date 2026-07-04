@@ -1,0 +1,6 @@
+== stdout:
+circle:12
+square:9
+rect:20
+== exit:
+0

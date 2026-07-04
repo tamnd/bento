@@ -485,6 +485,19 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return expr, nil
 	}
 
+	// s.kind === "circle" on a discriminated object union lowers to a tag compare,
+	// s.tag == ShapeOrCircleCircle, rather than reading a kind field and matching a
+	// string: the tag already distinguishes the arms, so the narrowing is one integer
+	// compare (tagunion.go). It routes before the string-equality path because the
+	// discriminant read is a string property the value compare would otherwise lower
+	// against a field the sum struct does not carry. A read that is not the union's
+	// discriminant, or a literal naming no arm, falls through.
+	if expr, handled, err := r.discriminantUnionCompare(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	// === and !== on two strings compare by UTF-16 code unit, which is what
 	// JavaScript string equality does and what value.BStr.Equal implements. A Go
 	// == on the struct would compare backing fields instead and call two strings
