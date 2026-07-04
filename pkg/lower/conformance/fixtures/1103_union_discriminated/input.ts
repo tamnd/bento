@@ -5,7 +5,10 @@
 // Narrowing is a single integer compare on the tag, in both the if form s.kind ===
 // "circle" and the switch form switch (s.kind), and inside the branch a read of the
 // value selects the arm's pointer field, so s.r becomes a direct field access with
-// no runtime type test beyond the tag the branch already matched.
+// no runtime type test beyond the tag the branch already matched. The area switch
+// has a case for every arm and no default, so the checker types its fall-out as
+// never and the function ends in it with no trailing return; the lowering carries
+// that across with a synthesized default that panics, unreachable in well-typed code.
 interface Circle {
   kind: "circle";
   r: number;
@@ -33,7 +36,6 @@ function area(s: Shape): number {
     case "rect":
       return s.w * s.h;
   }
-  return 0;
 }
 
 function label(s: Shape): string {

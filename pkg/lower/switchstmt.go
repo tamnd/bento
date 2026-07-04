@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -63,6 +64,7 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 // constant. A case label that is not a string literal, or names no arm, hands back.
 func (r *Renderer) lowerDiscriminantSwitch(name string, info *unionInfo, caseBlock frontend.Node) (ast.Stmt, error) {
 	clauses := r.prog.Children(caseBlock)
+	covered := map[string]bool{}
 	body, err := r.switchClauses(clauses, func(e frontend.Node) (ast.Expr, error) {
 		lit, ok := r.stringLiteralValue(e)
 		if !ok {
@@ -72,13 +74,46 @@ func (r *Renderer) lowerDiscriminantSwitch(name string, info *unionInfo, caseBlo
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a discriminant switch case naming no union arm is a later slice"}
 		}
+		covered[lit] = true
 		return ident(info.tagConst(arm)), nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	// An exhaustive switch, one with a case for every arm and no default, is a
+	// terminating statement in TypeScript: the checker types the fall-out as never, so
+	// a function may end in it with no trailing return. Go does not treat a
+	// default-less switch as terminating, so a Go default that panics is synthesized to
+	// carry that guarantee across; it is unreachable in well-typed code and only fires
+	// on a corrupted tag. A switch that already has a default, or that leaves an arm
+	// uncovered, keeps its own fall-out to the code after it.
+	if !r.hasDefaultClause(clauses) && len(covered) == len(info.arms) {
+		body.List = append(body.List, &ast.CaseClause{Body: []ast.Stmt{unreachablePanic()}})
+	}
 	tag := &ast.SelectorExpr{X: ident(name), Sel: ident("tag")}
 	return &ast.SwitchStmt{Tag: tag, Body: body}, nil
+}
+
+// hasDefaultClause reports whether any clause of a case block is the default clause,
+// so an exhaustive switch that already spells its own fall-out is left alone rather
+// than given a second default.
+func (r *Renderer) hasDefaultClause(clauses []frontend.Node) bool {
+	for _, c := range clauses {
+		if r.isDefaultClause(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// unreachablePanic builds the panic statement of a synthesized exhaustive-switch
+// default, the marker that a tag outside the union's arms reached code the checker
+// proved unreachable.
+func unreachablePanic() ast.Stmt {
+	return &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  ident("panic"),
+		Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: `"unreachable"`}},
+	}}
 }
 
 // switchClauses builds the Go case-clause list shared by the numeric and
