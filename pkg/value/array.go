@@ -416,6 +416,46 @@ func (a *Array[T]) Fill(v T, bounds ...float64) *Array[T] {
 	return a
 }
 
+// CopyWithin copies a block of the array to another position within the same
+// array in place and returns the array, the lowering of
+// Array.prototype.copyWithin. It takes a target and up to two bounds, all
+// Numbers, matching the source call: copyWithin(target) copies the whole array
+// onto itself starting at target, copyWithin(target, start) copies from start to
+// the end, and copyWithin(target, start, end) copies the half-open source range.
+// Each index is read through relativeIndex, the same step slice and fill use, so a
+// negative index counts from the end and an out-of-range one clamps rather than
+// panicking. The number of elements copied is capped so it neither runs past the
+// source range nor writes past the end of the array, matching copyWithin, which
+// never changes the length. The copy uses Go's builtin copy, whose memmove
+// semantics reproduce copyWithin's overlap behavior of reading the source range
+// as if to a temporary before writing, so an overlapping copy is correct. It is a
+// pointer method returning the receiver, so the write is visible through every
+// reference, matching JavaScript where copyWithin mutates in place and returns
+// this.
+func (a *Array[T]) CopyWithin(bounds ...float64) *Array[T] {
+	n := len(a.elems)
+	target := 0
+	start := 0
+	end := n
+	if len(bounds) >= 1 {
+		target = relativeIndex(bounds[0], n)
+	}
+	if len(bounds) >= 2 {
+		start = relativeIndex(bounds[1], n)
+	}
+	if len(bounds) >= 3 {
+		end = relativeIndex(bounds[2], n)
+	}
+	count := end - start
+	if rem := n - target; rem < count {
+		count = rem
+	}
+	if count > 0 {
+		copy(a.elems[target:target+count], a.elems[start:start+count])
+	}
+	return a
+}
+
 // Sort orders the array in place by a comparator and returns the array, the
 // lowering of Array.prototype.sort called with a compare function. The
 // comparator returns a Number that is negative when its first argument should
