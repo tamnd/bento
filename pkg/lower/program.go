@@ -60,7 +60,15 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		return Program{}, err
 	}
 
+	// A module-level binding a top-level function or class body reads cannot stay a
+	// local of main, since a separate Go function cannot see main's locals; it hoists
+	// to a package-level var the function and main both reference. The set is computed
+	// before any statement lowers so the loop below can route a hoisted binding's
+	// declaration out of the main body.
+	hoisted := r.crossBoundaryModuleNames(entry)
+
 	var funcs []ast.Decl
+	var moduleVars []ast.Decl
 	var mainBody []frontend.Node
 	for _, stmt := range r.prog.Children(entry) {
 		switch stmt.Kind() {
@@ -70,6 +78,21 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 				return Program{}, err
 			}
 			funcs = append(funcs, fd)
+		case frontend.NodeVariableStatement:
+			// A variable statement whose bindings a function reads becomes package-level
+			// state; one whose bindings stay inside main is an ordinary main local. A
+			// hoisted binding whose initializer is not safe to evaluate at package-init
+			// time hands back, so the program routes to the interpreter rather than emit
+			// Go that reads a name main declared but a function cannot see.
+			decl, hoist, err := r.hoistModuleVar(stmt, hoisted)
+			if err != nil {
+				return Program{}, err
+			}
+			if hoist {
+				moduleVars = append(moduleVars, decl)
+			} else {
+				mainBody = append(mainBody, stmt)
+			}
 		case frontend.NodeClassDeclaration:
 			// Already registered by collectClasses; the declarations render after
 			// every body lowers so a method body's interned shapes are collected.
@@ -107,6 +130,12 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// program has no enclosing body.
 	r.constInt = r.constIntsOf(mainBody)
 	r.int32Locals = r.int32LocalsOf(mainBody)
+	// A hoisted binding is a package-level var of its declared type, so it must not
+	// also be int32-specialized: main and the functions read it at one Go type, and
+	// the int32 form is reserved for a loop-local counter that never leaves main.
+	for name := range hoisted {
+		delete(r.int32Locals, name)
+	}
 	r.counterIvl = r.counterIvlOf(mainBody)
 	r.fixedTArr = r.fixedTypedArraysOf(mainBody)
 	r.optLocals = r.optLocalsOf(mainBody)
@@ -165,6 +194,9 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// Numeric enums emit their float64-backed const blocks with the other
 	// package-level state, before the classes and functions that read them.
 	file.Decls = append(file.Decls, r.renderEnums()...)
+	// Module bindings a function reads emit as package-level vars beside the other
+	// state, so both main and the functions name the same variable.
+	file.Decls = append(file.Decls, moduleVars...)
 	file.Decls = append(file.Decls, classDecls...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
@@ -174,6 +206,159 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		return Program{}, err
 	}
 	return Program{Source: src}, nil
+}
+
+// crossBoundaryModuleNames returns the module-level binding names a top-level
+// function or class body reads. Those cannot be locals of main, since a separate Go
+// function has no access to main's locals, so the assembler hoists them to
+// package-level vars. A reference counts only when its identifier resolves to the
+// module binding's own symbol, so a parameter or local that merely shares the name
+// does not force a hoist; the module binding it shadows stays a main local when no
+// body actually reads it.
+func (r *Renderer) crossBoundaryModuleNames(entry frontend.Node) map[string]bool {
+	module := map[frontend.Symbol]string{}
+	for _, stmt := range r.prog.Children(entry) {
+		if stmt.Kind() != frontend.NodeVariableStatement {
+			continue
+		}
+		var decls []frontend.Node
+		collectVarDecls(r.prog, stmt, &decls)
+		for _, d := range decls {
+			kids := r.prog.Children(d)
+			if len(kids) == 0 {
+				continue
+			}
+			name, ok := localName(r.prog.Text(kids[0]))
+			if !ok {
+				continue
+			}
+			if sym, ok := r.prog.SymbolAt(kids[0]); ok {
+				module[sym] = name
+			}
+		}
+	}
+	if len(module) == 0 {
+		return nil
+	}
+	used := map[string]bool{}
+	for _, stmt := range r.prog.Children(entry) {
+		switch stmt.Kind() {
+		case frontend.NodeFunctionDeclaration, frontend.NodeClassDeclaration:
+			collectModuleRefs(r.prog, stmt, module, used)
+		}
+	}
+	if len(used) == 0 {
+		return nil
+	}
+	return used
+}
+
+// collectModuleRefs records every identifier in n's subtree that resolves to a
+// module-level binding's symbol, so the caller learns which module bindings a
+// function or class body reads. Resolving through the symbol, rather than matching
+// the identifier text, means a parameter or local that shadows a module binding is
+// not mistaken for a read of it, since the shadow has its own symbol.
+func collectModuleRefs(prog *frontend.Program, n frontend.Node, module map[frontend.Symbol]string, out map[string]bool) {
+	if n.Kind() == frontend.NodeIdentifier {
+		if sym, ok := prog.SymbolAt(n); ok {
+			if name, ok := module[sym]; ok {
+				out[name] = true
+			}
+		}
+		return
+	}
+	for _, c := range prog.Children(n) {
+		collectModuleRefs(prog, c, module, out)
+	}
+}
+
+// hoistModuleVar decides whether a module-level variable statement holds a binding a
+// function reads and, if so, lowers the whole statement to a package-level var
+// declaration. It returns hoist=false for a statement whose bindings all stay inside
+// main, which the caller then lowers as an ordinary main local. When a binding does
+// need hoisting, every binding in the statement moves with it, so each must carry a
+// package-init-safe initializer; one that does not hands back rather than split the
+// statement or evaluate a main-ordered side effect at init time.
+func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool) (ast.Decl, bool, error) {
+	if len(hoisted) == 0 {
+		return nil, false, nil
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, stmt, &decls)
+	needsHoist := false
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		if name, ok := localName(r.prog.Text(kids[0])); ok && hoisted[name] {
+			needsHoist = true
+			break
+		}
+	}
+	if !needsHoist {
+		return nil, false, nil
+	}
+	specs := make([]ast.Spec, 0, len(decls))
+	for _, d := range decls {
+		spec, err := r.moduleVarSpec(d)
+		if err != nil {
+			return nil, false, err
+		}
+		specs = append(specs, spec)
+	}
+	return &ast.GenDecl{Tok: token.VAR, Specs: specs}, true, nil
+}
+
+// moduleVarSpec lowers one binding of a hoisted variable statement to a Go value
+// spec, var name T = init, typed by the checker the same way a local binding is. The
+// initializer must be safe to evaluate at package-init time; one that reads a name
+// or makes a call could depend on main's order or a side effect, so it hands back.
+func (r *Renderer) moduleVarSpec(d frontend.Node) (ast.Spec, error) {
+	kids := r.prog.Children(d)
+	if len(kids) != 2 && len(kids) != 3 {
+		return nil, &NotYetLowerable{Reason: "a module binding a function reads needs an initializer to hoist to a package var"}
+	}
+	name, ok := localName(r.prog.Text(kids[0]))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a hoisted module binding name is not a Go identifier"}
+	}
+	initNode := kids[len(kids)-1]
+	if !packageSafeInit(r.prog, initNode) {
+		return nil, &NotYetLowerable{Reason: "a module binding a function reads has an initializer that is not yet hoistable to a package var"}
+	}
+	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
+	if err != nil {
+		return nil, err
+	}
+	init, err := r.bindingInit(kids[0], initNode)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ValueSpec{
+		Names:  []*ast.Ident{ident(name)},
+		Type:   typ,
+		Values: []ast.Expr{init},
+	}, nil
+}
+
+// packageSafeInit reports whether an initializer can be evaluated at package-init
+// time. A subtree with no identifier read and no call references no other binding
+// and has no observable side effect, so a Go package-var initializer runs it with
+// the same result main would, whatever the init order. A numeric, string, boolean,
+// or bigint literal, a sign on one, and arithmetic over them all qualify; an
+// initializer that names a variable or calls a function does not.
+func packageSafeInit(prog *frontend.Program, n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeIdentifier, frontend.NodeCallExpression:
+		return false
+	}
+	for _, c := range prog.Children(n) {
+		if !packageSafeInit(prog, c) {
+			return false
+		}
+	}
+	return true
 }
 
 // bigLitDecls emits one package-level var per wide bigint literal the bodies
