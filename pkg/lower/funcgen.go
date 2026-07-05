@@ -55,7 +55,7 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
 	}
 
-	params, err := r.paramFields(sig)
+	params, err := r.funcParamFields(fn, sig)
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +124,118 @@ func (r *Renderer) paramFields(sig frontend.Signature) (*ast.FieldList, error) {
 		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
 	}
 	return fields, nil
+}
+
+// funcParamFields lowers a top-level function's parameters, and unlike the shared
+// paramFields it accepts a default-valued parameter: an omittable parameter (index
+// at or past MinArgs) becomes a plain Go field of its type when it carries a default
+// the call site can fill, so the Go function reads it as an ordinary argument and
+// every call supplies the default in the omitted slot. A default that reads a
+// variable or makes a call needs the callee's parameter scope at the call site,
+// which is not modeled yet, so it hands back; an omittable parameter with no default
+// (a bare `x?: T`) still hands back on the undefined-optional synthesis. Methods and
+// constructors keep the stricter paramFields, so a default there is a later slice.
+func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*ast.FieldList, error) {
+	paramNodes := r.funcParamNodes(fn)
+	fields := &ast.FieldList{}
+	for i, p := range sig.Params {
+		pname, ok := localName(p.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "parameter name is not a Go identifier"}
+		}
+		if i >= sig.MinArgs {
+			def, ok := r.paramDefaultNode(paramNodes, i)
+			if !ok {
+				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
+			}
+			if !packageSafeInit(r.prog, def) {
+				return nil, &NotYetLowerable{Reason: "a default parameter value that reads a variable or makes a call needs the callee's scope at the call site, a later slice"}
+			}
+		}
+		pt, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, err
+		}
+		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
+	}
+	return fields, nil
+}
+
+// funcParamNodes returns the parameter nodes of a function or arrow declaration in
+// declaration order, so a caller can read a parameter's default off the AST, which
+// the checker signature does not carry.
+func (r *Renderer) funcParamNodes(fn frontend.Node) []frontend.Node {
+	var out []frontend.Node
+	for _, k := range r.prog.Children(fn) {
+		if k.Kind() == frontend.NodeParameter {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// paramDefaultNode returns the default-value expression of the parameter at index i,
+// if it has one. A parameter node's children are the name, an optional type
+// annotation the shim leaves as an opaque unknown node, and an optional default
+// value, which is a real expression node. The default is the first child past the
+// name that is not the unknown type node; a default the shim itself leaves unknown
+// (a rarer operator form) reads as absent, so the parameter hands back rather than
+// lower a default the call site could not reconstruct.
+func (r *Renderer) paramDefaultNode(paramNodes []frontend.Node, i int) (frontend.Node, bool) {
+	if i < 0 || i >= len(paramNodes) {
+		return nil, false
+	}
+	pkids := r.prog.Children(paramNodes[i])
+	if len(pkids) == 0 {
+		return nil, false
+	}
+	for _, c := range pkids[1:] {
+		if c.Kind() != frontend.NodeUnknown {
+			return c, true
+		}
+	}
+	return nil, false
+}
+
+// calleeDefaults returns the default-value nodes of the function a call resolves to,
+// aligned to the parameter list with a nil where a parameter has no default, or nil
+// when the callee has no defaults at all. finishCall reads it to fill an omitted
+// trailing argument with the parameter's default.
+func (r *Renderer) calleeDefaults(sym frontend.Symbol) []frontend.Node {
+	for _, d := range r.prog.Declarations(sym) {
+		paramNodes := r.funcParamNodes(d)
+		if len(paramNodes) == 0 {
+			continue
+		}
+		out := make([]frontend.Node, len(paramNodes))
+		found := false
+		for i := range paramNodes {
+			if def, ok := r.paramDefaultNode(paramNodes, i); ok {
+				out[i] = def
+				found = true
+			}
+		}
+		if found {
+			return out
+		}
+	}
+	return nil
+}
+
+// funcOmittable reports whether the function a symbol names has a parameter a caller
+// may omit, whether by a default value, a trailing `?`, or a rest. A function like
+// that lowers to a Go func whose arity exceeds its minimal call, so using it as a
+// value (a callback, a binding) where the slot expects the minimal arity would not
+// type; such a use hands back until a defaulting wrapper is modeled.
+func (r *Renderer) funcOmittable(sym frontend.Symbol) bool {
+	for _, d := range r.prog.Declarations(sym) {
+		if sig, ok := r.prog.SignatureAt(d); ok {
+			if sig.MinArgs < len(sig.Params) || sig.RestParam != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // resultFields lowers the return type to the function's result list. A void or

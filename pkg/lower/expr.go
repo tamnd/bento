@@ -35,6 +35,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// is checked before the local-name path, which would otherwise emit the source
 		// name and miss the exported declaration.
 		if sym, ok := r.prog.SymbolAt(n); ok && sym.Flags&frontend.SymbolFunction != 0 {
+			// A function whose lowered arity exceeds its minimal call (it has a
+			// defaulted, optional, or rest parameter) fills the omitted slot at the call
+			// site, so it has no single Go func value that fits a slot expecting the
+			// minimal arity. Used as a value rather than called, it hands back until a
+			// defaulting wrapper is modeled.
+			if r.funcOmittable(sym) {
+				return nil, &NotYetLowerable{Reason: "a function with an omittable parameter used as a value needs a defaulting wrapper, a later slice"}
+			}
 			if goName, ok := exportedField(sym.Name); ok {
 				return ident(goName), nil
 			}
