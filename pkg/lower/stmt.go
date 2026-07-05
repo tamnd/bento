@@ -47,6 +47,11 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	} else if ok {
 		return stmts, nil
 	}
+	if stmts, ok, err := r.flattenCommaStatement(n); err != nil {
+		return nil, err
+	} else if ok {
+		return stmts, nil
+	}
 	s, err := r.lowerStatement(n)
 	if err != nil {
 		return nil, err
@@ -356,6 +361,59 @@ func (r *Renderer) lowerExprStatement(n frontend.Node) (ast.Stmt, error) {
 		return nil, &NotYetLowerable{Reason: "expression statement did not expose a single expression"}
 	}
 	return r.lowerUpdate(kids[0])
+}
+
+// flattenCommaStatement lowers a statement-position comma expression, a = 1, b = 2
+// or f(), g(), to the Go statements its operands spell, evaluated left to right
+// with each value discarded. That is exactly the comma operator's meaning when its
+// result is thrown away, which is every use of it in statement position. It
+// returns ok=false when the statement is not a comma expression, so a plain
+// expression statement falls through to the single-statement path below. An
+// operand the update lowering does not cover (a bare value with no effect, say)
+// makes the whole statement hand back rather than emit a partial flatten.
+func (r *Renderer) flattenCommaStatement(n frontend.Node) ([]ast.Stmt, bool, error) {
+	if n.Kind() != frontend.NodeExpressionStatement {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 1 {
+		return nil, false, nil
+	}
+	ops, ok := commaOperands(r.prog, kids[0])
+	if !ok {
+		return nil, false, nil
+	}
+	stmts := make([]ast.Stmt, 0, len(ops))
+	for _, op := range ops {
+		s, err := r.lowerUpdate(op)
+		if err != nil {
+			return nil, false, err
+		}
+		stmts = append(stmts, s)
+	}
+	return stmts, true, nil
+}
+
+// commaOperands returns the operands of a comma expression in source order, or
+// ok=false when n is not a comma expression. The comma operator is left
+// associative, so a, b, c parses as (a, b), c; the walk flattens that left spine
+// so the operands come back in the order they were written.
+func commaOperands(prog *frontend.Program, n frontend.Node) ([]frontend.Node, bool) {
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return nil, false
+	}
+	kids := prog.Children(n)
+	if len(kids) != 3 || prog.Text(kids[1]) != "," {
+		return nil, false
+	}
+	var out []frontend.Node
+	if left, ok := commaOperands(prog, kids[0]); ok {
+		out = append(out, left...)
+	} else {
+		out = append(out, kids[0])
+	}
+	out = append(out, kids[2])
+	return out, true
 }
 
 // lowerUpdate lowers a statement-position expression that mutates a local: a
