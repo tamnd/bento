@@ -275,6 +275,50 @@ func TestFromCodePoint(t *testing.T) {
 	}
 }
 
+// TestCodePoints pins the for...of iteration order of a string: one element per
+// Unicode code point, so a BMP character is its own one-unit element, an astral
+// character is a single two-unit element, and a lone surrogate stands alone. This
+// is what makes `for (const c of s)` step by code point rather than by code unit.
+func TestCodePoints(t *testing.T) {
+	got := FromGoString("abc").CodePoints()
+	if len(got) != 3 || got[0].ToGoString() != "a" || got[2].ToGoString() != "c" {
+		t.Errorf("CodePoints(\"abc\") = %v, want [a b c]", goStrings(got))
+	}
+
+	// "a😀b" is four code units (the emoji is a surrogate pair) but three code
+	// points, so it iterates as three elements and the middle one is the emoji.
+	astral := FromGoString("a\U0001F600b").CodePoints()
+	if len(astral) != 3 {
+		t.Fatalf("CodePoints(\"a<emoji>b\") length = %d, want 3", len(astral))
+	}
+	if astral[0].ToGoString() != "a" || astral[1].ToGoString() != "\U0001F600" || astral[2].ToGoString() != "b" {
+		t.Errorf("CodePoints(\"a<emoji>b\") = %v, want [a <emoji> b]", goStrings(astral))
+	}
+	if astral[1].Length() != 2 {
+		t.Errorf("astral element length = %v, want 2 (a surrogate pair)", astral[1].Length())
+	}
+
+	if got := FromGoString("").CodePoints(); len(got) != 0 {
+		t.Errorf("CodePoints(\"\") = %v, want empty", goStrings(got))
+	}
+
+	// A lone high surrogate has no low half to pair with, so it iterates as one
+	// one-unit element rather than being dropped or combined.
+	lone := FromUTF16([]uint16{0xD83D, 0x0041}).CodePoints()
+	if len(lone) != 2 || lone[1].ToGoString() != "A" {
+		t.Errorf("CodePoints(lone high surrogate + A) = %v, want two elements ending in A", goStrings(lone))
+	}
+}
+
+// goStrings renders a slice of BStr as Go strings for a readable test failure.
+func goStrings(ss []BStr) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.ToGoString()
+	}
+	return out
+}
+
 // TestFromCodePointThrows pins that an out-of-range code point throws a
 // RangeError the way JavaScript does, rather than wrapping the way fromCharCode
 // does: a negative, a fraction, and a value past U+10FFFF are all rejected.
