@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -53,6 +54,11 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 		return stmts, nil
 	}
 	if stmts, ok, err := r.flattenChainedAssignStatement(n); err != nil {
+		return nil, err
+	} else if ok {
+		return stmts, nil
+	}
+	if stmts, ok, err := r.flattenArrayDestructure(n); err != nil {
 		return nil, err
 	} else if ok {
 		return stmts, nil
@@ -457,6 +463,92 @@ func (r *Renderer) chainedAssign(n frontend.Node) ([]frontend.Node, frontend.Nod
 		return append([]frontend.Node{kids[0]}, inner...), final, true
 	}
 	return nil, n, true
+}
+
+// flattenArrayDestructure lowers `const [a, b] = src` to one `:=` binding per
+// element, a := src.AtI(0) and b := src.AtI(1), the same indexed read a written-out
+// element access lowers to. It owns the statement once it sees an array binding
+// pattern, so every shape it cannot yet lower returns an error and hands the unit
+// back rather than falling through to the plain binding path with a misleading
+// diagnostic. The bounded cases: the source must be a plain variable, since any
+// other source would be re-evaluated once per element without a temporary to hold
+// it; the pattern is flat names only, so a hole, a default, a rest, or a nested
+// pattern hands back; and each name's type must match the array's element type, so
+// a heterogeneous tuple, whose element read does not produce the narrowed type the
+// name is declared with, hands back. An object pattern is a separate slice and is
+// left for the plain path, which recognizes it is not a Go identifier and hands back.
+func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, error) {
+	if n.Kind() != frontend.NodeVariableStatement {
+		return nil, false, nil
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	if len(decls) != 1 {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(decls[0])
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	patNode, initNode := kids[0], kids[1]
+	if patNode.Kind() != frontend.NodeUnknown {
+		return nil, false, nil
+	}
+	if !strings.HasPrefix(strings.TrimSpace(r.prog.Text(patNode)), "[") {
+		return nil, false, nil
+	}
+	// The pattern is an array binding, so from here the statement is ours: an early
+	// return reports ok=true with an error, not a fall-through.
+	if initNode.Kind() != frontend.NodeIdentifier {
+		return nil, true, &NotYetLowerable{Reason: "array destructuring off anything but a plain variable needs a temporary to hold the source, a later slice"}
+	}
+	elemT, ok := r.prog.ElementType(r.prog.TypeAt(initNode))
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "array destructuring on a non-array or tuple source is a later slice"}
+	}
+	elemGo, err := r.typeExpr(elemT)
+	if err != nil {
+		return nil, true, err
+	}
+	elems := r.prog.Children(patNode)
+	if len(elems) == 0 {
+		return nil, true, &NotYetLowerable{Reason: "an empty array destructuring pattern binds nothing"}
+	}
+	stmts := make([]ast.Stmt, 0, len(elems))
+	for i, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return nil, true, &NotYetLowerable{Reason: "an array destructuring hole, default, rest, or nested pattern is a later slice"}
+		}
+		nameNode := ec[0]
+		name, ok := localName(r.prog.Text(nameNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+		}
+		nameGo, err := r.typeExpr(r.prog.TypeAt(nameNode))
+		if err != nil {
+			return nil, true, err
+		}
+		if same, err := sameGoType(nameGo, elemGo); err != nil {
+			return nil, true, err
+		} else if !same {
+			return nil, true, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
+		}
+		recv, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, true, err
+		}
+		read := &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("AtI")},
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
+		stmts = append(stmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{read},
+		})
+	}
+	return stmts, true, nil
 }
 
 // assignCopy builds target = source for one link of a chained assignment, where
