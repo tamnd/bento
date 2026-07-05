@@ -146,6 +146,10 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 		return nil, &NotYetLowerable{Reason: "for...of with other than a single loop binding is a later slice"}
 	}
 	dkids := r.prog.Children(decls[0])
+	if len(dkids) == 1 && dkids[0].Kind() == frontend.NodeUnknown &&
+		strings.HasPrefix(strings.TrimSpace(r.prog.Text(dkids[0])), "[") {
+		return r.forOfArrayDestructure(kids[1], dkids[0], kids[2])
+	}
 	if len(dkids) != 1 || dkids[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "for...of with a destructuring or annotated loop variable is a later slice"}
 	}
@@ -190,6 +194,107 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 		rng.Value = ident(name)
 		rng.Tok = token.DEFINE
 	}
+	return rng, nil
+}
+
+// forOfArrayDestructure lowers `for (const [a, b] of pairs)` over an array of arrays
+// to a range loop whose element is bound to a generated temporary and destructured at
+// the top of the body, for _, e := range pairs.Elems() { a := e.AtI(0); b := e.AtI(1);
+// ... }. The range value is a fresh binding each iteration, so the temporary needs no
+// reset and the positional reads see that iteration's element. Only a flat array
+// pattern over an array-of-arrays iterable is lowered: the iterable's element must be
+// an array so the positional read has something to index, and each name's type must
+// match that inner element type. A hole, a default, a rest, a nested pattern, a
+// non-array iterable, or a non-array element hands back, each a later slice. A name
+// the body never reads is dropped rather than bound, the same unused-binding rule the
+// single-variable loop applies, so the Go loop compiles.
+func (r *Renderer) forOfArrayDestructure(iterable, pattern, bodyNode frontend.Node) (ast.Stmt, error) {
+	if !isArrayElem(r, iterable) {
+		return nil, &NotYetLowerable{Reason: "a destructuring for...of over a non-array iterable is a later slice"}
+	}
+	outerElem, ok := r.prog.ElementType(r.prog.TypeAt(iterable))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a destructuring for...of whose iterable has no element type is a later slice"}
+	}
+	innerElem, ok := r.prog.ElementType(outerElem)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a destructuring for...of whose element is not itself an array is a later slice"}
+	}
+	innerGo, err := r.typeExpr(innerElem)
+	if err != nil {
+		return nil, err
+	}
+	elems := r.prog.Children(pattern)
+	if len(elems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty for...of destructuring pattern binds nothing"}
+	}
+	// Each element must be a flat name whose type matches the inner element type, so
+	// the AtI read binds it without coercion. The reads are gathered first, so an
+	// unsupported shape hands the whole loop back before any temporary is minted.
+	type binding struct {
+		name string
+		idx  int
+	}
+	var used []binding
+	for i, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "a for...of destructuring hole, default, rest, or nested pattern is a later slice"}
+		}
+		nameNode := ec[0]
+		name, ok := localName(r.prog.Text(nameNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a for...of destructured name is not a Go identifier"}
+		}
+		nameGo, err := r.typeExpr(r.prog.TypeAt(nameNode))
+		if err != nil {
+			return nil, err
+		}
+		if same, err := sameGoType(nameGo, innerGo); err != nil {
+			return nil, err
+		} else if !same {
+			return nil, &NotYetLowerable{Reason: "a for...of destructuring where an element's type differs from the array element type is a later slice"}
+		}
+		// A name the body never reads is dropped: binding it would leave an unused Go
+		// local, and the read it drives has no effect worth keeping.
+		if r.bodyUsesName(bodyNode, r.prog.Text(nameNode)) {
+			used = append(used, binding{name: name, idx: i})
+		}
+	}
+	iter, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	rng := &ast.RangeStmt{
+		X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident("Elems")}},
+	}
+	// With no name read, the loop only drives the iteration and binds nothing, so it
+	// ranges without a value the way the counting single-variable loop does.
+	if len(used) == 0 {
+		rng.Body = body
+		return rng, nil
+	}
+	tmp := r.freshTemp()
+	reads := make([]ast.Stmt, 0, len(used))
+	for _, b := range used {
+		reads = append(reads, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(b.name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("AtI")},
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(b.idx)}},
+			}},
+		})
+	}
+	body.List = append(reads, body.List...)
+	rng.Key = ident("_")
+	rng.Value = ident(tmp)
+	rng.Tok = token.DEFINE
+	rng.Body = body
 	return rng, nil
 }
 
