@@ -74,10 +74,35 @@ func TestObjectDestructureRestHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestObjectDestructureLiteralSourceHandsBack proves destructuring off a non-variable
-// source hands back, since repeating the source without a temporary would evaluate it
-// once per property.
-func TestObjectDestructureLiteralSourceHandsBack(t *testing.T) {
-	const src = "const { x, y } = { x: 1, y: 2 };\nconsole.log(x + y);\n"
-	renderProgramHandBack(t, src)
+// TestObjectDestructureCallSourceLowersToTemp proves a non-variable object source, a
+// call returning a fixed-shape object, lowers by holding the source in a generated
+// temporary read once, then reading each property off that temporary, so the source is
+// evaluated once.
+func TestObjectDestructureCallSourceLowersToTemp(t *testing.T) {
+	const src = "function pt(): { x: number; y: number } { return { x: 10, y: 20 }; }\nconst { x, y } = pt();\nconsole.log(x + y);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ":= Pt()") {
+		t.Errorf("call source was not held in a temporary:\n%s", source)
+	}
+	if !strings.Contains(source, "x := ") || !strings.Contains(source, ".X") {
+		t.Errorf("property x did not read off the temporary:\n%s", source)
+	}
+	if !strings.Contains(source, "y := ") || !strings.Contains(source, ".Y") {
+		t.Errorf("property y did not read off the temporary:\n%s", source)
+	}
+}
+
+// TestObjectDestructureCallSourceRuns builds and runs a call-source destructure so the
+// evaluate-once temporary is proven to feed the property reads.
+func TestObjectDestructureCallSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function pt(): { x: number; y: number } { return { x: 10, y: 20 }; }
+const { x, y } = pt();
+console.log(x);
+console.log(y);
+`
+	if got, want := runProgramGo(t, src), "10\n20\n"; got != want {
+		t.Fatalf("call-source object destructure printed %q, want %q", got, want)
+	}
 }

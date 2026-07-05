@@ -97,10 +97,38 @@ func TestArrayDestructureNestedHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestArrayDestructureLiteralSourceHandsBack proves destructuring off a non-variable
-// source hands back, since repeating the source without a temporary would evaluate
-// it once per element.
-func TestArrayDestructureLiteralSourceHandsBack(t *testing.T) {
+// TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a
+// call returning an array, lowers by holding the source in a generated temporary read
+// once, then reading each element off that temporary, so the source is evaluated once.
+func TestArrayDestructureCallSourceLowersToTemp(t *testing.T) {
+	const src = "function pair(): number[] { return [10, 20]; }\nconst [a, b] = pair();\nconsole.log(a + b);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ":= Pair()") {
+		t.Errorf("call source was not held in a temporary:\n%s", source)
+	}
+	if !strings.Contains(source, ".AtI(0)") || !strings.Contains(source, ".AtI(1)") {
+		t.Errorf("elements did not read off the temporary through AtI:\n%s", source)
+	}
+}
+
+// TestArrayDestructureCallSourceRuns builds and runs a call-source destructure so the
+// evaluate-once temporary is proven to feed the positional reads.
+func TestArrayDestructureCallSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function pair(): number[] { return [10, 20]; }
+const [a, b] = pair();
+console.log(a);
+console.log(b);
+`
+	if got, want := runProgramGo(t, src), "10\n20\n"; got != want {
+		t.Fatalf("call-source array destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayDestructureTupleSourceHandsBack proves a tuple-literal source hands back,
+// since a tuple has no single array element type to read every name through AtI.
+func TestArrayDestructureTupleSourceHandsBack(t *testing.T) {
 	const src = "const [a, b] = [10, 20];\nconsole.log(a + b);\n"
 	renderProgramHandBack(t, src)
 }
