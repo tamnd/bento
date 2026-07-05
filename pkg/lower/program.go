@@ -86,12 +86,14 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 			// The parser ends a source file with an empty end-of-file token bento
 			// does not name; it is skipped. An import declaration is an unnamed node
 			// too, already validated and recorded by collectNodeImports above, and it
-			// carries no runtime code, so it is skipped here. A non-empty unnamed node
-			// that is neither is a construct the frontend did not classify, so it
-			// hands back rather than vanish.
+			// carries no runtime code, so it is skipped here. Several control-flow
+			// statements (a do...while, a labeled loop, a break or continue) are left
+			// unnamed as well, and lowerStatement recognizes each by its shape, so a
+			// non-empty non-import unknown routes to the main body like any other
+			// statement; if lowerStatement does not know it either, it hands back there.
 			text := strings.TrimSpace(r.prog.Text(stmt))
 			if text != "" && !strings.HasPrefix(text, "import") {
-				return Program{}, &NotYetLowerable{Reason: "unrecognized top-level construct is a later slice"}
+				mainBody = append(mainBody, stmt)
 			}
 		default:
 			mainBody = append(mainBody, stmt)
