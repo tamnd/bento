@@ -1,0 +1,12 @@
+== stdout:
+6
+8
+hi, sam
+yo, sam
+6
+15
+30
+9
+0
+== exit:
+0
