@@ -338,9 +338,6 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		// a truthy number or string condition lowers now, but an object in boolean
 		// position has a falsy rule this slice does not model, so it hands back.
 		{"truthyObject", "export function t(o: { x: number }): number { if (o) { return 1; } return 0; }"},
-		// for-of over an array lowers now, but over a string (a non-array iterable)
-		// is still a later slice, so it hands back.
-		{"forOfString", "export function s(x: string): number { let n = 0; for (const ch of x) { n = n + 1; } return n; }"},
 		// a prefix increment used as a value needs its pre-increment result, not just
 		// the mutation, so it hands back; the statement form (++b;) does lower.
 		{"prefixIncrValue", "export function p(a: number): number { let b = a; const c = ++b; return c; }"},

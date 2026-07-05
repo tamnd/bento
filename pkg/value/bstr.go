@@ -310,6 +310,33 @@ func (s BStr) CodePointAtOpt(i float64) Opt[float64] {
 	return Some(float64(first))
 }
 
+// CodePoints returns the string's Unicode code points in order, each as its own
+// one- or two-code-unit string. This is what a for...of loop over a string
+// iterates: JavaScript steps a string by code point, so a surrogate pair (an
+// astral character) yields as a single two-unit element and every other unit,
+// including a lone surrogate, yields as its own one-unit element. It is the string
+// counterpart of an array's Elems, the slice a ranged Go loop walks. A pair is
+// rebuilt through FromUTF16 so a lone surrogate that UTF-8 cannot represent is
+// preserved rather than replaced.
+func (s BStr) CodePoints() []BStr {
+	units := s.units()
+	out := make([]BStr, 0, len(units))
+	for i := 0; i < len(units); i++ {
+		first := units[i]
+		// A high surrogate followed by a low surrogate is one astral code point of
+		// two units; any other unit, including an unpaired surrogate, stands alone.
+		if first >= 0xD800 && first <= 0xDBFF && i+1 < len(units) {
+			if second := units[i+1]; second >= 0xDC00 && second <= 0xDFFF {
+				out = append(out, FromUTF16([]uint16{first, second}))
+				i++
+				continue
+			}
+		}
+		out = append(out, FromUTF16([]uint16{first}))
+	}
+	return out
+}
+
 // IsWellFormed reports whether the string contains no lone surrogate code unit,
 // matching String.prototype.isWellFormed. In a well-formed string every high
 // surrogate (D800..DBFF) is immediately followed by a low surrogate (DC00..DFFF)
