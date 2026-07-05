@@ -609,9 +609,6 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	}
 	// The pattern is an array binding, so from here the statement is ours: an early
 	// return reports ok=true with an error, not a fall-through.
-	if initNode.Kind() != frontend.NodeIdentifier {
-		return nil, true, &NotYetLowerable{Reason: "array destructuring off anything but a plain variable needs a temporary to hold the source, a later slice"}
-	}
 	elemT, ok := r.prog.ElementType(r.prog.TypeAt(initNode))
 	if !ok {
 		return nil, true, &NotYetLowerable{Reason: "array destructuring on a non-array or tuple source is a later slice"}
@@ -624,7 +621,9 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	if len(elems) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty array destructuring pattern binds nothing"}
 	}
-	stmts := make([]ast.Stmt, 0, len(elems))
+	// The pattern is validated before the source is lowered, so an unsupported shape
+	// hands back before a temporary is minted for the source.
+	names := make([]string, len(elems))
 	for i, el := range elems {
 		ec := r.prog.Children(el)
 		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
@@ -644,12 +643,20 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		} else if !same {
 			return nil, true, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
 		}
-		recv, err := r.lowerExpr(initNode)
+		names[i] = name
+	}
+	prefix, recv, err := r.destructureSource(initNode)
+	if err != nil {
+		return nil, true, err
+	}
+	stmts := prefix
+	for i, name := range names {
+		rc, err := recv()
 		if err != nil {
 			return nil, true, err
 		}
 		read := &ast.CallExpr{
-			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("AtI")},
+			Fun:  &ast.SelectorExpr{X: rc, Sel: ident("AtI")},
 			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
 		}
 		stmts = append(stmts, &ast.AssignStmt{
@@ -659,6 +666,31 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		})
 	}
 	return stmts, true, nil
+}
+
+// destructureSource lowers the source of a destructuring binding into a receiver the
+// element reads select through. A plain variable is re-lowered on each read, since a
+// bare identifier reference has no cost and no effect to repeat, so each read carries
+// a fresh copy of the receiver expression; any other source is evaluated once into a
+// generated temporary bound at the front of the expansion, so a call or a member read
+// runs a single time and each read selects off the held value. The returned prefix is
+// the temporary's binding, empty for a variable source, and the receiver thunk yields
+// the receiver expression for one read.
+func (r *Renderer) destructureSource(initNode frontend.Node) ([]ast.Stmt, func() (ast.Expr, error), error) {
+	if initNode.Kind() == frontend.NodeIdentifier {
+		return nil, func() (ast.Expr, error) { return r.lowerExpr(initNode) }, nil
+	}
+	lowered, err := r.lowerExpr(initNode)
+	if err != nil {
+		return nil, nil, err
+	}
+	tmp := r.freshTemp()
+	prefix := []ast.Stmt{&ast.AssignStmt{
+		Lhs: []ast.Expr{ident(tmp)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{lowered},
+	}}
+	return prefix, func() (ast.Expr, error) { return ident(tmp), nil }, nil
 }
 
 // flattenObjectDestructure lowers `const {x, y} = src` to one `:=` binding per
@@ -694,9 +726,6 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	}
 	// The pattern is an object binding, so from here the statement is ours: an early
 	// return reports ok=true with an error, not a fall-through.
-	if initNode.Kind() != frontend.NodeIdentifier {
-		return nil, true, &NotYetLowerable{Reason: "object destructuring off anything but a plain variable needs a temporary to hold the source, a later slice"}
-	}
 	objType := r.prog.TypeAt(initNode)
 	if objType.Flags&frontend.TypeObject == 0 || r.isTypedArray(initNode) {
 		return nil, true, &NotYetLowerable{Reason: "object destructuring on a non-object source is a later slice"}
@@ -711,14 +740,16 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	if len(elems) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty object destructuring pattern binds nothing"}
 	}
-	stmts := make([]ast.Stmt, 0, len(elems))
-	for _, el := range elems {
+	// The pattern is validated before the source is lowered, so an unsupported shape
+	// hands back before a temporary is minted for the source.
+	type binding struct{ name, field string }
+	fields := make([]binding, len(elems))
+	for i, el := range elems {
 		ec := r.prog.Children(el)
 		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
 			return nil, true, &NotYetLowerable{Reason: "an object destructuring rename, default, rest, or nested pattern is a later slice"}
 		}
-		nameNode := ec[0]
-		name, ok := localName(r.prog.Text(nameNode))
+		name, ok := localName(r.prog.Text(ec[0]))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
@@ -726,14 +757,22 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 		}
-		recv, err := r.lowerExpr(initNode)
+		fields[i] = binding{name: name, field: field}
+	}
+	prefix, recv, err := r.destructureSource(initNode)
+	if err != nil {
+		return nil, true, err
+	}
+	stmts := prefix
+	for _, b := range fields {
+		rc, err := recv()
 		if err != nil {
 			return nil, true, err
 		}
 		stmts = append(stmts, &ast.AssignStmt{
-			Lhs: []ast.Expr{ident(name)},
+			Lhs: []ast.Expr{ident(b.name)},
 			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident(field)}},
+			Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident(b.field)}},
 		})
 	}
 	return stmts, true, nil
