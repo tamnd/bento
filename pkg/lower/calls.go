@@ -168,27 +168,34 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 // assignment would.
 func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node) (ast.Expr, error) {
 	var params []frontend.Param
+	var rest *frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
 		params = sig.Params
+		rest = sig.RestParam
 	}
-	args := make([]ast.Expr, 0, len(params))
-	for i, a := range argNodes {
+	args := make([]ast.Expr, 0, len(params)+1)
+	// The arguments that land on a fixed parameter lower and bridge in position; any
+	// beyond the fixed count belong to a rest parameter and are gathered below.
+	nFixed := len(argNodes)
+	if nFixed > len(params) {
+		nFixed = len(params)
+	}
+	for i := 0; i < nFixed; i++ {
+		a := argNodes[i]
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
 		}
-		if i < len(params) {
-			lowered, err = r.bridgeArg(lowered, a, params[i].Type)
-			if err != nil {
-				return nil, err
-			}
+		lowered, err = r.bridgeArg(lowered, a, params[i].Type)
+		if err != nil {
+			return nil, err
 		}
 		args = append(args, lowered)
 	}
-	// A call that omits a trailing argument fills the slot with the parameter's
-	// default, so the Go call passes every argument the lowered function expects.
-	// A missing argument with no default is an arity the callee could not have been
-	// a plain function value with, so it hands back rather than emit a short call.
+	// A call that omits a trailing fixed argument fills the slot with the parameter's
+	// default, so the Go call passes every argument the lowered function expects. A
+	// missing argument with no default is an arity the callee could not have been a
+	// plain function value with, so it hands back rather than emit a short call.
 	for i := len(argNodes); i < len(params); i++ {
 		var def frontend.Node
 		if i < len(defaults) {
@@ -207,7 +214,50 @@ func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []front
 		}
 		args = append(args, lowered)
 	}
+	if rest != nil {
+		restArg, err := r.gatherRest(*rest, argNodes[nFixed:])
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, restArg)
+	} else if len(argNodes) > len(params) {
+		return nil, &NotYetLowerable{Reason: "a call with more arguments than the callee has parameters and no rest is a later slice"}
+	}
 	return &ast.CallExpr{Fun: callee, Args: args}, nil
+}
+
+// gatherRest packs the trailing arguments a rest parameter collects into one
+// value.NewArray of the parameter's element type, the same array a plain array
+// argument would arrive as, so the callee reads its rest parameter with no special
+// casing. Each argument bridges to the element type the way a positional argument
+// bridges to its parameter. A spread into the rest position waits on the spread
+// slice, and a rest whose element type does not lower hands back.
+func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (ast.Expr, error) {
+	elemT, ok := r.prog.ElementType(rest.Type)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "rest parameter whose element type does not lower yet"}
+	}
+	elemGo, err := r.typeExpr(elemT)
+	if err != nil {
+		return nil, err
+	}
+	restArgs := make([]ast.Expr, 0, len(restNodes))
+	for _, a := range restNodes {
+		if a.Kind() == frontend.NodeSpreadElement {
+			return nil, &NotYetLowerable{Reason: "a spread argument into a rest parameter is a later slice"}
+		}
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		lowered, err = r.bridgeArg(lowered, a, elemT)
+		if err != nil {
+			return nil, err
+		}
+		restArgs = append(restArgs, lowered)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: restArgs}, nil
 }
 
 // bridgeArg fits a lowered argument to its declared parameter type the way an
