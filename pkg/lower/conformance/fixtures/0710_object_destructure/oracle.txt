@@ -1,0 +1,6 @@
+== stdout:
+30
+sam 30
+true
+== exit:
+0

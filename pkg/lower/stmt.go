@@ -63,6 +63,11 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	} else if ok {
 		return stmts, nil
 	}
+	if stmts, ok, err := r.flattenObjectDestructure(n); err != nil {
+		return nil, err
+	} else if ok {
+		return stmts, nil
+	}
 	s, err := r.lowerStatement(n)
 	if err != nil {
 		return nil, err
@@ -546,6 +551,84 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 			Lhs: []ast.Expr{ident(name)},
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
+		})
+	}
+	return stmts, true, nil
+}
+
+// flattenObjectDestructure lowers `const {x, y} = src` to one `:=` binding per
+// property, x := src.X and y := src.Y, the same struct-field selector a written-out
+// property access lowers to. It is the object sibling of flattenArrayDestructure and
+// owns the statement once it sees an object binding pattern, so every shape it cannot
+// yet lower returns an error and hands the unit back. The bounded cases: the source
+// must be a plain variable, so the read repeats without re-evaluating it; the source
+// must be a fixed-shape object, since a struct field is what the selector reads, so a
+// map-like record or an array hands back; and the pattern is shorthand names only, so
+// a rename (`{x: a}`), a default, a rest, or a nested pattern hands back, each a later
+// slice. A shorthand name binds the property of the same name, so its type is the
+// property's type and the selector read needs no coercion.
+func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, error) {
+	if n.Kind() != frontend.NodeVariableStatement {
+		return nil, false, nil
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	if len(decls) != 1 {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(decls[0])
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	patNode, initNode := kids[0], kids[1]
+	if patNode.Kind() != frontend.NodeUnknown {
+		return nil, false, nil
+	}
+	if !strings.HasPrefix(strings.TrimSpace(r.prog.Text(patNode)), "{") {
+		return nil, false, nil
+	}
+	// The pattern is an object binding, so from here the statement is ours: an early
+	// return reports ok=true with an error, not a fall-through.
+	if initNode.Kind() != frontend.NodeIdentifier {
+		return nil, true, &NotYetLowerable{Reason: "object destructuring off anything but a plain variable needs a temporary to hold the source, a later slice"}
+	}
+	objType := r.prog.TypeAt(initNode)
+	if objType.Flags&frontend.TypeObject == 0 || r.isTypedArray(initNode) {
+		return nil, true, &NotYetLowerable{Reason: "object destructuring on a non-object source is a later slice"}
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return nil, true, &NotYetLowerable{Reason: "object destructuring on an array source is a later slice"}
+	}
+	if _, err := r.decls.internStruct(r, objType); err != nil {
+		return nil, true, err
+	}
+	elems := r.prog.Children(patNode)
+	if len(elems) == 0 {
+		return nil, true, &NotYetLowerable{Reason: "an empty object destructuring pattern binds nothing"}
+	}
+	stmts := make([]ast.Stmt, 0, len(elems))
+	for _, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return nil, true, &NotYetLowerable{Reason: "an object destructuring rename, default, rest, or nested pattern is a later slice"}
+		}
+		nameNode := ec[0]
+		name, ok := localName(r.prog.Text(nameNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+		}
+		field, ok := exportedField(name)
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
+		}
+		recv, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, true, err
+		}
+		stmts = append(stmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident(field)}},
 		})
 	}
 	return stmts, true, nil
