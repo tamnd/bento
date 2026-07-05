@@ -132,8 +132,20 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "for...of loop variable is not a Go identifier"}
 	}
-	if _, ok := r.arrayElem(kids[1]); !ok {
-		return nil, &NotYetLowerable{Reason: "for...of over a non-array iterable is a later slice"}
+	// The iterable is an array (ranged over its Elems) or a string (ranged over its
+	// code points). A string yields one substring per Unicode code point, so it
+	// lowers to a range over CodePoints() the same way an array ranges over Elems();
+	// the loop variable is the string of that code point, which is how the checker
+	// types it. Any other iterable (a Set, a Map, a generator, a user iterator) is a
+	// later slice and hands back.
+	var elemsMethod string
+	switch {
+	case isArrayElem(r, kids[1]):
+		elemsMethod = "Elems"
+	case r.isString(kids[1]):
+		elemsMethod = "CodePoints"
+	default:
+		return nil, &NotYetLowerable{Reason: "for...of over a non-array, non-string iterable is a later slice"}
 	}
 	iter, err := r.lowerExpr(kids[1])
 	if err != nil {
@@ -143,13 +155,48 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ast.RangeStmt{
-		Key:   ident("_"),
-		Value: ident(name),
-		Tok:   token.DEFINE,
-		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident("Elems")}},
-		Body:  body,
-	}, nil
+	rng := &ast.RangeStmt{
+		X:    &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident(elemsMethod)}},
+		Body: body,
+	}
+	// A JavaScript for...of may bind a loop variable it never reads, the common
+	// counting idiom `for (const c of s) n++`, but Go rejects an unused range value
+	// and a `for _, _ := range` with no new variable. When the body reads the
+	// binding it is ranged into the loop variable; when it does not, the loop drops
+	// the binding entirely and ranges only to drive the iteration (`for range xs`).
+	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) {
+		rng.Key = ident("_")
+		rng.Value = ident(name)
+		rng.Tok = token.DEFINE
+	}
+	return rng, nil
+}
+
+// isArrayElem reports whether n is an array-typed for...of iterable, the receiver
+// whose element type arrayElem resolves. It wraps the arrayElem probe so the
+// for...of dispatch reads as a set of iterable kinds rather than a bare ok check.
+func isArrayElem(r *Renderer, n frontend.Node) bool {
+	_, ok := r.arrayElem(n)
+	return ok
+}
+
+// bodyUsesName reports whether the subtree rooted at n contains an identifier
+// whose source text is name. lowerForOf uses it to decide whether a for...of loop
+// variable is read in the body: a binding the body never mentions ranges into the
+// blank identifier so the Go loop compiles. The scan is by source text, the same
+// spelling the binding carries, so it sees a read however deeply nested. A body
+// that shadows the binding with its own declaration of the same name is a
+// pathological case this over-approximates as a use, which only keeps the binding.
+func (r *Renderer) bodyUsesName(n frontend.Node, name string) bool {
+	if n.Kind() == frontend.NodeIdentifier {
+		return r.prog.Text(n) == name
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.bodyUsesName(c, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // lowerReturn lowers a return, with or without a value.
