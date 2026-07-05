@@ -1,0 +1,7 @@
+== stdout:
+25
+2
+hi, sam
+20
+== exit:
+0
