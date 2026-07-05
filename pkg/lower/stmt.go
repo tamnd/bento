@@ -52,6 +52,11 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	} else if ok {
 		return stmts, nil
 	}
+	if stmts, ok, err := r.flattenChainedAssignStatement(n); err != nil {
+		return nil, err
+	} else if ok {
+		return stmts, nil
+	}
 	s, err := r.lowerStatement(n)
 	if err != nil {
 		return nil, err
@@ -392,6 +397,89 @@ func (r *Renderer) flattenCommaStatement(n frontend.Node) ([]ast.Stmt, bool, err
 		stmts = append(stmts, s)
 	}
 	return stmts, true, nil
+}
+
+// flattenChainedAssignStatement lowers a statement-position chained assignment,
+// a = b = 5, to the Go statements it means: the innermost assignment runs, then
+// each outer target takes the value the one inside it just held. So a = b = 5
+// becomes b = 5; a = b, which evaluates the right side once and settles every
+// target, the same as the chain does. It returns ok=false for a plain single
+// assignment, which the normal statement path already lowers, and hands back when
+// a link in the chain targets something other than a local identifier.
+func (r *Renderer) flattenChainedAssignStatement(n frontend.Node) ([]ast.Stmt, bool, error) {
+	if n.Kind() != frontend.NodeExpressionStatement {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 1 {
+		return nil, false, nil
+	}
+	outer, final, ok := r.chainedAssign(kids[0])
+	if !ok || len(outer) == 0 {
+		return nil, false, nil
+	}
+	// The innermost assignment lowers on its own, b = 5. Its target then feeds the
+	// next target out, and so on, so the value walks from the inside to the outside
+	// exactly as the chain assigns it.
+	first, err := r.lowerUpdate(final)
+	if err != nil {
+		return nil, false, err
+	}
+	stmts := []ast.Stmt{first}
+	source := r.prog.Children(final)[0]
+	for i := len(outer) - 1; i >= 0; i-- {
+		copyStmt, err := r.assignCopy(outer[i], source)
+		if err != nil {
+			return nil, false, err
+		}
+		stmts = append(stmts, copyStmt)
+		source = outer[i]
+	}
+	return stmts, true, nil
+}
+
+// chainedAssign walks a chain of plain assignments a = b = ... = value, returning
+// the outer targets in source order and the innermost assignment node that carries
+// the value. Assignment is right associative, so a = b = 5 nests as a = (b = 5);
+// the walk descends the right side while it stays a plain "=" assignment. A single
+// assignment has no outer targets and reports ok=false so the caller leaves it to
+// the ordinary path. A compound link like a = (b += 5) stops the walk, since its
+// value is not a plain copy, and that link lowers (and hands back) on its own.
+func (r *Renderer) chainedAssign(n frontend.Node) ([]frontend.Node, frontend.Node, bool) {
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return nil, n, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 3 || r.prog.Text(kids[1]) != "=" {
+		return nil, n, false
+	}
+	if inner, final, ok := r.chainedAssign(kids[2]); ok {
+		return append([]frontend.Node{kids[0]}, inner...), final, true
+	}
+	return nil, n, true
+}
+
+// assignCopy builds target = source for one link of a chained assignment, where
+// source is the target one step inside it. The source lowers as a read and coerces
+// to the target's type, so a chain that crosses the dynamic boundary boxes or
+// unboxes at each step the same way a written-out assignment would.
+func (r *Renderer) assignCopy(target, source frontend.Node) (ast.Stmt, error) {
+	if target.Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "chained assignment to a non-identifier target is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(target))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "chained assignment target is not a Go identifier"}
+	}
+	src, err := r.lowerExpr(source)
+	if err != nil {
+		return nil, err
+	}
+	src, err = r.coerceToTarget(src, source, target)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{src}}, nil
 }
 
 // commaOperands returns the operands of a comma expression in source order, or
