@@ -863,6 +863,15 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 			return inc, nil
 		}
 		return assign, nil
+	case frontend.NodeParenthesizedExpression:
+		// An object destructuring assignment is parenthesized in statement position,
+		// ({ x, y } = o), since a bare { on the left would open a block. The paren is
+		// the only thing between the assignment and lowerUpdate, so unwrap it for the
+		// one shape we lower and hand back the rest.
+		if stmt, ok, err := r.objectDestructureAssign(n); ok || err != nil {
+			return stmt, err
+		}
+		return nil, &NotYetLowerable{Reason: "a parenthesized expression statement that is not an object destructuring assignment is a later slice"}
 	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
 		return r.lowerIncDec(n)
 	case frontend.NodeCallExpression:
@@ -986,6 +995,79 @@ func (r *Renderer) arrayDestructureValues(targets []frontend.Node, rhs frontend.
 	default:
 		return nil, &NotYetLowerable{Reason: "array destructuring assignment from anything but a plain variable or an array literal needs a temporary, a later slice"}
 	}
+}
+
+// objectDestructureAssign lowers an object destructuring assignment `({ x, y } = o)`
+// to a single Go parallel assignment, `x, y = o.X, o.Y`, one struct-field selector per
+// target. It is the assignment sibling of flattenObjectDestructure, which binds fresh
+// names with `:=`; here the targets are already-declared locals, so it assigns with
+// `=`. The statement is parenthesized in source since a leading `{` would open a block,
+// so the node handed in is the parenthesized expression. It reports ok=false when that
+// wraps anything but an object-pattern assignment, so an ordinary parenthesized
+// statement falls through. Once it sees the object pattern on the left it owns the
+// statement: the source must be a plain variable of a fixed-shape object read field by
+// field, and every target must be a shorthand identifier whose field is the property of
+// the same name, so a rename (`{x: a}`), a default, a rest, a nested pattern, a member
+// target, or a non-variable source hands back, each a later slice.
+func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool, error) {
+	inner := r.prog.Children(paren)
+	if len(inner) != 1 || inner[0].Kind() != frontend.NodeBinaryExpression {
+		return nil, false, nil
+	}
+	parts := r.prog.Children(inner[0])
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, false, nil
+	}
+	lhs, rhs := parts[0], parts[2]
+	if lhs.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil, false, nil
+	}
+	// The left side is an object pattern, so from here the statement is ours.
+	if rhs.Kind() != frontend.NodeIdentifier {
+		return nil, true, &NotYetLowerable{Reason: "object destructuring assignment from anything but a plain variable needs a temporary, a later slice"}
+	}
+	objType := r.prog.TypeAt(rhs)
+	if objType.Flags&frontend.TypeObject == 0 || r.isTypedArray(rhs) {
+		return nil, true, &NotYetLowerable{Reason: "object destructuring assignment from a non-object source is a later slice"}
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return nil, true, &NotYetLowerable{Reason: "object destructuring assignment from an array source is a later slice"}
+	}
+	if _, err := r.decls.internStruct(r, objType); err != nil {
+		return nil, true, err
+	}
+	props := r.prog.Children(lhs)
+	if len(props) == 0 {
+		return nil, true, &NotYetLowerable{Reason: "an empty object assignment pattern binds nothing"}
+	}
+	names := make([]ast.Expr, 0, len(props))
+	values := make([]ast.Expr, 0, len(props))
+	for _, prop := range props {
+		// A rest property reads as a single-identifier property whose text carries the
+		// leading `...`, so the spread is caught by the text a child count would miss.
+		if strings.HasPrefix(strings.TrimSpace(r.prog.Text(prop)), "...") {
+			return nil, true, &NotYetLowerable{Reason: "a rest property in an object assignment gathers the remaining fields into an object, a later slice"}
+		}
+		pc := r.prog.Children(prop)
+		if len(pc) != 1 || pc[0].Kind() != frontend.NodeIdentifier {
+			return nil, true, &NotYetLowerable{Reason: "an object assignment rename, default, nested pattern, or member target is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(pc[0]))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
+		}
+		field, ok := exportedField(name)
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		names = append(names, ident(name))
+		values = append(values, &ast.SelectorExpr{X: recv, Sel: ident(field)})
+	}
+	return &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}, true, nil
 }
 
 // bytesElementAssign lowers a typed-array element write a[i] = v to the buffer's
