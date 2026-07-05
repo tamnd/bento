@@ -51,13 +51,19 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	if len(sig.TypeParams) != 0 {
 		return nil, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
 	}
-	if sig.RestParam != nil {
-		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
-	}
-
 	params, err := r.funcParamFields(fn, sig)
 	if err != nil {
 		return nil, err
+	}
+	// A rest parameter gathers the trailing arguments into an array, so it lowers to
+	// a final Go field of the array type its `T[]` annotation carries; every call
+	// packs its extra arguments into that array at the call site.
+	if sig.RestParam != nil {
+		restField, err := r.restParamField(*sig.RestParam)
+		if err != nil {
+			return nil, err
+		}
+		params.List = append(params.List, restField)
 	}
 	results, err := r.resultFields(sig.Return)
 	if err != nil {
@@ -159,6 +165,23 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
 	}
 	return fields, nil
+}
+
+// restParamField lowers a rest parameter to its Go field. The parameter's type is
+// the `T[]` the checker gives the gathered arguments, so it lowers to the same
+// *value.Array[T] a plain array parameter takes, and the body reads it as an array
+// with no special casing; only the call site differs, packing the trailing
+// arguments into the array rather than passing one already built.
+func (r *Renderer) restParamField(rest frontend.Param) (*ast.Field, error) {
+	name, ok := localName(rest.Name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "rest parameter name is not a Go identifier"}
+	}
+	pt, err := r.typeExpr(rest.Type)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.Field{Names: []*ast.Ident{ident(name)}, Type: pt}, nil
 }
 
 // funcParamNodes returns the parameter nodes of a function or arrow declaration in
