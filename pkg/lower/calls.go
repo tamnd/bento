@@ -43,8 +43,17 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		return r.methodCall(kids[0], kids[1:])
 	}
+	// A callee that is neither a bare identifier nor a member expression is a
+	// larger expression that evaluates to a function value: an array element
+	// fs[0](x), the result of another call mk(5)(), a parenthesized arrow. It has
+	// no name to resolve to a symbol, so it skips the builtin and user-function
+	// routing below and lowers as a function value applied to its arguments.
 	if kids[0].Kind() != frontend.NodeIdentifier {
-		return nil, &NotYetLowerable{Reason: "call to a non-identifier callee is a later slice"}
+		callee, err := r.functionValueCallee(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		return r.finishCall(n, callee, kids[1:])
 	}
 	// A call to a name bound by a node: import is a call to a host builtin, not a
 	// user function, so it routes to the value helper the builtin maps to before the
@@ -135,31 +144,31 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		// A bare identifier used as a callee that the checker accepted has a call
 		// signature, so the binding is a function value: an arrow or function
 		// expression stored in a local, or a parameter typed as a function. It lowers
-		// to a Go func value the same as any other read, and calling it is that value
-		// applied to the arguments. The call proceeds only when the callee's type
-		// lowers to a clean Go func type, the same shape its declaration takes, so a
-		// callable object, an overload set, or a generic function value hands back
-		// here instead of emitting a call on a wrong Go type.
-		if ft, ok, err := r.renderFuncType(r.prog.TypeAt(kids[0])); err != nil {
-			return nil, err
-		} else if !ok || ft == nil {
-			return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function or a plain function value is a later slice"}
-		}
-		lowered, err := r.lowerExpr(kids[0])
+		// as a function value the same way a non-identifier callee does, so the two
+		// share functionValueCallee.
+		lowered, err := r.functionValueCallee(kids[0])
 		if err != nil {
 			return nil, err
 		}
 		callee = lowered
 	}
-	// Arguments lower positionally, each bridged against its declared
-	// parameter, so a derived instance passed for a base parameter upcasts to
-	// the embedded base the same way an assignment would.
+	return r.finishCall(n, callee, kids[1:])
+}
+
+// finishCall lowers the argument list of call n against its signature and builds
+// the Go call on the already-lowered callee. It is shared by every user-call path
+// (a top-level function, a function-valued binding, and a non-identifier callee
+// expression) so the argument bridging is written once. Arguments lower
+// positionally, each bridged against its declared parameter, so a derived instance
+// passed for a base parameter upcasts to the embedded base the same way an
+// assignment would.
+func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node) (ast.Expr, error) {
 	var params []frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
 		params = sig.Params
 	}
-	args := make([]ast.Expr, 0, len(kids)-1)
-	for i, a := range kids[1:] {
+	args := make([]ast.Expr, 0, len(argNodes))
+	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -183,6 +192,22 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: callee, Args: args}, nil
+}
+
+// functionValueCallee lowers a callee expression that is not a named function to
+// the Go func value it evaluates to: a binding of function type, or a larger
+// expression whose type is a function (an array element fs[0], the result of
+// another call mk(5), a parenthesized arrow). The call proceeds only when the
+// callee's type lowers to a clean Go func type, the same shape a function
+// declaration takes, so a callable object, an overload set, or a generic function
+// value hands back here instead of emitting a call on a wrong Go type.
+func (r *Renderer) functionValueCallee(calleeNode frontend.Node) (ast.Expr, error) {
+	if ft, ok, err := r.renderFuncType(r.prog.TypeAt(calleeNode)); err != nil {
+		return nil, err
+	} else if !ok || ft == nil {
+		return nil, &NotYetLowerable{Reason: "call to a callee that is not a top-level function or a plain function value is a later slice"}
+	}
+	return r.lowerExpr(calleeNode)
 }
 
 // methodCall lowers a call whose callee is a member expression. The only
