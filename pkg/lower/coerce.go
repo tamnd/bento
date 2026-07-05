@@ -19,7 +19,14 @@ import (
 // in and a consumer coerces and operates on it as the number, string, or boolean it
 // is (section 6.11). A plain type is returned unchanged.
 func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
-	t := r.prog.TypeAt(n)
+	return r.primitiveFlagsOfType(r.prog.TypeAt(n))
+}
+
+// primitiveFlagsOfType is primitiveFlags over a Type rather than a node, so a
+// return type, a union member, or any other type handle folds down to its
+// primitive facet the same way. typeExpr uses it to pick the Go type of a folded
+// union, and primitiveFlags forwards a node's type to it.
+func (r *Renderer) primitiveFlagsOfType(t frontend.Type) frontend.TypeFlags {
 	f := t.Flags
 	// A registered enum is backed by a primitive (float64 for a numeric enum,
 	// value.BStr for a string enum), so a value of the enum type is that primitive
@@ -36,12 +43,30 @@ func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
 			}
 		}
 	}
-	if f&frontend.TypeIntersection == 0 {
-		return f
-	}
 	const prim = frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
-	for _, m := range r.prog.IntersectionMembers(t) {
-		f |= m.Flags & prim
+	if f&frontend.TypeIntersection != 0 {
+		for _, m := range r.prog.IntersectionMembers(t) {
+			f |= m.Flags & prim
+		}
+	}
+	// A union folds in a primitive facet only when every member carries it, so a
+	// union of numeric literals (1 | 2 | 3) is a number and true | false (how the
+	// checker often spells boolean) is a boolean, the same widening TypeScript
+	// applies. A member outside that primitive, including null or undefined, clears
+	// the facet, so a mixed union like string | number or an optional string |
+	// undefined folds nothing and stays on its own path. String is deliberately not
+	// in this mask: a closed string-literal union ("on" | "off") lowers to a compact
+	// integer tag enum (union.go, section 10), not a bstr, so its value is a tag and
+	// must not be treated as a string for coercion or type mapping.
+	const unionPrim = frontend.TypeNumber | frontend.TypeBoolean
+	if f&frontend.TypeUnion != 0 {
+		if members := r.prog.UnionMembers(t); len(members) > 0 {
+			common := frontend.TypeFlags(unionPrim)
+			for _, m := range members {
+				common &= m.Flags
+			}
+			f |= common
+		}
 	}
 	return f
 }
