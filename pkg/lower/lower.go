@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"go/ast"
 	"sort"
+	"strconv"
 
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/goimport"
@@ -160,6 +161,13 @@ type Renderer struct {
 	// program that cannot throw defers nothing, so its main and its imports are
 	// unchanged.
 	usesThrow bool
+	// tmpSeq is a monotonic counter the lowerer draws generated temporary names from,
+	// for the places a single source construct needs a Go local with no source name:
+	// the element a destructuring for...of binds before it reads each position out of
+	// it. It runs across the whole program so two temporaries never share a name, and
+	// it advances in the deterministic lowering order so the emitted names are stable
+	// from one render to the next.
+	tmpSeq int
 	// strBuilders is the list of reusable value.StrBuilder variables the current
 	// body needs, one per template or number-interpolated concatenation site the
 	// lowerer chose to build through a builder. A var declaration for each is hoisted
@@ -229,6 +237,16 @@ type Renderer struct {
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
 	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+}
+
+// freshTemp returns a generated Go local name unique across the program, for a
+// lowering that needs a variable with no source spelling. The name carries a prefix
+// no mangled source identifier takes, so it cannot collide with a user binding, and
+// the monotonic counter keeps two temporaries apart even in nested scopes.
+func (r *Renderer) freshTemp() string {
+	name := "_bt" + strconv.Itoa(r.tmpSeq)
+	r.tmpSeq++
+	return name
 }
 
 // SetGoSignatures wires the resolver a go: call marshals numbers against, so a Go
