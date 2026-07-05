@@ -53,7 +53,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.finishCall(n, callee, kids[1:])
+		return r.finishCall(n, callee, kids[1:], nil)
 	}
 	// A call to a name bound by a node: import is a call to a host builtin, not a
 	// user function, so it routes to the value helper the builtin maps to before the
@@ -134,12 +134,16 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// the Go func value the binding already lowered to. The two share the argument
 	// lowering below; only the callee spelling differs.
 	var callee ast.Expr
+	var defaults []frontend.Node
 	if sym.Flags&frontend.SymbolFunction != 0 {
 		name, ok := exportedField(sym.Name)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
 		}
 		callee = ident(name)
+		// A direct call to a top-level function may omit a defaulted trailing
+		// argument, so its parameter defaults ride into finishCall to fill the slot.
+		defaults = r.calleeDefaults(sym)
 	} else {
 		// A bare identifier used as a callee that the checker accepted has a call
 		// signature, so the binding is a function value: an arrow or function
@@ -152,7 +156,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		callee = lowered
 	}
-	return r.finishCall(n, callee, kids[1:])
+	return r.finishCall(n, callee, kids[1:], defaults)
 }
 
 // finishCall lowers the argument list of call n against its signature and builds
@@ -162,36 +166,67 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 // positionally, each bridged against its declared parameter, so a derived instance
 // passed for a base parameter upcasts to the embedded base the same way an
 // assignment would.
-func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node) (ast.Expr, error) {
+func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node) (ast.Expr, error) {
 	var params []frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
 		params = sig.Params
 	}
-	args := make([]ast.Expr, 0, len(argNodes))
+	args := make([]ast.Expr, 0, len(params))
 	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
 		}
 		if i < len(params) {
-			if boxed, ok, berr := r.boxToOptional(lowered, a, params[i].Type); berr != nil {
-				return nil, berr
-			} else if ok {
-				lowered = boxed
-			} else if wrapped, ok, werr := r.wrapToUnion(lowered, a, params[i].Type); werr != nil {
-				return nil, werr
-			} else if ok {
-				lowered = wrapped
-			} else {
-				lowered, err = r.bridgeClassBinding(lowered, a, params[i].Type)
-				if err != nil {
-					return nil, err
-				}
+			lowered, err = r.bridgeArg(lowered, a, params[i].Type)
+			if err != nil {
+				return nil, err
 			}
 		}
 		args = append(args, lowered)
 	}
+	// A call that omits a trailing argument fills the slot with the parameter's
+	// default, so the Go call passes every argument the lowered function expects.
+	// A missing argument with no default is an arity the callee could not have been
+	// a plain function value with, so it hands back rather than emit a short call.
+	for i := len(argNodes); i < len(params); i++ {
+		var def frontend.Node
+		if i < len(defaults) {
+			def = defaults[i]
+		}
+		if def == nil {
+			return nil, &NotYetLowerable{Reason: "a call that omits an argument the callee does not default is a later slice"}
+		}
+		lowered, err := r.lowerExpr(def)
+		if err != nil {
+			return nil, err
+		}
+		lowered, err = r.bridgeArg(lowered, def, params[i].Type)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
 	return &ast.CallExpr{Fun: callee, Args: args}, nil
+}
+
+// bridgeArg fits a lowered argument to its declared parameter type the way an
+// assignment would: it boxes into an optional, wraps into a tagged union, or upcasts
+// a derived instance to the embedded base, whichever the parameter asks for. It is
+// shared by a provided argument and a default filled into an omitted slot, so both
+// cross the parameter boundary by the same rule.
+func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.Type) (ast.Expr, error) {
+	if boxed, ok, err := r.boxToOptional(lowered, node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
+	if wrapped, ok, err := r.wrapToUnion(lowered, node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return wrapped, nil
+	}
+	return r.bridgeClassBinding(lowered, node, pt)
 }
 
 // functionValueCallee lowers a callee expression that is not a named function to
