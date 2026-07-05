@@ -687,6 +687,9 @@ func commaOperands(prog *frontend.Program, n frontend.Node) ([]frontend.Node, bo
 func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 	switch n.Kind() {
 	case frontend.NodeBinaryExpression:
+		if stmt, ok, err := r.arrayDestructureAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		if stmt, ok, err := r.bytesElementAssign(n); ok || err != nil {
 			return stmt, err
 		}
@@ -730,6 +733,114 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		return &ast.ExprStmt{X: call}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment, update, or call is a later slice"}
+	}
+}
+
+// arrayDestructureAssign lowers an array destructuring assignment `[a, b] = rhs` to a
+// single Go parallel assignment, `a, b = rhs0, rhs1`. Go evaluates every right-hand
+// side before it assigns any target, which is exactly the destructuring assignment's
+// order and is what makes the swap idiom `[a, b] = [b, a]` fall out as `a, b = b, a`.
+// It reports ok=false when the statement is not an array destructuring assignment, so
+// an ordinary assignment falls through to the paths below. Once it sees the array
+// pattern on the left it owns the statement, so a shape it cannot lower hands back:
+// the targets must be plain identifiers, an element-access or nested-pattern target
+// is a later slice; the right side is either a plain array variable, read element by
+// element through AtI with each element type matching its target, or an array literal
+// of the same arity whose elements lower and coerce to their targets; any other right
+// side needs a temporary and hands back.
+func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, error) {
+	parts := r.prog.Children(bin)
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, false, nil
+	}
+	lhs, rhs := parts[0], parts[2]
+	if lhs.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false, nil
+	}
+	// The left side is an array pattern, so from here the statement is ours.
+	targets := r.prog.Children(lhs)
+	if len(targets) == 0 {
+		return nil, true, &NotYetLowerable{Reason: "an empty array assignment pattern binds nothing"}
+	}
+	names := make([]ast.Expr, 0, len(targets))
+	for _, tgt := range targets {
+		if tgt.Kind() != frontend.NodeIdentifier {
+			return nil, true, &NotYetLowerable{Reason: "an array assignment hole, rest, nested pattern, or member target is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(tgt))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "array assignment target is not a Go identifier"}
+		}
+		names = append(names, ident(name))
+	}
+	values, err := r.arrayDestructureValues(targets, rhs)
+	if err != nil {
+		return nil, true, err
+	}
+	return &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}, true, nil
+}
+
+// arrayDestructureValues lowers the right side of an array destructuring assignment
+// into one Go expression per target, ready for the parallel assignment. A plain array
+// variable reads each target's element through AtI, guarded so the element type
+// matches the target and no coercion is needed; an array literal of the same arity
+// lowers each element and coerces it to its target the way a written-out assignment
+// would, which covers the swap idiom.
+func (r *Renderer) arrayDestructureValues(targets []frontend.Node, rhs frontend.Node) ([]ast.Expr, error) {
+	switch rhs.Kind() {
+	case frontend.NodeIdentifier:
+		elemT, ok := r.prog.ElementType(r.prog.TypeAt(rhs))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "array destructuring assignment from a non-array or tuple source is a later slice"}
+		}
+		elemGo, err := r.typeExpr(elemT)
+		if err != nil {
+			return nil, err
+		}
+		values := make([]ast.Expr, 0, len(targets))
+		for i, tgt := range targets {
+			tgtGo, err := r.typeExpr(r.prog.TypeAt(tgt))
+			if err != nil {
+				return nil, err
+			}
+			if same, err := sameGoType(tgtGo, elemGo); err != nil {
+				return nil, err
+			} else if !same {
+				return nil, &NotYetLowerable{Reason: "array destructuring assignment where a target's type differs from the array element type is a later slice"}
+			}
+			recv, err := r.lowerExpr(rhs)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, &ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: recv, Sel: ident("AtI")},
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+			})
+		}
+		return values, nil
+	case frontend.NodeArrayLiteralExpression:
+		elems := r.prog.Children(rhs)
+		if len(elems) != len(targets) {
+			return nil, &NotYetLowerable{Reason: "array destructuring assignment with a different number of literal elements than targets is a later slice"}
+		}
+		values := make([]ast.Expr, 0, len(elems))
+		for i, el := range elems {
+			if el.Kind() == frontend.NodeSpreadElement {
+				return nil, &NotYetLowerable{Reason: "a spread element in an array assignment source is a later slice"}
+			}
+			v, err := r.lowerExpr(el)
+			if err != nil {
+				return nil, err
+			}
+			v, err = r.coerceToTarget(v, el, targets[i])
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, v)
+		}
+		return values, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "array destructuring assignment from anything but a plain variable or an array literal needs a temporary, a later slice"}
 	}
 }
 
