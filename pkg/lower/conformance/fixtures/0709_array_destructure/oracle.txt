@@ -1,0 +1,6 @@
+== stdout:
+60
+alice and bob
+7
+== exit:
+0
