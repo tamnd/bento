@@ -972,6 +972,105 @@ func compoundBaseOp(op string) (string, bool) {
 // float64 type, which a := init would lose to int inference. Only the full
 // declare-condition-increment-block shape is covered; an omitted clause or an
 // expression initializer hands back.
+// lowerForPost lowers a for loop's post clause. A single update lowers the way it
+// does anywhere else. A comma of updates, the i++, j-- a two-pointer loop walks
+// with, cannot be two Go statements because a Go post clause holds exactly one, so
+// its operands fuse into one parallel assignment, i, j = i + 1, j - 1, which runs
+// them together the way the comma sequence does. The fuse needs every operand to
+// assign a distinct local; an operand that targets a property, repeats a target,
+// or is a call (which cannot sit on the left of an assignment) hands back, since
+// those cannot join one parallel assignment.
+func (r *Renderer) lowerForPost(n frontend.Node) (ast.Stmt, error) {
+	ops, ok := commaOperands(r.prog, n)
+	if !ok {
+		return r.lowerUpdate(n)
+	}
+	var lhs, rhs []ast.Expr
+	seen := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		s, err := r.lowerUpdate(op)
+		if err != nil {
+			return nil, err
+		}
+		l, r2, ok := postAssignPair(s)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a for post clause comma with an operand that is not a local assignment is a later slice"}
+		}
+		name, ok := l.(*ast.Ident)
+		if !ok || seen[name.Name] {
+			return nil, &NotYetLowerable{Reason: "a for post clause comma that repeats or computes its target is a later slice"}
+		}
+		seen[name.Name] = true
+		lhs = append(lhs, l)
+		rhs = append(rhs, r2)
+	}
+	return &ast.AssignStmt{Lhs: lhs, Tok: token.ASSIGN, Rhs: rhs}, nil
+}
+
+// postAssignPair rewrites one lowered update statement into the (target, value)
+// pair a parallel assignment needs, so an increment, a plain assignment, and a
+// compound step all reduce to target = value. An increment becomes target +/- 1;
+// a compound step x <op>= v becomes x = x <op> v, the same fuse combineBinary
+// undoes going the other way. A statement that is not one of these (a call) has no
+// such pair and reports ok=false.
+func postAssignPair(s ast.Stmt) (ast.Expr, ast.Expr, bool) {
+	switch st := s.(type) {
+	case *ast.IncDecStmt:
+		op := token.ADD
+		if st.Tok == token.DEC {
+			op = token.SUB
+		}
+		return st.X, &ast.BinaryExpr{X: st.X, Op: op, Y: &ast.BasicLit{Kind: token.INT, Value: "1"}}, true
+	case *ast.AssignStmt:
+		if len(st.Lhs) != 1 || len(st.Rhs) != 1 {
+			return nil, nil, false
+		}
+		if st.Tok == token.ASSIGN {
+			return st.Lhs[0], st.Rhs[0], true
+		}
+		base, ok := compoundAssignBase(st.Tok)
+		if !ok {
+			return nil, nil, false
+		}
+		return st.Lhs[0], &ast.BinaryExpr{X: st.Lhs[0], Op: base, Y: st.Rhs[0]}, true
+	default:
+		return nil, nil, false
+	}
+}
+
+// compoundAssignBase maps a Go compound-assignment token to the binary operator it
+// fuses, the inverse of compoundAssignToken, so x += v can be rewritten as x + v
+// for a parallel assignment. A token that is not a compound assignment returns
+// false.
+func compoundAssignBase(tok token.Token) (token.Token, bool) {
+	switch tok {
+	case token.ADD_ASSIGN:
+		return token.ADD, true
+	case token.SUB_ASSIGN:
+		return token.SUB, true
+	case token.MUL_ASSIGN:
+		return token.MUL, true
+	case token.QUO_ASSIGN:
+		return token.QUO, true
+	case token.REM_ASSIGN:
+		return token.REM, true
+	case token.AND_ASSIGN:
+		return token.AND, true
+	case token.OR_ASSIGN:
+		return token.OR, true
+	case token.XOR_ASSIGN:
+		return token.XOR, true
+	case token.SHL_ASSIGN:
+		return token.SHL, true
+	case token.SHR_ASSIGN:
+		return token.SHR, true
+	case token.AND_NOT_ASSIGN:
+		return token.AND_NOT, true
+	default:
+		return token.ILLEGAL, false
+	}
+}
+
 func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
 	if len(kids) != 4 {
@@ -991,7 +1090,7 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	post, err := r.lowerUpdate(kids[2])
+	post, err := r.lowerForPost(kids[2])
 	if err != nil {
 		return nil, err
 	}
