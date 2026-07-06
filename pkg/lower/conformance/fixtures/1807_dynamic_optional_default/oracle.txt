@@ -1,0 +1,5 @@
+== stdout:
+Test262Error:boom
+Test262Error:
+== exit:
+0

@@ -77,6 +77,44 @@ func TestValueLogicalImpureLeftHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
+// TestValueLogicalDynamicLowersToOr pins the dynamic form: || with an any-typed
+// left boxes both sides and routes through value.Or, so the truthiness test runs
+// at runtime where the kind lives. The string literal right boxes through
+// StringValue, and the string-returning function coerces the dynamic result back
+// out with ToString.
+func TestValueLogicalDynamicLowersToOr(t *testing.T) {
+	src := "function f(x: any): string { return x || \"d\"; }\nconsole.log(f(\"a\"));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.Or(x, value.StringValue(value.FromGoString(\"d\")))") {
+		t.Errorf("dynamic || did not lower to value.Or over boxed operands:\n%s", source)
+	}
+	if !strings.Contains(source, "value.ToString(value.Or(") {
+		t.Errorf("dynamic || result did not coerce back to the declared string return:\n%s", source)
+	}
+	if !strings.Contains(source, "F(value.StringValue(value.FromGoString(\"a\")))") {
+		t.Errorf("string argument into the any parameter did not box:\n%s", source)
+	}
+}
+
+// TestValueLogicalDynamicLowersToAnd pins the && sibling: value.And returns the
+// left operand when it is falsy, the right otherwise.
+func TestValueLogicalDynamicLowersToAnd(t *testing.T) {
+	src := "function f(x: any): number { return x && 7; }\nconsole.log(f(1));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.And(x, value.Number(7))") {
+		t.Errorf("dynamic && did not lower to value.And over boxed operands:\n%s", source)
+	}
+}
+
+// TestValueLogicalDynamicImpureRightHandsBack pins the eager-argument gate:
+// value.Or takes both operands evaluated, so a right side with a side effect
+// would run even when the short-circuit says it must not, and the form hands
+// back until a lazy right lands.
+func TestValueLogicalDynamicImpureRightHandsBack(t *testing.T) {
+	src := "function f(x: any, y: number): any { return x || Math.floor(y); }\nconsole.log(f(1, 2));\n"
+	renderProgramHandBack(t, src)
+}
+
 // TestValueLogicalRuns builds and runs both operators over numbers and strings and
 // matches the Node oracle: || returns the left when truthy and && the left when
 // falsy, so a falsy but present left like 0 or "" is returned by && and replaced by
