@@ -134,7 +134,7 @@ func (r *Renderer) flattenConditionalDecl(n frontend.Node) ([]ast.Stmt, bool, er
 	}
 	nameNode := kids[0]
 	name, ok := localName(r.prog.Text(nameNode))
-	if !ok || r.int32Locals[name] {
+	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false, nil
 	}
 	// The temporary takes the branches' widened primitive type, not the checker's
@@ -179,7 +179,7 @@ func (r *Renderer) flattenConditionalAssign(n frontend.Node) ([]ast.Stmt, bool, 
 		return nil, false, nil
 	}
 	name, ok := localName(r.prog.Text(parts[0]))
-	if !ok || r.int32Locals[name] {
+	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false, nil
 	}
 	targetNode := parts[0]

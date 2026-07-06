@@ -337,6 +337,13 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 	r.fixedTArr = r.fixedTypedArraysOf(r.prog.Children(block))
 	defer func() { r.fixedTArr = prevFA }()
 
+	// The int64 tier runs after the int32 set and the counter ranges are in place,
+	// since its interval proof reads both: an int32 local or a bounded counter is a
+	// known-range leaf inside an int64 candidate's writes.
+	prevI64 := r.int64Locals
+	r.int64Locals = r.int64LocalsOf(r.prog.Children(block))
+	defer func() { r.int64Locals = prevI64 }()
+
 	// The optional-locals set is scoped to this body the same way, so a narrowed read
 	// of an option unwraps with .Get() wherever in the body it sits and one function's
 	// options do not leak into another's reads.
