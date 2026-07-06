@@ -86,9 +86,31 @@ func (r *Renderer) isBool(n frontend.Node) bool {
 
 // isString reports whether the checker types n as string, the guard that routes
 // + to value.Concat and .length to value.BStr.Length rather than to a number or
-// object path.
+// object path. A read of a caught error's .message or .name counts too: the
+// checker types the binding any or unknown, so the read carries no string flag,
+// but it lowers to the *value.Error Message or Name method (member.go), which
+// returns the bento string, so every consumer of the predicate sees the string
+// the lowered expression is.
 func (r *Renderer) isString(n frontend.Node) bool {
-	return r.primitiveFlags(n)&frontend.TypeString != 0
+	return r.primitiveFlags(n)&frontend.TypeString != 0 || r.caughtErrorStringRead(n)
+}
+
+// caughtErrorStringRead reports whether n reads .message or .name off a catch
+// binding in scope, the two reads member.go lowers to the *value.Error methods.
+func (r *Renderer) caughtErrorStringRead(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name, ok := localName(r.prog.Text(kids[0]))
+	if !ok || !r.errorLocals[name] {
+		return false
+	}
+	prop := r.prog.Text(kids[1])
+	return prop == "message" || prop == "name"
 }
 
 // isBigInt reports whether the checker types n as bigint, the guard that routes the
@@ -104,6 +126,13 @@ func (r *Renderer) isBigInt(n frontend.Node) bool {
 // dynamic paths use to route a property read, a +, or an assignment through the
 // value box rather than a static field, operator, or slot.
 func (r *Renderer) isDynamic(n frontend.Node) bool {
+	// A read of a caught error's .message or .name lowers to a bento string
+	// (member.go), so it is not a boxed value even though the checker types the
+	// catch binding any or unknown; keeping it off the dynamic path routes a +
+	// over it to the plain string concat the lowered expression supports.
+	if r.caughtErrorStringRead(n) {
+		return false
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 

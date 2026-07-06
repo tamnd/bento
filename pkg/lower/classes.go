@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -78,6 +79,11 @@ type classInfo struct {
 	// new on it), only the init function its concrete subclasses run on the
 	// embedded base, and its abstract methods hold vtable slots with no body.
 	abstract bool
+	// thrownAsError marks a class the module throws. Its instances travel the
+	// runtime's panic path, so emission adds the ErrorName and ErrorMessage
+	// methods that satisfy value.Thrown (set by lowerThrow, read by
+	// renderClass).
+	thrownAsError bool
 }
 
 // classField is one instance field, in declaration order.
@@ -1194,7 +1200,54 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		}
 		out = append(out, fd)
 	}
+	if info.thrownAsError {
+		out = append(out, r.thrownMethodDecls(info)...)
+	}
 	return out, nil
+}
+
+// thrownMethodDecls emits the two methods that let a thrown instance ride the
+// runtime's panic path: ErrorName reports the source class name, the spelling
+// a catch and the uncaught reporter print, and ErrorMessage reads the
+// instance's message field. Together they satisfy value.Thrown, so
+// value.Throw takes the instance as-is; a catch that recovers it binds a
+// *value.Error carrying this name and message.
+func (r *Renderer) thrownMethodDecls(info *classInfo) []ast.Decl {
+	recv := func() *ast.FieldList {
+		return &ast.FieldList{List: []*ast.Field{{
+			Names: []*ast.Ident{ident(info.recv)},
+			Type:  star(ident(info.goName)),
+		}}}
+	}
+	stringResult := func() *ast.FieldList {
+		return &ast.FieldList{List: []*ast.Field{{Type: ident("string")}}}
+	}
+	var msgField string
+	for _, f := range info.fields {
+		if f.prop == "message" {
+			msgField = f.goName
+		}
+	}
+	nameDecl := &ast.FuncDecl{
+		Recv: recv(),
+		Name: ident("ErrorName"),
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: stringResult()},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{
+			Results: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(info.name)}},
+		}}},
+	}
+	msgDecl := &ast.FuncDecl{
+		Recv: recv(),
+		Name: ident("ErrorMessage"),
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: stringResult()},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{
+			Results: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{
+				X:   &ast.SelectorExpr{X: ident(info.recv), Sel: ident(msgField)},
+				Sel: ident("ToGoString"),
+			}}},
+		}}},
+	}
+	return []ast.Decl{nameDecl, msgDecl}
 }
 
 // staticVarDecl emits one static field as a package var with an explicit type,

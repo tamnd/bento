@@ -537,10 +537,10 @@ func (r *Renderer) renderFuncType(t frontend.Type) (ast.Expr, bool, error) {
 		params = append(params, &ast.Field{Type: pt})
 	}
 	ft := &ast.FuncType{Params: &ast.FieldList{List: params}}
-	// A void return (or the zero type at a position with no value) is a Go func
-	// with no results; any other return lowers to the single Go result the
-	// signature carries.
-	if sig.Return.Flags != 0 && sig.Return.Flags&frontend.TypeVoid == 0 {
+	// A void or never return (or the zero type at a position with no value) is a
+	// Go func with no results; any other return lowers to the single Go result
+	// the signature carries.
+	if sig.Return.Flags != 0 && sig.Return.Flags&(frontend.TypeVoid|frontend.TypeNever) == 0 {
 		rt, err := r.typeExpr(sig.Return)
 		if err != nil {
 			return nil, true, err
