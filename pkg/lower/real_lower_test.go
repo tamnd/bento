@@ -261,13 +261,16 @@ func TestRealSameStringUnionInternsToOneEnum(t *testing.T) {
 	}
 }
 
-// TestRealNonIdentifierStringUnionHandsBack pins that a string-literal union whose
-// member is not a Go identifier has no clean tag name yet, so it hands back.
-func TestRealNonIdentifierStringUnionHandsBack(t *testing.T) {
-	_, _, err := renderReal(t, `const x: "north" | "due east" = "north";`)
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderType(union with a spaced member) err = %v, want a *NotYetLowerable", err)
+// TestRealNonIdentifierStringUnionLowers pins that a string-literal union whose
+// member is not a Go identifier now gets its tag name through the mangle (the
+// space spells U20_), so the union lowers instead of handing back.
+func TestRealNonIdentifierStringUnionLowers(t *testing.T) {
+	_, got, err := renderReal(t, `const x: "north" | "due east" = "north";`)
+	if err != nil {
+		t.Fatalf("RenderType(union with a spaced member) err = %v, want nil via the mangle", err)
+	}
+	if got == "" {
+		t.Fatal("RenderType(union with a spaced member) returned an empty type")
 	}
 }
 
@@ -322,13 +325,25 @@ func TestRealWideOptionalPropertyHandsBack(t *testing.T) {
 	}
 }
 
-// TestRealNonIdentifierPropertyHandsBack pins that a property name Go cannot spell
-// belongs in the side table, not a field, so the object hands back for now.
-func TestRealNonIdentifierPropertyHandsBack(t *testing.T) {
-	_, _, err := renderReal(t, `declare const x: { "has space": number };`)
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderType(object with non-identifier key) err = %v, want a *NotYetLowerable", err)
+// TestRealNonIdentifierPropertyLowers pins that a property name Go cannot spell
+// verbatim becomes a mangled struct field. Declaration, dotted read, and
+// bracket read all route through the same exportedField, so "has space" is
+// one field everywhere and the object lowers with a json tag keeping the
+// original spelling.
+func TestRealNonIdentifierPropertyLowers(t *testing.T) {
+	r, got, err := renderReal(t, `declare const x: { "has space": number };`)
+	if err != nil {
+		t.Fatalf("RenderType(object with non-identifier key) err = %v, want nil via the mangle", err)
+	}
+	if got == "" {
+		t.Fatal("RenderType(object with non-identifier key) returned an empty type")
+	}
+	var src string
+	for _, d := range r.decls.emit() {
+		src += d.Source + "\n"
+	}
+	if !strings.Contains(src, "`json:\"has space\"`") {
+		t.Fatalf("struct decl = %q, want a json tag preserving the original key", src)
 	}
 }
 

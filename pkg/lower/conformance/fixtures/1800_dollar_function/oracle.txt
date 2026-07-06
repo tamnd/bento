@@ -1,0 +1,4 @@
+== stdout:
+done: first
+done: second
+42
