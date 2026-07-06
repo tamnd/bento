@@ -60,6 +60,31 @@ func (r *Renderer) valueLogical(opText string, left, right frontend.Node) (ast.E
 	if r.isBool(left) && r.isBool(right) {
 		return nil, false, nil
 	}
+	// A dynamic operand makes the result dynamic: which operand comes back is a
+	// runtime truthiness question, so both sides box and the value.Or or value.And
+	// helper picks one. The helper takes both operands already evaluated, so the
+	// right side must be effect-free for the evaluation the short-circuit skips to
+	// be unobservable; the left evaluates exactly once either way. The common
+	// shape this serves is a default over a maybe-missing dynamic, message || "".
+	if r.isDynamic(left) || r.isDynamic(right) {
+		if !r.repeatableOperand(right) {
+			return nil, false, &NotYetLowerable{Reason: "value-returning " + opText + " on a dynamic operand whose right side has a side effect needs a lazy form, a later slice"}
+		}
+		leftBoxed, err := r.boxOperand(left)
+		if err != nil {
+			return nil, false, err
+		}
+		rightBoxed, err := r.boxOperand(right)
+		if err != nil {
+			return nil, false, err
+		}
+		helper := "Or"
+		if opText == "&&" {
+			helper = "And"
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", helper), Args: []ast.Expr{leftBoxed, rightBoxed}}, true, nil
+	}
 	retType, kind, ok := r.condBranchType(left)
 	_, otherKind, otherOK := r.condBranchType(right)
 	if !ok || !otherOK || kind != otherKind {

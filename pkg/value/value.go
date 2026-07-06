@@ -283,6 +283,28 @@ func Add(a, b Value) Value {
 	return Number(ToNumber(pa) + ToNumber(pb))
 }
 
+// Or implements the value-returning a || b over dynamic values: the left operand
+// when it is truthy, the right otherwise. Both arguments arrive evaluated, so the
+// lowering only takes this form when the right operand has no side effect to
+// short-circuit away; a right operand with an effect keeps its hand-back until
+// the lazy form lands.
+func Or(a, b Value) Value {
+	if ToBoolean(a) {
+		return a
+	}
+	return b
+}
+
+// And implements the value-returning a && b over dynamic values: the left operand
+// when it is falsy, the right otherwise. The same eager-argument caveat as Or
+// applies, so the lowering gates on an effect-free right operand.
+func And(a, b Value) Value {
+	if ToBoolean(a) {
+		return b
+	}
+	return a
+}
+
 // toPrimitiveDefault, toPrimitiveNumber, and toPrimitiveString apply the
 // ToPrimitive abstract operation at the three hints. A primitive is already
 // primitive and returns unchanged. An object has no user valueOf or toString on

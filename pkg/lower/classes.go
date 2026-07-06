@@ -1758,10 +1758,10 @@ func (r *Renderer) newClass(info *classInfo, argNodes []frontend.Node) (ast.Expr
 	if info.abstract {
 		return nil, &NotYetLowerable{Reason: "constructing the abstract class " + info.name + " is not lowerable"}
 	}
-	if len(argNodes) != len(info.ctorParams) {
+	if len(argNodes) > len(info.ctorParams) {
 		return nil, &NotYetLowerable{Reason: "new " + info.name + " with an argument count that differs from the constructor is a later slice"}
 	}
-	args := make([]ast.Expr, 0, len(argNodes))
+	args := make([]ast.Expr, 0, len(info.ctorParams))
 	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
@@ -1773,6 +1773,17 @@ func (r *Renderer) newClass(info *classInfo, argNodes []frontend.Node) (ast.Expr
 			return nil, err
 		}
 		args = append(args, lowered)
+	}
+	// A trailing parameter the call omits is an optional the checker accepted the
+	// short call against. A dynamic optional's slot fills with value.Undefined,
+	// the absent value the language binds; a static omission has no Go value to
+	// stand in and hands back.
+	for i := len(argNodes); i < len(info.ctorParams); i++ {
+		if !r.isDynamic(r.paramNameNode(info.ctorParams[i])) {
+			return nil, &NotYetLowerable{Reason: "new " + info.name + " omitting a non-dynamic optional argument is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		args = append(args, sel("value", "Undefined"))
 	}
 	return &ast.CallExpr{Fun: ident("New" + info.goName), Args: args}, nil
 }
@@ -1796,24 +1807,27 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "method has no call signature"}
 	}
-	if len(argNodes) != len(sig.Params) {
+	if len(argNodes) > len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
 	name := m.goName
 	if viaSuper && info.isVirtual(method) {
 		name = implName(m)
 	}
-	args := make([]ast.Expr, 0, len(argNodes))
+	args := make([]ast.Expr, 0, len(sig.Params))
 	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
 		}
-		lowered, err = r.bridgeClassBinding(lowered, a, sig.Params[i].Type)
+		lowered, err = r.bridgeArg(lowered, a, sig.Params[i].Type)
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, lowered)
+	}
+	if err := r.padOmittedDynamic(&args, sig, len(argNodes)); err != nil {
+		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
 }
@@ -1832,22 +1846,40 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "static method has no call signature"}
 	}
-	if len(argNodes) != len(sig.Params) {
+	if len(argNodes) > len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
-	args := make([]ast.Expr, 0, len(argNodes))
+	args := make([]ast.Expr, 0, len(sig.Params))
 	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
 		}
-		lowered, err = r.bridgeClassBinding(lowered, a, sig.Params[i].Type)
+		lowered, err = r.bridgeArg(lowered, a, sig.Params[i].Type)
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, lowered)
 	}
+	if err := r.padOmittedDynamic(&args, sig, len(argNodes)); err != nil {
+		return nil, err
+	}
 	return &ast.CallExpr{Fun: ident(m.goName), Args: args}, nil
+}
+
+// padOmittedDynamic fills the trailing argument slots a short call left empty.
+// Only a dynamic optional pads: its slot takes value.Undefined, the absent value
+// the language binds to an omitted parameter. A static optional has no Go value
+// to stand in for the omission and hands back, the same edge paramFields keeps.
+func (r *Renderer) padOmittedDynamic(args *[]ast.Expr, sig frontend.Signature, from int) error {
+	for i := from; i < len(sig.Params); i++ {
+		if sig.Params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+			return &NotYetLowerable{Reason: "a call omitting a non-dynamic optional argument is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		*args = append(*args, sel("value", "Undefined"))
+	}
+	return nil
 }
 
 // classFieldOfTarget resolves a property access to the class field it stores

@@ -106,17 +106,19 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 
 // paramFields lowers each parameter to a Go field with its lowered type. An
 // optional parameter (one a caller may omit, so its index is at or past the
-// signature's MinArgs) still hands back: its type is the optional value.Opt[T]
-// now, but a call that omits the argument must synthesize the undefined optional,
-// the call-site defaulting of a later slice, so lowering the parameter without it
-// would emit a Go function no omitting caller could call. Its type carrying an
-// explicit undefined member is not what marks it optional here, since the checker
-// reports the same T | undefined type for a required parameter annotated that
-// way; the caller-omittable distinction is MinArgs alone.
+// signature's MinArgs) lowers only when its type is dynamic: a dynamic slot
+// holds undefined natively, so an omitting call site fills it with
+// value.Undefined and the body reads the same absent value JavaScript binds. A
+// static optional still hands back, because its Go type has no room for the
+// undefined an omission means; the value.Opt[T] synthesis is a later slice. Its
+// type carrying an explicit undefined member is not what marks it optional
+// here, since the checker reports the same T | undefined type for a required
+// parameter annotated that way; the caller-omittable distinction is MinArgs
+// alone.
 func (r *Renderer) paramFields(sig frontend.Signature) (*ast.FieldList, error) {
 	fields := &ast.FieldList{}
 	for i, p := range sig.Params {
-		if i >= sig.MinArgs {
+		if i >= sig.MinArgs && p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
 			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 		}
 		pname, ok := localName(p.Name)
@@ -151,11 +153,17 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 		}
 		if i >= sig.MinArgs {
 			def, ok := r.paramDefaultNode(paramNodes, i)
-			if !ok {
+			switch {
+			case ok:
+				if !packageSafeInit(r.prog, def) {
+					return nil, &NotYetLowerable{Reason: "a default parameter value that reads a variable or makes a call needs the callee's scope at the call site, a later slice"}
+				}
+			case p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+				// A bare optional of dynamic type needs no default: the omitted slot
+				// fills with value.Undefined at the call site, the same absent value
+				// the language binds.
+			default:
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
-			}
-			if !packageSafeInit(r.prog, def) {
-				return nil, &NotYetLowerable{Reason: "a default parameter value that reads a variable or makes a call needs the callee's scope at the call site, a later slice"}
 			}
 		}
 		pt, err := r.typeExpr(p.Type)

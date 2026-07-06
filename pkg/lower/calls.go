@@ -194,14 +194,20 @@ func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []front
 	}
 	// A call that omits a trailing fixed argument fills the slot with the parameter's
 	// default, so the Go call passes every argument the lowered function expects. A
-	// missing argument with no default is an arity the callee could not have been a
-	// plain function value with, so it hands back rather than emit a short call.
+	// defaultless omission on a dynamic parameter fills with value.Undefined, the
+	// absent value the language binds there; a defaultless static omission hands
+	// back rather than emit a short call.
 	for i := len(argNodes); i < len(params); i++ {
 		var def frontend.Node
 		if i < len(defaults) {
 			def = defaults[i]
 		}
 		if def == nil {
+			if params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+				r.requireImport(valuePkg)
+				args = append(args, sel("value", "Undefined"))
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "a call that omits an argument the callee does not default is a later slice"}
 		}
 		lowered, err := r.lowerExpr(def)
@@ -275,6 +281,18 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 		return nil, err
 	} else if ok {
 		return wrapped, nil
+	}
+	// An argument crosses the dynamic boundary the way an assignment does: a
+	// static value into a dynamic parameter boxes, and a dynamic value into a
+	// static parameter coerces, so a string passed for a message?: any lands as
+	// the boxed string the body reads.
+	srcDyn := r.isDynamic(node)
+	tgtDyn := pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	switch {
+	case srcDyn && !tgtDyn:
+		return r.coerceDynamicToStaticFlags(lowered, pt.Flags)
+	case !srcDyn && tgtDyn:
+		return r.boxStaticToDynamic(lowered, node)
 	}
 	return r.bridgeClassBinding(lowered, node, pt)
 }
