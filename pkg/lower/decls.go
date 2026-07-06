@@ -236,11 +236,13 @@ func (d *declSet) emitNodes() []ast.Decl {
 func renderStructBody(r *Renderer, name string, props []frontend.Property) (*ast.GenDecl, error) {
 	fields := &ast.FieldList{}
 	for _, p := range props {
-		if p.Optional {
-			// An optional property is T | undefined plus a presence bit, which
-			// lowers to the section 9 optional type. That type is a later slice,
-			// so a shape with an optional property is not lowerable yet.
-			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property needs the optional tagged type, a later slice"}
+		if p.Optional && !r.isOptionalType(p.Type) {
+			// An optional property x?: T types as T | undefined, which lowers to a
+			// value.Opt[T'] field below through the ordinary typeExpr, with the Opt's
+			// zero value standing for the absent member (05_type_lowering section 17).
+			// An optional whose type is not that two-member shape (x?: number | string
+			// adds a third member) needs the tagged sum and stays a later slice.
+			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property outside the T | undefined shape needs the tagged sum, a later slice"}
 		}
 		field, ok := exportedField(p.Name)
 		if !ok {
