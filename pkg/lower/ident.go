@@ -1,6 +1,10 @@
 package lower
 
-import "unicode"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+)
 
 // This file implements the name-mangling rules of 05_type_lowering.md section
 // 29. TypeScript identifiers are a superset of Go identifiers, so a property or
@@ -32,20 +36,58 @@ func isGoIdent(s string) bool {
 	return true
 }
 
-// exportedField turns a TypeScript property name into an exported Go struct
-// field name: the first letter is uppercased and the rest is preserved, so "x"
-// becomes "X" and "count" becomes "Count" (section 12). An exported name can
-// never collide with a Go keyword, because every keyword is lowercase, so the
-// keyword rule does not fire here; it is kept in mangleUnexported for names that
-// must stay lowercase. A name that is not a legal Go identifier is not a struct
-// field at all: it belongs in the object's symbol-property side table, and this
-// function reports ok=false so the caller routes it there rather than inventing
-// an unsound field.
-func exportedField(name string) (string, bool) {
-	if !isGoIdent(name) {
+// mangleIdent maps a TypeScript identifier to a legal Go identifier spelling.
+// A name that is already legal passes through untouched, which keeps today's
+// output byte-identical for every program that lowered before mangling
+// existed. Otherwise the name is escaped rune by rune with a small mnemonic
+// table: `$` becomes `D_` (dollar, the overwhelmingly common case, test262
+// spells $DONE and $DONOTEVALUATE everywhere), and any other rune outside
+// Go's letter/digit/underscore set becomes `U` plus its uppercase hex code
+// point plus `_`, so a name carrying U+2118 spells it U2118_. A name left
+// starting with a digit takes an `N_` prefix. The escape decodes back
+// unambiguously, so two different names can never mangle to the same output;
+// the one possible clash, a mangled spelling against the same name written
+// verbatim elsewhere in the module, is declined by the module-level guard in
+// RenderProgram rather than resolved with a context-dependent rename, which
+// would break the pure-function rule. Only the empty string reports ok=false.
+func mangleIdent(name string) (string, bool) {
+	if name == "" {
 		return "", false
 	}
-	runes := []rune(name)
+	if isGoIdent(name) {
+		return name, true
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == '$':
+			b.WriteString("D_")
+		case r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		default:
+			fmt.Fprintf(&b, "U%X_", r)
+		}
+	}
+	s := b.String()
+	if r := []rune(s)[0]; unicode.IsDigit(r) {
+		s = "N_" + s
+	}
+	return s, true
+}
+
+// exportedField turns a TypeScript property name into an exported Go struct
+// field name: the name is mangled into a legal identifier if it needs it, then
+// the first letter is uppercased and the rest is preserved, so "x" becomes
+// "X", "count" becomes "Count" (section 12), and "$DONE" becomes "D_DONE". An
+// exported name can never collide with a Go keyword, because every keyword is
+// lowercase, so the keyword rule does not fire here. Only the empty string
+// reports ok=false.
+func exportedField(name string) (string, bool) {
+	s, ok := mangleIdent(name)
+	if !ok {
+		return "", false
+	}
+	runes := []rune(s)
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes), true
 }
@@ -63,18 +105,21 @@ var goKeywords = map[string]bool{
 }
 
 // localName maps a TypeScript parameter or local identifier to its Go spelling.
-// A local stays unexported, so the name is preserved verbatim except when it
-// spells a Go keyword, which takes a trailing underscore. A name that is not a
-// legal Go identifier (a string-keyed binding, say) reports ok=false so the
-// caller hands the construct back rather than emitting an unsound reference. The
-// mapping is a pure function of the name, so a parameter and every reference to
-// it mangle identically without threading any shared table.
+// A local stays unexported, so a legal name is preserved verbatim except when
+// it spells a Go keyword, which takes a trailing underscore; a name that is
+// not a legal Go identifier mangles through the same escape exportedField
+// uses, minus the uppercasing, so "$DONE" declares and reads as D_DONE
+// everywhere. A mangled name can never spell a keyword (it always carries an
+// uppercase rune or an underscore from the escape), so the two rules do not
+// interact. The mapping is a pure function of the name, so a parameter and
+// every reference to it mangle identically without threading any shared table.
 func localName(name string) (string, bool) {
-	if !isGoIdent(name) {
+	s, ok := mangleIdent(name)
+	if !ok {
 		return "", false
 	}
-	if goKeywords[name] {
-		return name + "_", true
+	if goKeywords[s] {
+		return s + "_", true
 	}
-	return name, true
+	return s, true
 }

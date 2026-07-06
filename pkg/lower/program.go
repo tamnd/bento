@@ -42,6 +42,15 @@ type Program struct {
 // slice; today a program whose functions are self-contained (the common shape of
 // the compute workloads, which are a single top-level body) compiles.
 func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
+	// Names that are not Go identifiers mangle through a pure function of the
+	// name (ident.go), so declaration and reference agree with no shared table.
+	// The one spelling that scheme cannot make safe is a module that speaks
+	// both a mangled name and its mangled form verbatim; that clashes in the
+	// emitted Go, and renaming one side would make emission order-dependent,
+	// so the whole module hands back before anything lowers.
+	if err := r.checkMangleCollisions(entry); err != nil {
+		return Program{}, err
+	}
 	// Record the module's node: import bindings before lowering any body, since a
 	// function or a top-level statement may call an imported builtin and the call
 	// lowering needs the binding already in hand. An import bento does not lower
@@ -213,6 +222,38 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		return Program{}, err
 	}
 	return Program{Source: src}, nil
+}
+
+// checkMangleCollisions declines a module that spells both a name needing the
+// mangle and that name's mangled form verbatim, like $DONE next to D_DONE.
+// Both would emit as D_DONE, and picking a fresh name for either side would
+// make the mapping depend on what else the module declares, breaking the
+// pure-function rule every call site relies on. The scan walks every
+// identifier once up front so the guard holds for declarations and references
+// alike, wherever they sit.
+func (r *Renderer) checkMangleCollisions(entry frontend.Node) error {
+	texts := map[string]bool{}
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeIdentifier {
+			texts[r.prog.Text(n)] = true
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(entry)
+	names := make([]string, 0, len(texts))
+	for t := range texts {
+		names = append(names, t)
+	}
+	sort.Strings(names)
+	for _, t := range names {
+		if m, ok := mangleIdent(t); ok && m != t && texts[m] {
+			return &NotYetLowerable{Reason: "the module already speaks " + m + ", which " + t + " mangles to"}
+		}
+	}
+	return nil
 }
 
 // crossBoundaryModuleNames returns the module-level binding names a top-level
