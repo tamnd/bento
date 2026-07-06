@@ -685,6 +685,13 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		if info, ok := r.classOfNode(argNodes[0]); ok && info.extended {
 			return nil, &NotYetLowerable{Reason: "JSON.stringify of a value typed as class " + info.name + ", which another class extends, is a later slice"}
 		}
+		// A shape with an optional property lowers to a struct with a value.Opt field,
+		// which the serializer's reflection walk has no case for yet: it would print
+		// the empty optional as a nested object rather than omit the key. Until that
+		// walk learns the Opt field, an optional-shape argument hands back.
+		if r.shapeHasOptional(r.prog.TypeAt(argNodes[0])) {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify of a shape with an optional property is a later slice"}
+		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
@@ -813,6 +820,13 @@ func (r *Renderer) fixedShapeProps(method string, arg frontend.Node) ([]frontend
 	}
 	if _, isArray := r.prog.ElementType(objType); isArray {
 		return nil, &NotYetLowerable{Reason: "Object." + method + " of an array is a later slice"}
+	}
+	// An optional field may be absent at runtime, so it is not always an own key,
+	// which the compile-time key and value lists these statics fold cannot express.
+	// The interned struct now lowers such a shape, so the handback that used to ride
+	// on internStruct is spelled out here instead.
+	if r.shapeHasOptional(objType) {
+		return nil, &NotYetLowerable{Reason: "Object." + method + " of a shape with an optional property is a later slice"}
 	}
 	if _, err := r.decls.internStruct(r, objType); err != nil {
 		return nil, err

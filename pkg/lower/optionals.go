@@ -50,6 +50,122 @@ func (r *Renderer) boxToOptional(expr ast.Expr, src frontend.Node, target fronte
 	return &ast.CallExpr{Fun: index(sel("value", "Some"), elem), Args: []ast.Expr{bridged}}, true, nil
 }
 
+// isPlainShape reports whether a type is a fixed-shape object that lowers to an
+// interned struct: an object that is not an array, not a class instance (which
+// has its own generated type and upcast bridge), and not a union. It is the
+// shape test the contextual object-literal build and the shape-cross guard
+// share, so both agree on which types the struct interner owns.
+func (r *Renderer) isPlainShape(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 || t.Flags&frontend.TypeUnion != 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	if _, isClass := r.classOfType(t); isClass {
+		return false
+	}
+	return true
+}
+
+// shapeHasOptional reports whether a fixed shape declares any optional property,
+// the shapes whose interning this slice added and whose crossings the guard
+// below polices.
+func (r *Renderer) shapeHasOptional(t frontend.Type) bool {
+	for _, p := range r.prog.Properties(t) {
+		if p.Optional {
+			return true
+		}
+	}
+	return false
+}
+
+// shapeProp returns the declared property of a fixed shape by its source name,
+// the declaration a member read or write consults for the property's unnarrowed
+// type and optionality.
+func (r *Renderer) shapeProp(t frontend.Type, name string) (frontend.Property, bool) {
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return frontend.Property{}, false
+}
+
+// contextualObjectShape returns the fixed shape an object literal in a slot of
+// the declared type must build at, unwrapping a declared T | undefined to its
+// inner shape (wrap reports that unwrap so the caller re-wraps the built value
+// in Some). It reports ok only when the shape declares an optional property:
+// that is the one case where the literal's own fresh type, whose members are
+// all required, interns a different struct than the slot declares, so the
+// literal must build at the declared shape, the same contextual typing
+// TypeScript applies to it. Every other literal keeps building at its own
+// type, unchanged behavior.
+func (r *Renderer) contextualObjectShape(declared frontend.Type) (shape frontend.Type, wrap, ok bool) {
+	shape = declared
+	if inner, isOpt := r.optionalInner(r.prog.UnionMembers(declared)); isOpt {
+		shape, wrap = inner, true
+	}
+	if !r.isPlainShape(shape) || !r.shapeHasOptional(shape) {
+		return frontend.Type{}, false, false
+	}
+	return shape, wrap, true
+}
+
+// someWrap wraps a present value in value.Some at the given element type, the
+// boxing a contextual literal applies to a present optional field.
+func (r *Renderer) someWrap(expr ast.Expr, elem frontend.Type) (ast.Expr, error) {
+	elemGo, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "Some"), elemGo), Args: []ast.Expr{expr}}, nil
+}
+
+// noneOf is the empty optional value.None[T]() at the given element type, the
+// value a contextual literal supplies for an optional field its members omit.
+func (r *Renderer) noneOf(elem frontend.Type) (ast.Expr, error) {
+	elemGo, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "None"), elemGo)}, nil
+}
+
+// guardOptionalShapeCross hands back when a value flows into a slot of a
+// different fixed shape and either shape carries an optional property. Two
+// different shapes intern to two different Go structs, so such a move never
+// compiles even though TypeScript's width subtyping accepts it; before optional
+// properties interned, these targets handed back at internStruct, and this
+// guard keeps that routing for the sources the contextual literal build does
+// not cover (a variable of a fresh required shape passed where the optional
+// shape is declared). Two crossings of plain shapes keep their pre-optional
+// behavior and are not this guard's slice. An optional target slot guards
+// against its inner shape, since that is the type the wrapped value must have.
+func (r *Renderer) guardOptionalShapeCross(src frontend.Node, target frontend.Type) error {
+	if inner, ok := r.optionalInner(r.prog.UnionMembers(target)); ok {
+		target = inner
+	}
+	return r.guardOptionalShapeCrossTypes(r.prog.TypeAt(src), target)
+}
+
+// guardOptionalShapeCrossTypes is the type-level core of guardOptionalShapeCross,
+// for the spread copy that reads fields off a source type with no per-field node.
+func (r *Renderer) guardOptionalShapeCrossTypes(src, target frontend.Type) error {
+	if !r.isPlainShape(src) || !r.isPlainShape(target) {
+		return nil
+	}
+	if structuralKey(r.prog, src, map[int]int{}) == structuralKey(r.prog, target, map[int]int{}) {
+		return nil
+	}
+	if r.shapeHasOptional(src) || r.shapeHasOptional(target) {
+		return &NotYetLowerable{Reason: "an object crossing to a slot of a different shape with an optional property is a later slice"}
+	}
+	return nil
+}
+
 // optionalUndefinedCompare recognizes an equality between an optional and the
 // bare undefined literal and returns the optional operand. One operand must type
 // as exactly undefined (the undefined keyword, flags TypeUndefined) and the other
