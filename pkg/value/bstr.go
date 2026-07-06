@@ -254,6 +254,19 @@ func (s BStr) CharAt(i float64) BStr {
 	return FromUTF16([]uint16{s.units()[int(i)]})
 }
 
+// CharAtI reads the one-code-unit string at a Go int index, the integer-index
+// form of CharAt the lowerer emits when the checker proved the index expression
+// is an integer. The float truncation and NaN fold CharAt runs are then dead
+// work, so this form takes the index already narrowed. The bounds check and the
+// empty-string out-of-range result are the same as CharAt, so the two reads
+// agree on every index; only the index type differs.
+func (s BStr) CharAtI(i int) BStr {
+	if i < 0 || i >= s.lengthU16 {
+		return BStr{}
+	}
+	return FromUTF16([]uint16{s.units()[i]})
+}
+
 // AtOpt returns the one-code-unit string at the relative index i, matching
 // String.prototype.at. Its declared type is string | undefined, so it returns an
 // Opt[BStr]: a present optional holding the single-code-unit string when the
