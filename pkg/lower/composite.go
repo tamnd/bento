@@ -292,6 +292,100 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, nil
 }
 
+// objectLiteralContextual lowers an object literal whose slot declares a
+// fixed-shape object with an optional property, the one case where the literal's
+// own fresh type, whose members are all required, interns a different struct than
+// the slot and so cannot build at its own type (05_type_lowering section 17). It
+// builds at the declared shape instead, the same contextual typing TypeScript
+// applies, so a literal { x: 3 } assigned to { x: number; y?: number } fills the
+// y field with the empty optional rather than leaving it off a differently-shaped
+// struct.
+//
+// Each present member becomes a keyed field in source order, wrapped in value.Some
+// when the field it fills is optional, so the evaluation order of side-effecting
+// members is preserved. Each optional field the members omit is appended as
+// value.None, which have no effect to order. A required field left unfilled, a
+// spread member, and a computed or non-identifier key each hand back to a later
+// slice, keeping this slice to the plain contextual build.
+func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type) (ast.Expr, error) {
+	name, err := r.decls.internStruct(r, shape)
+	if err != nil {
+		return nil, err
+	}
+	elts := make([]ast.Expr, 0)
+	seen := map[string]bool{}
+	for _, p := range r.prog.Children(n) {
+		if p.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: "object literal with a method or accessor member is a later slice"}
+		}
+		kids := r.prog.Children(p)
+		var keyNode, valNode frontend.Node
+		switch len(kids) {
+		case 1:
+			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
+				return nil, &NotYetLowerable{Reason: "object spread into a shape with an optional property is a later slice"}
+			}
+			keyNode, valNode = kids[0], kids[0]
+		case 2:
+			keyNode, valNode = kids[0], kids[1]
+		default:
+			return nil, &NotYetLowerable{Reason: "object literal member with an unexpected shape is a later slice"}
+		}
+		if keyNode.Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "object literal with a non-identifier key is a later slice"}
+		}
+		srcName := r.prog.Text(keyNode)
+		field, ok := exportedField(srcName)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
+		}
+		val, err := r.lowerExpr(valNode)
+		if err != nil {
+			return nil, err
+		}
+		// A member filling an optional field is wrapped in value.Some so it lands in
+		// the value.Opt slot the field became, unless the member is already an optional
+		// of that type, which passes through as the Opt it is.
+		if sp, ok := r.shapeProp(shape, srcName); ok && sp.Optional && !r.isOptional(valNode) {
+			inner, ok := r.optionalInner(r.prog.UnionMembers(sp.Type))
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}
+			}
+			val, err = r.someWrap(val, inner)
+			if err != nil {
+				return nil, err
+			}
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+		seen[field] = true
+	}
+	// Fill each field the members did not supply: an omitted optional becomes the
+	// empty optional value.None, while an omitted required field has no value to
+	// stand in, so the literal hands back rather than leave a field at its zero.
+	for _, tp := range r.prog.Properties(shape) {
+		field, ok := exportedField(tp.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
+		}
+		if seen[field] {
+			continue
+		}
+		if !tp.Optional {
+			return nil, &NotYetLowerable{Reason: "object literal missing a required field is a later slice"}
+		}
+		inner, ok := r.optionalInner(r.prog.UnionMembers(tp.Type))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}
+		}
+		none, err := r.noneOf(inner)
+		if err != nil {
+			return nil, err
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: none})
+	}
+	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, nil
+}
+
 // objectSpread copies the fields of a { ...src } member into the collector: each
 // own property of the spread source becomes a field read src.Field, the same
 // struct-field access member.go lowers a plain src.k read to, keyed by the same

@@ -331,6 +331,21 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	if len(kids) == 0 {
 		return &ast.ReturnStmt{}, nil
 	}
+	// An object literal returned into a declared shape with an optional property
+	// builds at that shape, the same contextual typing a binding applies; a return
+	// type that is itself T | undefined hands back to a later slice.
+	if kids[0].Kind() == frontend.NodeObjectLiteralExpression {
+		if shape, wrap, ok := r.contextualObjectShape(r.retType); ok {
+			if wrap {
+				return nil, &NotYetLowerable{Reason: "an object literal returned into a T | undefined optional slot is a later slice"}
+			}
+			expr, err := r.objectLiteralContextual(kids[0], shape)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
+		}
+	}
 	expr, err := r.lowerExpr(kids[0])
 	if err != nil {
 		return nil, err
@@ -437,6 +452,18 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 // the binding rather than from the literal, which is exactly the contextual type
 // TypeScript itself applies here. Every other initializer lowers on its own.
 func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, error) {
+	// An object literal in a slot whose declared shape has an optional property
+	// must build at that shape rather than its own all-required type, the contextual
+	// typing objectLiteralContextual applies. A slot that is itself T | undefined
+	// (the shape wrapped in an optional) is a later slice and hands back here.
+	if initNode.Kind() == frontend.NodeObjectLiteralExpression {
+		if shape, wrap, ok := r.contextualObjectShape(r.prog.TypeAt(nameNode)); ok {
+			if wrap {
+				return nil, &NotYetLowerable{Reason: "an object literal in a T | undefined optional slot is a later slice"}
+			}
+			return r.objectLiteralContextual(initNode, shape)
+		}
+	}
 	if initNode.Kind() == frontend.NodeArrayLiteralExpression && len(r.prog.Children(initNode)) == 0 {
 		if elem, ok := r.prog.ElementType(r.prog.TypeAt(nameNode)); ok {
 			elemType, err := r.typeExpr(elem)

@@ -291,13 +291,34 @@ func TestRealUnlowerableHandsBack(t *testing.T) {
 	}
 }
 
-// TestRealOptionalPropertyHandsBack pins that an optional property is not
-// lowerable until the optional tagged type lands, so the whole object hands back.
-func TestRealOptionalPropertyHandsBack(t *testing.T) {
-	_, _, err := renderReal(t, "declare const x: { host: string; port?: number };")
+// TestRealOptionalPropertyLowers pins that an optional property x?: T, which
+// types as the T | undefined optional, lowers to a struct with a value.Opt[T]
+// field rather than handing the whole object back.
+func TestRealOptionalPropertyLowers(t *testing.T) {
+	r, got, err := renderReal(t, "declare const x: { host: string; port?: number };")
+	if err != nil {
+		t.Fatalf("RenderType(object with optional) err = %v, want nil", err)
+	}
+	if got == "" {
+		t.Fatal("RenderType(object with optional) returned an empty type")
+	}
+	var src string
+	for _, d := range r.decls.emit() {
+		src += d.Source + "\n"
+	}
+	if !strings.Contains(src, "value.Opt[float64]") {
+		t.Fatalf("struct decl = %q, want a value.Opt[float64] field for the optional property", src)
+	}
+}
+
+// TestRealWideOptionalPropertyHandsBack pins that an optional whose type is not
+// the two-member T | undefined shape (port?: number | string adds a third
+// member) still needs the tagged sum, so the whole object hands back.
+func TestRealWideOptionalPropertyHandsBack(t *testing.T) {
+	_, _, err := renderReal(t, "declare const x: { host: string; port?: number | string };")
 	var nyl *NotYetLowerable
 	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderType(object with optional) err = %v, want a *NotYetLowerable", err)
+		t.Fatalf("RenderType(object with wide optional) err = %v, want a *NotYetLowerable", err)
 	}
 }
 
