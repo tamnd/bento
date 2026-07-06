@@ -1,0 +1,9 @@
+== stdout:
+h
+é
+l
+héllo
+hél
+o
+== exit:
+0

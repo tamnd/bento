@@ -482,6 +482,29 @@ func TestCharAt(t *testing.T) {
 	}
 }
 
+// TestCharAtI pins the integer-index form of CharAt: it agrees with CharAt on
+// every index, in range and out, including the lone-surrogate read of an astral
+// character's halves. Only the index type differs, so the two reads are compared
+// unit for unit rather than re-deriving the expected strings.
+func TestCharAtI(t *testing.T) {
+	s := FromGoString("a😀b")
+	for i := -2; i <= 5; i++ {
+		viaI := s.CharAtI(i)
+		viaF := s.CharAt(float64(i))
+		if viaI.Length() != viaF.Length() {
+			t.Errorf("CharAtI(%d) Length = %v, CharAt = %v", i, viaI.Length(), viaF.Length())
+			continue
+		}
+		ui, uf := viaI.units(), viaF.units()
+		for k := range ui {
+			if ui[k] != uf[k] {
+				t.Errorf("CharAtI(%d) units = %v, CharAt units = %v", i, ui, uf)
+				break
+			}
+		}
+	}
+}
+
 // TestAtOpt pins String.prototype.at: an in-range index yields the present
 // optional holding the one-code-unit string, a negative index counts from the
 // end, and an index that resolves outside the string reads as the undefined
