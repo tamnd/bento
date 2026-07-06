@@ -58,15 +58,25 @@ func TestNoThrowKeepsMainClean(t *testing.T) {
 	}
 }
 
-// TestThrowNonErrorHandsBack proves throwing a value that is not a built-in error
-// hands back rather than emit an unsound panic, since the runtime can only recover
-// a value.Error today; boxing an arbitrary thrown value is a later slice.
+// TestThrowStringLowers proves a thrown string wraps in the runtime's
+// ThrownString, so it rides the panic path with the string as the reported
+// name; test262's $DONOTEVALUATE throws this shape.
+func TestThrowStringLowers(t *testing.T) {
+	source := renderProgram(t, "throw \"boom\";\n")
+	if !strings.Contains(source, "value.Throw(value.ThrownString(") {
+		t.Errorf("thrown string did not wrap in value.ThrownString:\n%s", source)
+	}
+}
+
+// TestThrowNonErrorHandsBack proves throwing a value with no Thrown lowering (a
+// bare number) still hands back rather than emit an unsound panic; boxing the
+// remaining primitive throws is a later slice.
 func TestThrowNonErrorHandsBack(t *testing.T) {
-	prog := compile(t, "throw \"boom\";\n")
+	prog := compile(t, "throw 42;\n")
 	r := NewRenderer(prog)
 	r.SetGoSignatures(testGoSignatures())
 	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
-		t.Fatal("throwing a string lowered, want a hand-back until arbitrary throws are boxed")
+		t.Fatal("throwing a number lowered, want a hand-back until arbitrary throws are boxed")
 	}
 }
 

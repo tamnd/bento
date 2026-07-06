@@ -275,11 +275,13 @@ func (r *Renderer) resultFields(ret frontend.Type) (*ast.FieldList, error) {
 }
 
 // isVoidReturn reports whether a return type carries no value: a bare void, an
-// undefined, or the zero type a function with no annotated return and no value
-// carries. These are the shapes that give a func literal no result, whether the
-// return sits on a function declaration or a concise-body arrow.
+// undefined, the zero type a function with no annotated return and no value
+// carries, or never. A never function always throws or loops, so no call site
+// ever reads a result from it; giving it no Go result is the whole lowering.
+// These are the shapes that give a func literal no result, whether the return
+// sits on a function declaration or a concise-body arrow.
 func isVoidReturn(ret frontend.Type) bool {
-	return ret.Flags == 0 || ret.Flags&frontend.TypeVoid != 0 || ret.Flags&frontend.TypeUndefined != 0
+	return ret.Flags == 0 || ret.Flags&(frontend.TypeVoid|frontend.TypeUndefined|frontend.TypeNever) != 0
 }
 
 // blockOf finds the function's body block and lowers it. A function with no body

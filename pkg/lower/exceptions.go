@@ -300,7 +300,26 @@ func (r *Renderer) lowerThrow(n frontend.Node) (ast.Stmt, error) {
 		return nil, &NotYetLowerable{Reason: "throw did not expose a single operand"}
 	}
 	if !r.isThrowable(kids[0]) {
-		return nil, &NotYetLowerable{Reason: "throwing a value that is not a built-in error is a later slice"}
+		// A new expression of a registered class whose instances carry a string
+		// message throws too: the instance itself is the panic payload, and the
+		// class gains the ErrorName and ErrorMessage methods (renderClasses) that
+		// satisfy the runtime's Thrown surface, so a catch that recovers it binds
+		// an error named after the class carrying the instance's message. A
+		// thrown string wraps in the runtime's ThrownString, which carries the
+		// same surface with the string as the name.
+		if info, ok := r.thrownClassOf(kids[0]); ok {
+			info.thrownAsError = true
+		} else if r.isString(kids[0]) {
+			operand, err := r.lowerExpr(kids[0])
+			if err != nil {
+				return nil, err
+			}
+			r.usesThrow = true
+			wrapped := &ast.CallExpr{Fun: sel("value", "ThrownString"), Args: []ast.Expr{operand}}
+			return &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "Throw"), Args: []ast.Expr{wrapped}}}, nil
+		} else {
+			return nil, &NotYetLowerable{Reason: "throwing a value that is not a built-in error is a later slice"}
+		}
 	}
 	operand, err := r.lowerExpr(kids[0])
 	if err != nil {
@@ -325,6 +344,32 @@ func (r *Renderer) isThrowable(n frontend.Node) bool {
 		return ok
 	}
 	return false
+}
+
+// thrownClassOf reports the registered class a throw's new expression
+// constructs, when its instances can ride the runtime's throw path: the class
+// declares its own string message field, so the Thrown surface the panic
+// payload needs (a name and a message) reads straight off the instance. A
+// class without one hands back rather than throw a value a catch could not
+// read.
+func (r *Renderer) thrownClassOf(n frontend.Node) (*classInfo, bool) {
+	if n.Kind() != frontend.NodeNewExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	info, ok := r.classNameRef(kids[0])
+	if !ok {
+		return nil, false
+	}
+	for _, f := range info.fields {
+		if f.prop == "message" && r.prog.TypeAt(f.ident).Flags&frontend.TypeString != 0 {
+			return info, true
+		}
+	}
+	return nil, false
 }
 
 // lowerTry lowers a try/catch/finally to a Go closure over panic and recover. A
@@ -406,8 +451,13 @@ func (r *Renderer) catchDefer(catchClause frontend.Node) (ast.Stmt, error) {
 		case frontend.NodeBlock:
 			catchBlock = k
 		case frontend.NodeVariableDeclaration:
+			// The binding is the declaration's leading identifier; a type
+			// annotation (catch (err: any), the strict-checker spelling) rides
+			// along as a trailing child and changes nothing, since the binding
+			// is the *value.Error the recover converts regardless of what the
+			// author annotated. Only a binding pattern declines.
 			vk := r.prog.Children(k)
-			if len(vk) != 1 || vk[0].Kind() != frontend.NodeIdentifier {
+			if len(vk) == 0 || vk[0].Kind() != frontend.NodeIdentifier {
 				return nil, &NotYetLowerable{Reason: "a destructured catch binding is a later slice"}
 			}
 			name, ok := localName(r.prog.Text(vk[0]))
