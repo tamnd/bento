@@ -1,0 +1,2 @@
+feature = "ident-mangle"
+handback = "the module already speaks D_DONE, which $DONE mangles to"
