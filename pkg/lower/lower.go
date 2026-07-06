@@ -116,6 +116,13 @@ type Renderer struct {
 	// specialized locals do not leak into another. A nil map (the default) specializes
 	// nothing, so a body with no eligible local lowers exactly as before.
 	int32Locals map[string]bool
+	// int64Locals is the set of local names in the body currently being lowered
+	// whose values are proven to stay inside the safe-integer range while reaching
+	// past 32 bits, and are therefore given a Go int64 type rather than a float64.
+	// It is computed once per body by int64LocalsOf, after int32Locals and
+	// counterIvl since the proof reads both, and, like int32Locals, saved and
+	// restored around each body. A nil map (the default) specializes nothing.
+	int64Locals map[string]bool
 	// counterIvl maps each bounded increasing for-counter in the body currently being
 	// lowered to the integer interval it ranges over, so an index built from a counter
 	// can be proven to sit inside a fixed-length array. It is computed once per body by
