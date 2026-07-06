@@ -426,6 +426,20 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 			})
 			continue
 		}
+		// A local proven to hold safe integers wider than 32 bits is declared as a
+		// Go int64 the same way, its initializer lowered in the int64 domain.
+		if r.int64Locals[name] {
+			init, err := r.int64Of(kids[len(kids)-1])
+			if err != nil {
+				return nil, err
+			}
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   ident("int64"),
+				Values: []ast.Expr{init},
+			})
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err
@@ -1384,6 +1398,14 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else if r.int64Locals[name] {
+		// The target is an int64-specialized local, so the right-hand side lowers in
+		// the int64 domain. The analysis approved every one of this local's writes
+		// through the same walk int64Of lowers, so the native form always exists.
+		rhs, err = r.int64Of(parts[2])
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		rhs, err = r.lowerExpr(parts[2])
 		if err != nil {
@@ -1757,7 +1779,7 @@ func (r *Renderer) foldFloatDecl(decls []frontend.Node) (ast.Stmt, bool) {
 		return nil, false
 	}
 	name, ok := localName(r.prog.Text(kids[0]))
-	if !ok || r.int32Locals[name] {
+	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false
 	}
 	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
@@ -1798,7 +1820,7 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 		return nil, false
 	}
 	name, ok := localName(r.prog.Text(kids[0]))
-	if !ok || r.int32Locals[name] {
+	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false
 	}
 	init, err := r.bindingInit(kids[0], kids[len(kids)-1])

@@ -137,6 +137,13 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		delete(r.int32Locals, name)
 	}
 	r.counterIvl = r.counterIvlOf(mainBody)
+	// The int64 tier runs after the int32 set and the counter ranges, since its
+	// interval proof reads both, and a hoisted binding stays at its package-level
+	// type for the same reason it cannot be int32.
+	r.int64Locals = r.int64LocalsOf(mainBody)
+	for name := range hoisted {
+		delete(r.int64Locals, name)
+	}
 	r.fixedTArr = r.fixedTypedArraysOf(mainBody)
 	r.optLocals = r.optLocalsOf(mainBody)
 	r.unionLocals = r.unionLocalsOf(nil, mainBody)

@@ -66,6 +66,12 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.int32Locals[name] {
 			return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{ident(name)}}, nil
 		}
+		// An int64-specialized local reads back the same way: float64(name) is
+		// exact, since the analysis bounded the value inside the safe-integer
+		// range, so the read side stays transparent for this tier too.
+		if r.int64Locals[name] {
+			return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{ident(name)}}, nil
+		}
 		// A local declared as an optional (value.Opt[T]) that the checker narrowed to
 		// T at this use, past a presence guard like `x !== undefined`, reads the stored
 		// value out with .Get(). The narrowing shows as the type at this node no longer
