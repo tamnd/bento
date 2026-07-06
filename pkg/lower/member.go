@@ -344,13 +344,14 @@ func numberConstant(prop string) (ast.Expr, bool) {
 	return nil, false
 }
 
-// elementAccess lowers an index expression a[i] to the array's At method. Only an
-// array receiver is covered: arrayElem confirms the checker types the receiver as
-// an array whose element type lowers, and the index must be a Number, the JS array
-// index. An object property read spelled o["k"] and a string character read s[i]
-// have different runtime meanings and hand back to their own later slices. The
-// element type is carried by the receiver, so At needs no type argument here; it
-// returns the element the checker already typed the whole access as.
+// elementAccess lowers an index expression a[i] to the receiver's index read: the
+// array's At method, the typed array's At, or the string's CharAt code-unit read.
+// arrayElem confirms an array receiver's element type lowers, and the index must
+// be a Number, the JS index. An object property read spelled o["k"] lowers to the
+// struct-field selector when the key is a string literal; a dynamic object key is
+// its own later slice. The element type is carried by the receiver, so At needs no
+// type argument here; it returns the element the checker already typed the whole
+// access as.
 func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
 	if len(kids) != 2 {
@@ -382,6 +383,34 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 				return &ast.SelectorExpr{X: recv, Sel: ident(field)}, nil
 			}
 		}
+	}
+	// A string read s[i] is the code-unit index read: the one-code-unit string at
+	// index i through BStr.CharAt, the bracket spelling of charAt. The divergence
+	// from JS is the one the array read already accepts: JS answers undefined for an
+	// out-of-range or fractional index where the typed read answers the zero value,
+	// here the empty string, with charAt's integer coercion on the index. A
+	// proven-integer loop index reads through CharAtI, the same speed-only choice
+	// the array AtI makes; both forms bounds-check and read the same code unit.
+	if r.isString(obj) {
+		if !r.isNumber(idxNode) {
+			return nil, &NotYetLowerable{Reason: "string element access with a non-number index is a later slice"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		if r.intLoopIndex(idxNode) {
+			idx, err := r.intIndexExpr(idxNode)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("CharAtI")}, Args: []ast.Expr{idx}}, nil
+		}
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("CharAt")}, Args: []ast.Expr{idx}}, nil
 	}
 	// A typed-array read a[i] returns its element as a Number through the buffer's own
 	// At, the same method name a typed Array indexes through, so the receivers share
