@@ -283,6 +283,33 @@ func Add(a, b Value) Value {
 	return Number(ToNumber(pa) + ToNumber(pb))
 }
 
+// StrictEquals implements the === operator over two dynamic values, the Strict
+// Equality Comparison: different types are never equal, numbers compare as
+// doubles (so NaN equals nothing and +0 equals -0, which Go's float64 == already
+// does), strings compare by code unit, bigints by mathematical value, and the
+// reference kinds by identity. undefined equals undefined and null equals null,
+// each only itself.
+func StrictEquals(a, b Value) bool {
+	if a.kind != b.kind {
+		return false
+	}
+	switch a.kind {
+	case KindUndefined, KindNull:
+		return true
+	case KindBool:
+		return a.scalar == b.scalar
+	case KindNumber:
+		return a.AsNumber() == b.AsNumber()
+	case KindString:
+		return a.str().Equal(b.str())
+	case KindBigInt:
+		return a.bigint().i.Cmp(&b.bigint().i) == 0
+	default:
+		// Symbols, objects, arrays, and functions compare by identity.
+		return a.ref == b.ref
+	}
+}
+
 // Or implements the value-returning a || b over dynamic values: the left operand
 // when it is truthy, the right otherwise. Both arguments arrive evaluated, so the
 // lowering only takes this form when the right operand has no side effect to

@@ -17,8 +17,8 @@ func main() {
 		neg -= int64(j) * int64(j)
 	}
 	value.ConsoleLog(value.NumberToString(float64(neg)))
-	var big int64 = 5000000000
-	big++
-	value.ConsoleLog(value.NumberToString(float64(big)))
-	value.ConsoleLog(value.NumberToString(float64(sum) + float64(big)))
+	var big_ int64 = 5000000000
+	big_++
+	value.ConsoleLog(value.NumberToString(float64(big_)))
+	value.ConsoleLog(value.NumberToString(float64(sum) + float64(big_)))
 }

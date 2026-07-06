@@ -35,8 +35,18 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 		return r.numberTruthy(n)
 	case r.isString(n):
 		return r.stringTruthy(n)
+	case r.isDynamic(n):
+		// A dynamic operand's kind is only known at runtime, so the whole falsy
+		// set is one call into the value model's ToBoolean, the same test Or and
+		// And run on their left operand.
+		x, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{x}}, nil
 	}
-	return nil, &NotYetLowerable{Reason: "truthiness of a non-primitive (object, union, or dynamic value) is a later slice"}
+	return nil, &NotYetLowerable{Reason: "truthiness of a non-primitive (object or union) is a later slice"}
 }
 
 // staticTruthy reports whether the checker proved an operand's type is always
