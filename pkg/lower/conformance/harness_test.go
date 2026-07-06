@@ -92,6 +92,9 @@ func TestStructure(t *testing.T) {
 			if f.HasOracle && !f.HasGolden {
 				t.Errorf("%s: has an oracle.txt but no emit.golden to run against it", f.Slug)
 			}
+			if f.HasGolden && !f.HasOracle {
+				t.Errorf("%s: has an emit.golden but no oracle.txt, so the emitted Go is never proven to run", f.Slug)
+			}
 		})
 	}
 }

@@ -194,11 +194,29 @@ func (e *Error) As(target any) bool {
 	return e.cause != nil && errors.As(e.cause, target)
 }
 
-// Throw raises a thrown error so an enclosing catch recovers it or the top-level
-// reporter surfaces it. It is a named entry point so every throw lowers to one
-// call shape rather than an inline panic, which keeps the generated code readable
-// and gives the runtime one place to evolve the throw path.
-func Throw(e *Error) {
+// ThrownString is a thrown primitive string, the `throw "reason"` JavaScript
+// allows beside thrown errors. It carries the Thrown surface with the string
+// as the name and no message, so the uncaught reporter prints the string the
+// way node reports a thrown primitive. A catch that recovers one binds an
+// *Error whose name is the string, which deviates from the primitive a
+// JavaScript catch binds; binding the primitive itself waits on the dynamic
+// catch slice.
+type ThrownString BStr
+
+// ErrorName reports the thrown string itself, the text the reporter prints.
+func (t ThrownString) ErrorName() string { return BStr(t).ToGoString() }
+
+// ErrorMessage reports an empty message; a thrown primitive has none.
+func (t ThrownString) ErrorMessage() string { return "" }
+
+// Throw raises a thrown value so an enclosing catch recovers it or the top-level
+// reporter surfaces it. The payload is anything carrying the Thrown surface: the
+// runtime's own *Error, or a program class whose thrown instances gained
+// ErrorName and ErrorMessage in emission. It is a named entry point so every
+// throw lowers to one call shape rather than an inline panic, which keeps the
+// generated code readable and gives the runtime one place to evolve the throw
+// path.
+func Throw(e Thrown) {
 	panic(e)
 }
 
