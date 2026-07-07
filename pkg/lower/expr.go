@@ -825,19 +825,41 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	if err != nil {
 		return nil, err
 	}
-	// Two constant float operands whose result runs off the float64 range fold to a
-	// Go constant the compiler rejects, where JavaScript evaluates the same
-	// arithmetic at runtime to an infinity or a NaN. A sum or product past the range
-	// overflows to an infinity, and a division by a constant zero is +Inf, -Inf, or
-	// NaN by the sign of the numerator. Either way the whole expression lowers to the
-	// exact value the language produces (math.Inf with its sign, or math.NaN) so it
-	// carries the right number and reads as that number rather than a build error.
-	// 1e308 * 2 and 1 / (0 + 0) in the test262 number tests take this shape.
-	if f, ok := floatConstNonFinite(l, rr, goOp); ok {
-		r.requireImport("math")
-		return nonFiniteCall(f), nil
+	// Arithmetic on two constant number operands folds to a float64 literal, because
+	// JavaScript number arithmetic is float64 and Go's is not for integer-spelled
+	// constants: 5 + 3 under := infers int, and 7 / 2 folds to the integer 3 rather
+	// than 3.5. Folding the node to its float64 value gives := the float64 type it
+	// means and the division its real quotient, and it also carries the non-finite
+	// cases a Go constant expression rejects: a sum or product past the range is an
+	// infinity, and a divide by a constant zero is +Inf, -Inf, or NaN by the sign of
+	// the numerator, each emitted as math.Inf or math.NaN so it reads as that number
+	// rather than a build error. 5 + 3, 18 / 2 / 9, 1e308 * 2, and 1 / (0 + 0) in the
+	// test262 number tests take this shape. The fold fires only when both operands are
+	// constant; a runtime operand keeps the live BinaryExpr, which already evaluates in
+	// float64 because the number locals are.
+	if f, ok := floatConstArith(l, rr, goOp); ok {
+		if math.IsInf(f, 0) || math.IsNaN(f) {
+			r.requireImport("math")
+			return nonFiniteCall(f), nil
+		}
+		return floatConstLit(f), nil
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// floatConstLit renders a finite float64 as a Go float literal, the folded form of a
+// constant number arithmetic. An integer-valued result is written in full with a
+// trailing .0 so 8 reads as 8.0 and infers float64 rather than int, and a result with
+// a fraction or one large enough that the full form would be unwieldy uses the shortest
+// round-tripping decimal, which already carries a point or exponent.
+func floatConstLit(f float64) ast.Expr {
+	var s string
+	if f == math.Trunc(f) && math.Abs(f) < 1e21 {
+		s = strconv.FormatFloat(f, 'f', -1, 64) + ".0"
+	} else {
+		s = strconv.FormatFloat(f, 'g', -1, 64)
+	}
+	return &ast.BasicLit{Kind: token.FLOAT, Value: s}
 }
 
 // nonFiniteCall builds the math call that names a non-finite float64: math.Inf(1)
@@ -853,15 +875,14 @@ func nonFiniteCall(f float64) ast.Expr {
 	}
 }
 
-// floatConstNonFinite evaluates l op rr in the float64 domain and reports the result
-// when it is non-finite, the case a Go constant expression rejects at compile time
-// but JavaScript produces at runtime. It fires only when both operands are themselves
-// constant floats; anything with a runtime operand already evaluates at runtime under
-// IEEE rules and cannot trip the compiler's constant folding. The evaluation is
-// float64 step by step, which is exactly the arithmetic JavaScript performs, so a
-// sum or product past the range is an infinity, 1 / 0 is +Inf, -1 / 0 is -Inf, and
-// 0 / 0 is NaN, each matching the value the language yields at runtime.
-func floatConstNonFinite(l, rr ast.Expr, op token.Token) (float64, bool) {
+// floatConstArith evaluates l op rr in the float64 domain when both operands are
+// constant floats and op is one of the four arithmetic operators, and reports the
+// float64 result. This is the arithmetic JavaScript performs on number literals, so
+// the result carries the value the language yields: 5 + 3 is 8, 7 / 2 is 3.5, a sum or
+// product past the range is an infinity, and 1 / 0 is +Inf, -1 / 0 is -Inf, 0 / 0 is
+// NaN. It fires only when both operands are themselves constant floats; anything with
+// a runtime operand already evaluates at runtime under IEEE rules in float64.
+func floatConstArith(l, rr ast.Expr, op token.Token) (float64, bool) {
 	lf, ok := astConstFloat(l)
 	if !ok {
 		return 0, false
@@ -870,21 +891,15 @@ func floatConstNonFinite(l, rr ast.Expr, op token.Token) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	var f float64
 	switch op {
 	case token.ADD:
-		f = lf + rf
+		return lf + rf, true
 	case token.SUB:
-		f = lf - rf
+		return lf - rf, true
 	case token.MUL:
-		f = lf * rf
+		return lf * rf, true
 	case token.QUO:
-		f = lf / rf
-	default:
-		return 0, false
-	}
-	if math.IsInf(f, 0) || math.IsNaN(f) {
-		return f, true
+		return lf / rf, true
 	}
 	return 0, false
 }
