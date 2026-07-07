@@ -909,7 +909,7 @@ func TestRepeat(t *testing.T) {
 
 // TestRepeatRangeErrors pins that a negative or non-finite count throws the
 // RangeError JavaScript raises, a catchable *Error rather than a bare panic, so a
-// try/catch or assert.throws around ''.repeat(-1) catches it. The message matches
+// try/catch or assert.throws around a repeat with a bad count catches it. The message matches
 // V8's "Invalid count value: <count>".
 func TestRepeatRangeErrors(t *testing.T) {
 	cases := []struct {
