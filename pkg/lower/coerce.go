@@ -200,6 +200,21 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 
+// localStorageDynamic reports whether a local identifier's Go slot is a boxed
+// value.Value, which is how a binding whose declared type is any or unknown is
+// stored (stmt.go declares `var y value.Value` for `var y;` with no initializer).
+// It reads the declared type off the symbol, not the identifier node, because
+// control-flow analysis narrows a later read to a primitive while the slot itself
+// stays a box. A compound assignment reads its narrowed target and so needs the
+// slot's real storage to decide whether the static result must be boxed back.
+func (r *Renderer) localStorageDynamic(target frontend.Node) bool {
+	sym, ok := r.prog.SymbolAt(target)
+	if !ok {
+		return false
+	}
+	return r.prog.TypeOfSymbol(sym).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
 // isUndefinedLiteral reports whether n is the ambient undefined global, the one
 // identifier whose type is exactly undefined. It tells the literal apart from a
 // user binding that could be typed undefined only loosely, but the pair with the
