@@ -595,6 +595,19 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 // the binding rather than from the literal, which is exactly the contextual type
 // TypeScript itself applies here. Every other initializer lowers on its own.
 func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, error) {
+	// A binding whose declared type is dynamic takes an object or array literal as a
+	// boxed value straight from its members, skipping the static struct or slice the
+	// literal would otherwise build and intern for a shape the any slot never names.
+	// Boxing at the expression's own lowering would not see the slot's type; the
+	// binding does, so the short-circuit lives here alongside the other contextual
+	// cases.
+	if r.prog.TypeAt(nameNode).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		if boxed, ok, err := r.boxLiteralToDynamic(initNode); err != nil {
+			return nil, err
+		} else if ok {
+			return boxed, nil
+		}
+	}
 	// An object literal in a slot whose declared shape has an optional property
 	// must build at that shape rather than its own all-required type, the contextual
 	// typing objectLiteralContextual applies. A slot that is itself T | undefined
