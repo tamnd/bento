@@ -57,13 +57,19 @@ twice(show, 5);
 	}
 }
 
-// TestCallableObjectHandsBack pins that a callable object type, a function value
-// that also carries its own property, hands the unit back rather than falling
-// through to the empty struct the object lowering would give a shape it reads as
-// having no representable fields.
-func TestCallableObjectHandsBack(t *testing.T) {
+// TestCallableObjectParamRenders pins that a callable object type, a function
+// value that also carries its own property, lowers to a struct with a reserved
+// Call field and that a call of the value routes through that field. The prelude
+// assert object is this shape, so it must lower rather than hand back.
+func TestCallableObjectParamRenders(t *testing.T) {
 	src := "type Fn = { (n: number): number; tag: string };\nfunction use(g: Fn): number { return g(1); }\n"
-	renderProgramHandBack(t, src)
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "Call func(float64) float64") {
+		t.Fatalf("callable object did not render a reserved Call field:\n%s", got)
+	}
+	if !strings.Contains(got, "g.Call(1)") {
+		t.Fatalf("call of a callable object did not route through Call:\n%s", got)
+	}
 }
 
 // TestOverloadedFuncTypeHandsBack pins that a function type with more than one

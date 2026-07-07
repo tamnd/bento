@@ -1,0 +1,2 @@
+feature = "callable-object"
+handback = "an overloaded or constructable callable object is a later slice"

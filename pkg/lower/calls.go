@@ -25,6 +25,22 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if len(kids) == 0 {
 		return nil, &NotYetLowerable{Reason: "call expression exposed no callee"}
 	}
+	// A callee that is a user-defined callable object, assert(x) where assert holds
+	// an Assert struct, calls through the struct's reserved Call field: assert.Call(x).
+	// It routes before the method and value-callee paths, which would otherwise call
+	// the struct itself as if it were a bare Go func. A member callee is excluded
+	// here because assert.sameValue(...) is a method on the object, handled by
+	// methodCall below, not a call of the object itself. An ambient global (String,
+	// Number, Array) is excluded too: those are callable objects in the type system,
+	// but each has its own dedicated lowering below, so the reserved-Call path must
+	// not shadow them. An import binding is excluded for the same reason.
+	if kids[0].Kind() != frontend.NodePropertyAccessExpression && !r.isBuiltinCallee(kids[0]) && r.isCallableObject(r.prog.TypeAt(kids[0])) {
+		recv, err := r.lowerExpr(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		return r.finishCall(n, &ast.SelectorExpr{X: recv, Sel: ident("Call")}, kids[1:], nil)
+	}
 	// A member callee (s.charCodeAt(...)) is a method call, not a plain function
 	// call; the string methods are the only ones covered so far. A call on a
 	// namespace go: import (zstd.NewReader(...)) is also a member callee, but it is a
@@ -173,6 +189,16 @@ func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []front
 		params = sig.Params
 		rest = sig.RestParam
 	}
+	return r.buildCall(callee, argNodes, params, rest, defaults)
+}
+
+// buildCall lowers the argument list against a known parameter list and builds
+// the Go call on the already-lowered callee. It is the body finishCall reaches
+// through the call node's signature, split out so a member call whose signature
+// comes from the receiver's property type (an assert.sameValue(...) on a callable
+// object) shares the exact same argument bridging without a call node to look the
+// signature up from.
+func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node) (ast.Expr, error) {
 	args := make([]ast.Expr, 0, len(params)+1)
 	// The arguments that land on a fixed parameter lower and bridge in position; any
 	// beyond the fixed count belong to a rest parameter and are gathered below.
@@ -295,6 +321,51 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 		return r.boxStaticToDynamic(lowered, node)
 	}
 	return r.bridgeClassBinding(lowered, node, pt)
+}
+
+// objectMethodCall lowers a method call whose receiver is a fixed-shape object
+// and whose named member is a function-valued property, so a member closure is
+// called through the Go struct field it interned to: recv.SameValue(args). It
+// reports ok=false when the receiver is not such an object or the member is not a
+// function property, so methodCall falls through to its string path; the member's
+// own call signature drives the argument bridging, the same rule a named call
+// applies. A data property (a non-function field) is not callable and stays for
+// the read path.
+func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	t := r.prog.TypeAt(recvNode)
+	if t.Flags&frontend.TypeObject == 0 {
+		return nil, false, nil
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return nil, false, nil
+	}
+	sp, ok := r.shapeProp(t, method)
+	if !ok {
+		return nil, false, nil
+	}
+	call, _ := r.prog.Signatures(sp.Type)
+	if len(call) != 1 {
+		return nil, false, nil
+	}
+	field, ok := exportedField(method)
+	if !ok {
+		return nil, false, &NotYetLowerable{Reason: "method name ." + method + " is not a Go identifier"}
+	}
+	// Interning the receiver's shape declares the func field this call selects, so
+	// the call and the struct agree on the field name and type.
+	if _, err := r.decls.internStruct(r, t); err != nil {
+		return nil, false, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, false, err
+	}
+	callee := &ast.SelectorExpr{X: recv, Sel: ident(field)}
+	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	return e, true, nil
 }
 
 // functionValueCallee lowers a callee expression that is not a named function to
@@ -447,6 +518,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// otherwise reject a function receiver as a later slice.
 	if r.isObjectProtoToString(recvNode) {
 		return r.objectProtoToStringCall(method, argNodes)
+	}
+	// A method on a fixed-shape object receiver whose property is itself a function
+	// (assert.sameValue(...) on a callable object, or a plain object that holds a
+	// closure in a field) calls through the Go struct field: recv.SameValue(args).
+	// It routes here, after the primitive and collection receivers, so a member
+	// closure is called as the func field it interned to rather than falling to the
+	// string-method gate below.
+	if e, ok, err := r.objectMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
 	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
@@ -1263,6 +1343,28 @@ func (r *Renderer) isAmbientGlobal(n frontend.Node) bool {
 		}
 	}
 	return true
+}
+
+// isBuiltinCallee reports whether a call-position identifier resolves to a host
+// builtin rather than a user binding: an ambient global (String, Number, Array)
+// or a name bound by a node: or go: import. The callable-object call path checks
+// this so it does not shadow a builtin that is a callable object in the type
+// system but has its own dedicated lowering further down callExpr.
+func (r *Renderer) isBuiltinCallee(n frontend.Node) bool {
+	if r.isAmbientGlobal(n) {
+		return true
+	}
+	if n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name := r.prog.Text(n)
+	if _, ok := r.nodeImports[name]; ok {
+		return true
+	}
+	if _, ok := r.goImports[name]; ok {
+		return true
+	}
+	return false
 }
 
 // isObjectProtoToString reports whether n is the member chain

@@ -49,6 +49,11 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	if (r.tryRet == tryRetDefer || r.tryRet == tryRetDeferPlain) && n.Kind() == frontend.NodeReturnStatement {
 		return r.deferredReturn(n)
 	}
+	if stmts, ok, err := r.flattenCallableBinding(n); err != nil {
+		return nil, err
+	} else if ok {
+		return stmts, nil
+	}
 	if stmts, ok, err := r.flattenConditionalStatement(n); err != nil {
 		return nil, err
 	} else if ok {
@@ -576,6 +581,97 @@ func collectVarDecls(prog *frontend.Program, n frontend.Node, out *[]frontend.No
 		}
 		collectVarDecls(prog, c, out)
 	}
+}
+
+// flattenCallableBinding expands a callable-object binding into the two steps a
+// JavaScript object of this shape needs. The test262 prelude writes
+// `const assert = function () { ... } as Assert` and then hangs methods off it,
+// so the value is a function that also carries fields. Go has no such value, so
+// the binding lowers to a pointer whose reserved Call field holds the function:
+// `assert := &Assert{}` then `assert.Call = func (...) { ... }`. The pointer is
+// declared first on purpose. The function body reads the object back (the assert
+// call reaches for its own message helpers), and the later member assignments
+// fill those helpers in, so every alias has to see one shared object. Go gets
+// that from the closure capturing the already-declared variable, which matches
+// the const being in scope for JavaScript. Anything that is not a single
+// callable-object binding reports ok=false and takes the ordinary var path.
+func (r *Renderer) flattenCallableBinding(n frontend.Node) ([]ast.Stmt, bool, error) {
+	if n.Kind() != frontend.NodeVariableStatement {
+		return nil, false, nil
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	if len(decls) != 1 {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(decls[0])
+	if len(kids) != 2 && len(kids) != 3 {
+		return nil, false, nil
+	}
+	nameNode := kids[0]
+	if !r.isCallableObject(r.prog.TypeAt(nameNode)) {
+		return nil, false, nil
+	}
+	name, ok := localName(r.prog.Text(nameNode))
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "a callable object bound to a non-identifier name is a later slice"}
+	}
+	fnNode, ok := r.callableInitFunc(kids[len(kids)-1])
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "a callable object initialized by something other than a function value is a later slice"}
+	}
+	structName, err := r.decls.internStruct(r, r.prog.TypeAt(nameNode))
+	if err != nil {
+		return nil, true, err
+	}
+	fnLit, err := r.lowerExpr(fnNode)
+	if err != nil {
+		return nil, true, err
+	}
+	// Step one declares the pointer, so the closure below and every later member
+	// assignment reach the same object.
+	declStmt := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(name)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(structName)}}},
+	}
+	// Step two assigns the call itself into the reserved field.
+	callStmt := &ast.AssignStmt{
+		Lhs: []ast.Expr{&ast.SelectorExpr{X: ident(name), Sel: ident("Call")}},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{fnLit},
+	}
+	return []ast.Stmt{declStmt, callStmt}, true, nil
+}
+
+// callableInitFunc peels the type cast off a callable-object initializer and
+// reports the function value underneath. The prelude spells the initializer as a
+// function expression widened to the object type through an `as` cast or an
+// angle-bracket assertion, so the cast is stripped (its inner value sits at
+// child 0 for `as` and child 1 for the assertion) and the result is returned
+// only when it is a function value. A cast over anything else, or an initializer
+// with no cast at all, reports ok=false so the binding hands back.
+func (r *Renderer) callableInitFunc(init frontend.Node) (frontend.Node, bool) {
+	inner := init
+	switch init.Kind() {
+	case frontend.NodeAsExpression:
+		kids := r.prog.Children(init)
+		if len(kids) == 0 {
+			return init, false
+		}
+		inner = kids[0]
+	case frontend.NodeTypeAssertion:
+		kids := r.prog.Children(init)
+		if len(kids) < 2 {
+			return init, false
+		}
+		inner = kids[1]
+	}
+	switch inner.Kind() {
+	case frontend.NodeFunctionExpression, frontend.NodeArrowFunction:
+		return inner, true
+	}
+	return init, false
 }
 
 // lowerExprStatement lowers an expression used as a statement. The covered

@@ -531,46 +531,76 @@ func (r *Renderer) renderFuncType(t frontend.Type) (ast.Expr, bool, error) {
 		return nil, false, nil
 	}
 	// The type is callable, so it is a function value and must not fall through to
-	// the empty-struct object lowering, which would be unsound. Only a single plain
-	// call signature lowers here; an overload set (more than one call signature), a
-	// callable object that also carries a construct signature or its own properties,
-	// or a generic or rest-or-optional-parameter signature is a later slice and
-	// hands the unit back rather than emit a wrong shape.
-	if len(call) != 1 || len(construct) != 0 || len(r.prog.Properties(t)) != 0 {
-		return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "function type with overloads, properties, or a construct signature is a later slice"}
+	// the empty-struct object lowering, which would be unsound. An overload set
+	// (more than one call signature) or a construct signature is still a later
+	// slice; the reason names what actually remains now that properties lower.
+	if len(call) != 1 || len(construct) != 0 {
+		return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "overloaded or constructor function type is a later slice"}
 	}
-	sig := call[0]
+	// A callable object carries its own properties on top of the call signature, so
+	// it is not a bare Go func: it lowers to a named struct whose fields are the
+	// properties plus one reserved Call field for the call itself, the same struct
+	// internStruct mints for a fixed-shape object. It routes here, before the plain
+	// func type below, so its properties are not interned away.
+	if len(r.prog.Properties(t)) != 0 {
+		obj, err := r.renderObject(t)
+		if err != nil {
+			return nil, true, err
+		}
+		return obj, true, nil
+	}
+	ft, err := r.funcTypeOf(call[0])
+	if err != nil {
+		return nil, true, err
+	}
+	return ft, true, nil
+}
+
+// funcTypeOf builds the Go func type for one call signature: a field per
+// parameter and, unless the return is void or never, a single result. A dynamic
+// optional parameter lowers to its plain type, since undefined lives inside the
+// value box natively and the call site fills an omitted argument with
+// value.Undefined, matching how paramFields lowers the function body parameter;
+// a static optional has no such room and hands back, as do a generic or a
+// rest-parameter signature. It is shared by renderFuncType's plain function
+// value and the Call field of a callable-object struct.
+func (r *Renderer) funcTypeOf(sig frontend.Signature) (*ast.FuncType, error) {
 	if len(sig.TypeParams) != 0 || sig.RestParam != nil {
-		return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "generic or rest-parameter function type is a later slice"}
+		return nil, &NotYetLowerable{Reason: "generic or rest-parameter function type is a later slice"}
 	}
 	var params []*ast.Field
 	for _, p := range sig.Params {
 		if p.Optional && p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
-			// A static optional parameter has no room in its Go type for the
-			// undefined an omission means, so it hands back until the value.Opt
-			// synthesis lands. A dynamic optional holds undefined natively and
-			// lowers to its plain type below, matching how paramFields lowers the
-			// function body parameter so a literal assigns to this type.
-			return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "function type with a static optional parameter is a later slice"}
+			return nil, &NotYetLowerable{Reason: "function type with a static optional parameter is a later slice"}
 		}
 		pt, err := r.typeExpr(p.Type)
 		if err != nil {
-			return nil, true, err
+			return nil, err
 		}
 		params = append(params, &ast.Field{Type: pt})
 	}
 	ft := &ast.FuncType{Params: &ast.FieldList{List: params}}
-	// A void or never return (or the zero type at a position with no value) is a
-	// Go func with no results; any other return lowers to the single Go result
-	// the signature carries.
 	if sig.Return.Flags != 0 && sig.Return.Flags&(frontend.TypeVoid|frontend.TypeNever) == 0 {
 		rt, err := r.typeExpr(sig.Return)
 		if err != nil {
-			return nil, true, err
+			return nil, err
 		}
 		ft.Results = &ast.FieldList{List: []*ast.Field{{Type: rt}}}
 	}
-	return ft, true, nil
+	return ft, nil
+}
+
+// isCallableObject reports whether a type is a callable object: a fixed-shape
+// object that carries exactly one call signature alongside one or more
+// properties. It is the shape the test262 assert prelude spells, and it lowers
+// to a struct with a reserved Call field rather than to a bare Go func or a plain
+// struct.
+func (r *Renderer) isCallableObject(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	call, _ := r.prog.Signatures(t)
+	return len(call) == 1 && len(r.prog.Properties(t)) > 0
 }
 
 // renderArray lowers an array type. The default is the Array[T] header from the
