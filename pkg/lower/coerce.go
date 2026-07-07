@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -250,6 +251,16 @@ func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
 // which picks the constructor. A non-primitive source has no constructor here yet
 // and hands back.
 func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, error) {
+	// An object or array literal flowing into a dynamic slot builds a live
+	// value.Object straight from its members rather than the static struct or
+	// slice the fixed-shape path would build, since the any binding stores a box,
+	// not a Go shape. This routes before the primitive cases so { x: 1 } and
+	// [1, 2] take the object path even though their own type is a fixed shape.
+	if boxed, ok, err := r.boxLiteralToDynamic(src); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	r.requireImport(valuePkg)
 	switch {
 	case r.isNumber(src):
@@ -278,6 +289,93 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		}, nil
 	}
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
+}
+
+// boxLiteralToDynamic builds the boxed value form of an object or array literal
+// whose slot is dynamic, so { x: 1 } and [1, 2] enter an any binding as a live
+// value.Object rather than the static struct or slice the fixed-shape path would
+// build. The second result reports whether src is a literal this path claims, so a
+// non-literal returns (nil, false, nil) and the caller falls through to the
+// primitive boxes. A member the plain data build cannot express (a spread, a
+// method, a computed key) hands back to a later slice.
+func (r *Renderer) boxLiteralToDynamic(src frontend.Node) (ast.Expr, bool, error) {
+	switch src.Kind() {
+	case frontend.NodeArrayLiteralExpression:
+		e, err := r.boxArrayLiteral(src)
+		return e, true, err
+	case frontend.NodeObjectLiteralExpression:
+		e, err := r.boxObjectLiteral(src)
+		return e, true, err
+	}
+	return nil, false, nil
+}
+
+// boxArrayLiteral lowers [e0, e1, ...] into value.NewArrayValue over a []value.Value
+// of the boxed elements, the dense array a boxed value carries. Each element boxes
+// through boxOperand, so a primitive rides its box constructor and a nested literal
+// recurses here. A spread element hands back, keeping this to the plain element run.
+func (r *Renderer) boxArrayLiteral(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	elems := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeSpreadElement {
+			return nil, &NotYetLowerable{Reason: "boxing an array literal with a spread element is a later slice"}
+		}
+		boxed, err := r.boxOperand(k)
+		if err != nil {
+			return nil, err
+		}
+		elems = append(elems, boxed)
+	}
+	r.requireImport(valuePkg)
+	lit := &ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "Value")}, Elts: elems}
+	return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{lit}}, nil
+}
+
+// boxObjectLiteral lowers { k: v, ... } into value.NewObject().Set(...) per member,
+// the ordered property map a boxed object keeps, so the keys enumerate in source
+// order the way JavaScript's own property order does. Each value boxes through
+// boxOperand; the key is the property name string. A member that is not a plain
+// key-value or shorthand assignment (a method, a spread, a computed or string key)
+// hands back to a later slice, matching what the fixed-shape object path claims.
+func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	var obj ast.Expr = &ast.CallExpr{Fun: sel("value", "NewObject")}
+	for _, p := range r.prog.Children(n) {
+		if p.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: "boxing an object literal with a method or accessor member is a later slice"}
+		}
+		kids := r.prog.Children(p)
+		var keyNode, valNode frontend.Node
+		switch len(kids) {
+		case 1:
+			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
+				return nil, &NotYetLowerable{Reason: "boxing an object literal with a spread member is a later slice"}
+			}
+			keyNode, valNode = kids[0], kids[0]
+		case 2:
+			keyNode, valNode = kids[0], kids[1]
+		default:
+			return nil, &NotYetLowerable{Reason: "boxing an object literal member with an unexpected shape is a later slice"}
+		}
+		if keyNode.Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "boxing an object literal with a non-identifier key is a later slice"}
+		}
+		boxedVal, err := r.boxOperand(valNode)
+		if err != nil {
+			return nil, err
+		}
+		obj = &ast.CallExpr{
+			Fun: &ast.SelectorExpr{X: obj, Sel: ident("Set")},
+			Args: []ast.Expr{
+				&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{
+					&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(keyNode))},
+				}},
+				boxedVal,
+			},
+		}
+	}
+	return obj, nil
 }
 
 // coerceDynamicToStatic wraps a boxed dynamic value in the coercion that lands it
