@@ -543,11 +543,11 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return &ast.CallExpr{Fun: sel("value", "Add"), Args: []ast.Expr{l, rr}}, nil
 	}
 
-	// The other operators a dynamic operand reaches: strict equality through the
-	// runtime's StrictEquals (or the IsUndefined/IsNull presence forms against a
-	// literal) and the multiplicative operators through ToNumber on each side.
-	// Loose equality and the relationals report unhandled and keep their
-	// hand-back below.
+	// The other operators a dynamic operand reaches: strict and loose equality
+	// through the runtime's StrictEquals and LooseEquals (or the IsUndefined/IsNull
+	// presence forms against a literal), the relationals through the runtime's
+	// Abstract Relational Comparison, and the multiplicative operators through
+	// ToNumber on each side.
 	if expr, handled, err := r.dynamicBinary(opText, left, right); err != nil {
 		return nil, err
 	} else if handled {
