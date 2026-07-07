@@ -1,0 +1,6 @@
+== stdout:
+num 42
+str 2
+other
+== exit:
+0
