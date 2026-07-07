@@ -3,6 +3,7 @@ package lower
 import (
 	"go/token"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +69,30 @@ func TestDecodeNumericLiteralRejects(t *testing.T) {
 		if value, _, ok := decodeNumericLiteral(in); ok {
 			t.Errorf("decodeNumericLiteral(%q) = (%q, ok), want refused", in, value)
 		}
+	}
+}
+
+// TestNegativeNumberConstLowersToFloat pins that a number binding initialized to a
+// negative literal keeps its float64 type. A negative literal is a unary minus over
+// the literal, so the readability fold used to decline it and Go inferred int from
+// n := -5, which then failed to build wherever n flowed into a float64 parameter.
+// The short declaration must read n := -5.0, and a large negative that lands on
+// int32's minimum must not fall into an int specialization either.
+func TestNegativeNumberConstLowersToFloat(t *testing.T) {
+	src := `
+const a = -5;
+const b = -2147483648;
+console.log(a ** 2);
+console.log(b ** 2);
+`
+	got := renderProgram(t, src)
+	for _, want := range []string{"a := -5.0", "b := -2147483648.0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("negative number const should lower to %q\n---\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "a := -5\n") || strings.Contains(got, "b := -2147483648\n") {
+		t.Errorf("negative number const wrongly kept a Go int short declaration\n---\n%s", got)
 	}
 }
 
