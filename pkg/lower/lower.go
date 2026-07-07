@@ -153,6 +153,15 @@ type Renderer struct {
 	// stored T is pulled out of the option; a read where the type is still optional
 	// keeps the bare Opt value. A nil map (the default) unwraps nothing.
 	optLocals map[string]bool
+	// dynLocals is the set of names in the body currently being lowered that are
+	// bound as boxed dynamic values: a parameter or a local typed any or unknown,
+	// which typeExpr lowers to value.Value. A read of one at a point the checker
+	// narrowed to a single primitive, past a typeof guard, goes through the
+	// matching accessor (AsString, AsNumber, AsBool) so the static expression it
+	// flows into sees the unboxed Go value; a read still typed any keeps the bare
+	// box, which is what the runtime helpers take. It is built per body next to
+	// unionLocals and saved and restored the same way. A nil map unwraps nothing.
+	dynLocals map[string]bool
 	// errorLocals is the set of catch-binding names in scope while a catch block is
 	// lowered, each bound to the *value.Error the catch recovered. A read of the
 	// binding's .message or .name lowers to the matching method on the error; the

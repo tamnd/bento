@@ -1432,6 +1432,11 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 	case r.isBigInt(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{lowered}}, nil
+	case r.isDynamic(arg):
+		// A dynamic argument defers the whole ToString to the value model,
+		// which dispatches on the runtime kind.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "coercing this type to a string is a later slice"}
 	}

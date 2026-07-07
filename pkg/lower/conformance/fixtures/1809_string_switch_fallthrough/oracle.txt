@@ -1,0 +1,12 @@
+== stdout:
+ay
+other
+S:x
+zero
+other
+other
+3
+2
+9
+== exit:
+0

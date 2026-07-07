@@ -135,6 +135,11 @@ func (v Value) AsNumber() float64 { return math.Float64frombits(v.scalar) }
 // AsBool returns the bool a boolean box holds.
 func (v Value) AsBool() bool { return v.scalar != 0 }
 
+// AsString returns the BStr a string box holds. Like AsNumber it is only valid
+// on a KindString value: lowered code calls it where the checker proved the
+// kind, past a typeof guard, and reaches for ToString when the kind is open.
+func (v Value) AsString() BStr { return v.str() }
+
 // str returns the BStr a string box holds, dereferencing the heap copy. It is
 // unexported because only this package's coercions read it; a caller outside gets
 // a string through ToString.

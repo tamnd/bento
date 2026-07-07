@@ -138,11 +138,21 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 
 // combineIsDynamic reports whether a binary operator on these operands produces a
 // boxed dynamic result, which is the case only for + with a dynamic operand: the
-// result kind is not known until runtime, so it goes through value.Add. Every
-// other operator on a dynamic operand is not lowered here and hands back through
-// the operator table, so this stays narrow to the one case combineBinary boxes.
+// result kind is not known until runtime, so it goes through value.Add. When the
+// other operand is a known string the result kind is known after all, since + with
+// a string operand always concatenates, so the checker types it string and the
+// concat path produces the bstr that type promises; the dynamic operand runs
+// through ToString there, the same coercion Add would apply. Every other operator
+// on a dynamic operand is not lowered here and hands back through the operator
+// table, so this stays narrow to the one case combineBinary boxes.
 func (r *Renderer) combineIsDynamic(opText string, left, right frontend.Node) bool {
-	return opText == "+" && (r.isDynamic(left) || r.isDynamic(right))
+	if opText != "+" {
+		return false
+	}
+	if r.isString(left) || r.isString(right) {
+		return false
+	}
+	return r.isDynamic(left) || r.isDynamic(right)
 }
 
 // boxOperand lowers an operand to a value.Value so a dynamic operator can take it.
