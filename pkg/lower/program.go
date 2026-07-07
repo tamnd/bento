@@ -81,6 +81,12 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// its binding, so one walk over the module settles the count for every scope.
 	r.bindingUses, r.identText = countBindingUses(r.prog, entry)
 
+	// Count the identifier reads the Object statics fold away so the blank decision
+	// below sees the emitted-Go use count, not the source one. Object.keys(o) reads
+	// only o's shape and never lowers o, so without this a var o the fold orphaned
+	// would keep its source read and go unblanked, and the emitted Go would not build.
+	r.elidedUses, r.elidedText = countElidedReceivers(r, entry)
+
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
 	var mainBody []frontend.Node
@@ -364,7 +370,74 @@ func (r *Renderer) bindingUnused(nameNode frontend.Node) bool {
 		return false
 	}
 	name := r.prog.Text(nameNode)
-	return r.bindingUses[sym] == 1 && r.identText[name] == 1
+	// Subtract the reads a fold drops from the emitted Go, so a binding whose only
+	// non-declaration read was the receiver of an Object.keys(o) that folded to a
+	// static name list reads as unused here and gets the blank the emit needs.
+	uses := r.bindingUses[sym] - r.elidedUses[sym]
+	text := r.identText[name] - r.elidedText[name]
+	return uses == 1 && text == 1
+}
+
+// countElidedReceivers tallies, per binding, the identifier reads the Object static
+// folds drop from the emitted Go. Object.keys(o), Object.getOwnPropertyNames(o), and
+// Object.hasOwn(o, k) read only o's compile-time shape and never lower o, so the
+// source counts a read the emit does not make. Recording those reads lets
+// bindingUnused blank a binding the fold orphaned. The pattern is matched
+// syntactically, on a bare-identifier receiver of one of those three calls; if the
+// shape does not fold the whole program hands back and no Go is emitted, so an
+// over-count on a call that will not fold cannot reach a build.
+func countElidedReceivers(r *Renderer, entry frontend.Node) (map[frontend.Symbol]int, map[string]int) {
+	uses := map[frontend.Symbol]int{}
+	text := map[string]int{}
+	prog := r.prog
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeCallExpression {
+			if arg, ok := elidedObjectReceiver(r, n); ok {
+				text[prog.Text(arg)]++
+				if sym, ok := prog.SymbolAt(arg); ok {
+					uses[sym]++
+				}
+			}
+		}
+		for _, c := range prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(entry)
+	return uses, text
+}
+
+// elidedObjectReceiver reports the bare-identifier receiver of an Object static call
+// that folds to a compile-time answer and drops the receiver from the emit:
+// Object.keys, Object.getOwnPropertyNames, and Object.hasOwn. It returns the receiver
+// identifier node and true only for those calls with an identifier first argument.
+func elidedObjectReceiver(r *Renderer, call frontend.Node) (frontend.Node, bool) {
+	kids := r.prog.Children(call)
+	if len(kids) < 2 {
+		return nil, false
+	}
+	callee := kids[0]
+	if callee.Kind() != frontend.NodePropertyAccessExpression {
+		return nil, false
+	}
+	ckids := r.prog.Children(callee)
+	if len(ckids) != 2 {
+		return nil, false
+	}
+	if !r.isGlobalRef(ckids[0], "Object") {
+		return nil, false
+	}
+	switch r.prog.Text(ckids[1]) {
+	case "keys", "getOwnPropertyNames", "hasOwn":
+	default:
+		return nil, false
+	}
+	arg := kids[1]
+	if arg.Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	return arg, true
 }
 
 // hoistModuleVar decides whether a module-level variable statement holds a binding a

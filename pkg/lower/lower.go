@@ -271,6 +271,16 @@ type Renderer struct {
 	// binding (an object-literal shorthand, say) from being mistaken for an unused
 	// local. It is filled alongside bindingUses in RenderProgram.
 	identText map[string]int
+	// elidedUses counts, per binding symbol, the identifier references a fold drops
+	// from the emitted Go. Object.keys(o) and its siblings read only o's static shape
+	// and never lower o, so the source counts o as read while the emit does not; the
+	// two elided maps let bindingUnused subtract those dropped reads and still blank a
+	// binding the fold orphaned. It is the text twin elidedText and both are filled
+	// alongside bindingUses in RenderProgram.
+	elidedUses map[frontend.Symbol]int
+	// elidedText is the text twin of elidedUses, subtracted from identText the same
+	// way bindingUnused subtracts elidedUses from bindingUses.
+	elidedText map[string]int
 }
 
 // NewRenderer builds a renderer over a checked program.
