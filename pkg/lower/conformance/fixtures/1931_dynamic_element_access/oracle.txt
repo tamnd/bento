@@ -1,0 +1,7 @@
+== stdout:
+e
+h
+o
+5
+== exit:
+0

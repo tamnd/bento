@@ -430,6 +430,43 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("CharAt")}, Args: []ast.Expr{idx}}, nil
 	}
+	// A read a[i] on a dynamic receiver dispatches at runtime: the receiver is a
+	// value.Value that carries its own kind, so the read routes through GetIndex for a
+	// number index and GetElem for a dynamic one, the runtime dispatch that indexes an
+	// array, a string, or an object property by the same rule a static read would. A
+	// string-literal key was already handled above as a property read, so what reaches
+	// here is a computed index. Only a number or another dynamic value is a key this
+	// slice forms; a statically typed non-number index (a bigint, a boolean) is its own
+	// later slice.
+	if r.isDynamic(obj) {
+		r.requireImport(valuePkg)
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case r.isNumber(idxNode):
+			idx, err := r.lowerExpr(idxNode)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{idx}}, nil
+		case r.isDynamic(idxNode):
+			idx, err := r.lowerExpr(idxNode)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, nil
+		case r.isString(idxNode):
+			idx, err := r.lowerExpr(idxNode)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{idx}}, nil
+		default:
+			return nil, &NotYetLowerable{Reason: "a dynamic element access with a non-number, non-string index is a later slice"}
+		}
+	}
 	// A typed-array read a[i] returns its element as a Number through the buffer's own
 	// At, the same method name a typed Array indexes through, so the receivers share
 	// this shape and differ only in which value type carries At. A typed array is not
