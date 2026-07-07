@@ -1,0 +1,5 @@
+== stdout:
+2
+second
+== exit:
+0
