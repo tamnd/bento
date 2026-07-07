@@ -528,13 +528,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if e, ok, err := r.objectMethodCall(recvNode, method, argNodes); ok || err != nil {
 		return e, err
 	}
-	// toString on a dynamic receiver dispatches at runtime: the value carries its
+	// toString on a boxed receiver dispatches at runtime: the value carries its
 	// kind, so recv.ToStringMethod() runs the toString the receiver's prototype
 	// installs, throwing on undefined and null the way the language does. It routes
-	// here before the string gate below, which would otherwise reject a dynamic
+	// here before the string gate below, which would otherwise reject a boxed
 	// receiver as a later slice. compareArray in the test262 prelude calls
-	// message.toString() on an any-typed message, the first hit.
-	if r.isDynamic(recvNode) && method == "toString" {
+	// message.toString() where a typeof guard narrowed the any-typed message to
+	// symbol, so the binding is still a box the checker no longer types dynamic.
+	if r.isBoxedValue(recvNode) && method == "toString" {
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "dynamic .toString with an argument is a later slice"}
 		}
@@ -543,7 +544,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 			return nil, err
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToStringMethod")}}, nil
+		call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToStringMethod")}}
+		// A receiver typed any keeps the boxed result: any.toString() is itself any,
+		// so the call node stays a value the consumer takes. A receiver narrowed to a
+		// concrete kind types the call string, so the boxed result unboxes to its BStr
+		// to match the string the checker promised the consumer.
+		if r.isDynamic(recvNode) {
+			return call, nil
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: call, Sel: ident("AsString")}}, nil
 	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
