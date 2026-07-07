@@ -184,6 +184,12 @@ func (v Value) Get(key BStr) Value {
 		return o.getOwn(key)
 	case KindObject:
 		return v.object().getOwn(key)
+	case KindFunc:
+		// A function is an object too, so a named read finds its own properties: the
+		// name a built-in error constructor carries is the read the caught-error tests
+		// make. A function box with no own properties still answers undefined for a
+		// miss through the same getOwn scan.
+		return v.object().getOwn(key)
 	default:
 		return Undefined
 	}
