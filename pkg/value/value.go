@@ -263,6 +263,44 @@ func ToString(v Value) BStr {
 	}
 }
 
+// ClassTag implements Object.prototype.toString.call(v), the idiom test262 and
+// much library code reaches for to read a value's internal class as a string of
+// the form "[object Type]". The mapping is the spec's Object.prototype.toString:
+// undefined and null carry their own tags, an array is "[object Array]", a
+// callable is "[object Function]", and every primitive and plain object reports
+// the tag for its type. It is called only where the AOT path proved the borrow is
+// Object.prototype.toString.call, so the receiver kind alone decides the tag.
+//
+// Two spec cases bento does not model yet: an object with a Symbol.toStringTag
+// property reports that tag instead of "[object Object]", and an Error, Date, or
+// RegExp built with the corresponding internal slot reports "[object Error]" and
+// the like. Those wait on the runtime carrying the slots; a plain object reaches
+// the object case and reports "[object Object]".
+func ClassTag(v Value) BStr {
+	switch v.kind {
+	case KindUndefined:
+		return FromGoString("[object Undefined]")
+	case KindNull:
+		return FromGoString("[object Null]")
+	case KindBool:
+		return FromGoString("[object Boolean]")
+	case KindNumber:
+		return FromGoString("[object Number]")
+	case KindBigInt:
+		return FromGoString("[object BigInt]")
+	case KindString:
+		return FromGoString("[object String]")
+	case KindSymbol:
+		return FromGoString("[object Symbol]")
+	case KindArray:
+		return FromGoString("[object Array]")
+	case KindFunc:
+		return FromGoString("[object Function]")
+	default:
+		return FromGoString("[object Object]")
+	}
+}
+
 // Add implements the JavaScript + operator over two dynamic values, the one
 // operator whose result kind depends on its operands: if either side becomes a
 // string after ToPrimitive, the result is the concatenation, and otherwise both

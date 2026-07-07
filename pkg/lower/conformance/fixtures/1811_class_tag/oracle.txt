@@ -1,0 +1,8 @@
+== stdout:
+[object Number]
+[object String]
+[object Boolean]
+[object Number]
+[object String]
+== exit:
+0
