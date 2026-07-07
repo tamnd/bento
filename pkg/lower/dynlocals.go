@@ -47,9 +47,17 @@ func (r *Renderer) dynLocalsOf(params []frontend.Param, body []frontend.Node) ma
 // collectDynDecls walks one node, recording each variable declaration whose
 // name is typed any or unknown, and recurses into its children so a binding in
 // a nested block or loop is seen. It counts declarations per name alongside so
-// dynLocalsOf can drop a shadowed name, the same guard the union pre-pass
-// keeps.
+// dynLocalsOf can drop a name redeclared in this same scope. It stops at a
+// nested function boundary: a binding inside a nested function belongs to that
+// function's own dynLocals pass, so counting it here would treat a same-named
+// local as a redeclaration and drop the outer binding. A prelude helper with a
+// local `result` used to knock the top-level `result` out of the boxed-locals
+// set this way, leaving its narrowed read a bare box that double-boxed and
+// failed go build.
 func (r *Renderer) collectDynDecls(n frontend.Node, out map[string]bool, declCount map[string]int) {
+	if isFunctionScope(n.Kind()) {
+		return
+	}
 	if n.Kind() == frontend.NodeVariableDeclaration {
 		kids := r.prog.Children(n)
 		if len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier {
@@ -64,6 +72,67 @@ func (r *Renderer) collectDynDecls(n frontend.Node, out map[string]bool, declCou
 	for _, c := range r.prog.Children(n) {
 		r.collectDynDecls(c, out, declCount)
 	}
+}
+
+// scopeDeclaredNames collects every binding name a function scope declares, its
+// parameters and its variable declarations, stopping at a nested function the way
+// collectDynDecls does. A closure inherits the enclosing dynamic locals so a captured
+// outer binding stays tracked inside it, but a name the closure redeclares as its own
+// local shadows that outer binding. The merge subtracts these names before overlaying
+// the closure's own dynamic set, so an outer dynamic does not leak a value accessor
+// onto a static local that reuses the name.
+func (r *Renderer) scopeDeclaredNames(params []frontend.Param, body []frontend.Node) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range params {
+		if name, ok := localName(p.Name); ok {
+			out[name] = true
+		}
+	}
+	for _, n := range body {
+		r.collectDeclaredNames(n, out)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// collectDeclaredNames walks one node recording every variable declaration name,
+// whatever its type, and recurses into control-flow children while stopping at a
+// nested function scope, the same boundary collectDynDecls keeps.
+func (r *Renderer) collectDeclaredNames(n frontend.Node, out map[string]bool) {
+	if isFunctionScope(n.Kind()) {
+		return
+	}
+	if n.Kind() == frontend.NodeVariableDeclaration {
+		kids := r.prog.Children(n)
+		if len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier {
+			if name, ok := localName(r.prog.Text(kids[0])); ok {
+				out[name] = true
+			}
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		r.collectDeclaredNames(c, out)
+	}
+}
+
+// isFunctionScope reports whether a node opens a new function scope, the boundary
+// the dynamic-locals walk stops at so a nested function's bindings are left to that
+// function's own pre-pass. It covers every form that carries its own parameter list
+// and body: a function declaration or expression, an arrow, and a class member.
+func isFunctionScope(k frontend.NodeKind) bool {
+	switch k {
+	case frontend.NodeFunctionDeclaration,
+		frontend.NodeFunctionExpression,
+		frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration,
+		frontend.NodeGetAccessor,
+		frontend.NodeSetAccessor,
+		frontend.NodeConstructor:
+		return true
+	}
+	return false
 }
 
 // dynAccessor names the Value accessor for a boxed read the checker narrowed to
