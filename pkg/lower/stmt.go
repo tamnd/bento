@@ -43,6 +43,12 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 // return or assign each branch; every other statement lowers to the single Go
 // statement lowerStatement builds and comes back as a one-element slice.
 func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
+	// A return in a catch or finally body of a try whose returns escape expands
+	// to the named-result assignment plus the bare return out of the deferred
+	// handler, so it routes here where a statement may become two.
+	if (r.tryRet == tryRetDefer || r.tryRet == tryRetDeferPlain) && n.Kind() == frontend.NodeReturnStatement {
+		return r.deferredReturn(n)
+	}
 	if stmts, ok, err := r.flattenConditionalStatement(n); err != nil {
 		return nil, err
 	} else if ok {
@@ -329,7 +335,19 @@ func (r *Renderer) bodyUsesName(n frontend.Node, name string) bool {
 func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
 	if len(kids) == 0 {
+		// Inside a try escape closure the bare return of a void function still has
+		// to raise done, or the call site would not return; the closure's own
+		// fall-off return is the only bare one.
+		if r.tryRet == tryRetBody {
+			if !isVoidReturn(r.retType) {
+				return nil, &NotYetLowerable{Reason: "a bare return of undefined from a value-returning try is a later slice"}
+			}
+			return &ast.ReturnStmt{Results: []ast.Expr{ident("true")}}, nil
+		}
 		return &ast.ReturnStmt{}, nil
+	}
+	if r.tryRet == tryRetBody && isVoidReturn(r.retType) {
+		return nil, &NotYetLowerable{Reason: "a value returned from a void function inside a try is a later slice"}
 	}
 	// An object literal returned into a declared shape with an optional property
 	// builds at that shape, the same contextual typing a binding applies; a return
@@ -354,7 +372,54 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	// In a try escape closure the return also raises done, filling the closure's
+	// named results in one statement; a plain function return carries the value
+	// alone.
+	if r.tryRet == tryRetBody {
+		return &ast.ReturnStmt{Results: []ast.Expr{expr, ident("true")}}, nil
+	}
 	return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
+}
+
+// deferredReturn lowers a return inside a catch or finally body of a try whose
+// returns escape. The body runs inside a deferred function, and the only way a
+// deferred function sets its enclosing closure's results is by assigning the
+// named ones, so the return becomes `ret, done = x, true` followed by a bare
+// return out of the handler; the always form's closure has no done, so there
+// the assignment fills ret alone, and a void function's fills just done. The
+// object-literal contextual path is left to a later slice, so a returned
+// literal that needs it hands back through the plain lowering's shape checks.
+func (r *Renderer) deferredReturn(n frontend.Node) ([]ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 {
+		if !isVoidReturn(r.retType) {
+			return nil, &NotYetLowerable{Reason: "a bare return of undefined from a value-returning try is a later slice"}
+		}
+		return []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident("done")}, Tok: token.ASSIGN, Rhs: []ast.Expr{ident("true")}},
+			&ast.ReturnStmt{},
+		}, nil
+	}
+	if isVoidReturn(r.retType) {
+		return nil, &NotYetLowerable{Reason: "a value returned from a void function inside a try is a later slice"}
+	}
+	expr, err := r.lowerExpr(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	expr, err = r.coerceReturn(expr, kids[0])
+	if err != nil {
+		return nil, err
+	}
+	lhs := []ast.Expr{ident("ret"), ident("done")}
+	rhs := []ast.Expr{expr, ident("true")}
+	if r.tryRet == tryRetDeferPlain {
+		lhs, rhs = lhs[:1], rhs[:1]
+	}
+	return []ast.Stmt{
+		&ast.AssignStmt{Lhs: lhs, Tok: token.ASSIGN, Rhs: rhs},
+		&ast.ReturnStmt{},
+	}, nil
 }
 
 // lowerVarStatement lowers a const or let statement to Go var declarations, one

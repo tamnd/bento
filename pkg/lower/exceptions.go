@@ -372,6 +372,19 @@ func (r *Renderer) thrownClassOf(n frontend.Node) (*classInfo, bool) {
 	return nil, false
 }
 
+// tryRetMode is how a return statement leaves the try construct it sits in;
+// the modes are documented on the Renderer's tryRet field. tryRetDeferPlain is
+// the deferred-handler mode of the always-returning form, whose closure carries
+// only the value: the assignment fills ret alone, with no done to raise.
+type tryRetMode int
+
+const (
+	tryRetNone tryRetMode = iota
+	tryRetBody
+	tryRetDefer
+	tryRetDeferPlain
+)
+
 // lowerTry lowers a try/catch/finally to a Go closure over panic and recover. A
 // throw inside the try body is a panic, so the try body runs inside an immediately
 // invoked function whose deferred functions handle it: a catch is a deferred
@@ -380,11 +393,13 @@ func (r *Renderer) thrownClassOf(n frontend.Node) (*classInfo, bool) {
 // order so the catch runs first and the finally last, matching the language:
 // finally runs after the catch, and after a normal completion too.
 //
-// The closure cannot carry an abrupt completion out of the construct, so a try,
-// catch, or finally body that returns hands the whole statement back; a break or
-// continue inside a body already hands back at the statement lowering, so only a
-// return needs guarding here. Widening to abrupt completions that escape the
-// construct is a later slice.
+// A try none of whose bodies return stays that plain closure. A body that
+// returns compiles to the escape form instead: the closure takes named results
+// (ret T, done bool), a return in the try body fills them with `return x,
+// true`, a return in a catch or finally assigns them from inside the deferred
+// function, and the call site turns done back into the enclosing function's
+// return. A break or continue inside a body still hands back at the statement
+// lowering.
 func (r *Renderer) lowerTry(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
 	if len(kids) == 0 || kids[0].Kind() != frontend.NodeBlock {
@@ -404,8 +419,11 @@ func (r *Renderer) lowerTry(n frontend.Node) (ast.Stmt, error) {
 	if !hasCatch && !hasFinally {
 		return nil, &NotYetLowerable{Reason: "a try with neither catch nor finally is a later slice"}
 	}
-	if r.blockReturns(tryBlock) || (hasFinally && r.blockReturns(finallyBlock)) {
-		return nil, &NotYetLowerable{Reason: "a return that escapes a try, catch, or finally is a later slice"}
+	escapes := r.blockReturns(tryBlock) ||
+		(hasCatch && r.blockReturns(catchClause)) ||
+		(hasFinally && r.blockReturns(finallyBlock))
+	if escapes {
+		return r.lowerTryEscape(n, tryBlock, catchClause, finallyBlock, hasCatch, hasFinally)
 	}
 
 	var closureBody []ast.Stmt
@@ -421,7 +439,7 @@ func (r *Renderer) lowerTry(n frontend.Node) (ast.Stmt, error) {
 	}
 
 	if hasCatch {
-		catchDefer, err := r.catchDefer(catchClause)
+		catchDefer, err := r.catchDefer(catchClause, false)
 		if err != nil {
 			return nil, err
 		}
@@ -437,13 +455,194 @@ func (r *Renderer) lowerTry(n frontend.Node) (ast.Stmt, error) {
 	return &ast.ExprStmt{X: callClosure(closureBody)}, nil
 }
 
+// lowerTryEscape lowers a try one of whose bodies returns. Two forms cover it,
+// both closures whose named results a deferred catch or finally can fill.
+//
+// When every path through the try body and the catch ends in a return or a
+// throw, the construct as a whole always returns, so it lowers to returning
+// the closure directly, and the enclosing function needs nothing after it:
+//
+//	return func() (ret T) { ... }()
+//
+// A return in that try body stays a plain Go return; a return in the catch or
+// finally assigns ret and leaves the handler with a bare return.
+//
+// Otherwise control can run past the construct, so the closure carries a
+// second result saying whether a body returned, and the call site turns it
+// back into a real return:
+//
+//	if ret, done := func() (ret T, done bool) { ... }(); done {
+//		return ret
+//	}
+//
+// There a return in the try body is `return x, true`, and a return in a catch
+// or finally assigns both named results. A function returning nothing always
+// takes the done form with ret dropped, since it has no missing-return
+// obligation the always form would be needed for.
+func (r *Renderer) lowerTryEscape(n, tryBlock, catchClause, finallyBlock frontend.Node, hasCatch, hasFinally bool) (ast.Stmt, error) {
+	if r.tryRet == tryRetDefer || r.tryRet == tryRetDeferPlain {
+		return nil, &NotYetLowerable{Reason: "a try with an escaping return nested in a catch or finally is a later slice"}
+	}
+	// The closure's named results live in the same scope as the bodies, so a
+	// source binding or reference named ret or done inside the construct would
+	// resolve to them rather than to the source's own variable; that shadowing
+	// hazard hands back rather than miscompile.
+	if r.mentionsName(n, "ret") || r.mentionsName(n, "done") {
+		return nil, &NotYetLowerable{Reason: "a name colliding with the try escape results (ret, done) is a later slice"}
+	}
+	valued := !isVoidReturn(r.retType)
+	always := valued && r.alwaysAbrupt(r.prog.Children(tryBlock)) &&
+		(!hasCatch || r.alwaysAbrupt(r.prog.Children(r.catchBlockOf(catchClause))))
+
+	bodyMode, deferMode := tryRetBody, tryRetDefer
+	if always {
+		// The always form's closure returns the plain value, so returns in the
+		// try body need no rewriting at all, and the handlers fill only ret.
+		bodyMode, deferMode = tryRetNone, tryRetDeferPlain
+	}
+
+	var closureBody []ast.Stmt
+	if hasFinally {
+		prev := r.tryRet
+		r.tryRet = deferMode
+		finStmts, err := r.lowerBlock(finallyBlock)
+		r.tryRet = prev
+		if err != nil {
+			return nil, err
+		}
+		closureBody = append(closureBody, &ast.DeferStmt{Call: callClosure(finStmts.List)})
+	}
+	if hasCatch {
+		prev := r.tryRet
+		r.tryRet = deferMode
+		catchDefer, err := r.catchDefer(catchClause, true)
+		r.tryRet = prev
+		if err != nil {
+			return nil, err
+		}
+		closureBody = append(closureBody, catchDefer)
+	}
+	prev := r.tryRet
+	r.tryRet = bodyMode
+	tryStmts, err := r.lowerBlock(tryBlock)
+	r.tryRet = prev
+	if err != nil {
+		return nil, err
+	}
+	closureBody = append(closureBody, tryStmts.List...)
+	// The closure's tail return is the fall-off path; a body already ending in
+	// a Go return needs none, and in the always form a throw ends the body
+	// instead, whose panic the tail return sits after only syntactically.
+	if len(closureBody) == 0 || !isGoReturn(closureBody[len(closureBody)-1]) {
+		closureBody = append(closureBody, &ast.ReturnStmt{})
+	}
+
+	results := &ast.FieldList{}
+	if valued {
+		rt, err := r.typeExpr(r.retType)
+		if err != nil {
+			return nil, err
+		}
+		results.List = append(results.List, &ast.Field{Names: []*ast.Ident{ident("ret")}, Type: rt})
+	}
+	if !always {
+		results.List = append(results.List, &ast.Field{Names: []*ast.Ident{ident("done")}, Type: ident("bool")})
+	}
+	closure := &ast.CallExpr{Fun: &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: results},
+		Body: &ast.BlockStmt{List: closureBody},
+	}}
+
+	if always {
+		// Inside an enclosing escape closure this return itself raises that
+		// closure's done.
+		if r.tryRet == tryRetBody {
+			return &ast.ReturnStmt{Results: []ast.Expr{closure, ident("true")}}, nil
+		}
+		return &ast.ReturnStmt{Results: []ast.Expr{closure}}, nil
+	}
+
+	// The done form's call site: bind the results and return when a body did.
+	// Inside an enclosing escape closure the emitted return fills that closure's
+	// named results; the if-init's ret shadows the outer one only for the
+	// return's operand, which is exactly the value being handed up.
+	var lhs []ast.Expr
+	var thenRet *ast.ReturnStmt
+	if valued {
+		lhs = []ast.Expr{ident("ret"), ident("done")}
+		if r.tryRet == tryRetBody {
+			thenRet = &ast.ReturnStmt{Results: []ast.Expr{ident("ret"), ident("true")}}
+		} else {
+			thenRet = &ast.ReturnStmt{Results: []ast.Expr{ident("ret")}}
+		}
+	} else {
+		lhs = []ast.Expr{ident("done")}
+		if r.tryRet == tryRetBody {
+			thenRet = &ast.ReturnStmt{Results: []ast.Expr{ident("true")}}
+		} else {
+			thenRet = &ast.ReturnStmt{}
+		}
+	}
+	return &ast.IfStmt{
+		Init: &ast.AssignStmt{Lhs: lhs, Tok: token.DEFINE, Rhs: []ast.Expr{closure}},
+		Cond: ident("done"),
+		Body: &ast.BlockStmt{List: []ast.Stmt{thenRet}},
+	}, nil
+}
+
+// catchBlockOf returns the block body of a catch clause, or the clause itself
+// when it has none, which only makes the abruptness analysis answer false.
+func (r *Renderer) catchBlockOf(catchClause frontend.Node) frontend.Node {
+	for _, k := range r.prog.Children(catchClause) {
+		if k.Kind() == frontend.NodeBlock {
+			return k
+		}
+	}
+	return catchClause
+}
+
+// alwaysAbrupt reports whether a statement list cannot complete normally: its
+// last statement returns, throws, or is an if-else (or block) whose every arm
+// does. It is deliberately conservative; a shape it cannot see answers false
+// and only costs the try escape its done result.
+func (r *Renderer) alwaysAbrupt(stmts []frontend.Node) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	return r.stmtAbrupt(stmts[len(stmts)-1])
+}
+
+// stmtAbrupt reports whether one statement cannot complete normally, the
+// per-statement half of alwaysAbrupt.
+func (r *Renderer) stmtAbrupt(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeReturnStatement, frontend.NodeThrowStatement:
+		return true
+	case frontend.NodeBlock:
+		return r.alwaysAbrupt(r.prog.Children(n))
+	case frontend.NodeIfStatement:
+		kids := r.prog.Children(n)
+		return len(kids) >= 3 && r.stmtAbrupt(kids[1]) && r.stmtAbrupt(kids[2])
+	}
+	return false
+}
+
+// isGoReturn reports whether a lowered statement is a Go return, the check the
+// try escape uses to skip its redundant tail return.
+func isGoReturn(s ast.Stmt) bool {
+	_, ok := s.(*ast.ReturnStmt)
+	return ok
+}
+
 // catchDefer builds the deferred recover that runs a catch clause. It recovers the
 // panic, and when something was thrown it converts the payload to the *value.Error
 // the binding names (value.Caught re-panics a Go runtime bug so a genuine crash is
 // not swallowed) and runs the catch body. A catch with no binding still recovers
 // and converts, so a Go runtime panic is re-raised rather than silently caught, but
-// discards the error.
-func (r *Renderer) catchDefer(catchClause frontend.Node) (ast.Stmt, error) {
+// discards the error. allowReturns is set by the escape form, whose named results
+// a catch return can fill; the plain form keeps its hand-back on a returning
+// catch, since its closure has nowhere to carry the value.
+func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast.Stmt, error) {
 	var binding string
 	var catchBlock frontend.Node
 	for _, k := range r.prog.Children(catchClause) {
@@ -472,7 +671,7 @@ func (r *Renderer) catchDefer(catchClause frontend.Node) (ast.Stmt, error) {
 	if catchBlock == nil {
 		return nil, &NotYetLowerable{Reason: "catch clause did not expose a block body"}
 	}
-	if r.blockReturns(catchBlock) {
+	if !allowReturns && r.blockReturns(catchBlock) {
 		return nil, &NotYetLowerable{Reason: "a return that escapes a try, catch, or finally is a later slice"}
 	}
 
