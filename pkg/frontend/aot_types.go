@@ -95,6 +95,8 @@ const (
 	NodeYieldExpression          = adapter.NodeYieldExpression
 	NodeSpreadElement            = adapter.NodeSpreadElement
 	NodeParenthesizedExpression  = adapter.NodeParenthesizedExpression
+	NodeAsExpression             = adapter.NodeAsExpression
+	NodeTypeAssertion            = adapter.NodeTypeAssertion
 
 	// Literals and keyword-valued expressions.
 	NodeNumericLiteral                = adapter.NodeNumericLiteral

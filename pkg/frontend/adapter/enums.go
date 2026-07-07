@@ -139,6 +139,11 @@ const (
 	NodeSpreadElement
 	NodeParenthesizedExpression
 
+	// Type-cast expressions the emitter erases to their inner value: the `as`
+	// form and the angle-bracket assertion.
+	NodeAsExpression
+	NodeTypeAssertion
+
 	// Literals and keyword-valued expressions, the leaves lowering reads a
 	// constant from.
 	NodeNumericLiteral

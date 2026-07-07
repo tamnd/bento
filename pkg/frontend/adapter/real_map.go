@@ -166,6 +166,10 @@ func mapKind(k shim.Kind) NodeKind {
 		return NodeSpreadElement
 	case shim.KindParenthesizedExpression:
 		return NodeParenthesizedExpression
+	case shim.KindAsExpression:
+		return NodeAsExpression
+	case shim.KindTypeAssertionExpression:
+		return NodeTypeAssertion
 	case shim.KindNumericLiteral:
 		return NodeNumericLiteral
 	case shim.KindStringLiteral:

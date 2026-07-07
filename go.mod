@@ -53,4 +53,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/microsoft/typescript-go => github.com/tamnd/typescript v0.0.0-20260707060644-3c62e0d4745f
+replace github.com/microsoft/typescript-go => github.com/tamnd/typescript v0.0.0-20260707081459-6785784e1a79
