@@ -1636,10 +1636,10 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 //
 // ??= assigns when x is undefined, so the target must be an optional (the
 // T | undefined the Opt models), and the guard is x.IsUndefined(). ||= assigns
-// when x is falsy and &&= when x is truthy, which needs JavaScript truthiness on
-// x; until that lands, both are taken only for a boolean target, where falsy is
-// exactly !x and truthy is x. The target must be a plain local identifier so it
-// can be named in both the guard and the assignment with no repeated side effect.
+// when x is falsy and &&= when x is truthy, so both read x through the same
+// JavaScript truthiness lowerTruthy spells for the target's type, negated for
+// ||=. The target must be a plain local identifier so it can be named in both the
+// guard and the assignment with no repeated side effect.
 // A non-logical operator reports ok=false so the caller falls through to the plain
 // and arithmetic-compound path.
 func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
@@ -1678,15 +1678,24 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 		}
 		cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
 	case "||=":
-		if !r.isBool(target) {
-			return nil, true, &NotYetLowerable{Reason: "||= on a non-boolean target needs JavaScript truthiness, a later slice"}
+		// ||= assigns when the target is falsy, so the guard is the target's
+		// JavaScript truthiness negated. lowerTruthy spells the falsy set for the
+		// target's type: the bare identifier for a boolean, x != 0 && x == x for a
+		// number, s.Length() > 0 for a string, and value.ToBoolean for a dynamic
+		// value. An object or union target still hands back through lowerTruthy.
+		truth, err := r.lowerTruthy(target)
+		if err != nil {
+			return nil, true, err
 		}
-		cond = &ast.UnaryExpr{Op: token.NOT, X: ident(name)}
+		cond = &ast.UnaryExpr{Op: token.NOT, X: truth}
 	case "&&=":
-		if !r.isBool(target) {
-			return nil, true, &NotYetLowerable{Reason: "&&= on a non-boolean target needs JavaScript truthiness, a later slice"}
+		// &&= is the mirror: it assigns when the target is truthy, so the guard is
+		// the same truthiness test without the negation.
+		truth, err := r.lowerTruthy(target)
+		if err != nil {
+			return nil, true, err
 		}
-		cond = ident(name)
+		cond = truth
 	}
 	rhs, err := r.lowerExpr(parts[2])
 	if err != nil {
