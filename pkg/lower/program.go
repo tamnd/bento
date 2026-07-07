@@ -156,6 +156,7 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	r.fixedTArr = r.fixedTypedArraysOf(mainBody)
 	r.optLocals = r.optLocalsOf(mainBody)
 	r.unionLocals = r.unionLocalsOf(nil, mainBody)
+	r.dynLocals = r.dynLocalsOf(nil, mainBody)
 	r.bigOwned = r.bigOwnedLocalsOf(mainBody)
 	r.strBuilders = nil
 	stmts, err := r.lowerStatements(mainBody)

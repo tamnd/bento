@@ -91,6 +91,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.optLocals[name] && !r.isOptional(n) {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Get")}}, nil
 		}
+		// A boxed dynamic local the checker narrowed to a single primitive at this
+		// use, past a typeof guard, reads through the matching accessor so the
+		// static expression it flows into (a concat, a compare, a Math call) sees
+		// the unboxed Go value. A read where the type is still any or unknown
+		// keeps the bare box, which is what the runtime helpers take.
+		if r.dynLocals[name] {
+			if acc, ok := dynAccessor(r.primitiveFlags(n)); ok {
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident(acc)}}, nil
+			}
+		}
 		// A local or parameter of a tagged-sum union type that the checker narrowed
 		// to one arm at this use reads that arm's field off the struct, the same
 		// unwrap the optional does with .Get() but for a discriminated member: past
@@ -275,6 +285,11 @@ func (r *Renderer) condBranchType(n frontend.Node) (ast.Expr, string, bool) {
 	case r.isBool(n):
 		return ident("bool"), "bool", true
 	case r.isString(n):
+		r.requireImport(valuePkg)
+		return sel("value", "BStr"), "string", true
+	case r.isTypeofExpr(n):
+		// typeof always lowers to a BStr, folded to its tag constant or read at
+		// runtime, even when the checker leaves the node itself untyped.
 		r.requireImport(valuePkg)
 		return sel("value", "BStr"), "string", true
 	}
@@ -910,6 +925,12 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 	case r.isBigInt(n):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{e}}, nil
+	case r.isDynamic(n):
+		// A dynamic operand coerces at runtime through the value model's
+		// ToString, which routes an object or array through ToPrimitive the
+		// same way the + operator's own concatenation branch does.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "string concatenation with a non-primitive operand is a later slice"}
 	}
