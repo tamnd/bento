@@ -623,7 +623,7 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 		bodyStmts = r.prog.Children(last)
 	}
 	prevDyn := r.dynLocals
-	r.dynLocals = mergeNameSets(prevDyn, r.dynLocalsOf(sig.Params, bodyStmts))
+	r.dynLocals = mergeNameSets(prevDyn, r.dynLocalsOf(sig.Params, bodyStmts), r.scopeDeclaredNames(sig.Params, bodyStmts))
 	defer func() { r.dynLocals = prevDyn }()
 
 	body, err := r.blockOf(n)
@@ -637,12 +637,17 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	}, nil
 }
 
-// mergeNameSets overlays a nested body's name set on the inherited one, so a
-// closure keeps tracking a captured outer binding while also tracking its own.
-// A nil inner returns the outer unchanged, and a nil outer returns the inner, so
-// the common body with nothing to merge allocates nothing.
-func mergeNameSets(outer, inner map[string]bool) map[string]bool {
-	if len(inner) == 0 {
+// mergeNameSets overlays a nested body's dynamic set on the inherited one, so a
+// closure keeps tracking a captured outer binding while also tracking its own. A
+// name the closure redeclares as its own local shadows the outer binding, so the
+// shadowed set is subtracted from the inherited names before the inner set is laid
+// over: a static local that shares a name with an outer dynamic (a helper's
+// `var result` under a top-level `var result`) drops the inherited dynamic bit and
+// keeps its own Go type. A name the closure redeclares and itself classifies dynamic
+// comes back through inner. A nil inner with no shadows returns the outer unchanged,
+// and a nil outer returns the inner, so the common body allocates nothing.
+func mergeNameSets(outer, inner, shadowed map[string]bool) map[string]bool {
+	if len(inner) == 0 && len(shadowed) == 0 {
 		return outer
 	}
 	if len(outer) == 0 {
@@ -650,6 +655,12 @@ func mergeNameSets(outer, inner map[string]bool) map[string]bool {
 	}
 	merged := make(map[string]bool, len(outer)+len(inner))
 	maps.Copy(merged, outer)
+	for name := range shadowed {
+		delete(merged, name)
+	}
 	maps.Copy(merged, inner)
+	if len(merged) == 0 {
+		return nil
+	}
 	return merged
 }

@@ -1,0 +1,5 @@
+== stdout:
+<a$c>
+<heLLo>
+== exit:
+0

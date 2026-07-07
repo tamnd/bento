@@ -57,3 +57,50 @@ console.log(g(7));
 		t.Errorf("string + dynamic leaked a boxed Add:\n%s", source)
 	}
 }
+
+// TestDynLocalScopedPastNestedName pins that the boxed-locals pre-pass scopes each
+// name to its own function. A helper declares a local named the same as a top-level
+// dynamic binding, and the pre-pass used to count the two declarations as one
+// redeclared name and drop the top-level binding, so its narrowed read stayed a bare
+// box that double-boxed into an any parameter. The top-level read must unbox through
+// its accessor and the helper's static local must stay a plain string.
+func TestDynLocalScopedPastNestedName(t *testing.T) {
+	const src = `function tag(v: any): string {
+  var result = "<" + String(v) + ">";
+  return result;
+}
+var result;
+result = "abc".replaceAll("b", "$$");
+console.log(tag(result));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "Tag(value.StringValue(result.AsString()))") {
+		t.Errorf("top-level dynamic read did not unbox before the any parameter:\n%s", source)
+	}
+	if strings.Contains(source, "value.StringValue(result))") {
+		t.Errorf("top-level dynamic read double-boxed the bare slot:\n%s", source)
+	}
+}
+
+// TestDynClosureShadowsOuterName pins that a closure which redeclares an outer
+// dynamic name as its own static local does not inherit the outer binding's box.
+// The closure captures nothing dynamic here, so its result is a plain string read as
+// a bool truthiness test, not a value accessor on a Go bool.
+func TestDynClosureShadowsOuterName(t *testing.T) {
+	const src = `var flag;
+flag = "on";
+var check = function (): string {
+  var flag = "hello".length > 0;
+  if (flag) {
+    return "yes";
+  }
+  return "no";
+};
+console.log(flag);
+console.log(check());
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, "flag.AsBool()") {
+		t.Errorf("closure static local inherited the outer dynamic box:\n%s", source)
+	}
+}
