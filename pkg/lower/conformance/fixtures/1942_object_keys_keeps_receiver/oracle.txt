@@ -1,0 +1,9 @@
+== stdout:
+2
+x
+y
+true
+1
+2
+== exit:
+0

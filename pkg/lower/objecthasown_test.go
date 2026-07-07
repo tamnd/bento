@@ -61,6 +61,21 @@ console.log(o.a, Object.hasOwn(o, k));
 	}
 }
 
+// TestObjectHasOwnOrphanedReceiverBuilds pins that a receiver whose only read is the
+// folded Object.hasOwn call is blanked, so the emit builds rather than tripping the
+// declared-and-not-used check on the dropped argument.
+func TestObjectHasOwnOrphanedReceiverBuilds(t *testing.T) {
+	src := `
+var o = { x: 1, y: 2 };
+var b = Object.hasOwn(o, "x");
+console.log(b);
+`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "_ = o") {
+		t.Fatalf("expected a _ = o blank for the orphaned hasOwn receiver, got:\n%s", out)
+	}
+}
+
 // TestObjectHasOwnRuns builds and runs the emitted Go and checks the fold
 // against the Node oracle: a present key is true and an absent one is false.
 func TestObjectHasOwnRuns(t *testing.T) {
