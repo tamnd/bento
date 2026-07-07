@@ -545,8 +545,13 @@ func (r *Renderer) renderFuncType(t frontend.Type) (ast.Expr, bool, error) {
 	}
 	var params []*ast.Field
 	for _, p := range sig.Params {
-		if p.Optional {
-			return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "function type with an optional parameter is a later slice"}
+		if p.Optional && p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+			// A static optional parameter has no room in its Go type for the
+			// undefined an omission means, so it hands back until the value.Opt
+			// synthesis lands. A dynamic optional holds undefined natively and
+			// lowers to its plain type below, matching how paramFields lowers the
+			// function body parameter so a literal assigns to this type.
+			return nil, true, &NotYetLowerable{Flags: t.Flags, Reason: "function type with a static optional parameter is a later slice"}
 		}
 		pt, err := r.typeExpr(p.Type)
 		if err != nil {
