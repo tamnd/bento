@@ -367,6 +367,16 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 			fresh := &ast.CallExpr{Fun: ident("new"), Args: []ast.Expr{sel("big", "Int")}}
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: fresh, Sel: ident("Neg")}, Args: []ast.Expr{x}}, nil
 		}
+		if r.isDynamic(operand) {
+			// A dynamic operand coerces through ToNumber and the minus applies to the
+			// resulting float64, so -x on an any-typed value is -value.ToNumber(x),
+			// the same coercion the dynamic arithmetic operators run.
+			num, err := r.operandToNumber(operand)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.UnaryExpr{Op: token.SUB, X: num}, nil
+		}
 		if !r.isNumber(operand) {
 			return nil, &NotYetLowerable{Reason: "unary minus on a non-number is a later slice"}
 		}
@@ -392,6 +402,12 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.UnaryExpr{Op: token.SUB, X: x}, nil
 	case "+":
+		// Unary plus is ToNumber and nothing else, so a dynamic operand lowers to
+		// value.ToNumber(x): a bigint reaching it throws the same TypeError the
+		// language raises, and every other kind coerces to its float64.
+		if r.isDynamic(operand) {
+			return r.operandToNumber(operand)
+		}
 		if !r.isNumber(operand) {
 			return nil, &NotYetLowerable{Reason: "unary plus on a non-number is a later slice"}
 		}
@@ -421,11 +437,12 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		// Bitwise NOT is the unary member of the bitwise family: it coerces its
 		// operand to a 32-bit integer, complements it, and returns the result as a
 		// number, so it lowers to float64(^value.ToInt32(x)), the same coercion the
-		// binary bitwise operators use, not a Go ^ on the float64.
-		if !r.isNumber(operand) {
+		// binary bitwise operators use, not a Go ^ on the float64. A dynamic operand
+		// coerces through ToNumber first, the float64 that ToInt32 then narrows.
+		if !r.isNumber(operand) && !r.isDynamic(operand) {
 			return nil, &NotYetLowerable{Reason: "bitwise not on a non-number is a later slice"}
 		}
-		x, err := r.lowerExpr(operand)
+		x, err := r.operandToNumber(operand)
 		if err != nil {
 			return nil, err
 		}
