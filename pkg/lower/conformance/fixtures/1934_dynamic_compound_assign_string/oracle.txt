@@ -1,0 +1,5 @@
+== stdout:
+hi world
+n=42
+== exit:
+0
