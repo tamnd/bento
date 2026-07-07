@@ -334,6 +334,34 @@ func TestBigIntShifts(t *testing.T) {
 	}
 }
 
+// TestBigIntDivRem proves / and % on bigints: the quotient truncates toward zero and
+// the remainder keeps the sign of the dividend, and a zero divisor throws a catchable
+// RangeError rather than panicking the way big.Int.Quo and Rem do on their own.
+func TestBigIntDivRem(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  *big.Int
+		want string
+	}{
+		{"10n / 3n", BigIntDiv(big.NewInt(10), big.NewInt(3)), "3"},
+		{"-10n / 3n", BigIntDiv(big.NewInt(-10), big.NewInt(3)), "-3"},
+		{"10n % 3n", BigIntRem(big.NewInt(10), big.NewInt(3)), "1"},
+		{"-7n % 3n", BigIntRem(big.NewInt(-7), big.NewInt(3)), "-1"},
+	} {
+		if tc.got.String() != tc.want {
+			t.Errorf("%s = %s, want %s", tc.name, tc.got.String(), tc.want)
+		}
+	}
+	e := bigThrown(t, "1n / 0n", func() { BigIntDiv(big.NewInt(1), new(big.Int)) })
+	if e.Name().ToGoString() != "RangeError" || e.Message().ToGoString() != "Division by zero" {
+		t.Errorf("1n / 0n threw %s: %s, want the divide-by-zero RangeError", e.Name().ToGoString(), e.Message().ToGoString())
+	}
+	e = bigThrown(t, "1n % 0n", func() { BigIntRem(big.NewInt(1), new(big.Int)) })
+	if e.Name().ToGoString() != "RangeError" || e.Message().ToGoString() != "Division by zero" {
+		t.Errorf("1n %% 0n threw %s: %s, want the divide-by-zero RangeError", e.Name().ToGoString(), e.Message().ToGoString())
+	}
+}
+
 // bi parses a decimal string as a *big.Int for the wrap tests, panicking on a bad
 // literal since the test author writes them.
 func bi(s string) *big.Int {

@@ -270,10 +270,12 @@ func (r *Renderer) bigIntBinary(opText string, left, right frontend.Node) (ast.E
 }
 
 // bigIntArithMethod maps a bigint operator to the *big.Int method that computes
-// it, or reports false for an operator with no direct method form. Quo and Rem are
-// the truncated-toward-zero pair, which match the way BigInt / and % behave, so no
-// sign correction is needed; And, Or, and Xor compute on big.Int's infinite two's
-// complement, which is exactly the bit model a negative JavaScript bigint means.
+// it, or reports false for an operator with no direct method form. Add, Sub, and Mul
+// never trap, so they inline as a bare method; And, Or, and Xor compute on big.Int's
+// infinite two's complement, which is exactly the bit model a negative JavaScript
+// bigint means. Division and remainder are not here: big.Int.Quo and Rem panic on a
+// zero divisor where BigInt / and % throw a catchable RangeError, so those route
+// through a value helper instead.
 func bigIntArithMethod(opText string) (string, bool) {
 	switch opText {
 	case "+":
@@ -282,10 +284,6 @@ func bigIntArithMethod(opText string) (string, bool) {
 		return "Sub", true
 	case "*":
 		return "Mul", true
-	case "/":
-		return "Quo", true
-	case "%":
-		return "Rem", true
 	case "&":
 		return "And", true
 	case "|":
@@ -298,11 +296,16 @@ func bigIntArithMethod(opText string) (string, bool) {
 }
 
 // bigIntHelperOp maps a bigint operator to the value helper that computes it, for
-// the operators a bare *big.Int method cannot express: ** throws on a negative
-// exponent, and the shifts reverse direction on a negative count and cap the
-// result size, so each is a small runtime function rather than inline Go.
+// the operators a bare *big.Int method cannot express: / and % throw a RangeError on
+// a zero divisor rather than panic, ** throws on a negative exponent, and the shifts
+// reverse direction on a negative count and cap the result size, so each is a small
+// runtime function rather than inline Go.
 func bigIntHelperOp(opText string) (string, bool) {
 	switch opText {
+	case "/":
+		return "BigIntDiv", true
+	case "%":
+		return "BigIntRem", true
 	case "**":
 		return "BigIntPow", true
 	case "<<":
