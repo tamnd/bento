@@ -1034,7 +1034,7 @@ func TestTSAndGeneratedGoAgree(t *testing.T) {
 		{
 			name: "compoundExponent",
 			file: "eq_compound_exponent",
-			// **= fuses to x = x ** n, so it exercises the same math.Pow path from
+			// **= fuses to x = x ** n, so it exercises the same value.Pow path from
 			// a statement; the reciprocal case checks the negative exponent too.
 			fn:   "grow",
 			args: [][]any{{2, 10}, {3, 4}, {5, 0}, {2, -2}},

@@ -7,9 +7,10 @@ import (
 )
 
 // TestExponentEmits pins the shape of the lowering: ** on numbers is Math.pow,
-// so it emits a math.Pow call rather than a Go operator, and **= fuses to
+// so it emits a value.Pow call rather than a Go operator, and **= fuses to
 // x = x ** n and reaches the same call from a statement. A chained ** nests
-// right, the way the source parses.
+// right, the way the source parses. value.Pow rather than math.Pow carries the
+// JavaScript NaN result at a unit base with an infinite or NaN exponent.
 func TestExponentEmits(t *testing.T) {
 	cases := []struct {
 		name string
@@ -19,17 +20,17 @@ func TestExponentEmits(t *testing.T) {
 		{
 			"binary",
 			"export function raise(a: number, b: number): number { return a ** b; }\n",
-			"math.Pow(a, b)",
+			"value.Pow(a, b)",
 		},
 		{
 			"rightAssociative",
 			"export function raise(a: number, b: number, c: number): number { return a ** b ** c; }\n",
-			"math.Pow(a, math.Pow(b, c))",
+			"value.Pow(a, value.Pow(b, c))",
 		},
 		{
 			"compound",
 			"export function grow(x: number, n: number): number { x **= n; return x; }\n",
-			"x = math.Pow(x, n)",
+			"x = value.Pow(x, n)",
 		},
 	}
 	for _, tc := range cases {
