@@ -2,7 +2,9 @@ package lower
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
+	"math"
 	"strconv"
 	"strings"
 
@@ -824,7 +826,98 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	if err != nil {
 		return nil, err
 	}
+	// Two constant float operands whose sum or product runs past the float64 range
+	// fold to an untyped Go constant the compiler rejects as overflowing, where
+	// JavaScript evaluates the same arithmetic to Infinity at runtime. A finite pair
+	// can only overflow to an infinity, and the fold settles which one, so the whole
+	// expression lowers to math.Inf with that sign: it carries the exact value the
+	// language produces and reads as the infinity it is rather than a build error.
+	// 1e308 * 2 in the test262 prelude and its number tests takes this shape.
+	if sign, ok := floatConstOverflowSign(l, rr, goOp); ok {
+		r.requireImport("math")
+		return &ast.CallExpr{Fun: sel("math", "Inf"), Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(sign)},
+		}}, nil
+	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// floatConstOverflowSign reports whether folding l op rr as a Go constant would
+// overflow float64 and, if so, the sign of the resulting infinity (1 or -1). It
+// only inspects additive and multiplicative operators, the ones that grow a finite
+// magnitude past the range, and only when both operands are themselves constant
+// floats; anything with a runtime operand already evaluates at runtime and cannot
+// trip the compiler's constant overflow. The fold runs in arbitrary precision
+// through go/constant, so an exact 2e308 is seen and its conversion to float64
+// reports the infinity that flags the overflow.
+func floatConstOverflowSign(l, rr ast.Expr, op token.Token) (int, bool) {
+	if op != token.ADD && op != token.SUB && op != token.MUL {
+		return 0, false
+	}
+	lv, ok := astConstFloat(l)
+	if !ok {
+		return 0, false
+	}
+	rv, ok := astConstFloat(rr)
+	if !ok {
+		return 0, false
+	}
+	res := constant.BinaryOp(lv, op, rv)
+	if res.Kind() != constant.Float {
+		return 0, false
+	}
+	f, _ := constant.Float64Val(res)
+	if math.IsInf(f, 1) {
+		return 1, true
+	}
+	if math.IsInf(f, -1) {
+		return -1, true
+	}
+	return 0, false
+}
+
+// astConstFloat evaluates a lowered Go expression to its constant float value when
+// it is one, so floatConstOverflows can fold a binary node before it is emitted. It
+// walks the literal, parenthesized, signed, and arithmetic shapes a lowered float
+// expression is built from and returns not-ok for anything else, which keeps a
+// runtime operand from being mistaken for a constant.
+func astConstFloat(e ast.Expr) (constant.Value, bool) {
+	switch t := e.(type) {
+	case *ast.BasicLit:
+		if t.Kind != token.INT && t.Kind != token.FLOAT {
+			return nil, false
+		}
+		v := constant.MakeFromLiteral(t.Value, t.Kind, 0)
+		if v.Kind() == constant.Unknown {
+			return nil, false
+		}
+		return constant.ToFloat(v), true
+	case *ast.ParenExpr:
+		return astConstFloat(t.X)
+	case *ast.UnaryExpr:
+		if t.Op != token.SUB && t.Op != token.ADD {
+			return nil, false
+		}
+		x, ok := astConstFloat(t.X)
+		if !ok {
+			return nil, false
+		}
+		return constant.UnaryOp(t.Op, x, 0), true
+	case *ast.BinaryExpr:
+		if t.Op != token.ADD && t.Op != token.SUB && t.Op != token.MUL {
+			return nil, false
+		}
+		x, ok := astConstFloat(t.X)
+		if !ok {
+			return nil, false
+		}
+		y, ok := astConstFloat(t.Y)
+		if !ok {
+			return nil, false
+		}
+		return constant.BinaryOp(x, t.Op, y), true
+	}
+	return nil, false
 }
 
 // relationalToken maps a TypeScript relational operator to the Go comparison
