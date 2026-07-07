@@ -1054,6 +1054,17 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.logicalAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		// A binary expression in statement position that is not an assignment is a
+		// bare value written for effect, a === b or a + b with the result thrown
+		// away. None of the assignment shapes above matched it, so it takes the
+		// same discard a value-shaped statement does rather than lowerAssign, which
+		// only knows the assignment operators.
+		if parts := r.prog.Children(n); len(parts) == 3 {
+			opText := r.prog.Text(parts[1])
+			if _, compound := compoundBaseOp(opText); opText != "=" && !compound {
+				return r.discardExprStatement(n)
+			}
+		}
 		assign, err := r.lowerAssign(n)
 		if err != nil {
 			return nil, err
@@ -1087,8 +1098,25 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		}
 		return &ast.ExprStmt{X: call}, nil
 	default:
-		return nil, &NotYetLowerable{Reason: "expression statement that is not an assignment, update, or call is a later slice"}
+		return r.discardExprStatement(n)
 	}
+}
+
+// discardExprStatement lowers a bare expression statement, one that evaluates its
+// operand for any side effect and throws the value away. Go does not let a value
+// stand alone as a statement the way a call does, so the discard is spelled
+// _ = expr, which evaluates the operand and drops the result. The call form is
+// lowered on its own branch, so this covers the value-shaped statements a program
+// writes for effect or leaves inert: a member read that runs a getter, a
+// comparison written for its effect, a discarded conditional, a lone identifier or
+// literal. An operand lowerExpr cannot lower yet hands back through its own error,
+// so only a faithfully lowered value reaches the discard.
+func (r *Renderer) discardExprStatement(n frontend.Node) (ast.Stmt, error) {
+	expr, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{expr}}, nil
 }
 
 // arrayDestructureAssign lowers an array destructuring assignment `[a, b] = rhs` to a
