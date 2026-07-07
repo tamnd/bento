@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -240,9 +241,20 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		// slot is the identity. Gating on the literal node keeps a typed null or
 		// undefined inside a union, whose representation is not a bare box, out.
 		return expr, nil
-	default:
-		return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
 	}
+	// A built-in error constructor named as a value (TypeError passed as an argument,
+	// RangeError compared for identity) boxes to the interned constructor value, which
+	// carries the name and compares equal to itself. The lowered expr from the general
+	// path above is dropped: the identifier has no value form of its own, so the
+	// constructor value stands in for it. This routes after the primitive cases so a
+	// binding named like a constructor but typed a primitive still takes its box.
+	if name, ok := r.errorConstructorRef(src); ok {
+		return &ast.CallExpr{
+			Fun:  sel("value", "ErrorConstructor"),
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}},
+		}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
 }
 
 // coerceDynamicToStatic wraps a boxed dynamic value in the coercion that lands it
