@@ -40,6 +40,38 @@ func TestCaughtErrorEqualsUndefinedFolds(t *testing.T) {
 	}
 }
 
+// TestCaughtErrorConstructorLowers pins that a caught error's .constructor lowers
+// to the Constructor method on the bound error rather than handing back.
+func TestCaughtErrorConstructorLowers(t *testing.T) {
+	src := "try { throw new TypeError(\"x\"); } catch (e: any) { let c: any = e.constructor; console.log(c === TypeError); }"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, ".Constructor()") {
+		t.Fatalf("caught error .constructor did not lower to the Constructor method:\n%s", out)
+	}
+}
+
+// TestCaughtErrorConstructorRuns builds and runs the assert.throws comparison: a
+// caught error's constructor compares equal by identity to the matching built-in
+// and answers its name, and unequal to a different constructor.
+func TestCaughtErrorConstructorRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+try {
+  throw new TypeError("boom");
+} catch (thrown: any) {
+  console.log(thrown.constructor === TypeError);
+  console.log(thrown.constructor === RangeError);
+  let cn: string = thrown.constructor.name;
+  console.log(cn);
+}
+`
+	got := runProgramGo(t, src)
+	want := "true\nfalse\nTypeError\n"
+	if got != want {
+		t.Fatalf("caught error constructor run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestCaughtErrorGuardRuns builds and runs the assert.throws guard shape, typeof
 // thrown !== 'object' || thrown === null, over a real thrown error, and checks it
 // takes the else branch the way the prelude needs it to for a real error.
