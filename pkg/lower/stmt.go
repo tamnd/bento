@@ -1661,6 +1661,20 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 			}
 			r.requireImport(valuePkg)
 			rhs = &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{rhs}}
+		} else if !r.combineIsDynamic(baseOp, parts[0], parts[2]) && r.localStorageDynamic(parts[0]) {
+			// The target's Go slot is a boxed value.Value, e.g. `var y;` with no
+			// initializer, but control-flow analysis narrowed the read that combineBinary
+			// lowered, so the compound result came out a static primitive that does not
+			// fit the boxed slot. Box it back: a + over a string concatenates to a bstr
+			// that StringValue boxes, every arithmetic operator leaves a float64 that
+			// value.Number boxes. `var y; y = 1; y /= -1;` in the test262 compound-assign
+			// suite takes this shape, y declared value.Value but read as a number.
+			r.requireImport(valuePkg)
+			if baseOp == "+" && (r.isString(parts[0]) || r.isString(parts[2])) {
+				rhs = &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{rhs}}
+			} else {
+				rhs = &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{rhs}}
+			}
 		}
 	} else if r.int32Locals[name] {
 		// The target is an int32-specialized local, so the right-hand side lowers in the
