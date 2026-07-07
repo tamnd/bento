@@ -47,6 +47,17 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 				return ident(goName), nil
 			}
 		}
+		// NaN and Infinity are ambient number globals, not user bindings, so they
+		// lower to the doubles they name: math.NaN() and math.Inf(1). A source
+		// binding that shadows either name fails isGlobalRef and stays a local.
+		if r.isGlobalRef(n, "NaN") {
+			r.requireImport("math")
+			return &ast.CallExpr{Fun: sel("math", "NaN")}, nil
+		}
+		if r.isGlobalRef(n, "Infinity") {
+			r.requireImport("math")
+			return &ast.CallExpr{Fun: sel("math", "Inf"), Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: "1"}}}, nil
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
@@ -310,6 +321,22 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		if !r.isNumber(operand) {
 			return nil, &NotYetLowerable{Reason: "unary minus on a non-number is a later slice"}
 		}
+		// -0 is the negative-zero double, but a Go constant has no signed zero:
+		// -0 and -0.0 both fold to +0, so the literal form goes through
+		// math.Copysign, the Go spelling of the value. Negating a variable is
+		// float64 negation and keeps the sign on its own.
+		if operand.Kind() == frontend.NodeNumericLiteral {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(r.prog.Text(operand)), 64); err == nil && v == 0 {
+				r.requireImport("math")
+				return &ast.CallExpr{
+					Fun: sel("math", "Copysign"),
+					Args: []ast.Expr{
+						&ast.BasicLit{Kind: token.INT, Value: "0"},
+						&ast.UnaryExpr{Op: token.SUB, X: &ast.BasicLit{Kind: token.INT, Value: "1"}},
+					},
+				}, nil
+			}
+		}
 		x, err := r.lowerExpr(operand)
 		if err != nil {
 			return nil, err
@@ -467,6 +494,17 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return &ast.CallExpr{Fun: sel("value", "Add"), Args: []ast.Expr{l, rr}}, nil
 	}
 
+	// The other operators a dynamic operand reaches: strict equality through the
+	// runtime's StrictEquals (or the IsUndefined/IsNull presence forms against a
+	// literal) and the multiplicative operators through ToNumber on each side.
+	// Loose equality and the relationals report unhandled and keep their
+	// hand-back below.
+	if expr, handled, err := r.dynamicBinary(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	// + where either operand is a string is concatenation of a UTF-16 string, not
 	// a Go string +, which would be UTF-8, and not a Go operator at all since bstr
 	// is a struct. JavaScript + is string concatenation as soon as one operand is a
@@ -533,8 +571,14 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	// == on the struct would compare backing fields instead and call two strings
 	// unequal when one is UTF-8 backed and the other UTF-16 backed but they hold
 	// the same code units. Handled before the operator table so the string path
-	// emits the method call, negated for !==.
-	if (opText == "===" || opText == "!==") && r.isString(left) && r.isString(right) {
+	// emits the method call, negated for !==. A typeof expression counts as a
+	// string operand here even when the checker leaves its node untyped: typeof
+	// always lowers to a BStr, folded to its tag constant or read at runtime
+	// through TypeOf, so typeof x !== "object" over a dynamic x lands on the
+	// same Equal call.
+	if (opText == "===" || opText == "!==") &&
+		(r.isString(left) || r.isTypeofExpr(left)) &&
+		(r.isString(right) || r.isTypeofExpr(right)) {
 		l, err := r.lowerExpr(left)
 		if err != nil {
 			return nil, err
