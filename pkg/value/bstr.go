@@ -1069,18 +1069,17 @@ func padUnits(pad []BStr) []uint16 {
 
 // Repeat returns s concatenated count times, String.prototype.repeat. count is
 // coerced to an integer the way JavaScript does (a fraction truncates toward
-// zero, NaN becomes 0), and a count that is negative or not finite is a
-// RangeError in JavaScript, which bento surfaces as a panic because the compiled
-// program has no exception machinery yet (a later slice lowers throw). The type
-// checker and the lowerer only admit a non-negative integer literal count today,
-// so the panic is unreachable from lowered code and guards only a direct runtime
-// caller. A count of zero, or an empty receiver, yields the empty string, and a
-// count of one returns the receiver unchanged. The UTF-8 fast path is kept when
-// the receiver is on it, since repeating valid UTF-8 stays valid UTF-8.
+// zero, NaN becomes 0), and a count that is negative or not finite throws the
+// RangeError JavaScript raises, "Invalid count value: <count>", the same
+// Throw(NewRangeError(...)) every other range-checked runtime method uses so a
+// try/catch or assert.throws catches it. A count of zero, or an empty receiver,
+// yields the empty string, and a count of one returns the receiver unchanged. The
+// UTF-8 fast path is kept when the receiver is on it, since repeating valid UTF-8
+// stays valid UTF-8.
 func (s BStr) Repeat(count float64) BStr {
 	n := toInteger(count)
 	if n < 0 || math.IsInf(n, 0) {
-		panic("String.prototype.repeat: count out of range")
+		Throw(NewRangeError(FromGoString("Invalid count value: ").ConcatN(NumberToString(count))))
 	}
 	c := int(n)
 	if c == 0 || s.lengthU16 == 0 {
