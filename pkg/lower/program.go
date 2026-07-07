@@ -76,6 +76,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// declaration out of the main body.
 	hoisted := r.crossBoundaryModuleNames(entry)
 
+	// Count how many identifiers resolve to each binding so a local declared and
+	// never read can be spotted when its statement lowers. A symbol is unique to
+	// its binding, so one walk over the module settles the count for every scope.
+	r.bindingUses, r.identText = countBindingUses(r.prog, entry)
+
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
 	var mainBody []frontend.Node
@@ -319,6 +324,47 @@ func collectModuleRefs(prog *frontend.Program, n frontend.Node, module map[front
 	for _, c := range prog.Children(n) {
 		collectModuleRefs(prog, c, module, out)
 	}
+}
+
+// countBindingUses walks the module and tallies, per symbol, how many identifiers
+// resolve to it. A binding declared and never read shows a count of one, the
+// declaration's own name; every read or write adds another. Resolving through the
+// symbol rather than the identifier text keeps a shadowing local from inflating an
+// outer binding's count, since each binding carries its own symbol.
+func countBindingUses(prog *frontend.Program, entry frontend.Node) (map[frontend.Symbol]int, map[string]int) {
+	uses := map[frontend.Symbol]int{}
+	text := map[string]int{}
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeIdentifier {
+			text[prog.Text(n)]++
+			if sym, ok := prog.SymbolAt(n); ok {
+				uses[sym]++
+			}
+		}
+		for _, c := range prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(entry)
+	return uses, text
+}
+
+// bindingUnused reports whether the binding named by nameNode is declared and
+// never read. Two counts must agree: exactly one identifier resolves to the
+// binding's symbol, the declaration itself, and the name text occurs exactly once
+// in the module. The text guard covers a reference the symbol walk does not see as
+// the binding, such as an object-literal shorthand whose identifier resolves to the
+// property rather than the local; those keep the name used, so no blank is added.
+// A binding whose symbol does not resolve is treated as used, so the conservative
+// answer only ever withholds the blank assignment.
+func (r *Renderer) bindingUnused(nameNode frontend.Node) bool {
+	sym, ok := r.prog.SymbolAt(nameNode)
+	if !ok {
+		return false
+	}
+	name := r.prog.Text(nameNode)
+	return r.bindingUses[sym] == 1 && r.identText[name] == 1
 }
 
 // hoistModuleVar decides whether a module-level variable statement holds a binding a

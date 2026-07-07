@@ -257,6 +257,20 @@ type Renderer struct {
 	// like optLocals, saved and restored around each body. A nil map reads nothing
 	// out, so a body with no union binding lowers exactly as before.
 	unionLocals map[string]*unionInfo
+	// bindingUses counts, per binding symbol, how many identifiers in the module
+	// resolve to it. A local declared and never read shows a count of one, the
+	// declaration itself, and gets a trailing blank assignment so the emitted Go
+	// does not trip the compiler's declared-and-not-used check while the
+	// initializer still runs for its side effect, the way an unused `var x = e;`
+	// still evaluates e in JavaScript. It is program-scoped and computed once in
+	// RenderProgram, since a symbol is unique to its binding across the module.
+	bindingUses map[frontend.Symbol]int
+	// identText counts how often each identifier spelling appears in the module,
+	// the text twin of bindingUses. A binding is only blanked when its name occurs
+	// exactly once, which keeps a reference the symbol walk cannot attribute to the
+	// binding (an object-literal shorthand, say) from being mistaken for an unused
+	// local. It is filled alongside bindingUses in RenderProgram.
+	identText map[string]int
 }
 
 // NewRenderer builds a renderer over a checked program.
