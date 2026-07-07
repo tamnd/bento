@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"maps"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -587,6 +588,24 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	prevRet := r.retType
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
+
+	// The dynamic-locals set rescopes to this nested body the way the named path
+	// scopes it, so an any-typed parameter of a function expression or an arrow
+	// binds a tracked box: a read the checker narrowed past a typeof guard unwraps
+	// through its accessor, and a method call on the still-boxed binding routes to
+	// the runtime dispatch. Without this a nested function saw only the enclosing
+	// function's set, so its own parameters went untracked. The nested set merges
+	// over the inherited one rather than replacing it, so a captured outer dynamic
+	// stays tracked inside the closure.
+	var bodyStmts []frontend.Node
+	kids := r.prog.Children(n)
+	if last := kids[len(kids)-1]; last.Kind() == frontend.NodeBlock {
+		bodyStmts = r.prog.Children(last)
+	}
+	prevDyn := r.dynLocals
+	r.dynLocals = mergeNameSets(prevDyn, r.dynLocalsOf(sig.Params, bodyStmts))
+	defer func() { r.dynLocals = prevDyn }()
+
 	body, err := r.blockOf(n)
 	if err != nil {
 		return nil, err
@@ -595,4 +614,21 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}, Results: results},
 		Body: body,
 	}, nil
+}
+
+// mergeNameSets overlays a nested body's name set on the inherited one, so a
+// closure keeps tracking a captured outer binding while also tracking its own.
+// A nil inner returns the outer unchanged, and a nil outer returns the inner, so
+// the common body with nothing to merge allocates nothing.
+func mergeNameSets(outer, inner map[string]bool) map[string]bool {
+	if len(inner) == 0 {
+		return outer
+	}
+	if len(outer) == 0 {
+		return inner
+	}
+	merged := make(map[string]bool, len(outer)+len(inner))
+	maps.Copy(merged, outer)
+	maps.Copy(merged, inner)
+	return merged
 }
