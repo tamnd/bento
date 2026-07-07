@@ -1595,6 +1595,19 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 			if err != nil {
 				return nil, err
 			}
+		} else if r.isDynamic(parts[0]) && !r.combineIsDynamic(baseOp, parts[0], parts[2]) {
+			// The target is a boxed dynamic binding but the compound result is static: a +
+			// with a string operand concatenates, and value.Concat returns a bstr rather
+			// than a box, so the bare bstr does not fit the value.Value slot. Wrap it back
+			// into a box so the assignment types. Only + reaches here for a dynamic target,
+			// since combineBinary hands back every other operator on a dynamic operand.
+			// message += ' ' in the test262 prelude takes this shape, message being any and
+			// the right side a string literal.
+			if baseOp != "+" {
+				return nil, &NotYetLowerable{Reason: "compound assignment other than + on a dynamic target is a later slice"}
+			}
+			r.requireImport(valuePkg)
+			rhs = &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{rhs}}
 		}
 	} else if r.int32Locals[name] {
 		// The target is an int32-specialized local, so the right-hand side lowers in the
