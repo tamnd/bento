@@ -134,9 +134,24 @@ func NumberToBigInt(f float64) *big.Int {
 // separator, or a sign on a prefixed form, throws the SyntaxError JavaScript
 // raises, since unlike Number(s) there is no NaN to fall back to.
 func StringToBigInt(s BStr) *big.Int {
+	i, ok := parseBigInt(s)
+	if !ok {
+		Throw(NewSyntaxError(FromGoString("Cannot convert " + s.Trim().ToGoString() + " to a BigInt")))
+	}
+	return i
+}
+
+// parseBigInt reads the ECMAScript StringToBigInt grammar and reports whether the
+// string is a bigint at all: whitespace trims away, the empty remainder is 0n, a
+// decimal form may carry one sign, and the 0x, 0o, and 0b radix prefixes are read
+// unsigned. It returns ok=false for anything else, a trailing character, a digit
+// separator, or a sign on a prefixed form. StringToBigInt turns that into the
+// SyntaxError the BigInt(s) coercion raises; loose equality reads it as "not a
+// bigint" and compares unequal, since == has no error to raise.
+func parseBigInt(s BStr) (*big.Int, bool) {
 	text := s.Trim().ToGoString()
 	if text == "" {
-		return new(big.Int)
+		return new(big.Int), true
 	}
 	base := 10
 	digits := text
@@ -154,13 +169,9 @@ func StringToBigInt(s BStr) *big.Int {
 	// reject it here. SetString with an explicit base already rejects a digit
 	// separator, an empty digit run, and a stray character.
 	if base != 10 && (digits == "" || digits[0] == '+' || digits[0] == '-') {
-		Throw(NewSyntaxError(FromGoString("Cannot convert " + text + " to a BigInt")))
+		return nil, false
 	}
-	i, ok := new(big.Int).SetString(digits, base)
-	if !ok {
-		Throw(NewSyntaxError(FromGoString("Cannot convert " + text + " to a BigInt")))
-	}
-	return i
+	return new(big.Int).SetString(digits, base)
 }
 
 // BoolToBigInt converts a boolean to a bigint, the lowering of BigInt(b): true is

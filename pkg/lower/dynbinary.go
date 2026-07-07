@@ -19,13 +19,32 @@ import (
 
 // dynamicBinary lowers a binary operator where either operand is dynamic. It
 // reports handled=false when neither side is dynamic or the operator has no
-// dynamic lowering yet (loose equality, the relationals), so those keep their
-// hand-back through the operator table.
+// dynamic lowering yet, so those keep their hand-back through the operator table.
 func (r *Renderer) dynamicBinary(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
 	if !r.isDynamic(left) && !r.isDynamic(right) {
 		return nil, false, nil
 	}
 	switch opText {
+	case "==", "!=":
+		// Loose equality over a dynamic operand runs the Abstract Equality
+		// Comparison, which coerces across kinds before it compares: 1 == "1" is
+		// true and null == undefined is true. The value model spells that as
+		// value.LooseEquals, so a == b lowers to the call and a != b negates it, the
+		// coercing sibling of the StrictEquals path below.
+		l, err := r.boxOperand(left)
+		if err != nil {
+			return nil, false, err
+		}
+		rr, err := r.boxOperand(right)
+		if err != nil {
+			return nil, false, err
+		}
+		r.requireImport(valuePkg)
+		eq := &ast.CallExpr{Fun: sel("value", "LooseEquals"), Args: []ast.Expr{l, rr}}
+		if opText == "!=" {
+			return &ast.UnaryExpr{Op: token.NOT, X: eq}, true, nil
+		}
+		return eq, true, nil
 	case "===", "!==":
 		if expr, ok, err := r.dynamicPresenceCompare(opText, left, right); err != nil {
 			return nil, false, err
