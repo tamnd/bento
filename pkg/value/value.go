@@ -148,6 +148,29 @@ func (v Value) str() BStr { return *(*BStr)(v.ref) }
 // object returns the *Object an object, array, or function box holds.
 func (v Value) object() *Object { return (*Object)(v.ref) }
 
+// GetIndex reads v[i] for a numeric index, the bracket read a[i] takes when the
+// receiver is a dynamic value and the index is a number. The index becomes a
+// property key its canonical string the way JavaScript's a[3] reads the "3"
+// property, then the read dispatches by the receiver's kind through Get, so an
+// array element, a string code unit, and an object numeric property all resolve
+// the same way a static read would.
+func (v Value) GetIndex(i float64) Value {
+	return v.Get(NumberToString(i))
+}
+
+// GetElem reads v[key] for a dynamic index whose own type is not known to be a
+// number, the bracket read a[k] takes when both the receiver and the key are
+// dynamic values. The key is coerced to a property key the way JavaScript does, a
+// string used as is and any other value taken through ToString, then the read
+// dispatches through Get. A number key round-trips to its canonical string, so a
+// dynamic index reads the same element GetIndex would.
+func (v Value) GetElem(key Value) Value {
+	if key.kind == KindString {
+		return v.Get(key.str())
+	}
+	return v.Get(ToString(key))
+}
+
 // Get implements a dynamic property read, o[key], for the kinds the AOT path
 // produces. A string reports its length and indexes to a one-character string; an
 // array reports its length and indexes into its elements; an object looks the key
