@@ -440,6 +440,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isBigInt(recvNode) {
 		return r.bigIntValueCall(recvNode, method, argNodes)
 	}
+	// Object.prototype.toString.call(x) is the class-tag idiom: it borrows the
+	// base object toString and applies it to any value to read its internal class
+	// as "[object Type]". The receiver is the function Object.prototype.toString,
+	// not a value, so it routes here before the non-string gate below, which would
+	// otherwise reject a function receiver as a later slice.
+	if r.isObjectProtoToString(recvNode) {
+		return r.objectProtoToStringCall(method, argNodes)
+	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
@@ -1255,6 +1263,48 @@ func (r *Renderer) isAmbientGlobal(n frontend.Node) bool {
 		}
 	}
 	return true
+}
+
+// isObjectProtoToString reports whether n is the member chain
+// Object.prototype.toString, the function the class-tag idiom borrows with .call.
+// It matches a property access .toString whose object is a property access
+// .prototype whose object is the ambient global Object, so a user value carrying
+// its own prototype.toString chain does not match and its methods stay on their
+// own paths.
+func (r *Renderer) isObjectProtoToString(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || r.prog.Text(kids[1]) != "toString" {
+		return false
+	}
+	proto := kids[0]
+	if proto.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	pkids := r.prog.Children(proto)
+	if len(pkids) != 2 || r.prog.Text(pkids[1]) != "prototype" {
+		return false
+	}
+	return r.isGlobalRef(pkids[0], "Object")
+}
+
+// objectProtoToStringCall lowers Object.prototype.toString.call(x) to the value
+// class-tag helper. Only .call with exactly one argument is the idiom; .apply, a
+// bind, or a different arity hands back so a real reflective borrow is not
+// mislowered to the tag helper. The argument boxes to a value.Value so the helper
+// can read any kind's tag, the same box a dynamic operand takes.
+func (r *Renderer) objectProtoToStringCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "call" || len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.prototype.toString borrowed with anything other than .call(x) is a later slice"}
+	}
+	arg, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ClassTag"), Args: []ast.Expr{arg}}, nil
 }
 
 // processStream reports whether n refers to process.stdout or process.stderr,
