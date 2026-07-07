@@ -907,14 +907,46 @@ func TestRepeat(t *testing.T) {
 	}
 }
 
-// TestRepeatNegativePanics pins that a negative count is a RangeError in
-// JavaScript, which bento surfaces as a panic since the compiled program has no
-// exception machinery yet.
-func TestRepeatNegativePanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("Repeat(-1) did not panic")
-		}
-	}()
-	FromGoString("ab").Repeat(-1)
+// TestRepeatRangeErrors pins that a negative or non-finite count throws the
+// RangeError JavaScript raises, a catchable *Error rather than a bare panic, so a
+// try/catch or assert.throws around a repeat with a bad count catches it. The message matches
+// V8's "Invalid count value: <count>".
+func TestRepeatRangeErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		count   float64
+		message string
+	}{
+		{"negative", -1, "Invalid count value: -1"},
+		{"negativeInfinity", math.Inf(-1), "Invalid count value: -Infinity"},
+		{"positiveInfinity", math.Inf(1), "Invalid count value: Infinity"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var caught *Error
+			func() {
+				defer func() {
+					r := recover()
+					if r == nil {
+						return
+					}
+					e, ok := r.(*Error)
+					if !ok {
+						t.Fatalf("Repeat(%v) threw %T, want *Error", tc.count, r)
+					}
+					caught = e
+				}()
+				FromGoString("ab").Repeat(tc.count)
+			}()
+			if caught == nil {
+				t.Fatalf("Repeat(%v) did not throw", tc.count)
+			}
+			if caught.Name().ToGoString() != "RangeError" {
+				t.Errorf("Repeat(%v) threw %s, want RangeError", tc.count, caught.Name().ToGoString())
+			}
+			if got := caught.Message().ToGoString(); got != tc.message {
+				t.Errorf("Repeat(%v) message = %q, want %q", tc.count, got, tc.message)
+			}
+		})
+	}
 }

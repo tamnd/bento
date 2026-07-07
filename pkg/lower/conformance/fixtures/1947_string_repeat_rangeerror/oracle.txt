@@ -1,0 +1,7 @@
+== stdout:
+RangeError
+Invalid count value: -1
+RangeError
+okok
+== exit:
+0
