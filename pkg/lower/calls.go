@@ -140,6 +140,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return r.unaryStringGlobal("Atob", callee, kids[1:])
 		}
 	}
+	// A bare call to any other ambient global (eval, and the globals whose lowering
+	// is a later slice) is not a user binding and has no generated Go function to
+	// stand behind it. The user-function path below would emit a call to the name's
+	// capitalized form, which was never declared, so the whole unit hands back to the
+	// interpreter here instead of building Go that names an undefined symbol. Every
+	// ambient global bento does lower returned above before this point.
+	if r.isAmbientGlobal(kids[0]) {
+		return nil, &NotYetLowerable{Reason: "call to the ambient global " + r.prog.Text(kids[0]) + " is a later slice"}
+	}
 	sym, ok := r.prog.SymbolAt(kids[0])
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "call to an unresolved callee is a later slice"}
