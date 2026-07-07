@@ -2,7 +2,6 @@ package lower
 
 import (
 	"go/ast"
-	"go/constant"
 	"go/token"
 	"math"
 	"strconv"
@@ -826,98 +825,154 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	if err != nil {
 		return nil, err
 	}
-	// Two constant float operands whose sum or product runs past the float64 range
-	// fold to an untyped Go constant the compiler rejects as overflowing, where
-	// JavaScript evaluates the same arithmetic to Infinity at runtime. A finite pair
-	// can only overflow to an infinity, and the fold settles which one, so the whole
-	// expression lowers to math.Inf with that sign: it carries the exact value the
-	// language produces and reads as the infinity it is rather than a build error.
-	// 1e308 * 2 in the test262 prelude and its number tests takes this shape.
-	if sign, ok := floatConstOverflowSign(l, rr, goOp); ok {
+	// Two constant float operands whose result runs off the float64 range fold to a
+	// Go constant the compiler rejects, where JavaScript evaluates the same
+	// arithmetic at runtime to an infinity or a NaN. A sum or product past the range
+	// overflows to an infinity, and a division by a constant zero is +Inf, -Inf, or
+	// NaN by the sign of the numerator. Either way the whole expression lowers to the
+	// exact value the language produces (math.Inf with its sign, or math.NaN) so it
+	// carries the right number and reads as that number rather than a build error.
+	// 1e308 * 2 and 1 / (0 + 0) in the test262 number tests take this shape.
+	if f, ok := floatConstNonFinite(l, rr, goOp); ok {
 		r.requireImport("math")
-		return &ast.CallExpr{Fun: sel("math", "Inf"), Args: []ast.Expr{
-			&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(sign)},
-		}}, nil
+		return nonFiniteCall(f), nil
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
 }
 
-// floatConstOverflowSign reports whether folding l op rr as a Go constant would
-// overflow float64 and, if so, the sign of the resulting infinity (1 or -1). It
-// only inspects additive and multiplicative operators, the ones that grow a finite
-// magnitude past the range, and only when both operands are themselves constant
-// floats; anything with a runtime operand already evaluates at runtime and cannot
-// trip the compiler's constant overflow. The fold runs in arbitrary precision
-// through go/constant, so an exact 2e308 is seen and its conversion to float64
-// reports the infinity that flags the overflow.
-func floatConstOverflowSign(l, rr ast.Expr, op token.Token) (int, bool) {
-	if op != token.ADD && op != token.SUB && op != token.MUL {
-		return 0, false
+// nonFiniteCall builds the math call that names a non-finite float64: math.Inf(1)
+// for a positive infinity, math.Inf(-1) for a negative one, and math.NaN otherwise.
+func nonFiniteCall(f float64) ast.Expr {
+	switch {
+	case math.IsInf(f, 1):
+		return &ast.CallExpr{Fun: sel("math", "Inf"), Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: "1"}}}
+	case math.IsInf(f, -1):
+		return &ast.CallExpr{Fun: sel("math", "Inf"), Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: "-1"}}}
+	default:
+		return &ast.CallExpr{Fun: sel("math", "NaN")}
 	}
-	lv, ok := astConstFloat(l)
+}
+
+// floatConstNonFinite evaluates l op rr in the float64 domain and reports the result
+// when it is non-finite, the case a Go constant expression rejects at compile time
+// but JavaScript produces at runtime. It fires only when both operands are themselves
+// constant floats; anything with a runtime operand already evaluates at runtime under
+// IEEE rules and cannot trip the compiler's constant folding. The evaluation is
+// float64 step by step, which is exactly the arithmetic JavaScript performs, so a
+// sum or product past the range is an infinity, 1 / 0 is +Inf, -1 / 0 is -Inf, and
+// 0 / 0 is NaN, each matching the value the language yields at runtime.
+func floatConstNonFinite(l, rr ast.Expr, op token.Token) (float64, bool) {
+	lf, ok := astConstFloat(l)
 	if !ok {
 		return 0, false
 	}
-	rv, ok := astConstFloat(rr)
+	rf, ok := astConstFloat(rr)
 	if !ok {
 		return 0, false
 	}
-	res := constant.BinaryOp(lv, op, rv)
-	if res.Kind() != constant.Float {
+	var f float64
+	switch op {
+	case token.ADD:
+		f = lf + rf
+	case token.SUB:
+		f = lf - rf
+	case token.MUL:
+		f = lf * rf
+	case token.QUO:
+		f = lf / rf
+	default:
 		return 0, false
 	}
-	f, _ := constant.Float64Val(res)
-	if math.IsInf(f, 1) {
-		return 1, true
-	}
-	if math.IsInf(f, -1) {
-		return -1, true
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return f, true
 	}
 	return 0, false
 }
 
-// astConstFloat evaluates a lowered Go expression to its constant float value when
-// it is one, so floatConstOverflows can fold a binary node before it is emitted. It
-// walks the literal, parenthesized, signed, and arithmetic shapes a lowered float
-// expression is built from and returns not-ok for anything else, which keeps a
-// runtime operand from being mistaken for a constant.
-func astConstFloat(e ast.Expr) (constant.Value, bool) {
+// astConstFloat evaluates a lowered Go expression to its float64 value when it is a
+// constant one, so floatConstNonFinite can fold a binary node before it is emitted.
+// It walks the literal, parenthesized, signed, and arithmetic shapes a lowered float
+// expression is built from, plus the value package's named numeric constants, and
+// returns not-ok for anything else, which keeps a runtime operand from being mistaken
+// for a constant. The arithmetic is float64 step by step to match the value Go would
+// fold and the value JavaScript would compute; division is included here so a divisor
+// like -1 / MaxValue + 1 / MaxValue that cancels to zero is seen before the outer
+// divide trips the compiler.
+func astConstFloat(e ast.Expr) (float64, bool) {
 	switch t := e.(type) {
 	case *ast.BasicLit:
 		if t.Kind != token.INT && t.Kind != token.FLOAT {
-			return nil, false
+			return 0, false
 		}
-		v := constant.MakeFromLiteral(t.Value, t.Kind, 0)
-		if v.Kind() == constant.Unknown {
-			return nil, false
+		f, err := strconv.ParseFloat(t.Value, 64)
+		if err != nil {
+			return 0, false
 		}
-		return constant.ToFloat(v), true
+		return f, true
 	case *ast.ParenExpr:
 		return astConstFloat(t.X)
 	case *ast.UnaryExpr:
-		if t.Op != token.SUB && t.Op != token.ADD {
-			return nil, false
-		}
 		x, ok := astConstFloat(t.X)
 		if !ok {
-			return nil, false
+			return 0, false
 		}
-		return constant.UnaryOp(t.Op, x, 0), true
+		switch t.Op {
+		case token.SUB:
+			return -x, true
+		case token.ADD:
+			return x, true
+		}
+		return 0, false
 	case *ast.BinaryExpr:
-		if t.Op != token.ADD && t.Op != token.SUB && t.Op != token.MUL {
-			return nil, false
-		}
 		x, ok := astConstFloat(t.X)
 		if !ok {
-			return nil, false
+			return 0, false
 		}
 		y, ok := astConstFloat(t.Y)
 		if !ok {
-			return nil, false
+			return 0, false
 		}
-		return constant.BinaryOp(x, t.Op, y), true
+		switch t.Op {
+		case token.ADD:
+			return x + y, true
+		case token.SUB:
+			return x - y, true
+		case token.MUL:
+			return x * y, true
+		case token.QUO:
+			return x / y, true
+		}
+		return 0, false
+	case *ast.SelectorExpr:
+		if pkg, ok := t.X.(*ast.Ident); ok && pkg.Name == "value" {
+			if f, ok := valueNumberConst[t.Sel.Name]; ok {
+				return f, true
+			}
+		}
 	}
-	return nil, false
+	return 0, false
+}
+
+// valueNumberConst maps the value package's finite numeric constants to their float64
+// value. Number.MAX_VALUE and its siblings lower to a reference like value.NumberMaxValue
+// rather than an inline literal, so astConstFloat resolves the reference here to fold
+// expressions built from them; Number.MAX_VALUE + Number.MAX_VALUE overflows to an
+// infinity the same way 1e308 + 1e308 does, and this is what lets the fold see it. The
+// values match pkg/value/constants.go exactly.
+var valueNumberConst = map[string]float64{
+	"MathE":                2.718281828459045,
+	"MathLN10":             2.302585092994046,
+	"MathLN2":              0.6931471805599453,
+	"MathLOG10E":           0.4342944819032518,
+	"MathLOG2E":            1.4426950408889634,
+	"MathPI":               3.141592653589793,
+	"MathSQRT12":           0.7071067811865476,
+	"MathSQRT2":            1.4142135623730951,
+	"NumberEpsilon":        2.220446049250313e-16,
+	"NumberMaxSafeInteger": 9007199254740991,
+	"NumberMinSafeInteger": -9007199254740991,
+	"NumberMaxValue":       1.7976931348623157e308,
+	"NumberMinValue":       5e-324,
 }
 
 // relationalToken maps a TypeScript relational operator to the Go comparison
