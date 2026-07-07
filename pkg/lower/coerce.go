@@ -96,6 +96,29 @@ func (r *Renderer) isString(n frontend.Node) bool {
 	return r.primitiveFlags(n)&frontend.TypeString != 0 || r.caughtErrorStringRead(n)
 }
 
+// isBoxedValue reports whether n lowers to a boxed value.Value at this use, the
+// receiver shape the dynamic method path needs. A node the checker types any or
+// unknown is boxed, and so is a dynamic local the checker narrowed to a kind the
+// accessors do not unbox: a typeof guard narrows an any binding to symbol inside
+// the guarded block, but the binding still holds the bare box, so a method call
+// on it (message.toString() in assert.compareArray) reads through the box rather
+// than a static receiver that does not exist. A narrow to string, number, or
+// boolean unboxes through its accessor, so those take the static method path.
+func (r *Renderer) isBoxedValue(n frontend.Node) bool {
+	if r.isDynamic(n) {
+		return true
+	}
+	if n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name, ok := localName(r.prog.Text(n))
+	if !ok || !r.dynLocals[name] {
+		return false
+	}
+	_, unboxes := dynAccessor(r.primitiveFlags(n))
+	return !unboxes
+}
+
 // isCaughtErrorRef reports whether n is a bare reference to a catch binding in
 // scope, the *value.Error a catch bound. It is the guard the caught-error paths
 // use to route typeof and a null compare over the binding, which the checker

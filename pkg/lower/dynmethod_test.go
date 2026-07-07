@@ -17,6 +17,20 @@ func TestDynamicToStringLowers(t *testing.T) {
 	}
 }
 
+// TestNarrowedReceiverToStringLowers pins that toString() on a dynamic local a
+// typeof guard narrowed to a kind the accessors do not unbox still lowers to the
+// runtime dispatch: the binding holds the bare box, so the call reads through
+// ToStringMethod, and since the narrowed call is typed string the box unboxes to
+// its BStr with AsString. compareArray in the test262 prelude hits this shape
+// with message.toString() inside a typeof message === 'symbol' guard.
+func TestNarrowedReceiverToStringLowers(t *testing.T) {
+	src := `function f(m: any): void { if (typeof m === "symbol") { m = m.toString(); } }`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, ".ToStringMethod().AsString()") {
+		t.Fatalf("narrowed-receiver .toString() did not lower to ToStringMethod().AsString():\n%s", out)
+	}
+}
+
 // TestDynamicToStringWithArgHandsBack pins that a dynamic .toString() with an
 // argument still hands back: the radix form is a later slice, so lowering it to
 // the no-argument helper would drop the argument.
