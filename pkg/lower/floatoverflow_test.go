@@ -100,6 +100,54 @@ func TestNumberMaxValueOverflowFolds(t *testing.T) {
 	}
 }
 
+// TestConstIntArithFoldsToFloat pins that arithmetic over two integer-spelled number
+// literals folds to a float64 literal, not the Go integer expression that := would
+// infer as int. 5 + 3 has to read as 8.0 so the local is float64 like every JavaScript
+// number, where 5 + 3 alone would make a Go int and fail wherever a float64 is wanted.
+func TestConstIntArithFoldsToFloat(t *testing.T) {
+	src := `const x = 5 + 3; console.log(String(x));`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "8.0") {
+		t.Fatalf("constant integer sum did not fold to a float literal:\n%s", out)
+	}
+	if strings.Contains(out, "5 + 3") {
+		t.Fatalf("constant integer sum kept its Go integer expression:\n%s", out)
+	}
+}
+
+// TestConstIntDivFoldsToRealQuotient pins that a constant divide folds to the real
+// float64 quotient JavaScript computes, so 7 / 2 is 3.5 rather than the Go integer
+// division 3 that a constant 7 / 2 folds to. This is a value bug, not only a type one.
+func TestConstIntDivFoldsToRealQuotient(t *testing.T) {
+	src := `const x = 7 / 2; console.log(String(x));`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "3.5") {
+		t.Fatalf("constant divide did not fold to its float quotient:\n%s", out)
+	}
+}
+
+// TestConstIntArithFoldsRuns builds and runs a spread of integer-literal arithmetic so
+// the folded float64 prints the plain number JavaScript does, with the chained divide
+// and the fractional quotient carrying their real values.
+func TestConstIntArithFoldsRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const a = 5 + 3;
+const b = 18 / 2 / 9;
+const c = 7 / 2;
+const d = 6 * 2;
+console.log(String(a));
+console.log(String(b));
+console.log(String(c));
+console.log(String(d));
+`
+	got := runProgramGo(t, src)
+	want := "8\n1\n3.5\n12\n"
+	if got != want {
+		t.Fatalf("constant arithmetic run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestFloatConstDivByZeroRuns builds and runs the divide-by-zero forms so the emitted
 // infinity and NaN print the way Number does in JavaScript.
 func TestFloatConstDivByZeroRuns(t *testing.T) {

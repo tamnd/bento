@@ -73,7 +73,7 @@ console.log(Dir.Up + Dir.Down);
 	if strings.Contains(source, "DirUp") || strings.Contains(source, "DirDown") {
 		t.Errorf("const enum leaked a member constant, want it inlined:\n%s", source)
 	}
-	if !strings.Contains(source, "1 + 2") {
+	if !strings.Contains(source, "3.0") {
 		t.Errorf("const enum did not inline its member values:\n%s", source)
 	}
 }
