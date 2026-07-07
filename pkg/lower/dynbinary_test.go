@@ -69,11 +69,26 @@ func TestDynamicArithmeticCoerces(t *testing.T) {
 	}
 }
 
-// TestDynamicRelationalHandsBack pins the boundary: a relational operator over a
-// dynamic operand carries the full ToPrimitive dance and stays a later slice.
-func TestDynamicRelationalHandsBack(t *testing.T) {
-	src := "function f(a: any, b: any): boolean { return a < b; }\nconsole.log(f(1, 2));\n"
-	renderProgramHandBack(t, src)
+// TestDynamicRelationalLowers pins that the four relational operators over a
+// dynamic operand each route to their value-model helper, the readable spelling of
+// the Abstract Relational Comparison the operand kinds decide at runtime.
+func TestDynamicRelationalLowers(t *testing.T) {
+	src := "function lt(a: any, b: any): boolean { return a < b; }\n" +
+		"function le(a: any, b: any): boolean { return a <= b; }\n" +
+		"function gt(a: any, b: any): boolean { return a > b; }\n" +
+		"function ge(a: any, b: any): boolean { return a >= b; }\n" +
+		"console.log(lt(1, 2));\nconsole.log(le(2, 2));\nconsole.log(gt(3, 2));\nconsole.log(ge(2, 2));\n"
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.Less(a, b)",
+		"value.LessEqual(a, b)",
+		"value.Greater(a, b)",
+		"value.GreaterEqual(a, b)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("dynamic relational did not lower to %s:\n%s", want, source)
+		}
+	}
 }
 
 // TestDynamicLooseEqualsHandsBack pins the other boundary: == runs the coercing
