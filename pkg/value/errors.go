@@ -80,6 +80,19 @@ func (e *Error) Error() string {
 	return name + ": " + msg
 }
 
+// ToBStr returns the error's JavaScript string form as a bento string, the result
+// Error.prototype.toString produces: the name, then ": " and the message when the
+// message is non-empty, or the name alone when it is empty. It is the coercion a
+// caught error takes in a template, a concatenation, or String(err), the bento
+// string form of the Go-string Error method above so the coercion needs no
+// re-transcoding.
+func (e *Error) ToBStr() BStr {
+	if e.message.Length() == 0 {
+		return e.name
+	}
+	return e.name.ConcatN(FromGoString(": "), e.message)
+}
+
 // IsA reports whether the error is an instance of the named built-in error
 // constructor, the lowering of e instanceof Error and its TypeError and
 // RangeError siblings on a caught error. Every built-in error is an Error, so the
