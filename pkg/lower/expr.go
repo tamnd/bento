@@ -562,6 +562,17 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		}
 	}
 
+	// An equality between a caught error and the null or undefined literal folds to
+	// a constant: the runtime holds a caught value as a non-nil *value.Error, so it
+	// is never null or undefined, and throwing null or undefined hands back, so no
+	// caught binding is ever one of them. It routes before the dynamic path, which
+	// would box the binding and hand back, since the binding has no general value
+	// form. Only a null or undefined literal on the other side is folded; a compare
+	// against another value stays a real comparison and is not this case.
+	if expr, handled := r.caughtErrorNullCompare(opText, left, right); handled {
+		return expr, nil
+	}
+
 	if r.combineIsDynamic(opText, left, right) {
 		l, err := r.boxOperand(left)
 		if err != nil {

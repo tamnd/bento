@@ -1,0 +1,10 @@
+== stdout:
+true
+false
+true
+false
+object
+TypeError
+boom
+== exit:
+0
