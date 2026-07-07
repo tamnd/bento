@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -348,10 +349,6 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		{"generic", "export function id<T>(x: T): T { return x; }"},
 		// an optional parameter needs the optional tagged type.
 		{"optionalParam", "export function o(a: number, b?: number): number { return a; }"},
-		// a locally shadowed Math is a value receiver, not the global namespace, so
-		// its method must not lower to the Go math package; it hands back as an
-		// unlowered non-string receiver instead of silently becoming math.Floor.
-		{"shadowedMath", "export function m(x: number): number { const Math = { floor: (n: number): number => n }; return Math.floor(x); }"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -362,5 +359,20 @@ func TestRenderFuncHandsBack(t *testing.T) {
 				t.Fatalf("RenderFunc(%s) err = %v, want a *NotYetLowerable", tc.name, err)
 			}
 		})
+	}
+}
+
+// TestShadowedMathLowersToStruct pins that a local object named Math is a value
+// receiver, not the global namespace: its floor method interns a struct and the
+// call routes through the Go func field rather than silently becoming the Go
+// math package's Floor.
+func TestShadowedMathLowersToStruct(t *testing.T) {
+	src := "export function m(x: number): number { const Math = { floor: (n: number): number => n }; return Math.floor(x); }"
+	got := renderProgram(t, src)
+	if strings.Contains(got, "math.Floor") {
+		t.Fatalf("shadowed local Math wrongly lowered to the Go math package:\n%s", got)
+	}
+	if !strings.Contains(got, "Math.Floor(x)") {
+		t.Fatalf("shadowed local Math did not route through the interned struct method:\n%s", got)
 	}
 }
