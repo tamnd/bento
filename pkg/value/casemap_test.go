@@ -51,7 +51,7 @@ func TestToLowerCaseFinalSigmaContext(t *testing.T) {
 		{"ͅΣ", "ͅσ", "ypogegrammeni is case-ignorable, no cased letter before"},
 		{"ᾼΣ", "ᾳς", "alpha before the ignorable ypogegrammeni is the cased letter, so final"},
 		{"A.Σ", "a.ς", "full stop is case-ignorable, A is the cased letter before"},
-		{"A­Σ", "a­ς", "soft hyphen is case-ignorable"},
+		{"A\u00adΣ", "a\u00adς", "soft hyphen is case-ignorable"},
 		{"AΣͅ", "aςͅ", "trailing ypogegrammeni is case-ignorable, no cased letter after, so final"},
 		{"AΣͅΑ", "aσͅα", "alpha after the ignorable ypogegrammeni is a cased letter, so not final"},
 	}
