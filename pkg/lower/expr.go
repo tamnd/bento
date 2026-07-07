@@ -195,6 +195,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeNewExpression:
 		return r.newExpr(n)
 
+	case frontend.NodeAsExpression:
+		// `inner as T` leads with the value, so the inner expression is the first
+		// child and the type node follows it.
+		return r.castExpr(n, 0)
+
+	case frontend.NodeTypeAssertion:
+		// `<T>inner` leads with the type, so the inner expression is the second
+		// child.
+		return r.castExpr(n, 1)
+
 	case frontend.NodeUnknown:
 		// typeof and a handful of other prefix operators the shim does not give a
 		// distinct kind surface as the catch-all node, told apart by the keyword their
@@ -207,6 +217,27 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	default:
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
 	}
+}
+
+// castExpr lowers a type-cast expression, `inner as T` or `<T>inner`. A cast
+// carries no runtime effect in JavaScript, so it erases to its inner value and
+// the only work left is bridging that value from the inner expression's type to
+// the cast's own type. That bridge is exactly the coercion a binding applies
+// across the dynamic boundary, so an unknown value cast to a number unboxes
+// through the same path an assignment would take, and a same-typed cast passes
+// through untouched. The inner expression sits at a fixed child index that
+// differs between the two forms, given by innerIdx.
+func (r *Renderer) castExpr(n frontend.Node, innerIdx int) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if innerIdx >= len(kids) {
+		return nil, &NotYetLowerable{Reason: "cast expression did not expose an inner expression"}
+	}
+	inner := kids[innerIdx]
+	expr, err := r.lowerExpr(inner)
+	if err != nil {
+		return nil, err
+	}
+	return r.coerceToTarget(expr, inner, n)
 }
 
 // conditionalExpr lowers a ternary cond ? whenTrue : whenFalse. Go has no
