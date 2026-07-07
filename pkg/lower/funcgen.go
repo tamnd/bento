@@ -106,12 +106,32 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
 
 	return &ast.FuncDecl{
 		Name: ident(name),
 		Type: &ast.FuncType{Params: params, Results: results},
 		Body: body,
 	}, nil
+}
+
+// endWithImplicitUndefinedReturn appends the return undefined a JavaScript
+// function runs off its end when the body can complete without a return and the
+// declared return type is dynamic. TypeScript only lets a body fall through when
+// the return type admits undefined, and any and unknown are the ones that lower to
+// a value.Value slot, so a static return never reaches here. Go then requires the
+// trailing return the switch or if the body ends on cannot provide, and undefined
+// is the value the fall-through yields, so this closes the gap without changing
+// what a returning path produces.
+func (r *Renderer) endWithImplicitUndefinedReturn(body *ast.BlockStmt, bodyStmts []frontend.Node, ret frontend.Type) {
+	if body == nil || r.bodyTerminates(bodyStmts) {
+		return
+	}
+	if ret.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return
+	}
+	r.requireImport(valuePkg)
+	body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
 }
 
 // paramFields lowers each parameter to a Go field with its lowered type. An
@@ -610,6 +630,7 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	if err != nil {
 		return nil, err
 	}
+	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
 	return &ast.FuncLit{
 		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}, Results: results},
 		Body: body,
