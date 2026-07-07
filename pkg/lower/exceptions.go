@@ -299,6 +299,18 @@ func (r *Renderer) lowerThrow(n frontend.Node) (ast.Stmt, error) {
 	if len(kids) != 1 {
 		return nil, &NotYetLowerable{Reason: "throw did not expose a single operand"}
 	}
+	// Re-throwing a caught error is the rethrow half of the exception model:
+	// catch (err) { ...; throw err } passes the recovered value straight back up.
+	// The binding is already a *value.Error, which carries the runtime's Thrown
+	// surface, so the throw re-raises that exact value with its identity intact.
+	// Reading the binding any other way still hands back at expr.go, so this is
+	// spelled out here rather than routed through lowerExpr, which would decline.
+	if kids[0].Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(kids[0])); ok && r.errorLocals[name] {
+			r.usesThrow = true
+			return &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "Throw"), Args: []ast.Expr{ident(name)}}}, nil
+		}
+	}
 	if !r.isThrowable(kids[0]) {
 		// A new expression of a registered class whose instances carry a string
 		// message throws too: the instance itself is the panic payload, and the
@@ -330,10 +342,11 @@ func (r *Renderer) lowerThrow(n frontend.Node) (ast.Stmt, error) {
 }
 
 // isThrowable reports whether a throw operand lowers to a value.Error the runtime
-// can raise and recover. A new expression for a built-in error qualifies directly;
-// an identifier qualifies when the checker types it as an Error, which is how a
-// caught-and-rethrown or a locally-constructed error variable throws. Anything
-// else hands back until arbitrary thrown values are boxed.
+// can raise and recover. Only a new expression for a built-in error qualifies here;
+// re-throwing a caught error is recognized earlier in lowerThrow, where the binding
+// is known to be a *value.Error. A locally constructed error variable still hands
+// back until its type flows through, and any other operand hands back until
+// arbitrary thrown values are boxed.
 func (r *Renderer) isThrowable(n frontend.Node) bool {
 	if n.Kind() == frontend.NodeNewExpression {
 		kids := r.prog.Children(n)
