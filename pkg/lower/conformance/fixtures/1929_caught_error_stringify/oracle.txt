@@ -1,0 +1,7 @@
+== stdout:
+caught TypeError: boom
+TypeError: boom
+got TypeError: boom
+caught RangeError
+== exit:
+0
