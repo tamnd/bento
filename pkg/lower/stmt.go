@@ -79,6 +79,12 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	} else if ok {
 		return stmts, nil
 	}
+	// A variable statement whose bindings the module never reads expands to the
+	// declaration plus a blank assignment per unused binding, so the initializer
+	// still runs while the emitted Go does not trip declared-and-not-used.
+	if n.Kind() == frontend.NodeVariableStatement {
+		return r.lowerVarStatementMulti(n)
+	}
 	s, err := r.lowerStatement(n)
 	if err != nil {
 		return nil, err
@@ -439,6 +445,40 @@ func (r *Renderer) lowerVarStatement(n frontend.Node) (ast.Stmt, error) {
 	var decls []frontend.Node
 	collectVarDecls(r.prog, n, &decls)
 	return r.varDeclStmt(decls)
+}
+
+// lowerVarStatementMulti lowers a variable statement and follows it with a blank
+// assignment for every binding the module never reads. Go rejects a local that is
+// declared and not used, but the initializer of an unused `var x = e;` must still
+// run, so the binding stays and `_ = x` marks it used without changing behavior.
+// A binding that is read anywhere gets no blank, and a destructuring target, whose
+// name node is not a plain identifier, is left to its own lowering.
+func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
+	s, err := r.lowerVarStatement(n)
+	if err != nil {
+		return nil, err
+	}
+	out := []ast.Stmt{s}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		name, ok := localName(r.prog.Text(kids[0]))
+		if !ok {
+			continue
+		}
+		if r.bindingUnused(kids[0]) {
+			out = append(out, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident("_")},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{ident(name)},
+			})
+		}
+	}
+	return out, nil
 }
 
 // varDeclStmt builds a Go var declaration statement from a set of variable
