@@ -2094,6 +2094,22 @@ func subtreeHasKind(prog *frontend.Program, n frontend.Node, kind frontend.NodeK
 	return false
 }
 
+// subtreeHasIdent reports whether the subtree rooted at n contains an identifier
+// node whose source text is name. It is the read-detection subtreeHasKind cannot
+// do for a binding the frontend spells as an ordinary identifier rather than its
+// own node kind, such as the implicit arguments object inside a function body.
+func subtreeHasIdent(prog *frontend.Program, n frontend.Node, name string) bool {
+	if n.Kind() == frontend.NodeIdentifier && prog.Text(n) == name {
+		return true
+	}
+	for _, c := range prog.Children(n) {
+		if subtreeHasIdent(prog, c, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // firstWord returns the first whitespace-delimited word of s, for the modifier
 // checks that read a member's source spelling.
 func firstWord(s string) string {
