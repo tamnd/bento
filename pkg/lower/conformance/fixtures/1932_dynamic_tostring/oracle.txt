@@ -1,0 +1,6 @@
+== stdout:
+42
+false
+hi
+== exit:
+0

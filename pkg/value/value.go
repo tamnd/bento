@@ -292,6 +292,25 @@ func ToString(v Value) BStr {
 	}
 }
 
+// ToStringMethod implements a dynamic x.toString() call, the method each
+// prototype installs rather than the abstract ToString the operators use. A
+// number spells its digits, a boolean spells true or false, a string is itself,
+// a bigint spells its digits, an array joins its elements, and any other object
+// reports the "[object Object]" tag. undefined and null carry no prototype, so
+// reading toString off them throws a TypeError the way JavaScript does. The
+// result is boxed because the receiver is dynamic and the call site is typed any.
+func (v Value) ToStringMethod() Value {
+	switch v.kind {
+	case KindUndefined:
+		Throw(NewTypeError(FromGoString("Cannot read properties of undefined (reading 'toString')")))
+	case KindNull:
+		Throw(NewTypeError(FromGoString("Cannot read properties of null (reading 'toString')")))
+	case KindString:
+		return v
+	}
+	return StringValue(ToString(v))
+}
+
 // ClassTag implements Object.prototype.toString.call(v), the idiom test262 and
 // much library code reaches for to read a value's internal class as a string of
 // the form "[object Type]". The mapping is the spec's Object.prototype.toString:

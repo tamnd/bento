@@ -528,6 +528,23 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if e, ok, err := r.objectMethodCall(recvNode, method, argNodes); ok || err != nil {
 		return e, err
 	}
+	// toString on a dynamic receiver dispatches at runtime: the value carries its
+	// kind, so recv.ToStringMethod() runs the toString the receiver's prototype
+	// installs, throwing on undefined and null the way the language does. It routes
+	// here before the string gate below, which would otherwise reject a dynamic
+	// receiver as a later slice. compareArray in the test262 prelude calls
+	// message.toString() on an any-typed message, the first hit.
+	if r.isDynamic(recvNode) && method == "toString" {
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "dynamic .toString with an argument is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToStringMethod")}}, nil
+	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
