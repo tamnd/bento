@@ -465,19 +465,38 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
 		kids := r.prog.Children(d)
-		// A binding is [name, initializer] without an annotation, or [name, type,
-		// initializer] with one. The Go type is always read from the checker's type
-		// for the name, so the annotation node itself is not lowered, only skipped;
-		// what it changes is the child count, and the initializer is the last child
-		// in both shapes. A binding with no initializer (a bare declaration or an
-		// ambient one) has no last-child value to lower and hands back, since the
-		// zero-value strategy it would need is a later slice.
-		if len(kids) != 2 && len(kids) != 3 {
-			return nil, &NotYetLowerable{Reason: "variable binding with no initializer is a later slice"}
-		}
+		// A binding is [name], [name, type], [name, initializer], or [name, type,
+		// initializer]: the name is always first, an optional type annotation follows,
+		// and an optional initializer is last. A type annotation is not an expression,
+		// so the adapter leaves it unclassified as NodeUnknown, which tells it apart
+		// from an initializer, whose node always carries a real expression kind. The Go
+		// type is read from the checker's type for the name either way, so the
+		// annotation node itself is only skipped, never lowered.
 		name, ok := localName(r.prog.Text(kids[0]))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "variable name is not a Go identifier"}
+		}
+		initIdx := -1
+		if len(kids) >= 2 && kids[len(kids)-1].Kind() != frontend.NodeUnknown {
+			initIdx = len(kids) - 1
+		}
+		// A binding with no initializer holds undefined until its first assignment, the
+		// way `var x;` reads undefined in JavaScript. A dynamic binding (any or unknown)
+		// lowers to value.Value, whose Go zero value is exactly that undefined, so a
+		// bare var declaration with no value is correct on its own. A binding with a
+		// static type has a Go zero value that is not undefined (0 for a number, "" for
+		// a string), so a typed declaration with no initializer would observe the wrong
+		// value if it were read before assignment and hands back for a later slice.
+		if initIdx < 0 {
+			if r.prog.TypeAt(kids[0]).Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+				return nil, &NotYetLowerable{Reason: "a statically typed binding with no initializer is a later slice"}
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names: []*ast.Ident{ident(name)},
+				Type:  sel("value", "Value"),
+			})
+			continue
 		}
 		// A local the analysis proved holds only 32-bit integers is declared as a Go
 		// int32 and its initializer is lowered in the int32 domain, so the counter or
@@ -485,7 +504,7 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		// operations. Every other local keeps its float64 (or richer) type and the
 		// ordinary boundary-coercing initializer.
 		if r.int32Locals[name] {
-			init, err := r.int32Of(kids[len(kids)-1])
+			init, err := r.int32Of(kids[initIdx])
 			if err != nil {
 				return nil, err
 			}
@@ -499,7 +518,7 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		// A local proven to hold safe integers wider than 32 bits is declared as a
 		// Go int64 the same way, its initializer lowered in the int64 domain.
 		if r.int64Locals[name] {
-			init, err := r.int64Of(kids[len(kids)-1])
+			init, err := r.int64Of(kids[initIdx])
 			if err != nil {
 				return nil, err
 			}
@@ -514,7 +533,7 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		init, err := r.bindingInit(kids[0], kids[len(kids)-1])
+		init, err := r.bindingInit(kids[0], kids[initIdx])
 		if err != nil {
 			return nil, err
 		}
