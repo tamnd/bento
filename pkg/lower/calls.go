@@ -1568,6 +1568,15 @@ func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 // ToString runs user code) hands back. String(x) and `${x}` share this so the two
 // paths always agree on how a value becomes a string.
 func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
+	// A caught error coerces through Error.prototype.toString, "Name: message", the
+	// bento string the *value.Error produces directly, so String(err) and `${err}`
+	// read the same as the engine. It routes before the general lower below, which
+	// hands a caught error back outside a .message, .name, or .constructor read.
+	if r.isCaughtErrorRef(arg) {
+		r.requireImport(valuePkg)
+		name, _ := localName(r.prog.Text(arg))
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("ToBStr")}}, nil
+	}
 	lowered, err := r.lowerExpr(arg)
 	if err != nil {
 		return nil, err

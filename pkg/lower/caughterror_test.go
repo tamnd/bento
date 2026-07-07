@@ -72,6 +72,52 @@ try {
 	}
 }
 
+// TestCaughtErrorStringifyLowers pins that a caught error read in a string context
+// lowers to the ToBStr method on the bound error rather than handing back. The
+// three spellings, concatenation, String(err), and a template, all take the same
+// coercion the way assert.sameValue builds its failure message.
+func TestCaughtErrorStringifyLowers(t *testing.T) {
+	cases := map[string]string{
+		"concat":   `try { throw new TypeError("x"); } catch (e: any) { let s: string = "caught " + e; console.log(s); }`,
+		"String":   `try { throw new TypeError("x"); } catch (e: any) { let s: string = String(e); console.log(s); }`,
+		"template": "try { throw new TypeError(\"x\"); } catch (e: any) { let s: string = `got ${e}`; console.log(s); }",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			out := renderProgram(t, src)
+			if !strings.Contains(out, ".ToBStr()") {
+				t.Fatalf("caught error in a string context did not lower to ToBStr:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestCaughtErrorStringifyRuns builds and runs the three string forms over a real
+// caught error and checks each yields Error.prototype.toString's "Name: message"
+// shape, with the name alone when the message is empty.
+func TestCaughtErrorStringifyRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+try {
+  throw new TypeError("boom");
+} catch (error: any) {
+  console.log("caught " + error);
+  console.log(String(error));
+  console.log(` + "`got ${error}`" + `);
+}
+try {
+  throw new RangeError("");
+} catch (error: any) {
+  console.log("caught " + error);
+}
+`
+	got := runProgramGo(t, src)
+	want := "caught TypeError: boom\nTypeError: boom\ngot TypeError: boom\ncaught RangeError\n"
+	if got != want {
+		t.Fatalf("caught error stringify run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestCaughtErrorGuardRuns builds and runs the assert.throws guard shape, typeof
 // thrown !== 'object' || thrown === null, over a real thrown error, and checks it
 // takes the else branch the way the prelude needs it to for a real error.

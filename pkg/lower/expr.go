@@ -986,6 +986,15 @@ func (r *Renderer) stringPlusOperands(left, right frontend.Node) []frontend.Node
 // object machinery, hands back for a later slice rather than emitting a coercion
 // that does not exist yet.
 func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
+	// A caught error concatenated coerces through Error.prototype.toString, "Name:
+	// message", the bento string the *value.Error produces directly. It routes before
+	// the general lower below, which hands a caught error back because it has no value
+	// form outside a .message, .name, or .constructor read.
+	if r.isCaughtErrorRef(n) {
+		r.requireImport(valuePkg)
+		name, _ := localName(r.prog.Text(n))
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("ToBStr")}}, nil
+	}
 	e, err := r.lowerExpr(n)
 	if err != nil {
 		return nil, err
