@@ -42,6 +42,22 @@ func (r *Renderer) typeofExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	operand := kids[0]
 
+	// typeof over a caught error folds to the "object" tag: the runtime holds every
+	// caught value as a *value.Error (catchDefer binds value.Caught), which is an
+	// object, so the tag is known without lowering the binding, which has no general
+	// value form. A thrown primitive that a catch recovers binds as an error too
+	// (the ThrownString deviation), so it also answers "object" here, consistent
+	// with how the model represents a caught value until the dynamic catch slice
+	// binds the primitive itself. The binding is a plain identifier read with no
+	// side effect, so dropping it from the output is sound.
+	if r.isCaughtErrorRef(operand) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "FromGoString"),
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote("object")}},
+		}, nil
+	}
+
 	if r.isDynamic(operand) {
 		e, err := r.lowerExpr(operand)
 		if err != nil {

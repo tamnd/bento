@@ -95,6 +95,45 @@ func (r *Renderer) isString(n frontend.Node) bool {
 	return r.primitiveFlags(n)&frontend.TypeString != 0 || r.caughtErrorStringRead(n)
 }
 
+// isCaughtErrorRef reports whether n is a bare reference to a catch binding in
+// scope, the *value.Error a catch bound. It is the guard the caught-error paths
+// use to route typeof and a null compare over the binding, which the checker
+// types any or unknown but which the runtime always holds as an error object.
+func (r *Renderer) isCaughtErrorRef(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name, ok := localName(r.prog.Text(n))
+	return ok && r.errorLocals[name]
+}
+
+// caughtErrorNullCompare folds an equality between a caught error and the null or
+// undefined literal to a Go boolean constant. A caught value is a non-nil
+// *value.Error, so it is never null or undefined, which makes === and == false and
+// !== and != true regardless of which side holds the literal. It reports
+// handled=false when neither shape matches, so a compare that is not this one falls
+// through to the normal path.
+func (r *Renderer) caughtErrorNullCompare(opText string, left, right frontend.Node) (ast.Expr, bool) {
+	switch opText {
+	case "===", "!==", "==", "!=":
+	default:
+		return nil, false
+	}
+	isNullish := func(n frontend.Node) bool {
+		return n.Kind() == frontend.NodeNullKeyword || r.isUndefinedLiteral(n)
+	}
+	caughtVsNullish := (r.isCaughtErrorRef(left) && isNullish(right)) ||
+		(r.isCaughtErrorRef(right) && isNullish(left))
+	if !caughtVsNullish {
+		return nil, false
+	}
+	result := "false"
+	if opText == "!==" || opText == "!=" {
+		result = "true"
+	}
+	return ident(result), true
+}
+
 // caughtErrorStringRead reports whether n reads .message or .name off a catch
 // binding in scope, the two reads member.go lowers to the *value.Error methods.
 func (r *Renderer) caughtErrorStringRead(n frontend.Node) bool {
