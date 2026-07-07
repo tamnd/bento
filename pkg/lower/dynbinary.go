@@ -61,6 +61,24 @@ func (r *Renderer) dynamicBinary(opText string, left, right frontend.Node) (ast.
 		}
 		ops := map[string]token.Token{"-": token.SUB, "*": token.MUL, "/": token.QUO}
 		return &ast.BinaryExpr{X: l, Op: ops[opText], Y: rr}, true, nil
+	case "<", "<=", ">", ">=":
+		// The four relational operators over a dynamic operand run the Abstract
+		// Relational Comparison, which boxes each side and coerces through
+		// ToPrimitive: two strings order by code unit and everything else compares
+		// as numbers, with NaN making the result false. The value model spells that
+		// operation as one helper per operator, so a < b lowers to value.Less(a, b)
+		// and reads the way a person would write it.
+		l, err := r.boxOperand(left)
+		if err != nil {
+			return nil, false, err
+		}
+		rr, err := r.boxOperand(right)
+		if err != nil {
+			return nil, false, err
+		}
+		helpers := map[string]string{"<": "Less", "<=": "LessEqual", ">": "Greater", ">=": "GreaterEqual"}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", helpers[opText]), Args: []ast.Expr{l, rr}}, true, nil
 	}
 	return nil, false, nil
 }
