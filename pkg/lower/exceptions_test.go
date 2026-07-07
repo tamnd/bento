@@ -173,14 +173,110 @@ func TestEmptyCatchStillRecovers(t *testing.T) {
 	}
 }
 
-// TestReturningTryHandsBack proves a return inside a try, catch, or finally body
-// hands the whole statement back, because a Go return inside the emitted closure
-// would leave the closure rather than the enclosing function, an abrupt completion
-// this slice does not carry out of the construct.
-func TestReturningTryHandsBack(t *testing.T) {
-	handsBack(t, "function f(): number { try { return 1; } finally { console.log(\"fin\"); } }\nf();\n")
-	handsBack(t, "function f(): number { try { console.log(\"body\"); } catch (e) { return 2; } return 0; }\nf();\n")
-	handsBack(t, "function f(): number { try { console.log(\"body\"); } finally { return 3; } }\nf();\n")
+// TestTryEscapeEmits pins the two forms a returning try takes. A try whose
+// every path returns or throws, with a catch that always returns, compiles to
+// returning the closure directly with a plain named result. One that control
+// can run past carries the done result, and the call site turns done back into
+// the enclosing function's return.
+func TestTryEscapeEmits(t *testing.T) {
+	const src = `function safeInvert(x: number): number {
+  try {
+    if (x === 0) {
+      throw new Error("div by zero");
+    }
+    return 1 / x;
+  } catch (e) {
+    return -1;
+  }
+}
+function guard(x: number): string {
+  try {
+    if (x < 0) {
+      throw new Error("neg");
+    }
+  } catch (e) {
+    return "caught";
+  }
+  return "ok";
+}
+console.log(safeInvert(2));
+console.log(guard(1));
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"return func() (ret float64) {",
+		"ret = -1",
+		"return 1 / x",
+		"if ret, done := func() (ret value.BStr, done bool) {",
+		"ret, done = value.FromGoString(\"caught\"), true",
+		"; done {",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("try escape emit did not print %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestTryEscapeHandsBack pins the boundaries the escape form keeps: a source
+// name that would collide with the closure's named results, and a returning
+// try nested inside a catch body, whose handler already runs deferred.
+func TestTryEscapeHandsBack(t *testing.T) {
+	handsBack(t, "function f(): number { let done = false; try { if (done) { return 1; } } catch (e) { return 2; } return 0; }\nf();\n")
+	handsBack(t, "function f(): number { try { return 1; } catch (e) { try { return 2; } catch (e2) { return 3; } } }\nf();\n")
+}
+
+// TestTryEscapeRuns builds and runs both escape forms end to end against the
+// Node answers: the always form returns from the try and from the catch, the
+// done form returns from the catch of a void-bodied try while its finally still
+// runs, and a finally return overrides the value the try body computed.
+func TestTryEscapeRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function safeInvert(x: number): number {
+  try {
+    if (x === 0) {
+      throw new Error("div by zero");
+    }
+    return 1 / x;
+  } catch (e) {
+    return -1;
+  }
+}
+function guard(x: number): string {
+  try {
+    if (x < 0) {
+      throw new Error("neg");
+    }
+  } catch (e) {
+    return "caught";
+  } finally {
+    console.log("fin");
+  }
+  return "ok";
+}
+function overridden(): number {
+  try {
+    return 1;
+  } finally {
+    return 2;
+  }
+}
+console.log(safeInvert(4));
+console.log(safeInvert(0));
+console.log(guard(1));
+console.log(guard(-1));
+console.log(overridden());
+`
+	got := runProgramGo(t, src)
+	want := "0.25\n" +
+		"-1\n" +
+		"fin\n" +
+		"ok\n" +
+		"fin\n" +
+		"caught\n" +
+		"2\n"
+	if got != want {
+		t.Fatalf("try escape program printed %q, want %q", got, want)
+	}
 }
 
 // TestInstanceofOutsideCatchHandsBack proves instanceof on a value that is not a

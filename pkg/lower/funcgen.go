@@ -340,6 +340,13 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 	r.constInt = r.constIntsOf(r.prog.Children(block))
 	defer func() { r.constInt = prevCN }()
 
+	// A nested function's returns are its own, not the enclosing try's, so the
+	// try return mode resets around every function body; every function body
+	// lowering runs through here, so this is the one reset site.
+	prevTryRet := r.tryRet
+	r.tryRet = tryRetNone
+	defer func() { r.tryRet = prevTryRet }()
+
 	prev := r.int32Locals
 	r.int32Locals = r.int32LocalsOf(r.prog.Children(block))
 	defer func() { r.int32Locals = prev }()
