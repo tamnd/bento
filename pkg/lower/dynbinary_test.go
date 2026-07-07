@@ -91,11 +91,18 @@ func TestDynamicRelationalLowers(t *testing.T) {
 	}
 }
 
-// TestDynamicLooseEqualsHandsBack pins the other boundary: == runs the coercing
-// equality table and stays a later slice.
-func TestDynamicLooseEqualsHandsBack(t *testing.T) {
-	src := "function f(a: any, b: any): boolean { return a == b; }\nconsole.log(f(1, 2));\n"
-	renderProgramHandBack(t, src)
+// TestDynamicLooseEqualsLowers pins that == over a dynamic operand routes through
+// value.LooseEquals, the coercing sibling of StrictEquals, and that != is the
+// same call negated.
+func TestDynamicLooseEqualsLowers(t *testing.T) {
+	src := "function f(a: any, b: any): boolean { return a == b; }\nfunction g(a: any, b: any): boolean { return a != b; }\nconsole.log(f(1, 1));\nconsole.log(g(1, 2));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.LooseEquals(a, b)") {
+		t.Errorf("dynamic == did not lower to value.LooseEquals:\n%s", source)
+	}
+	if !strings.Contains(source, "!value.LooseEquals(a, b)") {
+		t.Errorf("dynamic != did not lower to a negated value.LooseEquals:\n%s", source)
+	}
 }
 
 // TestTypeofDynamicCompareLowers pins typeof x !== "object" over a dynamic x: the
