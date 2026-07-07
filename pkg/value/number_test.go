@@ -159,6 +159,40 @@ func TestSign(t *testing.T) {
 	}
 }
 
+// TestPow pins the two places Number::exponentiate diverges from Go's math.Pow: a
+// NaN exponent is always NaN even at a base of one, and a base of magnitude one
+// raised to an infinite exponent is NaN. Every ordinary power, the fractional and
+// negative exponents, the zero exponent (one for any base including NaN), and the
+// infinite exponent at a base past one must still agree with math.Pow.
+func TestPow(t *testing.T) {
+	nan := math.NaN()
+	posInf := math.Inf(1)
+	negInf := math.Inf(-1)
+	cases := []struct {
+		base, exp, want float64
+	}{
+		{2, 10, 1024},
+		{9, 0.5, 3},
+		{2, -1, 0.5},
+		{2, 0, 1},
+		{nan, 0, 1}, // anything to the zero is one, even NaN
+		{2, posInf, posInf},
+		{2, negInf, 0},
+		{nan, 2, nan},     // NaN base with a finite exponent stays NaN
+		{1, nan, nan},     // math.Pow(1, NaN) is 1, JavaScript says NaN
+		{nan, nan, nan},   // NaN exponent wins regardless of base
+		{-1, posInf, nan}, // unit magnitude, infinite exponent: NaN in JS
+		{1, negInf, nan},  // math.Pow(1, -Inf) is 1, JavaScript says NaN
+		{-1, negInf, nan}, // same for the negative unit base
+	}
+	for _, c := range cases {
+		got := Pow(c.base, c.exp)
+		if !NumberSameValue(got, c.want) {
+			t.Errorf("Pow(%v, %v) = %v, want %v", c.base, c.exp, got, c.want)
+		}
+	}
+}
+
 // TestMinMaxN pins the variadic Math.min and Math.max: the no-argument identities
 // (+Infinity and -Infinity), the single-argument passthrough, ordinary folds over
 // several arguments, the signed-zero order, and NaN propagation.

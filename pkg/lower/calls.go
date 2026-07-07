@@ -1279,7 +1279,7 @@ func mathMethod(name string) (pkg, goName string, minArity, maxArity int, ok boo
 	case "sqrt":
 		return "math", "Sqrt", 1, 1, true
 	case "pow":
-		return "math", "Pow", 2, 2, true
+		return valuePkg, "Pow", 2, 2, true
 	case "min":
 		return valuePkg, "MinN", 0, -1, true
 	case "max":

@@ -1,3 +1,3 @@
 func Raise(a float64, b float64, c float64) float64 {
-	return math.Pow(a, math.Pow(b, c))
+	return value.Pow(a, value.Pow(b, c))
 }

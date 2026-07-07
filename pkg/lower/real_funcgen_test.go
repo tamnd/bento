@@ -236,7 +236,7 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "trimend", file: "func_trimend"},
 		// % on numbers is fmod, not Go's integer remainder, so it lowers to a math.Mod call rather than a Go % operator.
 		{name: "modulo", file: "func_modulo"},
-		// ** on numbers is the same operation as Math.pow, so it lowers to a math.Pow call; ** is right-associative, so a ** b ** c nests as math.Pow(a, math.Pow(b, c)).
+		// ** on numbers is the same operation as Math.pow, so it lowers to a value.Pow call; ** is right-associative, so a ** b ** c nests as value.Pow(a, value.Pow(b, c)).
 		{name: "exponent", file: "func_exponent"},
 		// && and || on boolean operands map to Go's short-circuit operators, so a compound range check lowers to one Go condition.
 		{name: "logical", file: "func_logical"},
@@ -248,7 +248,7 @@ func TestRenderFuncGoldens(t *testing.T) {
 		{name: "compound_string", file: "func_compound_string"},
 		// %= reuses the remainder path, so it emits math.Mod, not a Go %= that a float64 would reject.
 		{name: "compound_mod", file: "func_compound_mod"},
-		// **= fuses to x = x ** n and reuses the exponent path, so it emits math.Pow rather than a Go **= that does not exist.
+		// **= fuses to x = x ** n and reuses the exponent path, so it emits value.Pow rather than a Go **= that does not exist.
 		{name: "compound_exponent", file: "func_compound_exponent"},
 		// ++ and -- on a number local map to Go's IncDecStmt, which accepts a float64.
 		{name: "incdec", file: "func_incdec"},
