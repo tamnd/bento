@@ -1,0 +1,10 @@
+== stdout:
+0.25
+-1
+fin
+ok
+fin
+caught
+2
+== exit:
+0

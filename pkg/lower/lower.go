@@ -169,6 +169,15 @@ type Renderer struct {
 	// as a value.Error and not a general boxed value yet. It is set around a catch
 	// block and cleared after, so a binding does not leak past its clause.
 	errorLocals map[string]bool
+	// tryRet tells a return statement how to leave the try construct it sits in.
+	// The zero value is a plain function return. tryRetBody marks the body of the
+	// escape closure a try with an escaping return compiles to, where a return
+	// fills the closure's named results with `return x, true`. tryRetDefer marks
+	// a catch or finally body, which runs inside a deferred function, where a
+	// return assigns the named results and leaves with a bare return, the only
+	// way a deferred function can set them. It is saved and restored around each
+	// function body like retType so a nested function's returns stay its own.
+	tryRet tryRetMode
 	// usesThrow records that the program emitted a construct that can raise a
 	// thrown value the runtime must report if it escapes: an explicit throw, or a
 	// boundary crossing that range-checks (a go: int64 result). When set, the
