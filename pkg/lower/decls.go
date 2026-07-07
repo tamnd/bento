@@ -93,11 +93,37 @@ func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
 	}
 
 	props := r.prog.Properties(t)
-	name := d.reserve(structBaseName(props))
+	// A callable object (one call signature plus properties) interns to a struct
+	// with a reserved Call field. Its name comes from the interface's declared name
+	// when it has one, so the emitted type reads like the source (Assert, not a
+	// property-derived ObjSameValue), and falls back to the property-derived name
+	// for an anonymous callable shape.
+	call, construct := r.prog.Signatures(t)
+	// A callable object with more than one call signature (an overload set) or with
+	// a construct signature has no single Go func field to stand in for it, so the
+	// whole shape hands back rather than dropping the extra signatures on the floor.
+	if len(call) > 1 || len(construct) > 0 {
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "an overloaded or constructable callable object is a later slice"}
+	}
+	var callSig *frontend.Signature
+	base := structBaseName(props)
+	if len(call) == 1 {
+		callSig = &call[0]
+		// A named interface (Assert) carries its name on the type symbol, so the
+		// emitted struct reads like the source rather than a property-derived twin. An
+		// anonymous type literal has the checker's internal "__type" symbol instead,
+		// which is not a name a reader wrote, so those keep the property-derived base.
+		if sym, ok := r.prog.TypeSymbol(t); ok && !strings.HasPrefix(sym.Name, "__") {
+			if nm, ok := exportedField(sym.Name); ok {
+				base = nm
+			}
+		}
+	}
+	name := d.reserve(base)
 	d.nameByIdentity[id] = name
 	d.nameBySig[sig] = name
 
-	decl, err := renderStructBody(r, name, props)
+	decl, err := renderStructBody(r, name, props, callSig)
 	if err != nil {
 		// Roll the reservation back so a later, lowerable use of a shape that
 		// happens to share this base name is not pushed to a suffix by a failure.
@@ -167,6 +193,12 @@ func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) st
 			}
 			parts = append(parts, p.Name+opt+":"+structuralKey(prog, p.Type, seen))
 		}
+		// A call signature keys the shape too, so a callable object never dedupes
+		// onto a plain object that happens to carry the same properties: the two
+		// intern to different Go structs, one with a Call field and one without.
+		if call, _ := prog.Signatures(t); len(call) == 1 {
+			parts = append(parts, "()"+signatureKey(prog, call[0]))
+		}
 		sort.Strings(parts)
 		delete(seen, id)
 		return "{" + strings.Join(parts, ";") + "}"
@@ -178,6 +210,69 @@ func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) st
 		}
 		sort.Strings(parts)
 		return "(" + strings.Join(parts, "|") + ")"
+	default:
+		return "#" + itoa(t.Identity())
+	}
+}
+
+// signatureKey builds a structural key for one call signature, so two callable
+// objects with the same call shape key alike and one with a different arity or
+// parameter kind keys apart. It keys each parameter by a shallow fingerprint of
+// its type (the category, not the full nested structure), marking an optional
+// with a trailing ?, and appends the return type's fingerprint after an arrow.
+//
+// The fingerprint is deliberately shallow. A callable object's own methods are
+// themselves function-typed properties, and their parameters and returns can be
+// further callable objects (a typed array's methods return typed arrays with the
+// same methods, and the checker hands back a fresh type id at each step), so
+// descending into signature types with structuralKey would recurse without
+// bound because the cycle guard keys by id and never sees a repeat. The category
+// fingerprint bottoms out at once, which distinguishes the shapes that actually
+// differ (arity, a primitive versus an object parameter, the return category)
+// while a rare pair that matches on the fingerprint but differs deeper simply
+// shares a struct, the same structural approximation the object walk already
+// accepts for a type it cannot break down.
+func signatureKey(prog *frontend.Program, sig frontend.Signature) string {
+	parts := make([]string, 0, len(sig.Params))
+	for _, p := range sig.Params {
+		opt := ""
+		if p.Optional {
+			opt = "?"
+		}
+		parts = append(parts, opt+shallowTypeKey(prog, p.Type))
+	}
+	return "(" + strings.Join(parts, ",") + ")->" + shallowTypeKey(prog, sig.Return)
+}
+
+// shallowTypeKey fingerprints a type by its category without descending into a
+// nested shape, so a key built from it terminates at once. It is the bounded
+// counterpart to structuralKey, used where a full structural walk would recurse
+// without bound (a call signature's parameter and return types).
+func shallowTypeKey(prog *frontend.Program, t frontend.Type) string {
+	switch {
+	case t.Flags == 0:
+		return "void"
+	case t.Flags&frontend.TypeNumber != 0:
+		return "num"
+	case t.Flags&frontend.TypeString != 0:
+		return "str"
+	case t.Flags&frontend.TypeBoolean != 0:
+		return "bool"
+	case t.Flags&frontend.TypeBigInt != 0:
+		return "big"
+	case t.Flags&frontend.TypeSymbol != 0:
+		return "sym"
+	case t.Flags&frontend.TypeUndefined != 0:
+		return "undef"
+	case t.Flags&frontend.TypeNull != 0:
+		return "null"
+	case t.Flags&frontend.TypeObject != 0:
+		if _, ok := prog.ElementType(t); ok {
+			return "arr"
+		}
+		return "obj"
+	case t.Flags&frontend.TypeUnion != 0:
+		return "union"
 	default:
 		return "#" + itoa(t.Identity())
 	}
@@ -233,8 +328,23 @@ func (d *declSet) emitNodes() []ast.Decl {
 // node itself so the caller can both print it (for the decl-source table) and
 // splice it into the assembled program file, keeping one gofmt-clean node as the
 // single source of truth (section 2).
-func renderStructBody(r *Renderer, name string, props []frontend.Property) (*ast.GenDecl, error) {
+func renderStructBody(r *Renderer, name string, props []frontend.Property, callSig *frontend.Signature) (*ast.GenDecl, error) {
 	fields := &ast.FieldList{}
+	// A callable object reserves the leading Call field for its call signature, so
+	// the struct reads like the function bundle a Go developer hand-writes: a Call
+	// closure plus the member closures and data fields. The field is the func type
+	// the call signature lowers to; a call signature that does not lower (a static
+	// optional, a rest parameter) hands the whole shape back.
+	if callSig != nil {
+		ft, err := r.funcTypeOf(*callSig)
+		if err != nil {
+			return nil, err
+		}
+		fields.List = append(fields.List, &ast.Field{
+			Names: []*ast.Ident{ident("Call")},
+			Type:  ft,
+		})
+	}
 	for _, p := range props {
 		if p.Optional && !r.isOptionalType(p.Type) {
 			// An optional property x?: T types as T | undefined, which lowers to a
@@ -250,6 +360,12 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property) (*ast
 			// the object's symbol/string side table, not a struct field, which
 			// is a later slice.
 			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "non-identifier property name belongs in the object side table"}
+		}
+		if callSig != nil && field == "Call" {
+			// The Call field is reserved for the call signature, so a callable object
+			// with a property that also exports to Call collides; it hands back with
+			// an honest reason rather than shadowing the call slot.
+			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "a callable object with a property named call collides with the reserved Call field, a later slice"}
 		}
 		goType, err := r.typeExpr(p.Type)
 		if err != nil {
