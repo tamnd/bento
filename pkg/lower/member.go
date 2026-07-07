@@ -491,6 +491,20 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An evolving array holds value.Value elements even where the checker narrows a
+	// read to number, so the read is unboxed to the narrowed type when the two
+	// disagree. `var a = []; a[0] = 1` is declared any[], so a builds a
+	// value.Value-element array, but control-flow analysis types a[i] number, and an
+	// arithmetic use of a.At(i) needs the AsNumber the narrowed type names. An array
+	// whose element type is already static reads the primitive directly and takes no
+	// unbox.
+	unbox := func(read ast.Expr) ast.Expr {
+		acc, ok := r.dynamicArrayElemUnbox(obj, n)
+		if !ok {
+			return read
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident(acc)}}
+	}
 	// A proven-integer loop index reads through AtI, which takes the index already
 	// narrowed to a Go int, so the counter stays in a register and the float
 	// truncation At runs on every access is dropped. A dynamic or fractional index
@@ -501,11 +515,40 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AtI")}, Args: []ast.Expr{idx}}, nil
+		return unbox(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AtI")}, Args: []ast.Expr{idx}}), nil
 	}
 	idx, err := r.lowerExpr(idxNode)
 	if err != nil {
 		return nil, err
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
+	return unbox(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("At")}, Args: []ast.Expr{idx}}), nil
+}
+
+// dynamicArrayElemUnbox reports the accessor that unboxes an element read obj[i]
+// whose node is n, for the case where the array holds value.Value elements but
+// this read is narrowed to a static primitive. A TypeScript evolving array is
+// declared any[], so its backing store is value.Value, yet control-flow analysis
+// narrows a read to number, string, or boolean, and At hands back the bare box the
+// narrowed use cannot consume. It reports the AsNumber, AsString, or AsBool the
+// narrowed type names, and ok=false when the array's element type is already static
+// (At returns the primitive itself) or the read stays dynamic (the box is what the
+// use wants). The array's element type is read from its symbol, not the narrowed
+// read node, since only the symbol carries the any[] the store was built at.
+func (r *Renderer) dynamicArrayElemUnbox(obj, n frontend.Node) (string, bool) {
+	acc, ok := dynAccessor(r.primitiveFlags(n))
+	if !ok {
+		return "", false
+	}
+	sym, ok := r.prog.SymbolAt(obj)
+	if !ok {
+		return "", false
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeOfSymbol(sym))
+	if !ok {
+		return "", false
+	}
+	if elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return "", false
+	}
+	return acc, true
 }
