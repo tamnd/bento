@@ -281,6 +281,15 @@ type Renderer struct {
 	// elidedText is the text twin of elidedUses, subtracted from identText the same
 	// way bindingUnused subtracts elidedUses from bindingUses.
 	elidedText map[string]int
+	// blockDeclared is a stack of the local names already given a Go declaration in
+	// each open block, innermost last. A block is pushed when its statements start
+	// lowering and popped when they finish, so the top frame names the bindings the
+	// current Go block has already declared. JavaScript lets a `var` redeclare a name
+	// in the same scope, but Go rejects a second `x :=` on a name already declared in
+	// the block, so a redeclaration lowers to a plain assignment instead. The stack
+	// is empty outside a block (a for-loop initializer, say), where no redeclaration
+	// can arise, and that empty case declares normally.
+	blockDeclared []map[string]bool
 }
 
 // NewRenderer builds a renderer over a checked program.

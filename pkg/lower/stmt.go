@@ -25,8 +25,12 @@ func (r *Renderer) lowerBlock(block frontend.Node) (*ast.BlockStmt, error) {
 	return &ast.BlockStmt{List: stmts}, nil
 }
 
-// lowerStatements lowers a sequence of statement nodes, in order.
+// lowerStatements lowers a sequence of statement nodes, in order. It opens a
+// block scope for the duration so a `var` that redeclares a name already declared
+// in this block lowers to an assignment rather than a duplicate Go declaration.
 func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
+	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
+	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
 	out := make([]ast.Stmt, 0, len(nodes))
 	for _, n := range nodes {
 		stmts, err := r.lowerStatementMulti(n)
@@ -36,6 +40,26 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 		out = append(out, stmts...)
 	}
 	return out, nil
+}
+
+// blockDeclares reports whether name is already declared in the current block and,
+// if not, is only meaningful when a block is open. The empty stack (a for-loop
+// initializer lowered outside a block) declares nothing, so it always reports false.
+func (r *Renderer) blockDeclares(name string) bool {
+	if len(r.blockDeclared) == 0 {
+		return false
+	}
+	return r.blockDeclared[len(r.blockDeclared)-1][name]
+}
+
+// markBlockDeclared records that name now has a Go declaration in the current
+// block, so a later `var` on the same name in the same block lowers to an
+// assignment. It is a no-op with no block open.
+func (r *Renderer) markBlockDeclared(name string) {
+	if len(r.blockDeclared) == 0 {
+		return
+	}
+	r.blockDeclared[len(r.blockDeclared)-1][name] = true
 }
 
 // lowerStatementMulti lowers one statement, letting it expand into more than one Go
@@ -481,10 +505,88 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	return out, nil
 }
 
-// varDeclStmt builds a Go var declaration statement from a set of variable
-// declaration nodes. It is shared by a const/let statement and a for-loop
-// initializer, so both spell a binding the same way.
+// varDeclStmt builds a Go statement for a set of variable declaration nodes. It is
+// shared by a const/let statement and a for-loop initializer, so both spell a
+// binding the same way. A `var` that redeclares a name already declared in this Go
+// block lowers to an assignment instead of a second declaration, since Go rejects a
+// duplicate short declaration where JavaScript allows the redeclaration; every
+// other statement builds a fresh Go declaration and records its names as declared.
 func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
+	if len(decls) == 0 {
+		return nil, &NotYetLowerable{Reason: "variable declaration has no binding"}
+	}
+	if stmt, ok, err := r.redeclaredVarAssign(decls); err != nil || ok {
+		return stmt, err
+	}
+	stmt, err := r.buildVarDecl(decls)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range decls {
+		if name, ok := localName(r.prog.Text(r.prog.Children(d)[0])); ok {
+			r.markBlockDeclared(name)
+		}
+	}
+	return stmt, nil
+}
+
+// redeclaredVarAssign turns a `var` statement whose bindings all name variables the
+// current block already declared into assignments to those variables. JavaScript
+// hoists a `var` to one binding per scope, so `var x = a; var x = b;` is a single x
+// assigned twice, which Go writes as a declaration and then a plain assignment. A
+// binding with no initializer keeps the current value and emits nothing, matching a
+// bare `var x;` that does not reset x. A statement that mixes a redeclared name with
+// a fresh one, or names a destructuring target, is a later slice and hands back;
+// one with no redeclared name reports ok=false and takes the ordinary declaration
+// path.
+func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, error) {
+	redeclared := 0
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			return nil, false, nil
+		}
+		name, ok := localName(r.prog.Text(kids[0]))
+		if !ok {
+			return nil, false, nil
+		}
+		if r.blockDeclares(name) {
+			redeclared++
+		}
+	}
+	if redeclared == 0 {
+		return nil, false, nil
+	}
+	if redeclared != len(decls) {
+		return nil, true, &NotYetLowerable{Reason: "a var statement that mixes a redeclared name with a new one is a later slice"}
+	}
+	var lhs, rhs []ast.Expr
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		name, _ := localName(r.prog.Text(kids[0]))
+		initIdx := -1
+		if len(kids) >= 2 && kids[len(kids)-1].Kind() != frontend.NodeUnknown {
+			initIdx = len(kids) - 1
+		}
+		if initIdx < 0 {
+			continue
+		}
+		init, err := r.bindingInit(kids[0], kids[initIdx])
+		if err != nil {
+			return nil, true, err
+		}
+		lhs = append(lhs, ident(name))
+		rhs = append(rhs, init)
+	}
+	if len(lhs) == 0 {
+		return &ast.EmptyStmt{Implicit: true}, true, nil
+	}
+	return &ast.AssignStmt{Lhs: lhs, Tok: token.ASSIGN, Rhs: rhs}, true, nil
+}
+
+// buildVarDecl builds a Go var declaration statement from a set of variable
+// declaration nodes.
+func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 	if len(decls) == 0 {
 		return nil, &NotYetLowerable{Reason: "variable declaration has no binding"}
 	}
@@ -2022,6 +2124,14 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	if len(kids) != 4 {
 		return nil, &NotYetLowerable{Reason: "only a for with a declaration, condition, and increment is lowered yet"}
 	}
+
+	// The loop opens its own Go scope: the initializer either sits in the for
+	// clause or in the block that wraps the loop, so its names belong to the loop,
+	// not the enclosing block. A fresh frame keeps those names out of the enclosing
+	// block's declared set, so a later loop reusing the same counter names still
+	// declares them rather than mistaking them for a redeclaration.
+	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
+	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
 
 	var decls []frontend.Node
 	collectVarDecls(r.prog, kids[0], &decls)
