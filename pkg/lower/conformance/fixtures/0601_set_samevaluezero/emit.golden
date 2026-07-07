@@ -4,6 +4,7 @@ package main
 
 import (
 	"github.com/tamnd/bento/pkg/value"
+	"math"
 )
 
 func Run() {
@@ -13,7 +14,7 @@ func Run() {
 	s.Add(value.NumberNaN())
 	s.Add(value.NumberNaN())
 	s.Add(0)
-	s.Add(-0)
+	s.Add(math.Copysign(0, -1))
 	value.ConsoleLog(value.NumberToString(s.Size()))
 }
 func main() {

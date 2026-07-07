@@ -38,15 +38,15 @@ console.log(sum);
 // range declares as int64 with the literal folded straight in.
 func TestInt64SpecializationWideConstant(t *testing.T) {
 	src := `
-let big = 5000000000;
-big = big + 1;
-console.log(big);
+let wide = 5000000000;
+wide = wide + 1;
+console.log(wide);
 `
 	got := renderProgram(t, src)
-	if !strings.Contains(got, "var big int64 = 5000000000") {
+	if !strings.Contains(got, "var wide int64 = 5000000000") {
 		t.Errorf("emitted Go missing the int64 declaration\n---\n%s", got)
 	}
-	if !strings.Contains(got, "big++") {
+	if !strings.Contains(got, "wide++") {
 		t.Errorf("emitted Go missing the native increment\n---\n%s", got)
 	}
 }

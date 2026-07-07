@@ -104,21 +104,33 @@ var goKeywords = map[string]bool{
 	"select": true, "struct": true, "switch": true, "type": true, "var": true,
 }
 
+// emitterPkgs is the set of package identifiers the emitted code can qualify
+// through: everything requireImport is ever called with. A local spelling one
+// of these would shadow the package inside its function, and test262's own
+// harness hits it head on with parameters named value, so localName reserves
+// them the same way it reserves keywords. The set is fixed rather than
+// computed from the imports a module actually uses, because localName is a
+// pure function of the name and the rename must not depend on emission order.
+var emitterPkgs = map[string]bool{
+	"value": true, "math": true, "big": true, "unsafe": true, "bridge": true,
+}
+
 // localName maps a TypeScript parameter or local identifier to its Go spelling.
 // A local stays unexported, so a legal name is preserved verbatim except when
-// it spells a Go keyword, which takes a trailing underscore; a name that is
-// not a legal Go identifier mangles through the same escape exportedField
-// uses, minus the uppercasing, so "$DONE" declares and reads as D_DONE
-// everywhere. A mangled name can never spell a keyword (it always carries an
-// uppercase rune or an underscore from the escape), so the two rules do not
-// interact. The mapping is a pure function of the name, so a parameter and
-// every reference to it mangle identically without threading any shared table.
+// it spells a Go keyword or one of the emitter's package identifiers, which
+// takes a trailing underscore; a name that is not a legal Go identifier
+// mangles through the same escape exportedField uses, minus the uppercasing,
+// so "$DONE" declares and reads as D_DONE everywhere. A mangled name can never
+// spell a keyword (it always carries an uppercase rune or an underscore from
+// the escape), so the two rules do not interact. The mapping is a pure
+// function of the name, so a parameter and every reference to it mangle
+// identically without threading any shared table.
 func localName(name string) (string, bool) {
 	s, ok := mangleIdent(name)
 	if !ok {
 		return "", false
 	}
-	if goKeywords[s] {
+	if goKeywords[s] || emitterPkgs[s] {
 		return s + "_", true
 	}
 	return s, true
