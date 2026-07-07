@@ -3,7 +3,9 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -38,6 +40,17 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 	if name, info, ok := r.discriminantRead(disc); ok {
 		return r.lowerDiscriminantSwitch(name, info, caseBlock)
 	}
+	// A switch over a string compares by code unit, so it lowers to a Go switch
+	// on the UTF-8 view with each string-literal label spelled as a Go string.
+	// The two agree exactly when every label transcodes cleanly, which the label
+	// guard checks; the discriminant itself needs no purity guard because a Go
+	// switch evaluates its tag once. The string test rides condBranchType so a
+	// typeof discriminant and a ternary over strings, the assert._toString
+	// shape, count too: both lower to a BStr even where the checker's type on
+	// the node itself does not say string.
+	if _, kind, ok := r.condBranchType(disc); ok && kind == "string" {
+		return r.lowerStringSwitch(disc, caseBlock)
+	}
 	if !r.isNumber(disc) {
 		return nil, &NotYetLowerable{Reason: "a switch on a non-number discriminant is a later slice"}
 	}
@@ -57,6 +70,35 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 		return nil, err
 	}
 	return &ast.SwitchStmt{Tag: tag, Body: body}, nil
+}
+
+// lowerStringSwitch lowers a switch over a string discriminant to a Go switch on
+// the discriminant's UTF-8 view, disc.ToGoString(), with each case label spelled
+// as a Go string literal. Code-unit equality and Go string equality agree here
+// because a label that survives the guard transcodes to UTF-8 losslessly: only a
+// lone surrogate transcodes lossily, into U+FFFD, so a label carrying U+FFFD is
+// the one spelling a lossy discriminant could falsely match, and it hands back.
+func (r *Renderer) lowerStringSwitch(disc, caseBlock frontend.Node) (ast.Stmt, error) {
+	tag, err := r.lowerExpr(disc)
+	if err != nil {
+		return nil, err
+	}
+	clauses := r.prog.Children(caseBlock)
+	body, err := r.switchClauses(clauses, func(e frontend.Node) (ast.Expr, error) {
+		lit, ok := r.stringLiteralValue(e)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a string switch case label that is not a string literal is a later slice"}
+		}
+		if strings.ContainsRune(lit, utf8.RuneError) {
+			return nil, &NotYetLowerable{Reason: "a string switch case label carrying a replacement character cannot compare by code unit"}
+		}
+		return &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	goTag := &ast.CallExpr{Fun: &ast.SelectorExpr{X: tag, Sel: ident("ToGoString")}}
+	return &ast.SwitchStmt{Tag: goTag, Body: body}, nil
 }
 
 // lowerDiscriminantSwitch lowers a switch over an object union's discriminant to a
@@ -106,6 +148,12 @@ func (r *Renderer) hasDefaultClause(clauses []frontend.Node) bool {
 	return false
 }
 
+// fallthroughStmt builds the explicit fallthrough a case whose body runs off its
+// end takes, the Go spelling of JavaScript's implicit fall-through.
+func fallthroughStmt() ast.Stmt {
+	return &ast.BranchStmt{Tok: token.FALLTHROUGH}
+}
+
 // unreachablePanic builds the panic statement of a synthesized exhaustive-switch
 // default, the marker that a tag outside the union's arms reached code the checker
 // proved unreachable.
@@ -146,15 +194,13 @@ func (r *Renderer) switchClauses(clauses []frontend.Node, lowerLabel func(fronte
 		terminated := brokeOut || r.bodyTerminates(stmtNodes)
 
 		if isDefault {
-			// A default that runs off its end into a following clause is fall-through,
-			// which includes an empty default in the middle, so a non-terminated default
-			// that is not last hands back. A default cannot carry the labels of empty
-			// cases that precede it, so a fall-through from a case into default does too.
-			if !terminated && !isLast {
-				return nil, &NotYetLowerable{Reason: "a switch default that falls through into the next case is a later slice"}
-			}
+			// A default clause cannot carry the labels of empty cases that precede
+			// it, so those labels become their own Go case whose body is a single
+			// fallthrough: the label matches, transfers into the default body, and
+			// no label re-evaluates, exactly the JavaScript share.
 			if len(pending) > 0 {
-				return nil, &NotYetLowerable{Reason: "a switch case that falls through into default is a later slice"}
+				body.List = append(body.List, &ast.CaseClause{List: pending, Body: []ast.Stmt{fallthroughStmt()}})
+				pending = nil
 			}
 		} else {
 			// An empty case with no body of its own shares the next clause's body, so its
@@ -164,14 +210,19 @@ func (r *Renderer) switchClauses(clauses []frontend.Node, lowerLabel func(fronte
 				pending = append(pending, labels...)
 				continue
 			}
-			if len(stmtNodes) > 0 && !terminated && !isLast {
-				return nil, &NotYetLowerable{Reason: "a switch case that falls through into the next is a later slice"}
-			}
 		}
 
 		lowered, err := r.lowerStatements(stmtNodes)
 		if err != nil {
 			return nil, err
+		}
+		// A body that can run off its end into the following clause is genuine
+		// fall-through, which Go spells with an explicit trailing fallthrough:
+		// control enters the next clause's body without testing its label, the
+		// same transfer JavaScript makes. The last clause has nothing to fall
+		// into in either language, so it keeps its plain fall-out.
+		if !terminated && !isLast {
+			lowered = append(lowered, fallthroughStmt())
 		}
 		clauseOut := &ast.CaseClause{Body: lowered}
 		if !isDefault {

@@ -92,6 +92,14 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	r.unionLocals = r.unionLocalsOf(sig.Params, bodyStmts)
 	defer func() { r.unionLocals = prevUnion }()
 
+	// The dynamic-locals set rides the same scope: a parameter or local typed any
+	// binds a boxed value.Value, and a read of it the checker narrowed to one
+	// primitive unwraps through the matching accessor wherever in the body it
+	// sits.
+	prevDyn := r.dynLocals
+	r.dynLocals = r.dynLocalsOf(sig.Params, bodyStmts)
+	defer func() { r.dynLocals = prevDyn }()
+
 	body, err := r.blockOf(fn)
 	if err != nil {
 		return nil, err
