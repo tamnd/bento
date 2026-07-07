@@ -58,6 +58,13 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 			r.requireImport("math")
 			return &ast.CallExpr{Fun: sel("math", "Inf"), Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: "1"}}}, nil
 		}
+		// undefined is the ambient global whose only value is the absent one, so it
+		// lowers to the value.Undefined singleton. The type check keeps a user binding
+		// that shadows the name, which would not be typed exactly undefined, a local.
+		if r.isUndefinedLiteral(n) {
+			r.requireImport(valuePkg)
+			return sel("value", "Undefined"), nil
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
@@ -164,6 +171,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 
 	case frontend.NodeFalseKeyword:
 		return ident("false"), nil
+
+	case frontend.NodeNullKeyword:
+		// The null literal has no Go value of its own; its only representation is the
+		// boxed value.Null singleton, so it appears where a dynamic slot holds it. A
+		// typed null inside a union keeps its own representation and never reaches the
+		// bare literal here, since the union compares route the null before lowering.
+		r.requireImport(valuePkg)
+		return sel("value", "Null"), nil
 
 	case frontend.NodeBinaryExpression:
 		return r.binaryExpr(n)

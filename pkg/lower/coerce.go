@@ -136,6 +136,17 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 
+// isUndefinedLiteral reports whether n is the ambient undefined global, the one
+// identifier whose type is exactly undefined. It tells the literal apart from a
+// user binding that could be typed undefined only loosely, but the pair with the
+// null keyword is what the dynamic-boxing path needs: a value whose whole meaning
+// is the absent singleton, so boxing it is the identity.
+func (r *Renderer) isUndefinedLiteral(n frontend.Node) bool {
+	return n.Kind() == frontend.NodeIdentifier &&
+		r.prog.Text(n) == "undefined" &&
+		r.prog.TypeAt(n).Flags == frontend.TypeUndefined
+}
+
 // combineIsDynamic reports whether a binary operator on these operands produces a
 // boxed dynamic result, which is the case only for + with a dynamic operand: the
 // result kind is not known until runtime, so it goes through value.Add. When the
@@ -184,6 +195,12 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
 	case r.isBool(src):
 		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	case src.Kind() == frontend.NodeNullKeyword, r.isUndefinedLiteral(src):
+		// The null and undefined literals already lower to the value.Null and
+		// value.Undefined singletons, which are boxes, so boxing them into a dynamic
+		// slot is the identity. Gating on the literal node keeps a typed null or
+		// undefined inside a union, whose representation is not a bare box, out.
+		return expr, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
 	}
