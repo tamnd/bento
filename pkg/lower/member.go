@@ -45,6 +45,15 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Message")}}, nil
 			case "name":
 				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Name")}}, nil
+			case "constructor":
+				// A caught error's .constructor is the constructor value for its name, the
+				// same interned value the built-in constructor boxes to, so a comparison
+				// like thrown.constructor === TypeError holds by identity and a read of
+				// thrown.constructor.name answers the name. It is a boxed value.Value, the
+				// any the checker gives a property of a catch binding, so the compare and
+				// the name read downstream take the dynamic paths.
+				r.requireImport(valuePkg)
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Constructor")}}, nil
 			default:
 				return nil, &NotYetLowerable{Reason: "a caught error's ." + prop + " is a later slice"}
 			}
