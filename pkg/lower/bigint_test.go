@@ -33,8 +33,6 @@ func TestBigIntArithmeticEmitsBigMethods(t *testing.T) {
 		{"+", "new(big.Int).Add"},
 		{"-", "new(big.Int).Sub"},
 		{"*", "new(big.Int).Mul"},
-		{"/", "new(big.Int).Quo"},
-		{"%", "new(big.Int).Rem"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.op, func(t *testing.T) {
@@ -249,15 +247,17 @@ console.log(~a);
 	}
 }
 
-// TestBigIntPowShiftEmitHelpers pins that ** and the shifts lower to the value
-// helpers rather than bare big.Int methods, since each carries a throw path (a
-// negative exponent, the size cap) and the shifts the sign-of-count rule, and that
-// a program using one defers the uncaught reporter.
+// TestBigIntPowShiftEmitHelpers pins that /, %, ** and the shifts lower to the value
+// helpers rather than bare big.Int methods, since each carries a throw path (a zero
+// divisor, a negative exponent, the size cap) and the shifts the sign-of-count rule,
+// and that a program using one defers the uncaught reporter.
 func TestBigIntPowShiftEmitHelpers(t *testing.T) {
 	cases := []struct {
 		op   string
 		want string
 	}{
+		{"/", "value.BigIntDiv"},
+		{"%", "value.BigIntRem"},
 		{"**", "value.BigIntPow"},
 		{"<<", "value.BigIntLsh"},
 		{">>", "value.BigIntRsh"},

@@ -213,6 +213,27 @@ func BigIntPow(x, y *big.Int) *big.Int {
 	return new(big.Int).Exp(x, y, nil)
 }
 
+// BigIntDiv computes x / y on bigints, the quotient truncated toward zero that
+// BigInt division takes. A zero divisor throws the RangeError JavaScript raises
+// rather than letting big.Int.Quo panic, so the error is catchable in a try the way
+// the language means it: 1n / 0n throws, it does not crash the program.
+func BigIntDiv(x, y *big.Int) *big.Int {
+	if y.Sign() == 0 {
+		Throw(NewRangeError(FromGoString("Division by zero")))
+	}
+	return new(big.Int).Quo(x, y)
+}
+
+// BigIntRem computes x % y on bigints, the remainder that keeps the sign of the
+// dividend. A zero divisor throws the same RangeError division does, since the
+// remainder is undefined there and big.Int.Rem would otherwise panic.
+func BigIntRem(x, y *big.Int) *big.Int {
+	if y.Sign() == 0 {
+		Throw(NewRangeError(FromGoString("Division by zero")))
+	}
+	return new(big.Int).Rem(x, y)
+}
+
 // bigIntWidth reads the bit width the asIntN and asUintN statics take as their
 // first argument. The width is a number, and JavaScript runs it through ToIndex: a
 // fractional value truncates toward zero, NaN reads as 0, and a negative,
