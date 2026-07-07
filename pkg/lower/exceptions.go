@@ -30,6 +30,42 @@ var errorCtors = map[string]string{
 	"SyntaxError": "NewSyntaxError",
 }
 
+// errorCtorValueNames is the set of built-in error constructors that lower to a
+// value when named without new, the argument-and-comparison surface assert.throws
+// drives. It is broader than errorCtors because boxing a constructor and reading
+// its name work off the name alone, with no construction path, so it lists every
+// standard error constructor plus URIError, matching the value package's own set.
+var errorCtorValueNames = map[string]bool{
+	"Error":          true,
+	"TypeError":      true,
+	"RangeError":     true,
+	"SyntaxError":    true,
+	"ReferenceError": true,
+	"EvalError":      true,
+	"URIError":       true,
+	"AggregateError": true,
+}
+
+// errorConstructorRef reports the built-in error constructor an identifier names as
+// a value, and ok=false for anything else. It gates on the ambient-global test so a
+// user binding or class that shadows one of the names (class TypeError of one's own)
+// is never mistaken for the built-in and keeps its own lowering. This is what the
+// dynamic-boxing path checks to lower TypeError, passed as an argument or compared
+// for identity, to the interned constructor value.
+func (r *Renderer) errorConstructorRef(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodeIdentifier {
+		return "", false
+	}
+	name := r.prog.Text(n)
+	if !errorCtorValueNames[name] {
+		return "", false
+	}
+	if !r.isAmbientGlobal(n) {
+		return "", false
+	}
+	return name, true
+}
+
 // newExpr lowers a new expression. Only the built-in error constructors are
 // covered: new Error(message) and its TypeError and RangeError siblings lower to
 // the matching value constructor, taking a single string message or none. A
