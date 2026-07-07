@@ -147,6 +147,24 @@ func Sign(x float64) float64 {
 	return x
 }
 
+// Pow raises base to exponent, the ** operator and Math.pow. It is not math.Pow:
+// ECMAScript's Number::exponentiate returns NaN in two cases where Go's math.Pow
+// keeps the IEEE result of one. A NaN exponent is always NaN in JavaScript, but
+// math.Pow(1, NaN) is 1 because math.Pow special-cases a base of one for every
+// exponent. A base whose magnitude is one raised to an infinite exponent is NaN
+// in JavaScript, where math.Pow(-1, +Inf) and math.Pow(1, -Inf) are both 1. Every
+// other input agrees between the two, so those cases are handled here and the rest
+// defers to math.Pow.
+func Pow(base, exp float64) float64 {
+	if math.IsNaN(exp) {
+		return math.NaN()
+	}
+	if (base == 1 || base == -1) && math.IsInf(exp, 0) {
+		return math.NaN()
+	}
+	return math.Pow(base, exp)
+}
+
 // NumberSameValue reports whether two numbers are the same value under the
 // SameValue algorithm, the number case of Object.is. It differs from the strict
 // equality Go == gives at exactly the two points JavaScript's === also differs:

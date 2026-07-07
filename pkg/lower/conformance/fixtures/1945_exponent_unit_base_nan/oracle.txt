@@ -1,0 +1,10 @@
+== stdout:
+1024
+3
+NaN
+NaN
+NaN
+NaN
+NaN
+== exit:
+0

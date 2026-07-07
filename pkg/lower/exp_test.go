@@ -5,24 +5,25 @@ import (
 	"testing"
 )
 
-// TestExponentInlinesMathPow pins that ** on two numbers lowers to math.Pow, the
-// same Go function Math.pow lowers to, since a ** b is defined as Math.pow(a, b)
-// and the two must not drift.
+// TestExponentInlinesMathPow pins that ** on two numbers lowers to value.Pow, the
+// same helper Math.pow lowers to, since a ** b is defined as Math.pow(a, b) and the
+// two must not drift. value.Pow wraps math.Pow with the JavaScript NaN result at a
+// unit base with an infinite or NaN exponent.
 func TestExponentInlinesMathPow(t *testing.T) {
 	src := "function f(a: number, b: number): number { return a ** b; }\nconsole.log(f(2, 10));\n"
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "math.Pow(a, b)") {
-		t.Errorf("** did not lower to math.Pow:\n%s", source)
+	if !strings.Contains(source, "value.Pow(a, b)") {
+		t.Errorf("** did not lower to value.Pow:\n%s", source)
 	}
 }
 
 // TestExponentCompoundAssign pins that the compound form a **= b desugars through
-// the same path, so it assigns math.Pow(a, b) back to the operand.
+// the same path, so it assigns value.Pow(a, b) back to the operand.
 func TestExponentCompoundAssign(t *testing.T) {
 	src := "function f(a: number, b: number): number { let x = a; x **= b; return x; }\nconsole.log(f(3, 4));\n"
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "math.Pow(x, b)") {
-		t.Errorf("**= did not lower to a math.Pow assignment:\n%s", source)
+	if !strings.Contains(source, "value.Pow(x, b)") {
+		t.Errorf("**= did not lower to a value.Pow assignment:\n%s", source)
 	}
 }
 
