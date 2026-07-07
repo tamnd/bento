@@ -2142,10 +2142,20 @@ func isFloat64Ident(typ ast.Expr) bool {
 // floatLiteral retypes a numeric initializer so Go's := infers float64 from it. A
 // literal already written as a float (it carries a point or an exponent) passes
 // through, and a plain decimal integer literal gains a trailing .0 so 0 becomes 0.0
-// and 5 becomes 5.0. A hex, binary, or octal integer literal, or anything that is not
-// a bare literal, returns false: those have no short float spelling here, so the
-// caller keeps the typed var form rather than change the value.
+// and 5 becomes 5.0. A negative literal arrives as a unary minus wrapping the
+// literal (-5 is SUB over 5), so the sign is peeled off, the inner literal retyped,
+// and the minus put back, which turns -5 into -5.0 rather than a Go int. A hex,
+// binary, or octal integer literal, or anything that is not a bare literal, returns
+// false: those have no short float spelling here, so the caller keeps the typed var
+// form rather than change the value.
 func floatLiteral(init ast.Expr) (ast.Expr, bool) {
+	if neg, ok := init.(*ast.UnaryExpr); ok && neg.Op == token.SUB {
+		inner, ok := floatLiteral(neg.X)
+		if !ok {
+			return nil, false
+		}
+		return &ast.UnaryExpr{Op: token.SUB, X: inner}, true
+	}
 	lit, ok := init.(*ast.BasicLit)
 	if !ok {
 		return nil, false
