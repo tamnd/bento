@@ -71,17 +71,45 @@ console.log(flag);
 	}
 }
 
-// TestOrAssignNonBooleanHandsBack pins that ||= on a non-boolean target, which
-// needs JavaScript truthiness, hands back until truthiness lands.
-func TestOrAssignNonBooleanHandsBack(t *testing.T) {
+// TestOrAssignNumberGuard pins that ||= on a number target lowers through the
+// number ToBoolean, so the guard is the negated non-zero-and-not-NaN test rather
+// than a handback.
+func TestOrAssignNumberGuard(t *testing.T) {
 	src := `
 let n = 0;
 n ||= 5;
 console.log(n);
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "truthiness") {
-		t.Fatalf("expected a truthiness handback, got: %q", reason)
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "if !(n != 0 && n == n) {") {
+		t.Fatalf("expected the number truthiness guard, got:\n%s", out)
+	}
+}
+
+// TestOrAssignStringGuard pins that ||= on a string target guards on the
+// code-unit length, the empty-string falsy test negated.
+func TestOrAssignStringGuard(t *testing.T) {
+	src := `
+let s = "";
+s ||= "x";
+console.log(s);
+`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "if !(s.Length() > 0) {") {
+		t.Fatalf("expected the string truthiness guard, got:\n%s", out)
+	}
+}
+
+// TestLogicalAssignDynamicGuard pins that ||= and &&= on a dynamic target guard
+// on value.ToBoolean, the whole falsy set behind one call, negated for ||=.
+func TestLogicalAssignDynamicGuard(t *testing.T) {
+	or := renderProgram(t, "function f(x: any): void { x ||= 5; }\nf(0);\n")
+	if !strings.Contains(or, "if !value.ToBoolean(x) {") {
+		t.Fatalf("expected a negated ToBoolean guard for ||=, got:\n%s", or)
+	}
+	and := renderProgram(t, "function g(x: any): void { x &&= 5; }\ng(1);\n")
+	if !strings.Contains(and, "if value.ToBoolean(x) {") {
+		t.Fatalf("expected a ToBoolean guard for &&=, got:\n%s", and)
 	}
 }
 
@@ -133,5 +161,36 @@ console.log(d);
 	want := "true\ntrue\nfalse\nfalse\n"
 	if got != want {
 		t.Fatalf("boolean logical-assign run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestNonBooleanLogicalAssignRuns builds and runs ||= and &&= on number, string,
+// and dynamic targets and checks the results against the JavaScript answers: a
+// zero and an empty string are falsy so ||= fills them, a non-zero and a
+// non-empty string keep their value, and a dynamic target reads the same falsy
+// set at runtime.
+func TestNonBooleanLogicalAssignRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+let n = 0;
+n ||= 5;
+console.log(n);
+let m = 3;
+m ||= 9;
+console.log(m);
+let s = "";
+s ||= "filled";
+console.log(s);
+let t2 = "set";
+t2 &&= "changed";
+console.log(t2);
+function d(x: any): number { x ||= 7; return x; }
+console.log(d(0));
+console.log(d(2));
+`
+	got := runProgramGo(t, src)
+	want := "5\n3\nfilled\nchanged\n7\n2\n"
+	if got != want {
+		t.Fatalf("non-boolean logical-assign run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
