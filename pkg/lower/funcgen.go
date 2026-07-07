@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -399,6 +400,81 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 	return &ast.BlockStmt{List: r.hoistStrBuilders(stmts)}, nil
 }
 
+// closureParamFields lowers the parameters of an arrow or function expression to
+// Go fields. Both forms share the shape: one plain identifier per parameter, its
+// type folded into the checker's answer for that identifier, so a bare x in
+// xs.map(x => ...) is typed number without an annotation. A rest element or a
+// binding pattern (whose first child is not a lone identifier), and a default
+// value (an extra child past the annotation), each stay a later slice, named by
+// noun so the reason reads for the form the caller lowered. A named function
+// expression's own name is a NodeIdentifier child, not a NodeParameter, so it is
+// skipped here and ruled out separately by functionExpr.
+func (r *Renderer) closureParamFields(n frontend.Node, noun string) ([]*ast.Field, error) {
+	kids := r.prog.Children(n)
+	fields := make([]*ast.Field, 0, len(kids))
+	for _, k := range kids {
+		if k.Kind() != frontend.NodeParameter {
+			continue
+		}
+		pkids := r.prog.Children(k)
+		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: noun + " parameter that is not a plain identifier is a later slice"}
+		}
+		for _, extra := range pkids[1:] {
+			if extra.Kind() != frontend.NodeUnknown {
+				return nil, &NotYetLowerable{Reason: noun + " parameter with a default value is a later slice"}
+			}
+		}
+		name, ok := localName(r.prog.Text(pkids[0]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: noun + " parameter is not a Go identifier"}
+		}
+		ptype, err := r.typeExpr(r.prog.TypeAt(pkids[0]))
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
+	}
+	return fields, nil
+}
+
+// functionExpr lowers a function expression used as a value, the function(){}
+// form the test262 assert prelude assigns to a const and to its members. A
+// function expression always has a block body, which is the same closure a
+// block-body arrow lowers to, so it routes through the same generator once the
+// forms an arrow does not share are ruled out. An async or generator function is
+// a coroutine, a body that reads this or arguments needs a receiver or the arity
+// object neither a Go closure carries, and a named function expression needs the
+// two-step a self-reference takes; each hands back.
+func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
+	text := strings.TrimSpace(r.prog.Text(n))
+	if firstWord(text) == "async" {
+		return nil, &NotYetLowerable{Reason: "an async function expression is a coroutine, a later slice"}
+	}
+	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "function")), "*") {
+		return nil, &NotYetLowerable{Reason: "a generator function expression is a coroutine, a later slice"}
+	}
+	// A named function expression carries its own name as a NodeIdentifier child,
+	// which a recursive body reads before the binding exists; the self-reference
+	// two-step that names is a later slice.
+	for _, k := range r.prog.Children(n) {
+		if k.Kind() == frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "a named function expression needs the self-reference two-step, a later slice"}
+		}
+	}
+	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
+		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
+	}
+	if subtreeHasIdent(r.prog, n, "arguments") {
+		return nil, &NotYetLowerable{Reason: "a function expression that reads arguments needs the arity object, a later slice"}
+	}
+	fields, err := r.closureParamFields(n, "function")
+	if err != nil {
+		return nil, err
+	}
+	return r.blockBodyArrow(n, fields)
+}
+
 // arrowFunc lowers an arrow function to a Go function literal. Both a concise
 // expression body, the shape a map or filter callback almost always takes, and a
 // block body, which runs the statement lowering inside the literal, are covered.
@@ -415,36 +491,9 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "arrow function did not expose parameters and a body"}
 	}
 	body := kids[len(kids)-1]
-	fields := make([]*ast.Field, 0, len(kids))
-	for _, k := range kids[:len(kids)-1] {
-		if k.Kind() != frontend.NodeParameter {
-			continue
-		}
-		pkids := r.prog.Children(k)
-		// A bare parameter is a lone identifier; an annotated one, (n: number),
-		// carries the type node as a second child. The type is already folded into
-		// the checker's answer for the identifier, so we read the name off the first
-		// child and let the annotation ride along. Anything whose first child is not
-		// the identifier is a rest element or a binding pattern, and any extra child
-		// past the annotation is a default value that would need call-site
-		// defaulting; both stay a later slice.
-		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
-			return nil, &NotYetLowerable{Reason: "arrow parameter that is not a plain identifier is a later slice"}
-		}
-		for _, extra := range pkids[1:] {
-			if extra.Kind() != frontend.NodeUnknown {
-				return nil, &NotYetLowerable{Reason: "arrow parameter with a default value is a later slice"}
-			}
-		}
-		name, ok := localName(r.prog.Text(pkids[0]))
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "arrow parameter is not a Go identifier"}
-		}
-		ptype, err := r.typeExpr(r.prog.TypeAt(pkids[0]))
-		if err != nil {
-			return nil, err
-		}
-		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
+	fields, err := r.closureParamFields(n, "arrow")
+	if err != nil {
+		return nil, err
 	}
 	if body.Kind() == frontend.NodeBlock {
 		return r.blockBodyArrow(n, fields)
