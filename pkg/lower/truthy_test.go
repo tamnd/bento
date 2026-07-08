@@ -68,11 +68,22 @@ func TestTruthyWhileCondition(t *testing.T) {
 	}
 }
 
-// TestTruthyObjectHandsBack pins the boundary: an object in boolean position has a
-// falsy rule this slice does not model, so it hands the unit back rather than guess
-// one. renderProgramHandBack asserts the whole program falls back to the engine.
-func TestTruthyObjectHandsBack(t *testing.T) {
+// TestTruthyObjectCollapses pins that an object in boolean position collapses to the
+// Go constant true, since an object has no falsy member: the checker proves the type
+// carries no null or undefined, so the condition can only be truthy.
+func TestTruthyObjectCollapses(t *testing.T) {
 	src := "function f(o: { x: number }): number { if (o) { return 1; } return 0; }\nconsole.log(f({ x: 1 }));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if true {") {
+		t.Errorf("object condition did not collapse to a constant:\n%s", source)
+	}
+}
+
+// TestTruthyUnionHandsBack pins the remaining boundary: a union in boolean position
+// mixes types with different falsy rules, which this slice does not model, so it
+// hands the unit back rather than guess one.
+func TestTruthyUnionHandsBack(t *testing.T) {
+	src := "function f(x: number | string): number { if (x) { return 1; } return 0; }\nconsole.log(f(1));\n"
 	renderProgramHandBack(t, src)
 }
 

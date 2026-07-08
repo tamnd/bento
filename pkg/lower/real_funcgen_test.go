@@ -336,9 +336,9 @@ func TestRenderFuncVoidReturn(t *testing.T) {
 // NotYetLowerable rather than wrong or incomplete Go.
 func TestRenderFuncHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
-		// a truthy number or string condition lowers now, but an object in boolean
-		// position has a falsy rule this slice does not model, so it hands back.
-		{"truthyObject", "export function t(o: { x: number }): number { if (o) { return 1; } return 0; }"},
+		// a truthy number, string, or object condition lowers now, but a union in
+		// boolean position mixes types with different falsy rules, so it hands back.
+		{"truthyUnion", "export function t(x: number | string): number { if (x) { return 1; } return 0; }"},
 		// a ternary whose branches are different primitives is a union value, which
 		// needs the tagged union; a same-primitive ternary does lower.
 		{"ternaryMixed", "export function m(c: boolean, n: number, s: string): number { const x = c ? n : s; return n; }"},
