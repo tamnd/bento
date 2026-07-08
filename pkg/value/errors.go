@@ -3,6 +3,7 @@ package value
 import (
 	"errors"
 	"os"
+	"unsafe"
 )
 
 // This file is the value-model side of thrown JavaScript errors. A throw in the
@@ -50,6 +51,12 @@ type Error struct {
 	// which has no Go error behind it, and a nil cause is simply not a match for
 	// any target, so Is and As stay false rather than special-case the absence.
 	cause error
+	// boxed is the dynamic-object view of the error, built once by ToValue and
+	// reused after, so a caught error passed into the dynamic world keeps a stable
+	// object identity: e === e holds because both boxings return the same *Object
+	// pointer. It is nil until the first ToValue, since an error that never leaves
+	// the typed paths (a catch that only reads .name or rethrows) needs no object.
+	boxed *Object
 }
 
 // Name reports the error's constructor name as a bento string, the lowering of
@@ -91,6 +98,27 @@ func (e *Error) ToBStr() BStr {
 		return e.name
 	}
 	return e.name.ConcatN(FromGoString(": "), e.message)
+}
+
+// ToValue boxes the error as a dynamic object value, the form a caught error
+// takes when it flows into the dynamic world rather than through a typed read: it
+// is passed to a helper that takes any, compared for identity, or tested for
+// truthiness. The object carries the two own properties every error exposes, name
+// and message, so a dynamic read of either resolves through the boxed object's Get
+// the way JavaScript's own property lookup does. The object is built once and kept
+// on the error, so two boxings return the same pointer and identity holds: a caught
+// error stashed and compared to itself is === true, matching an object's reference
+// equality. A dynamic .constructor read on the boxed form is a later slice; the
+// direct thrown.constructor read stays on its own typed path.
+func (e *Error) ToValue() Value {
+	if e.boxed == nil {
+		e.boxed = &Object{
+			kind: KindObject,
+			keys: []BStr{FromGoString("name"), FromGoString("message")},
+			vals: []Value{StringValue(e.name), StringValue(e.message)},
+		}
+	}
+	return Value{kind: KindObject, ref: unsafe.Pointer(e.boxed)}
 }
 
 // IsA reports whether the error is an instance of the named built-in error
