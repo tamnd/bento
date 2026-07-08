@@ -170,10 +170,24 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	r.dynLocals = r.dynLocalsOf(nil, mainBody)
 	r.bigOwned = r.bigOwnedLocalsOf(mainBody)
 	r.strBuilders = nil
-	stmts, err := r.lowerStatements(mainBody)
+	// A var written in a nested block of the module body and read outside it hoists
+	// to a package-visible top-of-main declaration. A hoisted binding reads at one Go
+	// type, so like a module-hoisted one it is kept off the int32 and int64 tiers,
+	// which are reserved for a loop-local counter.
+	hoistDecls, restoreHoist, err := r.enterVarHoistScope(mainBody)
 	if err != nil {
 		return Program{}, err
 	}
+	for name := range r.hoistedVars {
+		delete(r.int32Locals, name)
+		delete(r.int64Locals, name)
+	}
+	stmts, err := r.lowerStatements(mainBody)
+	restoreHoist()
+	if err != nil {
+		return Program{}, err
+	}
+	stmts = append(hoistDecls, stmts...)
 	stmts = r.hoistStrBuilders(stmts)
 
 	// A program that can raise a thrown value defers the uncaught-error reporter as

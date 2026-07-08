@@ -1,0 +1,1 @@
+feature = "var-hoist-out-of-block"
