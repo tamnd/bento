@@ -1336,8 +1336,53 @@ func (r *Renderer) binaryOp(opText string, left, right frontend.Node) (token.Tok
 		}
 		return goOp, nil
 	default:
+		if goOp, ok := r.referenceIdentityOp(opText, left, right); ok {
+			return goOp, nil
+		}
 		return token.ILLEGAL, &NotYetLowerable{Reason: "binary operator on mixed or non-primitive operands is a later slice"}
 	}
+}
+
+// referenceIdentityOp recognizes an equality between two operands of the same
+// non-primitive reference type, an object, array, or class instance, and maps it
+// to the matching Go pointer comparison. JavaScript === and !== on objects test
+// reference identity, and == and != on two objects reduce to the same identity
+// since neither operand is a primitive to coerce, so all four lower to Go's == or
+// != on the two pointers, which compares the addresses the bindings hold, exactly
+// the object identity the language means. Each such value lowers to a Go pointer
+// and identity is preserved across its lifetime, so address equality is object
+// equality. It fires only when both operands render to the same pointer type, so
+// the Go comparison type-checks and stays a comparison of like references; the
+// pointer requirement is what marks a by-reference value, and it excludes the Go
+// func types that == does not admit. A mixed-type or object-to-primitive compare
+// is not this case and keeps its hand-back.
+func (r *Renderer) referenceIdentityOp(opText string, left, right frontend.Node) (token.Token, bool) {
+	var goOp token.Token
+	switch opText {
+	case "===", "==":
+		goOp = token.EQL
+	case "!==", "!=":
+		goOp = token.NEQ
+	default:
+		return token.ILLEGAL, false
+	}
+	lt := r.prog.TypeAt(left)
+	rt := r.prog.TypeAt(right)
+	if lt.Flags&frontend.TypeObject == 0 || rt.Flags&frontend.TypeObject == 0 {
+		return token.ILLEGAL, false
+	}
+	ls, err := r.RenderType(lt)
+	if err != nil {
+		return token.ILLEGAL, false
+	}
+	rs, err := r.RenderType(rt)
+	if err != nil {
+		return token.ILLEGAL, false
+	}
+	if ls != rs || !strings.HasPrefix(ls, "*") {
+		return token.ILLEGAL, false
+	}
+	return goOp, true
 }
 
 // numericBinaryOp maps a TypeScript operator on number operands to its Go token.
