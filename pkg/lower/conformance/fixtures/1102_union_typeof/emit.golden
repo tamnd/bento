@@ -30,6 +30,17 @@ func NumOrStrOrBoolOfStr(v value.BStr) NumOrStrOrBool {
 func NumOrStrOrBoolOfBool(v bool) NumOrStrOrBool {
 	return NumOrStrOrBool{tag: NumOrStrOrBoolBool, bl: v}
 }
+func (u NumOrStrOrBool) JSONArm() any {
+	switch u.tag {
+	case NumOrStrOrBoolNum:
+		return u.num
+	case NumOrStrOrBoolStr:
+		return u.str
+	case NumOrStrOrBoolBool:
+		return u.bl
+	}
+	return nil
+}
 func Describe(v NumOrStrOrBool) value.BStr {
 	if v.tag == NumOrStrOrBoolStr {
 		return value.Concat(value.FromGoString("string:"), v.str)

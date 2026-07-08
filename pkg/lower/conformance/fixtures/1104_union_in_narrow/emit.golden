@@ -33,6 +33,15 @@ func CircleOrSquareOfCircle(v *ObjKindRadius) CircleOrSquare {
 func CircleOrSquareOfSquare(v *ObjKindSide) CircleOrSquare {
 	return CircleOrSquare{tag: CircleOrSquareSquare, square: v}
 }
+func (u CircleOrSquare) JSONArm() any {
+	switch u.tag {
+	case CircleOrSquareCircle:
+		return u.circle
+	case CircleOrSquareSquare:
+		return u.square
+	}
+	return nil
+}
 func Area(s CircleOrSquare) float64 {
 	if s.tag == CircleOrSquareCircle {
 		return 3 * s.circle.Radius * s.circle.Radius
