@@ -80,3 +80,44 @@ func TestMissingReadFlowsThroughArithmetic(t *testing.T) {
 		t.Fatalf("expected the missing read to route through the boxed value path, got:\n%s", out)
 	}
 }
+
+// TestAbsentElementReadLowers pins that o["k"] with a string-literal key the
+// fixed shape does not declare folds the same way the dotted read does. The
+// checker reports it as an index error (7053) rather than a missing property, so
+// the front door tolerates that code too and the read lowers to undefined instead
+// of emitting a struct-field selector the shape has no field for.
+func TestAbsentElementReadLowers(t *testing.T) {
+	src := "const o = { a: 1 };\nconsole.log(o[\"b\"]);\n"
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("absent element read should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "value.MissingProperty") {
+		t.Fatalf("expected the absent element read to fold to value.MissingProperty, got:\n%s", out)
+	}
+}
+
+// TestPresentElementReadUnchanged pins that a declared property read through the
+// bracket spelling still lowers to the Go struct field, so the presence guard did
+// not disturb o["a"].
+func TestPresentElementReadUnchanged(t *testing.T) {
+	src := "const o = { a: 1 };\nconsole.log(o[\"a\"]);\n"
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("present element read should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "o.A") {
+		t.Fatalf("expected the declared property to read the struct field, got:\n%s", out)
+	}
+}
+
+// TestComputedElementReadHandsBack pins that o[k] with a computed key on a fixed
+// shape hands back rather than lowering: the shape cannot prove that key absent,
+// so folding to undefined would be wrong and emitting a selector would not
+// compile. It waits on the struct-to-value boxer slice.
+func TestComputedElementReadHandsBack(t *testing.T) {
+	src := "const o = { a: 1 };\nconst k = \"a\";\nconsole.log(o[k]);\n"
+	if _, err := compileSource(t, src); err == nil {
+		t.Fatalf("computed element read on a fixed shape should hand back, but it lowered")
+	}
+}

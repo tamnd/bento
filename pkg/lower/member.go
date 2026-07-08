@@ -257,14 +257,29 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 // It mirrors the condition in propertyAccess exactly, so the two never disagree
 // on which reads are boxes.
 func (r *Renderer) missingPropertyRead(n frontend.Node) bool {
-	if n.Kind() != frontend.NodePropertyAccessExpression {
-		return false
-	}
 	kids := r.prog.Children(n)
 	if len(kids) != 2 {
 		return false
 	}
-	obj, nameNode := kids[0], kids[1]
+	obj := kids[0]
+	// The read names a property either dotted (o.k) or bracketed with a string
+	// literal (o["k"]); both lower to value.MissingProperty when the key is absent,
+	// so both are recognized here. A bracket read with a computed key is not this
+	// case: the shape cannot prove that key absent at compile time, so it hands back
+	// rather than fold.
+	var name string
+	switch n.Kind() {
+	case frontend.NodePropertyAccessExpression:
+		name = r.prog.Text(kids[1])
+	case frontend.NodeElementAccessExpression:
+		key, ok := r.stringLiteralKey(kids[1])
+		if !ok {
+			return false
+		}
+		name = key
+	default:
+		return false
+	}
 	objType := r.prog.TypeAt(obj)
 	if objType.Flags&frontend.TypeObject == 0 {
 		return false
@@ -272,7 +287,10 @@ func (r *Renderer) missingPropertyRead(n frontend.Node) bool {
 	if _, isArray := r.prog.ElementType(objType); isArray {
 		return false
 	}
-	_, present := r.shapeProp(objType, r.prog.Text(nameNode))
+	if r.isTypedArray(obj) {
+		return false
+	}
+	_, present := r.shapeProp(objType, name)
 	return !present
 }
 
@@ -449,6 +467,21 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {
+				// o["k"] with a key the fixed shape does not declare is the bracket
+				// spelling of the absent dotted read o.k, so it folds the same way: to
+				// value.MissingProperty over the lowered receiver, which evaluates the
+				// receiver for its effect and yields undefined (member.go, the dotted
+				// case). Guarding presence here is what keeps the selector path from
+				// emitting o.K for a field the struct does not carry once the front door
+				// tolerates the checker's index diagnostic for such a read.
+				if _, present := r.shapeProp(objType, key); !present {
+					recv, err := r.lowerExpr(obj)
+					if err != nil {
+						return nil, err
+					}
+					r.requireImport(valuePkg)
+					return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, nil
+				}
 				field, ok := exportedField(key)
 				if !ok {
 					return nil, &NotYetLowerable{Reason: "element access key is not a Go identifier"}
