@@ -91,6 +91,12 @@ func encodeJSON(b *strings.Builder, v any) {
 			if i > 0 {
 				b.WriteByte(',')
 			}
+			if jsonUndefinedGo(e) {
+				// A function element has no JSON form; an array renders such an element
+				// as null the way SerializeJSONProperty does, not by dropping it.
+				b.WriteString("null")
+				continue
+			}
 			encodeJSON(b, e)
 		}
 		b.WriteByte(']')
@@ -103,8 +109,27 @@ func encodeJSON(b *strings.Builder, v any) {
 		// walk serializes that member as the value the union holds.
 		encodeJSON(b, x.JSONArm())
 	default:
+		if jsonUndefinedGo(v) {
+			// A top-level function has no JSON form, so JSON.stringify(function(){})
+			// is undefined, which the typed call site models as the string being
+			// absent; nothing is written and no reflection is attempted, so a func
+			// value does not reach NumField and panic.
+			return
+		}
 		encodeJSONObject(b, reflect.ValueOf(v))
 	}
+}
+
+// jsonUndefinedGo reports whether a statically typed Go value serializes as
+// JSON-undefined, the counterpart to jsonUndefinedValue on the boxed side. The AOT
+// path builds a function value as a Go func, which has no JSON form: an array folds
+// it to null, an object omits its key, and a top-level function stringifies to
+// undefined. A nil interface has no value to serialize and is treated the same.
+func jsonUndefinedGo(v any) bool {
+	if v == nil {
+		return true
+	}
+	return reflect.ValueOf(v).Kind() == reflect.Func
 }
 
 // encodeBoxedJSON writes a boxed dynamic Value as JSON text, the JSON.stringify
@@ -216,6 +241,12 @@ func encodeJSONFields(b *strings.Builder, rv reflect.Value, first *bool) {
 			encodeJSONFields(b, rv.Field(i), first)
 			continue
 		}
+		val := rv.Field(i).Interface()
+		if jsonUndefinedGo(val) {
+			// A function-valued property has no JSON form, so the object omits the
+			// key rather than reflecting the func and faulting on NumField.
+			continue
+		}
 		key := f.Tag.Get("json")
 		if key == "" {
 			key = f.Name
@@ -226,7 +257,7 @@ func encodeJSONFields(b *strings.Builder, rv reflect.Value, first *bool) {
 		*first = false
 		encodeJSONString(b, FromGoString(key))
 		b.WriteByte(':')
-		encodeJSON(b, rv.Field(i).Interface())
+		encodeJSON(b, val)
 	}
 }
 
