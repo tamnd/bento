@@ -386,19 +386,6 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 			fresh := &ast.CallExpr{Fun: ident("new"), Args: []ast.Expr{sel("big", "Int")}}
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: fresh, Sel: ident("Neg")}, Args: []ast.Expr{x}}, nil
 		}
-		if r.isDynamic(operand) {
-			// A dynamic operand coerces through ToNumber and the minus applies to the
-			// resulting float64, so -x on an any-typed value is -value.ToNumber(x),
-			// the same coercion the dynamic arithmetic operators run.
-			num, err := r.operandToNumber(operand)
-			if err != nil {
-				return nil, err
-			}
-			return &ast.UnaryExpr{Op: token.SUB, X: num}, nil
-		}
-		if !r.isNumber(operand) {
-			return nil, &NotYetLowerable{Reason: "unary minus on a non-number is a later slice"}
-		}
 		// -0 is the negative-zero double, but a Go constant has no signed zero:
 		// -0 and -0.0 both fold to +0, so the literal form goes through
 		// math.Copysign, the Go spelling of the value. Negating a variable is
@@ -415,22 +402,21 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 				}, nil
 			}
 		}
-		x, err := r.lowerExpr(operand)
+		// Every other operand coerces to its float64 the way ToNumber does, and the
+		// minus applies to the result: -x on a number is Go negation, on a string
+		// value.StringToNumber then negation, on a dynamic value -value.ToNumber(x).
+		// A non-primitive hands back through the shared coercion.
+		num, err := r.unaryOperandToNumber(operand)
 		if err != nil {
 			return nil, err
 		}
-		return &ast.UnaryExpr{Op: token.SUB, X: x}, nil
+		return &ast.UnaryExpr{Op: token.SUB, X: num}, nil
 	case "+":
-		// Unary plus is ToNumber and nothing else, so a dynamic operand lowers to
-		// value.ToNumber(x): a bigint reaching it throws the same TypeError the
-		// language raises, and every other kind coerces to its float64.
-		if r.isDynamic(operand) {
-			return r.operandToNumber(operand)
-		}
-		if !r.isNumber(operand) {
-			return nil, &NotYetLowerable{Reason: "unary plus on a non-number is a later slice"}
-		}
-		return r.lowerExpr(operand)
+		// Unary plus is ToNumber and nothing else: a number passes through, a string
+		// or boolean coerces through its numeric conversion, and a dynamic value runs
+		// value.ToNumber. A bigint reaching the dynamic path throws the same TypeError
+		// the language raises, and a non-primitive hands back through the coercion.
+		return r.unaryOperandToNumber(operand)
 	case "!":
 		// ! negates the operand's truthiness, so a non-boolean rides the same
 		// ToBoolean lowerCondition uses and the not wraps the resulting bool: !s is
@@ -456,12 +442,10 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		// Bitwise NOT is the unary member of the bitwise family: it coerces its
 		// operand to a 32-bit integer, complements it, and returns the result as a
 		// number, so it lowers to float64(^value.ToInt32(x)), the same coercion the
-		// binary bitwise operators use, not a Go ^ on the float64. A dynamic operand
-		// coerces through ToNumber first, the float64 that ToInt32 then narrows.
-		if !r.isNumber(operand) && !r.isDynamic(operand) {
-			return nil, &NotYetLowerable{Reason: "bitwise not on a non-number is a later slice"}
-		}
-		x, err := r.operandToNumber(operand)
+		// binary bitwise operators use, not a Go ^ on the float64. A string or boolean
+		// coerces through its numeric conversion, a dynamic operand through ToNumber,
+		// the float64 that ToInt32 then narrows; a non-primitive hands back.
+		x, err := r.unaryOperandToNumber(operand)
 		if err != nil {
 			return nil, err
 		}
@@ -1226,6 +1210,18 @@ func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left,
 	if err != nil {
 		return nil, err
 	}
+	return r.bitwiseFromFloat(goOp, shift, unsignedLeft, l, rr), nil
+}
+
+// bitwiseFromFloat builds a bitwise result from two operands already lowered to
+// float64: each is coerced with value.ToInt32 (or ToUint32 for the left operand of
+// >>>), the Go bitwise operator runs on the integers, and the result casts back to
+// float64 because a JavaScript bitwise result is a number. A shift masks its count
+// to the low five bits, the ECMAScript rule that a shift by 32 is a shift by 0. This
+// is the shared tail of the static-number bitwise path and the dynamic-operand one:
+// the first reaches it with a number expression, the second with a ToNumber-coerced
+// dynamic value, so both spell the same ToInt32-based form.
+func (r *Renderer) bitwiseFromFloat(goOp token.Token, shift, unsignedLeft bool, l, rr ast.Expr) ast.Expr {
 	r.requireImport(valuePkg)
 	leftConv := "ToInt32"
 	if unsignedLeft {
@@ -1244,7 +1240,7 @@ func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left,
 		rx := &ast.CallExpr{Fun: sel("value", "ToInt32"), Args: []ast.Expr{rr}}
 		inner = &ast.BinaryExpr{X: lx, Op: goOp, Y: rx}
 	}
-	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}, nil
+	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}
 }
 
 // stringPlusOperands flattens a left-leaning chain of string + into its operands
@@ -1313,7 +1309,19 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
 	default:
-		return nil, &NotYetLowerable{Reason: "string concatenation with a non-primitive operand is a later slice"}
+		// A non-primitive operand coerces through the same value.ToString protocol
+		// the dynamic case uses: ToPrimitive on the object or array, then ToString on
+		// the result, so { a: 1 } becomes "[object Object]" and [1, 2] becomes "1,2"
+		// the way the engine joins an array. It must box into a dynamic value first,
+		// which an object or array literal does through its live-value constructor; a
+		// non-primitive whose only form is a Go struct or slice has no box yet and
+		// hands back through boxOperand for a later slice.
+		boxed, err := r.boxOperand(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}, nil
 	}
 }
 

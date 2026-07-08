@@ -80,6 +80,37 @@ func (r *Renderer) dynamicBinary(opText string, left, right frontend.Node) (ast.
 		}
 		ops := map[string]token.Token{"-": token.SUB, "*": token.MUL, "/": token.QUO}
 		return &ast.BinaryExpr{X: l, Op: ops[opText], Y: rr}, true, nil
+	case "**":
+		// Exponentiation over a dynamic operand coerces each side with ToNumber and
+		// runs value.Pow, the same helper the static number ** lowers to, so a dynamic
+		// base or exponent raises to a power with the JavaScript edge cases (a NaN
+		// exponent, base 1 to an infinite power) kept identical.
+		l, err := r.operandToNumber(left)
+		if err != nil {
+			return nil, false, err
+		}
+		rr, err := r.operandToNumber(right)
+		if err != nil {
+			return nil, false, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Pow"), Args: []ast.Expr{l, rr}}, true, nil
+	case "&", "|", "^", "<<", ">>", ">>>":
+		// The bitwise operators over a dynamic operand coerce each side with ToNumber
+		// and then run the same ToInt32-based construction the static number path uses:
+		// each operand narrows to a 32-bit integer, the Go operator runs, and the
+		// result casts back to float64. A shift masks its count to five bits. This is
+		// the shared bitwiseFromFloat tail reached with two ToNumber-coerced values.
+		goOp, shift, unsignedLeft, _ := bitwiseOp(opText)
+		l, err := r.operandToNumber(left)
+		if err != nil {
+			return nil, false, err
+		}
+		rr, err := r.operandToNumber(right)
+		if err != nil {
+			return nil, false, err
+		}
+		return r.bitwiseFromFloat(goOp, shift, unsignedLeft, l, rr), true, nil
 	case "<", "<=", ">", ">=":
 		// The four relational operators over a dynamic operand run the Abstract
 		// Relational Comparison, which boxes each side and coerces through
@@ -155,4 +186,34 @@ func (r *Renderer) operandToNumber(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ToNumber"), Args: []ast.Expr{boxed}}, nil
+}
+
+// unaryOperandToNumber lowers the operand of a numeric unary operator (+, -, ~) to
+// its float64, coercing a non-number the way the language runs ToNumber: a number
+// passes through, a static string parses through value.StringToNumber and a static
+// boolean maps through value.BoolToNumber (the readable direct forms rather than a
+// box round trip), and a dynamic value or a null or undefined literal coerces
+// through the boxing value.ToNumber. A non-primitive hands back there. Each operator
+// handles a bigint operand before this call, so a bigint never reaches it.
+func (r *Renderer) unaryOperandToNumber(n frontend.Node) (ast.Expr, error) {
+	if r.isNumber(n) {
+		return r.lowerExpr(n)
+	}
+	switch {
+	case r.isString(n):
+		e, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "StringToNumber"), Args: []ast.Expr{e}}, nil
+	case r.isBool(n):
+		e, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{e}}, nil
+	}
+	return r.operandToNumber(n)
 }
