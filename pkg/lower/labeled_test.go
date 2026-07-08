@@ -92,3 +92,25 @@ run();
 		t.Fatalf("labeled loops printed %q, want %q", got, want)
 	}
 }
+
+// TestLabeledBlockBreakHandsBack pins that a labeled break to a block hands back
+// rather than emitting invalid Go. JavaScript lets a break name a labeled block,
+// but Go accepts a labeled break only on a for, switch, or select, so a label on a
+// block is not a branch target. Emitting the label anyway would produce Go the
+// compiler rejects, so the lowering keeps this a later slice.
+func TestLabeledBlockBreakHandsBack(t *testing.T) {
+	const src = "export function f(): number {\n" +
+		"  let i = 0;\n" +
+		"  woohoo: {\n" +
+		"    while (true) {\n" +
+		"      i = i + 1;\n" +
+		"      if (i === 10) { break woohoo; }\n" +
+		"    }\n" +
+		"  }\n" +
+		"  return i;\n" +
+		"}\n"
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "labeled break") {
+		t.Errorf("labeled block break handback reason = %q, want it to mention the labeled break slice", reason)
+	}
+}

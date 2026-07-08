@@ -38,7 +38,30 @@ func (r *Renderer) lowerLabeled(n frontend.Node) (ast.Stmt, bool, error) {
 	if !r.labelTargeted(kids[1], label) {
 		return stmt, true, nil
 	}
+	// Go accepts break label and continue label only when the label sits on a for,
+	// switch, or select, while JavaScript also breaks a labeled block, if, or any
+	// statement. A labeled loop whose initializer forces the block-wrapped form
+	// lowers to a Go block too, so checking the lowered statement rather than the
+	// source kind catches both. When the target is not a statement Go can branch to,
+	// emitting the label would produce a "break label not defined" or an invalid
+	// break, so the whole labeled statement hands back for a later slice.
+	if !goBranchTarget(stmt) {
+		return nil, false, &NotYetLowerable{Reason: "a labeled break or continue to a block or other non-loop statement is a later slice"}
+	}
 	return &ast.LabeledStmt{Label: ident(label), Stmt: stmt}, true, nil
+}
+
+// goBranchTarget reports whether a Go statement is one a labeled break or continue
+// may name: a for loop (both plain and range), a switch, a type switch, or a
+// select. A label on any other statement, a block most often, is not a valid target
+// for a Go branch, so the caller hands back rather than emit code Go rejects.
+func goBranchTarget(stmt ast.Stmt) bool {
+	switch stmt.(type) {
+	case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		return true
+	default:
+		return false
+	}
 }
 
 // labelTargeted reports whether the subtree holds a labeled break or continue that

@@ -1212,12 +1212,14 @@ func (r *Renderer) binaryOp(opText string, left, right frontend.Node) (token.Tok
 
 // numericBinaryOp maps a TypeScript operator on number operands to its Go token.
 // The arithmetic operators whose float64 semantics match JavaScript's number
-// semantics are here, along with the relational and strict-equality operators,
-// which compare two float64 the same way in both languages (=== on numbers is Go
-// ==, !== is !=). Not here because they are not a Go binary token: %, which is
-// fmod and lowers to a math.Mod call in binaryExpr. Left out on purpose: the
-// bitwise operators, which coerce to int32 first, and loose == and !=, whose
-// coercion has no direct Go spelling. Each is a later slice.
+// semantics are here, along with the relational and equality operators, which
+// compare two float64 the same way in both languages (=== on numbers is Go ==,
+// !== is !=). Loose == and != join them: with both operands typed number no
+// coercion runs, so == is exactly ===, and NaN and signed zero compare the same in
+// Go as in JavaScript, so the mapping stays sound. Not here because they are not a
+// Go binary token: %, which is fmod and lowers to a math.Mod call in binaryExpr.
+// Left out on purpose: the bitwise operators, which coerce to int32 first, a later
+// slice.
 func numericBinaryOp(tsOp string) (token.Token, bool) {
 	switch tsOp {
 	case "+":
@@ -1240,6 +1242,10 @@ func numericBinaryOp(tsOp string) (token.Token, bool) {
 		return token.EQL, true
 	case "!==":
 		return token.NEQ, true
+	case "==":
+		return token.EQL, true
+	case "!=":
+		return token.NEQ, true
 	default:
 		return token.ILLEGAL, false
 	}
@@ -1250,8 +1256,8 @@ func numericBinaryOp(tsOp string) (token.Token, bool) {
 // operand first and skips the right on the same condition JavaScript does, and
 // with both operands typed boolean the result is boolean in both languages, so
 // there is no truthiness gap to bridge. Strict === / !== on two booleans are Go
-// == / !=. Left out on purpose: loose == and !=, whose coercion has no direct Go
-// spelling, a later slice.
+// == / !=, and loose == / != join them: with both operands typed boolean no
+// coercion runs, so == is exactly === on the two bools.
 func booleanBinaryOp(tsOp string) (token.Token, bool) {
 	switch tsOp {
 	case "&&":
@@ -1261,6 +1267,10 @@ func booleanBinaryOp(tsOp string) (token.Token, bool) {
 	case "===":
 		return token.EQL, true
 	case "!==":
+		return token.NEQ, true
+	case "==":
+		return token.EQL, true
+	case "!=":
 		return token.NEQ, true
 	default:
 		return token.ILLEGAL, false
