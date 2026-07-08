@@ -2148,10 +2148,13 @@ func compoundAssignBase(tok token.Token) (token.Token, bool) {
 }
 
 func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
-	kids := r.prog.Children(n)
-	if len(kids) != 4 {
-		return nil, &NotYetLowerable{Reason: "only a for with a declaration, condition, and increment is lowered yet"}
-	}
+	// A for statement's three header clauses are each optional in the source, so
+	// the roles are read straight off the node rather than by walking children:
+	// an omitted clause leaves no child, and a bare child list cannot say which
+	// of the surviving nodes is the condition and which the incrementor. An empty
+	// condition means the loop runs forever, which Go writes as a bare for with no
+	// condition; an empty incrementor means no post clause.
+	fc := r.prog.ForClauses(n)
 
 	// The loop opens its own Go scope: the initializer either sits in the for
 	// clause or in the block that wraps the loop, so its names belong to the loop,
@@ -2162,38 +2165,107 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
 
 	var decls []frontend.Node
-	collectVarDecls(r.prog, kids[0], &decls)
+	if fc.HasInit {
+		collectVarDecls(r.prog, fc.Init, &decls)
+		if len(decls) == 0 {
+			return nil, &NotYetLowerable{Reason: "a for loop with an expression initializer instead of a let or const declaration is a later slice"}
+		}
+		// A destructuring initializer binds a pattern, not a plain name, and the
+		// pattern's own lowering is a separate slice. The binding name of a plain
+		// counter is an identifier node; an array or object pattern is not, so hand
+		// back rather than mangle the pattern text into one Go name.
+		for _, d := range decls {
+			kids := r.prog.Children(d)
+			if len(kids) == 0 {
+				continue
+			}
+			if kids[0].Kind() != frontend.NodeIdentifier {
+				return nil, &NotYetLowerable{Reason: "a for loop with a destructuring initializer is a later slice"}
+			}
+		}
+	}
+
+	var cond ast.Expr
+	if fc.HasCond {
+		c, err := r.lowerCondition(fc.Cond)
+		if err != nil {
+			return nil, err
+		}
+		cond = c
+	}
+	var post ast.Stmt
+	if fc.HasIncr {
+		p, err := r.lowerForPost(fc.Incr)
+		if err != nil {
+			return nil, err
+		}
+		post = p
+	}
+	body, err := r.loopBody(fc.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// With no declaration to place, the surviving clauses go straight onto the for.
+	// A nil condition is Go's infinite loop, a nil post clause is none, so for(;;),
+	// for(;cond;), and for(let-less shapes) all read the way a developer writes them.
 	if len(decls) == 0 {
-		return nil, &NotYetLowerable{Reason: "for loop without a let/const initializer is a later slice"}
+		return &ast.ForStmt{Cond: cond, Post: post, Body: body}, nil
 	}
-	initDecl, err := r.varDeclStmt(decls)
-	if err != nil {
-		return nil, err
-	}
-	cond, err := r.lowerCondition(kids[1])
-	if err != nil {
-		return nil, err
-	}
-	post, err := r.lowerForPost(kids[2])
-	if err != nil {
-		return nil, err
-	}
-	body, err := r.loopBody(kids[3])
-	if err != nil {
-		return nil, err
-	}
+
+	// A loop variable an omitted clause leaves unread is still declared, and Go
+	// rejects a declared-and-unused local. A condition or an incrementor usually
+	// reads the counter, but for(let i=0; false;) and for(let i=0;;) read none, so
+	// each unread binding takes a blank assignment the way an unused let does. A
+	// bound blank also keeps such a binding out of the fold, whose := init has no
+	// place to hang one.
+	blanks := r.forInitBlanks(decls)
 
 	// A single float64 loop variable folds into the for's own init clause, so the
 	// loop reads for i := 0.0; i < n; i++ the way a developer writes it rather than a
 	// block wrapping a var declaration. The block form stays for everything the fold
 	// declines (an int32-specialized counter, a hex or non-literal initializer, more
-	// than one loop variable), because Go's := would infer int for those and lose the
-	// declared type the block's var keeps.
-	if init, ok := r.foldFloatDecl(decls); ok {
-		return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
+	// than one loop variable, an unread counter that needs a blank), because Go's :=
+	// would infer int for those and lose the declared type the block's var keeps.
+	if len(blanks) == 0 {
+		if init, ok := r.foldFloatDecl(decls); ok {
+			return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
+		}
+	}
+	initDecl, err := r.varDeclStmt(decls)
+	if err != nil {
+		return nil, err
 	}
 	loop := &ast.ForStmt{Cond: cond, Post: post, Body: body}
-	return &ast.BlockStmt{List: []ast.Stmt{initDecl, loop}}, nil
+	list := append([]ast.Stmt{initDecl}, blanks...)
+	list = append(list, loop)
+	return &ast.BlockStmt{List: list}, nil
+}
+
+// forInitBlanks builds a blank assignment for each for-loop binding no clause of
+// the loop reads, so a counter an omitted condition or incrementor orphans does
+// not trip Go's declared-and-unused rule. A binding read anywhere in the loop
+// gets none, the same test lowerVarStatementMulti applies to a plain let.
+func (r *Renderer) forInitBlanks(decls []frontend.Node) []ast.Stmt {
+	var out []ast.Stmt
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		name, ok := localName(r.prog.Text(kids[0]))
+		if !ok {
+			continue
+		}
+		if r.bindingUnused(kids[0]) {
+			out = append(out, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident("_")},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{ident(name)},
+			})
+		}
+	}
+	return out
 }
 
 // foldFloatDecl builds a Go short variable declaration from a single float64

@@ -191,6 +191,11 @@ type TSAdapter interface {
 	SourceFiles(p ProgramHandle) []NodeHandle
 	KindOf(n NodeHandle) NodeKind
 	ChildrenOf(n NodeHandle) []NodeHandle
+	// ForClausesOf returns a for statement's initializer, condition, incrementor,
+	// and body by role. Any of the first three is a nil handle when the source
+	// omits that clause, the case ChildrenOf cannot report because it skips an
+	// omitted clause and so collapses the roles onto fewer positions.
+	ForClausesOf(n NodeHandle) (init, cond, incr, body NodeHandle)
 	SpanOf(n NodeHandle) (start, end int, file string)
 	// TextOf returns a node's own source text without leading trivia, so lowering
 	// reads an identifier name, a literal, or an operator token straight from the
