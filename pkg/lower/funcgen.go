@@ -677,14 +677,6 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "function")), "*") {
 		return nil, &NotYetLowerable{Reason: "a generator function expression is a coroutine, a later slice"}
 	}
-	// A named function expression carries its own name as a NodeIdentifier child,
-	// which a recursive body reads before the binding exists; the self-reference
-	// two-step that names is a later slice.
-	for _, k := range r.prog.Children(n) {
-		if k.Kind() == frontend.NodeIdentifier {
-			return nil, &NotYetLowerable{Reason: "a named function expression needs the self-reference two-step, a later slice"}
-		}
-	}
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
 	}
@@ -695,7 +687,111 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A named function expression carries its own name as a NodeIdentifier child. The
+	// name is in scope only inside the body, where a recursive call reads it, so it
+	// takes the self-reference two-step: bind the closure to a Go local of its own
+	// function type, then let the body's recursive calls resolve to that local. A name
+	// the body never reads needs no two-step, so it lowers as a plain closure.
+	if nameNode, ok := r.funcExprNameNode(n); ok {
+		return r.namedFunctionExpr(n, nameNode, fields)
+	}
 	return r.blockBodyArrow(n, fields)
+}
+
+// funcExprNameNode returns a function expression's own name node, the NodeIdentifier
+// child that sits before its parameters, if it has one. An anonymous function
+// expression has no such child and reads as not-named here.
+func (r *Renderer) funcExprNameNode(n frontend.Node) (frontend.Node, bool) {
+	for _, k := range r.prog.Children(n) {
+		if k.Kind() == frontend.NodeIdentifier {
+			return k, true
+		}
+	}
+	return nil, false
+}
+
+// namedFunctionExpr lowers a named function expression through the self-reference
+// two-step. Go has no self-referential function literal, so the closure binds to a
+// declared local first and the literal is assigned second, which lets the body call
+// the local by name:
+//
+//	func() func(float64) float64 {
+//		var fac func(float64) float64
+//		fac = func(n float64) float64 { ... fac(n-1) ... }
+//		return fac
+//	}()
+//
+// The self name is registered so a recursive call inside the body resolves to the
+// local rather than to a top-level function name. When the body never reads the
+// name, the two-step is unnecessary and the closure lowers plainly.
+func (r *Renderer) namedFunctionExpr(n, nameNode frontend.Node, fields []*ast.Field) (ast.Expr, error) {
+	sym, ok := r.prog.SymbolAt(nameNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a named function expression whose name has no symbol is a later slice"}
+	}
+	goName, ok := localName(r.prog.Text(nameNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a named function expression whose name is not a Go identifier is a later slice"}
+	}
+	if !r.subtreeReferencesSymbol(r.funcExprBody(n), sym) {
+		return r.blockBodyArrow(n, fields)
+	}
+	prev, had := r.funcExprSelf[sym]
+	r.funcExprSelf[sym] = goName
+	lit, err := r.blockBodyArrow(n, fields)
+	if had {
+		r.funcExprSelf[sym] = prev
+	} else {
+		delete(r.funcExprSelf, sym)
+	}
+	if err != nil {
+		return nil, err
+	}
+	funcLit, ok := lit.(*ast.FuncLit)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a named function expression body did not lower to a closure"}
+	}
+	funcType := funcLit.Type
+	body := []ast.Stmt{
+		&ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{Names: []*ast.Ident{ident(goName)}, Type: funcType}}}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(goName)}, Tok: token.ASSIGN, Rhs: []ast.Expr{funcLit}},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(goName)}},
+	}
+	return &ast.CallExpr{Fun: &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: funcType}}}},
+		Body: &ast.BlockStmt{List: body},
+	}}, nil
+}
+
+// funcExprBody returns the block body of a function expression, or the node itself
+// when it has no block, so a caller can scan the body for a self-reference.
+func (r *Renderer) funcExprBody(n frontend.Node) frontend.Node {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 {
+		return n
+	}
+	if last := kids[len(kids)-1]; last.Kind() == frontend.NodeBlock {
+		return last
+	}
+	return n
+}
+
+// subtreeReferencesSymbol reports whether any identifier in n's subtree resolves to
+// sym, so a named function expression can tell whether its body reads its own name.
+// Resolving through the symbol, rather than matching the text, keeps a shadowing
+// local of the same name from counting as a self-reference.
+func (r *Renderer) subtreeReferencesSymbol(n frontend.Node, sym frontend.Symbol) bool {
+	if n.Kind() == frontend.NodeIdentifier {
+		if s, ok := r.prog.SymbolAt(n); ok && s == sym {
+			return true
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.subtreeReferencesSymbol(c, sym) {
+			return true
+		}
+	}
+	return false
 }
 
 // arrowFunc lowers an arrow function to a Go function literal. Both a concise
