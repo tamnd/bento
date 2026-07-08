@@ -280,6 +280,14 @@ type Renderer struct {
 	// is empty outside a block (a for-loop initializer, say), where no redeclaration
 	// can arise, and that empty case declares normally.
 	blockDeclared []map[string]bool
+	// hoistedVars names the `var` bindings the active scope declared at its top
+	// because a nested block writes one that another block reads. JavaScript scopes
+	// a var to the whole function or module, not the block it sits in, so such a var
+	// is one binding declared once at the scope top; the in-block `var name = e` then
+	// lowers to a plain assignment. It is set per scope (the program body and each
+	// function body) and restored on exit, so one scope's hoists do not leak into
+	// another.
+	hoistedVars map[string]bool
 }
 
 // NewRenderer builds a renderer over a checked program.
