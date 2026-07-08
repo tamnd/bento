@@ -334,6 +334,22 @@ func (r *Renderer) errorMethodCall(name, method string, argNodes []frontend.Node
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Is")}, Args: []ast.Expr{sentinel}}, nil
 	case "as":
 		return nil, &NotYetLowerable{Reason: "err.as waits on concrete Go error type projection"}
+	case "toString":
+		// err.toString() is Error.prototype.toString, the "Name: message" form the
+		// *value.Error produces through ToBStr, the same coercion String(err) and a
+		// template substitution take. It carries no argument, so a call with one hands
+		// back rather than silently ignore it. The result boxes into a string value:
+		// e.toString() is any-typed (the binding is unknown to the checker), so it must
+		// flow as a value.Value the way a dynamic receiver's toString does, not a bare
+		// BStr, so a console.log or concatenation coerces it through the dynamic path.
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "a caught error's toString takes no argument"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "StringValue"),
+			Args: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("ToBStr")}}},
+		}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "a caught error's ." + method + "() is a later slice"}
 	}

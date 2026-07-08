@@ -1,0 +1,4 @@
+== stdout:
+TypeError: boom
+== exit:
+0

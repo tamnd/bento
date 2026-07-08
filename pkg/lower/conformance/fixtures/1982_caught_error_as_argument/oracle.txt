@@ -1,0 +1,4 @@
+== stdout:
+got TypeError: bad input
+== exit:
+0

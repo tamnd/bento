@@ -70,12 +70,17 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
 		}
-		// A catch binding read outside of its .message or .name property (which
-		// propertyAccess handles before it reaches here) hands back, since the runtime
-		// models a caught error as a value.Error rather than a general boxed value, so
-		// passing it on or reassigning it has no lowering yet.
+		// A catch binding used as a plain value, not through one of the typed reads
+		// the paths above intercept (.message, .name, .constructor, instanceof,
+		// typeof, a null compare, a string coercion, or a rethrow), boxes to the
+		// dynamic object the error presents through ToValue. That is what lets a
+		// caught error be passed to a helper that takes any, compared for identity,
+		// tested for truthiness, or assigned into a dynamic slot: each reads the
+		// boxed value.Value the dynamic paths already consume. The box is interned on
+		// the error, so identity holds across repeated uses.
 		if r.errorLocals[name] {
-			return nil, &NotYetLowerable{Reason: "a caught error used other than reading .message or .name is a later slice"}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("ToValue")}}, nil
 		}
 		// A local specialized to Go int32 is read back as float64(name), so every
 		// consumer of the read (arithmetic, a Math call, console.log) sees the same
