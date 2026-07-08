@@ -1325,7 +1325,19 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
 	default:
-		return nil, &NotYetLowerable{Reason: "string concatenation with a non-primitive operand is a later slice"}
+		// A non-primitive operand coerces through the same value.ToString protocol
+		// the dynamic case uses: ToPrimitive on the object or array, then ToString on
+		// the result, so { a: 1 } becomes "[object Object]" and [1, 2] becomes "1,2"
+		// the way the engine joins an array. It must box into a dynamic value first,
+		// which an object or array literal does through its live-value constructor; a
+		// non-primitive whose only form is a Go struct or slice has no box yet and
+		// hands back through boxOperand for a later slice.
+		boxed, err := r.boxOperand(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}, nil
 	}
 }
 
