@@ -160,7 +160,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// lowering below; only the callee spelling differs.
 	var callee ast.Expr
 	var defaults []frontend.Node
-	if sym.Flags&frontend.SymbolFunction != 0 {
+	if goName, ok := r.funcExprSelf[sym]; ok {
+		// The callee is a named function expression calling itself. Its two-step
+		// lowering bound the closure to a Go local, so the recursive call is a plain
+		// call on that func value rather than on a top-level function name.
+		callee = ident(goName)
+	} else if sym.Flags&frontend.SymbolFunction != 0 {
 		name, ok := exportedField(sym.Name)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
