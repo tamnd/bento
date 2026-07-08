@@ -80,6 +80,37 @@ func (r *Renderer) dynamicBinary(opText string, left, right frontend.Node) (ast.
 		}
 		ops := map[string]token.Token{"-": token.SUB, "*": token.MUL, "/": token.QUO}
 		return &ast.BinaryExpr{X: l, Op: ops[opText], Y: rr}, true, nil
+	case "**":
+		// Exponentiation over a dynamic operand coerces each side with ToNumber and
+		// runs value.Pow, the same helper the static number ** lowers to, so a dynamic
+		// base or exponent raises to a power with the JavaScript edge cases (a NaN
+		// exponent, base 1 to an infinite power) kept identical.
+		l, err := r.operandToNumber(left)
+		if err != nil {
+			return nil, false, err
+		}
+		rr, err := r.operandToNumber(right)
+		if err != nil {
+			return nil, false, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Pow"), Args: []ast.Expr{l, rr}}, true, nil
+	case "&", "|", "^", "<<", ">>", ">>>":
+		// The bitwise operators over a dynamic operand coerce each side with ToNumber
+		// and then run the same ToInt32-based construction the static number path uses:
+		// each operand narrows to a 32-bit integer, the Go operator runs, and the
+		// result casts back to float64. A shift masks its count to five bits. This is
+		// the shared bitwiseFromFloat tail reached with two ToNumber-coerced values.
+		goOp, shift, unsignedLeft, _ := bitwiseOp(opText)
+		l, err := r.operandToNumber(left)
+		if err != nil {
+			return nil, false, err
+		}
+		rr, err := r.operandToNumber(right)
+		if err != nil {
+			return nil, false, err
+		}
+		return r.bitwiseFromFloat(goOp, shift, unsignedLeft, l, rr), true, nil
 	case "<", "<=", ">", ">=":
 		// The four relational operators over a dynamic operand run the Abstract
 		// Relational Comparison, which boxes each side and coerces through

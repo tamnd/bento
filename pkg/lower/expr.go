@@ -1226,6 +1226,18 @@ func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left,
 	if err != nil {
 		return nil, err
 	}
+	return r.bitwiseFromFloat(goOp, shift, unsignedLeft, l, rr), nil
+}
+
+// bitwiseFromFloat builds a bitwise result from two operands already lowered to
+// float64: each is coerced with value.ToInt32 (or ToUint32 for the left operand of
+// >>>), the Go bitwise operator runs on the integers, and the result casts back to
+// float64 because a JavaScript bitwise result is a number. A shift masks its count
+// to the low five bits, the ECMAScript rule that a shift by 32 is a shift by 0. This
+// is the shared tail of the static-number bitwise path and the dynamic-operand one:
+// the first reaches it with a number expression, the second with a ToNumber-coerced
+// dynamic value, so both spell the same ToInt32-based form.
+func (r *Renderer) bitwiseFromFloat(goOp token.Token, shift, unsignedLeft bool, l, rr ast.Expr) ast.Expr {
 	r.requireImport(valuePkg)
 	leftConv := "ToInt32"
 	if unsignedLeft {
@@ -1244,7 +1256,7 @@ func (r *Renderer) bitwiseExpr(goOp token.Token, shift, unsignedLeft bool, left,
 		rx := &ast.CallExpr{Fun: sel("value", "ToInt32"), Args: []ast.Expr{rr}}
 		inner = &ast.BinaryExpr{X: lx, Op: goOp, Y: rx}
 	}
-	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}, nil
+	return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{inner}}
 }
 
 // stringPlusOperands flattens a left-leaning chain of string + into its operands

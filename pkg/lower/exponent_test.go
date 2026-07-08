@@ -1,7 +1,6 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -43,19 +42,13 @@ func TestExponentEmits(t *testing.T) {
 	}
 }
 
-// TestExponentHandsBack pins the boundary: ** on a dynamic operand cannot pick
-// math.Pow at compile time because the operand's runtime kind is unknown, so it
-// hands back rather than coercing with machinery that does not exist yet.
-func TestExponentHandsBack(t *testing.T) {
+// TestExponentDynamicCoerces pins that ** on a dynamic operand coerces the side
+// through value.ToNumber and runs value.Pow, the same helper the static number path
+// uses, since the operand's runtime kind is only known then.
+func TestExponentDynamicCoerces(t *testing.T) {
 	const src = "export function raise(a: any, b: number): number { return a ** b; }\n"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
-	}
-	if !strings.Contains(nyl.Reason, "mixed or non-primitive") {
-		t.Errorf("hand-back reason = %q, want it to mention mixed or non-primitive operands", nyl.Reason)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.Pow(value.ToNumber(a), b)") {
+		t.Errorf("dynamic exponent did not coerce through ToNumber and Pow:\n%s", source)
 	}
 }
