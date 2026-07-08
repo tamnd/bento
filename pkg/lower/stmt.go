@@ -1636,6 +1636,32 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 		return nil, false, nil
 	}
 	obj := tParts[0]
+	// A write o.k = v on a dynamic receiver (one typed any or unknown, new Object()
+	// being the first source) has no static field to assign, so it dispatches at
+	// runtime through the boxed value's Set, the mirror of the dynamic Get a read
+	// takes. Set writes the property in place through the object's pointer and
+	// returns the receiver, which the statement discards, so it lowers to a bare
+	// call. The value boxes through boxOperand so a primitive rides its constructor
+	// and a nested dynamic passes through. This routes before the static-shape gate
+	// below, which expects a receiver whose object type the checker pinned down.
+	if r.isDynamic(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, false, err
+		}
+		val, err := r.boxOperand(parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		r.requireImport(valuePkg)
+		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(tParts[1]))},
+		}}
+		return &ast.ExprStmt{X: &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
+			Args: []ast.Expr{key, val},
+		}}, true, nil
+	}
 	objType := r.prog.TypeAt(obj)
 	if objType.Flags&frontend.TypeObject == 0 {
 		return nil, false, nil

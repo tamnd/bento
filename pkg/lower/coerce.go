@@ -276,6 +276,13 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	} else if ok {
 		return boxed, nil
 	}
+	// A source that already lowers to a boxed value.Value, new Object() being the
+	// first, needs no wrapping: its lowered expr is the box, so it enters a dynamic
+	// slot as itself. This routes before the primitive switch, whose type tests a
+	// non-primitive box would otherwise fall past to the handback.
+	if r.producesBoxedValue(src) {
+		return expr, nil
+	}
 	r.requireImport(valuePkg)
 	switch {
 	case r.isNumber(src):
@@ -304,6 +311,19 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		}, nil
 	}
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
+}
+
+// producesBoxedValue reports whether a source expression already lowers to a
+// value.Value box, so boxing it into a dynamic slot is the identity. new Object()
+// is the first such form: it lowers to value.NewObject(), a live property bag that
+// is already a box. This lets the coercion pass the lowered expr through rather
+// than searching for a primitive constructor it has none of.
+func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
+	if src.Kind() != frontend.NodeNewExpression {
+		return false
+	}
+	kids := r.prog.Children(src)
+	return len(kids) >= 1 && r.prog.Text(kids[0]) == "Object" && len(kids) == 1
 }
 
 // boxLiteralToDynamic builds the boxed value form of an object or array literal
