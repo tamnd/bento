@@ -541,6 +541,17 @@ func (a *RealAdapter) ChildrenOf(n NodeHandle) []NodeHandle {
 	return out
 }
 
+func (a *RealAdapter) ForClausesOf(n NodeHandle) (init, cond, incr, body NodeHandle) {
+	i, c, r, b := shim.ForClauses(nodeOf(n))
+	wrap := func(x *shim.Node) NodeHandle {
+		if x == nil {
+			return nil
+		}
+		return rNode{n: x}
+	}
+	return wrap(i), wrap(c), wrap(r), wrap(b)
+}
+
 func (a *RealAdapter) SpanOf(n NodeHandle) (start, end int, file string) {
 	node := nodeOf(n)
 	return node.Pos(), node.End(), shim.FileName(node)

@@ -173,6 +173,26 @@ func (p *Program) Children(n Node) []Node {
 	return out
 }
 
+// ForClauses returns a for statement's initializer, condition, incrementor, and
+// body by role, with a flag for each of the three optional header clauses. It
+// reads roles straight off the node, so an omitted clause is reported as absent
+// rather than silently collapsing onto another role the way a bare child walk
+// would. The node must be a for statement.
+func (p *Program) ForClauses(n Node) ForClauses {
+	i, c, r, b := p.adapter.ForClausesOf(p.unwrapNode(n))
+	out := ForClauses{Body: p.wrapNode(b)}
+	if i != nil {
+		out.Init, out.HasInit = p.wrapNode(i), true
+	}
+	if c != nil {
+		out.Cond, out.HasCond = p.wrapNode(c), true
+	}
+	if r != nil {
+		out.Incr, out.HasIncr = p.wrapNode(r), true
+	}
+	return out
+}
+
 // Text returns n's own source text with no leading trivia, the identifier name,
 // literal, or operator token lowering emits into the generated Go.
 func (p *Program) Text(n Node) string {
