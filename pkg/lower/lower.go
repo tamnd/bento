@@ -169,6 +169,12 @@ type Renderer struct {
 	// as a value.Error and not a general boxed value yet. It is set around a catch
 	// block and cleared after, so a binding does not leak past its clause.
 	errorLocals map[string]bool
+	// funcExprSelf maps a named function expression's own name symbol to the Go local
+	// variable its two-step lowering binds the closure to, so a recursive call inside
+	// the body resolves to that local rather than to a top-level function name that
+	// does not exist. It is set around the body of a named function expression and
+	// cleared after, so the self name does not leak past the expression.
+	funcExprSelf map[frontend.Symbol]string
 	// tryRet tells a return statement how to leave the try construct it sits in.
 	// The zero value is a plain function return. tryRetBody marks the body of the
 	// escape closure a try with an escaping return compiles to, where a return
@@ -292,7 +298,7 @@ type Renderer struct {
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

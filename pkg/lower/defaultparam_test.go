@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -88,18 +89,78 @@ console.log(shift(10, 5));
 	}
 }
 
-// TestDefaultParamReadingVariableHandsBack proves a default that reads a module
-// binding hands back, since evaluating it needs the callee's scope at the call site.
-func TestDefaultParamReadingVariableHandsBack(t *testing.T) {
-	const src = "const base = 10;\nfunction f(x: number, y: number = base): number { return x + y; }\nf(1);\n"
-	renderProgramHandBack(t, src)
+// TestDefaultParamModuleReadLowers proves a default that reads a module binding or
+// calls a top-level function now lowers, and its read lands at the omitting call
+// site rather than in the function signature. The binding is hoisted to a package
+// var and a top-level function is package-visible, so the call site sees the same
+// value the callee scope would.
+func TestDefaultParamModuleReadLowers(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"moduleVar",
+			"const base = 10;\nfunction f(n: number = base): number { return n; }\nconsole.log(f());\n",
+			"F(base)",
+		},
+		{
+			"moduleCall",
+			"function d(): number { return 42; }\nfunction f(n: number = d()): number { return n; }\nconsole.log(f());\n",
+			"F(D())",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := renderProgram(t, tc.src)
+			if !strings.Contains(source, tc.want) {
+				t.Errorf("default parameter fill did not print %q:\n%s", tc.want, source)
+			}
+		})
+	}
 }
 
-// TestDefaultParamCallingFunctionHandsBack proves a default that calls a function
-// hands back, since a package-level fill cannot reproduce the call at the call site.
-func TestDefaultParamCallingFunctionHandsBack(t *testing.T) {
-	const src = "function seed(): number { return 3; }\nfunction f(x: number, y: number = seed()): number { return x + y; }\nf(1);\n"
-	renderProgramHandBack(t, src)
+// TestDefaultParamModuleReadRuns builds and runs a module-var default and a
+// top-level-call default, both omitted and supplied, so the filled value is proven
+// against the JavaScript result rather than just the emitted shape.
+func TestDefaultParamModuleReadRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const base = 10;
+function d(): number {
+  return 42;
+}
+function f(n: number = base): number {
+  return n;
+}
+function g(n: number = d()): number {
+  return n;
+}
+console.log(f());
+console.log(f(3));
+console.log(g());
+console.log(g(7));
+`
+	if got, want := runProgramGo(t, src), "10\n3\n42\n7\n"; got != want {
+		t.Fatalf("default parameter program printed %q, want %q", got, want)
+	}
+}
+
+// TestDefaultParamReadingEarlierParamHandsBack proves the one default form the call
+// site cannot reconstruct still hands back: a default that reads an earlier
+// parameter is bound only inside the callee scope, so it names its own later slice.
+func TestDefaultParamReadingEarlierParamHandsBack(t *testing.T) {
+	const src = "function f(a: number, b: number = a + 1): number { return a + b; }\nconsole.log(f(5));\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if !strings.Contains(nyl.Reason, "earlier parameter") {
+		t.Errorf("hand-back reason = %q, want it to contain %q", nyl.Reason, "earlier parameter")
+	}
 }
 
 // TestOptionalParamWithoutDefaultHandsBack proves a bare `x?: T` with no default

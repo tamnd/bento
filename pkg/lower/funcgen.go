@@ -2,7 +2,9 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -106,6 +108,16 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A destructured parameter lowered to a synthesized Go field holding the whole
+	// object or array; the names the pattern bound are read from it at the top of the
+	// body, so the body sees the same names the source destructured.
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(fn), sig)
+	if err != nil {
+		return nil, err
+	}
+	if len(binds) != 0 {
+		body.List = append(binds, body.List...)
+	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
 
 	return &ast.FuncDecl{
@@ -185,8 +197,15 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 			def, ok := r.paramDefaultNode(paramNodes, i)
 			switch {
 			case ok:
-				if !packageSafeInit(r.prog, def) {
-					return nil, &NotYetLowerable{Reason: "a default parameter value that reads a variable or makes a call needs the callee's scope at the call site, a later slice"}
+				// A default that reads a module binding or calls a top-level function
+				// lowers at the omitting call site: the binding is hoisted to a package
+				// var (its read inside this default keeps it cross-boundary) and a
+				// top-level function is always package-visible, so the call site sees the
+				// same value the callee scope would. A default that reads an earlier
+				// parameter is the one form the call site cannot reconstruct, since that
+				// parameter is in scope only inside the callee, so it hands back.
+				if r.defaultReadsOwnParam(sig, def) {
+					return nil, &NotYetLowerable{Reason: "a default parameter value that reads an earlier parameter needs the callee's scope, a later slice"}
 				}
 			case p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
 				// A bare optional of dynamic type needs no default: the omitted slot
@@ -256,6 +275,38 @@ func (r *Renderer) paramDefaultNode(paramNodes []frontend.Node, i int) (frontend
 		}
 	}
 	return nil, false
+}
+
+// defaultReadsOwnParam reports whether a parameter default reads one of the
+// function's own parameters. Such a default is evaluated in the callee's scope,
+// where the earlier parameters are bound, so the omitting call site cannot
+// reconstruct it and the parameter hands back. Any other identifier the default
+// reads resolves to a module binding or a top-level function, both of which the
+// call site can see, so only a self-parameter read blocks the call-site fill. A
+// property access reads a binding only on its object side, so the member name is
+// not treated as a parameter read.
+func (r *Renderer) defaultReadsOwnParam(sig frontend.Signature, def frontend.Node) bool {
+	names := make(map[string]bool, len(sig.Params))
+	for _, p := range sig.Params {
+		names[p.Name] = true
+	}
+	var reads func(n frontend.Node) bool
+	reads = func(n frontend.Node) bool {
+		kids := r.prog.Children(n)
+		if n.Kind() == frontend.NodeIdentifier {
+			return names[r.prog.Text(n)]
+		}
+		if n.Kind() == frontend.NodePropertyAccessExpression && len(kids) == 2 {
+			return reads(kids[0])
+		}
+		for _, c := range kids {
+			if reads(c) {
+				return true
+			}
+		}
+		return false
+	}
+	return reads(def)
 }
 
 // calleeDefaults returns the default-value nodes of the function a call resolves to,
@@ -475,6 +526,141 @@ func (r *Renderer) closureParamFields(n frontend.Node, noun string) ([]*ast.Fiel
 	return fields, nil
 }
 
+// paramDestructureBindings returns the statements that bind the names an object or
+// array pattern parameter destructured, read from the synthesized Go field the
+// pattern lowered to. Go has no destructuring parameter, so the whole object or
+// array arrives in one field (named __0, __1, and so on) and the body reads the
+// bound names out of it at entry, the same selector and indexed reads a `const {a}
+// = o` or `const [x] = xs` statement lowers to. A plain-identifier parameter
+// contributes nothing. Only the shorthand shapes the statement destructuring
+// already covers are lowered; a rename, default, rest, or nested pattern hands back.
+func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig frontend.Signature) ([]ast.Stmt, error) {
+	var out []ast.Stmt
+	for i, pn := range paramNodes {
+		if i >= len(sig.Params) {
+			break
+		}
+		pkids := r.prog.Children(pn)
+		if len(pkids) == 0 || pkids[0].Kind() == frontend.NodeIdentifier {
+			continue
+		}
+		pat := pkids[0]
+		goName, ok := localName(sig.Params[i].Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter has no Go name to read from, a later slice"}
+		}
+		text := strings.TrimSpace(r.prog.Text(pat))
+		switch {
+		case strings.HasPrefix(text, "{"):
+			stmts, err := r.objectPatternBindings(pat, goName, sig.Params[i].Type)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, stmts...)
+		case strings.HasPrefix(text, "["):
+			stmts, err := r.arrayPatternBindings(pat, goName, sig.Params[i].Type)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, stmts...)
+		default:
+			return nil, &NotYetLowerable{Reason: "a parameter that is neither an identifier nor an object or array pattern is a later slice"}
+		}
+	}
+	return out, nil
+}
+
+// objectPatternBindings binds each shorthand name an object pattern parameter
+// destructured from the field of the same name on the held object, name := __0.Name,
+// the same struct-field selector a written-out property access lowers to. It mirrors
+// flattenObjectDestructure's element loop over the pattern parameter's held value, so
+// a rename, default, rest, or nested member hands back the same way the statement form
+// does.
+func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objType frontend.Type) ([]ast.Stmt, error) {
+	if objType.Flags&frontend.TypeObject == 0 {
+		return nil, &NotYetLowerable{Reason: "an object-pattern parameter on a non-object type is a later slice"}
+	}
+	if _, err := r.decls.internStruct(r, objType); err != nil {
+		return nil, err
+	}
+	elems := r.prog.Children(pat)
+	if len(elems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty object-pattern parameter binds nothing"}
+	}
+	var out []ast.Stmt
+	for _, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "an object-pattern parameter rename, default, rest, or nested pattern is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(ec[0]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
+		}
+		field, ok := exportedField(name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
+		}
+		out = append(out, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(goName), Sel: ident(field)}},
+		})
+	}
+	return out, nil
+}
+
+// arrayPatternBindings binds each name an array pattern parameter destructured from
+// the matching position of the held array, name := __0.AtI(i), the same indexed read
+// a written-out element access lowers to. It mirrors flattenArrayDestructure's element
+// loop over the pattern parameter's held value: the type must be a homogeneous array,
+// so a tuple whose positions differ hands back, and a hole, default, rest, or nested
+// element is a later slice.
+func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrType frontend.Type) ([]ast.Stmt, error) {
+	elemT, ok := r.prog.ElementType(arrType)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "an array-pattern parameter on a non-array or tuple type is a later slice"}
+	}
+	elemGo, err := r.typeExpr(elemT)
+	if err != nil {
+		return nil, err
+	}
+	elems := r.prog.Children(pat)
+	if len(elems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty array-pattern parameter binds nothing"}
+	}
+	var out []ast.Stmt
+	for i, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "an array-pattern parameter hole, default, rest, or nested pattern is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(ec[0]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
+		}
+		nameGo, err := r.typeExpr(r.prog.TypeAt(ec[0]))
+		if err != nil {
+			return nil, err
+		}
+		if same, err := sameGoType(nameGo, elemGo); err != nil {
+			return nil, err
+		} else if !same {
+			return nil, &NotYetLowerable{Reason: "an array-pattern parameter whose element type differs from the array element type is a later slice"}
+		}
+		read := &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident(goName), Sel: ident("AtI")},
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
+		out = append(out, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{read},
+		})
+	}
+	return out, nil
+}
+
 // functionExpr lowers a function expression used as a value, the function(){}
 // form the test262 assert prelude assigns to a const and to its members. A
 // function expression always has a block body, which is the same closure a
@@ -491,14 +677,6 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "function")), "*") {
 		return nil, &NotYetLowerable{Reason: "a generator function expression is a coroutine, a later slice"}
 	}
-	// A named function expression carries its own name as a NodeIdentifier child,
-	// which a recursive body reads before the binding exists; the self-reference
-	// two-step that names is a later slice.
-	for _, k := range r.prog.Children(n) {
-		if k.Kind() == frontend.NodeIdentifier {
-			return nil, &NotYetLowerable{Reason: "a named function expression needs the self-reference two-step, a later slice"}
-		}
-	}
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
 	}
@@ -509,7 +687,111 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A named function expression carries its own name as a NodeIdentifier child. The
+	// name is in scope only inside the body, where a recursive call reads it, so it
+	// takes the self-reference two-step: bind the closure to a Go local of its own
+	// function type, then let the body's recursive calls resolve to that local. A name
+	// the body never reads needs no two-step, so it lowers as a plain closure.
+	if nameNode, ok := r.funcExprNameNode(n); ok {
+		return r.namedFunctionExpr(n, nameNode, fields)
+	}
 	return r.blockBodyArrow(n, fields)
+}
+
+// funcExprNameNode returns a function expression's own name node, the NodeIdentifier
+// child that sits before its parameters, if it has one. An anonymous function
+// expression has no such child and reads as not-named here.
+func (r *Renderer) funcExprNameNode(n frontend.Node) (frontend.Node, bool) {
+	for _, k := range r.prog.Children(n) {
+		if k.Kind() == frontend.NodeIdentifier {
+			return k, true
+		}
+	}
+	return nil, false
+}
+
+// namedFunctionExpr lowers a named function expression through the self-reference
+// two-step. Go has no self-referential function literal, so the closure binds to a
+// declared local first and the literal is assigned second, which lets the body call
+// the local by name:
+//
+//	func() func(float64) float64 {
+//		var fac func(float64) float64
+//		fac = func(n float64) float64 { ... fac(n-1) ... }
+//		return fac
+//	}()
+//
+// The self name is registered so a recursive call inside the body resolves to the
+// local rather than to a top-level function name. When the body never reads the
+// name, the two-step is unnecessary and the closure lowers plainly.
+func (r *Renderer) namedFunctionExpr(n, nameNode frontend.Node, fields []*ast.Field) (ast.Expr, error) {
+	sym, ok := r.prog.SymbolAt(nameNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a named function expression whose name has no symbol is a later slice"}
+	}
+	goName, ok := localName(r.prog.Text(nameNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a named function expression whose name is not a Go identifier is a later slice"}
+	}
+	if !r.subtreeReferencesSymbol(r.funcExprBody(n), sym) {
+		return r.blockBodyArrow(n, fields)
+	}
+	prev, had := r.funcExprSelf[sym]
+	r.funcExprSelf[sym] = goName
+	lit, err := r.blockBodyArrow(n, fields)
+	if had {
+		r.funcExprSelf[sym] = prev
+	} else {
+		delete(r.funcExprSelf, sym)
+	}
+	if err != nil {
+		return nil, err
+	}
+	funcLit, ok := lit.(*ast.FuncLit)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a named function expression body did not lower to a closure"}
+	}
+	funcType := funcLit.Type
+	body := []ast.Stmt{
+		&ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{Names: []*ast.Ident{ident(goName)}, Type: funcType}}}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(goName)}, Tok: token.ASSIGN, Rhs: []ast.Expr{funcLit}},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(goName)}},
+	}
+	return &ast.CallExpr{Fun: &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: funcType}}}},
+		Body: &ast.BlockStmt{List: body},
+	}}, nil
+}
+
+// funcExprBody returns the block body of a function expression, or the node itself
+// when it has no block, so a caller can scan the body for a self-reference.
+func (r *Renderer) funcExprBody(n frontend.Node) frontend.Node {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 {
+		return n
+	}
+	if last := kids[len(kids)-1]; last.Kind() == frontend.NodeBlock {
+		return last
+	}
+	return n
+}
+
+// subtreeReferencesSymbol reports whether any identifier in n's subtree resolves to
+// sym, so a named function expression can tell whether its body reads its own name.
+// Resolving through the symbol, rather than matching the text, keeps a shadowing
+// local of the same name from counting as a self-reference.
+func (r *Renderer) subtreeReferencesSymbol(n frontend.Node, sym frontend.Symbol) bool {
+	if n.Kind() == frontend.NodeIdentifier {
+		if s, ok := r.prog.SymbolAt(n); ok && s == sym {
+			return true
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.subtreeReferencesSymbol(c, sym) {
+			return true
+		}
+	}
+	return false
 }
 
 // arrowFunc lowers an arrow function to a Go function literal. Both a concise
