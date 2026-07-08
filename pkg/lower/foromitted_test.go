@@ -116,13 +116,41 @@ func TestForDestructuringInitHandsBack(t *testing.T) {
 	}
 }
 
-// TestForExpressionInitHandsBack proves the initializer shape stays scoped to a
-// declaration: for(i=0;...) writes to an existing binding instead of declaring
-// one, a distinct later slice, so it hands back rather than dropping the write.
-func TestForExpressionInitHandsBack(t *testing.T) {
+// TestForExpressionInitLowersToForInit proves an assignment initializer, one that
+// writes an existing binding rather than declaring a new one, folds straight into
+// Go's for init clause instead of a wrapping block, so for(i=0;...) reads the way a
+// developer writes it.
+func TestForExpressionInitLowersToForInit(t *testing.T) {
 	const src = "let i = 0; for (i = 0; i < 3; i++) { } console.log(i);\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "expression initializer") {
-		t.Errorf("for with an expression initializer handback reason = %q, want it to name the expression initializer", reason)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "for i = 0; i < 3; i++ {") {
+		t.Errorf("for with an assignment initializer did not fold into the for init clause:\n%s", source)
+	}
+}
+
+// TestForExpressionInitRuns builds and runs an assignment-initialized loop and a
+// comma-of-assignments initializer, whose two writes fuse into one parallel
+// assignment the way a comma post clause does, and checks the results against the
+// JavaScript answers.
+func TestForExpressionInitRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+let i = 0;
+let sum = 0;
+for (i = 0; i < 4; i++) {
+  sum = sum + i;
+}
+console.log(sum);
+
+let a = 0;
+let b = 0;
+let steps = 0;
+for (a = 0, b = 10; a < b; a++) {
+  steps = steps + 1;
+}
+console.log(steps);
+`
+	if got, want := runProgramGo(t, src), "6\n10\n"; got != want {
+		t.Fatalf("assignment-initialized for loops printed %q, want %q", got, want)
 	}
 }
