@@ -1,0 +1,9 @@
+== stdout:
+5
+fb:b
+-1
+0
+fb:d
+-2
+== exit:
+0

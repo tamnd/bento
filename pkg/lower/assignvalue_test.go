@@ -47,10 +47,70 @@ console.log(a[0], y);
 	}
 }
 
-// TestAssignmentValueOnNonIdentifierHandsBack proves the value form stays scoped to
-// a plain local: an assignment into a property, read for its value, has no
-// capturing closure yet and hands back rather than emit wrong Go.
-func TestAssignmentValueOnNonIdentifierHandsBack(t *testing.T) {
-	const src = "const o = { n: 0 }; const r = (o.n = 5); console.log(r);\n"
-	renderProgramHandBack(t, src)
+// TestAssignmentValuePropertyLowersToAssignThenReturn proves an assignment into a
+// class or object field, read for its value, lowers to a closure that binds the
+// right-hand side to a typed temp, writes it through the field selector, and
+// returns the temp.
+func TestAssignmentValuePropertyLowersToAssignThenReturn(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"classField",
+			"class P { x = 0; set(v: number): number { return this.x = v; } }\nconst p = new P(); console.log(p.set(7));\n",
+			"p.X = _bt0",
+		},
+		{
+			"objectField",
+			"const o = { n: 0 }; console.log(o.n = 5);\n",
+			"o.N = _bt0",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := renderProgram(t, tc.src)
+			if !strings.Contains(source, tc.want) {
+				t.Errorf("property assignment value did not print %q:\n%s", tc.want, source)
+			}
+		})
+	}
+}
+
+// TestAssignmentValuePropertyAndTypedLocalsRun builds and runs the value form over
+// a class field, an object field, a string local, and a chained assignment, so the
+// assigned value each expression evaluates to is proven against the JavaScript
+// result rather than just the emitted shape.
+func TestAssignmentValuePropertyAndTypedLocalsRun(t *testing.T) {
+	skipIfShort(t)
+	const src = `class P { x = 0; set(v: number): number { return this.x = v; } }
+const p = new P();
+console.log(p.set(7), p.x);
+
+const o = { n: 0 };
+console.log((o.n = 5), o.n);
+
+let s = "";
+console.log(s = "hi");
+
+let a = 0;
+let b = 0;
+console.log(a = b = 9, a, b);
+`
+	if got, want := runProgramGo(t, src), "7 7\n5 5\nhi\n9 9 9\n"; got != want {
+		t.Fatalf("assignment value form printed %q, want %q", got, want)
+	}
+}
+
+// TestAssignmentValueOnUnsupportedTargetHandsBack proves the value form still hands
+// back where the write has no plain lvalue: an array element uses method access and
+// a dynamic local has a boxed narrowed slot, so each names its own later slice.
+func TestAssignmentValueOnUnsupportedTargetHandsBack(t *testing.T) {
+	for _, src := range []string{
+		"const a = [1, 2]; console.log(a[0] = 9);\n",
+		"let d: any = 0; console.log(d = 5);\n",
+	} {
+		renderProgramHandBack(t, src)
+	}
 }
