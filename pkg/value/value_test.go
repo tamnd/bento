@@ -184,6 +184,30 @@ func TestJSONStringifyUnionArm(t *testing.T) {
 	}
 }
 
+// TestJSONStringifyFunctionValue checks that a function value, which has no JSON
+// form, serializes the way SerializeJSONProperty dictates: a function element in an
+// array renders as null, a function-valued struct field is omitted, and a top-level
+// function produces the empty string the typed call site spells for undefined. None
+// of these reflect the func into NumField, the fault the encoder used to take.
+func TestJSONStringifyFunctionValue(t *testing.T) {
+	fn := func() {}
+	if got := JSONStringify(fn).ToGoString(); got != "" {
+		t.Fatalf("top-level function stringified to %q, want empty", got)
+	}
+	arr := NewArray[any](float64(1), fn, float64(2))
+	if got := JSONStringify(arr).ToGoString(); got != "[1,null,2]" {
+		t.Fatalf("function array element stringified to %q, want [1,null,2]", got)
+	}
+	type withFunc struct {
+		A float64 `json:"a"`
+		F func()  `json:"f"`
+		B float64 `json:"b"`
+	}
+	if got := JSONStringify(withFunc{A: 1, F: fn, B: 2}).ToGoString(); got != `{"a":1,"b":2}` {
+		t.Fatalf("function field stringified to %q, want {\"a\":1,\"b\":2}", got)
+	}
+}
+
 // TestValueCoercions checks the ToNumber, ToString, ToBoolean, and Add operations
 // the dynamic arithmetic path uses, against the JavaScript results.
 func TestValueCoercions(t *testing.T) {
