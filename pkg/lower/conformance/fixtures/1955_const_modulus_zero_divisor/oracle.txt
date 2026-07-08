@@ -1,0 +1,7 @@
+== stdout:
+Infinity
+Infinity
+-Infinity
+true
+== exit:
+0
