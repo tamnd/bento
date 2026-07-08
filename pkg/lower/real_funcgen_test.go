@@ -339,9 +339,6 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		// a truthy number or string condition lowers now, but an object in boolean
 		// position has a falsy rule this slice does not model, so it hands back.
 		{"truthyObject", "export function t(o: { x: number }): number { if (o) { return 1; } return 0; }"},
-		// a prefix increment used as a value needs its pre-increment result, not just
-		// the mutation, so it hands back; the statement form (++b;) does lower.
-		{"prefixIncrValue", "export function p(a: number): number { let b = a; const c = ++b; return c; }"},
 		// a ternary whose branches are different primitives is a union value, which
 		// needs the tagged union; a same-primitive ternary does lower.
 		{"ternaryMixed", "export function m(c: boolean, n: number, s: string): number { const x = c ? n : s; return n; }"},

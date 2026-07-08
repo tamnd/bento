@@ -190,6 +190,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodePrefixUnaryExpression:
 		return r.prefixUnary(n)
 
+	case frontend.NodePostfixUnaryExpression:
+		return r.postfixUnary(n)
+
 	case frontend.NodeConditionalExpression:
 		return r.conditionalExpr(n)
 
@@ -465,9 +468,79 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		conv := &ast.CallExpr{Fun: sel("value", "ToInt32"), Args: []ast.Expr{x}}
 		return &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{&ast.UnaryExpr{Op: token.XOR, X: conv}}}, nil
+	case "++", "--":
+		return r.incDecValue(operand, op, true)
 	default:
 		return nil, &NotYetLowerable{Reason: "prefix operator " + op + " is a later slice"}
 	}
+}
+
+// postfixUnary lowers a value-position postfix ++ or -- (n++ or n-- used where a
+// value is read, as in const r = n++ or a[i++]). A statement-position postfix
+// never reaches here: lowerUpdate takes n++; on its own line and emits a Go
+// IncDecStmt, so this path is only the form that must also yield the operand's
+// value.
+func (r *Renderer) postfixUnary(n frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 1 {
+		return nil, &NotYetLowerable{Reason: "postfix expression did not expose a single operand"}
+	}
+	operand := kids[0]
+	op := strings.TrimSpace(strings.TrimPrefix(r.prog.Text(n), r.prog.Text(operand)))
+	if op != "++" && op != "--" {
+		return nil, &NotYetLowerable{Reason: "postfix operator " + op + " is a later slice"}
+	}
+	return r.incDecValue(operand, op, false)
+}
+
+// incDecValue lowers a value-position ++ or -- on a number local, the increment
+// form that yields a value rather than standing alone as a statement. Go has no
+// expression that both mutates a variable and evaluates to a number, so the update
+// rides an immediately-called closure that captures the local: a prefix ++n
+// increments and returns the new value, and a postfix n++ saves the old value,
+// increments, and returns the saved one, which is the read timing JavaScript
+// specifies. The target has to be a plain float64 local: a refined-integer local
+// would make the float64 return type mismatch its int, and a non-identifier or
+// dynamic target has no such closure yet, so both hand back to a later slice.
+func (r *Renderer) incDecValue(operand frontend.Node, op string, prefix bool) (ast.Expr, error) {
+	if operand.Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "value-position " + op + " on a non-identifier target is a later slice"}
+	}
+	if !r.isNumber(operand) || r.isDynamic(operand) {
+		return nil, &NotYetLowerable{Reason: "value-position " + op + " on a non-number target is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(operand))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "value-position " + op + " target is not a Go identifier"}
+	}
+	if r.int32Locals[name] || r.int64Locals[name] {
+		return nil, &NotYetLowerable{Reason: "value-position " + op + " on a refined-integer local is a later slice"}
+	}
+	tok := token.INC
+	if op == "--" {
+		tok = token.DEC
+	}
+	inc := &ast.IncDecStmt{X: ident(name), Tok: tok}
+	var body []ast.Stmt
+	if prefix {
+		body = []ast.Stmt{inc, &ast.ReturnStmt{Results: []ast.Expr{ident(name)}}}
+	} else {
+		// prev holds the value the postfix form reads before the update. It shadows
+		// any outer name harmlessly, since the closure only reads it to return it.
+		body = []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident("prev")}, Tok: token.DEFINE, Rhs: []ast.Expr{ident(name)}},
+			inc,
+			&ast.ReturnStmt{Results: []ast.Expr{ident("prev")}},
+		}
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident("float64")}}},
+		},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
 }
 
 // binaryExpr lowers a binary expression on two operands of the same primitive
