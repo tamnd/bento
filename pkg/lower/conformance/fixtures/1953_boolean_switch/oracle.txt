@@ -1,0 +1,8 @@
+== stdout:
+big
+mid
+small
+even
+odd
+== exit:
+0

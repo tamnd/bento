@@ -51,6 +51,16 @@ func (r *Renderer) lowerSwitch(n frontend.Node) (ast.Stmt, error) {
 	if _, kind, ok := r.condBranchType(disc); ok && kind == "string" {
 		return r.lowerStringSwitch(disc, caseBlock)
 	}
+	// A switch over a boolean is the case-chain idiom, switch (true) { case a: case
+	// b: }, where each label is a boolean test and the first true one runs. JavaScript
+	// matches a label with strict equality, disc === label, and for two booleans that
+	// is Go's ==, which is exactly what a Go switch on a bool tag computes, so the
+	// discriminant lowers to a Go bool tag and each label to a Go bool expression. The
+	// bool test rides condBranchType so a typeof-style boolean and a ternary over
+	// booleans count too.
+	if _, kind, ok := r.condBranchType(disc); ok && kind == "bool" {
+		return r.lowerBooleanSwitch(disc, caseBlock)
+	}
 	if !r.isNumber(disc) {
 		return nil, &NotYetLowerable{Reason: "a switch on a non-number discriminant is a later slice"}
 	}
@@ -99,6 +109,31 @@ func (r *Renderer) lowerStringSwitch(disc, caseBlock frontend.Node) (ast.Stmt, e
 	}
 	goTag := &ast.CallExpr{Fun: &ast.SelectorExpr{X: tag, Sel: ident("ToGoString")}}
 	return &ast.SwitchStmt{Tag: goTag, Body: body}, nil
+}
+
+// lowerBooleanSwitch lowers a switch over a boolean discriminant to a Go switch on
+// the discriminant with each case label spelled as a Go bool expression. The tag
+// needs no conversion because a boolean already lowers to a Go bool, and boolean
+// strict equality is Go's ==, so switch tag { case label: } matches exactly where
+// disc === label does. A case label that is not itself a boolean hands back: a
+// number or string label can never strictly equal a boolean, so it would only match
+// in JavaScript by never matching, and Go would reject the mixed-type comparison.
+func (r *Renderer) lowerBooleanSwitch(disc, caseBlock frontend.Node) (ast.Stmt, error) {
+	tag, err := r.lowerExpr(disc)
+	if err != nil {
+		return nil, err
+	}
+	clauses := r.prog.Children(caseBlock)
+	body, err := r.switchClauses(clauses, func(e frontend.Node) (ast.Expr, error) {
+		if !r.isBool(e) {
+			return nil, &NotYetLowerable{Reason: "a boolean switch case label that is not a boolean is a later slice"}
+		}
+		return r.lowerExpr(e)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ast.SwitchStmt{Tag: tag, Body: body}, nil
 }
 
 // lowerDiscriminantSwitch lowers a switch over an object union's discriminant to a
