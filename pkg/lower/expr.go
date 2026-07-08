@@ -561,9 +561,49 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	left, op, right := kids[0], kids[1], kids[2]
 	opText := r.prog.Text(op)
 	if opText == "=" {
-		return nil, &NotYetLowerable{Reason: "assignment used as a value is a later slice"}
+		return r.assignValue(left, right)
 	}
 	return r.combineBinary(opText, left, right)
+}
+
+// assignValue lowers an assignment read for its value (const r = (x = 5), or the
+// (i = i + 1) a while condition steps with), the form whose result is the value
+// assigned. Go's assignment is a statement and yields nothing, so as with the
+// value-position increment the write rides an immediately-called closure over the
+// target: it assigns and returns the target, which holds the value JavaScript's
+// assignment expression evaluates to. The target is scoped to a plain float64
+// local, whose Go type the closure can name; a refined-integer, non-identifier, or
+// dynamic target has no such closure yet and hands back to a later slice.
+func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
+	if left.Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "assignment value with a non-identifier target is a later slice"}
+	}
+	if !r.isNumber(left) || r.isDynamic(left) {
+		return nil, &NotYetLowerable{Reason: "assignment value on a non-number target is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(left))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "assignment value target is not a Go identifier"}
+	}
+	if r.int32Locals[name] || r.int64Locals[name] {
+		return nil, &NotYetLowerable{Reason: "assignment value on a refined-integer local is a later slice"}
+	}
+	rhs, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, err
+	}
+	body := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(name)}},
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident("float64")}}},
+		},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
 }
 
 // combineBinary lowers a JavaScript binary operator applied to two operand
