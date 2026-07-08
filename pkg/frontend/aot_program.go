@@ -218,6 +218,18 @@ func (p *Program) SymbolAt(n Node) (Symbol, bool) {
 	return p.wrapSymbol(h), true
 }
 
+// ShorthandValueSymbolAt returns the local binding an object-literal shorthand
+// member reads, so the use walk can credit `{ x }` to the outer `x` rather than to
+// the property the shorthand declares. It reports false for a node that is not a
+// shorthand member.
+func (p *Program) ShorthandValueSymbolAt(n Node) (Symbol, bool) {
+	h, ok := p.adapter.ShorthandValueSymbolOfNode(p.handle, p.unwrapNode(n))
+	if !ok {
+		return Symbol{}, false
+	}
+	return p.wrapSymbol(h), true
+}
+
 // TypeSymbol returns the symbol a type was declared by, and ok=false for an
 // anonymous type. Lowering uses it to walk from a class instance type back to
 // the class declaration that names it.
