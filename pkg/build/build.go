@@ -280,10 +280,11 @@ func firstError(prog *frontend.Program) string {
 // lowering the untyped form to a dynamic value instead of failing the build.
 // Each one is a noImplicitAny report over a binding, parameter, variable,
 // member, or inferred return whose resolved type is already `any`, so tolerating
-// it costs no precision the checker had. Index-access and module-resolution
-// implicit-any reports (7015, 7016, 7017, 7052, 7053) are deliberately absent:
-// those need the dynamic member and index path, so they gate until that work
-// lands and stay attributable to it. Binding element (7031) is also absent: a
+// it costs no precision the checker had. The element-index implicit-any reports
+// (7052, 7053) moved to toleratedDynamicMember once the dynamic member path grew
+// to fold an absent element read; the remaining index-access and module-resolution
+// reports (7015, 7016, 7017) are still deliberately absent and gate until their
+// own slices land, staying attributable to them. Binding element (7031) is also absent: a
 // destructured parameter with no annotation is not typed `any`, the checker
 // infers an anonymous object type from the pattern, so tolerating it would emit
 // Go that does not compile rather than a dynamic slot. It waits on the
@@ -312,10 +313,16 @@ var toleratedImplicitAny = map[int]bool{
 // the shape does not declare, so tolerating these codes never produces Go that
 // fails to compile; it only lets a resolvable read through and leaves the rest a
 // handback. The "Did you mean" variant (2551) is the same absent-property read
-// with a spelling suggestion, so it tolerates on the same terms.
+// with a spelling suggestion, so it tolerates on the same terms. The element
+// forms (7053, 7052) are the bracket spelling of the same read: o["k"] with a
+// string-literal key the shape does not declare folds to undefined exactly as o.k
+// does, and o[k] with a computed key, which the shape cannot prove absent, hands
+// back to the struct-to-value boxer slice rather than emitting a wrong read.
 var toleratedDynamicMember = map[int]bool{
 	2339: true, // Property 'X' does not exist on type 'Y'.
 	2551: true, // Property 'X' does not exist on type 'Y'. Did you mean 'Z'?
+	7053: true, // Element implicitly has an 'any' type because expression of type 'X' can't be used to index type 'Y'.
+	7052: true, // Element implicitly has an 'any' type because type 'X' has no index signature.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
