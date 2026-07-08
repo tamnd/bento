@@ -187,3 +187,33 @@ func (r *Renderer) operandToNumber(n frontend.Node) (ast.Expr, error) {
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ToNumber"), Args: []ast.Expr{boxed}}, nil
 }
+
+// unaryOperandToNumber lowers the operand of a numeric unary operator (+, -, ~) to
+// its float64, coercing a non-number the way the language runs ToNumber: a number
+// passes through, a static string parses through value.StringToNumber and a static
+// boolean maps through value.BoolToNumber (the readable direct forms rather than a
+// box round trip), and a dynamic value or a null or undefined literal coerces
+// through the boxing value.ToNumber. A non-primitive hands back there. Each operator
+// handles a bigint operand before this call, so a bigint never reaches it.
+func (r *Renderer) unaryOperandToNumber(n frontend.Node) (ast.Expr, error) {
+	if r.isNumber(n) {
+		return r.lowerExpr(n)
+	}
+	switch {
+	case r.isString(n):
+		e, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "StringToNumber"), Args: []ast.Expr{e}}, nil
+	case r.isBool(n):
+		e, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{e}}, nil
+	}
+	return r.operandToNumber(n)
+}

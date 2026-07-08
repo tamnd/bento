@@ -386,19 +386,6 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 			fresh := &ast.CallExpr{Fun: ident("new"), Args: []ast.Expr{sel("big", "Int")}}
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: fresh, Sel: ident("Neg")}, Args: []ast.Expr{x}}, nil
 		}
-		if r.isDynamic(operand) {
-			// A dynamic operand coerces through ToNumber and the minus applies to the
-			// resulting float64, so -x on an any-typed value is -value.ToNumber(x),
-			// the same coercion the dynamic arithmetic operators run.
-			num, err := r.operandToNumber(operand)
-			if err != nil {
-				return nil, err
-			}
-			return &ast.UnaryExpr{Op: token.SUB, X: num}, nil
-		}
-		if !r.isNumber(operand) {
-			return nil, &NotYetLowerable{Reason: "unary minus on a non-number is a later slice"}
-		}
 		// -0 is the negative-zero double, but a Go constant has no signed zero:
 		// -0 and -0.0 both fold to +0, so the literal form goes through
 		// math.Copysign, the Go spelling of the value. Negating a variable is
@@ -415,22 +402,21 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 				}, nil
 			}
 		}
-		x, err := r.lowerExpr(operand)
+		// Every other operand coerces to its float64 the way ToNumber does, and the
+		// minus applies to the result: -x on a number is Go negation, on a string
+		// value.StringToNumber then negation, on a dynamic value -value.ToNumber(x).
+		// A non-primitive hands back through the shared coercion.
+		num, err := r.unaryOperandToNumber(operand)
 		if err != nil {
 			return nil, err
 		}
-		return &ast.UnaryExpr{Op: token.SUB, X: x}, nil
+		return &ast.UnaryExpr{Op: token.SUB, X: num}, nil
 	case "+":
-		// Unary plus is ToNumber and nothing else, so a dynamic operand lowers to
-		// value.ToNumber(x): a bigint reaching it throws the same TypeError the
-		// language raises, and every other kind coerces to its float64.
-		if r.isDynamic(operand) {
-			return r.operandToNumber(operand)
-		}
-		if !r.isNumber(operand) {
-			return nil, &NotYetLowerable{Reason: "unary plus on a non-number is a later slice"}
-		}
-		return r.lowerExpr(operand)
+		// Unary plus is ToNumber and nothing else: a number passes through, a string
+		// or boolean coerces through its numeric conversion, and a dynamic value runs
+		// value.ToNumber. A bigint reaching the dynamic path throws the same TypeError
+		// the language raises, and a non-primitive hands back through the coercion.
+		return r.unaryOperandToNumber(operand)
 	case "!":
 		// ! negates the operand's truthiness, so a non-boolean rides the same
 		// ToBoolean lowerCondition uses and the not wraps the resulting bool: !s is
@@ -456,12 +442,10 @@ func (r *Renderer) prefixUnary(n frontend.Node) (ast.Expr, error) {
 		// Bitwise NOT is the unary member of the bitwise family: it coerces its
 		// operand to a 32-bit integer, complements it, and returns the result as a
 		// number, so it lowers to float64(^value.ToInt32(x)), the same coercion the
-		// binary bitwise operators use, not a Go ^ on the float64. A dynamic operand
-		// coerces through ToNumber first, the float64 that ToInt32 then narrows.
-		if !r.isNumber(operand) && !r.isDynamic(operand) {
-			return nil, &NotYetLowerable{Reason: "bitwise not on a non-number is a later slice"}
-		}
-		x, err := r.operandToNumber(operand)
+		// binary bitwise operators use, not a Go ^ on the float64. A string or boolean
+		// coerces through its numeric conversion, a dynamic operand through ToNumber,
+		// the float64 that ToInt32 then narrows; a non-primitive hands back.
+		x, err := r.unaryOperandToNumber(operand)
 		if err != nil {
 			return nil, err
 		}
