@@ -1,0 +1,7 @@
+== stdout:
+1 hi
+2
+5
+undefined
+== exit:
+0

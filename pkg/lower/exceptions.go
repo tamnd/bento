@@ -97,6 +97,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Set" {
 		return r.newSet(n, kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "Object" {
+		return r.newObject(kids[1:])
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}
@@ -122,6 +125,19 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", ctor), Args: []ast.Expr{message}}, nil
+}
+
+// newObject lowers new Object() to the empty boxed object value.NewObject builds,
+// a live property bag the dynamic Get and Set paths read and write. Only the
+// zero-argument form is claimed: new Object(x) is the ToObject coercion, which
+// returns x untouched when it is already an object and boxes a primitive into its
+// wrapper, a distinct later slice, so it hands back.
+func (r *Renderer) newObject(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 0 {
+		return nil, &NotYetLowerable{Reason: "new Object(value), the ToObject coercion, is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewObject")}, nil
 }
 
 // newTypedArray lowers a typed-array construction, the fixed-width numeric buffers
