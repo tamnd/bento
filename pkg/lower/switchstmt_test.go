@@ -94,6 +94,11 @@ func TestSwitchHandsBack(t *testing.T) {
 			"function f(s: string, a: string): number {\n  switch (s) {\n    case a:\n      return 1;\n    default:\n      return 0;\n  }\n}\nconsole.log(f(\"a\", \"a\"));\n",
 			"not a string literal",
 		},
+		{
+			"booleanLabelNotBoolean",
+			"function f(b: boolean, x: any): number {\n  switch (b) {\n    case x:\n      return 1;\n    default:\n      return 0;\n  }\n}\nconsole.log(f(true, true));\n",
+			"not a boolean",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -195,6 +200,56 @@ console.log(f("b"));
 		if !strings.Contains(source, want) {
 			t.Errorf("string switch did not print %q:\n%s", want, source)
 		}
+	}
+}
+
+// TestSwitchOnBooleanEmits pins the case-chain idiom: switch (true) lowers to a Go
+// switch on the bool, each boolean test a case label, so the first true label runs.
+func TestSwitchOnBooleanEmits(t *testing.T) {
+	const src = `function f(n: number): string {
+  switch (true) {
+    case n > 10:
+      return "big";
+    case n > 5:
+      return "mid";
+    default:
+      return "small";
+  }
+}
+console.log(f(7));
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"switch true {",
+		"case n > 10:",
+		"case n > 5:",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("boolean switch did not print %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestSwitchOnBooleanRuns builds and runs the case-chain, proving the first true
+// case wins and the others are skipped the way strict equality against true selects.
+func TestSwitchOnBooleanRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function rank(n: number): string {
+  switch (true) {
+    case n > 10:
+      return "big";
+    case n > 5:
+      return "mid";
+    default:
+      return "small";
+  }
+}
+console.log(rank(12));
+console.log(rank(7));
+console.log(rank(2));
+`
+	if got, want := runProgramGo(t, src), "big\nmid\nsmall\n"; got != want {
+		t.Fatalf("boolean switch printed %q, want %q", got, want)
 	}
 }
 
