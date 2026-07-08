@@ -2,7 +2,9 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -105,6 +107,16 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	body, err := r.blockOf(fn)
 	if err != nil {
 		return nil, err
+	}
+	// A destructured parameter lowered to a synthesized Go field holding the whole
+	// object or array; the names the pattern bound are read from it at the top of the
+	// body, so the body sees the same names the source destructured.
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(fn), sig)
+	if err != nil {
+		return nil, err
+	}
+	if len(binds) != 0 {
+		body.List = append(binds, body.List...)
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
 
@@ -512,6 +524,141 @@ func (r *Renderer) closureParamFields(n frontend.Node, noun string) ([]*ast.Fiel
 		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
 	}
 	return fields, nil
+}
+
+// paramDestructureBindings returns the statements that bind the names an object or
+// array pattern parameter destructured, read from the synthesized Go field the
+// pattern lowered to. Go has no destructuring parameter, so the whole object or
+// array arrives in one field (named __0, __1, and so on) and the body reads the
+// bound names out of it at entry, the same selector and indexed reads a `const {a}
+// = o` or `const [x] = xs` statement lowers to. A plain-identifier parameter
+// contributes nothing. Only the shorthand shapes the statement destructuring
+// already covers are lowered; a rename, default, rest, or nested pattern hands back.
+func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig frontend.Signature) ([]ast.Stmt, error) {
+	var out []ast.Stmt
+	for i, pn := range paramNodes {
+		if i >= len(sig.Params) {
+			break
+		}
+		pkids := r.prog.Children(pn)
+		if len(pkids) == 0 || pkids[0].Kind() == frontend.NodeIdentifier {
+			continue
+		}
+		pat := pkids[0]
+		goName, ok := localName(sig.Params[i].Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter has no Go name to read from, a later slice"}
+		}
+		text := strings.TrimSpace(r.prog.Text(pat))
+		switch {
+		case strings.HasPrefix(text, "{"):
+			stmts, err := r.objectPatternBindings(pat, goName, sig.Params[i].Type)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, stmts...)
+		case strings.HasPrefix(text, "["):
+			stmts, err := r.arrayPatternBindings(pat, goName, sig.Params[i].Type)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, stmts...)
+		default:
+			return nil, &NotYetLowerable{Reason: "a parameter that is neither an identifier nor an object or array pattern is a later slice"}
+		}
+	}
+	return out, nil
+}
+
+// objectPatternBindings binds each shorthand name an object pattern parameter
+// destructured from the field of the same name on the held object, name := __0.Name,
+// the same struct-field selector a written-out property access lowers to. It mirrors
+// flattenObjectDestructure's element loop over the pattern parameter's held value, so
+// a rename, default, rest, or nested member hands back the same way the statement form
+// does.
+func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objType frontend.Type) ([]ast.Stmt, error) {
+	if objType.Flags&frontend.TypeObject == 0 {
+		return nil, &NotYetLowerable{Reason: "an object-pattern parameter on a non-object type is a later slice"}
+	}
+	if _, err := r.decls.internStruct(r, objType); err != nil {
+		return nil, err
+	}
+	elems := r.prog.Children(pat)
+	if len(elems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty object-pattern parameter binds nothing"}
+	}
+	var out []ast.Stmt
+	for _, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "an object-pattern parameter rename, default, rest, or nested pattern is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(ec[0]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
+		}
+		field, ok := exportedField(name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
+		}
+		out = append(out, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(goName), Sel: ident(field)}},
+		})
+	}
+	return out, nil
+}
+
+// arrayPatternBindings binds each name an array pattern parameter destructured from
+// the matching position of the held array, name := __0.AtI(i), the same indexed read
+// a written-out element access lowers to. It mirrors flattenArrayDestructure's element
+// loop over the pattern parameter's held value: the type must be a homogeneous array,
+// so a tuple whose positions differ hands back, and a hole, default, rest, or nested
+// element is a later slice.
+func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrType frontend.Type) ([]ast.Stmt, error) {
+	elemT, ok := r.prog.ElementType(arrType)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "an array-pattern parameter on a non-array or tuple type is a later slice"}
+	}
+	elemGo, err := r.typeExpr(elemT)
+	if err != nil {
+		return nil, err
+	}
+	elems := r.prog.Children(pat)
+	if len(elems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty array-pattern parameter binds nothing"}
+	}
+	var out []ast.Stmt
+	for i, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "an array-pattern parameter hole, default, rest, or nested pattern is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(ec[0]))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
+		}
+		nameGo, err := r.typeExpr(r.prog.TypeAt(ec[0]))
+		if err != nil {
+			return nil, err
+		}
+		if same, err := sameGoType(nameGo, elemGo); err != nil {
+			return nil, err
+		} else if !same {
+			return nil, &NotYetLowerable{Reason: "an array-pattern parameter whose element type differs from the array element type is a later slice"}
+		}
+		read := &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident(goName), Sel: ident("AtI")},
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
+		out = append(out, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{read},
+		})
+	}
+	return out, nil
 }
 
 // functionExpr lowers a function expression used as a value, the function(){}
