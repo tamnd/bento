@@ -1920,20 +1920,31 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	var cond ast.Expr
 	switch op {
 	case "??=":
-		if !r.isOptional(target) {
-			return nil, true, &NotYetLowerable{Reason: "??= on a target that is not the optional T | undefined is a later slice"}
+		switch {
+		case r.isDynamic(target):
+			// A dynamic target is nullish on either null or undefined, so its guard is
+			// the runtime IsNullish, the same presence test dynamicNullishCoalesce runs.
+			// The slot stays a box, so the store below coerces the right-hand side into a
+			// value the same way any assignment into a dynamic slot does.
+			cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsNullish")}}
+		case r.isOptional(target):
+			// An optional target is nullish only on undefined, so its guard is the Opt
+			// presence flag. A definite right-hand side leaves the target present after
+			// the store, which the checker narrows to the bare T; the store keeps the
+			// slot Opt[T] (coerceToTarget wraps the value in Some), so a later read the
+			// checker narrowed must unwrap with .Get() for the slot and the narrowed use
+			// to agree. That unwrap only fires for a local the optLocals pre-pass tracks;
+			// a parameter is not tracked, so its narrowed read would keep the bare Opt and
+			// fail to compile, and a definite right-hand side into one hands back. An
+			// optional right-hand side leaves the target still T | undefined, so no
+			// narrowing happens and either kind of target lowers.
+			if !r.isOptional(parts[2]) && !r.optLocals[name] {
+				return nil, true, &NotYetLowerable{Reason: "??= with a definite right-hand side into a parameter narrows the target, which needs narrowing at a parameter, a later slice"}
+			}
+			cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
+		default:
+			return nil, true, &NotYetLowerable{Reason: "??= on a target that is neither the optional T | undefined nor a dynamic value is a later slice"}
 		}
-		// A definite right-hand side leaves the target definitely present, which the
-		// checker narrows to the bare T; reading it there would need a .Get() the
-		// narrowing at an assignment does not yet insert, so the emitted slot (still
-		// Opt[T]) and the narrowed use would disagree. When the right-hand side is
-		// itself optional the target stays T | undefined, no narrowing happens, and a
-		// later read flows through the existing presence test, so only that form
-		// lowers here.
-		if !r.isOptional(parts[2]) {
-			return nil, true, &NotYetLowerable{Reason: "??= with a definite right-hand side narrows the target, which needs narrowing at an assignment, a later slice"}
-		}
-		cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
 	case "||=":
 		// ||= assigns when the target is falsy, so the guard is the target's
 		// JavaScript truthiness negated. lowerTruthy spells the falsy set for the
