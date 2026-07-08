@@ -8,8 +8,10 @@ import (
 )
 
 // TestNullishCoalesceEmits pins the shape of the lowering: an optional left with
-// a pure fallback becomes an Or call on the Opt, and a fallback that is itself
-// optional becomes OrOpt so the result stays optional.
+// a pure fallback becomes an Or call on the Opt, a fallback that is itself
+// optional becomes OrOpt so the result stays optional, and a dynamic left becomes
+// a value.Coalesce over both boxed operands, whose nullish test is the runtime
+// presence check rather than an Opt flag.
 func TestNullishCoalesceEmits(t *testing.T) {
 	cases := []struct {
 		name string
@@ -31,6 +33,11 @@ func TestNullishCoalesceEmits(t *testing.T) {
 			"function f(a: number | undefined, b: number | undefined): number | undefined { return a ?? b; }\nconsole.log(f(undefined, undefined) ?? -1);\n",
 			"a.OrOpt(b)",
 		},
+		{
+			"dynamicLeft",
+			"function f(x: any): any { return x ?? 0; }\nconsole.log(f(undefined));\n",
+			"value.Coalesce(x, value.Number(0))",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,8 +50,9 @@ func TestNullishCoalesceEmits(t *testing.T) {
 }
 
 // TestNullishCoalesceHandsBack pins the boundaries: a side-effecting fallback
-// needs statement hoisting, and a non-optional left (dynamic here) is a
-// different nullish representation, so both hand back with named reasons.
+// needs statement hoisting whether the left is an optional or a dynamic value,
+// since the fallback is an eager function argument in both lowerings, so each
+// hands back with the named reason until the hoisting slice lands.
 func TestNullishCoalesceHandsBack(t *testing.T) {
 	cases := []struct {
 		name string
@@ -57,9 +65,9 @@ func TestNullishCoalesceHandsBack(t *testing.T) {
 			"side-effecting fallback",
 		},
 		{
-			"dynamicLeft",
-			"function f(x: any): number { return x ?? 0; }\nconsole.log(f(undefined));\n",
-			"not the optional",
+			"dynamicSideEffectingFallback",
+			"function side(): any { return 1; }\nfunction f(x: any): any { return x ?? side(); }\nconsole.log(f(undefined));\n",
+			"side-effecting fallback",
 		},
 	}
 	for _, tc := range cases {
@@ -116,5 +124,34 @@ console.log(chain(undefined, undefined));
 		"-2\n"
 	if got != want {
 		t.Fatalf("nullish program printed %q, want %q", got, want)
+	}
+}
+
+// TestDynamicNullishCoalesceRuns builds and runs ?? on a dynamic left, the shape
+// the value.Coalesce path lowers. The runtime tests presence, not truthiness, so
+// a present zero or empty string is kept while null and undefined fall to the
+// fallback, the same ?? contract the optional path keeps but over boxed values.
+func TestDynamicNullishCoalesceRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the test builds and runs generated Go")
+	}
+	const src = `function pick(x: any, fb: any): any {
+  return x ?? fb;
+}
+console.log(pick(0, 99));
+console.log(pick(null, 99));
+console.log(pick(undefined, 7));
+console.log(pick("", "z"));
+console.log(pick("kept", "z"));
+`
+	got := runProgramGo(t, src)
+	want := "0\n" +
+		"99\n" +
+		"7\n" +
+		"\n" +
+		"kept\n"
+	if got != want {
+		t.Fatalf("dynamic nullish program printed %q, want %q", got, want)
 	}
 }
