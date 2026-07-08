@@ -118,6 +118,91 @@ try {
 	}
 }
 
+// TestCaughtErrorAsArgumentRuns builds and runs a caught error passed to a helper
+// that takes any: the error boxes to the dynamic object it presents, and the helper
+// reads name and message through the dynamic property path, the shape assert.throws
+// takes when it hands a thrown value to a message-building helper.
+func TestCaughtErrorAsArgumentRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+function describe(x: any): string {
+  return "got " + x.name + ": " + x.message;
+}
+try {
+  throw new TypeError("bad input");
+} catch (e: any) {
+  console.log(describe(e));
+}
+`
+	got := runProgramGo(t, src)
+	want := "got TypeError: bad input\n"
+	if got != want {
+		t.Fatalf("caught error as argument run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestCaughtErrorIdentityRuns builds and runs a caught error stashed in a dynamic
+// slot and compared back to itself: the box is interned on the error, so both
+// references resolve to the same object and === holds, while a different value is
+// not equal.
+func TestCaughtErrorIdentityRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+let saved: any = undefined;
+try {
+  throw new RangeError("oops");
+} catch (e: any) {
+  saved = e;
+  console.log(saved === e);
+  console.log(saved === "oops");
+}
+`
+	got := runProgramGo(t, src)
+	want := "true\nfalse\n"
+	if got != want {
+		t.Fatalf("caught error identity run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestCaughtErrorTruthinessRuns builds and runs a caught error in boolean position:
+// an error is an object, so it is always truthy, takes the then branch of if (e),
+// and !e is false.
+func TestCaughtErrorTruthinessRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+try {
+  throw new Error("x");
+} catch (e: any) {
+  if (e) { console.log("truthy"); }
+  if (!e) { console.log("falsy"); } else { console.log("not falsy"); }
+}
+`
+	got := runProgramGo(t, src)
+	want := "truthy\nnot falsy\n"
+	if got != want {
+		t.Fatalf("caught error truthiness run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestCaughtErrorToStringRuns builds and runs e.toString() over a real caught
+// error and checks it yields Error.prototype.toString's "Name: message" form, the
+// same string String(err) and a template produce.
+func TestCaughtErrorToStringRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+try {
+  throw new TypeError("boom");
+} catch (e: any) {
+  console.log(e.toString());
+}
+`
+	got := runProgramGo(t, src)
+	want := "TypeError: boom\n"
+	if got != want {
+		t.Fatalf("caught error toString run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestCaughtErrorGuardRuns builds and runs the assert.throws guard shape, typeof
 // thrown !== 'object' || thrown === null, over a real thrown error, and checks it
 // takes the else branch the way the prelude needs it to for a real error.
