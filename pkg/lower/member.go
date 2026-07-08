@@ -202,6 +202,26 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	objType := r.prog.TypeAt(obj)
 	if objType.Flags&frontend.TypeObject != 0 {
 		if _, isArray := r.prog.ElementType(objType); !isArray {
+			// A fixed shape interns to a Go struct that carries exactly its declared
+			// fields, so a read of a property the shape does not declare is a provable
+			// runtime miss: the struct has no field that could hold it, and the language
+			// answers undefined. It lowers to value.MissingProperty over the lowered
+			// receiver, which evaluates the receiver for its effect and yields the
+			// undefined singleton, so a read like getObj().foo still runs getObj and the
+			// receiver stays referenced rather than becoming an unused Go local. The
+			// checker flags this read, "Property 'X' does not exist on type 'Y'", a
+			// diagnostic the front door tolerates so the read reaches here rather than
+			// gating the build. It routes before the field paths below, which expect a
+			// property the shape declares and would otherwise emit a selector on a Go
+			// field that was never declared.
+			if _, present := r.shapeProp(objType, prop); !present {
+				recv, err := r.lowerExpr(obj)
+				if err != nil {
+					return nil, err
+				}
+				r.requireImport(valuePkg)
+				return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, nil
+			}
 			field, ok := exportedField(prop)
 			if !ok {
 				return nil, &NotYetLowerable{Reason: "property name ." + prop + " is not a Go identifier"}
@@ -226,6 +246,34 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
+}
+
+// missingPropertyRead reports whether n is a property read that propertyAccess
+// lowers to value.MissingProperty: a plain read on a fixed-shape object of a
+// property the shape does not declare. The checker types such a read as its error
+// type (no flags), not any, so isDynamic consults this to route the read through
+// the boxed-value path all the same, keeping its lowered undefined a dynamic
+// value the enclosing call or coercion treats as a box rather than a static miss.
+// It mirrors the condition in propertyAccess exactly, so the two never disagree
+// on which reads are boxes.
+func (r *Renderer) missingPropertyRead(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return false
+	}
+	obj, nameNode := kids[0], kids[1]
+	objType := r.prog.TypeAt(obj)
+	if objType.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return false
+	}
+	_, present := r.shapeProp(objType, r.prog.Text(nameNode))
+	return !present
 }
 
 // isQuestionDotToken reports whether a node is the ?. token that marks an
