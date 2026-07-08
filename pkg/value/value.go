@@ -171,6 +171,19 @@ func (v Value) GetElem(key Value) Value {
 	return v.Get(ToString(key))
 }
 
+// MissingProperty is the value of a property read whose receiver's fixed shape
+// does not declare the property. A shape interns to a Go struct that carries
+// exactly its declared fields, so such a read is a provable miss and the language
+// answers undefined. The receiver is passed and dropped rather than ignored at
+// the call site so its evaluation still happens, keeping any effect a receiver
+// expression like getObj().foo carries, and so the read references the receiver
+// the Go compiler would otherwise flag as unused. It takes any because the
+// receiver is a static Go value of the shape's struct type, not a boxed value.
+func MissingProperty(recv any) Value {
+	_ = recv
+	return Undefined
+}
+
 // Get implements a dynamic property read, o[key], for the kinds the AOT path
 // produces. A string reports its length and indexes to a one-character string; an
 // array reports its length and indexes into its elements; an object looks the key

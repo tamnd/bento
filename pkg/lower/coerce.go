@@ -197,6 +197,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.caughtErrorStringRead(n) {
 		return false
 	}
+	// A read of a property a fixed shape does not declare lowers to the boxed
+	// undefined singleton (member.go), so it is a dynamic value even though the
+	// checker gives it the error type rather than any. Routing it here keeps the
+	// enclosing call, +, or coercion treating the read as the box it is.
+	if r.missingPropertyRead(n) {
+		return true
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 
