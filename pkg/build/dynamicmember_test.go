@@ -111,6 +111,50 @@ func TestPresentElementReadUnchanged(t *testing.T) {
 	}
 }
 
+// TestDynamicElementWriteLowers pins that a bracket write o[k] = v on a dynamic
+// receiver lowers rather than handing back: the receiver has no static field to
+// store into, so the write dispatches at runtime through the boxed value's SetKey,
+// the mirror of the dynamic Get a read takes. A string-literal key stores a named
+// property the same way the dotted write o.k = v does.
+func TestDynamicElementWriteLowers(t *testing.T) {
+	src := "const o: any = {};\no[\"k\"] = 1;\n"
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("dynamic element write should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "SetKey") {
+		t.Fatalf("expected the string-key write to route through SetKey, got:\n%s", out)
+	}
+}
+
+// TestDynamicNumberElementWriteLowers pins that a numeric index write on a dynamic
+// receiver routes through SetIndex, the write mirror of the GetIndex a numeric read
+// takes, so a[i] = v lands in an array element by the same rule the read resolves.
+func TestDynamicNumberElementWriteLowers(t *testing.T) {
+	src := "const a: any = [];\na[0] = 5;\n"
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("dynamic number element write should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "SetIndex") {
+		t.Fatalf("expected the number-index write to route through SetIndex, got:\n%s", out)
+	}
+}
+
+// TestDynamicComputedElementWriteLowers pins that a computed dynamic key write
+// routes through SetElem, the write mirror of the GetElem a dynamic read takes, so
+// the key is coerced to a property key at runtime the same way the read coerces it.
+func TestDynamicComputedElementWriteLowers(t *testing.T) {
+	src := "const o: any = {};\nlet k: any = \"x\";\no[k] = 7;\n"
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("dynamic computed element write should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "SetElem") {
+		t.Fatalf("expected the computed-key write to route through SetElem, got:\n%s", out)
+	}
+}
+
 // TestComputedElementReadHandsBack pins that o[k] with a computed key on a fixed
 // shape hands back rather than lowering: the shape cannot prove that key absent,
 // so folding to undefined would be wrong and emitting a selector would not
