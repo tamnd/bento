@@ -6,10 +6,9 @@
 //
 // The grammar is the JSON grammar from the specification (the same one V8
 // accepts), parsed by recursive descent over the string's UTF-16 code units. A
-// malformed input should throw a SyntaxError; the throw machinery is not in place
-// yet, so a parse error returns undefined for now, which is honest about the gap
-// and never faults. Well-formed input, which is what a stringify round-trip
-// produces, parses exactly.
+// malformed input throws a SyntaxError, the error JSON.parse raises: a value that
+// does not parse, or trailing content after the one top-level value. Well-formed
+// input, which is what a stringify round-trip produces, parses exactly.
 
 package value
 
@@ -20,18 +19,18 @@ import (
 
 // JSONParse reads a JSON document from s and returns the boxed value it denotes,
 // the value model's JSON.parse. It parses the one top-level value and requires
-// only whitespace after it; anything else is malformed and returns undefined
-// until the SyntaxError throw path exists.
+// only whitespace after it; a value that does not parse, or any non-whitespace
+// content after it, throws the SyntaxError JavaScript raises on malformed JSON.
 func JSONParse(s BStr) Value {
 	p := &jsonParser{src: s.units()}
 	p.skipSpace()
 	v, ok := p.parseValue()
 	if !ok {
-		return Undefined
+		Throw(NewSyntaxError(FromGoString("Unexpected token in JSON")))
 	}
 	p.skipSpace()
 	if p.pos != len(p.src) {
-		return Undefined
+		Throw(NewSyntaxError(FromGoString("Unexpected non-whitespace character after JSON data")))
 	}
 	return v
 }

@@ -86,6 +86,66 @@ func TestJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// parseThrewSyntaxError runs JSONParse on doc and reports whether it threw a
+// SyntaxError, recovering the panic the Throw path raises. It fails the test on a
+// panic that is not a thrown error, the way an uncaught runtime fault should
+// surface rather than be swallowed.
+func parseThrewSyntaxError(t *testing.T, doc string) (threw bool) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		e, ok := r.(Thrown)
+		if !ok {
+			t.Fatalf("JSONParse(%q) panicked with a non-thrown value %v", doc, r)
+		}
+		threw = e.ErrorName() == "SyntaxError"
+	}()
+	JSONParse(FromGoString(doc))
+	return false
+}
+
+// TestJSONParseThrowsOnMalformed checks that a value that does not parse, and
+// non-whitespace content after the one top-level value, throw the SyntaxError
+// JavaScript raises rather than returning undefined.
+func TestJSONParseThrowsOnMalformed(t *testing.T) {
+	malformed := []string{
+		`{ bad }`,
+		`12 34`,
+		`12` + "\t\r\n " + `34`,
+		`[1, 2,]`,
+		`"unterminated`,
+		``,
+		`nul`,
+		`{"a":1`,
+	}
+	for _, d := range malformed {
+		if !parseThrewSyntaxError(t, d) {
+			t.Errorf("JSONParse(%q) did not throw a SyntaxError", d)
+		}
+	}
+}
+
+// TestJSONParseWellFormedDoesNotThrow checks the throw path stays off valid input,
+// including a document padded with the JSON whitespace set, so the SyntaxError is
+// raised only on malformed text.
+func TestJSONParseWellFormedDoesNotThrow(t *testing.T) {
+	wellFormed := []string{
+		`42`,
+		` [1, 2, 3] `,
+		"\t\r\n {\"a\": 1} \t",
+		`"hi"`,
+		`null`,
+	}
+	for _, d := range wellFormed {
+		if parseThrewSyntaxError(t, d) {
+			t.Errorf("JSONParse(%q) threw on well-formed input", d)
+		}
+	}
+}
+
 // TestValueCoercions checks the ToNumber, ToString, ToBoolean, and Add operations
 // the dynamic arithmetic path uses, against the JavaScript results.
 func TestValueCoercions(t *testing.T) {
