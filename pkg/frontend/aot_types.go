@@ -198,6 +198,16 @@ type Node interface {
 	File() SourceFile
 }
 
+// ForClauses is a for statement's four parts read by role. Body is always
+// present. Init, Cond, and Incr each carry a node only when the source wrote
+// that clause, reported by the matching HasInit, HasCond, HasIncr flag, so a
+// caller lowers for(;;), for(let i=0;;i++), and every other shape without
+// guessing which clauses a bare child list dropped.
+type ForClauses struct {
+	Init, Cond, Incr, Body    Node
+	HasInit, HasCond, HasIncr bool
+}
+
 // Type is bento's view of a TypeScript type: a small handle carrying the coarse
 // flags eagerly, with structural detail fetched through Program methods so the
 // typescript-go type object never crosses the adapter boundary.
