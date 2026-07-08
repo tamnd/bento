@@ -550,21 +550,35 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	return r.combineBinary(opText, left, right)
 }
 
-// assignValue lowers an assignment read for its value (const r = (x = 5), or the
-// (i = i + 1) a while condition steps with), the form whose result is the value
-// assigned. Go's assignment is a statement and yields nothing, so as with the
-// value-position increment the write rides an immediately-called closure over the
-// target: it assigns and returns the target, which holds the value JavaScript's
-// assignment expression evaluates to. The target is scoped to a plain float64
-// local, whose Go type the closure can name; a refined-integer, non-identifier, or
-// dynamic target has no such closure yet and hands back to a later slice.
+// assignValue lowers an assignment read for its value (const r = (x = 5), the
+// (i = i + 1) a while condition steps with, or console.log(p.x = 7)), the form
+// whose result is the value assigned. Go's assignment is a statement and yields
+// nothing, so the write rides an immediately-called closure that performs the
+// store and returns the assigned value, which is what JavaScript's assignment
+// expression evaluates to. A local target names its own Go slot; a property
+// target reuses the statement path's field gate, so a plain class or object field
+// lowers to a selector lvalue and a setter, dynamic receiver, or element access
+// hands back. A chained a = b = 5 falls out for free: the inner assignment is the
+// right operand of the outer, so it lowers through this same path.
 func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
-	if left.Kind() != frontend.NodeIdentifier {
-		return nil, &NotYetLowerable{Reason: "assignment value with a non-identifier target is a later slice"}
+	switch left.Kind() {
+	case frontend.NodeIdentifier:
+		return r.assignValueLocal(left, right)
+	case frontend.NodePropertyAccessExpression:
+		return r.assignValueProperty(left, right)
+	default:
+		return nil, &NotYetLowerable{Reason: "assignment value into a target that is neither a local nor a property is a later slice"}
 	}
-	if !r.isNumber(left) || r.isDynamic(left) {
-		return nil, &NotYetLowerable{Reason: "assignment value on a non-number target is a later slice"}
-	}
+}
+
+// assignValueLocal lowers an assignment-as-value whose target is a local: the
+// closure assigns the coerced right-hand side to the local and returns it, typed
+// by the local's own Go slot. A refined-integer local returns an int the float64
+// slot type would mismatch, and a dynamic-storage local (a var with no
+// initializer, narrowed on read) has a boxed slot the narrowed type would not
+// name, so both hand back to a later slice; a plain number, string, or boolean
+// local passes through.
+func (r *Renderer) assignValueLocal(left, right frontend.Node) (ast.Expr, error) {
 	name, ok := localName(r.prog.Text(left))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "assignment value target is not a Go identifier"}
@@ -572,7 +586,18 @@ func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
 	if r.int32Locals[name] || r.int64Locals[name] {
 		return nil, &NotYetLowerable{Reason: "assignment value on a refined-integer local is a later slice"}
 	}
+	if r.isDynamic(left) || r.localStorageDynamic(left) {
+		return nil, &NotYetLowerable{Reason: "assignment value on a dynamic or narrowed-storage local is a later slice"}
+	}
+	retType, err := r.typeExpr(r.prog.TypeAt(left))
+	if err != nil {
+		return nil, err
+	}
 	rhs, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err = r.coerceToTarget(rhs, right, left)
 	if err != nil {
 		return nil, err
 	}
@@ -580,14 +605,85 @@ func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
 		&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}},
 		&ast.ReturnStmt{Results: []ast.Expr{ident(name)}},
 	}
+	return r.valueClosure(retType, body), nil
+}
+
+// assignValueProperty lowers an assignment-as-value whose target is a property.
+// It reuses the same field gate the statement store uses: a class field or a
+// static-shape object field resolves to a Go selector lvalue, so the closure
+// binds the coerced right-hand side to a temp, writes it through the lvalue, and
+// returns the temp. Evaluating the right-hand side into the temp first keeps the
+// stored value and the returned value the same object. A setter, a dynamic
+// receiver, an array element, or a typed-array/map/set member uses method access
+// rather than a plain lvalue and hands back to a later slice.
+func (r *Renderer) assignValueProperty(left, right frontend.Node) (ast.Expr, error) {
+	_, f, isField, err := r.classFieldOfTarget(left)
+	if err != nil {
+		return nil, err
+	}
+	coerceTo := f.ident
+	if !isField {
+		tParts := r.prog.Children(left)
+		if len(tParts) != 2 {
+			return nil, &NotYetLowerable{Reason: "assignment value property target is malformed"}
+		}
+		obj := tParts[0]
+		objType := r.prog.TypeAt(obj)
+		if r.isDynamic(obj) || objType.Flags&frontend.TypeObject == 0 {
+			return nil, &NotYetLowerable{Reason: "assignment value into a dynamic-receiver or non-object property is a later slice"}
+		}
+		if _, isArray := r.prog.ElementType(objType); isArray {
+			return nil, &NotYetLowerable{Reason: "assignment value into an array element is a later slice"}
+		}
+		if r.isTypedArray(obj) || r.isMap(obj) || r.isSet(obj) {
+			return nil, &NotYetLowerable{Reason: "assignment value into a typed-array, map, or set member is a later slice"}
+		}
+		coerceTo = left
+	}
+	lhs, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err = r.coerceToTarget(rhs, right, coerceTo)
+	if err != nil {
+		return nil, err
+	}
+	retType, err := r.typeExpr(r.prog.TypeAt(left))
+	if err != nil {
+		return nil, err
+	}
+	// The temp is declared with the field's Go type rather than inferred with :=, so
+	// a bare numeric constant right-hand side does not settle to Go's default int and
+	// mismatch a float64 field.
+	tmp := r.freshTemp()
+	body := []ast.Stmt{
+		&ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+			Names:  []*ast.Ident{ident(tmp)},
+			Type:   retType,
+			Values: []ast.Expr{rhs},
+		}}}},
+		&ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: token.ASSIGN, Rhs: []ast.Expr{ident(tmp)}},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}},
+	}
+	return r.valueClosure(retType, body), nil
+}
+
+// valueClosure wraps a body that ends in a return into an immediately-called
+// function literal returning the given type, the shape a value-position statement
+// (an assignment or an increment) rides so it can both run and yield a value.
+func (r *Renderer) valueClosure(retType ast.Expr, body []ast.Stmt) ast.Expr {
 	lit := &ast.FuncLit{
 		Type: &ast.FuncType{
 			Params:  &ast.FieldList{},
-			Results: &ast.FieldList{List: []*ast.Field{{Type: ident("float64")}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
 		},
 		Body: &ast.BlockStmt{List: body},
 	}
-	return &ast.CallExpr{Fun: lit}, nil
+	return &ast.CallExpr{Fun: lit}
 }
 
 // combineBinary lowers a JavaScript binary operator applied to two operand
