@@ -2045,9 +2045,10 @@ func compoundBaseOp(op string) (string, bool) {
 // directly, but Go forbids a var declaration in a for's init clause, so a
 // let-initialized loop is emitted as a Go block holding the declaration followed
 // by a for with an empty init: the loop variable keeps its block scope and its
-// float64 type, which a := init would lose to int inference. Only the full
-// declare-condition-increment-block shape is covered; an omitted clause or an
-// expression initializer hands back.
+// float64 type, which a := init would lose to int inference. An expression
+// initializer, one that assigns an existing binding rather than declaring a new
+// one, needs no wrapping block and lowers straight into the for's init clause; a
+// destructuring initializer still hands back as its own later slice.
 // lowerForPost lowers a for loop's post clause. A single update lowers the way it
 // does anywhere else. A comma of updates, the i++, j-- a two-pointer loop walks
 // with, cannot be two Go statements because a Go post clause holds exactly one, so
@@ -2165,22 +2166,33 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
 
 	var decls []frontend.Node
+	var exprInit ast.Stmt
 	if fc.HasInit {
 		collectVarDecls(r.prog, fc.Init, &decls)
 		if len(decls) == 0 {
-			return nil, &NotYetLowerable{Reason: "a for loop with an expression initializer instead of a let or const declaration is a later slice"}
-		}
-		// A destructuring initializer binds a pattern, not a plain name, and the
-		// pattern's own lowering is a separate slice. The binding name of a plain
-		// counter is an identifier node; an array or object pattern is not, so hand
-		// back rather than mangle the pattern text into one Go name.
-		for _, d := range decls {
-			kids := r.prog.Children(d)
-			if len(kids) == 0 {
-				continue
+			// An expression initializer writes to a binding that already exists
+			// rather than declaring one, so it needs no wrapping block: it lowers
+			// straight into Go's for init clause the way the post clause lowers its
+			// own update. A single assignment stands as one statement; a comma of
+			// assignments fuses into one parallel assignment.
+			s, err := r.lowerForPost(fc.Init)
+			if err != nil {
+				return nil, err
 			}
-			if kids[0].Kind() != frontend.NodeIdentifier {
-				return nil, &NotYetLowerable{Reason: "a for loop with a destructuring initializer is a later slice"}
+			exprInit = s
+		} else {
+			// A destructuring initializer binds a pattern, not a plain name, and the
+			// pattern's own lowering is a separate slice. The binding name of a plain
+			// counter is an identifier node; an array or object pattern is not, so hand
+			// back rather than mangle the pattern text into one Go name.
+			for _, d := range decls {
+				kids := r.prog.Children(d)
+				if len(kids) == 0 {
+					continue
+				}
+				if kids[0].Kind() != frontend.NodeIdentifier {
+					return nil, &NotYetLowerable{Reason: "a for loop with a destructuring initializer is a later slice"}
+				}
 			}
 		}
 	}
@@ -2210,7 +2222,7 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	// A nil condition is Go's infinite loop, a nil post clause is none, so for(;;),
 	// for(;cond;), and for(let-less shapes) all read the way a developer writes them.
 	if len(decls) == 0 {
-		return &ast.ForStmt{Cond: cond, Post: post, Body: body}, nil
+		return &ast.ForStmt{Init: exprInit, Cond: cond, Post: post, Body: body}, nil
 	}
 
 	// A loop variable an omitted clause leaves unread is still declared, and Go
