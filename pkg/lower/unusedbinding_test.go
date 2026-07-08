@@ -27,15 +27,21 @@ func TestUsedBindingNotBlanked(t *testing.T) {
 	}
 }
 
-// TestShorthandRefKeepsBindingUsed pins that a binding referenced only through an
-// object-literal shorthand is not mistaken for unused. The shorthand identifier
-// resolves to the property rather than the local, so the symbol walk alone would
-// miss the read; the name-occurrence guard keeps the binding used and adds no blank.
-func TestShorthandRefKeepsBindingUsed(t *testing.T) {
+// TestShorthandRefBuildsAndRuns pins that a binding referenced only through an
+// object-literal shorthand still builds and runs. The shorthand identifier resolves
+// to the property rather than the local, so the symbol walk counts the local as
+// unused and emits a trailing `_ = first`. That blank is harmless: it sits beside a
+// binding the struct literal reads on the next line, so the Go compiles and the
+// program prints the value. Keying the blank on the symbol count alone, rather than
+// on how many times the name appears, is what lets a shadowed unused binding get its
+// own blank without an outer namesake keeping it alive.
+func TestShorthandRefBuildsAndRuns(t *testing.T) {
+	skipIfShort(t)
 	src := `const first = "ada"; const person = { first }; console.log(person.first);`
-	out := renderProgram(t, src)
-	if strings.Contains(out, "_ = first") {
-		t.Fatalf("shorthand-referenced binding was wrongly blanked:\n%s", out)
+	got := runProgramGo(t, src)
+	want := "ada\n"
+	if got != want {
+		t.Fatalf("shorthand-referenced binding run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 

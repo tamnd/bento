@@ -79,13 +79,13 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// Count how many identifiers resolve to each binding so a local declared and
 	// never read can be spotted when its statement lowers. A symbol is unique to
 	// its binding, so one walk over the module settles the count for every scope.
-	r.bindingUses, r.identText = countBindingUses(r.prog, entry)
+	r.bindingUses = countBindingUses(r.prog, entry)
 
 	// Count the identifier reads the Object statics fold away so the blank decision
 	// below sees the emitted-Go use count, not the source one. Object.keys(o) reads
 	// only o's shape and never lowers o, so without this a var o the fold orphaned
 	// would keep its source read and go unblanked, and the emitted Go would not build.
-	r.elidedUses, r.elidedText = countElidedReceivers(r, entry)
+	r.elidedUses = countElidedReceivers(r, entry)
 
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
@@ -337,15 +337,26 @@ func collectModuleRefs(prog *frontend.Program, n frontend.Node, module map[front
 // declaration's own name; every read or write adds another. Resolving through the
 // symbol rather than the identifier text keeps a shadowing local from inflating an
 // outer binding's count, since each binding carries its own symbol.
-func countBindingUses(prog *frontend.Program, entry frontend.Node) (map[frontend.Symbol]int, map[string]int) {
+//
+// An object-literal shorthand needs a second lookup. The checker resolves a `{ x }`
+// member's identifier to the property it declares, not to the outer `x` it copies,
+// so the plain symbol walk would miss the read and blank a binding the emit still
+// references. Each shorthand member credits its value symbol, the outer binding, so
+// the emit for `{ x }` reads `x` without a redundant blank beside it.
+func countBindingUses(prog *frontend.Program, entry frontend.Node) map[frontend.Symbol]int {
 	uses := map[frontend.Symbol]int{}
-	text := map[string]int{}
 	var walk func(n frontend.Node)
 	walk = func(n frontend.Node) {
 		if n.Kind() == frontend.NodeIdentifier {
-			text[prog.Text(n)]++
 			if sym, ok := prog.SymbolAt(n); ok {
 				uses[sym]++
+			}
+		}
+		if n.Kind() == frontend.NodeObjectLiteralExpression {
+			for _, member := range prog.Children(n) {
+				if sym, ok := shorthandValueSymbol(prog, member); ok {
+					uses[sym]++
+				}
 			}
 		}
 		for _, c := range prog.Children(n) {
@@ -353,29 +364,43 @@ func countBindingUses(prog *frontend.Program, entry frontend.Node) (map[frontend
 		}
 	}
 	walk(entry)
-	return uses, text
+	return uses
+}
+
+// shorthandValueSymbol returns the outer binding an object-literal member reads when
+// the member is a shorthand `{ x }`, and false otherwise. A shorthand carries a
+// single identifier child and does not open with the spread token; a `{ ...o }` copy
+// and a `{ k: v }` pair both fail that shape and read as not-a-shorthand here.
+func shorthandValueSymbol(prog *frontend.Program, member frontend.Node) (frontend.Symbol, bool) {
+	kids := prog.Children(member)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodeIdentifier {
+		return frontend.Symbol{}, false
+	}
+	if strings.HasPrefix(strings.TrimSpace(prog.Text(member)), "...") {
+		return frontend.Symbol{}, false
+	}
+	return prog.ShorthandValueSymbolAt(member)
 }
 
 // bindingUnused reports whether the binding named by nameNode is declared and
-// never read. Two counts must agree: exactly one identifier resolves to the
-// binding's symbol, the declaration itself, and the name text occurs exactly once
-// in the module. The text guard covers a reference the symbol walk does not see as
-// the binding, such as an object-literal shorthand whose identifier resolves to the
-// property rather than the local; those keep the name used, so no blank is added.
-// A binding whose symbol does not resolve is treated as used, so the conservative
-// answer only ever withholds the blank assignment.
+// never read: exactly one identifier resolves to the binding's symbol, the
+// declaration itself. Resolving through the symbol counts only references to this
+// binding, so a shadowing local of the same name elsewhere in the module does not
+// keep it alive. A binding whose symbol does not resolve is treated as used, so the
+// conservative answer only ever withholds the blank assignment. countBindingUses
+// credits an object-literal shorthand to the outer binding it reads, so a `{ x }`
+// keeps x used and no redundant blank lands beside the value the struct literal
+// copies.
 func (r *Renderer) bindingUnused(nameNode frontend.Node) bool {
 	sym, ok := r.prog.SymbolAt(nameNode)
 	if !ok {
 		return false
 	}
-	name := r.prog.Text(nameNode)
 	// Subtract the reads a fold drops from the emitted Go, so a binding whose only
 	// non-declaration read was the receiver of an Object.keys(o) that folded to a
 	// static name list reads as unused here and gets the blank the emit needs.
 	uses := r.bindingUses[sym] - r.elidedUses[sym]
-	text := r.identText[name] - r.elidedText[name]
-	return uses == 1 && text == 1
+	return uses == 1
 }
 
 // countElidedReceivers tallies, per binding, the identifier reads the Object static
@@ -386,15 +411,13 @@ func (r *Renderer) bindingUnused(nameNode frontend.Node) bool {
 // syntactically, on a bare-identifier receiver of one of those three calls; if the
 // shape does not fold the whole program hands back and no Go is emitted, so an
 // over-count on a call that will not fold cannot reach a build.
-func countElidedReceivers(r *Renderer, entry frontend.Node) (map[frontend.Symbol]int, map[string]int) {
+func countElidedReceivers(r *Renderer, entry frontend.Node) map[frontend.Symbol]int {
 	uses := map[frontend.Symbol]int{}
-	text := map[string]int{}
 	prog := r.prog
 	var walk func(n frontend.Node)
 	walk = func(n frontend.Node) {
 		if n.Kind() == frontend.NodeCallExpression {
 			if arg, ok := elidedObjectReceiver(r, n); ok {
-				text[prog.Text(arg)]++
 				if sym, ok := prog.SymbolAt(arg); ok {
 					uses[sym]++
 				}
@@ -405,7 +428,7 @@ func countElidedReceivers(r *Renderer, entry frontend.Node) (map[frontend.Symbol
 		}
 	}
 	walk(entry)
-	return uses, text
+	return uses
 }
 
 // elidedObjectReceiver reports the bare-identifier receiver of an Object static call
