@@ -251,14 +251,52 @@ func isJavaScript(entry string) bool {
 // firstError returns the message of the first type error in the program, or the
 // empty string when it type-checks cleanly. A build stops on the first error so
 // its message is the one the user sees, the same contract the CLI type-checker
-// keeps.
+// keeps. An implicit-any diagnostic is skipped rather than treated as fatal:
+// bento checks strictly to get the most precise types it can, but noImplicitAny
+// only reports that a form was left untyped, it does not change the resolved
+// type, which is already `any`. The lowerer runs `any` through its dynamic value
+// path (the same path an explicit `x: any` takes), so an untyped parameter,
+// variable, binding element, or member lowers to a dynamic slot instead of being
+// refused. Skipping the diagnostic here is equivalent to a noImplicitAny:false
+// project for these forms, but scoped to bento's AOT gate and kept per-family so
+// only the untyped-form codes are tolerated; every other error still gates.
 func firstError(prog *frontend.Program) string {
 	for _, d := range prog.Diagnostics() {
-		if d.Category == frontend.CategoryError {
-			return d.Message
+		if d.Category != frontend.CategoryError {
+			continue
 		}
+		if toleratedImplicitAny[d.Code] {
+			continue
+		}
+		return d.Message
 	}
 	return ""
+}
+
+// toleratedImplicitAny is the set of checker diagnostic codes bento admits by
+// lowering the untyped form to a dynamic value instead of failing the build.
+// Each one is a noImplicitAny report over a binding, parameter, variable,
+// member, or inferred return whose resolved type is already `any`, so tolerating
+// it costs no precision the checker had. Index-access and module-resolution
+// implicit-any reports (7015, 7016, 7017, 7052, 7053) are deliberately absent:
+// those need the dynamic member and index path, so they gate until that work
+// lands and stay attributable to it. Binding element (7031) is also absent: a
+// destructured parameter with no annotation is not typed `any`, the checker
+// infers an anonymous object type from the pattern, so tolerating it would emit
+// Go that does not compile rather than a dynamic slot. It waits on the
+// destructured-param lowering and stays a front-door handback until then.
+var toleratedImplicitAny = map[int]bool{
+	7005: true, // Variable 'X' implicitly has an 'any' type.
+	7006: true, // Parameter 'X' implicitly has an 'any' type.
+	7008: true, // Member 'X' implicitly has an 'any' type.
+	7010: true, // 'X', which lacks return-type annotation, implicitly has an 'any' return type.
+	7011: true, // Function expression, which lacks return-type annotation, implicitly has an 'any' return type.
+	7018: true, // Object literal's property 'X' implicitly has an 'any' type.
+	7019: true, // Rest parameter 'X' implicitly has an 'any[]' type.
+	7022: true, // 'X' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+	7032: true, // Property 'X' implicitly has type 'any', because its set accessor lacks a parameter type annotation.
+	7033: true, // Property 'X' implicitly has type 'any', because its get accessor lacks a return type annotation.
+	7034: true, // Variable 'X' implicitly has type 'any' in some locations where its type cannot be determined.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
