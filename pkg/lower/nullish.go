@@ -27,7 +27,10 @@ import (
 // is the element type and Or returns the bare value.
 func (r *Renderer) nullishCoalesce(left, right frontend.Node) (ast.Expr, error) {
 	if !r.isOptional(left) {
-		return nil, &NotYetLowerable{Reason: "nullish coalescing whose left is not the optional T | undefined (a T | null or dynamic operand) is a later slice"}
+		if r.isDynamic(left) {
+			return r.dynamicNullishCoalesce(left, right)
+		}
+		return nil, &NotYetLowerable{Reason: "nullish coalescing whose left is a T | null, not the optional T | undefined or a dynamic operand, is a later slice"}
 	}
 	if !r.pureCtorValue(right) {
 		return nil, &NotYetLowerable{Reason: "nullish coalescing with a side-effecting fallback needs statement hoisting, a later slice"}
@@ -60,4 +63,28 @@ func (r *Renderer) nullishCoalesce(left, right frontend.Node) (ast.Expr, error) 
 		}
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: opt, Sel: ident("Or")}, Args: []ast.Expr{fallback}}, nil
+}
+
+// dynamicNullishCoalesce lowers a ?? b when the left is a dynamic value, whose
+// nullish test is the runtime IsNullish rather than an Opt presence flag. It
+// returns the left when it is neither null nor undefined and the right otherwise,
+// which the value model spells as value.Coalesce(a, b). Both sides box to a Value,
+// so the result keeps the left's runtime kind or the fallback's, and a dynamic
+// fallback is admitted here since the helper takes plain values. The fallback is a
+// function argument and so is evaluated eagerly, so the form is taken only when it
+// is side-effect free, the same short-circuit constraint the Opt path keeps.
+func (r *Renderer) dynamicNullishCoalesce(left, right frontend.Node) (ast.Expr, error) {
+	if !r.pureCtorValue(right) {
+		return nil, &NotYetLowerable{Reason: "nullish coalescing with a side-effecting fallback needs statement hoisting, a later slice"}
+	}
+	l, err := r.boxOperand(left)
+	if err != nil {
+		return nil, err
+	}
+	fallback, err := r.boxOperand(right)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "Coalesce"), Args: []ast.Expr{l, fallback}}, nil
 }
