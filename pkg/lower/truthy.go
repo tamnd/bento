@@ -18,8 +18,10 @@ import (
 // number is falsy only at zero and NaN, a string only when empty, and those two
 // tests are the ones a Go comparison does not spell on its own: a bare x != 0 keeps
 // NaN, which is falsy, and a Go string has no direct emptiness idiom for value.BStr.
-// An object, a union, or a dynamic value has a falsy rule this slice does not model
-// yet and hands the unit back rather than guess one.
+// A non-primitive the checker proved always truthy or always falsy (an object is
+// always truthy, a null/undefined/void-only type always falsy) collapses to the Go
+// boolean constant. A union, or a side-effecting non-primitive whose evaluation must
+// still fire, has a falsy rule this slice does not model yet and hands back.
 
 // lowerTruthy lowers an operand standing in boolean position to a Go bool: the
 // operand itself when it is already boolean, and the type's ToBoolean test
@@ -29,6 +31,19 @@ import (
 func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 	if r.isBool(n) {
 		return r.lowerExpr(n)
+	}
+	// A non-primitive operand the checker proved always truthy or always falsy
+	// collapses to that Go boolean constant: an object, array, function, or class
+	// instance is always truthy, and a type that is only null, undefined, or void is
+	// always falsy. This is the object-in-boolean-position case, where the value has
+	// no falsy member to test. The collapse is taken only for a repeatable operand,
+	// so dropping its evaluation loses no side effect; an operand with a side effect
+	// keeps its runtime test and falls through to the per-kind handling below.
+	if val, known := r.staticTruthy(n); known && r.repeatableOperand(n) {
+		if val {
+			return ident("true"), nil
+		}
+		return ident("false"), nil
 	}
 	switch {
 	case r.isNumber(n):
@@ -46,7 +61,7 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{x}}, nil
 	}
-	return nil, &NotYetLowerable{Reason: "truthiness of a non-primitive (object or union) is a later slice"}
+	return nil, &NotYetLowerable{Reason: "truthiness of a union or a side-effecting non-primitive is a later slice"}
 }
 
 // staticTruthy reports whether the checker proved an operand's type is always
