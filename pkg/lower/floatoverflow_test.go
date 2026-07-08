@@ -166,3 +166,33 @@ console.log(String(nan));
 		t.Fatalf("divide by zero run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestConstModulusZeroDivisorFolds pins that a divide by a constant modulus that
+// evaluates to zero folds to math.Inf, not the Go constant division by zero the
+// compiler rejects. The remainder path wraps its Go % in a float64 cast, so 1 % 1
+// lowers to float64((1)%1), a Go constant zero, and 1 / (1 % 1) would be a build
+// error without the fold seeing through the cast to evaluate the modulus.
+func TestConstModulusZeroDivisorFolds(t *testing.T) {
+	src := `console.log(String(1 / (1 % 1)));`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "math.Inf(1)") {
+		t.Fatalf("divide by a constant zero modulus did not fold to math.Inf(1):\n%s", out)
+	}
+}
+
+// TestConstModulusZeroDivisorRuns builds and runs the constant-modulus divisor forms
+// so the folded infinity prints the way Number does, with the numerator's sign and
+// the dividend-zero case both carrying the value JavaScript yields.
+func TestConstModulusZeroDivisorRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+console.log(String(1 / (1 % 1)));
+console.log(String(1 / (0 % 1)));
+console.log(String(-1 / (1 % 1)));
+`
+	got := runProgramGo(t, src)
+	want := "Infinity\nInfinity\n-Infinity\n"
+	if got != want {
+		t.Fatalf("constant modulus divisor run mismatch:\n got %q\nwant %q", got, want)
+	}
+}

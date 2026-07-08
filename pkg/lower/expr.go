@@ -958,6 +958,23 @@ func astConstFloat(e ast.Expr) (float64, bool) {
 			return x * y, true
 		case token.QUO:
 			return x / y, true
+		case token.REM:
+			// A modulus on two int32 constants lowers to a Go % inside a float64 cast
+			// (the remainder path above), so a constant zero divisor downstream, 1 / (1 % 1),
+			// reaches the fold as a constant. JavaScript % is math.Mod, which keeps the sign
+			// of the dividend and yields NaN on a zero divisor, so evaluating it here lets the
+			// outer divide fold to the infinity the language gives rather than a Go constant
+			// division-by-zero the compiler rejects.
+			return math.Mod(x, y), true
+		}
+		return 0, false
+	case *ast.CallExpr:
+		// The int32 remainder path wraps its Go % in a float64 conversion, so a constant
+		// modulus reaches the fold as float64((a)%b). Unwrapping the conversion lets the
+		// remainder inside it evaluate; any other one-argument float64(...) over a constant
+		// folds through unchanged, and a conversion over a runtime value stays not-ok.
+		if fn, ok := t.Fun.(*ast.Ident); ok && fn.Name == "float64" && len(t.Args) == 1 {
+			return astConstFloat(t.Args[0])
 		}
 		return 0, false
 	case *ast.SelectorExpr:
