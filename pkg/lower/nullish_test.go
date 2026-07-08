@@ -49,40 +49,90 @@ func TestNullishCoalesceEmits(t *testing.T) {
 	}
 }
 
-// TestNullishCoalesceHandsBack pins the boundaries: a side-effecting fallback
-// needs statement hoisting whether the left is an optional or a dynamic value,
-// since the fallback is an eager function argument in both lowerings, so each
-// hands back with the named reason until the hoisting slice lands.
-func TestNullishCoalesceHandsBack(t *testing.T) {
+// TestNullishCoalesceLazyEmits pins the lazy-closure shape a side-effecting
+// fallback lowers to: the optional left binds to a temp and its presence is the
+// IsUndefined test, the dynamic left binds and tests IsNullish, and in both cases
+// the fallback call sits inside the closure body so it runs only on the nullish
+// branch. This is what keeps ??'s short-circuit when the fallback is not pure.
+func TestNullishCoalesceLazyEmits(t *testing.T) {
 	cases := []struct {
-		name string
-		src  string
-		want string
+		name  string
+		src   string
+		wants []string
 	}{
 		{
-			"sideEffectingFallback",
+			"optionalLeft",
 			"function side(): number { return 1; }\nfunction f(x: number | undefined): number { return x ?? side(); }\nconsole.log(f(undefined));\n",
-			"side-effecting fallback",
+			[]string{".IsUndefined()", "Side()", ".Get()"},
 		},
 		{
-			"dynamicSideEffectingFallback",
+			"dynamicLeft",
 			"function side(): any { return 1; }\nfunction f(x: any): any { return x ?? side(); }\nconsole.log(f(undefined));\n",
-			"side-effecting fallback",
+			[]string{".IsNullish()", "Side()"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			prog := compile(t, tc.src)
-			r := NewRenderer(prog)
-			_, err := r.RenderProgram(entryFile(t, prog))
-			var nyl *NotYetLowerable
-			if !errors.As(err, &nyl) {
-				t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
-			}
-			if !strings.Contains(nyl.Reason, tc.want) {
-				t.Errorf("hand-back reason = %q, want it to contain %q", nyl.Reason, tc.want)
+			source := renderProgram(t, tc.src)
+			for _, want := range tc.wants {
+				if !strings.Contains(source, want) {
+					t.Errorf("lazy nullish coalescing did not print %q:\n%s", want, source)
+				}
 			}
 		})
+	}
+}
+
+// TestNullishCoalesceHandsBack pins the one ?? boundary that still hands back: a
+// dynamic fallback into an optional left mixes the two nullish representations and
+// has no bridge yet, so it names its own later slice.
+func TestNullishCoalesceHandsBack(t *testing.T) {
+	const src = "function side(): any { return 1; }\nfunction f(x: number | undefined): number { return x ?? side(); }\nconsole.log(f(undefined));\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if !strings.Contains(nyl.Reason, "dynamic fallback") {
+		t.Errorf("hand-back reason = %q, want it to contain %q", nyl.Reason, "dynamic fallback")
+	}
+}
+
+// TestNullishCoalesceLazyRuns builds and runs a side-effecting fallback and
+// checks both the value and the short-circuit: a present left keeps its value and
+// the fallback's console.log never fires, an undefined left falls to the fallback
+// and does fire, and the dynamic left keeps the same contract over boxed values.
+func TestNullishCoalesceLazyRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the test builds and runs generated Go")
+	}
+	const src = `function loud(tag: string, v: number): number {
+  console.log("fb:" + tag);
+  return v;
+}
+function opt(x: number | undefined, tag: string): number {
+  return x ?? loud(tag, -1);
+}
+function dyn(x: any, tag: string): any {
+  return x ?? loud(tag, -2);
+}
+console.log(opt(5, "a"));
+console.log(opt(undefined, "b"));
+console.log(dyn(0, "c"));
+console.log(dyn(undefined, "d"));
+`
+	got := runProgramGo(t, src)
+	want := "5\n" +
+		"fb:b\n" +
+		"-1\n" +
+		"0\n" +
+		"fb:d\n" +
+		"-2\n"
+	if got != want {
+		t.Fatalf("lazy nullish program printed %q, want %q", got, want)
 	}
 }
 
