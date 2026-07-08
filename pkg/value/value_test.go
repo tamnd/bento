@@ -146,6 +146,44 @@ func TestJSONParseWellFormedDoesNotThrow(t *testing.T) {
 	}
 }
 
+// numOrStrArm stands in for a generated tagged-sum union in this test: a value that
+// carries one member and hands it back through JSONArm, the hook the JSON walk reads
+// so it serializes the active member rather than reflecting the struct's unexported
+// fields into an empty object.
+type numOrStrArm struct {
+	isStr bool
+	num   float64
+	str   BStr
+}
+
+func (u numOrStrArm) JSONArm() any {
+	if u.isStr {
+		return u.str
+	}
+	return u.num
+}
+
+// TestJSONStringifyUnionArm checks that a value exposing JSONArm serializes as its
+// active member: a number arm renders as the number and a string arm as the quoted
+// string, and an array of such values renders each element by its arm rather than as
+// the empty object a reflected union struct would produce.
+func TestJSONStringifyUnionArm(t *testing.T) {
+	if got := JSONStringify(numOrStrArm{num: 42}).ToGoString(); got != "42" {
+		t.Fatalf("number arm stringified to %q", got)
+	}
+	if got := JSONStringify(numOrStrArm{isStr: true, str: FromGoString("hi")}).ToGoString(); got != `"hi"` {
+		t.Fatalf("string arm stringified to %q", got)
+	}
+	arr := NewArray(
+		numOrStrArm{isStr: true, str: FromGoString("-0")},
+		numOrStrArm{num: 0},
+		numOrStrArm{num: negZero()},
+	)
+	if got := JSONStringify(arr).ToGoString(); got != `["-0",0,0]` {
+		t.Fatalf("union array stringified to %q", got)
+	}
+}
+
 // TestValueCoercions checks the ToNumber, ToString, ToBoolean, and Add operations
 // the dynamic arithmetic path uses, against the JavaScript results.
 func TestValueCoercions(t *testing.T) {

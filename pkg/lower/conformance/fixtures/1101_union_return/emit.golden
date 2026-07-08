@@ -25,6 +25,15 @@ func NumOrStrOfNum(v float64) NumOrStr {
 func NumOrStrOfStr(v value.BStr) NumOrStr {
 	return NumOrStr{tag: NumOrStrStr, str: v}
 }
+func (u NumOrStr) JSONArm() any {
+	switch u.tag {
+	case NumOrStrNum:
+		return u.num
+	case NumOrStrStr:
+		return u.str
+	}
+	return nil
+}
 func Pick(b bool) NumOrStr {
 	if b {
 		return NumOrStrOfNum(1)

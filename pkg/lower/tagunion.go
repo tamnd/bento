@@ -748,8 +748,43 @@ func (r *Renderer) renderUnions() []ast.Decl {
 		for _, a := range info.arms {
 			out = append(out, unionCtor(info, a))
 		}
+		out = append(out, unionJSONArm(info))
 	}
 	return out
+}
+
+// unionJSONArm builds the JSONArm method that hands the union's active member to the
+// JSON serializer. A tagged-sum union stores its value in the field its tag selects,
+// and those fields are unexported, so without this hook JSON.stringify would reflect
+// the struct and write an empty object. The method switches on the tag and returns
+// the matching arm boxed as any, the member the serializer then renders as the value
+// the union holds. It is a plain method a person would write to make the value
+// serializable, and the encoder recognizes it by the exported name.
+func unionJSONArm(info *unionInfo) ast.Decl {
+	cases := make([]ast.Stmt, 0, len(info.arms))
+	for _, a := range info.arms {
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{ident(info.tagConst(a))},
+			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+				&ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)},
+			}}},
+		})
+	}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("u")}, Type: ident(info.goName)}}},
+		Name: ident("JSONArm"),
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident("any")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.SwitchStmt{
+				Tag:  &ast.SelectorExpr{X: ident("u"), Sel: ident("tag")},
+				Body: &ast.BlockStmt{List: cases},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{ident("nil")}},
+		}},
+	}
 }
 
 // unionTagType builds the discriminant type declaration, an unsigned integer the

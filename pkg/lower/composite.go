@@ -62,8 +62,52 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 		}
 		args = append(args, e)
 	}
+	args, err := r.wrapArrayElems(args, kids, n)
+	if err != nil {
+		return nil, err
+	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
+// wrapArrayElems wraps each lowered element of an array construction into the arm
+// constructor of a tagged-sum union element type, the construction a NewArray over
+// a union needs. An array whose element type is a union like string | number stores
+// union values, not the bare number or string an element lowers to, so each element
+// is wrapped in the arm constructor its own type selects (NumOrStrOfNum, NumOrStrOfStr)
+// the same way an assignment into a union slot is. When the element type is not a
+// tagged-sum union every element passes through unchanged, so a homogeneous array is
+// emitted exactly as before. elems are the element nodes in index order, the source
+// types wrapToUnion reads to pick each arm; container is the whole literal or call,
+// whose checker type carries the element type.
+func (r *Renderer) wrapArrayElems(args []ast.Expr, elems []frontend.Node, container frontend.Node) ([]ast.Expr, error) {
+	elemT, ok := r.prog.ElementType(r.prog.TypeAt(container))
+	if !ok {
+		return args, nil
+	}
+	for i, e := range args {
+		w, err := r.wrapUnionElem(e, elems[i], elemT)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = w
+	}
+	return args, nil
+}
+
+// wrapUnionElem wraps one lowered element into the arm constructor its source type
+// selects when elemT is a tagged-sum union, and returns the element unchanged when
+// it is not. It is the per-element step wrapArrayElems and the spread path share so a
+// plain and a spread construction wrap an element the same way.
+func (r *Renderer) wrapUnionElem(e ast.Expr, elem frontend.Node, elemT frontend.Type) (ast.Expr, error) {
+	wrapped, ok, err := r.wrapToUnion(e, elem, elemT)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return wrapped, nil
+	}
+	return e, nil
 }
 
 // arraySpread lowers an array literal that splices in one or more spread
@@ -79,6 +123,7 @@ func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
 // covered, since that is what append's variadic form takes; a spread of a string
 // or another iterable, or of an array with a different element type, hands back.
 func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []frontend.Node) (ast.Expr, error) {
+	elemT, hasElemT := r.prog.ElementType(r.prog.TypeAt(n))
 	seedType := &ast.ArrayType{Elt: elemType}
 	var acc ast.Expr
 	var pending []ast.Expr
@@ -98,6 +143,11 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 			e, err := r.lowerExpr(k)
 			if err != nil {
 				return nil, err
+			}
+			if hasElemT {
+				if e, err = r.wrapUnionElem(e, k, elemT); err != nil {
+					return nil, err
+				}
 			}
 			pending = append(pending, e)
 			continue
@@ -182,6 +232,10 @@ func (r *Renderer) arrayOf(call frontend.Node, argNodes []frontend.Node) (ast.Ex
 			return nil, err
 		}
 		args = append(args, e)
+	}
+	args, err := r.wrapArrayElems(args, argNodes, call)
+	if err != nil {
+		return nil, err
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil

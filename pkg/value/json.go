@@ -26,6 +26,16 @@ type jsonArray interface {
 	jsonElements() []any
 }
 
+// jsonArmer is the hook a generated tagged-sum union exposes so the encoder reads
+// its active member rather than reflecting the struct's unexported arm fields into
+// an empty object. The method is exported because the generated union type lives in
+// the compiled program's own package, so an unexported method there could not
+// satisfy this interface; JSONArm returns the arm the tag selects, boxed as any, and
+// the walk recurses into it as the value the union holds.
+type jsonArmer interface {
+	JSONArm() any
+}
+
 // jsonElements returns the array's elements boxed as a slice of any, in order, so
 // the JSON walk can recurse into each without knowing the element type. The box
 // is the same value the element already is (a BStr, a float64, a struct), so no
@@ -86,6 +96,12 @@ func encodeJSON(b *strings.Builder, v any) {
 		b.WriteByte(']')
 	case Value:
 		encodeBoxedJSON(b, x)
+	case jsonArmer:
+		// A tagged-sum union carries its value in whichever arm its tag selects, and
+		// the arm fields are unexported machinery, so reflecting the struct would write
+		// an empty object. The generated type hands back its active arm here, and the
+		// walk serializes that member as the value the union holds.
+		encodeJSON(b, x.JSONArm())
 	default:
 		encodeJSONObject(b, reflect.ValueOf(v))
 	}
