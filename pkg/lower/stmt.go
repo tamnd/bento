@@ -1218,6 +1218,9 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.arrayElementAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		if stmt, ok, err := r.dynamicElementAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		if stmt, ok, err := r.bigIntInPlaceAssign(n); ok || err != nil {
 			return stmt, err
 		}
@@ -1688,6 +1691,68 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 		return nil, false, err
 	}
 	return &ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}}, true, nil
+}
+
+// dynamicElementAssign lowers a bracket write o[k] = v on a dynamic receiver (one
+// typed any or unknown) through the runtime store, the write mirror of the dynamic
+// element read elementAccess lowers (member.go). arrayElementAssign already claims a
+// receiver the checker types an array, so what reaches here is a receiver whose type
+// the checker never pinned down, the same any target the dotted write o.x = v routes
+// through objectFieldAssign. The key dispatches by its own type exactly as the read
+// does: a number index writes through SetIndex, a dynamic key through SetElem, and a
+// string key through SetKey, so a[3] = x lands in an array element and o["k"] = x in
+// a named property by the same rule the read resolves them. The value boxes through
+// boxOperand so a primitive rides its constructor and a nested dynamic passes
+// through. The store returns the assigned value, which the statement discards, so it
+// lowers to a bare call. It reports ok=false when the statement is not a bracket
+// write on a dynamic receiver, so lowerUpdate falls through to the paths that own the
+// other targets. Only a plain "=" is covered: a compound write o[k] += v reads and
+// writes and is a later slice, so it hands back rather than dropping the read.
+func (r *Renderer) dynamicElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
+	parts := r.prog.Children(bin)
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, false, nil
+	}
+	target := parts[0]
+	if target.Kind() != frontend.NodeElementAccessExpression {
+		return nil, false, nil
+	}
+	idxParts := r.prog.Children(target)
+	if len(idxParts) != 2 {
+		return nil, false, nil
+	}
+	recvNode, idxNode := idxParts[0], idxParts[1]
+	if !r.isDynamic(recvNode) {
+		return nil, false, nil
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, false, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, false, err
+	}
+	val, err := r.boxOperand(parts[2])
+	if err != nil {
+		return nil, false, err
+	}
+	var method string
+	switch {
+	case r.isNumber(idxNode):
+		method = "SetIndex"
+	case r.isDynamic(idxNode):
+		method = "SetElem"
+	case r.isString(idxNode):
+		method = "SetKey"
+	default:
+		return nil, false, &NotYetLowerable{Reason: "a dynamic element write with a non-number, non-string index is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: recv, Sel: ident(method)},
+		Args: []ast.Expr{idx, val},
+	}}, true, nil
 }
 
 // lowerIncDec lowers a ++ or -- applied to a local number. In statement

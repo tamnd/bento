@@ -51,6 +51,36 @@ func (v Value) Set(key BStr, val Value) Value {
 	return v
 }
 
+// SetKey writes v[key] = val by the receiver's kind, the store mirror of the
+// kind-aware Get read. An array claims a numeric key into its dense element
+// storage, growing the slice with undefined holes so a[5] = x on a shorter array
+// leaves the gap the way JavaScript does, and a non-numeric key lands in the named
+// property map an array can still carry. An object and a function store the key as
+// a named property through Set. It returns val so a bracket write can sit in an
+// expression, the way JavaScript's assignment evaluates to its right-hand side. A
+// kind with no writable storage drops the write and returns val, the value the
+// language still hands back.
+func (v Value) SetKey(key BStr, val Value) Value {
+	switch v.kind {
+	case KindArray:
+		o := v.object()
+		if idx, ok := arrayIndex(key.ToGoString()); ok {
+			for len(o.elems) <= idx {
+				o.elems = append(o.elems, Undefined)
+			}
+			o.elems[idx] = val
+			return val
+		}
+		v.Set(key, val)
+		return val
+	case KindObject, KindFunc:
+		v.Set(key, val)
+		return val
+	default:
+		return val
+	}
+}
+
 // getOwn returns the value of a named own property, or undefined when the object
 // has no such key, the JavaScript result for a missing property. The lookup is a
 // linear scan of the ordered keys, which the shape machinery will later replace

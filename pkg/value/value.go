@@ -171,6 +171,29 @@ func (v Value) GetElem(key Value) Value {
 	return v.Get(ToString(key))
 }
 
+// SetIndex writes v[i] = val for a numeric index, the bracket write a[i] = val
+// takes when the receiver is a dynamic value and the index is a number. It mirrors
+// GetIndex: the index becomes a property key its canonical string, then the write
+// dispatches by the receiver's kind, so an array element lands in dense storage and
+// an object numeric property lands in the property map the way a[3] = x does. It
+// returns the assigned value so the write reads the same as JavaScript's assignment
+// expression, which evaluates to its right-hand side.
+func (v Value) SetIndex(i float64, val Value) Value {
+	return v.SetKey(NumberToString(i), val)
+}
+
+// SetElem writes v[key] = val for a dynamic index whose own type is not known to
+// be a number, the mirror of GetElem. The key is coerced to a property key the way
+// JavaScript does, a string used as is and any other value taken through ToString,
+// then the write dispatches through the same kind-aware path SetIndex uses, so a
+// numeric string key round-trips to the same array element GetIndex would read.
+func (v Value) SetElem(key, val Value) Value {
+	if key.kind == KindString {
+		return v.SetKey(key.str(), val)
+	}
+	return v.SetKey(ToString(key), val)
+}
+
 // MissingProperty is the value of a property read whose receiver's fixed shape
 // does not declare the property. A shape interns to a Go struct that carries
 // exactly its declared fields, so such a read is a provable miss and the language
