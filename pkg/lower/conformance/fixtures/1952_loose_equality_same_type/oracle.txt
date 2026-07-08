@@ -1,0 +1,7 @@
+== stdout:
+num-eq
+num-neq
+bool-eq
+bool-neq
+== exit:
+0
