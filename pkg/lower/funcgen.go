@@ -185,8 +185,15 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 			def, ok := r.paramDefaultNode(paramNodes, i)
 			switch {
 			case ok:
-				if !packageSafeInit(r.prog, def) {
-					return nil, &NotYetLowerable{Reason: "a default parameter value that reads a variable or makes a call needs the callee's scope at the call site, a later slice"}
+				// A default that reads a module binding or calls a top-level function
+				// lowers at the omitting call site: the binding is hoisted to a package
+				// var (its read inside this default keeps it cross-boundary) and a
+				// top-level function is always package-visible, so the call site sees the
+				// same value the callee scope would. A default that reads an earlier
+				// parameter is the one form the call site cannot reconstruct, since that
+				// parameter is in scope only inside the callee, so it hands back.
+				if r.defaultReadsOwnParam(sig, def) {
+					return nil, &NotYetLowerable{Reason: "a default parameter value that reads an earlier parameter needs the callee's scope, a later slice"}
 				}
 			case p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
 				// A bare optional of dynamic type needs no default: the omitted slot
@@ -256,6 +263,38 @@ func (r *Renderer) paramDefaultNode(paramNodes []frontend.Node, i int) (frontend
 		}
 	}
 	return nil, false
+}
+
+// defaultReadsOwnParam reports whether a parameter default reads one of the
+// function's own parameters. Such a default is evaluated in the callee's scope,
+// where the earlier parameters are bound, so the omitting call site cannot
+// reconstruct it and the parameter hands back. Any other identifier the default
+// reads resolves to a module binding or a top-level function, both of which the
+// call site can see, so only a self-parameter read blocks the call-site fill. A
+// property access reads a binding only on its object side, so the member name is
+// not treated as a parameter read.
+func (r *Renderer) defaultReadsOwnParam(sig frontend.Signature, def frontend.Node) bool {
+	names := make(map[string]bool, len(sig.Params))
+	for _, p := range sig.Params {
+		names[p.Name] = true
+	}
+	var reads func(n frontend.Node) bool
+	reads = func(n frontend.Node) bool {
+		kids := r.prog.Children(n)
+		if n.Kind() == frontend.NodeIdentifier {
+			return names[r.prog.Text(n)]
+		}
+		if n.Kind() == frontend.NodePropertyAccessExpression && len(kids) == 2 {
+			return reads(kids[0])
+		}
+		for _, c := range kids {
+			if reads(c) {
+				return true
+			}
+		}
+		return false
+	}
+	return reads(def)
 }
 
 // calleeDefaults returns the default-value nodes of the function a call resolves to,
