@@ -268,6 +268,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedImplicitAny[d.Code] {
 			continue
 		}
+		if toleratedDynamicMember[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -297,6 +300,22 @@ var toleratedImplicitAny = map[int]bool{
 	7032: true, // Property 'X' implicitly has type 'any', because its set accessor lacks a parameter type annotation.
 	7033: true, // Property 'X' implicitly has type 'any', because its get accessor lacks a return type annotation.
 	7034: true, // Variable 'X' implicitly has type 'any' in some locations where its type cannot be determined.
+}
+
+// toleratedDynamicMember is the set of checker diagnostic codes bento admits by
+// resolving the member read at run time instead of failing the build. Each one
+// reports that a property the source names is not on the receiver's static type.
+// The read is not a build error for an AOT that runs the value model: on a
+// receiver whose type interned to a Go struct the absent property is a provable
+// miss and folds to undefined, and on any other receiver the lowerer hands the
+// read back to a later slice. No lowering path emits a selector for a property
+// the shape does not declare, so tolerating these codes never produces Go that
+// fails to compile; it only lets a resolvable read through and leaves the rest a
+// handback. The "Did you mean" variant (2551) is the same absent-property read
+// with a spelling suggestion, so it tolerates on the same terms.
+var toleratedDynamicMember = map[int]bool{
+	2339: true, // Property 'X' does not exist on type 'Y'.
+	2551: true, // Property 'X' does not exist on type 'Y'. Did you mean 'Z'?
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
