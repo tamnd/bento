@@ -414,10 +414,26 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 	prevBig := r.bigOwned
 	r.bigOwned = r.bigOwnedLocalsOf(r.prog.Children(block))
 	defer func() { r.bigOwned = prevBig }()
-	stmts, err := r.lowerStatements(r.prog.Children(block)[skip:])
+
+	// A var written in a nested block of this body and read outside it hoists to a
+	// declaration at the top of the function, the same function-scoping the module
+	// body gets, so the var is one binding the whole body shares. A hoisted binding
+	// reads at one Go type, so it is kept off the int32 and int64 tiers.
+	bodyStmts := r.prog.Children(block)[skip:]
+	hoistDecls, restoreHoist, err := r.enterVarHoistScope(bodyStmts)
 	if err != nil {
 		return nil, err
 	}
+	defer restoreHoist()
+	for name := range r.hoistedVars {
+		delete(r.int32Locals, name)
+		delete(r.int64Locals, name)
+	}
+	stmts, err := r.lowerStatements(bodyStmts)
+	if err != nil {
+		return nil, err
+	}
+	stmts = append(hoistDecls, stmts...)
 	return &ast.BlockStmt{List: r.hoistStrBuilders(stmts)}, nil
 }
 

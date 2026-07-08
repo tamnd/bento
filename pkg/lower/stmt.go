@@ -531,9 +531,11 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 }
 
 // redeclaredVarAssign turns a `var` statement whose bindings all name variables the
-// current block already declared into assignments to those variables. JavaScript
-// hoists a `var` to one binding per scope, so `var x = a; var x = b;` is a single x
-// assigned twice, which Go writes as a declaration and then a plain assignment. A
+// current block already declared, or that the scope hoisted to its top, into
+// assignments to those variables. JavaScript hoists a `var` to one binding per
+// scope, so `var x = a; var x = b;` is a single x assigned twice, and a var written
+// in a nested block whose scope declared it at the top is likewise one binding, both
+// of which Go writes as a declaration and then a plain assignment. A
 // binding with no initializer keeps the current value and emits nothing, matching a
 // bare `var x;` that does not reset x. A statement that mixes a redeclared name with
 // a fresh one, or names a destructuring target, is a later slice and hands back;
@@ -550,7 +552,7 @@ func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, e
 		if !ok {
 			return nil, false, nil
 		}
-		if r.blockDeclares(name) {
+		if r.blockDeclares(name) || r.hoistedVars[name] {
 			redeclared++
 		}
 	}

@@ -1,0 +1,7 @@
+== stdout:
+positive
+non-positive
+caught
+swept
+== exit:
+0
