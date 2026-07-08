@@ -59,6 +59,20 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			}
 		}
 	}
+	// A read of .prototype on an ambient built-in function that is not a constructor
+	// (isFinite, isNaN, parseInt, parseFloat, decodeURI, and their siblings) is
+	// undefined: these functions carry no prototype property. Bento models such a
+	// function only as a call target, not a first-class value, so a bare reference to
+	// it has no Go value, and the paths below would lower the receiver to a Go type
+	// name and emit a selector on it that does not build. The built-in constructors
+	// whose .prototype is a real object (Number, String, Array, Object) hand back
+	// before reaching here, so an ambient receiver whose .prototype the checker widens
+	// to any is one of the plain functions, and folding to the undefined singleton
+	// answers the value the language gives.
+	if prop == "prototype" && r.isAmbientGlobal(obj) && r.prog.TypeAt(n).Flags == frontend.TypeAny {
+		r.requireImport(valuePkg)
+		return sel("value", "Undefined"), nil
+	}
 	// A member read E.M where E is a registered numeric enum lowers to the
 	// member's Go constant, or to the member's inlined value for a const enum. It
 	// routes before the dynamic and instance paths because the enum name is a value
