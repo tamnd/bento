@@ -93,24 +93,23 @@ run();
 	}
 }
 
-// TestLabeledBlockBreakHandsBack pins that a labeled break to a block hands back
-// rather than emitting invalid Go. JavaScript lets a break name a labeled block,
-// but Go accepts a labeled break only on a for, switch, or select, so a label on a
-// block is not a branch target. Emitting the label anyway would produce Go the
-// compiler rejects, so the lowering keeps this a later slice.
-func TestLabeledBlockBreakHandsBack(t *testing.T) {
-	const src = "export function f(): number {\n" +
-		"  let i = 0;\n" +
-		"  woohoo: {\n" +
-		"    while (true) {\n" +
-		"      i = i + 1;\n" +
-		"      if (i === 10) { break woohoo; }\n" +
-		"    }\n" +
+// TestLabeledBlockBreakInnerLoop pins that a break naming a labeled block jumps out
+// of both an inner loop and the block. JavaScript lets a break name a labeled block,
+// and Go accepts a labeled break only on a for, switch, or select, so the block
+// lowers to a one-shot for loop the label sits on. The break past ten proves the
+// jump leaves the whole block, not just the inner while.
+func TestLabeledBlockBreakInnerLoop(t *testing.T) {
+	skipIfShort(t)
+	const src = "let i = 0;\n" +
+		"woohoo: {\n" +
+		"  while (true) {\n" +
+		"    i = i + 1;\n" +
+		"    if (i === 10) { break woohoo; }\n" +
 		"  }\n" +
-		"  return i;\n" +
-		"}\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "labeled break") {
-		t.Errorf("labeled block break handback reason = %q, want it to mention the labeled break slice", reason)
+		"  i = 99;\n" +
+		"}\n" +
+		"console.log(i);\n"
+	if got, want := runProgramGo(t, src), "10\n"; got != want {
+		t.Fatalf("labeled block break past an inner loop printed %q, want %q", got, want)
 	}
 }

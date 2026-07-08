@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -42,11 +43,26 @@ func (r *Renderer) lowerLabeled(n frontend.Node) (ast.Stmt, bool, error) {
 	// switch, or select, while JavaScript also breaks a labeled block, if, or any
 	// statement. A labeled loop whose initializer forces the block-wrapped form
 	// lowers to a Go block too, so checking the lowered statement rather than the
-	// source kind catches both. When the target is not a statement Go can branch to,
-	// emitting the label would produce a "break label not defined" or an invalid
-	// break, so the whole labeled statement hands back for a later slice.
+	// source kind catches both.
 	if !goBranchTarget(stmt) {
-		return nil, false, &NotYetLowerable{Reason: "a labeled break or continue to a block or other non-loop statement is a later slice"}
+		// A labeled block a break targets is the common non-loop case, `label: {
+		// ...; break label; ...}`, where break label jumps past the block. Go has no
+		// label on a plain block, so the block wraps in a one-shot for loop that the
+		// label sits on: break label targets the loop the way it targeted the block,
+		// and a trailing bare break makes the loop run its body exactly once so a
+		// fall-through past the break behaves like leaving the block. A continue to a
+		// block is invalid in JavaScript, so the checker has already rejected it, and
+		// only a genuine source block (not a loop lowered to a block) takes this path.
+		block, ok := stmt.(*ast.BlockStmt)
+		if ok && kids[1].Kind() == frontend.NodeBlock {
+			oneShot := &ast.ForStmt{Body: &ast.BlockStmt{
+				List: append(block.List, &ast.BranchStmt{Tok: token.BREAK}),
+			}}
+			return &ast.LabeledStmt{Label: ident(label), Stmt: oneShot}, true, nil
+		}
+		// Any other non-loop target (a labeled if, a labeled expression) has no Go
+		// branch form yet, so the whole labeled statement hands back for a later slice.
+		return nil, false, &NotYetLowerable{Reason: "a labeled break or continue to a non-block, non-loop statement is a later slice"}
 	}
 	return &ast.LabeledStmt{Label: ident(label), Stmt: stmt}, true, nil
 }
