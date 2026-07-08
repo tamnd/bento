@@ -265,22 +265,12 @@ type Renderer struct {
 	// still evaluates e in JavaScript. It is program-scoped and computed once in
 	// RenderProgram, since a symbol is unique to its binding across the module.
 	bindingUses map[frontend.Symbol]int
-	// identText counts how often each identifier spelling appears in the module,
-	// the text twin of bindingUses. A binding is only blanked when its name occurs
-	// exactly once, which keeps a reference the symbol walk cannot attribute to the
-	// binding (an object-literal shorthand, say) from being mistaken for an unused
-	// local. It is filled alongside bindingUses in RenderProgram.
-	identText map[string]int
 	// elidedUses counts, per binding symbol, the identifier references a fold drops
 	// from the emitted Go. Object.keys(o) and its siblings read only o's static shape
-	// and never lower o, so the source counts o as read while the emit does not; the
-	// two elided maps let bindingUnused subtract those dropped reads and still blank a
-	// binding the fold orphaned. It is the text twin elidedText and both are filled
-	// alongside bindingUses in RenderProgram.
+	// and never lower o, so the source counts o as read while the emit does not;
+	// bindingUnused subtracts those dropped reads and still blanks a binding the fold
+	// orphaned. It is filled alongside bindingUses in RenderProgram.
 	elidedUses map[frontend.Symbol]int
-	// elidedText is the text twin of elidedUses, subtracted from identText the same
-	// way bindingUnused subtracts elidedUses from bindingUses.
-	elidedText map[string]int
 	// blockDeclared is a stack of the local names already given a Go declaration in
 	// each open block, innermost last. A block is pushed when its statements start
 	// lowering and popped when they finish, so the top frame names the bindings the

@@ -151,6 +151,12 @@ type TSAdapter interface {
 
 	// Symbols.
 	SymbolOfNode(p ProgramHandle, n NodeHandle) (SymbolHandle, bool)
+	// ShorthandValueSymbolOfNode returns the local binding an object-literal
+	// shorthand member reads. For `{ x }` the checker resolves the member's own
+	// identifier to the property it creates, not to the outer `x` it copies from,
+	// so SymbolOfNode alone misses the read; this asks the checker for the value
+	// symbol instead. It reports false for a node that is not a shorthand member.
+	ShorthandValueSymbolOfNode(p ProgramHandle, n NodeHandle) (SymbolHandle, bool)
 	// SymbolOfType returns the symbol a type was declared by, so lowering can
 	// walk from a class instance type back to the class declaration that names
 	// it. Anonymous types (object literals, unions) have no symbol.

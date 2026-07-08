@@ -245,6 +245,21 @@ func (a *RealAdapter) SymbolOfNode(p ProgramHandle, n NodeHandle) (SymbolHandle,
 	return wrapSymbol(sym), true
 }
 
+// ShorthandValueSymbolOfNode returns the local binding an object-literal shorthand
+// member copies from. The checker resolves a `{ x }` member's identifier to the
+// property it declares, so lowering asks here for the value symbol instead, the
+// outer `x` the shorthand reads. It reports false for a node the checker does not
+// treat as a shorthand assignment.
+func (a *RealAdapter) ShorthandValueSymbolOfNode(p ProgramHandle, n NodeHandle) (SymbolHandle, bool) {
+	c, release := prog(p).checker()
+	defer release()
+	sym := c.GetShorthandAssignmentValueSymbol(nodeOf(n))
+	if sym == nil {
+		return nil, false
+	}
+	return wrapSymbol(sym), true
+}
+
 // SymbolOfType returns the symbol a type was declared by, the checker field
 // that links a class instance type back to its class declaration. It is a plain
 // field read like DeclarationsOf, so it takes no checker lock. An anonymous
