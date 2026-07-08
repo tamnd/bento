@@ -52,6 +52,30 @@ func BigIntValue(b *BigInt) Value {
 // bigint returns the *BigInt a bigint box holds.
 func (v Value) bigint() *BigInt { return (*BigInt)(v.ref) }
 
+// Inc implements the ++ update over a dynamic value: the operand's ToNumeric plus
+// one. Every kind but bigint coerces to a number, so "5"++ is 6 and true++ is 2,
+// and a bigint stays a bigint so 9n++ is 10n, the ToNumeric contract the update
+// operators keep. It differs from Add over one, which would concatenate a string
+// operand rather than coerce it, so the update stays numeric on every kind.
+func Inc(v Value) Value { return bumpNumeric(v, 1) }
+
+// Dec implements the -- update, the numeric decrement sibling of Inc: the
+// operand's ToNumeric minus one, a bigint staying a bigint.
+func Dec(v Value) Value { return bumpNumeric(v, -1) }
+
+// bumpNumeric adds a small integer delta to a value under ToNumeric, the shared
+// body of the increment and decrement updates. A bigint adds through big.Int so
+// it keeps arbitrary precision; every other kind coerces to a double and adds
+// there, where ToNumber already throws on a value that has no numeric form.
+func bumpNumeric(v Value, delta int64) Value {
+	if v.kind == KindBigInt {
+		sum := &BigInt{}
+		sum.i.Add(&v.bigint().i, big.NewInt(delta))
+		return BigIntValue(sum)
+	}
+	return Number(ToNumber(v) + float64(delta))
+}
+
 // Int is the arbitrary-precision value, for a caller that needs the underlying
 // math/big.Int, such as the bridge marshaling a bigint back to a Go integer.
 func (b *BigInt) Int() *big.Int { return &b.i }

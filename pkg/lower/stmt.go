@@ -1718,6 +1718,10 @@ func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
 		if lhs, ok, err := r.classFieldTarget(operand); err != nil {
 			return nil, err
 		} else if ok {
+			if r.isDynamic(operand) {
+				lhs2, _, _ := r.classFieldTarget(operand)
+				return r.dynamicIncDec(lhs, lhs2, tok), nil
+			}
 			if !r.isNumber(operand) {
 				return nil, &NotYetLowerable{Reason: "increment of a non-number needs coercion, a later slice"}
 			}
@@ -1727,14 +1731,38 @@ func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
 	if operand.Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "increment of a non-identifier target is a later slice"}
 	}
-	if !r.isNumber(operand) {
-		return nil, &NotYetLowerable{Reason: "increment of a non-number needs coercion, a later slice"}
-	}
 	name, ok := localName(r.prog.Text(operand))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "increment target is not a Go identifier"}
 	}
+	if r.isDynamic(operand) {
+		return r.dynamicIncDec(ident(name), ident(name), tok), nil
+	}
+	if !r.isNumber(operand) {
+		return nil, &NotYetLowerable{Reason: "increment of a non-number needs coercion, a later slice"}
+	}
 	return &ast.IncDecStmt{X: ident(name), Tok: tok}, nil
+}
+
+// dynamicIncDec lowers a ++ or -- on a dynamic target in statement position,
+// where the discarded result makes the prefix and postfix forms the same effect.
+// A dynamic value has no Go ++ to apply, so the update reads the target, runs the
+// numeric increment through value.Inc or value.Dec, which is ToNumeric and keeps a
+// bigint a bigint, and assigns the result back. The read and the write take
+// separate expression nodes so the printed form holds no shared node; both name
+// the same side-effect-free target, a local or a field of one, so evaluating it
+// on each side is the same access.
+func (r *Renderer) dynamicIncDec(write, read ast.Expr, tok token.Token) *ast.AssignStmt {
+	fn := "Inc"
+	if tok == token.DEC {
+		fn = "Dec"
+	}
+	r.requireImport(valuePkg)
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{write},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{&ast.CallExpr{Fun: sel("value", fn), Args: []ast.Expr{read}}},
+	}
 }
 
 // lowerAssign lowers a binary assignment to a Go assignment statement. It
