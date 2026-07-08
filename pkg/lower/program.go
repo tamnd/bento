@@ -557,9 +557,42 @@ func packageSafeInit(prog *frontend.Program, n frontend.Node) bool {
 	switch n.Kind() {
 	case frontend.NodeIdentifier, frontend.NodeCallExpression:
 		return false
+	case frontend.NodeObjectLiteralExpression:
+		return objectLiteralSafeInit(prog, n)
 	}
 	for _, c := range prog.Children(n) {
 		if !packageSafeInit(prog, c) {
+			return false
+		}
+	}
+	return true
+}
+
+// objectLiteralSafeInit reports whether an object literal { k: v, ... } is safe to
+// evaluate at package-init time. A property name is a fixed label, not a binding
+// read, so a plain-identifier key does not make the literal unsafe the way the
+// generic walk would judge it; only the values, and a computed key's own
+// expression, carry a read or a call that could depend on main's order. A
+// shorthand { x } or a spread { ...o } does read an outer binding, and a method or
+// accessor member holds a body the generic walk cannot vet here, so each of those
+// keeps the literal off the package-init path.
+func objectLiteralSafeInit(prog *frontend.Program, n frontend.Node) bool {
+	for _, member := range prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return false
+		}
+		kids := prog.Children(member)
+		switch len(kids) {
+		case 2:
+			// A plain-identifier key names a property and is skipped; a computed key,
+			// [expr], is not an identifier node and is vetted like any other subtree.
+			if kids[0].Kind() != frontend.NodeIdentifier && !packageSafeInit(prog, kids[0]) {
+				return false
+			}
+			if !packageSafeInit(prog, kids[1]) {
+				return false
+			}
+		default:
 			return false
 		}
 	}
