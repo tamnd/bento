@@ -1,0 +1,10 @@
+== stdout:
+def
+def
+0
+
+set
+6
+11
+== exit:
+0
