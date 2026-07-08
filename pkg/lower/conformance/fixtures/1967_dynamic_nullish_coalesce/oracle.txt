@@ -1,0 +1,8 @@
+== stdout:
+0
+
+99
+7
+kept
+== exit:
+0

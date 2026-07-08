@@ -423,6 +423,18 @@ func And(a, b Value) Value {
 	return a
 }
 
+// Coalesce implements the value-returning a ?? b over dynamic values: the left
+// operand when it is neither null nor undefined and the right otherwise. Unlike
+// Or it tests presence, not truthiness, so a zero or an empty string on the left
+// is kept. The same eager-argument caveat as Or applies, so the lowering gates on
+// an effect-free right operand.
+func Coalesce(a, b Value) Value {
+	if a.IsNullish() {
+		return b
+	}
+	return a
+}
+
 // toPrimitiveDefault, toPrimitiveNumber, and toPrimitiveString apply the
 // ToPrimitive abstract operation at the three hints. A primitive is already
 // primitive and returns unchanged. An object has no user valueOf or toString on
