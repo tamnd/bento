@@ -1,0 +1,9 @@
+== stdout:
+7
+3
+0
+7
+fallback
+9
+== exit:
+0
