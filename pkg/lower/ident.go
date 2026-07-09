@@ -54,6 +54,15 @@ func mangleIdent(name string) (string, bool) {
 	if name == "" {
 		return "", false
 	}
+	// The lone underscore is spelled like a legal Go identifier but names the
+	// blank identifier, which discards its value and cannot be read. A JavaScript
+	// binding or property named _ is an ordinary readable name (var _ = 1; use(_)),
+	// so it must not pass through to Go's _. Escape it through the same U + hex code
+	// point form any other unusable rune takes, so it decodes back unambiguously
+	// and a declaration and every reference agree on U5F_.
+	if name == "_" {
+		return "U5F_", true
+	}
 	if isGoIdent(name) {
 		return name, true
 	}
