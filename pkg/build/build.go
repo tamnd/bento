@@ -271,6 +271,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedDynamicMember[d.Code] {
 			continue
 		}
+		if toleratedUnknown[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -323,6 +326,27 @@ var toleratedDynamicMember = map[int]bool{
 	2551: true, // Property 'X' does not exist on type 'Y'. Did you mean 'Z'?
 	7053: true, // Element implicitly has an 'any' type because expression of type 'X' can't be used to index type 'Y'.
 	7052: true, // Element implicitly has an 'any' type because type 'X' has no index signature.
+}
+
+// toleratedUnknown is the set of checker diagnostic codes bento admits by
+// running the unknown-typed value through its dynamic value path instead of
+// failing the build. Under strict checking the catch binding is typed `unknown`
+// (useUnknownInCatchVariables, on with strict), so every `catch (e)` body that
+// reads, calls, or otherwise uses the caught value draws one of these before the
+// body can lower, the wall behind the whole throwing-test population. The lowerer
+// already treats `unknown` exactly like `any`: isDynamic is true for both, so an
+// unknown value flows as a boxed value.Value, a member read on it folds or hands
+// back through the dynamic member path, a call goes through value.Call, and an
+// operator takes the dynamic operand path. No lowering path emits a static
+// selector or typed operation on an unknown value, so tolerating these codes
+// never produces Go that fails to compile; it only lets the dynamic form through
+// and leaves anything the dynamic path cannot yet model a handback. 18046 is the
+// identifier form (`e` used directly) and 2571 the object-expression form (a
+// member or call whose receiver expression is unknown); they tolerate on the
+// same terms.
+var toleratedUnknown = map[int]bool{
+	2571:  true, // Object is of type 'unknown'.
+	18046: true, // 'X' is of type 'unknown'.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
