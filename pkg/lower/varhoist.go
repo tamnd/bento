@@ -87,12 +87,14 @@ func (r *Renderer) varHoists(topStmts []frontend.Node) []frontend.Node {
 	seen := map[string]bool{}
 	var out []frontend.Node
 	for _, s := range topStmts {
-		// A var directly in the top list is already scope-level; only the nested
-		// descendants of each top statement can hold a var that needs hoisting, so the
-		// walk starts one level below.
-		for _, c := range r.prog.Children(s) {
-			r.collectVarHoists(c, nil, topStmts, topNames, seen, &out)
-		}
+		// A var written directly in the top statement list is already scope-level and
+		// stays put: collectVarHoists only records a var it finds inside a block, and a
+		// top statement that is not itself a block carries no block for its direct var.
+		// A top statement that IS a block (a bare `{ var x; }` at the scope root) does
+		// hold a block-scoped var that is function-scoped and must hoist, so the walk
+		// starts at the statement itself rather than one level below it, where that
+		// block would be stepped over.
+		r.collectVarHoists(s, nil, topStmts, topNames, seen, &out)
 	}
 	// A for loop's own `var` counter is function-scoped too, so a second loop that
 	// reuses the counter by assignment (for (var i=0;...){} ; for (i=0;...){}) reads a
@@ -161,7 +163,7 @@ func (r *Renderer) collectVarHoists(n, block frontend.Node, topStmts []frontend.
 	if r.isVarStatement(n) && cur != nil {
 		for _, nn := range r.varNameNodes(n) {
 			name, ok := localName(r.prog.Text(nn))
-			if !ok || topNames[name] || seen[name] {
+			if !ok || seen[name] {
 				continue
 			}
 			if r.varEscapesBlock(topStmts, cur, name) {
