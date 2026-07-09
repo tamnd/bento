@@ -1,0 +1,4 @@
+== stdout:
+OK
+== exit:
+0

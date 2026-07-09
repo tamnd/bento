@@ -57,6 +57,17 @@ type Error struct {
 	// pointer. It is nil until the first ToValue, since an error that never leaves
 	// the typed paths (a catch that only reads .name or rethrows) needs no object.
 	boxed *Object
+	// thrown carries the original JavaScript primitive a `throw <primitive>` raised,
+	// so a catch that boxes the binding into the dynamic world reads back the
+	// primitive rather than the {name, message} object the runtime models a throw
+	// with. JavaScript binds `throw "reason"` as the string itself, so `e === "reason"`
+	// and `typeof e === "string"` must hold; the runtime keeps a name and a message on
+	// every thrown value for the uncaught reporter, so it also stashes the primitive
+	// here and hands it back through ToValue. It is set only for a thrown primitive;
+	// an error the program threw with new Error(...) leaves hasThrown false and boxes
+	// as the object.
+	thrown    Value
+	hasThrown bool
 }
 
 // Name reports the error's constructor name as a bento string, the lowering of
@@ -111,6 +122,12 @@ func (e *Error) ToBStr() BStr {
 // equality. A dynamic .constructor read on the boxed form is a later slice; the
 // direct thrown.constructor read stays on its own typed path.
 func (e *Error) ToValue() Value {
+	// A caught thrown primitive boxes back to the primitive itself, not the
+	// {name, message} object: JavaScript binds `throw "reason"` as the string, so the
+	// dynamic world must see the string for `e === "reason"` and typeof e to hold.
+	if e.hasThrown {
+		return e.thrown
+	}
 	if e.boxed == nil {
 		e.boxed = &Object{
 			kind: KindObject,
@@ -188,6 +205,17 @@ func Caught(r any) *Error {
 	switch t := r.(type) {
 	case *Error:
 		return t
+	case ThrownString:
+		// A thrown primitive string binds as the string itself, so the catch reads a
+		// primitive: `e === "reason"` and typeof e === "string" hold. The runtime still
+		// keeps the string as the name so an uncaught rethrow reports it, but ToValue
+		// hands back the primitive rather than the {name, message} object.
+		return &Error{
+			name:      FromGoString(t.ErrorName()),
+			message:   FromGoString(t.ErrorMessage()),
+			thrown:    StringValue(BStr(t)),
+			hasThrown: true,
+		}
 	case Thrown:
 		e := &Error{name: FromGoString(t.ErrorName()), message: FromGoString(t.ErrorMessage())}
 		// A boundary failure that wraps a Go error (the GoError a go: call raises)
@@ -239,9 +267,9 @@ func (e *Error) As(target any) bool {
 // allows beside thrown errors. It carries the Thrown surface with the string
 // as the name and no message, so the uncaught reporter prints the string the
 // way node reports a thrown primitive. A catch that recovers one binds an
-// *Error whose name is the string, which deviates from the primitive a
-// JavaScript catch binds; binding the primitive itself waits on the dynamic
-// catch slice.
+// *Error that stashes the string, so a dynamic read of the binding boxes back
+// to the string primitive: `e === "reason"` and typeof e === "string" hold the
+// way a JavaScript catch binds the primitive itself.
 type ThrownString BStr
 
 // ErrorName reports the thrown string itself, the text the reporter prints.
