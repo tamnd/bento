@@ -94,7 +94,58 @@ func (r *Renderer) varHoists(topStmts []frontend.Node) []frontend.Node {
 			r.collectVarHoists(c, nil, topStmts, topNames, seen, &out)
 		}
 	}
+	// A for loop's own `var` counter is function-scoped too, so a second loop that
+	// reuses the counter by assignment (for (var i=0;...){} ; for (i=0;...){}) reads a
+	// binding the first loop declared. Emitting the first loop's counter as a Go
+	// loop-local would leave the reuse referencing an undeclared name, so the counter
+	// hoists to the scope top when it is read outside the loop that declares it.
+	for _, s := range topStmts {
+		r.collectForInitHoists(s, topStmts, topNames, seen, &out)
+	}
 	return out
+}
+
+// isForInitVar reports whether a for loop's init clause declares its counter with
+// `var`, the only for-init keyword scoped to the whole function. A let or const
+// for-init stays block-scoped to the loop and never hoists.
+func (r *Renderer) isForInitVar(init frontend.Node) bool {
+	return strings.HasPrefix(strings.TrimSpace(r.prog.Text(init)), "var ")
+}
+
+// collectForInitHoists walks a subtree for for loops whose `var` counter is read
+// outside the loop that declares it, and records each such counter for hoisting. The
+// loop node stands in for the counter's declaring block: a reference to the counter
+// anywhere in the scope but outside the loop means the binding escapes and must sit
+// at the scope top. The walk stops at a nested function, whose loops own their scope.
+func (r *Renderer) collectForInitHoists(n frontend.Node, topStmts []frontend.Node, topNames, seen map[string]bool, out *[]frontend.Node) {
+	if isFunctionLike(n.Kind()) {
+		return
+	}
+	if n.Kind() == frontend.NodeForStatement {
+		fc := r.prog.ForClauses(n)
+		if fc.HasInit && r.isForInitVar(fc.Init) {
+			var decls []frontend.Node
+			collectVarDecls(r.prog, fc.Init, &decls)
+			for _, d := range decls {
+				kids := r.prog.Children(d)
+				if len(kids) == 0 {
+					continue
+				}
+				nn := kids[0]
+				name, ok := localName(r.prog.Text(nn))
+				if !ok || topNames[name] || seen[name] {
+					continue
+				}
+				if r.varEscapesBlock(topStmts, n, name) {
+					seen[name] = true
+					*out = append(*out, nn)
+				}
+			}
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		r.collectForInitHoists(c, topStmts, topNames, seen, out)
+	}
 }
 
 // collectVarHoists walks a subtree for nested var declarations that escape their

@@ -2273,7 +2273,19 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	var exprInit ast.Stmt
 	if fc.HasInit {
 		collectVarDecls(r.prog, fc.Init, &decls)
-		if len(decls) == 0 {
+		// A `var` counter this loop declares but a later statement reuses hoists to
+		// the scope top, so here the init writes the existing binding rather than
+		// declaring a fresh loop-local. Lowering it as an assignment keeps the counter
+		// one shared binding, the way JavaScript's function scope means it to be.
+		if hoisted, ok, err := r.hoistedForInit(decls); err != nil {
+			return nil, err
+		} else if ok {
+			exprInit = hoisted
+			decls = nil
+		}
+	}
+	if fc.HasInit {
+		if len(decls) == 0 && exprInit == nil {
 			// An expression initializer writes to a binding that already exists
 			// rather than declaring one, so it needs no wrapping block: it lowers
 			// straight into Go's for init clause the way the post clause lowers its
@@ -2382,6 +2394,46 @@ func (r *Renderer) forInitBlanks(decls []frontend.Node) []ast.Stmt {
 		}
 	}
 	return out
+}
+
+// hoistedForInit turns a for loop's `var` init into an assignment when the counter
+// has been hoisted to the scope top, so the loop writes the shared binding instead
+// of shadowing it with a loop-local. It fires only when a binding is in the hoisted
+// set, so a plain loop-local counter keeps its declaration and its fold. A single
+// binding lowers to one assignment, several to a parallel one; a hoisted binding
+// mixed with a non-hoisted one, or one with no initializer, is a later slice.
+func (r *Renderer) hoistedForInit(decls []frontend.Node) (ast.Stmt, bool, error) {
+	anyHoisted := false
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		if name, ok := localName(r.prog.Text(kids[0])); ok && r.hoistedVars[name] {
+			anyHoisted = true
+		}
+	}
+	if !anyHoisted {
+		return nil, false, nil
+	}
+	var lhs, rhs []ast.Expr
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) != 2 && len(kids) != 3 {
+			return nil, false, &NotYetLowerable{Reason: "a hoisted for-init var without a single initializer is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(kids[0]))
+		if !ok || !r.hoistedVars[name] {
+			return nil, false, &NotYetLowerable{Reason: "a for-init mixing a hoisted var with a non-hoisted binding is a later slice"}
+		}
+		init, err := r.bindingInit(kids[0], kids[len(kids)-1])
+		if err != nil {
+			return nil, false, err
+		}
+		lhs = append(lhs, ident(name))
+		rhs = append(rhs, init)
+	}
+	return &ast.AssignStmt{Lhs: lhs, Tok: token.ASSIGN, Rhs: rhs}, true, nil
 }
 
 // foldFloatDecl builds a Go short variable declaration from a single float64
