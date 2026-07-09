@@ -92,6 +92,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// needs; a variable Go never reads is declared-and-not-used even when it is
 	// written, since only a read counts toward use.
 	r.writeUses = countWriteUses(r.prog, entry)
+	// Count the declaration name nodes per binding so bindingUnused can tell a
+	// redeclared `var` (two `var f` name nodes, one binding) from a binding declared
+	// once and read once. Without this a redeclaration reads as a use and a never-read
+	// redeclared var goes unblanked, so the emitted Go trips declared-and-not-used.
+	r.bindingDecls = countBindingDecls(r.prog, entry)
 
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
@@ -403,8 +408,8 @@ func shorthandValueSymbol(prog *frontend.Program, member frontend.Node) (fronten
 }
 
 // bindingUnused reports whether the binding named by nameNode is declared and
-// never read: exactly one identifier resolves to the binding's symbol, the
-// declaration itself. Resolving through the symbol counts only references to this
+// never read: only its declaration name nodes resolve to the binding's symbol, and
+// nothing reads it. Resolving through the symbol counts only references to this
 // binding, so a shadowing local of the same name elsewhere in the module does not
 // keep it alive. A binding whose symbol does not resolve is treated as used, so the
 // conservative answer only ever withholds the blank assignment. countBindingUses
@@ -419,10 +424,44 @@ func (r *Renderer) bindingUnused(nameNode frontend.Node) bool {
 	// Subtract the reads a fold drops and the write-only references from the emitted
 	// Go, so a binding whose only non-declaration reads were dropped by a fold (an
 	// Object.keys(o) receiver, a typeof x tag) or were plain writes reads as unused
-	// here and gets the blank the emit needs. What remains is the declaration plus
-	// any real read; one means the declaration alone, so nothing reads the binding.
+	// here and gets the blank the emit needs. What remains is the binding's own
+	// declaration name nodes plus any real read; a `var` redeclared in the same scope
+	// has more than one declaration name node for one binding, so the baseline is the
+	// declaration count rather than a hardcoded one. Equal means no read survives.
+	decls := r.bindingDecls[sym]
+	if decls == 0 {
+		decls = 1
+	}
 	uses := r.bindingUses[sym] - r.elidedUses[sym] - r.writeUses[sym]
-	return uses == 1
+	return uses == decls
+}
+
+// countBindingDecls walks the module and tallies, per symbol, the declaration name
+// nodes that introduce it: the first identifier child of each variable declaration.
+// A binding declared once counts one; a `var` redeclared in the same scope, which
+// JavaScript folds to a single binding, counts one per `var` name node. bindingUnused
+// uses the tally as the baseline it compares the surviving reference count against, so
+// a redeclared-but-unread binding is still recognized as unused. Resolving through the
+// symbol keeps a shadowing local of the same name from inflating an outer binding's
+// count, since each binding carries its own symbol.
+func countBindingDecls(prog *frontend.Program, entry frontend.Node) map[frontend.Symbol]int {
+	decls := map[frontend.Symbol]int{}
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeVariableDeclaration {
+			kids := prog.Children(n)
+			if len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier {
+				if sym, ok := prog.SymbolAt(kids[0]); ok {
+					decls[sym]++
+				}
+			}
+		}
+		for _, c := range prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(entry)
+	return decls
 }
 
 // countElidedReads tallies, per binding, the identifier reads a fold drops from the
