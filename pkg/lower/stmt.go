@@ -825,10 +825,16 @@ func (r *Renderer) flattenCallableBinding(n frontend.Node) ([]ast.Stmt, bool, er
 		return nil, true, err
 	}
 	// Step one declares the pointer, so the closure below and every later member
-	// assignment reach the same object.
+	// assignment reach the same object. A binding an earlier statement captures in a
+	// closure has its pointer declared at the scope top instead, so its site here is
+	// a plain assignment into the already-declared variable.
+	declTok := token.DEFINE
+	if r.fwdHoisted[name] {
+		declTok = token.ASSIGN
+	}
 	declStmt := &ast.AssignStmt{
 		Lhs: []ast.Expr{ident(name)},
-		Tok: token.DEFINE,
+		Tok: declTok,
 		Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(structName)}}},
 	}
 	// Step two assigns the call itself into the reserved field.

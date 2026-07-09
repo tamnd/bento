@@ -571,6 +571,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isObjectProtoToString(recvNode) {
 		return r.objectProtoToStringCall(method, argNodes)
 	}
+	// Array.prototype.map.call(arrayLike, String) is the array-format idiom: it
+	// borrows the base array map and applies it to any array-like to stringify each
+	// element. The receiver is the function Array.prototype.map, not a value, so it
+	// routes here before the non-string gate below, which would otherwise reject a
+	// function receiver as a later slice. The assert prelude's compareArray.format
+	// is the reach that makes this worth lowering.
+	if r.isArrayProtoMap(recvNode) {
+		return r.arrayProtoMapCall(method, argNodes)
+	}
 	// A method on a fixed-shape object receiver whose property is itself a function
 	// (assert.sameValue(...) on a callable object, or a plain object that holds a
 	// closure in a field) calls through the Go struct field: recv.SameValue(args).
@@ -1485,6 +1494,52 @@ func (r *Renderer) objectProtoToStringCall(method string, argNodes []frontend.No
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ClassTag"), Args: []ast.Expr{arg}}, nil
+}
+
+// isArrayProtoMap reports whether n is the member chain Array.prototype.map, the
+// function the assert prelude borrows with .call to format an array-like for a
+// failed comparison. It matches a property access .map whose object is a property
+// access .prototype whose object is the ambient global Array, so a user value that
+// carries its own map does not match and stays on the array-method path.
+func (r *Renderer) isArrayProtoMap(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || r.prog.Text(kids[1]) != "map" {
+		return false
+	}
+	proto := kids[0]
+	if proto.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	pkids := r.prog.Children(proto)
+	if len(pkids) != 2 || r.prog.Text(pkids[1]) != "prototype" {
+		return false
+	}
+	return r.isGlobalRef(pkids[0], "Array")
+}
+
+// arrayProtoMapCall lowers Array.prototype.map.call(arrayLike, String) to the
+// value map-and-stringify helper. Only .call with exactly the array-like receiver
+// and the global String as the callback is the idiom the assert prelude uses; a
+// different arity, .apply, or any other callback hands back so a general borrow is
+// not mislowered to the String-specific helper. The receiver boxes to a value.Value
+// so the helper can read its length and elements whatever kind it is, the same box
+// a dynamic operand takes.
+func (r *Renderer) arrayProtoMapCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "call" || len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Array.prototype.map borrowed with anything other than .call(arrayLike, String) is a later slice"}
+	}
+	if !r.isGlobalRef(argNodes[1], "String") {
+		return nil, &NotYetLowerable{Reason: "Array.prototype.map.call with a callback other than the String built-in is a later slice"}
+	}
+	recv, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "MapCallString"), Args: []ast.Expr{recv}}, nil
 }
 
 // processStream reports whether n refers to process.stdout or process.stderr,

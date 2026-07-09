@@ -480,11 +480,20 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 		delete(r.int32Locals, name)
 		delete(r.int64Locals, name)
 	}
+	// A callable-object binding captured by an earlier statement of this body has its
+	// pointer declared at the top of the function, the same forward hoist the module
+	// body gets, so the closure closes over a variable already in scope.
+	fwdDecls, restoreFwd, err := r.enterFwdHoistScope(bodyStmts)
+	if err != nil {
+		return nil, err
+	}
+	defer restoreFwd()
 	stmts, err := r.lowerStatements(bodyStmts)
 	if err != nil {
 		return nil, err
 	}
 	stmts = append(hoistDecls, stmts...)
+	stmts = append(fwdDecls, stmts...)
 	return &ast.BlockStmt{List: r.hoistStrBuilders(stmts)}, nil
 }
 
