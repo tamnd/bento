@@ -17,6 +17,36 @@ func TestUnusedBindingBlanked(t *testing.T) {
 	}
 }
 
+// TestTruthyFoldedConditionBlanked pins that an object whose only read is a
+// control-flow condition still builds. lowerTruthy folds an always-truthy object to
+// the Go constant true and drops the read, so a var read only there would be
+// declared and not used. countElidedReads records the folded condition so the
+// binding gets a trailing blank instead. test262 reaches this with for (; obj; )
+// where obj is a plain object, always truthy.
+func TestTruthyFoldedConditionBlanked(t *testing.T) {
+	src := `var obj = { value: false }; for (var i = 0; obj; ) { break; }`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "for true") {
+		t.Fatalf("always-truthy for condition did not fold to a constant:\n%s", out)
+	}
+	if !strings.Contains(out, "_ = obj") {
+		t.Fatalf("object read only by a folded condition did not get a blank:\n%s", out)
+	}
+}
+
+// TestTruthyFoldedConditionKeptWhenReadElsewhere pins that an object read again
+// outside the folded condition keeps no spurious behavior: the emit reads it, so the
+// blank the fold would add sits harmlessly beside the real read and the value prints.
+func TestTruthyFoldedConditionKeptWhenReadElsewhere(t *testing.T) {
+	skipIfShort(t)
+	src := `var obj = { value: 7 }; var out = 0; if (obj) { out = obj.value; } console.log(String(out));`
+	got := runProgramGo(t, src)
+	want := "7\n"
+	if got != want {
+		t.Fatalf("object used past a folded condition run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestUsedBindingNotBlanked pins that a local read somewhere keeps no blank, so a
 // binding the program actually uses reads as the developer wrote it.
 func TestUsedBindingNotBlanked(t *testing.T) {
