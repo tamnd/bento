@@ -36,6 +36,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// is checked before the local-name path, which would otherwise emit the source
 		// name and miss the exported declaration.
 		if sym, ok := r.prog.SymbolAt(n); ok && sym.Flags&frontend.SymbolFunction != 0 {
+			// An ambient global function used as a value (eval, parseInt, isNaN) is not a
+			// user binding and has no generated Go function behind its exported name. The
+			// call path lowers the globals bento models and hands the rest back; a bare
+			// value reference has no such path, and capitalizing the name below would emit
+			// an undefined symbol like Eval. Hand back so the unit stays truthful instead
+			// of naming a function the runtime never declared. An indirect eval, var s =
+			// eval, is the shape this catches.
+			if r.isAmbientGlobal(n) {
+				return nil, &NotYetLowerable{Reason: "the ambient global " + r.prog.Text(n) + " used as a value is a later slice"}
+			}
 			// A function whose lowered arity exceeds its minimal call (it has a
 			// defaulted, optional, or rest parameter) fills the omitted slot at the call
 			// site, so it has no single Go func value that fits a slot expecting the
