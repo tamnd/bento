@@ -83,6 +83,54 @@ console.log(tag());
 	}
 }
 
+// TestEvolvedAnyCalleeRoutesThroughRuntimeCall pins the evolving-any shape: a var
+// declared with no initializer, later assigned a function, stores a value.Value box.
+// Control-flow analysis narrows the callee to a concrete function type at the call
+// site, but the slot stays a box, so the call must dispatch through the runtime Call
+// rather than a static Go call the box does not support. The call result is a box
+// too, so the enclosing String coercion routes through value.ToString, not the
+// number path the evolved return type would pick.
+func TestEvolvedAnyCalleeRoutesThroughRuntimeCall(t *testing.T) {
+	const src = `var f;
+f = function () { return 1; };
+console.log(String(f()));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "f.Call()") {
+		t.Errorf("evolved-any callee did not dispatch through the runtime Call:\n%s", source)
+	}
+	if !strings.Contains(source, "value.ToString(f.Call())") {
+		t.Errorf("call result was not treated as a box by the enclosing coercion:\n%s", source)
+	}
+	if strings.Contains(source, "value.NumberToString(f.Call())") {
+		t.Errorf("call result took the static number coercion over the box:\n%s", source)
+	}
+}
+
+// TestEvolvedAnyCalleeRuns builds and runs the evolving-any call end to end,
+// including the block-scope var-sharing shape test262 exercises in scope-var-none:
+// two closures declared around a bare block both capture the one function-scoped x,
+// and each is stored in an implicit-any var and called through the runtime Call.
+func TestEvolvedAnyCalleeRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `var x = "outside";
+var probeBefore = function () { return x; };
+var probeInside;
+{
+  var x = "inside";
+  probeInside = function () { return x; };
+}
+console.log(String(probeBefore()));
+console.log(String(probeInside()));
+console.log(x);
+`
+	got := runProgramGo(t, src)
+	want := "inside\ninside\ninside\n"
+	if got != want {
+		t.Fatalf("evolved-any call program printed %q, want %q", got, want)
+	}
+}
+
 // TestOptionalStaticParamStillHandsBack pins the boundary: an omitted optional
 // of a static type has no Go value to stand in for the omission, so the short
 // call hands back the way it always has.
