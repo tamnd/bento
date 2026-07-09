@@ -294,7 +294,38 @@ type Renderer struct {
 	// function body) and restored on exit, so one scope's hoists do not leak into
 	// another.
 	hoistedVars map[string]bool
+	// typeDepth counts the nesting typeExpr is currently rendering, so a
+	// self-referential type (a function whose return type reaches back to itself, an
+	// object with a property of its own shape) hands back at a bounded depth rather
+	// than recursing until the goroutine stack overflows. It is incremented on entry
+	// to typeExpr and decremented on exit, so it returns to zero between top-level
+	// renders.
+	typeDepth int
+	// typeNodes counts how many type nodes the current top-level typeExpr render
+	// has already produced. Depth alone does not bound memory: a self-referential
+	// type that reaches back through a union or a multi-property object branches, so
+	// the node count grows exponentially in the depth and exhausts RAM long before
+	// the depth ceiling trips (a lower-only pass climbed past 6 GB in seconds on
+	// one such type). The node budget caps the total work of a single render
+	// regardless of how it branches, so the worst case stays a handback rather than
+	// an out-of-memory kill that can take the whole machine down. It is reset when a
+	// render starts at depth zero.
+	typeNodes int
 }
+
+// maxTypeDepth bounds how deep typeExpr renders a nested type before it hands
+// back. A real annotation nests only a handful of levels, so the ceiling sits far
+// above any genuine type and only ever trips on a self-referential one, which has
+// no finite Go shape and must route to the interpreter instead of crashing.
+const maxTypeDepth = 256
+
+// maxTypeNodes bounds how many type nodes a single top-level typeExpr render may
+// produce before it hands back. A branching self-referential type multiplies its
+// node count at every level, so a depth cap alone lets it allocate gigabytes; the
+// node budget stops that in bounded memory. A genuine annotation renders a few
+// dozen nodes, so the ceiling sits far above any real type and only trips on a
+// pathological one.
+const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
@@ -397,6 +428,20 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	// asking for its type expression is a caller error, not a lowering gap.
 	if t.Flags == 0 {
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no type at this position (void or statement)"}
+	}
+
+	// A self-referential type recurses through typeExpr without end (a function type
+	// whose return renders another function of the same shape, an object with a
+	// property of its own type), so a bounded depth converts that into a handback
+	// rather than a stack overflow that would crash the worker and stall the run.
+	r.typeDepth++
+	defer func() { r.typeDepth-- }()
+	if r.typeDepth == 1 {
+		r.typeNodes = 0
+	}
+	r.typeNodes++
+	if r.typeDepth > maxTypeDepth || r.typeNodes > maxTypeNodes {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "a self-referential or excessively nested type is a later slice"}
 	}
 
 	// A union whose members all share a primitive facet (a numeric-literal union
