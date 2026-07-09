@@ -86,7 +86,20 @@ func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
 	// gives distinct ids, share the one struct. The signature is computed from the
 	// shape without reserving a name, so a shape seen a second time under a new id
 	// reuses the first struct rather than emitting a numbered twin.
-	sig := structuralKey(r.prog, t, map[int]int{})
+	//
+	// The walk carries a node budget. The type of a module-scope `this`, which the
+	// checker resolves to the whole global object, is a tree of hundreds of
+	// properties whose types are themselves objects with more properties, and the
+	// checker hands back a fresh type id at each step, so the cycle guard never sees
+	// a repeat and the walk grows without bound. Before the budget landed this
+	// climbed past several GB in seconds and OOM-killed the process, or the machine.
+	// A shape that outruns the budget has no finite Go struct worth building, so the
+	// whole type hands back rather than allocate into an out-of-memory.
+	nodes := 0
+	sig := structuralKeyN(r.prog, t, map[int]int{}, &nodes)
+	if nodes > maxStructKeyNodes {
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "an object type too large to key structurally (the global object or a deeply nested shape) is a later slice"}
+	}
 	if name, ok := d.nameBySig[sig]; ok {
 		d.nameByIdentity[id] = name
 		return name, nil
@@ -146,6 +159,15 @@ func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
 	return name, nil
 }
 
+// maxStructKeyNodes bounds how many type nodes a structural-key walk may enter
+// before it stops descending and internStruct hands the type back. The type of a
+// module-scope `this` is the whole global object, a tree of hundreds of properties
+// whose types are more objects still, so its walk allocates gigabytes and OOM
+// -kills the process without this cap. A genuine object shape keys in a few dozen
+// nodes, so the ceiling sits far above any real type and only trips on a
+// pathological one. It matches the node budget typeExpr keeps for the same reason.
+const maxStructKeyNodes = 20000
+
 // structuralKey builds a string that is equal for two types with the same
 // structure and different for two types with a different structure, so the decl
 // set can intern object structs by shape rather than by the checker's per type
@@ -157,6 +179,26 @@ func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
 // which each type id was entered, so a cycle keys by that relative depth and two
 // isomorphic recursive shapes still produce equal keys.
 func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) string {
+	nodes := 0
+	return structuralKeyN(prog, t, seen, &nodes)
+}
+
+// structuralKeyN is structuralKey with a node budget. It counts every node the
+// walk enters and stops descending once the budget is spent. A branching type
+// multiplies its node count at each level, so a depth cap alone would still let
+// the global object type (the type a module-scope `this` resolves to) allocate
+// gigabytes; the total-node budget bounds the work regardless of how the shape
+// branches. Once over budget the remaining recursive calls return at once, so the
+// walk terminates promptly. internStruct calls this form directly and hands the
+// whole type back when the count overran, rather than let the walk run memory
+// away; the plain structuralKey wrapper allocates its own budget for the callers
+// that only compare two keys and tolerate a truncated key on a pathological type.
+// It mirrors the node budget typeExpr keeps for the same reason.
+func structuralKeyN(prog *frontend.Program, t frontend.Type, seen map[int]int, budget *int) string {
+	*budget++
+	if *budget > maxStructKeyNodes {
+		return ""
+	}
 	if t.Flags == 0 {
 		return "void"
 	}
@@ -181,7 +223,7 @@ func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) st
 			return "@" + itoa(len(seen)-depth)
 		}
 		if elem, ok := prog.ElementType(t); ok {
-			return "[]" + structuralKey(prog, elem, seen)
+			return "[]" + structuralKeyN(prog, elem, seen, budget)
 		}
 		seen[id] = len(seen)
 		props := prog.Properties(t)
@@ -191,7 +233,7 @@ func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) st
 			if p.Optional {
 				opt = "?"
 			}
-			parts = append(parts, p.Name+opt+":"+structuralKey(prog, p.Type, seen))
+			parts = append(parts, p.Name+opt+":"+structuralKeyN(prog, p.Type, seen, budget))
 		}
 		// A call signature keys the shape too, so a callable object never dedupes
 		// onto a plain object that happens to carry the same properties: the two
@@ -206,7 +248,7 @@ func structuralKey(prog *frontend.Program, t frontend.Type, seen map[int]int) st
 		members := prog.UnionMembers(t)
 		parts := make([]string, 0, len(members))
 		for _, m := range members {
-			parts = append(parts, structuralKey(prog, m, seen))
+			parts = append(parts, structuralKeyN(prog, m, seen, budget))
 		}
 		sort.Strings(parts)
 		return "(" + strings.Join(parts, "|") + ")"
