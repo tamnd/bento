@@ -65,6 +65,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// no name to resolve to a symbol, so it skips the builtin and user-function
 	// routing below and lowers as a function value applied to its arguments.
 	if kids[0].Kind() != frontend.NodeIdentifier {
+		// A callee whose own type is dynamic is a boxed function value, so it dispatches
+		// through the runtime Call rather than a static Go call, the same way a dynamic
+		// member read resolves at runtime.
+		if r.isDynamic(kids[0]) {
+			return r.dynamicCall(kids[0], kids[1:])
+		}
 		callee, err := r.functionValueCallee(kids[0])
 		if err != nil {
 			return nil, err
@@ -174,6 +180,11 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		// A direct call to a top-level function may omit a defaulted trailing
 		// argument, so its parameter defaults ride into finishCall to fill the slot.
 		defaults = r.calleeDefaults(sym)
+	} else if r.isDynamic(kids[0]) {
+		// A binding of dynamic type used as a callee (a parameter typed any that holds
+		// a function) is a boxed function value, so it dispatches through the runtime
+		// Call the same way a non-identifier dynamic callee does.
+		return r.dynamicCall(kids[0], kids[1:])
 	} else {
 		// A bare identifier used as a callee that the checker accepted has a call
 		// signature, so the binding is a function value: an arrow or function
@@ -380,6 +391,31 @@ func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNo
 		return nil, false, err
 	}
 	return e, true, nil
+}
+
+// dynamicCall lowers fn(args) when the callee's own type is dynamic, so its shape
+// is known only at runtime: the callee lowers to a value.Value and the call goes
+// through the box's Call method with every argument boxed, the runtime dispatch
+// that mirrors a dynamic member read. The result is itself a value.Value, the any
+// type the checker gives a call whose callee is dynamic, so it flows on as a boxed
+// value with no further coercion here. A spread argument waits on the spread slice.
+func (r *Renderer) dynamicCall(calleeNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	callee, err := r.lowerExpr(calleeNode)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		if a.Kind() == frontend.NodeSpreadElement {
+			return nil, &NotYetLowerable{Reason: "a spread argument in a dynamic call is a later slice"}
+		}
+		boxed, err := r.boxOperand(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, boxed)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: callee, Sel: ident("Call")}, Args: args}, nil
 }
 
 // functionValueCallee lowers a callee expression that is not a named function to
