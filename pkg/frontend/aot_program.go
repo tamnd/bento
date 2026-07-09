@@ -1,6 +1,7 @@
 package frontend
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/tamnd/bento/pkg/frontend/adapter"
@@ -196,7 +197,17 @@ func (p *Program) ForClauses(n Node) ForClauses {
 // Text returns n's own source text with no leading trivia, the identifier name,
 // literal, or operator token lowering emits into the generated Go.
 func (p *Program) Text(n Node) string {
-	return p.adapter.TextOf(p.unwrapNode(n))
+	raw := p.adapter.TextOf(p.unwrapNode(n))
+	// An identifier's source spelling may carry unicode escapes, so the same
+	// name can be declared one way and read another; lowering mangles on the
+	// name it denotes, not its spelling, so both forms have to decode to one
+	// string before mangling. Only identifiers take escapes this way, and only
+	// a spelling with a backslash needs the work, so the escape-free identifier
+	// and every operator, keyword, and literal token skip it.
+	if strings.IndexByte(raw, '\\') >= 0 && n.Kind() == NodeIdentifier {
+		return decodeIdentEscapes(raw)
+	}
+	return raw
 }
 
 // TypeAt returns the type of the expression at n, with flow narrowing applied at
