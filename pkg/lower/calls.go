@@ -180,10 +180,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		// A direct call to a top-level function may omit a defaulted trailing
 		// argument, so its parameter defaults ride into finishCall to fill the slot.
 		defaults = r.calleeDefaults(sym)
-	} else if r.isDynamic(kids[0]) {
+	} else if r.isDynamic(kids[0]) || r.localStorageDynamic(kids[0]) {
 		// A binding of dynamic type used as a callee (a parameter typed any that holds
 		// a function) is a boxed function value, so it dispatches through the runtime
-		// Call the same way a non-identifier dynamic callee does.
+		// Call the same way a non-identifier dynamic callee does. The storage check
+		// catches an implicit-any binding whose type the checker evolved to a concrete
+		// function at the call site while the slot itself stays a value.Value box.
 		return r.dynamicCall(kids[0], kids[1:])
 	} else {
 		// A bare identifier used as a callee that the checker accepted has a call
