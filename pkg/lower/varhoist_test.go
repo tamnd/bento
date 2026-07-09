@@ -55,6 +55,48 @@ console.log(g(3));
 	}
 }
 
+// TestTopLevelBlockVarHoists pins that a var declared inside a bare block at the
+// scope root, then read after the block, hoists to a single scope-top declaration.
+// The block sits directly in the top statement list, so the hoist walk has to step
+// into the top statement itself; starting one level below would step over the block
+// and leave the var block-local, undeclared at the read after it.
+func TestTopLevelBlockVarHoists(t *testing.T) {
+	const src = `var x = "outside";
+{
+  var x = "inside";
+}
+console.log(x);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "var x value.BStr") {
+		t.Errorf("top-level block var was not declared once at the scope top:\n%s", source)
+	}
+	if !strings.Contains(source, "x = value.FromGoString(\"inside\")") {
+		t.Errorf("in-block var did not lower to an assignment:\n%s", source)
+	}
+	if strings.Contains(source, "x :=") {
+		t.Errorf("top-level block var kept a short declaration, splitting the binding:\n%s", source)
+	}
+}
+
+// TestTopLevelBlockVarRuns builds and runs the top-level block var end to end: the
+// outer and in-block var are one binding, so the value read after the block is the
+// one the block assigned, matching JavaScript function scoping.
+func TestTopLevelBlockVarRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `var x = "outside";
+{
+  var x = "inside";
+}
+console.log(x);
+`
+	got := runProgramGo(t, src)
+	want := "inside\n"
+	if got != want {
+		t.Fatalf("top-level block var printed %q, want %q", got, want)
+	}
+}
+
 // TestVarHoistRuns builds and runs the hoist end to end against the Node answers: a
 // var assigned in each branch of an if and read after it returns the branch value,
 // and a var written in a catch and read after the try carries across the block.
