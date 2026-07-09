@@ -313,6 +313,13 @@ type Renderer struct {
 	// function body) and restored on exit, so one scope's hoists do not leak into
 	// another.
 	hoistedVars map[string]bool
+	// fwdHoisted names the callable-object bindings the active scope declared at
+	// its top because a statement above the binding captures its name in a closure.
+	// JavaScript scopes the const to the whole module or function, so the closure's
+	// forward reference is legal there; Go needs the pointer declared first, so the
+	// binding's own site lowers to a plain assignment. It is set per scope and
+	// restored on exit, so one scope's forward hoists do not leak into another.
+	fwdHoisted map[string]bool
 	// typeDepth counts the nesting typeExpr is currently rendering, so a
 	// self-referential type (a function whose return type reaches back to itself, an
 	// object with a property of its own shape) hands back at a bounded depth rather
