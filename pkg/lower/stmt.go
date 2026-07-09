@@ -1681,6 +1681,16 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	if _, ok := r.classReceiver(obj); ok {
 		return nil, false, nil
 	}
+	// A write o.k = v to a property the fixed shape never declared has no Go field
+	// to land in: the struct interns exactly the shape's declared fields, so a read
+	// of an absent property folds to value.MissingProperty (member.go), and putting
+	// that read on the left of an assignment emits value.MissingProperty(o) = v,
+	// which is not addressable and fails the go build. Adding a property a shape
+	// never declared is a runtime shape mutation this path does not model, so it
+	// hands back rather than assign to a non-lvalue.
+	if _, present := r.shapeProp(objType, r.prog.Text(tParts[1])); !present {
+		return nil, false, &NotYetLowerable{Reason: "a write o.k = v that adds a property the fixed-shape object never declared needs the object's runtime shape, a later slice"}
+	}
 	lhs, err := r.lowerExpr(target)
 	if err != nil {
 		return nil, false, err

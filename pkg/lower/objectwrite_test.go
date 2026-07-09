@@ -54,3 +54,31 @@ func TestObjectCompoundFieldWriteHandsBack(t *testing.T) {
 		t.Fatal("expected a compound object field write to hand back")
 	}
 }
+
+// TestObjectUndeclaredFieldWriteHandsBack proves a write to a property the fixed
+// shape never declared hands back rather than emitting an assignment to the
+// value.MissingProperty read fallback, which is not addressable and would fail
+// the go build. The shape interns to a struct with only its declared fields, so
+// there is no lvalue for a property it never declared; adding one is a runtime
+// shape mutation this path does not model. The write draws the 2339 "property
+// does not exist" diagnostic the AOT front door tolerates, so the test reaches
+// the renderer through the same tolerant path build.Compile uses.
+func TestObjectUndeclaredFieldWriteHandsBack(t *testing.T) {
+	const src = "const o = { x: 1 };\no.y = 5;\n"
+	reason := renderProgramTolerantHandBack(t, src)
+	if reason == "" {
+		t.Fatal("expected a write to an undeclared property to hand back")
+	}
+}
+
+// TestObjectFieldWriteToEmptyShapeHandsBack pins the case the test262 compareArray
+// harness hit: a write to any property of an empty-shape object o = {} has no
+// declared field to land in, so it hands back instead of emitting the
+// non-addressable value.MissingProperty(o) = v.
+func TestObjectFieldWriteToEmptyShapeHandsBack(t *testing.T) {
+	const src = "const o = {};\no.prop = 42;\n"
+	reason := renderProgramTolerantHandBack(t, src)
+	if reason == "" {
+		t.Fatal("expected a write to a property of an empty-shape object to hand back")
+	}
+}

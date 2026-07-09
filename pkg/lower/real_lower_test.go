@@ -55,6 +55,51 @@ func compile(t *testing.T, src string) *frontend.Program {
 	return prog
 }
 
+// compileTolerant loads src like compile but admits the "property does not
+// exist" diagnostics (2339 and its "did you mean" variant 2551) the AOT front
+// door tolerates in build.firstError. A program that reads or writes a property
+// the fixed shape never declared draws 2339, so compiling it strictly would fail
+// the test before the renderer ran; tolerating it here reaches the renderer on
+// the exact terms build.Compile does, which is where the harness meets these
+// programs.
+func compileTolerant(t *testing.T, src string) *frontend.Program {
+	t.Helper()
+	prog, err := frontend.Load(frontend.LoadOptions{
+		Dir:   "/",
+		Roots: []string{"/m.ts"},
+		FS:    realFS{files: map[string]string{"/m.ts": src}},
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, d := range prog.Diagnostics() {
+		if d.Category != frontend.CategoryError {
+			continue
+		}
+		if d.Code == 2339 || d.Code == 2551 {
+			continue
+		}
+		t.Fatalf("unexpected type error in snippet: %s", d.Message)
+	}
+	return prog
+}
+
+// renderProgramTolerantHandBack compiles src through the tolerant front door and
+// asserts the assembler hands the whole program back as NotYetLowerable,
+// returning the reason. It is the handback counterpart for programs that only
+// reach the renderer because a dynamic-member diagnostic was admitted.
+func renderProgramTolerantHandBack(t *testing.T, src string) string {
+	t.Helper()
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	return nyl.Reason
+}
+
 // typeOfDecl compiles src and returns the type of the first variable
 // declaration's name, the type the renderer lowers.
 func typeOfDecl(t *testing.T, src string) (*frontend.Program, frontend.Type) {
