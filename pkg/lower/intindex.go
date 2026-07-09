@@ -46,6 +46,32 @@ func (r *Renderer) mentionsInt32Local(n frontend.Node) bool {
 	return false
 }
 
+// maxDenseLiteralIndex bounds the literal index an array write may target before
+// the lowerer hands back. The dense array store fills every empty slot with a zero,
+// so a write at a large index (a[2**31] = v, a[2**32 - 2] = v) would allocate
+// billions of elements and take the box down; the runtime caps the dense grow and
+// throws a RangeError, but a throw where JavaScript grows a sparse array is a
+// conformance failure, so a write at a literal index this large hands back for the
+// engine instead. The value is the runtime's own dense-grow ceiling (1 << 27); the
+// sparse representation that removes the ceiling on both sides is a later slice.
+const maxDenseLiteralIndex = 1 << 27
+
+// hugeLiteralArrayIndex reports whether an index node is a numeric literal whose
+// integer value is too large for the dense array store to reach without running
+// memory away. It reads only literal indices, which is where the huge-sparse-write
+// test262 cases (a[2147483648], a[4294967295]) sit, so a counter-driven or dynamic
+// index is left on its ordinary path and only a statically-known landmine trips it.
+func hugeLiteralArrayIndex(idxNode frontend.Node, prog *frontend.Program) bool {
+	if idxNode.Kind() != frontend.NodeNumericLiteral {
+		return false
+	}
+	v, ok := numericLiteralValue(prog.Text(idxNode))
+	if !ok {
+		return false
+	}
+	return v == float64(int64(v)) && v >= float64(maxDenseLiteralIndex)
+}
+
 // intIndexExpr lowers an index expression to a Go int. It takes the int32 lowering
 // of the index, which keeps a counter and its arithmetic in native integer
 // registers, and converts it to int for the slice index the AtI/SetAtI methods
