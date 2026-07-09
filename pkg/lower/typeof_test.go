@@ -49,6 +49,19 @@ func TestTypeofObjectTag(t *testing.T) {
 	}
 }
 
+// TestTypeofClassConstructorTag pins that typeof a class constructor folds to
+// "function". A class type carries construct signatures rather than call
+// signatures, and checking only call signatures folded it to "object", which
+// broke the harness sta.js self-test (typeof Test262Error === "function").
+func TestTypeofClassConstructorTag(t *testing.T) {
+	const src = "class C { m(): number { return 1; } }\n" +
+		"export function k(): string { return typeof C; }\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, `value.FromGoString("function")`) {
+		t.Errorf("typeof over a class constructor did not fold to \"function\":\n%s", source)
+	}
+}
+
 // TestTypeofDynamicCallsRuntime pins that a dynamic operand defers the tag to
 // runtime, evaluated once and asked through value.Value.TypeOf, since its kind is
 // not known until the boxed value exists.
