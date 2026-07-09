@@ -1,0 +1,6 @@
+== stdout:
+object
+RangeError: out of range
+true
+== exit:
+0
