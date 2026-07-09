@@ -19,6 +19,36 @@ type Object struct {
 	keys  []BStr  // property names in insertion order (named properties)
 	vals  []Value // property values, parallel to keys
 	elems []Value // dense element storage for an array
+	call  callFn  // the invocable body of a callable, nil for a plain object
+}
+
+// callFn is the body of a callable function value: it takes its arguments already
+// boxed and returns a boxed result, so a dynamic call site invokes it uniformly
+// without knowing the static signature the function had before it was boxed. A
+// missing trailing argument is not the callee's concern; the call site fills the
+// slot with undefined the way the language binds an omitted parameter, so the body
+// reads a fixed-length view.
+type callFn func(args []Value) Value
+
+// NewFunc boxes a Go closure as a callable function value, the box a static
+// function takes when it flows into a dynamic slot so a dynamic call site can
+// invoke it. A function is an object too (it can carry properties like name and
+// length), so it rides the same Object storage as a plain object with the call
+// body set; the kind stays KindFunc so typeof reports "function" and a property
+// read still finds the object's own keys.
+func NewFunc(fn callFn) Value {
+	return objectValue(&Object{kind: KindFunc, call: fn})
+}
+
+// Arg returns the ith boxed argument, or undefined when the call passed fewer, the
+// value JavaScript binds to a parameter the caller omitted. A boxed callable reads
+// its arguments through this helper so its body never indexes past the slice a
+// short call hands it.
+func Arg(args []Value, i int) Value {
+	if i >= 0 && i < len(args) {
+		return args[i]
+	}
+	return Undefined
 }
 
 // NewObject returns an empty plain object value, the target JSON.parse builds a
@@ -79,6 +109,21 @@ func (v Value) SetKey(key BStr, val Value) Value {
 	default:
 		return val
 	}
+}
+
+// Call invokes a callable function value with the given boxed arguments, the
+// lowering of fn(args) when the callee's type is dynamic so its shape is known
+// only at runtime. A callable runs its boxed body; any other value throws a
+// TypeError the way JavaScript does when a call target turns out not to be a
+// function.
+func (v Value) Call(args ...Value) Value {
+	if v.kind == KindFunc {
+		if o := v.object(); o.call != nil {
+			return o.call(args)
+		}
+	}
+	Throw(NewTypeError(v.TypeOf().ConcatN(FromGoString(" is not a function"))))
+	return Undefined
 }
 
 // getOwn returns the value of a named own property, or undefined when the object
