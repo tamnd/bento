@@ -335,6 +335,19 @@ func ToString(v Value) BStr {
 	}
 }
 
+// JoinString converts one element the way Array.prototype.join does: undefined
+// and null contribute the empty string rather than their names, so
+// [1, null, 3].join() is "1,,3", and every other value goes through the abstract
+// ToString. The lowerer passes this as the per-element string closure when the
+// array's element type is dynamic and it cannot pick a fixed element ToString
+// (NumberToString, BoolToString, or the identity for a string).
+func JoinString(v Value) BStr {
+	if v.IsNullish() {
+		return FromGoString("")
+	}
+	return ToString(v)
+}
+
 // ToStringMethod implements a dynamic x.toString() call, the method each
 // prototype installs rather than the abstract ToString the operators use. A
 // number spells its digits, a boolean spells true or false, a string is itself,
