@@ -21,6 +21,14 @@ import (
 // in and a consumer coerces and operates on it as the number, string, or boolean it
 // is (section 6.11). A plain type is returned unchanged.
 func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
+	// A call whose callee is a boxed value.Value binding returns a box, not a
+	// primitive, even where control-flow analysis evolved the callee to a concrete
+	// return type at the call site. Reporting no primitive facet routes every
+	// predicate over the call result (isNumber, isString, isBool, isBigInt) to the
+	// dynamic path the box needs, rather than a static coercion that would mistype it.
+	if r.callOfDynamicStorage(n) {
+		return frontend.TypeAny
+	}
 	return r.primitiveFlagsOfType(r.prog.TypeAt(n))
 }
 
@@ -204,7 +212,35 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.missingPropertyRead(n) {
 		return true
 	}
+	// A call whose callee is a binding stored as a boxed value.Value returns a box:
+	// the runtime Call always yields a value.Value. Control-flow analysis may have
+	// evolved an implicit-any callee to a concrete return type at the call site,
+	// which would drive a static coercion over the box and mistype it, so the call
+	// reads as dynamic off the callee's storage rather than the narrowed type.
+	if r.callOfDynamicStorage(n) {
+		return true
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
+// callOfDynamicStorage reports whether n is a call whose callee is a bare
+// identifier bound to a value.Value slot: a var declared with no initializer, or an
+// implicit-any binding later assigned a function. The runtime Call on such a slot
+// yields a boxed value, so the call result is dynamic even when control-flow
+// analysis narrowed the callee to a concrete function type at the call site. A
+// top-level function symbol is excluded: it lowers to a static Go func, not a box.
+func (r *Renderer) callOfDynamicStorage(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	if sym, ok := r.prog.SymbolAt(kids[0]); !ok || sym.Flags&frontend.SymbolFunction != 0 {
+		return false
+	}
+	return r.localStorageDynamic(kids[0])
 }
 
 // localStorageDynamic reports whether a local identifier's Go slot is a boxed
