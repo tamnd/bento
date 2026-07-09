@@ -290,6 +290,13 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if r.producesBoxedValue(src) {
 		return expr, nil
 	}
+	// A function value flowing into a dynamic slot boxes into a callable value.Value,
+	// so a dynamic call site can invoke it without knowing its static signature. It
+	// routes before the primitive switch, whose kind tests a function type would
+	// otherwise fall past to the handback.
+	if calls, _ := r.prog.Signatures(r.prog.TypeAt(src)); len(calls) == 1 {
+		return r.boxFuncToDynamic(expr, calls[0])
+	}
 	r.requireImport(valuePkg)
 	switch {
 	case r.isNumber(src):
@@ -318,6 +325,89 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		}, nil
 	}
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
+}
+
+// boxFuncToDynamic wraps a lowered function value in a callable value.Value, the
+// box a static function takes when it flows into a dynamic slot so a dynamic call
+// site can invoke it through value.Call. The wrapper is a value.NewFunc closure
+// that takes its arguments already boxed: it coerces each into the static
+// parameter type the lowered func expects, calls the func, and boxes the result
+// back into a value.Value. Coercion and boxing reuse the same dynamic-boundary
+// rules an argument and a return crossing that boundary already take, so the
+// boxed call behaves as the direct call would. A shape the wrapper cannot bridge
+// (a rest parameter, an optional parameter, a parameter or result type with no
+// coercion yet) hands back rather than emit a wrapper that would not compile.
+func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature) (ast.Expr, error) {
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "boxing a function with a rest parameter into a dynamic value is a later slice"}
+	}
+	if sig.MinArgs != len(sig.Params) {
+		return nil, &NotYetLowerable{Reason: "boxing a function with an optional parameter into a dynamic value is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	const argsName = "__a"
+	callArgs := make([]ast.Expr, 0, len(sig.Params))
+	for i, p := range sig.Params {
+		at := &ast.CallExpr{Fun: sel("value", "Arg"), Args: []ast.Expr{ident(argsName), &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}}}
+		if p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+			// A dynamic parameter takes the boxed argument as-is; the body already reads
+			// a value.Value there, so no coercion is needed.
+			callArgs = append(callArgs, at)
+			continue
+		}
+		coerced, err := r.coerceDynamicToStaticFlags(at, p.Type.Flags)
+		if err != nil {
+			return nil, err
+		}
+		callArgs = append(callArgs, coerced)
+	}
+	// The lowered func is called inline; a bare func literal needs parentheses to sit
+	// in call position, and wrapping a plain identifier callee too is harmless.
+	inner := &ast.CallExpr{Fun: &ast.ParenExpr{X: expr}, Args: callArgs}
+	var body []ast.Stmt
+	if sig.Return.Flags&(frontend.TypeVoid|frontend.TypeUndefined) != 0 {
+		// A void or undefined return runs the call for its effect and yields the
+		// undefined the language binds to the result of such a call.
+		body = []ast.Stmt{
+			&ast.ExprStmt{X: inner},
+			&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
+		}
+	} else {
+		boxed, err := r.boxStaticToDynamicFlags(inner, sig.Return.Flags)
+		if err != nil {
+			return nil, err
+		}
+		body = []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{boxed}}}
+	}
+	thunk := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident(argsName)}, Type: &ast.ArrayType{Elt: sel("value", "Value")}}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewFunc"), Args: []ast.Expr{thunk}}, nil
+}
+
+// boxStaticToDynamicFlags boxes a static primitive result into a value.Value by its
+// type flags, the type-driven companion to boxStaticToDynamic used where only a
+// type is in hand and not a source node, as the function-boxing wrapper is when it
+// boxes a call result. A dynamic result is already a box and passes through; a
+// primitive rides its box constructor; any other result hands back.
+func (r *Renderer) boxStaticToDynamicFlags(expr ast.Expr, flags frontend.TypeFlags) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	switch {
+	case flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+		return expr, nil
+	case flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{expr}}, nil
+	case flags&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
+	case flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "boxing this static result type into a dynamic value is a later slice"}
+	}
 }
 
 // producesBoxedValue reports whether a source expression already lowers to a

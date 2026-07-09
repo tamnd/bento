@@ -83,10 +83,17 @@ func StringValue(s BStr) Value {
 // array keeps its flat tag for the length and index fast paths while sharing the
 // one reference type.
 func objectValue(o *Object) Value {
-	if o.kind == KindArray {
+	switch o.kind {
+	case KindArray:
 		return Value{kind: KindArray, ref: unsafe.Pointer(o)}
+	case KindFunc:
+		// A function is an object too, so it shares Object storage, but its box keeps
+		// the func tag so typeof reports "function" and its callable body stays
+		// reachable through the same reference.
+		return Value{kind: KindFunc, ref: unsafe.Pointer(o)}
+	default:
+		return Value{kind: KindObject, ref: unsafe.Pointer(o)}
 	}
-	return Value{kind: KindObject, ref: unsafe.Pointer(o)}
 }
 
 // Kind reports the value's runtime tag.
