@@ -1,0 +1,2 @@
+feature = "indirect-eval-value"
+handback = "the ambient global eval used as a value is a later slice"
