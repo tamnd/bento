@@ -81,11 +81,17 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// its binding, so one walk over the module settles the count for every scope.
 	r.bindingUses = countBindingUses(r.prog, entry)
 
-	// Count the identifier reads the Object statics fold away so the blank decision
-	// below sees the emitted-Go use count, not the source one. Object.keys(o) reads
-	// only o's shape and never lowers o, so without this a var o the fold orphaned
-	// would keep its source read and go unblanked, and the emitted Go would not build.
-	r.elidedUses = countElidedReceivers(r, entry)
+	// Count the identifier reads a fold drops so the blank decision below sees the
+	// emitted-Go read count, not the source one. Object.keys(o) reads only o's shape
+	// and never lowers o, and typeof x over a statically typed x folds to a constant
+	// and drops x, so without this a binding the fold orphaned would keep its source
+	// read and go unblanked, and the emitted Go would not build.
+	r.elidedUses = countElidedReads(r, entry)
+	// Count the write-only references, a plain `x = e` left side, so a local that is
+	// declared and then only written registers as unread here and gets the blank Go
+	// needs; a variable Go never reads is declared-and-not-used even when it is
+	// written, since only a read counts toward use.
+	r.writeUses = countWriteUses(r.prog, entry)
 
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
@@ -410,22 +416,25 @@ func (r *Renderer) bindingUnused(nameNode frontend.Node) bool {
 	if !ok {
 		return false
 	}
-	// Subtract the reads a fold drops from the emitted Go, so a binding whose only
-	// non-declaration read was the receiver of an Object.keys(o) that folded to a
-	// static name list reads as unused here and gets the blank the emit needs.
-	uses := r.bindingUses[sym] - r.elidedUses[sym]
+	// Subtract the reads a fold drops and the write-only references from the emitted
+	// Go, so a binding whose only non-declaration reads were dropped by a fold (an
+	// Object.keys(o) receiver, a typeof x tag) or were plain writes reads as unused
+	// here and gets the blank the emit needs. What remains is the declaration plus
+	// any real read; one means the declaration alone, so nothing reads the binding.
+	uses := r.bindingUses[sym] - r.elidedUses[sym] - r.writeUses[sym]
 	return uses == 1
 }
 
-// countElidedReceivers tallies, per binding, the identifier reads the Object static
-// folds drop from the emitted Go. Object.keys(o), Object.getOwnPropertyNames(o), and
-// Object.hasOwn(o, k) read only o's compile-time shape and never lower o, so the
-// source counts a read the emit does not make. Recording those reads lets
-// bindingUnused blank a binding the fold orphaned. The pattern is matched
-// syntactically, on a bare-identifier receiver of one of those three calls; if the
-// shape does not fold the whole program hands back and no Go is emitted, so an
-// over-count on a call that will not fold cannot reach a build.
-func countElidedReceivers(r *Renderer, entry frontend.Node) map[frontend.Symbol]int {
+// countElidedReads tallies, per binding, the identifier reads a fold drops from the
+// emitted Go. Object.keys(o), Object.getOwnPropertyNames(o), and Object.hasOwn(o, k)
+// read only o's compile-time shape and never lower o, and typeof x over a statically
+// typed x folds to a constant tag and drops x, so the source counts a read the emit
+// does not make. Recording those reads lets bindingUnused blank a binding the fold
+// orphaned. Each pattern is matched syntactically, on a bare identifier; if it does
+// not actually fold the whole program hands back and no Go is emitted, and even a
+// stray over-count only adds a harmless `_ = x` beside a real read, so it never
+// unbalances a binding the emit does read.
+func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int {
 	uses := map[frontend.Symbol]int{}
 	prog := r.prog
 	var walk func(n frontend.Node)
@@ -437,12 +446,86 @@ func countElidedReceivers(r *Renderer, entry frontend.Node) map[frontend.Symbol]
 				}
 			}
 		}
+		if arg, ok := elidedTypeofOperand(r, n); ok {
+			if sym, ok := prog.SymbolAt(arg); ok {
+				uses[sym]++
+			}
+		}
 		for _, c := range prog.Children(n) {
 			walk(c)
 		}
 	}
 	walk(entry)
 	return uses
+}
+
+// elidedTypeofOperand reports the bare-identifier operand of a typeof expression
+// that folds to a constant tag and drops the operand from the emit. typeof x folds
+// when x is not dynamic and its type pins one tag (typeof.go), which is exactly the
+// non-dynamic bare identifier this matches; a dynamic operand keeps its runtime read
+// and so is left uncounted.
+func elidedTypeofOperand(r *Renderer, n frontend.Node) (frontend.Node, bool) {
+	if !r.isTypeofExpr(n) {
+		return nil, false
+	}
+	operand := r.prog.Children(n)[0]
+	if operand.Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	if r.isDynamic(operand) {
+		return nil, false
+	}
+	if _, ok := r.staticTypeofTag(operand); !ok {
+		return nil, false
+	}
+	return operand, true
+}
+
+// countWriteUses tallies, per binding, the identifier references that write it
+// without reading it: the left side of a plain `x = e` assignment whose value is
+// discarded, which the checker exposes as a binary expression whose operator token is
+// `=` and whose left operand is a bare identifier, sitting alone as an expression
+// statement. Only a discarded assignment is write-only: when the assignment's value is
+// consumed (console.log(s = "set")) the emit synthesizes a read of the target, so an
+// assignment nested inside a larger expression keeps the binding read and is not
+// counted. A compound assignment (x += e) and a ++/-- read the binding before storing,
+// so those are left out too. Go counts only a read toward use, so recording the
+// write-only references lets bindingUnused blank a local that is declared and then only
+// written.
+func countWriteUses(prog *frontend.Program, entry frontend.Node) map[frontend.Symbol]int {
+	uses := map[frontend.Symbol]int{}
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeExpressionStatement {
+			kids := prog.Children(n)
+			if len(kids) == 1 {
+				if sym, ok := plainAssignTarget(prog, kids[0]); ok {
+					uses[sym]++
+				}
+			}
+		}
+		for _, c := range prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(entry)
+	return uses
+}
+
+// plainAssignTarget reports the binding written by a plain `x = e` assignment whose
+// left operand is a bare identifier, and false for anything else (a compound assign, a
+// member or index target, a non-assignment expression). The caller only treats it as
+// write-only when the assignment stands alone as an expression statement, so its value
+// is discarded and the emit never reads the target back.
+func plainAssignTarget(prog *frontend.Program, n frontend.Node) (frontend.Symbol, bool) {
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return frontend.Symbol{}, false
+	}
+	kids := prog.Children(n)
+	if len(kids) != 3 || strings.TrimSpace(prog.Text(kids[1])) != "=" || kids[0].Kind() != frontend.NodeIdentifier {
+		return frontend.Symbol{}, false
+	}
+	return prog.SymbolAt(kids[0])
 }
 
 // elidedObjectReceiver reports the bare-identifier receiver of an Object static call
