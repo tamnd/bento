@@ -348,6 +348,28 @@ func JoinString(v Value) BStr {
 	return ToString(v)
 }
 
+// MapCallString implements the borrowed idiom Array.prototype.map.call(arrayLike,
+// String): it reads the array-like's length, coerces each element through the same
+// abstract ToString the String built-in applies, and returns a new array of those
+// strings. The test262 assert prelude formats a failed comparison exactly this
+// way, compareArray.format, so lowering the borrow is what lets the prelude reach
+// the interpreter's build path rather than hand back. The length coerces the way
+// ToLength does, a NaN or negative length yielding a zero count, and each element
+// reads positionally through the dynamic index so a dense array maps element for
+// element.
+func MapCallString(arrayLike Value) *Array[Value] {
+	lenF := ToNumber(arrayLike.Get(FromGoString("length")))
+	n := 0
+	if lenF > 0 {
+		n = int(lenF)
+	}
+	out := make([]Value, n)
+	for i := 0; i < n; i++ {
+		out[i] = StringValue(ToString(arrayLike.GetIndex(float64(i))))
+	}
+	return NewArray(out...)
+}
+
 // ToStringMethod implements a dynamic x.toString() call, the method each
 // prototype installs rather than the abstract ToString the operators use. A
 // number spells its digits, a boolean spells true or false, a string is itself,

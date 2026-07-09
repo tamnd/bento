@@ -182,12 +182,22 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		delete(r.int32Locals, name)
 		delete(r.int64Locals, name)
 	}
+	// A callable-object binding an earlier statement captures in a closure declares
+	// its pointer at the top of main too, so the closure closes over a variable
+	// already in scope the way the const is for JavaScript.
+	fwdDecls, restoreFwd, err := r.enterFwdHoistScope(mainBody)
+	if err != nil {
+		restoreHoist()
+		return Program{}, err
+	}
 	stmts, err := r.lowerStatements(mainBody)
 	restoreHoist()
+	restoreFwd()
 	if err != nil {
 		return Program{}, err
 	}
 	stmts = append(hoistDecls, stmts...)
+	stmts = append(fwdDecls, stmts...)
 	stmts = r.hoistStrBuilders(stmts)
 
 	// A program that can raise a thrown value defers the uncaught-error reporter as
