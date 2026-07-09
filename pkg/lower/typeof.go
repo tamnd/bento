@@ -105,7 +105,12 @@ func (r *Renderer) staticTypeofTag(n frontend.Node) (string, bool) {
 		return "object", true
 	}
 	if f&frontend.TypeObject != 0 {
-		if call, _ := r.prog.Signatures(r.prog.TypeAt(n)); len(call) > 0 {
+		// A callable answers "function", and so does a class: its type carries
+		// construct signatures rather than call signatures, but typeof a class
+		// constructor is "function" in JavaScript all the same. Checking only
+		// call signatures folded typeof SomeClass to "object", which fails the
+		// harness sta.js self-test (typeof Test262Error === "function").
+		if call, construct := r.prog.Signatures(r.prog.TypeAt(n)); len(call) > 0 || len(construct) > 0 {
 			return "function", true
 		}
 		return "object", true
