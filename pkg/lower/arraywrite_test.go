@@ -45,3 +45,32 @@ func TestArrayCompoundElementWriteHandsBack(t *testing.T) {
 		t.Fatal("expected a compound array element write to hand back")
 	}
 }
+
+// TestArrayHugeLiteralIndexWriteHandsBack proves a write at a literal index far
+// past the end hands back rather than lowering to a Set whose dense grow the
+// runtime caps with a RangeError. The dense store cannot fill billions of holes
+// without running memory away, and a throw where JavaScript grows a sparse array is
+// a conformance failure, so the write hands back for the engine until the sparse
+// representation lands. These are the test262 huge-sparse-write cases.
+func TestArrayHugeLiteralIndexWriteHandsBack(t *testing.T) {
+	for _, src := range []string{
+		"export function put(a: number[]): void { a[2147483648] = 1; }\n",
+		"export function put(a: number[]): void { a[4294967294] = 1; }\n",
+	} {
+		reason := renderProgramHandBack(t, src)
+		if reason == "" {
+			t.Fatalf("expected a huge-literal-index array write to hand back:\n%s", src)
+		}
+	}
+}
+
+// TestArraySmallLiteralIndexWriteEmits pins that an ordinary small literal index
+// stays on the Set path, so the huge-index guard trips only on the landmine values
+// and leaves every real dense write untouched.
+func TestArraySmallLiteralIndexWriteEmits(t *testing.T) {
+	const src = "export function put(a: number[]): void { a[3] = 1; }\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "a.Set(") {
+		t.Errorf("small literal index write did not lower to Set:\n%s", source)
+	}
+}

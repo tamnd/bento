@@ -1590,6 +1590,9 @@ func (r *Renderer) arrayElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 	if !r.isNumber(idxNode) {
 		return nil, false, &NotYetLowerable{Reason: "an array write with a non-number index is a later slice"}
 	}
+	if hugeLiteralArrayIndex(idxNode, r.prog) {
+		return nil, false, &NotYetLowerable{Reason: "an array write at a literal index far past the end (a[2**32 - 2] = v) needs the sparse representation, a later slice"}
+	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
 		return nil, false, err
