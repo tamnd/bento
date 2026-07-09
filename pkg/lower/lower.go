@@ -287,6 +287,15 @@ type Renderer struct {
 	// compound assignment (x += e) and a ++/-- read the binding first, so those are
 	// not counted here. It is filled alongside bindingUses in RenderProgram.
 	writeUses map[frontend.Symbol]int
+	// bindingDecls counts, per binding symbol, the declaration name nodes that name
+	// it. It is normally one, the single `var`/`let`/`const` that introduces the
+	// binding, but JavaScript lets a `var` redeclare a name in the same scope, so
+	// `{ var f; var f; }` is one binding with two declaration name nodes. bindingUnused
+	// compares the surviving reference count against this so a redeclared-but-unread
+	// binding is still recognized as unused and blanked, rather than its extra
+	// declarations reading as though they were uses. It is filled alongside
+	// bindingUses in RenderProgram.
+	bindingDecls map[frontend.Symbol]int
 	// blockDeclared is a stack of the local names already given a Go declaration in
 	// each open block, innermost last. A block is pushed when its statements start
 	// lowering and popped when they finish, so the top frame names the bindings the

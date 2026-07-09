@@ -476,16 +476,36 @@ func (r *Renderer) lowerVarStatement(n frontend.Node) (ast.Stmt, error) {
 // declared and not used, but the initializer of an unused `var x = e;` must still
 // run, so the binding stays and `_ = x` marks it used without changing behavior.
 // A binding that is read anywhere gets no blank, and a destructuring target, whose
-// name node is not a plain identifier, is left to its own lowering.
+// name node is not a plain identifier, is left to its own lowering. A `var` that
+// redeclares a name the block or scope already declared lowers to an assignment,
+// not a fresh declaration, so its blank belongs with the first declaration alone; a
+// name already declared before this statement is skipped here so an unread
+// redeclared var gets exactly one blank, not one per `var`.
 func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	// Note which names are seeing their first Go declaration in this statement before
+	// it lowers, since lowering marks them declared and would otherwise make every
+	// later redeclaration look fresh too.
+	fresh := make([]bool, len(decls))
+	for i, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		if name, ok := localName(r.prog.Text(kids[0])); ok {
+			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name]
+		}
+	}
 	s, err := r.lowerVarStatement(n)
 	if err != nil {
 		return nil, err
 	}
 	out := []ast.Stmt{s}
-	var decls []frontend.Node
-	collectVarDecls(r.prog, n, &decls)
-	for _, d := range decls {
+	for i, d := range decls {
+		if !fresh[i] {
+			continue
+		}
 		kids := r.prog.Children(d)
 		if len(kids) == 0 {
 			continue
