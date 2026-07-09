@@ -265,6 +265,16 @@ func firstError(prog *frontend.Program) string {
 		if d.Category != frontend.CategoryError {
 			continue
 		}
+		// A property miss on a private name (.#x) is not the tolerable absent-property
+		// read that folds to undefined: a private name is valid only inside the class
+		// body that declares it, so an access outside any class, or an in-class access
+		// of a name the class never declared, is a hard error the build must surface
+		// rather than route to the dynamic member path. The checker spells both as a
+		// 2339, or its 2551 suggestion variant, over a #-prefixed property, so those
+		// gate here ahead of the tolerated-member skip below.
+		if isPrivateNameMiss(d) {
+			return d.Message
+		}
 		if toleratedImplicitAny[d.Code] {
 			continue
 		}
@@ -277,6 +287,15 @@ func firstError(prog *frontend.Program) string {
 		return d.Message
 	}
 	return ""
+}
+
+// isPrivateNameMiss reports whether a diagnostic is a property-does-not-exist error
+// over a private name. The 2339 and 2551 codes cover both the outside-class access
+// and an undeclared in-class access, and both spell the message "Property '#name'
+// does not exist ...", so the #-prefixed quoted property is the tell. A normal
+// missing property ("Property 'b' ...") is not private and stays tolerated.
+func isPrivateNameMiss(d frontend.Diagnostic) bool {
+	return (d.Code == 2339 || d.Code == 2551) && strings.HasPrefix(d.Message, "Property '#")
 }
 
 // toleratedImplicitAny is the set of checker diagnostic codes bento admits by

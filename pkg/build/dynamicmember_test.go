@@ -165,3 +165,42 @@ func TestComputedElementReadHandsBack(t *testing.T) {
 		t.Fatalf("computed element read on a fixed shape should hand back, but it lowered")
 	}
 }
+
+// TestPrivateNameOutsideClassGates pins that a private-name access outside any
+// class body gates the build rather than being tolerated as an absent-property
+// read. The checker reports "Property '#x' does not exist on type 'void'" as a
+// 2339, the same code a normal missing property draws, but a private name is a
+// hard error anywhere but the class that declares it, so the front door surfaces
+// it. This is the early error test262's negative parse tests demand: an AOT build
+// error over the invalid source is the rejection those tests check for.
+func TestPrivateNameOutsideClassGates(t *testing.T) {
+	src := "var fn = function() { (() => {})().#x };\n"
+	if _, err := compileSource(t, src); err == nil {
+		t.Fatalf("a private name outside a class should gate the build, but it lowered")
+	}
+}
+
+// TestUndeclaredPrivateNameInClassGates pins that reading a private name the class
+// never declared also gates: this.#y where the class has no #y is a hard error in
+// the language, spelled as the same 2339 over a #-prefixed property, so it is not
+// the tolerable absent-property read that folds to undefined.
+func TestUndeclaredPrivateNameInClassGates(t *testing.T) {
+	src := "class C { get() { return this.#y; } }\nnew C().get();\n"
+	if _, err := compileSource(t, src); err == nil {
+		t.Fatalf("an undeclared private name in a class should gate the build, but it lowered")
+	}
+}
+
+// TestNormalMissingPropertyStillTolerated pins the boundary: a normal missing
+// property is still tolerated and folds to undefined, so gating the private-name
+// miss did not disturb the ordinary absent-property read.
+func TestNormalMissingPropertyStillTolerated(t *testing.T) {
+	src := "const o = { a: 1 };\nconsole.log(o.b);\n"
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("a normal missing property should still lower, got: %v", err)
+	}
+	if !strings.Contains(out, "value.MissingProperty") {
+		t.Fatalf("expected the normal missing read to fold to value.MissingProperty, got:\n%s", out)
+	}
+}
