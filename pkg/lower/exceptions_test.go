@@ -279,6 +279,38 @@ console.log(overridden());
 	}
 }
 
+// TestTryBranchEscapeHandsBack proves a break or continue inside a try, catch, or
+// finally body that targets a loop or switch enclosing the whole try hands back.
+// Those bodies lower inside a Go closure, so such a branch would compile to a
+// break or continue with no loop around it, which the toolchain rejects; handing
+// back keeps the emitted Go sound until the branch is lowered for real.
+func TestTryBranchEscapeHandsBack(t *testing.T) {
+	// Unlabeled break out of the try to the enclosing for.
+	handsBack(t, "for (let i = 0; i < 3; i = i + 1) { try { break; } catch (e) {} }\n")
+	// Unlabeled continue out of the try to the enclosing while.
+	handsBack(t, "while (true) { try { continue; } finally { console.log(\"x\"); } }\n")
+	// Labeled break whose label is declared outside the try.
+	handsBack(t, "outer: for (let i = 0; i < 3; i = i + 1) { try { break outer; } catch (e) {} }\n")
+	// The branch in a catch body escapes just the same.
+	handsBack(t, "for (let i = 0; i < 3; i = i + 1) { try { throw new Error(\"x\"); } catch (e) { break; } }\n")
+}
+
+// TestTryContainedBranchLowers proves the guard is precise: a break or continue
+// whose target loop or switch sits inside the try body stays within the closure
+// and lowers normally rather than tripping the hand-back.
+func TestTryContainedBranchLowers(t *testing.T) {
+	// break targets the for inside the try.
+	forSrc := renderProgram(t, "try { for (let i = 0; i < 3; i = i + 1) { if (i === 1) { break; } console.log(i); } } catch (e) {}\n")
+	if !strings.Contains(forSrc, "break") {
+		t.Errorf("a break contained by a loop inside the try was dropped:\n%s", forSrc)
+	}
+	// continue targets the while inside the try.
+	whileSrc := renderProgram(t, "try { let i = 0; while (i < 3) { i = i + 1; if (i === 2) { continue; } console.log(i); } } catch (e) {}\n")
+	if !strings.Contains(whileSrc, "continue") {
+		t.Errorf("a continue contained by a loop inside the try was dropped:\n%s", whileSrc)
+	}
+}
+
 // TestInstanceofOutsideCatchHandsBack proves instanceof on a value that is not a
 // caught error hands back, since class-instance narrowing is a later slice and
 // only a caught built-in error is covered here.
