@@ -490,12 +490,74 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 				uses[sym]++
 			}
 		}
+		if arg, ok := elidedTruthyOperand(r, n); ok {
+			if sym, ok := prog.SymbolAt(arg); ok {
+				uses[sym]++
+			}
+		}
 		for _, c := range prog.Children(n) {
 			walk(c)
 		}
 	}
 	walk(entry)
 	return uses
+}
+
+// elidedTruthyOperand reports the bare-identifier condition of a control-flow node
+// that lowerTruthy collapses to a constant and drops from the emit. An object in a
+// boolean position (for (; obj; ), while (obj), if (obj), obj ? a : b, obj && x) is
+// always truthy, so lowerTruthy folds it to the Go constant true and never lowers
+// the read, which leaves a var whose only use was that condition declared and not
+// used. Recording the read lets bindingUnused blank the binding the fold orphaned.
+// The match is the same one lowerTruthy makes: a bare identifier the checker proved
+// always truthy or always falsy and that is repeatable, so its evaluation is safe to
+// drop. A parenthesized condition unwraps to the identifier inside so ((obj)) counts
+// too. A dynamic or primitive condition keeps its runtime test and is not matched.
+func elidedTruthyOperand(r *Renderer, n frontend.Node) (frontend.Node, bool) {
+	var cond frontend.Node
+	switch n.Kind() {
+	case frontend.NodeForStatement:
+		fc := r.prog.ForClauses(n)
+		if !fc.HasCond {
+			return nil, false
+		}
+		cond = fc.Cond
+	case frontend.NodeWhileStatement, frontend.NodeIfStatement, frontend.NodeConditionalExpression:
+		kids := r.prog.Children(n)
+		if len(kids) < 1 {
+			return nil, false
+		}
+		cond = kids[0]
+	case frontend.NodeBinaryExpression:
+		// The left operand of && or || rides the same truthiness fold (logical.go),
+		// so an always-truthy object on the left collapses and drops its read.
+		kids := r.prog.Children(n)
+		if len(kids) != 3 {
+			return nil, false
+		}
+		switch r.prog.Text(kids[1]) {
+		case "&&", "||":
+			cond = kids[0]
+		default:
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	cond = r.unwrapParens(cond)
+	if cond.Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	if r.isBool(cond) || r.isDynamic(cond) {
+		return nil, false
+	}
+	if _, known := r.staticTruthy(cond); !known {
+		return nil, false
+	}
+	if !r.repeatableOperand(cond) {
+		return nil, false
+	}
+	return cond, true
 }
 
 // elidedTypeofOperand reports the bare-identifier operand of a typeof expression
