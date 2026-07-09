@@ -1449,6 +1449,13 @@ func (r *Renderer) stringifyClosure(elem frontend.Type, elemGo ast.Expr) (ast.Ex
 	case elem.Flags&frontend.TypeBoolean != 0:
 		r.requireImport(valuePkg)
 		body = &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{ident("x")}}
+	case elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+		// A dynamic element is a boxed value.Value, so join runs the abstract
+		// ToString on each one at runtime, with join's own rule that undefined and
+		// null become the empty string. This is the shape the assert prelude's
+		// compareArray.format reaches through Array.prototype.map.call(...).join.
+		r.requireImport(valuePkg)
+		body = &ast.CallExpr{Fun: sel("value", "JoinString"), Args: []ast.Expr{ident("x")}}
 	default:
 		return nil, &NotYetLowerable{Reason: "array join on an element type without a value ToString is a later slice"}
 	}
