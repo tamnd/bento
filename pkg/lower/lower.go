@@ -273,10 +273,20 @@ type Renderer struct {
 	bindingUses map[frontend.Symbol]int
 	// elidedUses counts, per binding symbol, the identifier references a fold drops
 	// from the emitted Go. Object.keys(o) and its siblings read only o's static shape
-	// and never lower o, so the source counts o as read while the emit does not;
+	// and never lower o, and typeof x over a statically typed x folds to a constant
+	// tag and drops x, so the source counts a read the emit does not make;
 	// bindingUnused subtracts those dropped reads and still blanks a binding the fold
 	// orphaned. It is filled alongside bindingUses in RenderProgram.
 	elidedUses map[frontend.Symbol]int
+	// writeUses counts, per binding symbol, the identifier references that write the
+	// binding without reading it: the left side of a plain `x = e` assignment. Go
+	// counts only reads toward a variable being used, so a local that is declared and
+	// then only written (var x; x = 1) is declared-and-not-used in the emitted Go
+	// even though the source names it more than once; bindingUnused subtracts these
+	// write-only references so such a binding still gets its trailing blank. A
+	// compound assignment (x += e) and a ++/-- read the binding first, so those are
+	// not counted here. It is filled alongside bindingUses in RenderProgram.
+	writeUses map[frontend.Symbol]int
 	// blockDeclared is a stack of the local names already given a Go declaration in
 	// each open block, innermost last. A block is pushed when its statements start
 	// lowering and popped when they finish, so the top frame names the bindings the
