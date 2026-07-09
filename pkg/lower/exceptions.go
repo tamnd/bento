@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -500,6 +501,17 @@ func (r *Renderer) lowerTry(n frontend.Node) (ast.Stmt, error) {
 	if !hasCatch && !hasFinally {
 		return nil, &NotYetLowerable{Reason: "a try with neither catch nor finally is a later slice"}
 	}
+	// A try, catch, and finally body all lower inside a Go closure, and Go's
+	// break and continue cannot leave the function they sit in. A break or
+	// continue in one of those bodies that targets a loop or switch enclosing
+	// the whole try would compile to a branch with no loop around it, so it
+	// hands back rather than emit Go the compiler rejects. A branch captured by
+	// a loop, switch, or label inside the body stays put and lowers normally.
+	if r.branchEscapesClosure(tryBlock) ||
+		(hasCatch && r.branchEscapesClosure(catchClause)) ||
+		(hasFinally && r.branchEscapesClosure(finallyBlock)) {
+		return nil, &NotYetLowerable{Reason: "a break or continue leaving the try's closure to an enclosing loop is a later slice"}
+	}
 	escapes := r.blockReturns(tryBlock) ||
 		(hasCatch && r.blockReturns(catchClause)) ||
 		(hasFinally && r.blockReturns(finallyBlock))
@@ -813,6 +825,101 @@ func (r *Renderer) blockReturns(n frontend.Node) bool {
 	}
 	for _, k := range r.prog.Children(n) {
 		if r.blockReturns(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// branchEscapesClosure reports whether a break or continue inside n targets a
+// loop or switch outside n. lowerTry lowers the try, catch, and finally bodies
+// inside a Go closure, and a branch that leaves the loop enclosing the try would
+// compile to a break or continue with no loop around it, which Go rejects. The
+// walk stops at a nested function, whose branches target its own loops, counts
+// the loops and switches declared inside n, and tracks the labels those loops
+// carry, so it reports an escape only for a branch whose target sits outside n:
+// an unlabeled break with no enclosing loop or switch, an unlabeled continue
+// with no enclosing loop, or a labeled branch whose label is not declared
+// inside n.
+func (r *Renderer) branchEscapesClosure(n frontend.Node) bool {
+	return r.branchEscapes(n, 0, 0, nil)
+}
+
+func (r *Renderer) branchEscapes(n frontend.Node, loopDepth, switchDepth int, labels map[string]bool) bool {
+	switch n.Kind() {
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		return false
+	case frontend.NodeForStatement, frontend.NodeForOfStatement, frontend.NodeForInStatement, frontend.NodeWhileStatement:
+		return r.branchEscapesChildren(n, loopDepth+1, switchDepth, labels)
+	case frontend.NodeSwitchStatement:
+		return r.branchEscapesChildren(n, loopDepth, switchDepth+1, labels)
+	case frontend.NodeUnknown:
+		txt := strings.TrimSpace(r.prog.Text(n))
+		// A break or continue surfaces unclassified with the keyword leading its
+		// text; the labeled form keeps its target as a lone identifier child. The
+		// keyword can be followed straight away by a semicolon (break;), so match
+		// the leading word rather than splitting on whitespace.
+		if word := branchKeyword(txt); word == "break" || word == "continue" {
+			kids := r.prog.Children(n)
+			if len(kids) == 1 && kids[0].Kind() == frontend.NodeIdentifier {
+				return !labels[strings.TrimSpace(r.prog.Text(kids[0]))]
+			}
+			if word == "break" {
+				return loopDepth == 0 && switchDepth == 0
+			}
+			return loopDepth == 0
+		}
+		kids := r.prog.Children(n)
+		// A do...while surfaces unclassified with a body block, a condition, and
+		// text beginning with do; it counts as a loop the way the other loops do.
+		if len(kids) == 2 && kids[0].Kind() == frontend.NodeBlock && strings.HasPrefix(txt, "do") {
+			return r.branchEscapesChildren(n, loopDepth+1, switchDepth, labels)
+		}
+		// A labeled statement surfaces unclassified with the label identifier
+		// first and the statement it labels second; the label is in scope for that
+		// statement, so a branch naming it stays inside n.
+		if len(kids) == 2 && kids[0].Kind() == frontend.NodeIdentifier {
+			label := strings.TrimSpace(r.prog.Text(kids[0]))
+			if strings.HasPrefix(txt, label+":") {
+				next := make(map[string]bool, len(labels)+1)
+				for k := range labels {
+					next[k] = true
+				}
+				next[label] = true
+				return r.branchEscapes(kids[1], loopDepth, switchDepth, next)
+			}
+		}
+	}
+	return r.branchEscapesChildren(n, loopDepth, switchDepth, labels)
+}
+
+// branchKeyword returns "break" or "continue" when txt is a branch statement led
+// by that keyword, and "" otherwise. It matches the keyword only when what
+// follows is not another identifier character, so a break; with no space is
+// caught while an identifier that merely starts with the letters (breakfast) is
+// not.
+func branchKeyword(txt string) string {
+	for _, kw := range [...]string{"break", "continue"} {
+		if strings.HasPrefix(txt, kw) {
+			if rest := txt[len(kw):]; rest == "" || !isIdentPart(rest[0]) {
+				return kw
+			}
+		}
+	}
+	return ""
+}
+
+// isIdentPart reports whether c can continue a JavaScript identifier, the test
+// that tells break; from a name like breakfast.
+func isIdentPart(c byte) bool {
+	return c == '_' || c == '$' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+func (r *Renderer) branchEscapesChildren(n frontend.Node, loopDepth, switchDepth int, labels map[string]bool) bool {
+	for _, k := range r.prog.Children(n) {
+		if r.branchEscapes(k, loopDepth, switchDepth, labels) {
 			return true
 		}
 	}
