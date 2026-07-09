@@ -45,6 +45,33 @@ func TestShorthandRefBuildsAndRuns(t *testing.T) {
 	}
 }
 
+// TestRedeclaredVarBlankedOnce pins that a `var` redeclared in the same block, one
+// binding with two declaration name nodes, gets a single trailing blank rather than
+// none. JavaScript folds `{ var f; var f; }` to one binding, so the second `var`
+// lowers to nothing and the first must carry the blank; counting the two name nodes
+// as two uses would leave the binding unblanked and the emitted Go would not compile.
+func TestRedeclaredVarBlankedOnce(t *testing.T) {
+	src := `{ var f; var f; }`
+	out := renderProgram(t, src)
+	if n := strings.Count(out, "_ = f"); n != 1 {
+		t.Fatalf("redeclared unused var got %d blanks, want exactly 1:\n%s", n, out)
+	}
+}
+
+// TestRedeclaredVarBuildsAndRuns builds and runs the block-scope redeclaration shape
+// test262 exercises, `{ var f; var f; }` as a positive test that var redeclaration is
+// legal, and checks it compiles and runs to completion.
+func TestRedeclaredVarBuildsAndRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `{ var f; var f; }
+console.log("ok");`
+	got := runProgramGo(t, src)
+	want := "ok\n"
+	if got != want {
+		t.Fatalf("redeclared var run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestUnusedBindingRunsInitializer builds and runs an unused binding whose
 // initializer has a side effect and checks the effect still happens, the way an
 // unused `var x = f();` still evaluates f() in JavaScript.
