@@ -662,6 +662,17 @@ func (a *Array[T]) Set(i float64, v T) T {
 		a.elems[idx] = v
 		return v
 	}
+	// A write far past the end would fill the gap with holes. JavaScript keeps
+	// those as a sparse array with no backing store for the empty slots, but the
+	// dense core here has to append a zero for each one, so a single write to a
+	// large index (a[2**32 - 2] = v) would try to allocate billions of elements
+	// and exhaust memory, which on a tight box takes the whole machine down. Until
+	// the sparse representation lands, a gap past the cap throws the RangeError a
+	// too-large length raises rather than allocate into an OOM, the same guard
+	// bigint uses for its size ceiling. A gap within the cap grows dense as before.
+	if idx-len(a.elems) > maxArrayGrow {
+		Throw(NewRangeError(FromGoString("Invalid array length")))
+	}
 	var zero T
 	for len(a.elems) < idx {
 		a.elems = append(a.elems, zero)
@@ -669,6 +680,15 @@ func (a *Array[T]) Set(i float64, v T) T {
 	a.elems = append(a.elems, v)
 	return v
 }
+
+// maxArrayGrow bounds how many holes a single indexed write may fill densely
+// before it throws instead of allocating. The dense core stores a zero for every
+// empty slot, so an unbounded gap fill on a sparse write is an out-of-memory the
+// kernel answers by killing the process, or the machine. The cap is generous for
+// any real dense array the covered subset builds and small enough that the fill
+// cannot run memory away; the sparse representation that removes the ceiling is a
+// later slice. It mirrors the size ceiling bigint keeps for the same reason.
+const maxArrayGrow = 1 << 27
 
 // Sort orders the array in place by a comparator and returns the array, the
 // lowering of Array.prototype.sort called with a compare function. The
