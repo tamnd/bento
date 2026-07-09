@@ -1833,7 +1833,12 @@ func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "increment target is not a Go identifier"}
 	}
-	if r.isDynamic(operand) {
+	// A local bound without an initializer lives in a value.Value slot even after
+	// control flow narrows it to number: var count; count = 0; count++ types count
+	// number at the ++, but the storage is still the box, so a Go count++ would try
+	// to increment a value.Value. The dynLocals check routes on storage, not the
+	// narrowed type, so the update goes through value.Inc on the box.
+	if r.isDynamic(operand) || r.dynLocals[name] {
 		return r.dynamicIncDec(ident(name), ident(name), tok), nil
 	}
 	if !r.isNumber(operand) {

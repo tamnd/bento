@@ -512,6 +512,13 @@ func (r *Renderer) incDecValue(operand frontend.Node, op string, prefix bool) (a
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "value-position " + op + " target is not a Go identifier"}
 	}
+	// A local bound without an initializer holds a value.Value box even where the
+	// checker narrowed it to number, so the float64 closure this path builds would
+	// not compile against the box. The value-position update over a boxed local is a
+	// later slice; the statement position already routes such a local to value.Inc.
+	if r.dynLocals[name] {
+		return nil, &NotYetLowerable{Reason: "value-position " + op + " on a boxed local is a later slice"}
+	}
 	if r.int32Locals[name] || r.int64Locals[name] {
 		return nil, &NotYetLowerable{Reason: "value-position " + op + " on a refined-integer local is a later slice"}
 	}

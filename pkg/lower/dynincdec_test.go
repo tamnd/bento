@@ -37,6 +37,40 @@ func TestDynamicIncDecEmits(t *testing.T) {
 	}
 }
 
+// TestBoxedLocalIncDecEmits pins that a ++ on a local declared without an
+// initializer routes through value.Inc even after control flow narrows the local
+// to number. var count; count = 0; count++ types count number at the ++, but the
+// storage is still a value.Value box, so a Go count++ would try to increment a box
+// and fail to build. The update reads the box through value.Inc instead.
+func TestBoxedLocalIncDecEmits(t *testing.T) {
+	const src = "var count;\ncount = 0;\ncount++;\nconsole.log(count);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "count = value.Inc(count)") {
+		t.Errorf("boxed-local increment did not print value.Inc:\n%s", source)
+	}
+	if strings.Contains(source, "count++") {
+		t.Errorf("boxed-local increment printed a Go count++ over a box:\n%s", source)
+	}
+}
+
+// TestBoxedLocalIncDecValueHandsBack pins that reading the result of a ++ on a
+// boxed local hands back rather than emitting the float64 closure the number path
+// builds, which would not compile against the box. Statement position lowers the
+// same update through value.Inc; this is the value form that still needs a slice.
+func TestBoxedLocalIncDecValueHandsBack(t *testing.T) {
+	const src = "var count;\ncount = 0;\nconst y = count++;\nconsole.log(y);\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if !strings.Contains(nyl.Reason, "boxed local") {
+		t.Errorf("hand-back reason = %q, want it to mention a boxed local", nyl.Reason)
+	}
+}
+
 // TestDynamicIncDecHandsBack pins the boundary: a ++ or -- whose result is used as
 // a value needs the old value in a temporary, so it hands back until that slice
 // lands, even though the same update in statement position lowers.
