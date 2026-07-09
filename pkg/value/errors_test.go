@@ -143,6 +143,42 @@ func TestErrorIsThrown(t *testing.T) {
 	var _ error = NewError(FromGoString("x"))
 }
 
+// TestCaughtThrownStringBoxesBackToTheString proves a caught thrown primitive
+// string reads as the string primitive in the dynamic world, the way a JavaScript
+// catch binds `throw "reason"` as the string itself: e === "reason" holds and
+// typeof e is string. The runtime models every thrown value as a name and a
+// message for the uncaught reporter, so before this the caught binding boxed as a
+// {name, message} object and e === "reason" was false. ToValue now hands back the
+// stashed primitive so the strict compare folds to true.
+func TestCaughtThrownStringBoxesBackToTheString(t *testing.T) {
+	caught := Caught(ThrownString(FromGoString("NoInExpression")))
+	boxed := caught.ToValue()
+	if boxed.Kind() != KindString {
+		t.Fatalf("caught thrown string boxed as kind %v, want a string primitive", boxed.Kind())
+	}
+	if !StrictEquals(boxed, StringValue(FromGoString("NoInExpression"))) {
+		t.Error("e === \"NoInExpression\" is false, want true for a caught thrown string")
+	}
+	if StrictEquals(boxed, StringValue(FromGoString("other"))) {
+		t.Error("e === \"other\" is true, want false for an unequal string")
+	}
+}
+
+// TestCaughtThrownErrorStillBoxesAsObject proves the primitive fidelity does not
+// leak into a real thrown error: a boundary Thrown that is not a primitive string
+// still boxes as the {name, message} object, so a dynamic .name read resolves and
+// two boxings keep one identity.
+func TestCaughtThrownErrorStillBoxesAsObject(t *testing.T) {
+	caught := Caught(goErrorStub{err: errors.New("boom")})
+	boxed := caught.ToValue()
+	if boxed.Kind() != KindObject {
+		t.Fatalf("caught boundary error boxed as kind %v, want an object", boxed.Kind())
+	}
+	if again := caught.ToValue(); again.ref != boxed.ref {
+		t.Error("two boxings of a caught error returned different objects, want one identity")
+	}
+}
+
 // TestThrowPanicsWithTheError proves Throw raises the error as the panic payload,
 // unchanged, so a recover downstream gets the same *Error to bind into a catch.
 func TestThrowPanicsWithTheError(t *testing.T) {
