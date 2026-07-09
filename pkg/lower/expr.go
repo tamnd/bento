@@ -572,6 +572,91 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	return r.combineBinary(opText, left, right)
 }
 
+// binaryEvalOrderHazard reports whether a binary expression cannot preserve
+// JavaScript's left-before-right operand order once lowered to a Go `L op R`. The
+// hazard is a left operand that reads a variable the right operand assigns while
+// it evaluates: Go leaves the left plain read unordered against the right's
+// assignment closure, so the emitted sum can observe the post-assignment value.
+// The check walks source order and stops at a nested function, whose body runs
+// only when later called, not while this expression evaluates.
+func (r *Renderer) binaryEvalOrderHazard(left, right frontend.Node) bool {
+	assigned := map[string]bool{}
+	r.collectEvalAssigns(right, assigned)
+	if len(assigned) == 0 {
+		return false
+	}
+	reads := map[string]bool{}
+	r.collectEvalReads(left, reads)
+	for name := range assigned {
+		if reads[name] {
+			return true
+		}
+	}
+	return false
+}
+
+// collectEvalAssigns records the variable names a subtree assigns while it
+// evaluates: the left identifier of an = or a compound assignment, and the
+// operand of a ++ or --. It stops at a nested function, whose assignments run
+// only when that function is called.
+func (r *Renderer) collectEvalAssigns(n frontend.Node, out map[string]bool) {
+	if isFunctionLike(n.Kind()) {
+		return
+	}
+	switch n.Kind() {
+	case frontend.NodeBinaryExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 3 && isSourceAssignOp(r.prog.Text(kids[1])) && kids[0].Kind() == frontend.NodeIdentifier {
+			out[r.prog.Text(kids[0])] = true
+		}
+	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 1 && kids[0].Kind() == frontend.NodeIdentifier {
+			op := strings.TrimSpace(strings.ReplaceAll(r.prog.Text(n), r.prog.Text(kids[0]), ""))
+			if op == "++" || op == "--" {
+				out[r.prog.Text(kids[0])] = true
+			}
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		r.collectEvalAssigns(c, out)
+	}
+}
+
+// collectEvalReads records the variable names a subtree reads while it evaluates.
+// It stops at a nested function and, for a property access, follows only the
+// object so a property name is not mistaken for a variable read. This is the
+// left-operand side of the eval-order hazard check.
+func (r *Renderer) collectEvalReads(n frontend.Node, out map[string]bool) {
+	if isFunctionLike(n.Kind()) {
+		return
+	}
+	if n.Kind() == frontend.NodeIdentifier {
+		out[r.prog.Text(n)] = true
+		return
+	}
+	if n.Kind() == frontend.NodePropertyAccessExpression {
+		kids := r.prog.Children(n)
+		if len(kids) == 2 {
+			r.collectEvalReads(kids[0], out)
+			return
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		r.collectEvalReads(c, out)
+	}
+}
+
+// isSourceAssignOp reports whether a source operator token stores into its left
+// operand, so an operand carrying it mutates a variable as it evaluates.
+func isSourceAssignOp(op string) bool {
+	switch op {
+	case "=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "??=":
+		return true
+	}
+	return false
+}
+
 // assignValue lowers an assignment read for its value (const r = (x = 5), the
 // (i = i + 1) a while condition steps with, or console.log(p.x = 7)), the form
 // whose result is the value assigned. Go's assignment is a statement and yields
@@ -776,6 +861,20 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		if handled {
 			return expr, nil
 		}
+	}
+
+	// JavaScript evaluates the left operand fully before the right, so a left read
+	// sees a variable's value before a right-operand assignment changes it: in
+	// `x + (x = 1)` the left x is 0 and the sum is 1. Go sequences an expression's
+	// function calls left to right but leaves a plain variable read unordered
+	// against them, and the assignment lowers to a called closure, so the emitted
+	// `x + f()` may read x after f runs and give 2. When the left operand reads a
+	// variable the right operand assigns while it evaluates, the two orders diverge,
+	// so the expression hands back until a later slice sequences the operands through
+	// a temp. The reverse arrangement, an assignment on the left, keeps its order:
+	// Go evaluates the left operand's call before the right operand's plain read.
+	if r.binaryEvalOrderHazard(left, right) {
+		return nil, &NotYetLowerable{Reason: "a binary expression whose left operand reads a variable the right operand assigns needs operand sequencing, a later slice"}
 	}
 
 	// An equality between a caught error and the null or undefined literal folds to
