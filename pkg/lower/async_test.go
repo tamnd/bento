@@ -1,0 +1,153 @@
+package lower
+
+import (
+	"strings"
+	"testing"
+)
+
+// TestAsyncMethodEmitsResolvedPromise pins the shape half of the async method
+// lowering: an await-free async method returns its body wrapped in value.Async,
+// so a normal completion settles a resolved promise of the element type.
+func TestAsyncMethodEmitsResolvedPromise(t *testing.T) {
+	const src = `class Calc {
+  x: number;
+  constructor(x: number) {
+    this.x = x;
+  }
+  async compute(): Promise<number> {
+    return this.x * 2;
+  }
+}
+new Calc(21).compute();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func (c *Calc) Compute() *value.Promise[float64]") {
+		t.Errorf("async method did not return a promise of its element type:\n%s", source)
+	}
+	if !strings.Contains(source, "return value.Async(func() float64 {") {
+		t.Errorf("async body did not wrap in value.Async:\n%s", source)
+	}
+}
+
+// TestAsyncVoidMethodEmitsUnitPromise pins that an async method with no value
+// lowers to a Promise<Unit> through value.AsyncVoid.
+func TestAsyncVoidMethodEmitsUnitPromise(t *testing.T) {
+	const src = `class Box {
+  async log(msg: string): Promise<void> {
+    console.log(msg);
+  }
+}
+new Box().log("hi");
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func (b *Box) Log(msg value.BStr) *value.Promise[value.Unit]") {
+		t.Errorf("void async method did not return a unit promise:\n%s", source)
+	}
+	if !strings.Contains(source, "return value.AsyncVoid(func() {") {
+		t.Errorf("void async body did not wrap in value.AsyncVoid:\n%s", source)
+	}
+}
+
+// TestStaticAsyncMethodEmitsPackageFunc pins that a static async method lowers
+// to a package func returning a promise, the same closure wrapping as an
+// instance method.
+func TestStaticAsyncMethodEmitsPackageFunc(t *testing.T) {
+	const src = `class Calc {
+  static async of(v: number): Promise<number> {
+    return v + 1;
+  }
+}
+Calc.of(4);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func CalcOf(v float64) *value.Promise[float64]") {
+		t.Errorf("static async method did not become a package func:\n%s", source)
+	}
+	if !strings.Contains(source, "return value.Async(func() float64 {") {
+		t.Errorf("static async body did not wrap in value.Async:\n%s", source)
+	}
+}
+
+// TestAsyncMethodResolvesAfterSyncCode runs the emitted Go and pins the
+// microtask ordering: a .then callback registered during the synchronous run
+// fires only after that run completes, at the end-of-main drain.
+func TestAsyncMethodResolvesAfterSyncCode(t *testing.T) {
+	const src = `class Calc {
+  x: number;
+  constructor(x: number) {
+    this.x = x;
+  }
+  async compute(): Promise<number> {
+    return this.x * 2;
+  }
+}
+console.log("sync-1");
+new Calc(21).compute().then(v => console.log(v));
+console.log("sync-2");
+`
+	got := runProgramGo(t, src)
+	want := "sync-1\nsync-2\n42\n"
+	if got != want {
+		t.Errorf("microtask ordering wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestAsyncMethodThrowRejects runs the emitted Go and pins that a synchronous
+// throw inside an async body becomes a rejected promise a .catch observes,
+// after the synchronous run.
+func TestAsyncMethodThrowRejects(t *testing.T) {
+	const src = `class Box {
+  async boom(): Promise<number> {
+    throw new Error("bang");
+    return 0;
+  }
+}
+new Box().boom().catch(e => console.log("caught:" + e.message));
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\ncaught:bang\n"
+	if got != want {
+		t.Errorf("rejection ordering wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestAsyncHandsBack pins the boundary: each async construct outside the
+// await-free subset hands the unit back with its own honest reason rather than
+// mislowering the suspension or propagation away.
+func TestAsyncHandsBack(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"await",
+			"class W { async f(): Promise<number> { const v = await Promise.resolve(1); return v; } }\nnew W().f();\n",
+			"await is a later slice",
+		},
+		{
+			"chainingThen",
+			"class C { async n(): Promise<number> { return 1; } }\nnew C().n().then(v => v + 1);\n",
+			"later slice",
+		},
+		{
+			"asyncGenerator",
+			"class C { async *g(): AsyncGenerator<number> { yield 1; } }\nconsole.log(\"x\");\n",
+			"async generator",
+		},
+		{
+			"staticAsyncGenerator",
+			"class C { static async *g(): AsyncGenerator<number> { yield 1; } }\nconsole.log(\"x\");\n",
+			"async generator",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reason := renderProgramHandBack(t, tc.src)
+			if !strings.Contains(reason, tc.want) {
+				t.Errorf("hand-back reason %q does not name %q", reason, tc.want)
+			}
+		})
+	}
+}
