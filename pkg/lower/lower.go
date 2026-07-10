@@ -648,6 +648,20 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// never re-derived structurally.
 			return star(ident(info.goName)), nil
 		}
+		// A Generator (or the wider iterator family) is the *value.Gen[Y] coroutine the
+		// runtime drives, its yielded element type read off the generic's first type
+		// argument. It routes before renderFuncType and the structural array and object
+		// paths, which would otherwise expand the generator's next() result into the
+		// IteratorResult union and hand back. This is the return type a generator
+		// function value spells, the slot a `const it = g()` binding takes.
+		if elem, ok := r.generatorElemType(t); ok {
+			inner, err := r.typeExpr(elem)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return star(index(sel("value", "Gen"), inner)), nil
+		}
 		if ft, ok, err := r.renderFuncType(t); err != nil {
 			return nil, err
 		} else if ok {

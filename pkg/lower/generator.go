@@ -33,6 +33,31 @@ func (r *Renderer) isGeneratorFunc(fn frontend.Node) bool {
 	return false
 }
 
+// generatorElemType reports the yielded element type of a generator or iterator
+// type, the Y in the *value.Gen[Y] the runtime drives, so a Generator-typed slot
+// (the return of a generator function value, a `const it = g()` binding) renders to
+// the coroutine pointer rather than expanding structurally into the IteratorResult
+// union. The judgment is the type's symbol name, the same built-in family
+// isGeneratorIterable keys on, and the element type is the generic's first type
+// argument (Generator<T, TReturn, TNext> puts T first). A generator with no readable
+// type argument reports false so the caller keeps its existing handling.
+func (r *Renderer) generatorElemType(t frontend.Type) (frontend.Type, bool) {
+	sym, ok := r.prog.TypeSymbol(t)
+	if !ok {
+		return frontend.Type{}, false
+	}
+	switch sym.Name {
+	case "Generator", "IterableIterator", "Iterator", "IteratorObject":
+	default:
+		return frontend.Type{}, false
+	}
+	args := r.prog.TypeArguments(t)
+	if len(args) == 0 || args[0].Flags == 0 {
+		return frontend.Type{}, false
+	}
+	return args[0], true
+}
+
 // collectYields gathers every yield expression under n, the nodes whose operands fix
 // the generator's element type. It descends the body but not into a nested function,
 // whose own yields belong to its own generator.
@@ -175,15 +200,20 @@ func (r *Renderer) generatorCoroutine(fn frontend.Node) (yieldGo ast.Expr, newGe
 		return nil, nil, err
 	}
 
-	// The body-scoped analyses are set up the way funcDeclNamed sets them, so the
-	// generator body lowers its locals the same as any other body, and they are saved
-	// and restored so the coroutine's scope does not leak out.
+	// The body-scoped analyses are set up the way funcDeclNamed sets them, off both the
+	// signature parameters and the body declarations, so a union-typed or any-typed
+	// parameter of the generator is tracked inside the body the same as in a plain
+	// function. They are saved and restored so the coroutine's scope does not leak out.
+	var params []frontend.Param
+	if sig, ok := r.prog.SignatureAt(fn); ok {
+		params = sig.Params
+	}
 	bodyStmts := r.prog.Children(block)
 	prevUnion := r.unionLocals
-	r.unionLocals = r.unionLocalsOf(nil, bodyStmts)
+	r.unionLocals = r.unionLocalsOf(params, bodyStmts)
 	defer func() { r.unionLocals = prevUnion }()
 	prevDyn := r.dynLocals
-	r.dynLocals = r.dynLocalsOf(nil, bodyStmts)
+	r.dynLocals = r.dynLocalsOf(params, bodyStmts)
 	defer func() { r.dynLocals = prevDyn }()
 
 	coName := r.freshTemp()
@@ -246,6 +276,22 @@ func (r *Renderer) generatorFuncDecl(fn frontend.Node, sig frontend.Signature, n
 	return &ast.FuncDecl{
 		Name: ident(name),
 		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{result}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{newGen}}}},
+	}, nil
+}
+
+// generatorFuncExpr lowers a generator function expression used as a value to a
+// closure that returns the running coroutine: func(params) *value.Gen[Y] { return
+// value.NewGen[Y](...) }. It is the expression form of generatorFuncDecl, the shape a
+// const bound to a function* takes, and shares the same coroutine body builder.
+func (r *Renderer) generatorFuncExpr(n frontend.Node, fields []*ast.Field) (ast.Expr, error) {
+	yieldGo, newGen, err := r.generatorCoroutine(n)
+	if err != nil {
+		return nil, err
+	}
+	result := &ast.Field{Type: star(index(sel("value", "Gen"), yieldGo))}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}, Results: &ast.FieldList{List: []*ast.Field{result}}},
 		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{newGen}}}},
 	}, nil
 }

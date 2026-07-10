@@ -996,15 +996,22 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	if firstWord(text) == "async" {
 		return nil, &NotYetLowerable{Reason: "an async function expression is a coroutine, a later slice"}
 	}
-	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "function")), "*") {
-		return nil, &NotYetLowerable{Reason: "a generator function expression is a coroutine, a later slice"}
-	}
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
 	}
 	fields, err := r.closureParamFields(n, "function")
 	if err != nil {
 		return nil, err
+	}
+	// A generator function expression lowers to a closure that returns the running
+	// coroutine, the same *value.Gen the declaration form returns. A named generator
+	// expression, whose own name a recursive body reads, needs the self-reference
+	// two-step around the coroutine and is a later slice.
+	if r.isGeneratorFunc(n) {
+		if _, named := r.funcExprNameNode(n); named {
+			return nil, &NotYetLowerable{Reason: "a named generator function expression is a later slice"}
+		}
+		return r.generatorFuncExpr(n, fields)
 	}
 	// A named function expression carries its own name as a NodeIdentifier child. The
 	// name is in scope only inside the body, where a recursive call reads it, so it

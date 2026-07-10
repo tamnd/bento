@@ -20,6 +20,46 @@ func TestGeneratorFuncCoroutineShape(t *testing.T) {
 	}
 }
 
+// TestGeneratorFuncExprShape pins that a generator function expression bound to a
+// const lowers to a closure returning the running coroutine, the value form of the
+// generator function declaration.
+func TestGeneratorFuncExprShape(t *testing.T) {
+	const src = `const g = function* (): Generator<number> { yield 1; yield 2; };
+g();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func() *value.Gen[float64]") {
+		t.Errorf("generator function expression did not lower to a *value.Gen closure:\n%s", source)
+	}
+	if !strings.Contains(source, "value.NewGen[float64](") {
+		t.Errorf("generator expression body was not wrapped in value.NewGen:\n%s", source)
+	}
+}
+
+// TestGeneratorFuncExprForOf pins that a generator function expression drives a
+// for...of the same as the declaration form, pulling its coroutine until done.
+func TestGeneratorFuncExprForOf(t *testing.T) {
+	const src = `const g = function* (): Generator<number> { yield 5; yield 6; yield 7; };
+let out = "";
+for (const x of g()) { out += String(x) + " "; }
+console.log(out);
+`
+	if got, want := runProgramGo(t, src), "5 6 7 \n"; got != want {
+		t.Fatalf("generator expression for...of printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorNamedFuncExprHandsBack pins that a named generator function
+// expression keeps its own reason until that slice lands.
+func TestGeneratorNamedFuncExprHandsBack(t *testing.T) {
+	const src = `const g = function* gen(): Generator<number> { yield 1; };
+g();
+`
+	if reason, want := renderProgramHandBack(t, src), "a named generator function expression is a later slice"; reason != want {
+		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}
+
 // TestGeneratorFuncForOf pins that a for...of over a generator function pulls its
 // coroutine until done, printing each yielded value in order.
 func TestGeneratorFuncForOf(t *testing.T) {

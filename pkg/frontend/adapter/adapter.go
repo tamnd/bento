@@ -176,6 +176,7 @@ type TSAdapter interface {
 	IntersectionOf(p ProgramHandle, t TypeHandle) []TypeHandle
 	PropertiesOf(p ProgramHandle, t TypeHandle) []PropertyInfo
 	ElementOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
+	TypeArgsOf(p ProgramHandle, t TypeHandle) []TypeHandle
 	LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool)
 
 	// Module graph.
