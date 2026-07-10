@@ -2743,7 +2743,9 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 		name = implName(m)
 	}
 	args := make([]ast.Expr, 0, len(sig.Params))
+	paramNodes := r.funcParamNodes(m.node)
 	for i, a := range argNodes {
+		a = r.argForDefaultedSlot(paramNodes, sig, i, a)
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -2778,7 +2780,9 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
 	args := make([]ast.Expr, 0, len(sig.Params))
+	paramNodes := r.funcParamNodes(m.node)
 	for i, a := range argNodes {
+		a = r.argForDefaultedSlot(paramNodes, sig, i, a)
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -2793,6 +2797,23 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: ident(m.goName), Args: args}, nil
+}
+
+// argForDefaultedSlot returns the expression to lower for argument i of a method
+// call with these parameter nodes. An explicit undefined argument in a slot whose
+// parameter carries a call-site-reconstructible default counts as a missing argument,
+// so the parameter's default stands in for it, matching the language rule that
+// undefined triggers a default exactly as an omission does. Any other argument, and
+// an undefined in a slot with no default or a default that reads an earlier
+// parameter, passes through unchanged.
+func (r *Renderer) argForDefaultedSlot(paramNodes []frontend.Node, sig frontend.Signature, i int, a frontend.Node) frontend.Node {
+	if !r.isUndefinedLiteral(a) {
+		return a
+	}
+	if def, ok := r.paramDefaultNode(paramNodes, i); ok && !r.defaultReadsOwnParam(sig, def) {
+		return def
+	}
+	return a
 }
 
 // fillOmittedMethodArgs fills the trailing argument slots a short method call left

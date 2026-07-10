@@ -267,6 +267,15 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 	}
 	for i := 0; i < nFixed; i++ {
 		a := argNodes[i]
+		// An explicit undefined argument in a defaulted slot counts as a missing
+		// argument: the language fills the parameter's default for undefined exactly as
+		// it does for an omission. The default stands in for the undefined so the Go
+		// call carries the default's value, not an undefined the static slot cannot
+		// hold. A variadicTail callee fills its own tail by arity in its body, so an
+		// undefined there rides the variadic untouched and is left alone.
+		if !variadicTail && i < len(defaults) && defaults[i] != nil && r.isUndefinedLiteral(a) {
+			a = defaults[i]
+		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
