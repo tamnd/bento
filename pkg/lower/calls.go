@@ -280,9 +280,50 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		}
 		args = append(args, restArg)
 	} else if len(argNodes) > len(params) {
-		return nil, &NotYetLowerable{Reason: "a call with more arguments than the callee has parameters and no rest is a later slice"}
+		// JavaScript evaluates every argument left to right and then ignores the ones
+		// past the callee's parameter count, so a call with extra arguments runs the
+		// fixed ones and drops the rest. Go has no way to pass an argument a function
+		// does not declare, so the extras cannot ride into the call; dropping them is
+		// faithful only when evaluating them changes nothing observable. An extra that
+		// is a literal or a plain variable read has no side effect and cannot throw, so
+		// it drops cleanly; an extra that could mutate, call, or throw would need its
+		// effect preserved before the call and hands back to a later slice rather than
+		// silently vanishing.
+		for _, extra := range argNodes[len(params):] {
+			if !r.isDroppableExtraArg(extra) {
+				return nil, &NotYetLowerable{Reason: "a call with a side-effecting extra argument the callee ignores is a later slice"}
+			}
+		}
 	}
 	return &ast.CallExpr{Fun: callee, Args: args}, nil
+}
+
+// isDroppableExtraArg reports whether an argument past the callee's parameter
+// count can be dropped without changing what the program observes. JavaScript
+// still evaluates the argument before ignoring it, so dropping it is only sound
+// when the evaluation has no side effect, cannot throw, and reads nothing. A
+// literal (a number, string, bigint, boolean, null, or a template with no
+// substitutions) evaluates to a constant with no reference to a binding, so
+// removing it changes neither state nor which locals the program uses. A plain
+// identifier is pure to evaluate but is deliberately not droppable: dropping it
+// removes the only read of a local, which Go rejects as a declared-and-unused
+// binding, so an identifier extra hands back rather than emit Go that fails to
+// compile. Any other form, a call, a property or element access that could fault
+// on a nullish base, a new, an assignment, or an increment, could be observable
+// and is not droppable either.
+func (r *Renderer) isDroppableExtraArg(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeNumericLiteral,
+		frontend.NodeStringLiteral,
+		frontend.NodeBigIntLiteral,
+		frontend.NodeTrueKeyword,
+		frontend.NodeFalseKeyword,
+		frontend.NodeNullKeyword,
+		frontend.NodeNoSubstitutionTemplateLiteral:
+		return true
+	default:
+		return false
+	}
 }
 
 // gatherRest packs the trailing arguments a rest parameter collects into one

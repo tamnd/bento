@@ -84,6 +84,12 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2695 {
 			continue
 		}
+		// 2554 and 2555 (a call whose argument count does not match the callee's
+		// arity) are admitted because the call still lowers or safely hands back, so
+		// mirror the front door here too.
+		if d.Code == 2554 || d.Code == 2555 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog

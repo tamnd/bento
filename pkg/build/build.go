@@ -287,6 +287,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedLooseForm[d.Code] {
 			continue
 		}
+		if toleratedArity[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -384,6 +387,21 @@ var toleratedUnknown = map[int]bool{
 // that fails to compile.
 var toleratedLooseForm = map[int]bool{
 	2695: true, // Left side of comma operator is unused and has no side effects.
+}
+
+// toleratedArity is the set of checker diagnostic codes bento admits because a
+// call whose argument count does not match the callee's declared arity still has
+// defined run-time behavior the lowerer reproduces or safely refuses. JavaScript
+// binds a missing argument to undefined and ignores an extra one, so 2554
+// ("Expected N arguments, but got M") and 2555 ("Expected at least N arguments,
+// but got M") mark a mismatch the language runs rather than a fault. The renderer
+// fills a defaultless omission on a dynamic parameter with undefined and drops an
+// extra argument that has no side effect; a defaultless static omission and a
+// side-effecting extra each hand back to a later slice, so admitting the code
+// lets the runnable calls through and never emits Go that fails to compile.
+var toleratedArity = map[int]bool{
+	2554: true, // Expected N arguments, but got M.
+	2555: true, // Expected at least N arguments, but got M.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
