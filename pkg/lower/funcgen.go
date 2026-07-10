@@ -129,6 +129,27 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	r.dynLocals = r.dynLocalsOf(sig.Params, bodyStmts)
 	defer func() { r.dynLocals = prevDyn }()
 
+	// A body that reads arguments materializes a backing store from the parameters,
+	// set before the body is lowered so a read of arguments.length or arguments[i]
+	// inside it routes to the store. A body with a rest, an optional parameter, or an
+	// unsupported read hands back from here. The argsObjName is scoped to this body
+	// like retType, so a nested function does not inherit the outer store. Methods
+	// and constructors keep the stricter paramFields and are not reached here, so
+	// arguments in one is still a later slice.
+	argsMat, argsStoreName, argsOK, argsWriteSafe, err := r.argumentsPlan(fn, sig)
+	if err != nil {
+		return nil, err
+	}
+	prevArgs, prevArgsWrite := r.argsObjName, r.argsWriteSafe
+	if argsOK {
+		r.argsObjName = argsStoreName
+		r.argsWriteSafe = argsWriteSafe
+	} else {
+		r.argsObjName = ""
+		r.argsWriteSafe = false
+	}
+	defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
+
 	body, err := r.blockOf(fn)
 	if err != nil {
 		return nil, err
@@ -152,6 +173,12 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	}
 	if len(binds) != 0 {
 		body.List = append(binds, body.List...)
+	}
+	// The arguments store is materialized above everything else so a read anywhere in
+	// the body, including inside the destructure bindings or the variadic prologue,
+	// sees the filled store.
+	if argsMat != nil {
+		body.List = append([]ast.Stmt{argsMat}, body.List...)
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
 
@@ -893,9 +920,10 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 // function expression always has a block body, which is the same closure a
 // block-body arrow lowers to, so it routes through the same generator once the
 // forms an arrow does not share are ruled out. An async or generator function is
-// a coroutine, a body that reads this or arguments needs a receiver or the arity
-// object neither a Go closure carries, and a named function expression needs the
-// two-step a self-reference takes; each hands back.
+// a coroutine and a body that reads this needs a receiver neither a Go closure
+// carries, so each hands back; a body that reads arguments materializes its own
+// arity object in the closure the same way a named function does, and a named
+// function expression takes the two-step a self-reference needs.
 func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	text := strings.TrimSpace(r.prog.Text(n))
 	if firstWord(text) == "async" {
@@ -906,9 +934,6 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
-	}
-	if subtreeHasIdent(r.prog, n, "arguments") {
-		return nil, &NotYetLowerable{Reason: "a function expression that reads arguments needs the arity object, a later slice"}
 	}
 	fields, err := r.closureParamFields(n, "function")
 	if err != nil {
@@ -1149,6 +1174,28 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
 
+	// A function expression materializes its own arguments object; an arrow has none
+	// of its own and reads the enclosing function's, so only the function-expression
+	// form plans a store here and the arrow inherits argsObjName untouched. When the
+	// plan cannot back a read the whole expression hands back through the error.
+	var argsMat ast.Stmt
+	if n.Kind() == frontend.NodeFunctionExpression {
+		mat, storeName, argsOK, writeSafe, perr := r.argumentsPlan(n, sig)
+		if perr != nil {
+			return nil, perr
+		}
+		argsMat = mat
+		prevArgs, prevArgsWrite := r.argsObjName, r.argsWriteSafe
+		if argsOK {
+			r.argsObjName = storeName
+			r.argsWriteSafe = writeSafe
+		} else {
+			r.argsObjName = ""
+			r.argsWriteSafe = false
+		}
+		defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
+	}
+
 	// The dynamic-locals set rescopes to this nested body the way the named path
 	// scopes it, so an any-typed parameter of a function expression or an arrow
 	// binds a tracked box: a read the checker narrowed past a typeof guard unwraps
@@ -1171,6 +1218,9 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 		return nil, err
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	if argsMat != nil {
+		body.List = append([]ast.Stmt{argsMat}, body.List...)
+	}
 	return &ast.FuncLit{
 		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}, Results: results},
 		Body: body,
