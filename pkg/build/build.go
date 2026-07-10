@@ -290,6 +290,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedArity[d.Code] {
 			continue
 		}
+		if toleratedArithOperand[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -402,6 +405,23 @@ var toleratedLooseForm = map[int]bool{
 var toleratedArity = map[int]bool{
 	2554: true, // Expected N arguments, but got M.
 	2555: true, // Expected at least N arguments, but got M.
+}
+
+// toleratedArithOperand is the set of checker diagnostic codes bento admits
+// because an arithmetic operator over a non-number primitive still has defined
+// run-time behavior the lowerer reproduces. 2362 ("The left-hand side of an
+// arithmetic operation must be of type 'any', 'number', 'bigint' or an enum
+// type") and 2363 (its right-hand-side twin) flag a statically typed string or
+// boolean used with -, *, /, %, **, or a bitwise operator. JavaScript coerces
+// each such operand through ToNumber before the numeric operation, so the
+// renderer lowers a string through value.StringToNumber and a boolean through
+// value.BoolToNumber and applies the operator to the two float64 results. An
+// operand that is not a number-coercible primitive, an object or a bigint mixed
+// with a number, is not this case and still hands back, so admitting the code
+// lets the runnable forms through and never emits Go that fails to compile.
+var toleratedArithOperand = map[int]bool{
+	2362: true, // The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+	2363: true, // The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
