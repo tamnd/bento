@@ -314,9 +314,9 @@ func TestClassHandsBack(t *testing.T) {
 			"a method overload signature",
 		},
 		{
-			"superNotFirst",
-			"class A { x: number = 1; }\nclass B extends A { constructor() { console.log(0); super(); } }\nconsole.log(new B().x);\n",
-			"first statement is not super()",
+			"declBeforeSuper",
+			"class A { x: number = 1; }\nclass B extends A { constructor() { const y: number = 2; super(); } }\nconsole.log(new B().x);\n",
+			"variable declaration before super()",
 		},
 		{
 			"superSetterStore",

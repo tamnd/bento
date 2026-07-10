@@ -412,6 +412,18 @@ func (r *Renderer) funcBodyBlock(fn frontend.Node) (frontend.Node, bool) {
 // derived constructor, whose validated super() call is emitted as the base
 // assignment before the field initializers rather than lowered in place.
 func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, error) {
+	return r.scopedBlockRange(block, skip, len(r.prog.Children(block)))
+}
+
+// scopedBlockRange lowers a contiguous slice children[lo:hi] of a block while
+// computing every body-scoped analysis (the int32 and int64 tiers, counter
+// ranges, var hoisting, string builders) over the whole block, so a fact proven
+// anywhere in the body applies to the lowered slice and a range that omits a
+// statement (a derived constructor's super call, which the caller emits as the
+// base assignment) still sees the body it belongs to. The common case lowers the
+// whole block through scopedBlock; a range is used only where a caller emits part
+// of the body itself.
+func (r *Renderer) scopedBlockRange(block frontend.Node, lo, hi int) (*ast.BlockStmt, error) {
 	// The int32 specialization set is computed once over the whole body and held for
 	// the duration of this function, so a counter declared in a nested loop is seen
 	// and the nested block inherits the same set. It is saved and restored like
@@ -480,7 +492,7 @@ func (r *Renderer) scopedBlock(block frontend.Node, skip int) (*ast.BlockStmt, e
 	// declaration at the top of the function, the same function-scoping the module
 	// body gets, so the var is one binding the whole body shares. A hoisted binding
 	// reads at one Go type, so it is kept off the int32 and int64 tiers.
-	bodyStmts := r.prog.Children(block)[skip:]
+	bodyStmts := r.prog.Children(block)[lo:hi]
 	hoistDecls, restoreHoist, err := r.enterVarHoistScope(bodyStmts)
 	if err != nil {
 		return nil, err

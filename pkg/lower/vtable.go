@@ -515,6 +515,15 @@ func (r *Renderer) initFuncDecl(info *classInfo) (*ast.FuncDecl, error) {
 // body.
 func (r *Renderer) ctorInitStmts(info *classInfo) ([]ast.Stmt, error) {
 	var stmts []ast.Stmt
+	// The this-free statements before super() run first, the order JavaScript
+	// runs them, then the base chain's init stands in for super().
+	if len(info.preSuper) > 0 {
+		pre, err := r.scopedBlockRange(r.ctorBlock(info), 0, len(info.preSuper))
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, pre.List...)
+	}
 	if info.base != nil && classNeedsInit(info.base) {
 		superArgs, err := r.superCtorArgs(info)
 		if err != nil {
