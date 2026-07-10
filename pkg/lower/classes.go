@@ -103,6 +103,7 @@ type classMethod struct {
 	node      frontend.Node
 	abstract  bool
 	generator bool
+	async     bool
 }
 
 // classSetter is one set accessor; param is its single parameter's name node,
@@ -859,6 +860,7 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	kids := r.prog.Children(m)
 	abstract := false
 	generator := false
+	async := false
 	for len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown {
 		// A computed name [expr] surfaces as an unnamed node that wraps the
 		// expression, so it carries a child; a modifier (abstract, async, the
@@ -877,10 +879,22 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 			// the method to lower as a state-machine closure (generatorMethodDecl)
 			// the way abstract flags the body-less form.
 			generator = true
+		case "async":
+			// An async modifier is a recognized marker: an await-free async method
+			// lowers to a synchronous method returning a settled promise
+			// (asyncMethodDecl), so async flags that path the way the generator star
+			// flags its own.
+			async = true
 		default:
 			return classMethod{}, &NotYetLowerable{Reason: "a " + w + " method is a later slice"}
 		}
 		kids = kids[1:]
+	}
+	if async && generator {
+		// An async generator (async *) yields promises through an async iterator, a
+		// shape neither the generator nor the async lowering models; it keeps its own
+		// reason rather than lowering as one or the other.
+		return classMethod{}, &NotYetLowerable{Reason: "an async generator method is a later slice"}
 	}
 	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a method without a plain identifier name is a later slice"}
@@ -905,7 +919,7 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	if !abstract && !hasBody {
 		return classMethod{}, &NotYetLowerable{Reason: "a method overload signature is a later slice"}
 	}
-	return classMethod{prop: prop, goName: goName, node: m, abstract: abstract, generator: generator}, nil
+	return classMethod{prop: prop, goName: goName, node: m, abstract: abstract, generator: generator, async: async}, nil
 }
 
 // staticFieldOf reads one static field into a classField whose goName is the
@@ -984,17 +998,46 @@ func (r *Renderer) pureStaticInit(n frontend.Node) bool {
 // the package function it becomes, the class name prefixed the way a Go
 // package spells a type's related functions (ABump).
 func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[string]bool) (classMethod, error) {
-	text := strings.TrimSpace(r.prog.Text(m))
-	if rest := strings.TrimSpace(strings.TrimPrefix(text, "static")); firstWord(rest) == "async" {
-		return classMethod{}, &NotYetLowerable{Reason: "a static async method is a later slice"}
-	}
+	// Modifiers surface as unnamed nodes before the name, the same shape
+	// classMethodOf strips. A static method always leads with the static keyword;
+	// async marks the promise-returning path asyncStaticFuncDecl takes, and any other
+	// modifier keeps its own reason. The name follows once an unnamed node either
+	// runs out or holds a computed expression.
 	kids := r.prog.Children(m)
-	if len(kids) < 2 {
+	async := false
+	generator := false
+	for len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown {
+		if len(r.prog.Children(kids[0])) > 0 {
+			break // a computed name [expr] wrapper, not a modifier
+		}
+		w := strings.TrimSpace(r.prog.Text(kids[0]))
+		switch w {
+		case "static":
+			// The static keyword is implied by this being a static member; skip it.
+		case "async":
+			async = true
+		case "*":
+			generator = true
+		default:
+			return classMethod{}, &NotYetLowerable{Reason: "a static " + w + " method is a later slice"}
+		}
+		kids = kids[1:]
+	}
+	if generator {
+		// A static generator (async or plain) is neither the state-machine closure
+		// generatorMethodDecl builds for an instance nor the settled promise the async
+		// path returns; it keeps its own reason.
+		if async {
+			return classMethod{}, &NotYetLowerable{Reason: "a static async generator method is a later slice"}
+		}
+		return classMethod{}, &NotYetLowerable{Reason: "a static generator method is a later slice"}
+	}
+	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a static method without a plain identifier name is a later slice"}
 	}
-	prop, ok := r.memberName(kids[1])
+	prop, ok := r.memberName(kids[0])
 	if !ok {
-		return classMethod{}, r.memberNameReason(kids[1], "static method")
+		return classMethod{}, r.memberNameReason(kids[0], "static method")
 	}
 	propGo, ok := exportedField(prop)
 	if !ok {
@@ -1005,7 +1048,7 @@ func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[st
 		return classMethod{}, &NotYetLowerable{Reason: "the module already speaks " + name + ", the name static ." + prop + " needs"}
 	}
 	taken[name] = true
-	return classMethod{prop: prop, goName: name, node: m}, nil
+	return classMethod{prop: prop, goName: name, node: m, async: async}, nil
 }
 
 // getterOf reads one get accessor into a classMethod; it emits through the
@@ -1249,6 +1292,22 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 			out = append(out, md)
 			continue
 		}
+		if m.async {
+			// An await-free async method lowers to a synchronous method returning a
+			// settled promise. Its result type is a *value.Promise, not a plain value,
+			// so like a generator it does not model the vtable's entry and Impl split
+			// yet; an async method caught in a class hierarchy hands back rather than
+			// emit a dispatch mismatch.
+			if info.vprops[m.prop] || info.overrides[m.prop] {
+				return nil, &NotYetLowerable{Reason: "an async method in a class hierarchy is a later slice"}
+			}
+			md, err := r.asyncMethodDecl(info, m, m.goName)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, md)
+			continue
+		}
 		if info.vprops[m.prop] {
 			entry, err := r.virtualEntryDecl(info, m)
 			if err != nil {
@@ -1285,7 +1344,13 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		out = append(out, md)
 	}
 	for _, m := range info.staticMethods {
-		fd, err := r.staticFuncDecl(m)
+		var fd ast.Decl
+		var err error
+		if m.async {
+			fd, err = r.asyncStaticFuncDecl(m)
+		} else {
+			fd, err = r.staticFuncDecl(m)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2015,6 +2080,129 @@ func (r *Renderer) staticFuncDecl(m classMethod) (ast.Decl, error) {
 		Type: &ast.FuncType{Params: params, Results: results},
 		Body: body,
 	}, nil
+}
+
+// asyncMethodDecl emits an await-free async instance method as a synchronous method
+// returning a settled value.Promise. An async body runs synchronously up to its
+// first await, and an await-free body runs to completion on the calling stack, so
+// the body lowers unchanged inside a func the runtime runs now: value.Async turns a
+// normal return into a resolved promise and a thrown value into a rejected one,
+// matching the JavaScript rule that a synchronous throw inside an async body becomes
+// a rejection. The method's Go result is the *value.Promise the declared Promise<T>
+// return maps to; the inner func returns the element type T the body's returns
+// carry.
+func (r *Renderer) asyncMethodDecl(info *classInfo, m classMethod, name string) (ast.Decl, error) {
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "method has no call signature"}
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic method needs monomorphization, a later slice"}
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+	params, err := r.paramFields(sig)
+	if err != nil {
+		return nil, err
+	}
+	results, err := r.resultFields(sig.Return)
+	if err != nil {
+		return nil, err
+	}
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = info, info.recv
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+	body, err := r.asyncBody(sig.Return, m.node)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{
+			Names: []*ast.Ident{ident(info.recv)},
+			Type:  star(ident(info.goName)),
+		}}},
+		Name: ident(name),
+		Type: &ast.FuncType{Params: params, Results: results},
+		Body: body,
+	}, nil
+}
+
+// asyncStaticFuncDecl is asyncMethodDecl for a static async method, a package
+// function with no receiver returning a settled promise.
+func (r *Renderer) asyncStaticFuncDecl(m classMethod) (ast.Decl, error) {
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "static method has no call signature"}
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic method needs monomorphization, a later slice"}
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+	params, err := r.paramFields(sig)
+	if err != nil {
+		return nil, err
+	}
+	results, err := r.resultFields(sig.Return)
+	if err != nil {
+		return nil, err
+	}
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = nil, ""
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+	body, err := r.asyncBody(sig.Return, m.node)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FuncDecl{
+		Name: ident(m.goName),
+		Type: &ast.FuncType{Params: params, Results: results},
+		Body: body,
+	}, nil
+}
+
+// asyncBody lowers an async method's body into the single return statement that
+// mints its settled promise: return value.Async(func() T { <body> }) for a valued
+// promise, or value.AsyncVoid(func() { <body> }) for a Promise<void>. The body
+// lowers with the element type T as its return type, so each `return expr` in the
+// source coerces expr to T and returns from the inner func, which value.Async then
+// settles. ret is the method's declared Promise<T> return; retNode is the method
+// node whose block holds the body.
+func (r *Renderer) asyncBody(ret frontend.Type, retNode frontend.Node) (*ast.BlockStmt, error) {
+	elem, ok := r.promiseElem(ret)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "an async method whose return is not a Promise is a later slice"}
+	}
+	prevRet := r.retType
+	if isVoidReturn(elem) {
+		r.retType = frontend.Type{}
+	} else {
+		r.retType = elem
+	}
+	defer func() { r.retType = prevRet }()
+	inner, err := r.blockOf(retNode)
+	if err != nil {
+		return nil, err
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	if isVoidReturn(elem) {
+		lit := &ast.FuncLit{Type: &ast.FuncType{Params: &ast.FieldList{}}, Body: inner}
+		call := &ast.CallExpr{Fun: sel("value", "AsyncVoid"), Args: []ast.Expr{lit}}
+		return &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{call}}}}, nil
+	}
+	et, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: et}}}},
+		Body: inner,
+	}
+	call := &ast.CallExpr{Fun: sel("value", "Async"), Args: []ast.Expr{lit}}
+	return &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{call}}}}, nil
 }
 
 // newClass lowers new Point(args) to the NewPoint constructor call, coercing

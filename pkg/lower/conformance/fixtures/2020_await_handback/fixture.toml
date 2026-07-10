@@ -1,0 +1,2 @@
+feature = "class-async-await"
+handback = "await is a later slice"
