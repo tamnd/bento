@@ -1,0 +1,6 @@
+== stdout:
+start
+end
+caught:bang
+== exit:
+0
