@@ -65,7 +65,22 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	if len(sig.TypeParams) != 0 {
 		return nil, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
 	}
-	params, err := r.funcParamFields(fn, sig)
+	// A default that reads an earlier parameter cannot be filled at the call site,
+	// which does not see the callee's scope, so such a function collapses its optional
+	// tail into one Go variadic and fills each optional in the body. Every other
+	// function keeps the plain-field lowering funcParamFields builds.
+	vplan, err := r.variadicDefaultPlan(fn, sig)
+	if err != nil {
+		return nil, err
+	}
+	var params *ast.FieldList
+	var argsName string
+	if vplan != nil {
+		argsName = r.freshTemp()
+		params, err = r.variadicParamFields(sig, argsName, vplan)
+	} else {
+		params, err = r.funcParamFields(fn, sig)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +139,16 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	binds, err := r.paramDestructureBindings(r.funcParamNodes(fn), sig)
 	if err != nil {
 		return nil, err
+	}
+	// The variadic prologue fills the optional tail from the variadic before the body
+	// runs, and the destructure bindings sit above it so a default may read a name a
+	// pattern parameter bound.
+	if vplan != nil {
+		prologue, err := r.variadicPrologue(argsName, vplan)
+		if err != nil {
+			return nil, err
+		}
+		body.List = append(prologue, body.List...)
 	}
 	if len(binds) != 0 {
 		body.List = append(binds, body.List...)
@@ -232,6 +257,177 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
 	}
 	return fields, nil
+}
+
+// variadicPlan describes a top-level function whose trailing optional parameters
+// are filled in the callee scope through one Go variadic tail. It is the shape a
+// default that reads an earlier parameter needs: the call site cannot see that
+// parameter, so the default runs inside the function where the earlier parameters
+// are bound. The plan carries the shared Go element type of the tail and the
+// optional parameters in order, each with the local name it binds, its checker
+// type, and its default expression.
+type variadicPlan struct {
+	elem ast.Expr
+	opts []variadicOpt
+}
+
+type variadicOpt struct {
+	name string
+	typ  frontend.Type
+	def  frontend.Node
+}
+
+// variadicDefaultPlan decides whether a top-level function fills its trailing
+// optional parameters in the callee scope through a Go variadic tail. It returns a
+// non-nil plan only when at least one default reads an earlier parameter, the case
+// the call site cannot reconstruct, and the whole optional tail fits one variadic:
+// no rest parameter, every optional carries a default and binds a plain
+// identifier, all optionals share one non-union primitive-or-array Go type, and
+// each optional is read in the body so its Go local is used. Any shape that does
+// not read an earlier parameter returns nil so the caller keeps the call-site
+// fill; a shape that reads one but does not fit the variadic returns a
+// NotYetLowerable so the function hands back rather than emit a call the signature
+// cannot honor.
+func (r *Renderer) variadicDefaultPlan(fn frontend.Node, sig frontend.Signature) (*variadicPlan, error) {
+	paramNodes := r.funcParamNodes(fn)
+	readsOwn := false
+	for i := sig.MinArgs; i < len(sig.Params); i++ {
+		if def, ok := r.paramDefaultNode(paramNodes, i); ok && r.defaultReadsOwnParam(sig, def) {
+			readsOwn = true
+			break
+		}
+	}
+	if !readsOwn {
+		return nil, nil
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "a default that reads an earlier parameter alongside a rest parameter is a later slice"}
+	}
+	body, hasBody := r.funcBodyBlock(fn)
+	if !hasBody {
+		return nil, &NotYetLowerable{Reason: "a defaulting function with no body block is a later slice"}
+	}
+	var opts []variadicOpt
+	var elem ast.Expr
+	for i := sig.MinArgs; i < len(sig.Params); i++ {
+		p := sig.Params[i]
+		if p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown|frontend.TypeUnion|frontend.TypeObject) != 0 {
+			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "a callee-scope default on a dynamic, union, or object optional parameter is a later slice"}
+		}
+		def, ok := r.paramDefaultNode(paramNodes, i)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a callee-scope optional parameter with no default is a later slice"}
+		}
+		pkids := r.prog.Children(paramNodes[i])
+		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "a callee-scope default on a destructured parameter is a later slice"}
+		}
+		psym, ok := r.prog.SymbolAt(pkids[0])
+		if !ok || !r.subtreeReferencesSymbol(body, psym) {
+			return nil, &NotYetLowerable{Reason: "a callee-scope optional parameter the body never reads would leave an unused Go local, a later slice"}
+		}
+		name, ok := localName(p.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a callee-scope optional parameter name is not a Go identifier"}
+		}
+		pt, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, err
+		}
+		if elem == nil {
+			elem = pt
+		} else if same, err := sameGoType(elem, pt); err != nil {
+			return nil, err
+		} else if !same {
+			return nil, &NotYetLowerable{Reason: "callee-scope optional parameters of differing Go types need separate variadics, a later slice"}
+		}
+		opts = append(opts, variadicOpt{name: name, typ: p.Type, def: def})
+	}
+	if len(opts) == 0 {
+		return nil, nil
+	}
+	return &variadicPlan{elem: elem, opts: opts}, nil
+}
+
+// variadicParamFields lowers a variadic-defaulting function's parameters: the
+// fixed parameters (indices below MinArgs) become plain Go fields the same way the
+// stricter path lowers them, and the whole optional tail collapses to one
+// `argsName ...T` field. The optional parameters themselves become Go locals the
+// body fills from that tail, so they are not fields here.
+func (r *Renderer) variadicParamFields(sig frontend.Signature, argsName string, plan *variadicPlan) (*ast.FieldList, error) {
+	fields := &ast.FieldList{}
+	for i := 0; i < sig.MinArgs; i++ {
+		p := sig.Params[i]
+		pname, ok := localName(p.Name)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "parameter name is not a Go identifier"}
+		}
+		pt, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, err
+		}
+		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
+	}
+	fields.List = append(fields.List, &ast.Field{
+		Names: []*ast.Ident{ident(argsName)},
+		Type:  &ast.Ellipsis{Elt: plan.elem},
+	})
+	return fields, nil
+}
+
+// variadicPrologue builds the statements that fill each trailing optional parameter
+// at the top of a variadic-defaulting function's body. Each optional binds a Go
+// local of the tail's element type and takes the provided argument when the
+// variadic carried one, otherwise its default, evaluated here in the callee scope
+// where the earlier parameters and earlier optionals are already bound:
+//
+//	var b float64
+//	if len(args) > 0 {
+//		b = args[0]
+//	} else {
+//		b = a + 1
+//	}
+//
+// The default runs only on the else branch, so a provided argument does not
+// re-evaluate it, matching the language rule that a default fires only for an
+// absent argument. Assigning each optional before the next lets a later default
+// read an earlier one.
+func (r *Renderer) variadicPrologue(argsName string, plan *variadicPlan) ([]ast.Stmt, error) {
+	out := make([]ast.Stmt, 0, len(plan.opts)*2)
+	for k, opt := range plan.opts {
+		lowered, err := r.lowerExpr(opt.def)
+		if err != nil {
+			return nil, err
+		}
+		lowered, err = r.bridgeArg(lowered, opt.def, opt.typ)
+		if err != nil {
+			return nil, err
+		}
+		idx := &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(k)}
+		out = append(out,
+			&ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{
+				&ast.ValueSpec{Names: []*ast.Ident{ident(opt.name)}, Type: plan.elem},
+			}}},
+			&ast.IfStmt{
+				Cond: &ast.BinaryExpr{
+					X:  &ast.CallExpr{Fun: ident("len"), Args: []ast.Expr{ident(argsName)}},
+					Op: token.GTR,
+					Y:  idx,
+				},
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{
+					Lhs: []ast.Expr{ident(opt.name)},
+					Tok: token.ASSIGN,
+					Rhs: []ast.Expr{&ast.IndexExpr{X: ident(argsName), Index: idx}},
+				}}},
+				Else: &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{
+					Lhs: []ast.Expr{ident(opt.name)},
+					Tok: token.ASSIGN,
+					Rhs: []ast.Expr{lowered},
+				}}},
+			},
+		)
+	}
+	return out, nil
 }
 
 // restParamField lowers a rest parameter to its Go field. The parameter's type is

@@ -1,7 +1,6 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -146,20 +145,56 @@ console.log(g(7));
 	}
 }
 
-// TestDefaultParamReadingEarlierParamHandsBack proves the one default form the call
-// site cannot reconstruct still hands back: a default that reads an earlier
-// parameter is bound only inside the callee scope, so it names its own later slice.
-func TestDefaultParamReadingEarlierParamHandsBack(t *testing.T) {
+// TestDefaultParamReadingEarlierParamLowers proves the one default form the call
+// site cannot reconstruct now lowers through a callee-scope variadic tail: the
+// optional parameters collapse to one Go variadic and the body fills each from the
+// variadic or its default, evaluated where the earlier parameter is in scope.
+func TestDefaultParamReadingEarlierParamLowers(t *testing.T) {
 	const src = "function f(a: number, b: number = a + 1): number { return a + b; }\nconsole.log(f(5));\n"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "...float64)") {
+		t.Errorf("the optional tail did not collapse to a Go variadic:\n%s", source)
 	}
-	if !strings.Contains(nyl.Reason, "earlier parameter") {
-		t.Errorf("hand-back reason = %q, want it to contain %q", nyl.Reason, "earlier parameter")
+	if !strings.Contains(source, "var b float64") {
+		t.Errorf("the optional parameter did not become a callee-scope local:\n%s", source)
+	}
+	if !strings.Contains(source, "b = a + 1") {
+		t.Errorf("the default was not filled in the callee scope reading the earlier parameter:\n%s", source)
+	}
+}
+
+// TestDefaultParamReadingEarlierParamRuns builds and runs a default that reads an
+// earlier parameter, both omitted and supplied, so the filled value is proven
+// against the JavaScript result.
+func TestDefaultParamReadingEarlierParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function f(a: number, b: number = a + 1): number {
+  return a + b;
+}
+console.log(f(5));
+console.log(f(5, 2));
+`
+	if got, want := runProgramGo(t, src), "11\n7\n"; got != want {
+		t.Fatalf("default reading an earlier parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestDefaultParamReadingEarlierParamChainRuns proves a chain of optional defaults,
+// each reading the one before it, fills left to right in the callee scope so a later
+// default sees the earlier one already settled.
+func TestDefaultParamReadingEarlierParamChainRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function f(a: number, b: number = a + 1, c: number = b + 1): number {
+  return a + b + c;
+}
+console.log(f(1));
+console.log(f(1, 5));
+console.log(f(1, 5, 9));
+`
+	if got, want := runProgramGo(t, src), "6\n12\n15\n"; got != want {
+		t.Fatalf("chained defaults printed %q, want %q", got, want)
 	}
 }
 

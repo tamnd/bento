@@ -2293,7 +2293,13 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
 	}
-	params, err := r.paramFields(sig)
+	// A method reuses the function parameter lowering so a default-valued parameter
+	// becomes a plain Go field the method call fills at the call site, the same
+	// call-site defaulting a top-level function takes. A default that reads an earlier
+	// parameter, which the call site cannot reconstruct, hands back here since a method
+	// has no callee-scope variadic fallback, so only a call-site-reconstructible default
+	// lowers.
+	params, err := r.funcParamFields(m.node, sig)
 	if err != nil {
 		return nil, err
 	}
@@ -2517,7 +2523,10 @@ func (r *Renderer) staticFuncDecl(m classMethod) (ast.Decl, error) {
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
 	}
-	params, err := r.paramFields(sig)
+	// A static method takes the same call-site defaulting a top-level function does,
+	// so a default-valued parameter lowers to a plain Go field the call fills; a
+	// default that reads an earlier parameter hands back here.
+	params, err := r.funcParamFields(m.node, sig)
 	if err != nil {
 		return nil, err
 	}
@@ -2734,7 +2743,9 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 		name = implName(m)
 	}
 	args := make([]ast.Expr, 0, len(sig.Params))
+	paramNodes := r.funcParamNodes(m.node)
 	for i, a := range argNodes {
+		a = r.argForDefaultedSlot(paramNodes, sig, i, a)
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -2745,7 +2756,7 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 		}
 		args = append(args, lowered)
 	}
-	if err := r.padOmittedDynamic(&args, sig, len(argNodes)); err != nil {
+	if err := r.fillOmittedMethodArgs(&args, m.node, sig, len(argNodes)); err != nil {
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
@@ -2769,7 +2780,9 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
 	args := make([]ast.Expr, 0, len(sig.Params))
+	paramNodes := r.funcParamNodes(m.node)
 	for i, a := range argNodes {
+		a = r.argForDefaultedSlot(paramNodes, sig, i, a)
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -2780,18 +2793,56 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 		}
 		args = append(args, lowered)
 	}
-	if err := r.padOmittedDynamic(&args, sig, len(argNodes)); err != nil {
+	if err := r.fillOmittedMethodArgs(&args, m.node, sig, len(argNodes)); err != nil {
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: ident(m.goName), Args: args}, nil
 }
 
-// padOmittedDynamic fills the trailing argument slots a short call left empty.
-// Only a dynamic optional pads: its slot takes value.Undefined, the absent value
-// the language binds to an omitted parameter. A static optional has no Go value
-// to stand in for the omission and hands back, the same edge paramFields keeps.
-func (r *Renderer) padOmittedDynamic(args *[]ast.Expr, sig frontend.Signature, from int) error {
+// argForDefaultedSlot returns the expression to lower for argument i of a method
+// call with these parameter nodes. An explicit undefined argument in a slot whose
+// parameter carries a call-site-reconstructible default counts as a missing argument,
+// so the parameter's default stands in for it, matching the language rule that
+// undefined triggers a default exactly as an omission does. Any other argument, and
+// an undefined in a slot with no default or a default that reads an earlier
+// parameter, passes through unchanged.
+func (r *Renderer) argForDefaultedSlot(paramNodes []frontend.Node, sig frontend.Signature, i int, a frontend.Node) frontend.Node {
+	if !r.isUndefinedLiteral(a) {
+		return a
+	}
+	if def, ok := r.paramDefaultNode(paramNodes, i); ok && !r.defaultReadsOwnParam(sig, def) {
+		return def
+	}
+	return a
+}
+
+// fillOmittedMethodArgs fills the trailing argument slots a short method call left
+// empty, the same call-site defaulting a top-level function takes. A slot whose
+// parameter carries a default fills with that default, evaluated at the call site
+// where the class binding is visible and bridged to the parameter type; a default
+// that reads an earlier parameter needs the callee's scope and hands back, matching
+// the funcParamFields gate the method declaration already applied. A slot with no
+// default fills with value.Undefined only when its type is dynamic, the absent value
+// the language binds; a static optional with no default has no Go value to stand in
+// and hands back.
+func (r *Renderer) fillOmittedMethodArgs(args *[]ast.Expr, node frontend.Node, sig frontend.Signature, from int) error {
+	paramNodes := r.funcParamNodes(node)
 	for i := from; i < len(sig.Params); i++ {
+		if def, ok := r.paramDefaultNode(paramNodes, i); ok {
+			if r.defaultReadsOwnParam(sig, def) {
+				return &NotYetLowerable{Reason: "a method default that reads an earlier parameter needs the callee's scope, a later slice"}
+			}
+			lowered, err := r.lowerExpr(def)
+			if err != nil {
+				return err
+			}
+			lowered, err = r.bridgeArg(lowered, def, sig.Params[i].Type)
+			if err != nil {
+				return err
+			}
+			*args = append(*args, lowered)
+			continue
+		}
 		if sig.Params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
 			return &NotYetLowerable{Reason: "a call omitting a non-dynamic optional argument is a later slice"}
 		}
