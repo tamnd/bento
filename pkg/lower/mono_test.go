@@ -272,3 +272,33 @@ func TestUncalledGenericHandsBack(t *testing.T) {
 		t.Fatalf("uncalled generic hand-back reason = %q, want a generic reason", reason)
 	}
 }
+
+// The atom mangler names a specialization only for a type it can spell as a stable
+// suffix: a number, string, boolean, bigint, or an array of one of those. A type
+// argument outside that set, a self-referential object type or a bare object shape,
+// has no suffix, so the monomorphizer fixes no specialization and the generic hands
+// back rather than emit an unsound unspecialized func or a name it never declared.
+
+// TestGenericOverRecursiveTypeHandsBack proves a generic instantiated over a
+// self-referential object type hands back cleanly, with no crash and no emitted Go,
+// since a recursive type has no stable monomorphization suffix.
+func TestGenericOverRecursiveTypeHandsBack(t *testing.T) {
+	const src = "interface Cell { next: Cell | null; val: number; }\n" +
+		"function id<T>(x: T): T { return x; }\n" +
+		"const c: Cell = { next: null, val: 1 };\n" +
+		"console.log(id(c).val);\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "generic") {
+		t.Fatalf("recursive-type generic hand-back reason = %q, want a generic reason", reason)
+	}
+}
+
+// TestGenericOverObjectTypeHandsBack proves a generic instantiated over a bare
+// object shape hands back cleanly, the same guard the recursive type keeps, since an
+// object type is outside the set of types the atom mangler can name.
+func TestGenericOverObjectTypeHandsBack(t *testing.T) {
+	const src = "function id<T>(x: T): T { return x; }\n" +
+		"console.log(id({ a: 1 }).a);\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "generic") {
+		t.Fatalf("object-type generic hand-back reason = %q, want a generic reason", reason)
+	}
+}
