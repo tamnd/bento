@@ -1,0 +1,6 @@
+== stdout:
+match ok
+mismatch: Test262Error: Expected a TypeError but got a RangeError
+none: Expected a TypeError to be thrown but no exception was thrown at all
+== exit:
+0

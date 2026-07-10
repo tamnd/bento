@@ -1958,20 +1958,36 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 
 // ctorParamFields builds the constructor's Go parameter list from the declared
 // parameter nodes, shared by the NewX declaration and the initX split a virtual
-// hierarchy adds.
+// hierarchy adds. A static optional parameter hands back the same way paramFields
+// makes a plain method's: its Go type is the value.Opt[T] the T | undefined union
+// renders, which the constructor body reads as a bare T, so admitting it would
+// emit Go that does not compile. The call-site defaulting that would fill an
+// omitted slot is a later slice. A dynamic optional is fine, an omitted slot
+// holds the undefined its value.Value already models.
 func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
+	var sig frontend.Signature
+	haveSig := false
+	if info.ctor != nil {
+		if s, ok := r.prog.SignatureAt(info.ctor); ok {
+			sig, haveSig = s, true
+		}
+	}
 	params := &ast.FieldList{}
-	for _, p := range info.ctorParams {
+	for i, p := range info.ctorParams {
 		nameNode := r.paramNameNode(p)
 		pname, ok := localName(r.prog.Text(nameNode))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "constructor parameter name is not a Go identifier"}
 		}
-		pt, err := r.typeExpr(r.prog.TypeAt(nameNode))
+		pt := r.prog.TypeAt(nameNode)
+		if haveSig && i >= sig.MinArgs && pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+			return nil, &NotYetLowerable{Flags: pt.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
+		}
+		goType, err := r.typeExpr(pt)
 		if err != nil {
 			return nil, err
 		}
-		params.List = append(params.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
+		params.List = append(params.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: goType})
 	}
 	return params, nil
 }
