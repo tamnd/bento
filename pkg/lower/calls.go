@@ -599,23 +599,98 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 	if err != nil {
 		return nil, err
 	}
-	restArgs := make([]ast.Expr, 0, len(restNodes))
+	hasSpread := false
 	for _, a := range restNodes {
 		if a.Kind() == frontend.NodeSpreadElement {
-			return nil, &NotYetLowerable{Reason: "a spread argument into a rest parameter is a later slice"}
+			hasSpread = true
+			break
 		}
-		lowered, err := r.lowerExpr(a)
+	}
+	if !hasSpread {
+		restArgs := make([]ast.Expr, 0, len(restNodes))
+		for _, a := range restNodes {
+			lowered, err := r.lowerExpr(a)
+			if err != nil {
+				return nil, err
+			}
+			lowered, err = r.bridgeArg(lowered, a, elemT)
+			if err != nil {
+				return nil, err
+			}
+			restArgs = append(restArgs, lowered)
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: restArgs}, nil
+	}
+	// A spread of a user iterable into the rest position walks the iterator
+	// protocol: the rest array is built by appending, splicing each iterable's
+	// drained slice between the positional arguments, then wrapped as the value.Array
+	// the callee reads. It is the arraySpread build over the rest element type, so a
+	// spread rest and a spread array literal collect the same way.
+	seedType := &ast.ArrayType{Elt: elemGo}
+	var acc ast.Expr
+	var pending []ast.Expr
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if acc == nil {
+			acc = &ast.CompositeLit{Type: seedType, Elts: pending}
+		} else {
+			acc = &ast.CallExpr{Fun: ident("append"), Args: append([]ast.Expr{acc}, pending...)}
+		}
+		pending = nil
+	}
+	for _, a := range restNodes {
+		if a.Kind() != frontend.NodeSpreadElement {
+			lowered, err := r.lowerExpr(a)
+			if err != nil {
+				return nil, err
+			}
+			lowered, err = r.bridgeArg(lowered, a, elemT)
+			if err != nil {
+				return nil, err
+			}
+			pending = append(pending, lowered)
+			continue
+		}
+		operands := r.prog.Children(a)
+		if len(operands) != 1 {
+			return nil, &NotYetLowerable{Reason: "a spread argument with an unexpected shape is a later slice"}
+		}
+		operand := operands[0]
+		shape, ok := r.symbolIteratorShape(r.prog.TypeAt(operand))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a spread of a non-iterable into a rest parameter is a later slice"}
+		}
+		iterElemGo, err := r.typeExpr(shape.elem)
 		if err != nil {
 			return nil, err
 		}
-		lowered, err = r.bridgeArg(lowered, a, elemT)
+		same, err := sameGoType(elemGo, iterElemGo)
 		if err != nil {
 			return nil, err
 		}
-		restArgs = append(restArgs, lowered)
+		if !same {
+			return nil, &NotYetLowerable{Reason: "a spread of an iterable with a different element type into a rest parameter is a later slice"}
+		}
+		src, err := r.lowerExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		flush()
+		if acc == nil {
+			acc = &ast.CompositeLit{Type: seedType}
+		}
+		drained := r.iterableToSliceExpr(src, elemGo, shape)
+		acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
+	}
+	flush()
+	if acc == nil {
+		acc = &ast.CompositeLit{Type: seedType}
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: restArgs}, nil
+	return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{acc}}, nil
 }
 
 // bridgeArg fits a lowered argument to its declared parameter type the way an

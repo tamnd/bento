@@ -1,5 +1,5 @@
 class C {
-  [Symbol.iterator]() {
+  [Symbol.asyncIterator]() {
     return 1;
   }
 }

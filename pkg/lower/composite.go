@@ -159,6 +159,34 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 		operand := operands[0]
 		opElemType, ok := r.arrayElem(operand)
 		if !ok {
+			// A spread of a user iterable that is not an array walks the iterator
+			// protocol: it is drained into a slice of its element type, then that slice
+			// is spliced the same way an array's Elems is. The element types must lower
+			// to the same Go type, so the drained values splice without a conversion.
+			if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(operand)); ok {
+				iterElemType, err := r.typeExpr(shape.elem)
+				if err != nil {
+					return nil, err
+				}
+				same, err := sameGoType(elemType, iterElemType)
+				if err != nil {
+					return nil, err
+				}
+				if !same {
+					return nil, &NotYetLowerable{Reason: "spread of an iterable with a different element type is a later slice"}
+				}
+				src, err := r.lowerExpr(operand)
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				drained := r.iterableToSliceExpr(src, elemType, shape)
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "spread of a non-array value in an array literal is a later slice"}
 		}
 		same, err := sameGoType(elemType, opElemType)

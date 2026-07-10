@@ -661,6 +661,22 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			return nil, &NotYetLowerable{Reason: "a dynamic element access with a non-number, non-string index is a later slice"}
 		}
 	}
+	// A manual obj[Symbol.iterator] reads the iterator factory a user iterable
+	// defines, the Go SymbolIterator method, so a test can drive the protocol by hand:
+	// obj[Symbol.iterator]() obtains the iterator, then its .next() pulls each result.
+	// It is read the same way the for...of loop obtains the iterator, and only when the
+	// receiver is a user iterable this slice lowers; a built-in iterable is a later
+	// slice.
+	if r.isSymbolIteratorExpr(idxNode) {
+		if _, ok := r.symbolIteratorShape(r.prog.TypeAt(obj)); ok {
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.SelectorExpr{X: recv, Sel: ident(symbolIteratorGoName)}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "a Symbol.iterator reference on a non-user-iterable receiver is a later slice"}
+	}
 	// A typed-array read a[i] returns its element as a Number through the buffer's own
 	// At, the same method name a typed Array indexes through, so the receivers share
 	// this shape and differ only in which value type carries At. A typed array is not
