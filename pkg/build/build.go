@@ -284,6 +284,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedUnknown[d.Code] {
 			continue
 		}
+		if toleratedLooseForm[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -366,6 +369,21 @@ var toleratedDynamicMember = map[int]bool{
 var toleratedUnknown = map[int]bool{
 	2571:  true, // Object is of type 'unknown'.
 	18046: true, // 'X' is of type 'unknown'.
+}
+
+// toleratedLooseForm is the set of checker diagnostic codes bento admits because
+// the flagged form has valid run-time semantics the lowerer reproduces, the
+// checker only warns that the source is looser than good style. 2695 reports a
+// comma expression whose left side has no side effect ("Left side of comma
+// operator is unused and has no side effects"): the runtime still evaluates the
+// left, discards it, and yields the right, exactly what the comma lowering emits
+// (the left runs into the blank identifier, the right is returned), so tolerating
+// it lets a pure-left comma reach the renderer where a side-effecting comma
+// already lowered. A comma the lowerer cannot yet model, a right operand outside
+// the lowerable subset, still hands back, so admitting the code never produces Go
+// that fails to compile.
+var toleratedLooseForm = map[int]bool{
+	2695: true, // Left side of comma operator is unused and has no side effects.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and

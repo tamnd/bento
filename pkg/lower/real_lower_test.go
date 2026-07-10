@@ -79,6 +79,11 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2339 || d.Code == 2551 {
 			continue
 		}
+		// 2695 (a comma whose left side has no side effect) is admitted by the AOT
+		// front door because the comma still lowers, so mirror it here.
+		if d.Code == 2695 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog
