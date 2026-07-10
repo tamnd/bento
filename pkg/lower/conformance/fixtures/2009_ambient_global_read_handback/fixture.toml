@@ -1,0 +1,2 @@
+feature = "ambient-global-read"
+handback = "the ambient global RegExp read as a value is a later slice"
