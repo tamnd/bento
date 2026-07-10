@@ -62,6 +62,12 @@ type classInfo struct {
 	// routes to the call, the static twin of the instance accessor path.
 	staticGetters []classMethod
 	staticSetters []classSetter
+	// staticBlocks are the class's static initialization blocks, in member order.
+	// Each lowers into a package function the program assembler calls at the class
+	// declaration's position in the main body, which is when JavaScript runs it;
+	// package-level Go has no ordered statement execution, so the ordered work a
+	// static block does lives in that called function instead.
+	staticBlocks []frontend.Node
 	// base is the registered class this one extends, nil for a root class. The
 	// base embeds as the derived struct's first field, so Go promotion serves
 	// the inherited fields and methods; registration rejects a derived member
@@ -405,6 +411,22 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			// so they are skipped rather than misread as heritage.
 			text := strings.TrimSpace(r.prog.Text(m))
 			if text == "" || text == ";" {
+				continue
+			}
+			// A static initialization block surfaces as an unnamed node whose text
+			// starts with static and whose one child is the block; it is not heritage.
+			// The first block seen mints the init function's name so a name clash hands
+			// back with the module's other package-level names rather than emitting Go
+			// that redeclares one.
+			if blk, ok := r.staticBlockBody(m); ok {
+				if len(info.staticBlocks) == 0 {
+					if nm := staticInitName(info); taken[nm] {
+						return &NotYetLowerable{Reason: "the module already speaks " + nm + ", the name class " + name + "'s static block needs"}
+					} else {
+						taken[nm] = true
+					}
+				}
+				info.staticBlocks = append(info.staticBlocks, blk)
 				continue
 			}
 			if firstWord(text) != "extends" || info.base != nil {
@@ -1601,6 +1623,17 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		}
 		out = append(out, fd)
 	}
+	// A static initialization block emits its lowered statements into a package
+	// function the main body calls at the class declaration's position, the one
+	// place package-level Go can run ordered work; the class declares no such
+	// function when it has no static block.
+	if len(info.staticBlocks) > 0 {
+		fd, err := r.staticInitFuncDecl(info)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fd)
+	}
 	for _, s := range info.staticSetters {
 		fd, err := r.staticFuncDecl(classMethod{prop: s.prop, goName: s.goName, node: s.node})
 		if err != nil {
@@ -1612,6 +1645,56 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		out = append(out, r.thrownMethodDecls(info)...)
 	}
 	return out, nil
+}
+
+// staticInitName is the name of the package function a class's static
+// initialization blocks lower into, the function the main body calls at the
+// class declaration's position.
+func staticInitName(c *classInfo) string {
+	return "staticInit" + c.goName
+}
+
+// staticBlockBody reports whether a class member node is a static
+// initialization block and returns its statement block. A static block surfaces
+// as an unnamed node whose text starts with static and whose one child is the
+// block, which is how it tells apart from a static modifier token (childless)
+// and from the extends and implements heritage clauses.
+func (r *Renderer) staticBlockBody(m frontend.Node) (frontend.Node, bool) {
+	if firstWord(strings.TrimSpace(r.prog.Text(m))) != "static" {
+		return nil, false
+	}
+	kids := r.prog.Children(m)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodeBlock {
+		return nil, false
+	}
+	return kids[0], true
+}
+
+// staticInitFuncDecl lowers a class's static initialization blocks into one
+// package function, the blocks concatenated in member order the way JavaScript
+// runs them at class-definition time. A block that reads this or super touches
+// the class constructor object, a dynamic-world value this slice does not model,
+// so it hands back rather than drop the reference.
+func (r *Renderer) staticInitFuncDecl(info *classInfo) (ast.Decl, error) {
+	var stmts []ast.Stmt
+	for _, blk := range info.staticBlocks {
+		if subtreeHasKind(r.prog, blk, frontend.NodeThisKeyword) {
+			return nil, &NotYetLowerable{Reason: "a static block that reads this is a later slice"}
+		}
+		if subtreeHasKind(r.prog, blk, frontend.NodeSuperKeyword) {
+			return nil, &NotYetLowerable{Reason: "a static block that reads super is a later slice"}
+		}
+		body, err := r.scopedBlock(blk, 0)
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, body.List...)
+	}
+	return &ast.FuncDecl{
+		Name: ident(staticInitName(info)),
+		Type: &ast.FuncType{Params: &ast.FieldList{}},
+		Body: &ast.BlockStmt{List: stmts},
+	}, nil
 }
 
 // thrownMethodDecls emits the two methods that let a thrown instance ride the
