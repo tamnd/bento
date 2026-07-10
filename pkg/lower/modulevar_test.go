@@ -98,4 +98,3 @@ console.log(greet("sam"));
 		t.Fatalf("shared module string printed %q, want %q", got, want)
 	}
 }
-
