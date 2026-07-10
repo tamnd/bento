@@ -180,7 +180,18 @@ func (r *Renderer) yieldExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("Yield")}, Args: []ast.Expr{val}}, nil
+	call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("Yield")}, Args: []ast.Expr{val}}
+	// The coroutine hands the sent value back as a dynamic value.Value, the argument
+	// the consumer passed to next(v). A yield expression reads as the generator's TNext
+	// type, so when TNext is a concrete primitive the dynamic result coerces to it
+	// through the ToNumber family, the same crossing an assignment applies. A TNext that
+	// is itself dynamic, the unknown a plain Generator<Y> carries, needs no coercion and
+	// the value.Value passes through as the yield's own value.
+	sent := r.prog.TypeAt(n)
+	if sent.Flags != 0 && sent.Flags&(frontend.TypeAny|frontend.TypeUnknown|frontend.TypeVoid) == 0 {
+		return r.coerceDynamicToStaticFlags(call, sent.Flags)
+	}
+	return call, nil
 }
 
 // generatorCoroutine builds the value.NewGen[Y](func(_co *value.GenCo[Y]) value.Value

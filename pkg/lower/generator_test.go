@@ -100,6 +100,51 @@ console.log(out);
 	}
 }
 
+// TestGeneratorYieldExprValue pins that a yield used as an expression binds the
+// value the consumer sends back through next(v). A for...of drive always sends
+// undefined, so each yield expression evaluates to undefined here.
+func TestGeneratorYieldExprValue(t *testing.T) {
+	const src = `function* g(): Generator<number> {
+  const a = yield 1;
+  console.log("a=" + String(a));
+  const b = yield 2;
+  console.log("b=" + String(b));
+}
+for (const v of g()) { console.log("v=" + String(v)); }
+`
+	if got, want := runProgramGo(t, src), "v=1\na=undefined\nv=2\nb=undefined\n"; got != want {
+		t.Fatalf("yield-expression generator printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorYieldExprShape pins that a plain yield expression lowers to a bare
+// Yield call on the coroutine, whose result is the dynamic value the consumer sent.
+func TestGeneratorYieldExprShape(t *testing.T) {
+	const src = `function* g(): Generator<number> {
+  const a = yield 1;
+  console.log(String(a));
+}`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "a := _bt0.Yield(1)") {
+		t.Fatalf("yield expression did not bind the sent value:\n%s", got)
+	}
+}
+
+// TestGeneratorYieldTypedNextCoerces pins that when the next type is a concrete
+// primitive, the dynamic Yield result is coerced to it so the surrounding Go stays
+// typed: total += yield 1 becomes total += value.ToNumber(_co.Yield(1)).
+func TestGeneratorYieldTypedNextCoerces(t *testing.T) {
+	const src = `function* g(): Generator<number, void, number> {
+  let total = 0;
+  total += yield 1;
+  console.log(String(total));
+}`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "total += value.ToNumber(_bt0.Yield(1))") {
+		t.Fatalf("typed next value was not coerced:\n%s", got)
+	}
+}
+
 // TestGeneratorEmptyHandsBack pins that a generator with no yielded value has no
 // element type to name yet and hands back with that reason.
 func TestGeneratorEmptyHandsBack(t *testing.T) {
