@@ -274,12 +274,12 @@ func (r *Renderer) isGeneratorIterable(n frontend.Node) bool {
 }
 
 // forOfGenerator lowers a for...of over a generator to the plain Go loop a
-// developer writes against a next() closure: bind the closure once so its state
-// is shared across the loop, then pull a value and a done flag each turn and
-// stop when done. The closure is called once up front, not per turn, so two
-// iterations of the same source expression would each get their own fresh
-// generator, matching the JavaScript protocol. A binding the body never reads
-// drops to the blank identifier, since Go rejects an unused loop value.
+// developer writes against a coroutine: obtain the *value.Gen once so its state is
+// shared across the loop, then pull a value and a done flag each turn with
+// Next(value.Undefined) and stop when done. The generator is obtained once up front,
+// not per turn, so two iterations of the same source expression would each get their
+// own fresh coroutine, matching the JavaScript protocol. A binding the body never
+// reads drops to the blank identifier, since Go rejects an unused loop value.
 func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node) (ast.Stmt, error) {
 	iter, err := r.lowerExpr(iterable)
 	if err != nil {
@@ -289,7 +289,8 @@ func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string,
 	if err != nil {
 		return nil, err
 	}
-	itName := r.freshTemp()
+	r.requireImport(valuePkg)
+	genName := r.freshTemp()
 	doneName := r.freshTemp()
 	loopVar := ast.Expr(ident("_"))
 	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
@@ -298,7 +299,10 @@ func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string,
 	pull := &ast.AssignStmt{
 		Lhs: []ast.Expr{loopVar, ident(doneName)},
 		Tok: token.DEFINE,
-		Rhs: []ast.Expr{&ast.CallExpr{Fun: ident(itName)}},
+		Rhs: []ast.Expr{&ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident(genName), Sel: ident("Next")},
+			Args: []ast.Expr{sel("value", "Undefined")},
+		}},
 	}
 	brk := &ast.IfStmt{
 		Cond: ident(doneName),
@@ -306,7 +310,7 @@ func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string,
 	}
 	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: append([]ast.Stmt{pull, brk}, body.List...)}}
 	return &ast.BlockStmt{List: []ast.Stmt{
-		&ast.AssignStmt{Lhs: []ast.Expr{ident(itName)}, Tok: token.DEFINE, Rhs: []ast.Expr{iter}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(genName)}, Tok: token.DEFINE, Rhs: []ast.Expr{iter}},
 		loop,
 	}}, nil
 }
@@ -454,6 +458,17 @@ func (r *Renderer) bodyUsesName(n frontend.Node, name string) bool {
 // lowerReturn lowers a return, with or without a value.
 func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
+	// A return inside a generator body completes the coroutine, whose func returns a
+	// value.Value the { value, done: true } result carries. A bare return completes
+	// with undefined; a return that carries a value is a later slice (item 5), so it
+	// hands back rather than drop the value.
+	if r.genCo != "" {
+		if len(kids) == 0 {
+			r.requireImport(valuePkg)
+			return &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "a generator return value is a later slice"}
+	}
 	if len(kids) == 0 {
 		// Inside a try escape closure the bare return of a void function still has
 		// to raise done, or the call site would not return; the closure's own

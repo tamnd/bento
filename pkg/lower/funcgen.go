@@ -43,6 +43,9 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	if err != nil {
 		return nil, err
 	}
+	if r.isGeneratorFunc(fn) {
+		return r.generatorFuncDecl(fn, sig, name)
+	}
 	if len(sig.TypeParams) != 0 {
 		return nil, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
 	}
@@ -61,6 +64,13 @@ func (r *Renderer) funcDecls(fn frontend.Node) ([]ast.Decl, error) {
 	sym, name, sig, err := r.funcDeclHead(fn)
 	if err != nil {
 		return nil, err
+	}
+	if r.isGeneratorFunc(fn) {
+		fd, err := r.generatorFuncDecl(fn, sig, name)
+		if err != nil {
+			return nil, err
+		}
+		return []ast.Decl{fd}, nil
 	}
 	if len(sig.TypeParams) == 0 {
 		fd, err := r.funcDeclNamed(fn, sig, name)

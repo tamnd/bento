@@ -126,6 +126,17 @@ type Renderer struct {
 	// aliasing corner the snapshot cannot mirror, so it hands back. It is saved and
 	// restored alongside argsObjName.
 	argsWriteSafe bool
+	// genCo is the Go name of the *value.GenCo handle the current generator body
+	// yields through, or "" when the body being lowered is not a generator. It is set
+	// around a generator function or method body, and a yield expression in that body
+	// lowers to a call on it (genCo.Yield). Like retType it is saved and restored around
+	// each body so a nested non-generator function does not inherit it.
+	genCo string
+	// genYieldType is the element type a generator body yields, the Y in *value.Gen[Y].
+	// It fixes the type argument of the NewGen call the body is wrapped in and the type
+	// a yield expression coerces its operand to. It is the zero type outside a generator
+	// body, and it is saved and restored alongside genCo.
+	genYieldType frontend.Type
 	// typeSubst maps a type parameter's identity to the concrete type it stands for in
 	// the specialization currently being lowered, so typeExpr resolves a bare T to the
 	// float64, value.BStr, or array type the call site fixed it to. It is set around one

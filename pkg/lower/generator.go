@@ -1,0 +1,251 @@
+package lower
+
+import (
+	"go/ast"
+
+	"github.com/tamnd/bento/pkg/frontend"
+)
+
+// A generator function (function* g()) lowers to a Go function that returns a
+// running coroutine, the *value.Gen the runtime drives (pkg/value/generator.go).
+// The body becomes the goroutine func value.NewGen wraps: each yield in the body
+// lowers to a call on the coroutine handle, which suspends the goroutine until the
+// consumer pulls again, and the body's fall-off completes the generator with
+// undefined. A for...of over the result, or a manual next(), pulls it one value at
+// a time through that same Gen. This file builds the function form and the shared
+// coroutine body; the class method form reuses the body builder from classes.go.
+
+// isGeneratorFunc reports whether a function declaration carries the generator
+// star, the function* marker the parser surfaces as a childless unnamed "*" token
+// before the name. It is the same token the class-method scan reads to route a
+// method to the coroutine, read here off the declaration's own children.
+func (r *Renderer) isGeneratorFunc(fn frontend.Node) bool {
+	for _, k := range r.prog.Children(fn) {
+		if k.Kind() == frontend.NodeUnknown && len(r.prog.Children(k)) == 0 && r.prog.Text(k) == "*" {
+			return true
+		}
+		// The star sits before the name; once a named child (the function name or a
+		// parameter) is reached the marker cannot appear, so stop scanning.
+		if k.Kind() == frontend.NodeIdentifier {
+			return false
+		}
+	}
+	return false
+}
+
+// collectYields gathers every yield expression under n, the nodes whose operands fix
+// the generator's element type. It descends the body but not into a nested function,
+// whose own yields belong to its own generator.
+func (r *Renderer) collectYields(n frontend.Node, out *[]frontend.Node) {
+	switch n.Kind() {
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		return
+	case frontend.NodeYieldExpression:
+		*out = append(*out, n)
+	}
+	for _, k := range r.prog.Children(n) {
+		r.collectYields(k, out)
+	}
+}
+
+// generatorYieldType reads the element type a generator body yields, the Y in
+// *value.Gen[Y], off its yielded expressions: the common type of every plain yield,
+// required to lower to one Go type so the single channel of Y carries them all. A
+// yield node carries its operand as its one child; a valueless yield or a yield*
+// delegation has a different arity and no single operand to read a type off, so a
+// body whose only yields are those keeps their own precise reason rather than the
+// generic no-element-type one. A body whose plain yields disagree in Go type hands
+// back rather than pick one.
+func (r *Renderer) generatorYieldType(block frontend.Node) (frontend.Type, ast.Expr, error) {
+	var yields []frontend.Node
+	r.collectYields(block, &yields)
+	var elemGo ast.Expr
+	var elemType frontend.Type
+	sawDelegation, sawValueless := false, false
+	for _, y := range yields {
+		kids := r.prog.Children(y)
+		switch {
+		case len(kids) == 0:
+			sawValueless = true
+			continue
+		case len(kids) > 1:
+			sawDelegation = true
+			continue
+		}
+		t := r.prog.TypeAt(kids[0])
+		g, err := r.typeExpr(t)
+		if err != nil {
+			return frontend.Type{}, nil, err
+		}
+		if elemGo == nil {
+			elemGo, elemType = g, t
+			continue
+		}
+		if same, err := sameGoType(elemGo, g); err != nil || !same {
+			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a generator whose yields differ in type is a later slice"}
+		}
+	}
+	if elemGo == nil {
+		switch {
+		case sawDelegation:
+			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a yield* delegation is a later slice"}
+		case sawValueless:
+			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a valueless yield is a later slice"}
+		default:
+			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a generator with no yielded value has no element type here, a later slice"}
+		}
+	}
+	return elemType, elemGo, nil
+}
+
+// coerceToType bridges a value from a source node's type to a target type across the
+// dynamic boundary, the same static/dynamic coercion coerceToTarget applies but
+// against a type the caller holds rather than a target node. A generator yields
+// through it: the yielded value is coerced to the channel's element type Y, which is
+// the value's own type in the common case and so passes through unchanged.
+func (r *Renderer) coerceToType(expr ast.Expr, src frontend.Node, target frontend.Type) (ast.Expr, error) {
+	if boxed, ok, err := r.boxToOptional(expr, src, target); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
+	if wrapped, ok, err := r.wrapToUnion(expr, src, target); err != nil {
+		return nil, err
+	} else if ok {
+		return wrapped, nil
+	}
+	if err := r.guardOptionalShapeCrossTypes(r.prog.TypeAt(src), target); err != nil {
+		return nil, err
+	}
+	srcDyn := r.isDynamic(src)
+	tgtDyn := target.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	switch {
+	case srcDyn && !tgtDyn:
+		return r.coerceDynamicToStaticFlags(expr, target.Flags)
+	case !srcDyn && tgtDyn:
+		return r.boxStaticToDynamic(expr, src)
+	default:
+		return r.bridgeClassBinding(expr, src, target)
+	}
+}
+
+// yieldExpr lowers a yield expression to a call on the current generator's coroutine
+// handle: _co.Yield(v) sends v to the consumer and blocks until the next pull, and
+// evaluates to the value the consumer passed back through next(v). A yield outside a
+// lowered generator body has no handle to send on and hands back; a valueless yield
+// or a yield* delegation is a later slice.
+func (r *Renderer) yieldExpr(n frontend.Node) (ast.Expr, error) {
+	if r.genCo == "" {
+		return nil, &NotYetLowerable{Reason: "a yield outside a lowered generator body is a later slice"}
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 {
+		return nil, &NotYetLowerable{Reason: "a valueless yield is a later slice"}
+	}
+	if len(kids) != 1 {
+		return nil, &NotYetLowerable{Reason: "a yield* delegation is a later slice"}
+	}
+	val, err := r.lowerExpr(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	val, err = r.coerceToType(val, kids[0], r.genYieldType)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("Yield")}, Args: []ast.Expr{val}}, nil
+}
+
+// generatorCoroutine builds the value.NewGen[Y](func(_co *value.GenCo[Y]) value.Value
+// { ... }) expression a generator body lowers to, and returns the Go element type Y
+// alongside it so the caller can spell the *value.Gen[Y] the enclosing function or
+// method returns. The body lowers with the coroutine handle name and the element type
+// in scope, so a yield inside it routes to yieldExpr and a return boxes to
+// value.Value; the body's fall-off appends `return value.Undefined`, the completion a
+// generator that runs off its end reports.
+func (r *Renderer) generatorCoroutine(fn frontend.Node) (yieldGo ast.Expr, newGen ast.Expr, err error) {
+	block, ok := r.funcBodyBlock(fn)
+	if !ok {
+		return nil, nil, &NotYetLowerable{Reason: "a generator without a body is a later slice"}
+	}
+	elemType, elemGo, err := r.generatorYieldType(block)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The body-scoped analyses are set up the way funcDeclNamed sets them, so the
+	// generator body lowers its locals the same as any other body, and they are saved
+	// and restored so the coroutine's scope does not leak out.
+	bodyStmts := r.prog.Children(block)
+	prevUnion := r.unionLocals
+	r.unionLocals = r.unionLocalsOf(nil, bodyStmts)
+	defer func() { r.unionLocals = prevUnion }()
+	prevDyn := r.dynLocals
+	r.dynLocals = r.dynLocalsOf(nil, bodyStmts)
+	defer func() { r.dynLocals = prevDyn }()
+
+	coName := r.freshTemp()
+	prevCo, prevYT := r.genCo, r.genYieldType
+	r.genCo, r.genYieldType = coName, elemType
+	defer func() { r.genCo, r.genYieldType = prevCo, prevYT }()
+
+	body, err := r.blockOf(fn)
+	if err != nil {
+		return nil, nil, err
+	}
+	r.requireImport(valuePkg)
+	// A generator that runs off its end completes with undefined, so the coroutine func
+	// returns value.Undefined after the body, the value a { value, done: true } result
+	// carries for a return-less generator.
+	body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
+
+	coParam := &ast.Field{
+		Names: []*ast.Ident{ident(coName)},
+		Type:  star(index(sel("value", "GenCo"), elemGo)),
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{coParam}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: body,
+	}
+	newGen = &ast.CallExpr{Fun: index(sel("value", "NewGen"), elemGo), Args: []ast.Expr{lit}}
+	// The element type is spelled fresh for the caller so the returned *value.Gen[Y]
+	// does not share the node the NewGen call already holds.
+	yieldGo, err = r.typeExpr(elemType)
+	if err != nil {
+		return nil, nil, err
+	}
+	return yieldGo, newGen, nil
+}
+
+// generatorFuncDecl lowers a top-level generator function to a Go function that
+// returns a running coroutine: g(params) *value.Gen[Y] { return value.NewGen[Y](...) }.
+// The body is the coroutine func generatorCoroutine builds, so the function's only
+// statement hands the caller the *value.Gen the for...of or the manual next() drives.
+// A generic generator or one with a rest parameter is a later slice.
+func (r *Renderer) generatorFuncDecl(fn frontend.Node, sig frontend.Signature, name string) (*ast.FuncDecl, error) {
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "a generic generator needs monomorphization, a later slice"}
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "a generator with a rest parameter is a later slice"}
+	}
+	params, err := r.funcParamFields(fn, sig)
+	if err != nil {
+		return nil, err
+	}
+	yieldGo, newGen, err := r.generatorCoroutine(fn)
+	if err != nil {
+		return nil, err
+	}
+	result := &ast.Field{Type: star(index(sel("value", "Gen"), yieldGo))}
+	return &ast.FuncDecl{
+		Name: ident(name),
+		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{result}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{newGen}}}},
+	}, nil
+}
