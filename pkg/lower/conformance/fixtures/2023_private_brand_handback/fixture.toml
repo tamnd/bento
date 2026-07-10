@@ -1,0 +1,2 @@
+feature = "class-private-brand"
+handback = "a private brand check (#m in obj) is a later slice"
