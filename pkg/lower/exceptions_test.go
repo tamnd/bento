@@ -173,6 +173,37 @@ func TestEmptyCatchStillRecovers(t *testing.T) {
 	}
 }
 
+// TestCatchBindingReassignedHandsBack proves that reassigning the catch binding to
+// another value hands back rather than storing into the *value.Error the recover
+// bound. block-scope/shadowing/catch-parameter-shadowing-let-declaration reassigns
+// the binding with a = 4, which would emit `a = value.Number(4)` into an *value.Error
+// local and fail to build.
+func TestCatchBindingReassignedHandsBack(t *testing.T) {
+	const src = "try { throw \"x\"; } catch (a) { a = 4; console.log(String(a)); }\n"
+	handsBack(t, src)
+}
+
+// TestCatchBindingShadowedHandsBack proves that shadowing the catch binding with a
+// nested declaration of the same name hands back. block-scope/shadowing/
+// let-declaration-shadowing-catch-parameter declares `let a = 3` inside the catch,
+// and the body would read the inner number through the error's methods, which does
+// not build.
+func TestCatchBindingShadowedHandsBack(t *testing.T) {
+	const src = "try { throw \"x\"; } catch (a) { { let a = 3; console.log(String(a)); } }\n"
+	handsBack(t, src)
+}
+
+// TestReadOnlyCatchBindingStillLowers proves the rebound-or-shadowed guard does not
+// swallow a catch that only reads its binding, the common shape, so the guard is
+// scoped to a store or a redeclaration and nothing else.
+func TestReadOnlyCatchBindingStillLowers(t *testing.T) {
+	const src = "try { throw new Error(\"boom\"); } catch (e) { if (e instanceof Error) { console.log(e.message); } }\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.Caught(rec)") {
+		t.Fatalf("a read-only catch binding should still lower:\n%s", source)
+	}
+}
+
 // TestTryEscapeEmits pins the two forms a returning try takes. A try whose
 // every path returns or throws, with a catch that always returns, compiles to
 // returning the closure directly with a plain named result. One that control
