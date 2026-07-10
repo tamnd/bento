@@ -76,6 +76,19 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return sel("value", "Undefined"), nil
 		}
+		// An ambient global read as a value that none of the modeled-global paths
+		// above lower (RegExp, String, Boolean used as an object rather than called)
+		// has no generated Go behind its name, so capitalizing the source name would
+		// emit an undefined symbol like RegExp. The functions and the modeled value
+		// globals (NaN, Infinity, undefined) already returned above, so this catches
+		// only the unmodeled remainder, including the object read under a member
+		// access like RegExp.length. A built-in error constructor is excluded: it has
+		// a value form (value.ErrorConstructor) the coercion path boxes it into, the
+		// shape assert.throws relies on. Hand back the rest until the global's object
+		// form is modeled, the way the indirect-eval value path does.
+		if _, isErrCtor := r.errorConstructorRef(n); !isErrCtor && r.isAmbientGlobal(n) {
+			return nil, &NotYetLowerable{Reason: "the ambient global " + r.prog.Text(n) + " read as a value is a later slice"}
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
@@ -686,6 +699,12 @@ func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
 // name, so both hand back to a later slice; a plain number, string, or boolean
 // local passes through.
 func (r *Renderer) assignValueLocal(left, right frontend.Node) (ast.Expr, error) {
+	// An assignment-as-value into an ambient global (const r = (NaN = 12)) has no
+	// user slot to store into and would name an undefined Go symbol; the statement
+	// path hands the same shape back, so mirror it here rather than emit bad Go.
+	if r.isAmbientGlobal(left) {
+		return nil, &NotYetLowerable{Reason: "assignment to the ambient global " + r.prog.Text(left) + " is a later slice"}
+	}
 	name, ok := localName(r.prog.Text(left))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "assignment value target is not a Go identifier"}

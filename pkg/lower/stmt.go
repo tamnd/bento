@@ -1894,6 +1894,14 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 	if parts[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "assignment to a non-identifier target is a later slice"}
 	}
+	// An assignment whose target is an ambient global (NaN = 12, undefined = 1) is
+	// not a store into a user slot: the runtime holds no such lvalue, and in strict
+	// mode the store throws a TypeError bento does not model, while in sloppy mode it
+	// is a silent no-op. Emitting the source name would name an undefined Go symbol.
+	// Hand back the way the read path does. global/10.2.1.1.3-4-16-s hits this.
+	if r.isAmbientGlobal(parts[0]) {
+		return nil, &NotYetLowerable{Reason: "assignment to the ambient global " + r.prog.Text(parts[0]) + " is a later slice"}
+	}
 	name, ok := localName(r.prog.Text(parts[0]))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "assignment target is not a Go identifier"}
