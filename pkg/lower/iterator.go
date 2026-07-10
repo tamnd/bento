@@ -66,6 +66,20 @@ func (r *Renderer) isSymbolIteratorName(nameNode frontend.Node) bool {
 	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "iterator"
 }
 
+// isSymbolIteratorExpr reports whether an expression node is the well-known
+// Symbol.iterator property access, the key a manual `obj[Symbol.iterator]()`
+// reference reads the iterator factory through. Unlike isSymbolIteratorName, which
+// matches the computed member name in a class body (an unnamed node wrapping the
+// access), this matches the access expression itself, the shape it takes as an
+// element-access index.
+func (r *Renderer) isSymbolIteratorExpr(node frontend.Node) bool {
+	if node.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	pa := r.prog.Children(node)
+	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "iterator"
+}
+
 // memberByPrefix returns the first property of a type whose name starts with the
 // given prefix, the way the [Symbol.iterator] member is reached: the checker
 // mangles a well-known symbol member to an internal name that leads with a prefix

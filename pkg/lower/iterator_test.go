@@ -101,6 +101,31 @@ func TestForOfUnusedBindingRuns(t *testing.T) {
 	}
 }
 
+// TestManualIteratorDriveLowers proves a test can drive an iterable by hand:
+// obj[Symbol.iterator]() reads the iterator factory as the Go SymbolIterator
+// method, and the iterator it returns answers a direct .next() through Next, so the
+// manual walk lowers to the same two methods the for...of loop calls.
+func TestManualIteratorDriveLowers(t *testing.T) {
+	src := selfIterator + "const it = new Countdown(2)[Symbol.iterator]();\nconst r = it.next();\nconsole.log(r.value);\n"
+	source := renderProgram(t, src)
+	for _, want := range []string{".SymbolIterator()", ".Next()", ".Value"} {
+		if !strings.Contains(source, want) {
+			t.Errorf("manual iterator drive did not lower through the protocol methods, missing %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestManualIteratorDriveRuns builds and runs a by-hand iterator walk: obtain the
+// iterator, pull once, and read value off the result, which for a Countdown to 2 is
+// its first value, 0.
+func TestManualIteratorDriveRuns(t *testing.T) {
+	skipIfShort(t)
+	src := selfIterator + "const it = new Countdown(2)[Symbol.iterator]();\nconst r = it.next();\nconsole.log(r.value);\n"
+	if got, want := runProgramGo(t, src), "0\n"; got != want {
+		t.Fatalf("manual iterator drive printed %q, want %q", got, want)
+	}
+}
+
 // TestForOfObjectLiteralIteratorHandsBack proves that an iterable whose
 // [Symbol.iterator]() returns an inline object literal with a next() method hands
 // back rather than mislower: an object literal that carries a method is a later
