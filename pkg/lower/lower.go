@@ -206,6 +206,15 @@ type Renderer struct {
 	// the specialized Go name it resolves to. A symbol absent from the map is a generic
 	// no call site monomorphizes, which hands back rather than emit an unspecialized func.
 	monoSpecs map[frontend.Symbol][]monoSpec
+	// monoMethodSpecs maps a generic method's declaration node to the distinct
+	// monomorphizations its call sites ask for. A Go method cannot carry a type
+	// parameter, so a generic method emits one mangled Go method per instantiation
+	// (Wrap_num, Wrap_str) and each call rewrites to the one it resolves to. It is
+	// filled once by collectMonoMethods in RenderProgram, before any body lowers, so
+	// the class knows every specialization to emit and a call site agrees on the name.
+	// A method absent from the map is a generic no call site monomorphizes, which
+	// hands back rather than emit an unspecialized method.
+	monoMethodSpecs map[frontend.Node][]monoSpec
 	// tryRet tells a return statement how to leave the try construct it sits in.
 	// The zero value is a plain function return. tryRetBody marks the body of the
 	// escape closure a try with an escaping return compiles to, where a return
@@ -404,7 +413,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

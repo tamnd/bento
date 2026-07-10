@@ -80,6 +80,85 @@ console.log(firstOf(10, 20));
 	}
 }
 
+// A Go method cannot carry a type parameter, so a generic method has no single Go
+// form either: bento emits one mangled Go method per instantiation its call sites
+// fix, keyed by the receiver type and the type argument, and rewrites each method
+// call to the specialization it resolves to. The body of each specialization lowers
+// with the type parameter resolved to the concrete type the call fixed.
+
+// TestGenericMethodMonomorphizesPerTypeArgument proves a generic method called with
+// two distinct type arguments emits two specialized Go methods with the concrete Go
+// types, and no unspecialized generic method is left behind.
+func TestGenericMethodMonomorphizesPerTypeArgument(t *testing.T) {
+	const src = "class Box {\n" +
+		"  wrap<T>(x: T): T { return x; }\n" +
+		"}\n" +
+		"const b = new Box();\n" +
+		"console.log(b.wrap(5));\n" +
+		"console.log(b.wrap(\"hi\"));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func (b *Box) Wrap_num(x float64) float64") {
+		t.Errorf("the number instantiation was not emitted with a float64 signature:\n%s", source)
+	}
+	if !strings.Contains(source, "func (b *Box) Wrap_str(x value.BStr) value.BStr") {
+		t.Errorf("the string instantiation was not emitted with a value.BStr signature:\n%s", source)
+	}
+	if strings.Contains(source, "func (b *Box) Wrap(") {
+		t.Errorf("an unspecialized generic method was emitted:\n%s", source)
+	}
+}
+
+// TestGenericMethodCallResolvesToSpecialization proves each method call is rewritten
+// to the specialized Go name the type arguments fix, not the bare method name.
+func TestGenericMethodCallResolvesToSpecialization(t *testing.T) {
+	const src = "class Box {\n" +
+		"  wrap<T>(x: T): T { return x; }\n" +
+		"}\n" +
+		"const b = new Box();\n" +
+		"console.log(b.wrap(5));\n" +
+		"console.log(b.wrap(\"hi\"));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "b.Wrap_num(5)") {
+		t.Errorf("the number call was not rewritten to the specialization:\n%s", source)
+	}
+	if !strings.Contains(source, "b.Wrap_str(value.FromGoString(\"hi\"))") {
+		t.Errorf("the string call was not rewritten to the specialization:\n%s", source)
+	}
+}
+
+// TestGenericMethodRuns builds and runs two instantiations of a generic method so
+// the monomorphized Go is proven against the JavaScript result.
+func TestGenericMethodRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class Box {
+  wrap<T>(x: T): T {
+    return x;
+  }
+}
+const b = new Box();
+console.log(b.wrap(5));
+console.log(b.wrap("hi"));
+`
+	if got, want := runProgramGo(t, src), "5\nhi\n"; got != want {
+		t.Fatalf("monomorphized generic method printed %q, want %q", got, want)
+	}
+}
+
+// TestUncalledGenericMethodHandsBack proves a generic method no call site
+// instantiates has no specialization to emit and hands back, the same zero-fail
+// guard an uncalled generic function keeps.
+func TestUncalledGenericMethodHandsBack(t *testing.T) {
+	const src = "class Box {\n" +
+		"  wrap<T>(x: T): T { return x; }\n" +
+		"}\n" +
+		"const b = new Box();\n" +
+		"console.log(1);\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "generic") {
+		t.Fatalf("uncalled generic method hand-back reason = %q, want a generic reason", reason)
+	}
+}
+
 // TestUncalledGenericHandsBack proves a generic no call site instantiates has no
 // specialization to emit and hands back, since an unspecialized generic has no
 // single Go form. The whole program routes to the engine rather than emit an

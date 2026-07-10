@@ -75,6 +75,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// can; a generic no call site monomorphizes simply records nothing and hands back
 	// at its declaration.
 	r.collectMono(entry)
+	// A generic method cannot lower to one Go method, since a Go method carries no
+	// type parameter, so the same pre-pass records the instantiations each generic
+	// method's call sites ask for. A class then emits one mangled Go method per
+	// instantiation, and a call site rewrites to the one it resolves to.
+	r.collectMonoMethods(entry)
 
 	// A module-level binding a top-level function or class body reads cannot stay a
 	// local of main, since a separate Go function cannot see main's locals; it hoists

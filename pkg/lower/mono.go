@@ -109,6 +109,110 @@ func (r *Renderer) monoCallSpec(call frontend.Node) (frontend.Symbol, monoSpec, 
 	return sym, monoSpec{suffix: suffix, subst: subst}, true
 }
 
+// collectMonoMethods walks the whole program before any body lowers and records,
+// per generic method declaration, the distinct monomorphizations its call sites
+// ask for. A Go method cannot carry a type parameter, so a generic method has no
+// single Go form the way a generic function has none: it emits one mangled Go
+// method per concrete instantiation. Discovery runs as a pre-pass, like
+// collectMono, so a class renders every specialization a call anywhere in the
+// module needs, whichever order the classes and their callers lower in. It keys by
+// the method declaration node, which a call on a subclass instance and the base
+// class that emits the method both resolve to, so an inherited generic method is
+// specialized once on the class that declares it.
+func (r *Renderer) collectMonoMethods(entry frontend.Node) {
+	seen := map[frontend.Node]map[string]bool{}
+	var walk func(frontend.Node)
+	walk = func(n frontend.Node) {
+		if n.Kind() == frontend.NodeCallExpression {
+			if node, spec, ok := r.monoMethodCallSpec(n); ok {
+				bySuffix := seen[node]
+				if bySuffix == nil {
+					bySuffix = map[string]bool{}
+					seen[node] = bySuffix
+				}
+				if !bySuffix[spec.suffix] {
+					bySuffix[spec.suffix] = true
+					r.monoMethodSpecs[node] = append(r.monoMethodSpecs[node], spec)
+				}
+			}
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(entry)
+}
+
+// monoMethodCallSpec reports the monomorphization a method call resolves to when
+// its callee is a generic method of a registered class every type argument of
+// which mangles to a concrete Go type. It returns the method declaration node and
+// the spec, or ok=false when the callee is not such a call (a plain function, a
+// method of no registered class, a non-generic method) or when a type argument does
+// not mangle, in which case the method is left unspecialized and hands back at both
+// its declaration and the call. It is the one place the method-call-to-spec mapping
+// is computed, so discovery and the call-site rewrite read the same answer.
+func (r *Renderer) monoMethodCallSpec(call frontend.Node) (frontend.Node, monoSpec, bool) {
+	kids := r.prog.Children(call)
+	if len(kids) == 0 {
+		return nil, monoSpec{}, false
+	}
+	callee := kids[0]
+	if callee.Kind() != frontend.NodePropertyAccessExpression {
+		return nil, monoSpec{}, false
+	}
+	ckids := r.prog.Children(callee)
+	if len(ckids) != 2 {
+		return nil, monoSpec{}, false
+	}
+	info, ok := r.classOfNode(ckids[0])
+	if !ok {
+		return nil, monoSpec{}, false
+	}
+	m, ok := info.lookupMethod(r.prog.Text(ckids[1]))
+	if !ok {
+		return nil, monoSpec{}, false
+	}
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok || len(sig.TypeParams) == 0 {
+		return nil, monoSpec{}, false
+	}
+	spec, ok := r.methodMonoSpec(sig, kids[1:])
+	if !ok {
+		return nil, monoSpec{}, false
+	}
+	return m.node, spec, true
+}
+
+// methodMonoSpec derives the monomorphization one generic-method call fixes, by
+// unifying the declaration's parameter types against the concrete types of the
+// arguments the call passes. A method call carries no resolved signature node the
+// way a bare call does, so the bindings come from the argument types directly: a
+// bare type parameter binds to the argument across from it, widened to the Go slot
+// it takes. It reports false when a type parameter is left unbound, because it
+// appears only in the return or in a form this pass does not walk, or when a bound
+// type does not mangle, so the method stays unspecialized and hands back.
+func (r *Renderer) methodMonoSpec(sig frontend.Signature, argNodes []frontend.Node) (monoSpec, bool) {
+	subst := map[int]frontend.Type{}
+	for i, p := range sig.Params {
+		if i >= len(argNodes) {
+			continue
+		}
+		if !r.unifyType(p.Type, r.prog.TypeAt(argNodes[i]), subst) {
+			return monoSpec{}, false
+		}
+	}
+	for _, tp := range sig.TypeParams {
+		if _, ok := subst[tp.Identity()]; !ok {
+			return monoSpec{}, false
+		}
+	}
+	suffix, ok := r.monoSuffix(sig.TypeParams, subst)
+	if !ok {
+		return monoSpec{}, false
+	}
+	return monoSpec{suffix: suffix, subst: subst}, true
+}
+
 // genericFuncDecl returns the function-declaration node of a generic top-level
 // function the symbol names, or ok=false when the symbol is not a single
 // function declaration (an overload set, a merged binding) or is not generic.
