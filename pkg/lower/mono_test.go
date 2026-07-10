@@ -184,6 +184,44 @@ func TestGenericBodyTypeParameterResolves(t *testing.T) {
 	}
 }
 
+// A generic function type used as a value or a parameter type lowers at the call
+// sites that fix its type arguments: monomorphizing the enclosing generic resolves
+// the callback's own type parameter to a concrete type, so a callback parameter
+// typed (x: T) => T becomes func(float64) float64 in the number specialization and
+// func(value.BStr) value.BStr in the string one, and a returned () => T reads the
+// concrete result the call fixed.
+
+// TestGenericFunctionTypeParameterInstantiates proves a callback parameter typed by
+// the enclosing generic's type parameter lowers to a concrete Go func type per
+// instantiation, and a named function passes as that value.
+func TestGenericFunctionTypeParameterInstantiates(t *testing.T) {
+	const src = "function apply<T>(f: (x: T) => T, v: T): T { return f(v); }\n" +
+		"function inc(n: number): number { return n + 1; }\n" +
+		"console.log(apply(inc, 5));\n" +
+		"console.log(apply(s => s, \"hi\"));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func Apply_num(f func(float64) float64, v float64) float64") {
+		t.Errorf("the number instantiation did not lower the callback to a float64 func type:\n%s", source)
+	}
+	if !strings.Contains(source, "func Apply_str(f func(value.BStr) value.BStr, v value.BStr) value.BStr") {
+		t.Errorf("the string instantiation did not lower the callback to a value.BStr func type:\n%s", source)
+	}
+	if !strings.Contains(source, "Apply_num(Inc, 5)") {
+		t.Errorf("the named function was not passed as the specialized callback value:\n%s", source)
+	}
+}
+
+// TestGenericFunctionTypeValueReturned proves a generic that returns a function
+// value lowers the returned () => T to a concrete Go func type the call resolves.
+func TestGenericFunctionTypeValueReturned(t *testing.T) {
+	const src = "function twice<T>(x: T): () => T { return () => x; }\n" +
+		"console.log(twice(9)());\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func Twice_num(x float64) func() float64") {
+		t.Errorf("the returned function value did not resolve to func() float64:\n%s", source)
+	}
+}
+
 // TestUncalledGenericHandsBack proves a generic no call site instantiates has no
 // specialization to emit and hands back, since an unspecialized generic has no
 // single Go form. The whole program routes to the engine rather than emit an
