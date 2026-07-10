@@ -668,6 +668,47 @@ func (r *Renderer) memberHasMod(m frontend.Node, mod string) bool {
 	return false
 }
 
+// memberName reads the property a class member's name node spells, for the
+// three static-name shapes this slice lowers: a plain identifier (m() {}), a
+// string-literal name ("my method"() {}), and a computed name whose expression
+// is a string literal (["m"]() {}). A string name resolves its escapes the same
+// way a string-literal element-access key does (stringLiteralKey), so a
+// declaration and a bracket read of the member agree on the mangled Go
+// spelling. It returns false for a computed name that is not a constant string,
+// a [Symbol.x] or a [expr], which stays a later slice, and for a name that
+// decodes to a lone surrogate no Go identifier could carry. A ["constructor"]
+// computed name is an ordinary property named "constructor", a prototype method
+// distinct from the class constructor, so it resolves here to that string like
+// any other constant name.
+func (r *Renderer) memberName(nameNode frontend.Node) (string, bool) {
+	switch nameNode.Kind() {
+	case frontend.NodeIdentifier:
+		return r.prog.Text(nameNode), true
+	case frontend.NodeStringLiteral:
+		return r.stringLiteralKey(nameNode)
+	case frontend.NodeUnknown:
+		// A computed name [expr] surfaces as an unnamed node wrapping the
+		// expression; only a lone string-literal expression is a constant name.
+		kids := r.prog.Children(nameNode)
+		if len(kids) == 1 && kids[0].Kind() == frontend.NodeStringLiteral {
+			return r.stringLiteralKey(kids[0])
+		}
+	}
+	return "", false
+}
+
+// memberNameReason is the handback a reader returns when memberName declines the
+// name node: a computed name that is not a constant string names itself, so the
+// leftover reason after this slice is honest about what remains; any other
+// shape (a numeric literal name, an unreadable node) keeps the family's
+// "without a plain identifier name" phrasing, with kind naming the member.
+func (r *Renderer) memberNameReason(nameNode frontend.Node, kind string) error {
+	if nameNode.Kind() == frontend.NodeUnknown {
+		return &NotYetLowerable{Reason: "a computed member name that is not a constant string is a later slice"}
+	}
+	return &NotYetLowerable{Reason: "a " + kind + " without a plain identifier name is a later slice"}
+}
+
 // classFieldOf reads one property declaration into a classField. The member's
 // children are the name, an optional type annotation (an unnamed node), and an
 // optional initializer expression. An initializer bento's node vocabulary does
@@ -687,10 +728,13 @@ func (r *Renderer) classFieldOf(m frontend.Node) (classField, error) {
 		return classField{}, &NotYetLowerable{Reason: "an abstract field is a later slice"}
 	}
 	kids := r.prog.Children(m)
-	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+	if len(kids) == 0 {
 		return classField{}, &NotYetLowerable{Reason: "a class field without a plain identifier name is a later slice"}
 	}
-	prop := r.prog.Text(kids[0])
+	prop, ok := r.memberName(kids[0])
+	if !ok {
+		return classField{}, r.memberNameReason(kids[0], "class field")
+	}
 	goName, ok := exportedField(prop)
 	if !ok {
 		return classField{}, &NotYetLowerable{Reason: "class field name is not a Go identifier"}
@@ -814,6 +858,14 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	kids := r.prog.Children(m)
 	abstract := false
 	for len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown {
+		// A computed name [expr] surfaces as an unnamed node that wraps the
+		// expression, so it carries a child; a modifier (abstract, async, the
+		// generator star) is a childless keyword token. The name is not a
+		// modifier, so stop stripping once the unnamed node holds an expression
+		// and let the memberName read below claim or narrow it.
+		if len(r.prog.Children(kids[0])) > 0 {
+			break
+		}
 		w := strings.TrimSpace(r.prog.Text(kids[0]))
 		if w != "abstract" {
 			return classMethod{}, &NotYetLowerable{Reason: "a " + w + " method is a later slice"}
@@ -821,10 +873,13 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 		abstract = true
 		kids = kids[1:]
 	}
-	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a method without a plain identifier name is a later slice"}
 	}
-	prop := r.prog.Text(kids[0])
+	prop, ok := r.memberName(kids[0])
+	if !ok {
+		return classMethod{}, r.memberNameReason(kids[0], "method")
+	}
 	goName, ok := exportedField(prop)
 	if !ok {
 		return classMethod{}, &NotYetLowerable{Reason: "method name is not a Go identifier"}
@@ -852,10 +907,13 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 // package level and no evaluation order exists between the vars.
 func (r *Renderer) staticFieldOf(info *classInfo, m frontend.Node, taken map[string]bool) (classField, error) {
 	kids := r.prog.Children(m)
-	if len(kids) < 2 || kids[1].Kind() != frontend.NodeIdentifier {
+	if len(kids) < 2 {
 		return classField{}, &NotYetLowerable{Reason: "a static field without a plain identifier name is a later slice"}
 	}
-	prop := r.prog.Text(kids[1])
+	prop, ok := r.memberName(kids[1])
+	if !ok {
+		return classField{}, r.memberNameReason(kids[1], "static field")
+	}
 	propGo, ok := exportedField(prop)
 	if !ok {
 		return classField{}, &NotYetLowerable{Reason: "static field name is not a Go identifier"}
@@ -922,10 +980,13 @@ func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[st
 		return classMethod{}, &NotYetLowerable{Reason: "a static async method is a later slice"}
 	}
 	kids := r.prog.Children(m)
-	if len(kids) < 2 || kids[1].Kind() != frontend.NodeIdentifier {
+	if len(kids) < 2 {
 		return classMethod{}, &NotYetLowerable{Reason: "a static method without a plain identifier name is a later slice"}
 	}
-	prop := r.prog.Text(kids[1])
+	prop, ok := r.memberName(kids[1])
+	if !ok {
+		return classMethod{}, r.memberNameReason(kids[1], "static method")
+	}
 	propGo, ok := exportedField(prop)
 	if !ok {
 		return classMethod{}, &NotYetLowerable{Reason: "static method name is not a Go identifier"}
@@ -946,10 +1007,13 @@ func (r *Renderer) getterOf(m frontend.Node) (classMethod, error) {
 		return classMethod{}, &NotYetLowerable{Reason: "an abstract accessor is a later slice"}
 	}
 	kids := r.prog.Children(m)
-	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a get accessor without a plain identifier name is a later slice"}
 	}
-	prop := r.prog.Text(kids[0])
+	prop, ok := r.memberName(kids[0])
+	if !ok {
+		return classMethod{}, r.memberNameReason(kids[0], "get accessor")
+	}
 	goName, ok := exportedField(prop)
 	if !ok {
 		return classMethod{}, &NotYetLowerable{Reason: "accessor name is not a Go identifier"}
@@ -966,10 +1030,13 @@ func (r *Renderer) setterOf(m frontend.Node) (classSetter, error) {
 		return classSetter{}, &NotYetLowerable{Reason: "an abstract accessor is a later slice"}
 	}
 	kids := r.prog.Children(m)
-	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+	if len(kids) == 0 {
 		return classSetter{}, &NotYetLowerable{Reason: "a set accessor without a plain identifier name is a later slice"}
 	}
-	prop := r.prog.Text(kids[0])
+	prop, ok := r.memberName(kids[0])
+	if !ok {
+		return classSetter{}, r.memberNameReason(kids[0], "set accessor")
+	}
 	propGo, ok := exportedField(prop)
 	if !ok {
 		return classSetter{}, &NotYetLowerable{Reason: "accessor name is not a Go identifier"}
