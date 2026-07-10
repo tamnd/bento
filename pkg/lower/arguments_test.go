@@ -196,6 +196,50 @@ console.log(first(9, 8));
 	}
 }
 
+// TestArgumentsWriteReadsStore proves a write to arguments[i] lowers to the backing
+// store's Set when no parameter is read by name, so the write and a following read
+// go through the same snapshot.
+func TestArgumentsWriteReadsStore(t *testing.T) {
+	const src = "function f(a: number, b: number): unknown {\n" +
+		"  arguments[0] = 9;\n" +
+		"  return arguments[0];\n" +
+		"}\n" +
+		"f(1, 2);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Set(0, value.Number(9))") {
+		t.Errorf("the write to arguments did not store into the backing array:\n%s", source)
+	}
+}
+
+// TestArgumentsWriteRuns builds and runs a body that writes arguments[i] then reads
+// it back, so the store write is proven against the JavaScript result.
+func TestArgumentsWriteRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function set(a: number, b: number): unknown {
+  arguments[0] = 42;
+  return arguments[0];
+}
+console.log(set(1, 2));
+`
+	if got, want := runProgramGo(t, src), "42\n"; got != want {
+		t.Fatalf("a write to arguments printed %q, want %q", got, want)
+	}
+}
+
+// TestArgumentsWriteWithNamedParameterHandsBack proves a write to arguments[i] hands
+// back when the body also reads a parameter by name: the snapshot store cannot
+// mirror the mapped rule where the write would change that parameter too, so the
+// whole function hands back rather than emit an unfaithful write.
+func TestArgumentsWriteWithNamedParameterHandsBack(t *testing.T) {
+	const src = "function f(a: number, b: number): number {\n" +
+		"  arguments[0] = 9;\n" +
+		"  return a;\n" +
+		"}\n" +
+		"f(1, 2);\n"
+	renderProgramHandBack(t, src)
+}
+
 // TestArgumentsWithRestParameterHandsBack proves a body that reads arguments while
 // its signature carries a rest parameter hands back: the rest gathers a call-varying
 // tail, so the parameter count is not the call arity and the store cannot stand in.

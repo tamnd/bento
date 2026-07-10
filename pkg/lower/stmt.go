@@ -1317,6 +1317,9 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.arrayDestructureAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		if stmt, ok, err := r.argumentsElementAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		if stmt, ok, err := r.bytesElementAssign(n); ok || err != nil {
 			return stmt, err
 		}
@@ -1582,6 +1585,59 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 		values = append(values, &ast.SelectorExpr{X: recv, Sel: ident(field)})
 	}
 	return &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}, true, nil
+}
+
+// argumentsElementAssign lowers a write to arguments[i] to the backing store's Set,
+// the store half of the At read elementAccess lowers for an arguments index. It
+// claims the statement only when a store is in scope (argsObjName set) and the
+// receiver is the arguments object, so an ordinary array or typed-array write falls
+// through to the paths below. The store is a snapshot of the parameters, so writing
+// it is the unmapped (strict) rule where arguments does not alias the named
+// parameters; that is faithful only when no parameter is read by name in the body
+// (argsWriteSafe), so a body that observes a parameter makes the mapped difference
+// visible and hands the whole function back rather than emit an unfaithful write.
+// Only a plain "=" is covered; a compound write reads and writes the element and is
+// a later slice.
+func (r *Renderer) argumentsElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
+	if r.argsObjName == "" {
+		return nil, false, nil
+	}
+	parts := r.prog.Children(bin)
+	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+		return nil, false, nil
+	}
+	target := parts[0]
+	if target.Kind() != frontend.NodeElementAccessExpression {
+		return nil, false, nil
+	}
+	idxParts := r.prog.Children(target)
+	if len(idxParts) != 2 || !r.isArgumentsIdent(idxParts[0]) {
+		return nil, false, nil
+	}
+	if !r.argsWriteSafe {
+		return nil, false, &NotYetLowerable{Reason: "a write to arguments while a parameter is read by name is the mapped-arguments aliasing corner the snapshot store does not mirror, a later slice"}
+	}
+	if !r.isNumber(idxParts[1]) {
+		return nil, false, &NotYetLowerable{Reason: "a write to arguments with a non-number index is a later slice"}
+	}
+	idx, err := r.lowerExpr(idxParts[1])
+	if err != nil {
+		return nil, false, err
+	}
+	val, err := r.lowerExpr(parts[2])
+	if err != nil {
+		return nil, false, err
+	}
+	// The store holds value.Value, so the written value boxes into a dynamic slot the
+	// same way the parameters did when the store was materialized.
+	boxed, err := r.boxStaticToDynamicFlags(val, r.prog.TypeAt(parts[2]).Flags)
+	if err != nil {
+		return nil, false, err
+	}
+	return &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: ident(r.argsObjName), Sel: ident("Set")},
+		Args: []ast.Expr{idx, boxed},
+	}}, true, nil
 }
 
 // bytesElementAssign lowers a typed-array element write a[i] = v to the buffer's

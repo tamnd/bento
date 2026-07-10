@@ -26,30 +26,30 @@ import (
 // It returns a NotYetLowerable when the body reads arguments in a way this slice
 // does not back yet, so the whole function hands back rather than emit a body that
 // reads a store the guards cannot fill soundly.
-func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.Stmt, string, bool, error) {
+func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.Stmt, string, bool, bool, error) {
 	block, ok := r.funcBodyBlock(fn)
 	if !ok {
-		return nil, "", false, nil
+		return nil, "", false, false, nil
 	}
 	reads, supported := false, true
 	for _, stmt := range r.prog.Children(block) {
 		r.scanArguments(stmt, &reads, &supported)
 	}
 	if !reads {
-		return nil, "", false, nil
+		return nil, "", false, false, nil
 	}
 	if !supported {
-		return nil, "", false, &NotYetLowerable{Reason: "this read of arguments is a later slice"}
+		return nil, "", false, false, &NotYetLowerable{Reason: "this read of arguments is a later slice"}
 	}
 	// The parameters must exactly capture the call arity for the store to stand in
 	// for the passed arguments: a rest gathers a call-varying tail, and an optional
 	// or defaulted parameter lets a call omit a slot, so either makes arguments.length
 	// depend on the call site the body cannot see.
 	if sig.RestParam != nil {
-		return nil, "", false, &NotYetLowerable{Reason: "arguments in a function with a rest parameter needs the call-site arity, a later slice"}
+		return nil, "", false, false, &NotYetLowerable{Reason: "arguments in a function with a rest parameter needs the call-site arity, a later slice"}
 	}
 	if sig.MinArgs != len(sig.Params) {
-		return nil, "", false, &NotYetLowerable{Reason: "arguments in a function with an omittable parameter needs the call-site arity, a later slice"}
+		return nil, "", false, false, &NotYetLowerable{Reason: "arguments in a function with an omittable parameter needs the call-site arity, a later slice"}
 	}
 	// Each parameter is boxed into the store, so each must lower to a plain Go local
 	// whose static type boxes into a value.Value. A destructured parameter has no
@@ -59,14 +59,18 @@ func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.
 	for _, p := range sig.Params {
 		pname, ok := localName(p.Name)
 		if !ok {
-			return nil, "", false, &NotYetLowerable{Reason: "arguments over a parameter with no plain Go name is a later slice"}
+			return nil, "", false, false, &NotYetLowerable{Reason: "arguments over a parameter with no plain Go name is a later slice"}
 		}
 		box, err := r.boxStaticToDynamicFlags(ident(pname), p.Type.Flags)
 		if err != nil {
-			return nil, "", false, err
+			return nil, "", false, false, err
 		}
 		boxes = append(boxes, box)
 	}
+	// A write to arguments[i] against the snapshot store is the unmapped rule, faithful
+	// only when no parameter is read by name in the body (see argsWriteSafe). Compute
+	// it once here so a write in this body knows whether to lower or hand back.
+	writeSafe := !r.bodyReferencesParam(block, sig.Params)
 	r.requireImport(valuePkg)
 	name := r.freshTemp()
 	mat := &ast.AssignStmt{
@@ -77,7 +81,45 @@ func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.
 			Args: boxes,
 		}},
 	}
-	return mat, name, true, nil
+	return mat, name, true, writeSafe, nil
+}
+
+// bodyReferencesParam reports whether the body block reads any of the parameters by
+// name. A write to arguments[i] against the snapshot store cannot mirror the mapped
+// rule where the write also changes the named parameter, so a body that observes a
+// parameter by name makes that difference visible and its arguments write hands back.
+// It descends into a nested arrow, which shares the enclosing parameter binding, but
+// stops at a nested function or method, whose same-spelled parameter is its own. The
+// text match is deliberately conservative: a local that shadows a parameter name
+// counts too, which only widens the handback and never lowers an unfaithful write.
+func (r *Renderer) bodyReferencesParam(n frontend.Node, params []frontend.Param) bool {
+	names := make(map[string]bool, len(params))
+	for _, p := range params {
+		names[p.Name] = true
+	}
+	var walk func(frontend.Node) bool
+	walk = func(node frontend.Node) bool {
+		switch node.Kind() {
+		case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression,
+			frontend.NodeMethodDeclaration, frontend.NodeGetAccessor,
+			frontend.NodeSetAccessor, frontend.NodeConstructor:
+			return false
+		case frontend.NodeIdentifier:
+			return names[r.prog.Text(node)]
+		}
+		for _, c := range r.prog.Children(node) {
+			if walk(c) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, stmt := range r.prog.Children(n) {
+		if walk(stmt) {
+			return true
+		}
+	}
+	return false
 }
 
 // scanArguments walks a body node and records whether it reads the arguments object

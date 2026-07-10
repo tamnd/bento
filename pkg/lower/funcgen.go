@@ -136,17 +136,19 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	// like retType, so a nested function does not inherit the outer store. Methods
 	// and constructors keep the stricter paramFields and are not reached here, so
 	// arguments in one is still a later slice.
-	argsMat, argsStoreName, argsOK, err := r.argumentsPlan(fn, sig)
+	argsMat, argsStoreName, argsOK, argsWriteSafe, err := r.argumentsPlan(fn, sig)
 	if err != nil {
 		return nil, err
 	}
-	prevArgs := r.argsObjName
+	prevArgs, prevArgsWrite := r.argsObjName, r.argsWriteSafe
 	if argsOK {
 		r.argsObjName = argsStoreName
+		r.argsWriteSafe = argsWriteSafe
 	} else {
 		r.argsObjName = ""
+		r.argsWriteSafe = false
 	}
-	defer func() { r.argsObjName = prevArgs }()
+	defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
 
 	body, err := r.blockOf(fn)
 	if err != nil {
@@ -1178,18 +1180,20 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	// plan cannot back a read the whole expression hands back through the error.
 	var argsMat ast.Stmt
 	if n.Kind() == frontend.NodeFunctionExpression {
-		mat, storeName, argsOK, perr := r.argumentsPlan(n, sig)
+		mat, storeName, argsOK, writeSafe, perr := r.argumentsPlan(n, sig)
 		if perr != nil {
 			return nil, perr
 		}
 		argsMat = mat
-		prevArgs := r.argsObjName
+		prevArgs, prevArgsWrite := r.argsObjName, r.argsWriteSafe
 		if argsOK {
 			r.argsObjName = storeName
+			r.argsWriteSafe = writeSafe
 		} else {
 			r.argsObjName = ""
+			r.argsWriteSafe = false
 		}
-		defer func() { r.argsObjName = prevArgs }()
+		defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
 	}
 
 	// The dynamic-locals set rescopes to this nested body the way the named path
