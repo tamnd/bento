@@ -211,6 +211,16 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return nil, &NotYetLowerable{Reason: "Number." + prop + " as a value is a later slice"}
 	}
+	// A read of .length off a plain function value is a reflective property, not a
+	// field of a shape. bento models a function as a bare Go func with no struct, so
+	// the fixed-shape path below would take it for a provable miss and answer
+	// undefined, the wrong value for the declared arity the function really carries.
+	// It is a compile-time constant when the receiver is a named function declaration;
+	// a function value held in a variable or a parameter cannot be counted here and
+	// hands back rather than answer a wrong constant or fall to the missing path.
+	if e, ok, err := r.functionPropertyRead(obj, prop); ok || err != nil {
+		return e, err
+	}
 	// A plain read o.k on a fixed-shape object lowers to the Go struct field the
 	// shape's property interns to. The field name comes from the same exportedField
 	// mapping and the same internStruct registration the object literal and the
@@ -264,6 +274,48 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
+}
+
+// functionPropertyRead lowers a read of .length off a plain function value. A
+// function carries length as a reflective property, but bento models a function as a
+// bare Go func with no backing struct, so the fixed-shape path would take it for a
+// provable miss and answer undefined. length is a compile-time constant for a named
+// function declaration: the count of parameters before the first defaulted or rest
+// one, which is exactly the signature's MinArgs. It fires only when the receiver's
+// type is a bare function, one call signature and no construct signature or own
+// properties, so a callable object, whose length is a real struct field, keeps the
+// shape path. A function value that is not a named declaration, held in a variable or
+// a parameter, cannot be counted at compile time and hands back rather than answer a
+// wrong constant. It reports ok=false for any other property or a non-function
+// receiver, leaving the read to the general paths, where an unset expando property
+// still folds to undefined through the missing-property path.
+func (r *Renderer) functionPropertyRead(obj frontend.Node, prop string) (ast.Expr, bool, error) {
+	if prop != "length" {
+		return nil, false, nil
+	}
+	objType := r.prog.TypeAt(obj)
+	call, construct := r.prog.Signatures(objType)
+	if len(call) == 0 || len(construct) != 0 {
+		return nil, false, nil
+	}
+	if len(r.prog.Properties(objType)) != 0 {
+		return nil, false, nil
+	}
+	if obj.Kind() != frontend.NodeIdentifier {
+		return nil, false, &NotYetLowerable{Reason: "reflective ." + prop + " off a function value that is not a named declaration is a later slice"}
+	}
+	sym, ok := r.prog.SymbolAt(obj)
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return nil, false, &NotYetLowerable{Reason: "reflective ." + prop + " off a function value that is not a named declaration is a later slice"}
+	}
+	var sig frontend.Signature
+	for _, d := range r.prog.Declarations(sym) {
+		if s, ok := r.prog.SignatureAt(d); ok {
+			sig = s
+			break
+		}
+	}
+	return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(sig.MinArgs)}, true, nil
 }
 
 // missingPropertyRead reports whether n is a property read that propertyAccess

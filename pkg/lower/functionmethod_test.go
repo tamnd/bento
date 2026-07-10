@@ -114,3 +114,51 @@ func TestFunctionBoundValueHandsBack(t *testing.T) {
 		"console.log(g(3));\n"
 	renderProgramHandBack(t, src)
 }
+
+// A function's .length is its arity: the count of parameters before the first
+// defaulted or rest one, a compile-time constant. bento models a function as a bare Go
+// func with no struct, so without a reflective path the read would fold to undefined;
+// it lowers instead to the numeric constant of the signature's MinArgs.
+
+// TestFunctionLengthLowersToConstant proves add.length lowers to the numeric constant 2
+// rather than the missing-property fold that would answer undefined.
+func TestFunctionLengthLowersToConstant(t *testing.T) {
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"console.log(add.length);\n"
+	source := renderProgram(t, src)
+	if strings.Contains(source, "MissingProperty") {
+		t.Errorf(".length folded to the missing-property path instead of a constant:\n%s", source)
+	}
+	if !strings.Contains(source, "NumberToString(2)") {
+		t.Errorf(".length did not lower to the constant 2:\n%s", source)
+	}
+}
+
+// TestFunctionLengthRuns builds and runs .length reads so the lowered constants are
+// proven against the JavaScript arity, for a required-only function, a function with a
+// defaulted tail, and a function with a rest parameter, none of which count toward the
+// arity past the first optional one.
+func TestFunctionLengthRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"function greet(name: string, greeting = \"hi\"): string { return greeting + name; }\n" +
+		"function sum(first: number, ...rest: number[]): number { return first; }\n" +
+		"console.log(add.length);\n" +
+		"console.log(greet.length);\n" +
+		"console.log(sum.length);\n"
+	if got, want := runProgramGo(t, src), "2\n1\n1\n"; got != want {
+		t.Fatalf(".length printed %q, want %q", got, want)
+	}
+}
+
+// TestFunctionLengthOffVariableHandsBack proves .length off a function value held in a
+// variable, which has no named declaration to count at compile time, hands back rather
+// than answer a wrong constant or fold to undefined.
+func TestFunctionLengthOffVariableHandsBack(t *testing.T) {
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"const f = add;\n" +
+		"console.log(f.length);\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "reflective .length") {
+		t.Fatalf(".length off a variable hand-back reason = %q, want a reflective-length reason", reason)
+	}
+}
