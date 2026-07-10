@@ -394,43 +394,26 @@ func (r *Renderer) restFuncValueArg(argNode frontend.Node, pt frontend.Type) (as
 	return ident(name), true
 }
 
-// functionMethodCall lowers f.call(...) and f.apply(...) on a plain function value:
-// both invoke the function with the this argument the source passes and a list of
-// positional arguments, call spelling them inline and apply gathering them in an
-// array. bento's plain functions take no this, since a body that reads this hands
-// back when the function is lowered, so the this argument only sets a receiver the
-// function never reads and drops once its evaluation is known to be pure. The call
-// then lowers exactly as the direct call F(args) would, so an invocation through
-// .call or .apply and a bare call share the same argument bridging. bind is not this
-// path; it reports ok=false and falls to the non-string handback, a later slice. A
-// this argument that could have a side effect, an apply whose arguments are not a
-// plain array literal (a runtime array's length is not known here), or a generic or
-// omittable-arity callee whose direct call has its own reconstruction, hands back
-// rather than drop an observable evaluation or emit a call of the wrong arity.
+// functionMethodCall lowers f.call(...), f.apply(...), and f.bind(...) on a plain
+// function value. call and apply invoke the function with the this argument the source
+// passes and a list of positional arguments, call spelling them inline and apply
+// gathering them in an array; bind fixes this and any leading arguments and yields a
+// new function value. bento's plain functions take no this, since a body that reads
+// this hands back when the function is lowered, so the this argument only sets a
+// receiver the function never reads and drops once its evaluation is known to be pure.
+// call and apply then lower exactly as the direct call F(args) would, so an invocation
+// through them and a bare call share the same argument bridging. A method other than
+// these three reports ok=false and falls to the non-string handback, a later slice.
 func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
-	if (method != "call" && method != "apply") || recvNode.Kind() != frontend.NodeIdentifier {
+	if method == "bind" {
+		return r.functionBindCall(recvNode)
+	}
+	if method != "call" && method != "apply" {
 		return nil, false, nil
 	}
-	sym, ok := r.prog.SymbolAt(recvNode)
-	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
-		return nil, false, nil
-	}
-	name, ok := exportedField(sym.Name)
-	if !ok {
-		return nil, false, nil
-	}
-	var sig frontend.Signature
-	for _, d := range r.prog.Declarations(sym) {
-		if s, ok := r.prog.SignatureAt(d); ok {
-			sig = s
-			break
-		}
-	}
-	if len(sig.TypeParams) != 0 {
-		return nil, false, &NotYetLowerable{Reason: method + " on a generic function is a later slice"}
-	}
-	if r.funcOmittable(sym) {
-		return nil, false, &NotYetLowerable{Reason: method + " on a function with a defaulted or rest parameter is a later slice"}
+	name, sig, ok, err := r.functionMethodTarget(recvNode, method)
+	if !ok || err != nil {
+		return nil, false, err
 	}
 	if len(argNodes) > 0 && !r.droppableThisArg(argNodes[0]) {
 		return nil, false, &NotYetLowerable{Reason: method + " with a this argument that is not a plain value is a later slice"}
@@ -444,6 +427,62 @@ func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, arg
 		return nil, false, err
 	}
 	return e, true, nil
+}
+
+// functionMethodTarget resolves the receiver of f.call, f.apply, or f.bind to the
+// top-level function it names and that function's call signature, applying the guards
+// the three share. The receiver must be a plain named function: bento models no this,
+// so a method or a callable value routes elsewhere and reports ok=false, falling to
+// the non-string handback. A generic or omittable-arity callee, whose direct call
+// carries its own reconstruction, hands back rather than emit a call of the wrong
+// arity through these methods.
+func (r *Renderer) functionMethodTarget(recvNode frontend.Node, method string) (string, frontend.Signature, bool, error) {
+	if recvNode.Kind() != frontend.NodeIdentifier {
+		return "", frontend.Signature{}, false, nil
+	}
+	sym, ok := r.prog.SymbolAt(recvNode)
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return "", frontend.Signature{}, false, nil
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return "", frontend.Signature{}, false, nil
+	}
+	var sig frontend.Signature
+	for _, d := range r.prog.Declarations(sym) {
+		if s, ok := r.prog.SignatureAt(d); ok {
+			sig = s
+			break
+		}
+	}
+	if len(sig.TypeParams) != 0 {
+		return "", frontend.Signature{}, false, &NotYetLowerable{Reason: method + " on a generic function is a later slice"}
+	}
+	if r.funcOmittable(sym) {
+		return "", frontend.Signature{}, false, &NotYetLowerable{Reason: method + " on a function with a defaulted or rest parameter is a later slice"}
+	}
+	return name, sig, true, nil
+}
+
+// functionBindCall recognizes f.bind(...) on a plain function value and hands it back
+// with a precise reason. bind produces a new function with this and any leading
+// arguments fixed, but the checker types that new function as (...args: [tuple]) => R:
+// a rest parameter whose element type is the tuple of the remaining parameters. bento
+// renders a rest parameter through its element type (funcTypeOf), and a tuple element
+// type is not yet a lowerable Go type, so every use of the bound value, calling it or
+// binding it to a name, would render that rest-over-tuple function type. The bound
+// value is therefore unrenderable today no matter how bind itself lowers, so bind
+// stays a clean handback rather than emit a closure the rest of the unit cannot
+// consume. It routes here, ahead of the non-string receiver handback, only to name the
+// real blocker: the tuple-typed rest parameter the bound value's type carries. It
+// reports ok=false for a receiver that is not a plain function, leaving the general
+// path to handle a method or callable-value receiver.
+func (r *Renderer) functionBindCall(recvNode frontend.Node) (ast.Expr, bool, error) {
+	_, _, ok, err := r.functionMethodTarget(recvNode, "bind")
+	if !ok || err != nil {
+		return nil, false, err
+	}
+	return nil, false, &NotYetLowerable{Reason: "bind produces a rest-over-tuple function type whose bound value is a later slice"}
 }
 
 // functionInvokeArgs returns the positional argument nodes an invocation through call

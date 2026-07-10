@@ -84,3 +84,33 @@ func TestFunctionApplyRuns(t *testing.T) {
 		t.Fatalf("apply printed %q, want %q", got, want)
 	}
 }
+
+// Function.prototype.bind fixes this and any leading arguments and yields a new
+// function. The checker types that new function as (...args: [tuple]) => R, a rest
+// parameter whose element is the tuple of the remaining parameters, and bento does not
+// yet render a tuple-typed rest parameter, so the bound value is unrenderable wherever
+// it is used. bind is therefore a clean handback today, blocked on rendering a
+// rest-over-tuple function type.
+
+// TestFunctionBindHandsBack proves f.bind(thisArg, arg) on a plain function whose
+// result is discarded reaches the bind recognizer and hands back with the reason that
+// names the real blocker, the rest-over-tuple type of the bound value.
+func TestFunctionBindHandsBack(t *testing.T) {
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"add.bind(null, 2);\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "rest-over-tuple") {
+		t.Fatalf("bind hand-back reason = %q, want the rest-over-tuple reason", reason)
+	}
+}
+
+// TestFunctionBoundValueHandsBack proves that binding the result to a name and calling
+// it hands back too: rendering the bound value's rest-over-tuple function type is the
+// first thing that cannot lower, so the whole unit routes to the engine. This pins
+// that a consumed bound value is not silently mislowered while the rest-over-tuple
+// function type stays a later slice.
+func TestFunctionBoundValueHandsBack(t *testing.T) {
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"const g = add.bind(null, 2);\n" +
+		"console.log(g(3));\n"
+	renderProgramHandBack(t, src)
+}
