@@ -1,0 +1,2 @@
+feature = "class-static-accessor"
+handback = "the module already speaks CX, the name static get .x needs"
