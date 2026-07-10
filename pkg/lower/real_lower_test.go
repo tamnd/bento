@@ -90,6 +90,12 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2554 || d.Code == 2555 {
 			continue
 		}
+		// 2362 and 2363 (a string or boolean operand of an arithmetic operator) are
+		// admitted because the operand coerces through ToNumber and the operator
+		// still lowers, so mirror the front door here too.
+		if d.Code == 2362 || d.Code == 2363 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog

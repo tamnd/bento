@@ -217,3 +217,83 @@ func (r *Renderer) unaryOperandToNumber(n frontend.Node) (ast.Expr, error) {
 	}
 	return r.operandToNumber(n)
 }
+
+// stringBoolArith lowers an arithmetic operator over a statically typed string or
+// boolean operand, the form the checker rejects with 2362 or 2363 but the runtime
+// runs by coercing each side through ToNumber first. It fires only when the
+// operator is one that ToNumbers both operands (-, *, /, %, **, and the bitwise
+// operators, not + which concatenates when a string is present and not the
+// relational or equality operators, which take Abstract Relational Comparison and
+// a different checker report), and only when at least one operand is a static
+// string or boolean and both are number-coercible primitives. Each operand lowers
+// through unaryOperandToNumber to its float64, and the result takes the same
+// emit shape the two-number path uses for that operator: math.Mod for %, value.Pow
+// for **, the int32-coercing bitwise form for a bitwise operator, and a plain Go
+// operator for the rest. A pair of numbers is not this case and falls through to
+// the number paths; a dynamic or bigint operand is handled elsewhere.
+func (r *Renderer) stringBoolArith(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	if !isToNumberArithOp(opText) {
+		return nil, false, nil
+	}
+	if !r.isNumberCoercible(left) || !r.isNumberCoercible(right) {
+		return nil, false, nil
+	}
+	if !r.isStringOrBool(left) && !r.isStringOrBool(right) {
+		return nil, false, nil
+	}
+	l, err := r.unaryOperandToNumber(left)
+	if err != nil {
+		return nil, false, err
+	}
+	rr, err := r.unaryOperandToNumber(right)
+	if err != nil {
+		return nil, false, err
+	}
+	switch opText {
+	case "%":
+		r.requireImport("math")
+		return &ast.CallExpr{Fun: sel("math", "Mod"), Args: []ast.Expr{l, rr}}, true, nil
+	case "**":
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Pow"), Args: []ast.Expr{l, rr}}, true, nil
+	}
+	if goOp, shift, unsignedLeft, ok := bitwiseOp(opText); ok {
+		return r.bitwiseFromFloat(goOp, shift, unsignedLeft, l, rr), true, nil
+	}
+	goOp, ok := numericBinaryOp(opText)
+	if !ok {
+		return nil, false, nil
+	}
+	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, true, nil
+}
+
+// isToNumberArithOp reports whether an operator coerces both operands through
+// ToNumber, the arithmetic, remainder, exponent, and bitwise operators. It leaves
+// out + (string concatenation when either side is a string) and the relational and
+// equality operators (Abstract Relational and strict/loose equality, a different
+// coercion and a different checker report), so only the operators that JavaScript
+// evaluates as pure number arithmetic reach the string and boolean coercion path.
+func isToNumberArithOp(opText string) bool {
+	switch opText {
+	case "-", "*", "/", "%", "**", "<<", ">>", ">>>", "&", "|", "^":
+		return true
+	default:
+		return false
+	}
+}
+
+// isNumberCoercible reports whether the checker types n as a primitive that
+// ToNumber turns into a real number at compile-known cost: a number, a string, or
+// a boolean. A dynamic value, a bigint, null, undefined, or a non-primitive is not
+// one of these, so the arithmetic-operand coercion leaves it to its own path.
+func (r *Renderer) isNumberCoercible(n frontend.Node) bool {
+	return r.isNumber(n) || r.isString(n) || r.isBool(n)
+}
+
+// isStringOrBool reports whether the checker types n as a string or a boolean, the
+// two static primitives an arithmetic operator has to coerce through ToNumber
+// rather than use directly. It marks the operand that makes stringBoolArith fire
+// instead of the plain two-number path.
+func (r *Renderer) isStringOrBool(n frontend.Node) bool {
+	return r.isString(n) || r.isBool(n)
+}
