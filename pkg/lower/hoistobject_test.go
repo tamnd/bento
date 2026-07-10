@@ -63,14 +63,15 @@ console.log(total());
 	}
 }
 
-// TestHoistedShorthandObjectStillHandsBack proves the fix stays scoped to fixed
-// property names. A shorthand { x } reads the outer binding x, a real init-order
-// dependency, so it keeps the binding off the package-init path rather than
-// evaluating that read at an unspecified time.
-func TestHoistedShorthandObjectStillHandsBack(t *testing.T) {
+// TestHoistedShorthandObjectRuns proves a shorthand { x } binding a function reads
+// hoists by in-place assignment: its initializer reads the outer binding x, so it is
+// not safe at package-init time, but written at its source position in main it reads
+// x after x is set, and the function sees the settled value through the zero-valued
+// package var. The read is of an earlier binding, so the source order is preserved.
+func TestHoistedShorthandObjectRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = "var x = 5;\nvar wrap = { x };\nfunction get() { return wrap.x; }\nconsole.log(get());\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "hoistable to a package var") {
-		t.Errorf("shorthand object binding handback reason = %q, want it to name the package-var hoist", reason)
+	if got, want := runProgramGo(t, src), "5\n"; got != want {
+		t.Fatalf("hoisted shorthand object printed %q, want %q", got, want)
 	}
 }

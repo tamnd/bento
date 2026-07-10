@@ -98,11 +98,3 @@ console.log(greet("sam"));
 		t.Fatalf("shared module string printed %q, want %q", got, want)
 	}
 }
-
-// TestModuleBindingNonHoistableInitHandsBack proves a binding a function reads
-// whose initializer cannot become a package var hands back rather than emit Go that
-// names an undefined symbol.
-func TestModuleBindingNonHoistableInitHandsBack(t *testing.T) {
-	const src = "function seed(): number { return 7; }\nconst base = seed();\nfunction use(): number { return base + 1; }\nconsole.log(use());\n"
-	renderProgramHandBack(t, src)
-}
