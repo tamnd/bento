@@ -252,6 +252,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// child.
 		return r.castExpr(n, 1)
 
+	case frontend.NodeAwaitExpression:
+		// An await-free async body lowers today (Stage 6a): it runs to completion on
+		// the calling stack and settles its promise now. An await would suspend the
+		// body at a pending promise, the event-loop machinery a later slice owns, so a
+		// body that awaits hands back with an honest reason rather than mislowering the
+		// suspension away.
+		return nil, &NotYetLowerable{Reason: "await is a later slice"}
+
 	case frontend.NodeUnknown:
 		// typeof and a handful of other prefix operators the shim does not give a
 		// distinct kind surface as the catch-all node, told apart by the keyword their
