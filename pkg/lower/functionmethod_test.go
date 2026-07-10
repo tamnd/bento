@@ -206,3 +206,22 @@ func TestFunctionNameOffVariableHandsBack(t *testing.T) {
 		t.Fatalf(".name off a variable hand-back reason = %q, want a reflective-name reason", reason)
 	}
 }
+
+// call, apply, and bind read off a function value without an immediate call denote the
+// bound method value the callable-value shape carries. bento produces no such value
+// today, a bound function's own type is a rest-over-tuple that does not render, so the
+// read hands back rather than fold to undefined the way a missing struct field would.
+
+// TestFunctionMethodAsValueHandsBack proves reading .call, .apply, or .bind off a
+// function value as a value hands back with a callable-value-shape reason rather than
+// answer undefined, and that an immediate f.call(...) is unaffected since the call
+// lowering recognizes the method ahead of the member read.
+func TestFunctionMethodAsValueHandsBack(t *testing.T) {
+	for _, method := range []string{"call", "apply", "bind"} {
+		src := "function add(a: number, b: number): number { return a + b; }\n" +
+			"add." + method + ";\n"
+		if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "bound method value") {
+			t.Fatalf(".%s as a value hand-back reason = %q, want a bound-method-value reason", method, reason)
+		}
+	}
+}
