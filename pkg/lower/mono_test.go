@@ -159,6 +159,31 @@ func TestUncalledGenericMethodHandsBack(t *testing.T) {
 	}
 }
 
+// TestGenericBodyTypeParameterResolves proves a bare type parameter resolves to
+// the concrete type everywhere the specialization's body spells it, not only in the
+// parameter and return: a local annotated T becomes the concrete Go type and a T[]
+// built in the body becomes value.Array of that type, all under the one substitution
+// the specialization lowers under.
+func TestGenericBodyTypeParameterResolves(t *testing.T) {
+	const src = "function box<T>(x: T): T[] {\n" +
+		"  const first: T = x;\n" +
+		"  const pair: T[] = [first, x];\n" +
+		"  return pair;\n" +
+		"}\n" +
+		"console.log(box(5).length);\n" +
+		"console.log(box(\"hi\").length);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func Box_num(x float64) *value.Array[float64]") {
+		t.Errorf("the number body did not resolve T to float64 throughout:\n%s", source)
+	}
+	if !strings.Contains(source, "func Box_str(x value.BStr) *value.Array[value.BStr]") {
+		t.Errorf("the string body did not resolve T to value.BStr throughout:\n%s", source)
+	}
+	if !strings.Contains(source, "value.NewArray[float64](first, x)") {
+		t.Errorf("a T[] in the number body did not resolve to a float64 array:\n%s", source)
+	}
+}
+
 // TestUncalledGenericHandsBack proves a generic no call site instantiates has no
 // specialization to emit and hands back, since an unspecialized generic has no
 // single Go form. The whole program routes to the engine rather than emit an
