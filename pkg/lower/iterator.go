@@ -212,3 +212,54 @@ func (r *Renderer) forOfIterator(iterable, bindNode frontend.Node, name string, 
 	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}}
 	return &ast.BlockStmt{List: []ast.Stmt{getIter, loop}}, nil
 }
+
+// iterableToSliceExpr drains a user iterable into a Go slice of its element type,
+// the collection spread and destructuring need in expression position. It is the
+// same pull-until-done walk forOfIterator emits, wrapped in a func literal that
+// returns the collected slice so it stands where a value is expected: a spread
+// splices the slice, and destructuring indexes it. The iterator is obtained inside
+// the literal, so each spread of the same source gets its own fresh iterator, the
+// protocol's rule. The element type is the caller's, already checked to match the
+// iterable's, so the appended values need no conversion.
+func (r *Renderer) iterableToSliceExpr(src, elemType ast.Expr, shape iteratorShape) ast.Expr {
+	nextName, _ := exportedField("next")
+	sliceName := r.freshTemp()
+	itName := r.freshTemp()
+	resName := r.freshTemp()
+	decl := &ast.DeclStmt{Decl: &ast.GenDecl{
+		Tok:   token.VAR,
+		Specs: []ast.Spec{&ast.ValueSpec{Names: []*ast.Ident{ident(sliceName)}, Type: &ast.ArrayType{Elt: elemType}}},
+	}}
+	getIter := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(itName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident(symbolIteratorGoName)}}},
+	}
+	pull := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(resName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(itName), Sel: ident(nextName)}}},
+	}
+	brk := &ast.IfStmt{
+		Cond: &ast.SelectorExpr{X: ident(resName), Sel: ident(shape.doneName)},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.BranchStmt{Tok: token.BREAK}}},
+	}
+	grow := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(sliceName)},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{&ast.CallExpr{
+			Fun:  ident("append"),
+			Args: []ast.Expr{ident(sliceName), &ast.SelectorExpr{X: ident(resName), Sel: ident(shape.valueName)}},
+		}},
+	}
+	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: []ast.Stmt{pull, brk, grow}}}
+	ret := &ast.ReturnStmt{Results: []ast.Expr{ident(sliceName)}}
+	fn := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: &ast.ArrayType{Elt: elemType}}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{decl, getIter, loop, ret}},
+	}
+	return &ast.CallExpr{Fun: fn}
+}

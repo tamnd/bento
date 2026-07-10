@@ -126,6 +126,36 @@ func TestManualIteratorDriveRuns(t *testing.T) {
 	}
 }
 
+// TestSpreadUserIterableRuns proves a spread of a user iterable in an array
+// literal walks the iterator protocol: [head, ...iterable, tail] drains the
+// iterable between the fixed elements, so a Countdown to 3 splices 0, 1, 2 and the
+// literal is [99, 0, 1, 2, 88], length 5.
+func TestSpreadUserIterableRuns(t *testing.T) {
+	skipIfShort(t)
+	src := selfIterator + "const a = [99, ...new Countdown(3), 88];\nconsole.log(a.length);\nfor (const x of a) { console.log(x); }\n"
+	if got, want := runProgramGo(t, src), "5\n99\n0\n1\n2\n88\n"; got != want {
+		t.Fatalf("spread of a user iterable printed %q, want %q", got, want)
+	}
+}
+
+// TestSpreadUserIterableIntoRestRuns proves a spread of a user iterable into a
+// rest parameter walks the same protocol: sum(head, ...iterable, tail) collects the
+// drained values into the rest array, so sum(100, ...Countdown(3), 200) adds 100, 0,
+// 1, 2, 200 to 303.
+func TestSpreadUserIterableIntoRestRuns(t *testing.T) {
+	skipIfShort(t)
+	src := selfIterator + `function sum(...xs: number[]): number {
+  let s = 0;
+  for (const x of xs) { s = s + x; }
+  return s;
+}
+console.log(sum(100, ...new Countdown(3), 200));
+`
+	if got, want := runProgramGo(t, src), "303\n"; got != want {
+		t.Fatalf("spread of a user iterable into a rest parameter printed %q, want %q", got, want)
+	}
+}
+
 // TestForOfObjectLiteralIteratorHandsBack proves that an iterable whose
 // [Symbol.iterator]() returns an inline object literal with a next() method hands
 // back rather than mislower: an object literal that carries a method is a later
