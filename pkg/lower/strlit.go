@@ -90,9 +90,18 @@ func decodeJSString(inner string) ([]uint16, bool) {
 				i++ // a CRLF line continuation is a single break
 			}
 		default:
+			// A backslash before a line separator (U+2028) or paragraph separator
+			// (U+2029) is also a line continuation and produces nothing, the same as a
+			// backslash before a LF or CR. These are multi-byte in UTF-8, so they cannot
+			// ride the byte switch above and are recognized here. literals/string/
+			// line-continuation-double and -single assert exactly this.
+			r, size := utf8.DecodeRuneInString(inner[i:])
+			if r == '\u2028' || r == '\u2029' {
+				i += size
+				continue
+			}
 			// Any other escaped character stands for itself (\a is a, \' is '), so
 			// append the escaped code point verbatim.
-			r, size := utf8.DecodeRuneInString(inner[i:])
 			out = utf16.AppendRune(out, r)
 			i += size
 		}
