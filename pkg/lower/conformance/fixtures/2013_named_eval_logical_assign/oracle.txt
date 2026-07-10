@@ -1,0 +1,5 @@
+== stdout:
+value
+fn
+== exit:
+0

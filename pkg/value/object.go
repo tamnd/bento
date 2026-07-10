@@ -40,6 +40,19 @@ func NewFunc(fn callFn) Value {
 	return objectValue(&Object{kind: KindFunc, call: fn})
 }
 
+// WithName records name as a function value's own name property and returns the
+// value, the effect named evaluation has when an anonymous function is assigned to
+// an identifier: value = function() {} binds the function's name to "value". The
+// name rides the function's own "name" property, so a later read of f.name returns
+// it the way Function.prototype.name does. A non-function value is returned
+// untouched, since only a function carries a name.
+func WithName(f Value, name string) Value {
+	if f.kind == KindFunc {
+		f.Set(FromGoString("name"), StringValue(FromGoString(name)))
+	}
+	return f
+}
+
 // Arg returns the ith boxed argument, or undefined when the call passed fewer, the
 // value JavaScript binds to a parameter the caller omitted. A boxed callable reads
 // its arguments through this helper so its body never indexes past the slice a
