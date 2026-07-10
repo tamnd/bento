@@ -1,0 +1,2 @@
+feature = "class-non-plain-base"
+handback = "extends null is a later slice"

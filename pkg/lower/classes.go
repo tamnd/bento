@@ -496,27 +496,55 @@ func (r *Renderer) checkAccessorClashes(info *classInfo) error {
 }
 
 // baseClassOf resolves an extends clause to the registered base class. The
-// clause wraps one expression node whose single child must be a plain
-// identifier: a generic base (extends Base<T>) carries type-argument children
-// and an expression base (extends mixin()) is not an identifier at all, and
-// both need machinery this slice does not build. The identifier resolves the
-// way a class name reference does, through its symbol to the exact registered
-// declaration; the checker rejects a class used before its declaration, so a
-// resolvable base is always already registered when the derived class reads it.
+// clause wraps one expression node whose child is the base; a plain identifier
+// and a parenthesized one this slice resolves, and the other shapes each keep
+// their own named reason. A generic base (extends Base<T>) carries
+// type-argument children and needs monomorphization; extends null and a mixin
+// call (extends f()) each name a construct this slice does not build. The
+// identifier resolves the way a class name reference does, through its symbol to
+// the exact registered declaration; the checker rejects a class used before its
+// declaration, so a resolvable base is always already registered when the
+// derived class reads it.
 func (r *Renderer) baseClassOf(clause frontend.Node) (*classInfo, error) {
 	kids := r.prog.Children(clause)
 	if len(kids) != 1 {
 		return nil, &NotYetLowerable{Reason: "an extends clause that is not a single base class is a later slice"}
 	}
 	ekids := r.prog.Children(kids[0])
-	if len(ekids) != 1 || ekids[0].Kind() != frontend.NodeIdentifier {
+	// A generic base carries the type arguments as extra children after the name,
+	// so more than one child is the monomorphization case, the same reason the
+	// generic method path names.
+	if len(ekids) > 1 {
+		return nil, &NotYetLowerable{Reason: "a generic base class needs monomorphization, a later slice"}
+	}
+	if len(ekids) != 1 {
 		return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
 	}
-	base, ok := r.classNameRef(ekids[0])
-	if !ok {
-		return nil, &NotYetLowerable{Reason: "extending " + r.prog.Text(ekids[0]) + ", which is not a class this slice lowers, is a later slice"}
+	// A parenthesized base, extends (Base), is the name inside dressed in
+	// syntactic parens; unwrap them and resolve the name the same way a bare one
+	// resolves.
+	base := ekids[0]
+	for base.Kind() == frontend.NodeParenthesizedExpression {
+		inner := r.prog.Children(base)
+		if len(inner) != 1 {
+			return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
+		}
+		base = inner[0]
 	}
-	return base, nil
+	switch base.Kind() {
+	case frontend.NodeIdentifier:
+		info, ok := r.classNameRef(base)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "extending " + r.prog.Text(base) + ", which is not a class this slice lowers, is a later slice"}
+		}
+		return info, nil
+	case frontend.NodeNullKeyword:
+		return nil, &NotYetLowerable{Reason: "extends null is a later slice"}
+	case frontend.NodeCallExpression:
+		return nil, &NotYetLowerable{Reason: "a mixin base expression is a later slice"}
+	default:
+		return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
+	}
 }
 
 // classMember is one emitted member for the clash walk: its kind, its source
