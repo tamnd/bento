@@ -146,6 +146,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return r.unaryStringGlobal("Atob", callee, kids[1:])
 		}
 	}
+	// Function("a", "return a") called as a function builds a function from source
+	// text at run time, the same construction as new Function and a member of the
+	// eval family: the argument strings are parsed as a parameter list and a body. A
+	// program that parses source it was handed is phase 11 (eval) work, so bento hands
+	// it back with the reason that names where it belongs rather than the generic
+	// ambient-global reason below.
+	if r.prog.Text(kids[0]) == "Function" && r.isAmbientGlobal(kids[0]) {
+		return nil, &NotYetLowerable{Reason: "a Function built from a source string is eval, deferred to phase 11"}
+	}
 	// A bare call to any other ambient global (eval, and the globals whose lowering
 	// is a later slice) is not a user binding and has no generated Go function to
 	// stand behind it. The user-function path below would emit a call to the name's
@@ -392,6 +401,137 @@ func (r *Renderer) restFuncValueArg(argNode frontend.Node, pt frontend.Type) (as
 		return nil, false
 	}
 	return ident(name), true
+}
+
+// functionMethodCall lowers f.call(...), f.apply(...), and f.bind(...) on a plain
+// function value. call and apply invoke the function with the this argument the source
+// passes and a list of positional arguments, call spelling them inline and apply
+// gathering them in an array; bind fixes this and any leading arguments and yields a
+// new function value. bento's plain functions take no this, since a body that reads
+// this hands back when the function is lowered, so the this argument only sets a
+// receiver the function never reads and drops once its evaluation is known to be pure.
+// call and apply then lower exactly as the direct call F(args) would, so an invocation
+// through them and a bare call share the same argument bridging. A method other than
+// these three reports ok=false and falls to the non-string handback, a later slice.
+func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	if method == "bind" {
+		return r.functionBindCall(recvNode)
+	}
+	if method != "call" && method != "apply" {
+		return nil, false, nil
+	}
+	name, sig, ok, err := r.functionMethodTarget(recvNode, method)
+	if !ok || err != nil {
+		return nil, false, err
+	}
+	if len(argNodes) > 0 && !r.droppableThisArg(argNodes[0]) {
+		return nil, false, &NotYetLowerable{Reason: method + " with a this argument that is not a plain value is a later slice"}
+	}
+	callArgs, err := r.functionInvokeArgs(method, argNodes)
+	if err != nil {
+		return nil, false, err
+	}
+	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false)
+	if err != nil {
+		return nil, false, err
+	}
+	return e, true, nil
+}
+
+// functionMethodTarget resolves the receiver of f.call, f.apply, or f.bind to the
+// top-level function it names and that function's call signature, applying the guards
+// the three share. The receiver must be a plain named function: bento models no this,
+// so a method or a callable value routes elsewhere and reports ok=false, falling to
+// the non-string handback. A generic or omittable-arity callee, whose direct call
+// carries its own reconstruction, hands back rather than emit a call of the wrong
+// arity through these methods.
+func (r *Renderer) functionMethodTarget(recvNode frontend.Node, method string) (string, frontend.Signature, bool, error) {
+	if recvNode.Kind() != frontend.NodeIdentifier {
+		return "", frontend.Signature{}, false, nil
+	}
+	sym, ok := r.prog.SymbolAt(recvNode)
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return "", frontend.Signature{}, false, nil
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return "", frontend.Signature{}, false, nil
+	}
+	var sig frontend.Signature
+	for _, d := range r.prog.Declarations(sym) {
+		if s, ok := r.prog.SignatureAt(d); ok {
+			sig = s
+			break
+		}
+	}
+	if len(sig.TypeParams) != 0 {
+		return "", frontend.Signature{}, false, &NotYetLowerable{Reason: method + " on a generic function is a later slice"}
+	}
+	if r.funcOmittable(sym) {
+		return "", frontend.Signature{}, false, &NotYetLowerable{Reason: method + " on a function with a defaulted or rest parameter is a later slice"}
+	}
+	return name, sig, true, nil
+}
+
+// functionBindCall recognizes f.bind(...) on a plain function value and hands it back
+// with a precise reason. bind produces a new function with this and any leading
+// arguments fixed, but the checker types that new function as (...args: [tuple]) => R:
+// a rest parameter whose element type is the tuple of the remaining parameters. bento
+// renders a rest parameter through its element type (funcTypeOf), and a tuple element
+// type is not yet a lowerable Go type, so every use of the bound value, calling it or
+// binding it to a name, would render that rest-over-tuple function type. The bound
+// value is therefore unrenderable today no matter how bind itself lowers, so bind
+// stays a clean handback rather than emit a closure the rest of the unit cannot
+// consume. It routes here, ahead of the non-string receiver handback, only to name the
+// real blocker: the tuple-typed rest parameter the bound value's type carries. It
+// reports ok=false for a receiver that is not a plain function, leaving the general
+// path to handle a method or callable-value receiver.
+func (r *Renderer) functionBindCall(recvNode frontend.Node) (ast.Expr, bool, error) {
+	_, _, ok, err := r.functionMethodTarget(recvNode, "bind")
+	if !ok || err != nil {
+		return nil, false, err
+	}
+	return nil, false, &NotYetLowerable{Reason: "bind produces a rest-over-tuple function type whose bound value is a later slice"}
+}
+
+// functionInvokeArgs returns the positional argument nodes an invocation through call
+// or apply passes to the function, past the leading this argument. call spells the
+// arguments inline, so they are the arguments after this. apply gathers them in an
+// array, so they are the elements of that array; only a plain array literal is read
+// here, since a runtime array's length is not known at lowering, and a spread inside
+// the literal waits on the spread slice.
+func (r *Renderer) functionInvokeArgs(method string, argNodes []frontend.Node) ([]frontend.Node, error) {
+	if method == "call" {
+		if len(argNodes) == 0 {
+			return nil, nil
+		}
+		return argNodes[1:], nil
+	}
+	if len(argNodes) < 2 {
+		return nil, nil
+	}
+	arr := argNodes[1]
+	if arr.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, &NotYetLowerable{Reason: "apply whose arguments are not a plain array literal is a later slice"}
+	}
+	elems := r.prog.Children(arr)
+	for _, el := range elems {
+		if el.Kind() == frontend.NodeSpreadElement {
+			return nil, &NotYetLowerable{Reason: "apply over an array literal with a spread element is a later slice"}
+		}
+	}
+	return elems, nil
+}
+
+// droppableThisArg reports whether the this argument of a .call can be dropped
+// without changing what the program observes. bento's plain function ignores this,
+// so the argument only sets a receiver that is never read; dropping it is faithful
+// only when evaluating it has no side effect and cannot throw. A literal (including
+// null) and the undefined global evaluate to a constant with no reference to a
+// binding, so removing the argument changes nothing; any other form could be
+// observable and keeps the handback.
+func (r *Renderer) droppableThisArg(n frontend.Node) bool {
+	return r.isDroppableExtraArg(n) || r.isUndefinedLiteral(n)
 }
 
 // pureRestFunc reports whether a function symbol is omittable only through a rest
@@ -679,6 +819,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		if info, ok := r.classNameRef(recvNode); ok {
 			return r.staticMethodCall(info, method, argNodes)
 		}
+	}
+	// call on a plain function value invokes it with an explicit this and the
+	// remaining positional arguments. bento's plain functions take no this (a body
+	// that reads this hands back at its declaration), so f.call(thisArg, a, b) is the
+	// direct call F(a, b) with the this argument dropped once its evaluation is known
+	// to be pure. It routes before the receiver-value paths below, which would reject
+	// a function receiver as a non-string later slice.
+	if e, ok, err := r.functionMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
 	}
 	// A method on a class instance, this.m(...) inside a class body or p.m(...)
 	// on an instance, lowers to the Go method the class declared. It routes

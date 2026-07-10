@@ -211,6 +211,16 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return nil, &NotYetLowerable{Reason: "Number." + prop + " as a value is a later slice"}
 	}
+	// A read of a reflective member off a plain function value, .length, .name, or the
+	// .call, .apply, and .bind methods taken as a value, is not a field of a shape.
+	// bento models a function as a bare Go func with no struct, so the fixed-shape path
+	// below would take these for a provable miss and answer undefined, the wrong value
+	// for the members the function really carries. length and name lower to their
+	// compile-time constants for a named declaration; the rest hand back rather than
+	// answer a wrong constant or fold to undefined.
+	if e, ok, err := r.functionPropertyRead(obj, prop); ok || err != nil {
+		return e, err
+	}
 	// A plain read o.k on a fixed-shape object lowers to the Go struct field the
 	// shape's property interns to. The field name comes from the same exportedField
 	// mapping and the same internStruct registration the object literal and the
@@ -264,6 +274,65 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
+}
+
+// functionPropertyRead lowers a read of .length or .name off a plain function value,
+// and guards a read of .call, .apply, or .bind taken as a value rather than called. A
+// function carries all of these as reflective members, but bento models a function as
+// a bare Go func with no backing struct, so the fixed-shape path would take them for a
+// provable miss and answer undefined. It fires only when the receiver's type is a bare
+// function, one call signature and no construct signature or own properties, so a
+// callable object, whose members are real struct fields, keeps the shape path.
+//
+// length and name are compile-time constants for a named function declaration: length
+// is the count of parameters before the first defaulted or rest one, which is exactly
+// the signature's MinArgs, and name is the declared source name. A function value that
+// is not a named declaration, held in a variable or a parameter, cannot be named or
+// counted at compile time and hands back rather than answer a wrong constant.
+//
+// call, apply, and bind read as a value, not immediately invoked, denote a bound
+// method value the callable-value shape carries. bento produces no such value today,
+// a bound function's own type is a rest-over-tuple that does not render, so this hands
+// back rather than fold to undefined. An immediate f.call(...) never reaches here; the
+// call lowering recognizes the method ahead of the member read.
+//
+// It reports ok=false for any other property or a non-function receiver, leaving the
+// read to the general paths, where an unset expando property still folds to undefined
+// through the missing-property path.
+func (r *Renderer) functionPropertyRead(obj frontend.Node, prop string) (ast.Expr, bool, error) {
+	if prop != "length" && prop != "name" && prop != "call" && prop != "apply" && prop != "bind" {
+		return nil, false, nil
+	}
+	objType := r.prog.TypeAt(obj)
+	call, construct := r.prog.Signatures(objType)
+	if len(call) == 0 || len(construct) != 0 {
+		return nil, false, nil
+	}
+	if len(r.prog.Properties(objType)) != 0 {
+		return nil, false, nil
+	}
+	if prop == "call" || prop == "apply" || prop == "bind" {
+		return nil, false, &NotYetLowerable{Reason: "reading ." + prop + " off a function value as a bound method value is a later slice"}
+	}
+	if obj.Kind() != frontend.NodeIdentifier {
+		return nil, false, &NotYetLowerable{Reason: "reflective ." + prop + " off a function value that is not a named declaration is a later slice"}
+	}
+	sym, ok := r.prog.SymbolAt(obj)
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return nil, false, &NotYetLowerable{Reason: "reflective ." + prop + " off a function value that is not a named declaration is a later slice"}
+	}
+	if prop == "name" {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(sym.Name)}}}, true, nil
+	}
+	var sig frontend.Signature
+	for _, d := range r.prog.Declarations(sym) {
+		if s, ok := r.prog.SignatureAt(d); ok {
+			sig = s
+			break
+		}
+	}
+	return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(sig.MinArgs)}, true, nil
 }
 
 // missingPropertyRead reports whether n is a property read that propertyAccess
