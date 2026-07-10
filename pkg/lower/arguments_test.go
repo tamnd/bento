@@ -121,6 +121,46 @@ each(7, 8);
 	}
 }
 
+// TestArgumentsInNestedArrowCapturesStore proves a nested arrow that reads
+// arguments makes the enclosing function materialize the store and closes over it,
+// since an arrow has no arguments of its own.
+func TestArgumentsInNestedArrowCapturesStore(t *testing.T) {
+	const src = "function f(a: number, b: number): number {\n" +
+		"  const get = () => arguments.length;\n" +
+		"  return get();\n" +
+		"}\n" +
+		"f(1, 2);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.NewArray[value.Value](value.Number(a), value.Number(b))") {
+		t.Errorf("an arrow's arguments read did not materialize the enclosing store:\n%s", source)
+	}
+	if !strings.Contains(source, ".Len()") {
+		t.Errorf("the arrow did not read the captured store:\n%s", source)
+	}
+}
+
+// TestArgumentsInNestedArrowRuns builds and runs a function whose arrow reads the
+// enclosing arguments, both length and index, so the captured store is proven
+// against the JavaScript result.
+func TestArgumentsInNestedArrowRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function count(a: number, b: number, c: number): number {
+  const get = () => arguments.length;
+  return get();
+}
+function first(a: number, b: number): unknown {
+  const get = () => arguments[0];
+  return get();
+}
+console.log(count(1, 2, 3));
+console.log(first(9, 8));
+`
+	if got, want := runProgramGo(t, src), "3\n9\n"; got != want {
+		t.Fatalf("arguments in a nested arrow printed %q, want %q", got, want)
+	}
+}
+
 // TestArgumentsWithRestParameterHandsBack proves a body that reads arguments while
 // its signature carries a rest parameter hands back: the rest gathers a call-varying
 // tail, so the parameter count is not the call arity and the store cannot stand in.

@@ -84,15 +84,20 @@ func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.
 // and whether every such read is a shape this slice backs. It descends into the
 // receiver of a member or index access but never into its name, so obj.arguments
 // (a property named arguments) is not mistaken for the arguments object, and it
-// stops at a nested function, method, or arrow, each of which binds its own
-// arguments (an arrow's is the enclosing one, a later slice). A bare reference to
-// arguments that no backed shape consumed marks the body unsupported, so the plan
-// hands the whole function back.
+// stops at a nested function or method, each of which binds its own arguments. It
+// does not stop at an arrow, which has no arguments of its own and reads the
+// enclosing function's, so an arrow's read counts toward this body. A bare
+// reference to arguments that no backed shape consumed marks the body unsupported,
+// so the plan hands the whole function back.
 func (r *Renderer) scanArguments(n frontend.Node, reads, supported *bool) {
 	switch n.Kind() {
 	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression,
-		frontend.NodeArrowFunction, frontend.NodeMethodDeclaration,
-		frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor,
+		frontend.NodeSetAccessor, frontend.NodeConstructor:
+		// A nested function binds its own arguments, so its reads are not this body's.
+		// An arrow is not stopped: it has no arguments of its own and reads the
+		// enclosing function's, so its read counts here and its lowered closure captures
+		// the store this body materializes.
 		return
 	case frontend.NodeIdentifier:
 		if r.prog.Text(n) == "arguments" {
