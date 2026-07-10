@@ -221,6 +221,12 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	case r.isString(kids[1]):
 		elemsMethod = "CodePoints"
 	default:
+		// A user iterable, a class that defines [Symbol.iterator], is walked through
+		// the iterator protocol: obtain its iterator and pull it until done, rather
+		// than range a backing slice it does not have.
+		if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(kids[1])); ok {
+			return r.forOfIterator(kids[1], dkids[0], name, kids[2], shape)
+		}
 		return nil, &NotYetLowerable{Reason: "for...of over a non-array, non-string iterable is a later slice"}
 	}
 	if iter == nil {
@@ -1092,9 +1098,19 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	}
 	// The pattern is an array binding, so from here the statement is ours: an early
 	// return reports ok=true with an error, not a fall-through.
-	elemT, ok := r.prog.ElementType(r.prog.TypeAt(initNode))
+	initType := r.prog.TypeAt(initNode)
+	elemT, ok := r.prog.ElementType(initType)
+	// A source that is not an array or tuple but is a user iterable destructures
+	// through the iterator protocol: it is drained into a value.Array once, then each
+	// target reads off that array by index the same way an array source does, so the
+	// bounds-checked AtI read and the whole binding loop below are shared. The element
+	// type is the iterable's yield type.
+	iterShape, iterOK := iteratorShape{}, false
 	if !ok {
-		return nil, true, &NotYetLowerable{Reason: "array destructuring on a non-array or tuple source is a later slice"}
+		if iterShape, iterOK = r.symbolIteratorShape(initType); !iterOK {
+			return nil, true, &NotYetLowerable{Reason: "array destructuring on a non-array or tuple source is a later slice"}
+		}
+		elemT = iterShape.elem
 	}
 	elemGo, err := r.typeExpr(elemT)
 	if err != nil {
@@ -1128,9 +1144,25 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		}
 		names[i] = name
 	}
-	prefix, recv, err := r.destructureSource(initNode)
-	if err != nil {
-		return nil, true, err
+	var prefix []ast.Stmt
+	var recv func() (ast.Expr, error)
+	if iterOK {
+		// The iterable is drained into a value.Array bound once, so each index read
+		// selects off the held array and the iterator is walked a single time.
+		src, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, true, err
+		}
+		r.requireImport(valuePkg)
+		drained := &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{r.iterableToSliceExpr(src, elemGo, iterShape)}}
+		tmp := r.freshTemp()
+		prefix = []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{drained}}}
+		recv = func() (ast.Expr, error) { return ident(tmp), nil }
+	} else {
+		prefix, recv, err = r.destructureSource(initNode)
+		if err != nil {
+			return nil, true, err
+		}
 	}
 	stmts := prefix
 	for i, name := range names {

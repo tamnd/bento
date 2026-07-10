@@ -1084,6 +1084,13 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 		if !ok {
 			return classMethod{}, &NotYetLowerable{Reason: "private method name is not a Go identifier"}
 		}
+	} else if r.isSymbolIteratorName(kids[0]) {
+		// A [Symbol.iterator] member is the iterable protocol's entry point: it
+		// lowers to a Go method under the fixed name the for...of lowering calls to
+		// obtain the iterator, so its well-known computed name resolves where an
+		// ordinary [expr] name would hand back.
+		prop = symbolIteratorProp
+		goName = symbolIteratorGoName
 	} else {
 		prop, ok = r.memberName(kids[0])
 		if !ok {
@@ -2316,6 +2323,14 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	// parameter, which the call site cannot reconstruct, hands back here since a method
 	// has no callee-scope variadic fallback, so only a call-site-reconstructible default
 	// lowers.
+	// The class is in scope before the parameter and result types render, so a
+	// method that takes or returns the polymorphic this type (a fluent `return
+	// this`, the class-is-its-own-iterator [Symbol.iterator]) resolves it to the
+	// receiver's own Go type rather than reaching the type-parameter handback.
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = info, info.recv
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+
 	params, err := r.funcParamFields(m.node, sig)
 	if err != nil {
 		return nil, err
@@ -2328,9 +2343,6 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	prevRet := r.retType
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
-	prevClass, prevThis := r.curClass, r.thisName
-	r.curClass, r.thisName = info, info.recv
-	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 
 	body, err := r.blockOf(m.node)
 	if err != nil {
