@@ -699,12 +699,31 @@ func (r *Renderer) memberName(nameNode frontend.Node) (string, bool) {
 	return "", false
 }
 
+// isPrivateName reports whether a class member's name node is a JavaScript
+// private name (#x). The parser surfaces a private name as a childless unnamed
+// token whose text leads with #, distinct from the NodeIdentifier a public
+// member carries and from the expression-bearing unnamed node a computed name
+// wraps, so those two shapes are told apart by the child count and the leading
+// rune.
+func (r *Renderer) isPrivateName(n frontend.Node) bool {
+	return n.Kind() == frontend.NodeUnknown &&
+		len(r.prog.Children(n)) == 0 &&
+		strings.HasPrefix(strings.TrimSpace(r.prog.Text(n)), "#")
+}
+
 // memberNameReason is the handback a reader returns when memberName declines the
 // name node: a computed name that is not a constant string names itself, so the
 // leftover reason after this slice is honest about what remains; any other
 // shape (a numeric literal name, an unreadable node) keeps the family's
 // "without a plain identifier name" phrasing, with kind naming the member.
 func (r *Renderer) memberNameReason(nameNode frontend.Node, kind string) error {
+	if r.isPrivateName(nameNode) {
+		// A private name that reaches a reader is one this slice does not lower (a
+		// private static field, a private accessor); it names itself so the leftover
+		// reason is honest about what remains rather than the computed-name phrasing
+		// a #x would otherwise fall into.
+		return &NotYetLowerable{Reason: "a private " + kind + " is a later slice"}
+	}
 	if nameNode.Kind() == frontend.NodeUnknown {
 		return &NotYetLowerable{Reason: "a computed member name that is not a constant string is a later slice"}
 	}
@@ -733,13 +752,25 @@ func (r *Renderer) classFieldOf(m frontend.Node) (classField, error) {
 	if len(kids) == 0 {
 		return classField{}, &NotYetLowerable{Reason: "a class field without a plain identifier name is a later slice"}
 	}
-	prop, ok := r.memberName(kids[0])
-	if !ok {
-		return classField{}, r.memberNameReason(kids[0], "class field")
-	}
-	goName, ok := exportedField(prop)
-	if !ok {
-		return classField{}, &NotYetLowerable{Reason: "class field name is not a Go identifier"}
+	var prop, goName string
+	var ok bool
+	if r.isPrivateName(kids[0]) {
+		// A private field lowers to an unexported p_-prefixed struct field; the JS
+		// name (#x) stays the property so a this.#x read or write resolves to it.
+		prop = strings.TrimSpace(r.prog.Text(kids[0]))
+		goName, ok = privateGoName(prop)
+		if !ok {
+			return classField{}, &NotYetLowerable{Reason: "private field name is not a Go identifier"}
+		}
+	} else {
+		prop, ok = r.memberName(kids[0])
+		if !ok {
+			return classField{}, r.memberNameReason(kids[0], "class field")
+		}
+		goName, ok = exportedField(prop)
+		if !ok {
+			return classField{}, &NotYetLowerable{Reason: "class field name is not a Go identifier"}
+		}
 	}
 	var init frontend.Node
 	if last := kids[len(kids)-1]; len(kids) > 1 && last.Kind() != frontend.NodeUnknown {
@@ -861,6 +892,7 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	abstract := false
 	generator := false
 	async := false
+	private := ""
 	for len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown {
 		// A computed name [expr] surfaces as an unnamed node that wraps the
 		// expression, so it carries a child; a modifier (abstract, async, the
@@ -871,6 +903,13 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 			break
 		}
 		w := strings.TrimSpace(r.prog.Text(kids[0]))
+		// A private name (#m) surfaces as a childless token like a modifier but is
+		// the member's name, not a keyword: record it and stop stripping, leaving
+		// the token in place so the body scan below still sees the whole member.
+		if strings.HasPrefix(w, "#") {
+			private = w
+			break
+		}
 		switch w {
 		case "abstract":
 			abstract = true
@@ -899,13 +938,26 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a method without a plain identifier name is a later slice"}
 	}
-	prop, ok := r.memberName(kids[0])
-	if !ok {
-		return classMethod{}, r.memberNameReason(kids[0], "method")
-	}
-	goName, ok := exportedField(prop)
-	if !ok {
-		return classMethod{}, &NotYetLowerable{Reason: "method name is not a Go identifier"}
+	var prop, goName string
+	var ok bool
+	if private != "" {
+		// A private method lowers to an unexported p_-prefixed Go method; the JS
+		// name (#m) stays the property so a this.#m() call resolves to it and #m and
+		// m coexist as p_m and M.
+		prop = private
+		goName, ok = privateGoName(private)
+		if !ok {
+			return classMethod{}, &NotYetLowerable{Reason: "private method name is not a Go identifier"}
+		}
+	} else {
+		prop, ok = r.memberName(kids[0])
+		if !ok {
+			return classMethod{}, r.memberNameReason(kids[0], "method")
+		}
+		goName, ok = exportedField(prop)
+		if !ok {
+			return classMethod{}, &NotYetLowerable{Reason: "method name is not a Go identifier"}
+		}
 	}
 	// A body-less non-abstract declaration is an overload signature, whose
 	// call-site selection is a later slice; an abstract method is exactly the
@@ -1459,10 +1511,17 @@ func (r *Renderer) classStruct(info *classInfo) (ast.Decl, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A private field (#x) is invisible to JSON.stringify in JavaScript, so its
+		// Go field takes the json:"-" tag that omits it rather than the property
+		// name a public field carries.
+		tag := f.prop
+		if strings.HasPrefix(f.prop, "#") {
+			tag = "-"
+		}
 		fields.List = append(fields.List, &ast.Field{
 			Names: []*ast.Ident{ident(f.goName)},
 			Type:  goType,
-			Tag:   &ast.BasicLit{Kind: token.STRING, Value: "`json:\"" + f.prop + "\"`"},
+			Tag:   &ast.BasicLit{Kind: token.STRING, Value: "`json:\"" + tag + "\"`"},
 		})
 	}
 	return &ast.GenDecl{
