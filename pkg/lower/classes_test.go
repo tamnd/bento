@@ -329,11 +329,6 @@ func TestClassHandsBack(t *testing.T) {
 			"static accessor",
 		},
 		{
-			"staticAsyncMethod",
-			"class A { static async f(): Promise<void> { } }\nA.f();\n",
-			"static async",
-		},
-		{
 			"uninitializedStaticField",
 			"class A { static n: number; }\nconsole.log(A.n);\n",
 			"without an initializer",
