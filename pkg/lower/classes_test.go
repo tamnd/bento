@@ -329,11 +329,6 @@ func TestClassHandsBack(t *testing.T) {
 			"without an initializer",
 		},
 		{
-			"staticInitReadsName",
-			"const base: number = 5;\nclass A { static n: number = base; }\nconsole.log(A.n);\n",
-			"constant expression",
-		},
-		{
 			"thisInStaticMethod",
 			"class A { static f(): void { console.log(this); } }\nA.f();\n",
 			"outside a lowered class body",

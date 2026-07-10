@@ -137,10 +137,10 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		case frontend.NodeClassDeclaration:
 			// Already registered by collectClasses; the declarations render after
 			// every body lowers so a method body's interned shapes are collected. A
-			// class with a static initialization block also contributes a call to its
+			// class with static initialization steps also contributes a call to its
 			// init function here, at the declaration's position, which is when the
-			// block's ordered work runs.
-			if info, ok := r.classInfoForDecl(stmt); ok && len(info.staticBlocks) > 0 {
+			// ordered static work runs.
+			if info, ok := r.classInfoForDecl(stmt); ok && len(info.staticInit) > 0 {
 				mainItems = append(mainItems, mainItem{initClass: info})
 			}
 			continue
