@@ -394,6 +394,67 @@ func (r *Renderer) restFuncValueArg(argNode frontend.Node, pt frontend.Type) (as
 	return ident(name), true
 }
 
+// functionMethodCall lowers f.call(...) on a plain function value: it invokes the
+// function with the this argument the source passes and the remaining positional
+// arguments. bento's plain functions take no this, since a body that reads this
+// hands back when the function is lowered, so the this argument only sets a receiver
+// the function never reads and drops once its evaluation is known to be pure. The
+// call then lowers exactly as the direct call F(args) would, so a call through .call
+// and a bare call share the same argument bridging. apply and bind are not this
+// path; they report ok=false and fall to the non-string handback, a later slice. A
+// this argument that could have a side effect, or a generic or omittable-arity
+// callee whose direct call has its own reconstruction, hands back rather than drop an
+// observable evaluation or emit a short call.
+func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	if method != "call" || recvNode.Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	sym, ok := r.prog.SymbolAt(recvNode)
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return nil, false, nil
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return nil, false, nil
+	}
+	var sig frontend.Signature
+	for _, d := range r.prog.Declarations(sym) {
+		if s, ok := r.prog.SignatureAt(d); ok {
+			sig = s
+			break
+		}
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, false, &NotYetLowerable{Reason: "call on a generic function is a later slice"}
+	}
+	if r.funcOmittable(sym) {
+		return nil, false, &NotYetLowerable{Reason: "call on a function with a defaulted or rest parameter is a later slice"}
+	}
+	callArgs := argNodes
+	if len(argNodes) > 0 {
+		if !r.droppableThisArg(argNodes[0]) {
+			return nil, false, &NotYetLowerable{Reason: "call with a this argument that is not a plain value is a later slice"}
+		}
+		callArgs = argNodes[1:]
+	}
+	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false)
+	if err != nil {
+		return nil, false, err
+	}
+	return e, true, nil
+}
+
+// droppableThisArg reports whether the this argument of a .call can be dropped
+// without changing what the program observes. bento's plain function ignores this,
+// so the argument only sets a receiver that is never read; dropping it is faithful
+// only when evaluating it has no side effect and cannot throw. A literal (including
+// null) and the undefined global evaluate to a constant with no reference to a
+// binding, so removing the argument changes nothing; any other form could be
+// observable and keeps the handback.
+func (r *Renderer) droppableThisArg(n frontend.Node) bool {
+	return r.isDroppableExtraArg(n) || r.isUndefinedLiteral(n)
+}
+
 // pureRestFunc reports whether a function symbol is omittable only through a rest
 // parameter, with no defaulted or optional parameter. Such a function lowers to a
 // single fixed Go func shape, its fixed parameters followed by one trailing array
@@ -679,6 +740,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		if info, ok := r.classNameRef(recvNode); ok {
 			return r.staticMethodCall(info, method, argNodes)
 		}
+	}
+	// call on a plain function value invokes it with an explicit this and the
+	// remaining positional arguments. bento's plain functions take no this (a body
+	// that reads this hands back at its declaration), so f.call(thisArg, a, b) is the
+	// direct call F(a, b) with the this argument dropped once its evaluation is known
+	// to be pure. It routes before the receiver-value paths below, which would reject
+	// a function receiver as a non-string later slice.
+	if e, ok, err := r.functionMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
 	}
 	// A method on a class instance, this.m(...) inside a class body or p.m(...)
 	// on an instance, lowers to the Go method the class declared. It routes
