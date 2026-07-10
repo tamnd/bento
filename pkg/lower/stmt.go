@@ -221,6 +221,12 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	case r.isString(kids[1]):
 		elemsMethod = "CodePoints"
 	default:
+		// A user iterable, a class that defines [Symbol.iterator], is walked through
+		// the iterator protocol: obtain its iterator and pull it until done, rather
+		// than range a backing slice it does not have.
+		if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(kids[1])); ok {
+			return r.forOfIterator(kids[1], dkids[0], name, kids[2], shape)
+		}
 		return nil, &NotYetLowerable{Reason: "for...of over a non-array, non-string iterable is a later slice"}
 	}
 	if iter == nil {

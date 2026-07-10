@@ -525,6 +525,17 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		}
 	}
 
+	// The polymorphic this type, how the checker types a `return this` and the
+	// self-returning [Symbol.iterator]() of a class that is its own iterator, is a
+	// type parameter whose symbol is the enclosing class. Inside that class's body
+	// it renders as a pointer to the class's Go struct, the receiver's own type,
+	// rather than reaching the bare type-parameter handback below.
+	if t.Flags&frontend.TypeTypeParameter != 0 && r.curClass != nil {
+		if sym, ok := r.prog.TypeSymbol(t); ok && sym.Flags&frontend.SymbolClass != 0 && sym.Name == r.curClass.name {
+			return star(ident(r.curClass.goName)), nil
+		}
+	}
+
 	// A self-referential type recurses through typeExpr without end (a function type
 	// whose return renders another function of the same shape, an object with a
 	// property of its own type), so a bounded depth converts that into a handback
