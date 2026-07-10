@@ -736,7 +736,7 @@ func isGoReturn(s ast.Stmt) bool {
 // a catch return can fill; the plain form keeps its hand-back on a returning
 // catch, since its closure has nowhere to carry the value.
 func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast.Stmt, error) {
-	var binding string
+	var binding, bindingJS string
 	var catchBlock frontend.Node
 	for _, k := range r.prog.Children(catchClause) {
 		switch k.Kind() {
@@ -757,6 +757,7 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 				return nil, &NotYetLowerable{Reason: "catch binding is not a Go identifier"}
 			}
 			binding = name
+			bindingJS = strings.TrimSpace(r.prog.Text(vk[0]))
 		default:
 			return nil, &NotYetLowerable{Reason: "an unusual catch clause is a later slice"}
 		}
@@ -766,6 +767,17 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 	}
 	if !allowReturns && r.blockReturns(catchBlock) {
 		return nil, &NotYetLowerable{Reason: "a return that escapes a try, catch, or finally is a later slice"}
+	}
+	// The binding recovers as a *value.Error and the catch body reads it as that
+	// error for its whole extent. Reassigning it to another value (a = 4) would
+	// store into the *value.Error local, and shadowing it with a nested declaration
+	// (let a = 3) would still read the inner name through the error's methods, both
+	// of which emit Go that does not build. Model neither yet, so hand back when the
+	// binding is rebound or shadowed anywhere in the body. block-scope/shadowing/
+	// catch-parameter-shadowing-let-declaration and let-declaration-shadowing-catch-parameter
+	// hit these.
+	if bindingJS != "" && r.nameReboundOrShadowed(catchBlock, bindingJS) {
+		return nil, &NotYetLowerable{Reason: "a catch binding reassigned or shadowed inside its body is a later slice"}
 	}
 
 	// The binding is in scope only while the catch block is lowered, so a read of its
@@ -808,6 +820,48 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 		Body: &ast.BlockStmt{List: body},
 	}
 	return &ast.DeferStmt{Call: callClosure([]ast.Stmt{guard})}, nil
+}
+
+// nameReboundOrShadowed reports whether the name is assigned to or re-declared
+// anywhere in the subtree. The catch lowering uses it to decide a catch binding is
+// no longer the fixed *value.Error the body reads: an assignment target of the name
+// stores a new value into the error local, and a variable declaration of the name
+// shadows the binding with a fresh local the body then reads through the error's
+// methods. Either shape emits Go that does not build, so the caller hands back.
+func (r *Renderer) nameReboundOrShadowed(n frontend.Node, name string) bool {
+	switch n.Kind() {
+	case frontend.NodeBinaryExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 3 && isAssignOp(r.prog.Text(kids[1])) &&
+			kids[0].Kind() == frontend.NodeIdentifier &&
+			strings.TrimSpace(r.prog.Text(kids[0])) == name {
+			return true
+		}
+	case frontend.NodeVariableDeclaration:
+		kids := r.prog.Children(n)
+		if len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier &&
+			strings.TrimSpace(r.prog.Text(kids[0])) == name {
+			return true
+		}
+	}
+	for _, k := range r.prog.Children(n) {
+		if r.nameReboundOrShadowed(k, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAssignOp reports whether the operator text assigns to its left operand: the
+// plain "=" and every compound form. It excludes the comparison operators, which
+// also end in "=", so a read like a === b is not mistaken for a store.
+func isAssignOp(op string) bool {
+	switch op {
+	case "=", "+=", "-=", "*=", "/=", "%=", "**=",
+		"<<=", ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "??=":
+		return true
+	}
+	return false
 }
 
 // blockReturns reports whether a statement subtree contains a return that would

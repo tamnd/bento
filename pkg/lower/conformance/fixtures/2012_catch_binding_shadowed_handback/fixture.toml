@@ -1,0 +1,2 @@
+feature = "catch-binding-shadowed"
+handback = "a catch binding reassigned or shadowed inside its body is a later slice"
