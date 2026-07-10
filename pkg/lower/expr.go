@@ -1197,6 +1197,23 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return r.bitwiseExpr(goOp, shift, unsignedLeft, left, right)
 	}
 
+	// An arithmetic operator whose operand the checker rejects as a non-number,
+	// 2362 on the left or 2363 on the right, still runs: a statically typed string
+	// or boolean coerces through ToNumber before the numeric operation, exactly as
+	// a dynamic operand does through dynamicBinary above. When at least one operand
+	// is a static string or boolean and both are number-coercible primitives, each
+	// side lowers through unaryOperandToNumber (a string through value.StringToNumber,
+	// a boolean through value.BoolToNumber, a number straight through) and the
+	// numeric operator applies to the two float64 results. A dynamic operand took
+	// dynamicBinary above and a string + concatenated above, so neither reaches here;
+	// a bigint mixed with a number is not number-coercible and falls through to the
+	// hand-back below.
+	if expr, handled, err := r.stringBoolArith(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	goOp, err := r.binaryOp(opText, left, right)
 	if err != nil {
 		return nil, err
