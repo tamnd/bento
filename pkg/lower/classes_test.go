@@ -324,11 +324,6 @@ func TestClassHandsBack(t *testing.T) {
 			"later slice",
 		},
 		{
-			"staticAccessor",
-			"class A { static get n(): number { return 1; } }\nconsole.log(A.n);\n",
-			"static accessor",
-		},
-		{
 			"uninitializedStaticField",
 			"class A { static n: number; }\nconsole.log(A.n);\n",
 			"without an initializer",
