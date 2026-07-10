@@ -162,3 +162,47 @@ func TestFunctionLengthOffVariableHandsBack(t *testing.T) {
 		t.Fatalf(".length off a variable hand-back reason = %q, want a reflective-length reason", reason)
 	}
 }
+
+// A function's .name is its bound name, the source identifier a declaration binds. bento
+// models a function as a bare Go func with no struct, so without a reflective path the
+// read would fold to undefined; it lowers instead to the string constant of the name.
+
+// TestFunctionNameLowersToConstant proves add.name lowers to the string constant "add"
+// rather than the missing-property fold that would answer undefined.
+func TestFunctionNameLowersToConstant(t *testing.T) {
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"console.log(add.name);\n"
+	source := renderProgram(t, src)
+	if strings.Contains(source, "MissingProperty") {
+		t.Errorf(".name folded to the missing-property path instead of a constant:\n%s", source)
+	}
+	if !strings.Contains(source, `value.FromGoString("add")`) {
+		t.Errorf(`.name did not lower to the constant "add":\n%s`, source)
+	}
+}
+
+// TestFunctionNameRuns builds and runs .name reads so the lowered constants are proven
+// against the JavaScript bound name, for two distinct function declarations.
+func TestFunctionNameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"function greet(name: string): string { return name; }\n" +
+		"console.log(add.name);\n" +
+		"console.log(greet.name);\n"
+	if got, want := runProgramGo(t, src), "add\ngreet\n"; got != want {
+		t.Fatalf(".name printed %q, want %q", got, want)
+	}
+}
+
+// TestFunctionNameOffVariableHandsBack proves .name off a function value held in a
+// variable, which the checker infers to the variable's name, hands back rather than
+// answer a wrong constant or fold to undefined. Modeling the inferred name of a
+// function expression bound to a variable is a later slice.
+func TestFunctionNameOffVariableHandsBack(t *testing.T) {
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"const f = add;\n" +
+		"console.log(f.name);\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "reflective .name") {
+		t.Fatalf(".name off a variable hand-back reason = %q, want a reflective-name reason", reason)
+	}
+}

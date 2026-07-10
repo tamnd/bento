@@ -1,0 +1,5 @@
+== stdout:
+add
+greet
+== exit:
+0

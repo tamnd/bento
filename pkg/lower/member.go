@@ -211,13 +211,13 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return nil, &NotYetLowerable{Reason: "Number." + prop + " as a value is a later slice"}
 	}
-	// A read of .length off a plain function value is a reflective property, not a
-	// field of a shape. bento models a function as a bare Go func with no struct, so
-	// the fixed-shape path below would take it for a provable miss and answer
-	// undefined, the wrong value for the declared arity the function really carries.
-	// It is a compile-time constant when the receiver is a named function declaration;
-	// a function value held in a variable or a parameter cannot be counted here and
-	// hands back rather than answer a wrong constant or fall to the missing path.
+	// A read of .length or .name off a plain function value is a reflective property,
+	// not a field of a shape. bento models a function as a bare Go func with no
+	// struct, so the fixed-shape path below would take these for a provable miss and
+	// answer undefined, the wrong value for the arity and bound name the function
+	// really carries. Both are compile-time constants when the receiver is a named
+	// function declaration; a function value held in a variable or a parameter cannot
+	// be named or counted here and hands back rather than answer a wrong constant.
 	if e, ok, err := r.functionPropertyRead(obj, prop); ok || err != nil {
 		return e, err
 	}
@@ -276,21 +276,22 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}
 }
 
-// functionPropertyRead lowers a read of .length off a plain function value. A
-// function carries length as a reflective property, but bento models a function as a
-// bare Go func with no backing struct, so the fixed-shape path would take it for a
-// provable miss and answer undefined. length is a compile-time constant for a named
-// function declaration: the count of parameters before the first defaulted or rest
-// one, which is exactly the signature's MinArgs. It fires only when the receiver's
-// type is a bare function, one call signature and no construct signature or own
-// properties, so a callable object, whose length is a real struct field, keeps the
-// shape path. A function value that is not a named declaration, held in a variable or
-// a parameter, cannot be counted at compile time and hands back rather than answer a
+// functionPropertyRead lowers a read of .length or .name off a plain function value.
+// A function carries these two as reflective properties, but bento models a function
+// as a bare Go func with no backing struct, so the fixed-shape path would take them
+// for a provable miss and answer undefined. Both are compile-time constants for a
+// named function declaration: length is the count of parameters before the first
+// defaulted or rest one, which is exactly the signature's MinArgs, and name is the
+// declared source name. It fires only when the receiver's type is a bare function,
+// one call signature and no construct signature or own properties, so a callable
+// object, whose length and name are real struct fields, keeps the shape path. A
+// function value that is not a named declaration, held in a variable or a parameter,
+// cannot be named or counted at compile time and hands back rather than answer a
 // wrong constant. It reports ok=false for any other property or a non-function
 // receiver, leaving the read to the general paths, where an unset expando property
 // still folds to undefined through the missing-property path.
 func (r *Renderer) functionPropertyRead(obj frontend.Node, prop string) (ast.Expr, bool, error) {
-	if prop != "length" {
+	if prop != "length" && prop != "name" {
 		return nil, false, nil
 	}
 	objType := r.prog.TypeAt(obj)
@@ -307,6 +308,10 @@ func (r *Renderer) functionPropertyRead(obj frontend.Node, prop string) (ast.Exp
 	sym, ok := r.prog.SymbolAt(obj)
 	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
 		return nil, false, &NotYetLowerable{Reason: "reflective ." + prop + " off a function value that is not a named declaration is a later slice"}
+	}
+	if prop == "name" {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(sym.Name)}}}, true, nil
 	}
 	var sig frontend.Signature
 	for _, d := range r.prog.Declarations(sym) {
