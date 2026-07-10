@@ -129,6 +129,25 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	r.dynLocals = r.dynLocalsOf(sig.Params, bodyStmts)
 	defer func() { r.dynLocals = prevDyn }()
 
+	// A body that reads arguments materializes a backing store from the parameters,
+	// set before the body is lowered so a read of arguments.length or arguments[i]
+	// inside it routes to the store. A body with a rest, an optional parameter, or an
+	// unsupported read hands back from here. The argsObjName is scoped to this body
+	// like retType, so a nested function does not inherit the outer store. Methods
+	// and constructors keep the stricter paramFields and are not reached here, so
+	// arguments in one is still a later slice.
+	argsMat, argsStoreName, argsOK, err := r.argumentsPlan(fn, sig)
+	if err != nil {
+		return nil, err
+	}
+	prevArgs := r.argsObjName
+	if argsOK {
+		r.argsObjName = argsStoreName
+	} else {
+		r.argsObjName = ""
+	}
+	defer func() { r.argsObjName = prevArgs }()
+
 	body, err := r.blockOf(fn)
 	if err != nil {
 		return nil, err
@@ -152,6 +171,12 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	}
 	if len(binds) != 0 {
 		body.List = append(binds, body.List...)
+	}
+	// The arguments store is materialized above everything else so a read anywhere in
+	// the body, including inside the destructure bindings or the variadic prologue,
+	// sees the filled store.
+	if argsMat != nil {
+		body.List = append([]ast.Stmt{argsMat}, body.List...)
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
 

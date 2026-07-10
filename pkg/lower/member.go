@@ -33,6 +33,15 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
+	// arguments.length reads the count of arguments the call supplied. The current
+	// body materialized a *value.Array[value.Value] store from its parameters, and
+	// the parameter count is the call arity for the all-required signatures that reach
+	// materialization, so the store's Len is that count. It routes before the static
+	// paths, which would read a field off the IArguments shape the checker gives
+	// arguments.
+	if r.argsObjName != "" && prop == "length" && r.isArgumentsIdent(obj) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.argsObjName), Sel: ident("Len")}}, nil
+	}
 	// A read of a caught error's .message or .name lowers to the matching method on
 	// the *value.Error the catch bound. It routes before the dynamic path because
 	// the checker types a catch binding unknown, which would otherwise send the read

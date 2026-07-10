@@ -109,6 +109,14 @@ type Renderer struct {
 	// body, and it is saved and restored around each body so a nested function does
 	// not inherit the outer return type.
 	retType frontend.Type
+	// argsObjName is the Go name of the *value.Array[value.Value] local the current
+	// body materialized to back its arguments object, or "" when the body does not
+	// read arguments. It is set around a body whose arguments use is a supported
+	// shape (see arguments.go), and reads of arguments in that body route through it:
+	// arguments.length to its Len, arguments[i] to its At. Like retType it is saved
+	// and restored around each body so a nested function does not inherit the outer
+	// object.
+	argsObjName string
 	// int32Locals is the set of local names in the body currently being lowered that
 	// have been proven to hold only 32-bit integers and are therefore given a Go
 	// int32 type rather than a float64. It is computed once per body by int32LocalsOf
