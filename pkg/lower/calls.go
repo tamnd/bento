@@ -39,7 +39,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.finishCall(n, &ast.SelectorExpr{X: recv, Sel: ident("Call")}, kids[1:], nil)
+		return r.finishCall(n, &ast.SelectorExpr{X: recv, Sel: ident("Call")}, kids[1:], nil, false)
 	}
 	// A member callee (s.charCodeAt(...)) is a method call, not a plain function
 	// call; the string methods are the only ones covered so far. A call on a
@@ -75,7 +75,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.finishCall(n, callee, kids[1:], nil)
+		return r.finishCall(n, callee, kids[1:], nil, false)
 	}
 	// A call to a name bound by a node: import is a call to a host builtin, not a
 	// user function, so it routes to the value helper the builtin maps to before the
@@ -166,6 +166,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// lowering below; only the callee spelling differs.
 	var callee ast.Expr
 	var defaults []frontend.Node
+	var variadicTail bool
 	if goName, ok := r.funcExprSelf[sym]; ok {
 		// The callee is a named function expression calling itself. Its two-step
 		// lowering bound the closure to a Go local, so the recursive call is a plain
@@ -178,8 +179,17 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		callee = ident(name)
 		// A direct call to a top-level function may omit a defaulted trailing
-		// argument, so its parameter defaults ride into finishCall to fill the slot.
-		defaults = r.calleeDefaults(sym)
+		// argument. A callee that fills its optional tail in its own body (a default
+		// that reads an earlier parameter) takes the arguments the call supplies into a
+		// Go variadic and defaults the rest itself, so no fill rides in; every other
+		// defaulting callee fills the omitted slot at the call site from its defaults.
+		if variadic, err := r.calleeFillsInBody(sym); err != nil {
+			return nil, err
+		} else if variadic {
+			variadicTail = true
+		} else {
+			defaults = r.calleeDefaults(sym)
+		}
 	} else if r.isDynamic(kids[0]) || r.localStorageDynamic(kids[0]) {
 		// A binding of dynamic type used as a callee (a parameter typed any that holds
 		// a function) is a boxed function value, so it dispatches through the runtime
@@ -199,7 +209,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		callee = lowered
 	}
-	return r.finishCall(n, callee, kids[1:], defaults)
+	return r.finishCall(n, callee, kids[1:], defaults, variadicTail)
 }
 
 // finishCall lowers the argument list of call n against its signature and builds
@@ -209,14 +219,36 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 // positionally, each bridged against its declared parameter, so a derived instance
 // passed for a base parameter upcasts to the embedded base the same way an
 // assignment would.
-func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node) (ast.Expr, error) {
+func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node, variadicTail bool) (ast.Expr, error) {
 	var params []frontend.Param
 	var rest *frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
 		params = sig.Params
 		rest = sig.RestParam
 	}
-	return r.buildCall(callee, argNodes, params, rest, defaults)
+	return r.buildCall(callee, argNodes, params, rest, defaults, variadicTail)
+}
+
+// calleeFillsInBody reports whether the top-level function a symbol names fills its
+// optional tail in its own body through a Go variadic, the shape a default that
+// reads an earlier parameter takes. A call to such a function passes only the
+// arguments it supplies and lets the callee default the rest, so no call-site fill
+// rides in. A shape that reads an earlier parameter but does not fit the variadic
+// returns false here; the function itself hands back when it is lowered, so the
+// whole unit routes to the engine and the mismatched call is never emitted.
+func (r *Renderer) calleeFillsInBody(sym frontend.Symbol) (bool, error) {
+	for _, d := range r.prog.Declarations(sym) {
+		sig, ok := r.prog.SignatureAt(d)
+		if !ok {
+			continue
+		}
+		plan, err := r.variadicDefaultPlan(d, sig)
+		if err != nil {
+			return false, nil
+		}
+		return plan != nil, nil
+	}
+	return false, nil
 }
 
 // buildCall lowers the argument list against a known parameter list and builds
@@ -225,7 +257,7 @@ func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []front
 // comes from the receiver's property type (an assert.sameValue(...) on a callable
 // object) shares the exact same argument bridging without a call node to look the
 // signature up from.
-func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node) (ast.Expr, error) {
+func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool) (ast.Expr, error) {
 	args := make([]ast.Expr, 0, len(params)+1)
 	// The arguments that land on a fixed parameter lower and bridge in position; any
 	// beyond the fixed count belong to a rest parameter and are gathered below.
@@ -235,6 +267,15 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 	}
 	for i := 0; i < nFixed; i++ {
 		a := argNodes[i]
+		// An explicit undefined argument in a defaulted slot counts as a missing
+		// argument: the language fills the parameter's default for undefined exactly as
+		// it does for an omission. The default stands in for the undefined so the Go
+		// call carries the default's value, not an undefined the static slot cannot
+		// hold. A variadicTail callee fills its own tail by arity in its body, so an
+		// undefined there rides the variadic untouched and is left alone.
+		if !variadicTail && i < len(defaults) && defaults[i] != nil && r.isUndefinedLiteral(a) {
+			a = defaults[i]
+		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -245,33 +286,39 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		}
 		args = append(args, lowered)
 	}
-	// A call that omits a trailing fixed argument fills the slot with the parameter's
-	// default, so the Go call passes every argument the lowered function expects. A
-	// defaultless omission on a dynamic parameter fills with value.Undefined, the
-	// absent value the language binds there; a defaultless static omission hands
-	// back rather than emit a short call.
-	for i := len(argNodes); i < len(params); i++ {
-		var def frontend.Node
-		if i < len(defaults) {
-			def = defaults[i]
-		}
-		if def == nil {
-			if params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
-				r.requireImport(valuePkg)
-				args = append(args, sel("value", "Undefined"))
-				continue
+	// A callee that fills its optional tail in its own body takes the arguments the
+	// call supplies into a Go variadic and defaults the rest itself, so an omitted
+	// trailing argument needs no call-site fill: the provided ones already landed in
+	// the loop above and the variadic absorbs the gap. Every other defaulting callee
+	// fills an omitted trailing argument here with the parameter's default, so the Go
+	// call passes every argument the lowered function expects. A defaultless omission
+	// on a dynamic parameter fills with value.Undefined, the absent value the language
+	// binds there; a defaultless static omission hands back rather than emit a short
+	// call.
+	if !variadicTail {
+		for i := len(argNodes); i < len(params); i++ {
+			var def frontend.Node
+			if i < len(defaults) {
+				def = defaults[i]
 			}
-			return nil, &NotYetLowerable{Reason: "a call that omits an argument the callee does not default is a later slice"}
+			if def == nil {
+				if params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+					r.requireImport(valuePkg)
+					args = append(args, sel("value", "Undefined"))
+					continue
+				}
+				return nil, &NotYetLowerable{Reason: "a call that omits an argument the callee does not default is a later slice"}
+			}
+			lowered, err := r.lowerExpr(def)
+			if err != nil {
+				return nil, err
+			}
+			lowered, err = r.bridgeArg(lowered, def, params[i].Type)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
 		}
-		lowered, err := r.lowerExpr(def)
-		if err != nil {
-			return nil, err
-		}
-		lowered, err = r.bridgeArg(lowered, def, params[i].Type)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, lowered)
 	}
 	if rest != nil {
 		restArg, err := r.gatherRest(*rest, argNodes[nFixed:])
@@ -429,7 +476,7 @@ func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNo
 		return nil, false, err
 	}
 	callee := &ast.SelectorExpr{X: recv, Sel: ident(field)}
-	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil)
+	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil, false)
 	if err != nil {
 		return nil, false, err
 	}
