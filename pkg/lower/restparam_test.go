@@ -106,3 +106,62 @@ func TestRestFuncUsedAsValueHandsBack(t *testing.T) {
 	const src = "function sum(...ns: number[]): number { return ns.length; }\nconst g = sum;\ng(1, 2);\n"
 	renderProgramHandBack(t, src)
 }
+
+// A rest-parameter function type lowers to a plain Go func value whose trailing
+// argument is the *value.Array[T] a rest parameter gathers, not a Go variadic, so a
+// callback typed (...a: T[]) => R reads as one array field and the call site packs
+// its trailing arguments into the array. A pure rest-parameter function (a rest, no
+// defaults) fits such a slot directly, since its own Go form is that same shape.
+
+// TestRestFuncTypeParameterLowers proves a parameter typed as a rest-parameter
+// function lowers to a Go func with one trailing array field, a pure rest-parameter
+// function passes into it by name, and a call through the value packs its arguments.
+func TestRestFuncTypeParameterLowers(t *testing.T) {
+	const src = "function total(...xs: number[]): number {\n" +
+		"  let s = 0;\n" +
+		"  for (const x of xs) { s = s + x; }\n" +
+		"  return s;\n" +
+		"}\n" +
+		"function run(f: (...a: number[]) => number): number { return f(1, 2, 3); }\n" +
+		"console.log(run(total));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func Run(f func(*value.Array[float64]) float64) float64") {
+		t.Errorf("the rest-parameter function type did not lower to a trailing array field:\n%s", source)
+	}
+	if !strings.Contains(source, "return f(value.NewArray[float64](1, 2, 3))") {
+		t.Errorf("the call through the func value did not pack its arguments into the array:\n%s", source)
+	}
+	if !strings.Contains(source, "Run(Total)") {
+		t.Errorf("the pure rest-parameter function was not passed by name:\n%s", source)
+	}
+}
+
+// TestRestFuncTypeCallbackRuns builds and runs a rest-parameter callback so the
+// lowered Go is proven against the JavaScript result.
+func TestRestFuncTypeCallbackRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function total(...xs: number[]): number {\n" +
+		"  let s = 0;\n" +
+		"  for (const x of xs) { s = s + x; }\n" +
+		"  return s;\n" +
+		"}\n" +
+		"function run(f: (...a: number[]) => number): number { return f(1, 2, 3); }\n" +
+		"console.log(run(total));\n"
+	if got, want := runProgramGo(t, src), "6\n"; got != want {
+		t.Fatalf("rest-parameter callback printed %q, want %q", got, want)
+	}
+}
+
+// TestRestFuncToNonRestSlotHandsBack proves a pure rest-parameter function passed to
+// a fixed-arity func-typed slot hands back rather than emit Go that does not compile.
+// TypeScript accepts the assignment, but the function's Go form takes one array field
+// where the fixed-arity slot takes two floats, so only a rest-typed slot fits it and
+// this one keeps the value path's handback.
+func TestRestFuncToNonRestSlotHandsBack(t *testing.T) {
+	const src = "function total(...xs: number[]): number { return xs.length; }\n" +
+		"function run(f: (a: number, b: number) => number): number { return f(1, 2); }\n" +
+		"run(total);\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "defaulting wrapper") {
+		t.Fatalf("rest-to-fixed hand-back reason = %q, want the value-path wrapper reason", reason)
+	}
+}

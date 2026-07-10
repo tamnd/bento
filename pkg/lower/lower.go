@@ -746,12 +746,14 @@ func (r *Renderer) renderFuncType(t frontend.Type) (ast.Expr, bool, error) {
 // optional parameter lowers to its plain type, since undefined lives inside the
 // value box natively and the call site fills an omitted argument with
 // value.Undefined, matching how paramFields lowers the function body parameter;
-// a static optional has no such room and hands back, as do a generic or a
-// rest-parameter signature. It is shared by renderFuncType's plain function
+// a static optional has no such room and hands back, as does a generic
+// signature. A rest parameter lowers to a trailing *value.Array[T] field, the
+// same array header a rest parameter of a function body takes, so it is a plain
+// (non-variadic) Go func value. It is shared by renderFuncType's plain function
 // value and the Call field of a callable-object struct.
 func (r *Renderer) funcTypeOf(sig frontend.Signature) (*ast.FuncType, error) {
-	if len(sig.TypeParams) != 0 || sig.RestParam != nil {
-		return nil, &NotYetLowerable{Reason: "generic or rest-parameter function type is a later slice"}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic function type is a later slice"}
 	}
 	var params []*ast.Field
 	for _, p := range sig.Params {
@@ -763,6 +765,19 @@ func (r *Renderer) funcTypeOf(sig frontend.Signature) (*ast.FuncType, error) {
 			return nil, err
 		}
 		params = append(params, &ast.Field{Type: pt})
+	}
+	// A rest parameter gathers the trailing arguments into the same *value.Array[T] a
+	// rest parameter of a function body takes (restParamField), so a callback typed
+	// with `...args: T[]` reads as one array field here and the call site packs the
+	// trailing arguments into an array, exactly as a call of a rest-parameter function
+	// does. The Go func value is not variadic: bento models rest through the array
+	// header, not Go's `...`, so a func value and the function body agree on the shape.
+	if sig.RestParam != nil {
+		rt, err := r.typeExpr(sig.RestParam.Type)
+		if err != nil {
+			return nil, err
+		}
+		params = append(params, &ast.Field{Type: rt})
 	}
 	ft := &ast.FuncType{Params: &ast.FieldList{List: params}}
 	if sig.Return.Flags != 0 && sig.Return.Flags&(frontend.TypeVoid|frontend.TypeNever) == 0 {
