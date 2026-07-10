@@ -108,6 +108,15 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			if f, ok := info.staticByName(prop); ok {
 				return ident(f.goName), nil
 			}
+			// A read C.x through a static get accessor lowers to the call CX(), the
+			// package function the accessor became, the static twin of an instance
+			// getter read routing to c.X().
+			if g, ok := info.staticGetterByName(prop); ok {
+				return &ast.CallExpr{Fun: ident(g.goName)}, nil
+			}
+			if _, isSetter := info.staticSetterByName(prop); isSetter {
+				return nil, &NotYetLowerable{Reason: "reading the write-only static accessor ." + prop + " of class " + info.name + " is a later slice"}
+			}
 			if _, isMethod := info.staticMethodByName(prop); isMethod {
 				return nil, &NotYetLowerable{Reason: "a static method of class " + info.name + " read as a value is a later slice"}
 			}

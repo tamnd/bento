@@ -56,6 +56,12 @@ type classInfo struct {
 	// idiom, and the property read and write sites route to the calls.
 	getters []classMethod
 	setters []classSetter
+	// staticGetters and staticSetters are the static accessors; a static getter
+	// emits as a package function named goName (CX) and a static setter as its
+	// Set-prefixed sibling (CSetX), and a read or write through the class name
+	// routes to the call, the static twin of the instance accessor path.
+	staticGetters []classMethod
+	staticSetters []classSetter
 	// base is the registered class this one extends, nil for a root class. The
 	// base embeds as the derived struct's first field, so Go promotion serves
 	// the inherited fields and methods; registration rejects a derived member
@@ -162,6 +168,24 @@ func (c *classInfo) getterByName(prop string) (classMethod, bool) {
 
 func (c *classInfo) setterByName(prop string) (classSetter, bool) {
 	for _, s := range c.setters {
+		if s.prop == prop {
+			return s, true
+		}
+	}
+	return classSetter{}, false
+}
+
+func (c *classInfo) staticGetterByName(prop string) (classMethod, bool) {
+	for _, g := range c.staticGetters {
+		if g.prop == prop {
+			return g, true
+		}
+	}
+	return classMethod{}, false
+}
+
+func (c *classInfo) staticSetterByName(prop string) (classSetter, bool) {
+	for _, s := range c.staticSetters {
 		if s.prop == prop {
 			return s, true
 		}
@@ -342,7 +366,12 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			info.methods = append(info.methods, meth)
 		case frontend.NodeGetAccessor:
 			if r.memberIsStatic(m) {
-				return &NotYetLowerable{Reason: "a static accessor is a later slice"}
+				g, err := r.staticGetterOf(info, m, taken)
+				if err != nil {
+					return err
+				}
+				info.staticGetters = append(info.staticGetters, g)
+				continue
 			}
 			g, err := r.getterOf(m)
 			if err != nil {
@@ -351,7 +380,12 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			info.getters = append(info.getters, g)
 		case frontend.NodeSetAccessor:
 			if r.memberIsStatic(m) {
-				return &NotYetLowerable{Reason: "a static accessor is a later slice"}
+				s, err := r.staticSetterOf(info, m, taken)
+				if err != nil {
+					return err
+				}
+				info.staticSetters = append(info.staticSetters, s)
+				continue
 			}
 			s, err := r.setterOf(m)
 			if err != nil {
@@ -1164,6 +1198,97 @@ func (r *Renderer) setterOf(m frontend.Node) (classSetter, error) {
 	return classSetter{prop: prop, goName: "Set" + propGo, node: m, param: param}, nil
 }
 
+// staticAccessorName strips a static accessor's leading modifiers and reads its
+// property name, the shared front of staticGetterOf and staticSetterOf. The
+// static keyword is expected and dropped; any other modifier (an access
+// modifier the runtime does not model) keeps its own reason, and a private name
+// (static get #x) is left for memberName to decline with the private phrasing
+// rather than being mistaken for a modifier. It returns the source property, the
+// remaining children from the name onward, and the exported spelling the package
+// function name is built from.
+func (r *Renderer) staticAccessorName(m frontend.Node, kind string) (prop, propGo string, rest []frontend.Node, err error) {
+	if r.memberHasMod(m, "abstract") {
+		return "", "", nil, &NotYetLowerable{Reason: "an abstract accessor is a later slice"}
+	}
+	kids := r.prog.Children(m)
+	for len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown && len(r.prog.Children(kids[0])) == 0 {
+		w := strings.TrimSpace(r.prog.Text(kids[0]))
+		if strings.HasPrefix(w, "#") {
+			break // a private name, left for memberName to decline honestly
+		}
+		if w != "static" {
+			return "", "", nil, &NotYetLowerable{Reason: "a static " + w + " accessor is a later slice"}
+		}
+		kids = kids[1:]
+	}
+	if len(kids) == 0 {
+		return "", "", nil, &NotYetLowerable{Reason: "a " + kind + " without a plain identifier name is a later slice"}
+	}
+	prop, ok := r.memberName(kids[0])
+	if !ok {
+		return "", "", nil, r.memberNameReason(kids[0], kind)
+	}
+	propGo, ok = exportedField(prop)
+	if !ok {
+		return "", "", nil, &NotYetLowerable{Reason: "accessor name is not a Go identifier"}
+	}
+	return prop, propGo, kids, nil
+}
+
+// staticGetterOf reads one static get accessor into a classMethod whose goName
+// is the package function it becomes, the class name prefixed the way
+// staticMethodOf mints a static method's name (CX for static get x of class C).
+// The name threads the same taken map, so a static getter colliding with a
+// static field or method the module already speaks hands back with the
+// established phrasing.
+func (r *Renderer) staticGetterOf(info *classInfo, m frontend.Node, taken map[string]bool) (classMethod, error) {
+	prop, propGo, _, err := r.staticAccessorName(m, "get accessor")
+	if err != nil {
+		return classMethod{}, err
+	}
+	name := info.goName + propGo
+	if taken[name] || goKeywords[name] {
+		return classMethod{}, &NotYetLowerable{Reason: "the module already speaks " + name + ", the name static get ." + prop + " needs"}
+	}
+	taken[name] = true
+	return classMethod{prop: prop, goName: name, node: m}, nil
+}
+
+// staticSetterOf reads one static set accessor into a classSetter whose goName
+// is the Set-prefixed package function it becomes (CSetX for static set x of
+// class C), the static twin of setterOf's SetX method. The single parameter
+// must be a plain typed identifier, and its name node is kept so a store coerces
+// the value against the declared type. The name threads the taken map the same
+// way staticGetterOf does.
+func (r *Renderer) staticSetterOf(info *classInfo, m frontend.Node, taken map[string]bool) (classSetter, error) {
+	prop, propGo, rest, err := r.staticAccessorName(m, "set accessor")
+	if err != nil {
+		return classSetter{}, err
+	}
+	name := info.goName + "Set" + propGo
+	if taken[name] || goKeywords[name] {
+		return classSetter{}, &NotYetLowerable{Reason: "the module already speaks " + name + ", the name static set ." + prop + " needs"}
+	}
+	var param frontend.Node
+	for _, k := range rest[1:] {
+		if k.Kind() != frontend.NodeParameter {
+			continue
+		}
+		if param != nil {
+			return classSetter{}, &NotYetLowerable{Reason: "a set accessor with more than one parameter is a later slice"}
+		}
+		if err := r.plainParam(k); err != nil {
+			return classSetter{}, err
+		}
+		param = r.prog.Children(k)[0]
+	}
+	if param == nil {
+		return classSetter{}, &NotYetLowerable{Reason: "a set accessor without a parameter is a later slice"}
+	}
+	taken[name] = true
+	return classSetter{prop: prop, goName: name, node: m, param: param}, nil
+}
+
 // lowerFirst lowercases the first letter of a Go name, the package-var
 // spelling of a class-owned name (aTotal for A.total).
 func lowerFirst(s string) string {
@@ -1403,6 +1528,24 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		} else {
 			fd, err = r.staticFuncDecl(m)
 		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fd)
+	}
+	// A static accessor emits through the same package-function path a static
+	// method takes: a getter's signature is no parameters and a T return, a
+	// setter's is the one parameter and a void return, exactly the CX and CSetX
+	// functions a read and a write route to.
+	for _, g := range info.staticGetters {
+		fd, err := r.staticFuncDecl(g)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fd)
+	}
+	for _, s := range info.staticSetters {
+		fd, err := r.staticFuncDecl(classMethod{prop: s.prop, goName: s.goName, node: s.node})
 		if err != nil {
 			return nil, err
 		}
@@ -2484,6 +2627,9 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	if stmt, ok, err := r.classSetterStore(target, opText, parts[2]); ok || err != nil {
 		return stmt, ok, err
 	}
+	if stmt, ok, err := r.staticSetterStore(target, opText, parts[2]); ok || err != nil {
+		return stmt, ok, err
+	}
 	_, f, ok, err := r.classFieldOfTarget(target)
 	if err != nil || !ok {
 		return nil, ok, err
@@ -2573,6 +2719,40 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 		return nil, false, err
 	}
 	call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(s.goName)}, Args: []ast.Expr{rhs}}
+	return &ast.ExprStmt{X: call}, true, nil
+}
+
+// staticSetterStore lowers a plain assignment through a static set accessor,
+// C.x = v, to the ExprStmt CSetX(v), the static twin of classSetterStore. The
+// receiver is the class name, and the value coerces against the setter's
+// declared parameter. A compound store or increment through the accessor reads
+// the property back, which a write-only accessor cannot serve, so it hands back
+// with its own reason rather than falling through to the static-field path.
+func (r *Renderer) staticSetterStore(target frontend.Node, opText string, valueNode frontend.Node) (ast.Stmt, bool, error) {
+	tkids := r.prog.Children(target)
+	if len(tkids) != 2 || tkids[0].Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	info, ok := r.classNameRef(tkids[0])
+	if !ok {
+		return nil, false, nil
+	}
+	s, ok := info.staticSetterByName(r.prog.Text(tkids[1]))
+	if !ok {
+		return nil, false, nil
+	}
+	if opText != "=" {
+		return nil, false, &NotYetLowerable{Reason: "a compound store or increment through the static ." + s.prop + " accessor of class " + info.name + " is a later slice"}
+	}
+	rhs, err := r.lowerExpr(valueNode)
+	if err != nil {
+		return nil, false, err
+	}
+	rhs, err = r.coerceToTarget(rhs, valueNode, s.param)
+	if err != nil {
+		return nil, false, err
+	}
+	call := &ast.CallExpr{Fun: ident(s.goName), Args: []ast.Expr{rhs}}
 	return &ast.ExprStmt{X: call}, true, nil
 }
 
