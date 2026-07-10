@@ -68,10 +68,15 @@ type classInfo struct {
 	// sharing a base member's name, so promotion never has to break a tie.
 	base *classInfo
 	// superArgs are the argument nodes of the constructor's super(...) call,
-	// validated to be its first statement. They stay nil when the class has no
-	// constructor of its own; the synthesized constructor passes its parameters
-	// (the base's) straight through.
+	// validated to sit at the point past any this-free leading statements. They
+	// stay nil when the class has no constructor of its own; the synthesized
+	// constructor passes its parameters (the base's) straight through.
 	superArgs []frontend.Node
+	// preSuper are the constructor's statements before super(), each validated to
+	// be this-free and to declare no binding a later statement could read, so they
+	// lower before the base assignment the way JavaScript runs them (this is in the
+	// temporal dead zone until super returns).
+	preSuper []frontend.Node
 	// vprops, set only on a hierarchy root, names the methods some subclass
 	// overrides; each becomes a slot in the root's vtable (section 13).
 	// overrides names this class's own methods that fill an inherited slot.
@@ -647,11 +652,12 @@ func (r *Renderer) recordOverrides(info *classInfo) error {
 
 // validateSuper checks a derived constructor's super call: exactly one in the
 // whole constructor (a conditional or repeated super has no single point to
-// become the base assignment), it must be the first statement (TypeScript
-// permits this-free statements before it, but the lowering runs the base
-// constructor before the derived field initializers, so anything earlier would
-// run out of order), and its argument count must match the base constructor.
-// The argument nodes are kept for the base-value construction.
+// become the base assignment), and an argument count matching the base
+// constructor. TypeScript permits this-free statements before super(), and the
+// lowering runs them before the base assignment the way JavaScript does; a
+// pre-super statement that reads this or super, or that declares a binding a
+// later statement could read, stays a later slice. The argument nodes and the
+// pre-super statements are kept for the constructor body.
 func (r *Renderer) validateSuper(info *classInfo) error {
 	if n := r.countSuperCalls(info.ctor); n != 1 {
 		return &NotYetLowerable{Reason: "a derived constructor that calls super() " + itoa(n) + " times is a later slice"}
@@ -663,17 +669,38 @@ func (r *Renderer) validateSuper(info *classInfo) error {
 		}
 	}
 	stmts := r.prog.Children(block)
-	if len(stmts) == 0 {
-		return &NotYetLowerable{Reason: "a derived constructor whose first statement is not super() is a later slice"}
+	superIdx := -1
+	for i, s := range stmts {
+		if _, ok := r.superCallOf(s); ok {
+			superIdx = i
+			break
+		}
 	}
-	args, ok := r.superCallOf(stmts[0])
-	if !ok {
-		return &NotYetLowerable{Reason: "a derived constructor whose first statement is not super() is a later slice"}
+	if superIdx < 0 {
+		return &NotYetLowerable{Reason: "a derived constructor with no super() statement is a later slice"}
 	}
+	// A statement before super() runs while this is still in the temporal dead
+	// zone, so one that reads this or super is the JavaScript error case and stays
+	// declined; one that declares a binding a later statement could read is
+	// declined too, because the pre-super statements lower in their own place
+	// before the base assignment rather than through the body's var-hoist scope.
+	for _, s := range stmts[:superIdx] {
+		if subtreeHasKind(r.prog, s, frontend.NodeThisKeyword) {
+			return &NotYetLowerable{Reason: "a statement that reads this before super() is a later slice"}
+		}
+		if subtreeHasKind(r.prog, s, frontend.NodeSuperKeyword) {
+			return &NotYetLowerable{Reason: "a statement that reads super before super() is a later slice"}
+		}
+		if subtreeHasKind(r.prog, s, frontend.NodeVariableStatement) {
+			return &NotYetLowerable{Reason: "a variable declaration before super() is a later slice"}
+		}
+	}
+	args, _ := r.superCallOf(stmts[superIdx])
 	if len(args) != len(info.base.ctorParams) {
 		return &NotYetLowerable{Reason: "super() with an argument count that differs from the base constructor is a later slice"}
 	}
 	info.superArgs = args
+	info.preSuper = stmts[:superIdx]
 	return nil
 }
 
@@ -1798,6 +1825,15 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 		Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(info.goName)}}},
 	}}
 	if info.base != nil {
+		// The this-free statements before super() run first, the order
+		// JavaScript runs them, then the base assignment stands in for super().
+		if len(info.preSuper) > 0 {
+			pre, err := r.scopedBlockRange(r.ctorBlock(info), 0, len(info.preSuper))
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, pre.List...)
+		}
 		superVal, err := r.superCtorExpr(info)
 		if err != nil {
 			return nil, err
@@ -1855,21 +1891,28 @@ func (r *Renderer) ctorBodyStmts(info *classInfo) ([]ast.Stmt, error) {
 	if info.ctor == nil {
 		return nil, nil
 	}
+	skip := 0
+	if info.base != nil {
+		// The pre-super statements and the validated super() call are all emitted
+		// by the caller ahead of the base assignment; the body picks up after them.
+		skip = len(info.preSuper) + 1
+	}
+	body, err := r.scopedBlock(r.ctorBlock(info), skip)
+	if err != nil {
+		return nil, err
+	}
+	return body.List, nil
+}
+
+// ctorBlock returns the declared constructor's body block.
+func (r *Renderer) ctorBlock(info *classInfo) frontend.Node {
 	var block frontend.Node
 	for _, k := range r.prog.Children(info.ctor) {
 		if k.Kind() == frontend.NodeBlock {
 			block = k
 		}
 	}
-	skip := 0
-	if info.base != nil {
-		skip = 1 // the validated super() call, already emitted by the caller
-	}
-	body, err := r.scopedBlock(block, skip)
-	if err != nil {
-		return nil, err
-	}
-	return body.List, nil
+	return block
 }
 
 // superCtorExpr builds the base value a derived constructor stores or folds:
