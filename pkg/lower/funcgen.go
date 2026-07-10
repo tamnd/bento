@@ -717,6 +717,21 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	return r.blockBodyArrow(n, fields)
 }
 
+// isAnonymousFunctionDef reports whether a node is an anonymous function definition,
+// the right-hand side named evaluation gives a name: an arrow function, which never
+// carries a name, or a function expression with no name node. A named function
+// expression already has its own name and is left alone.
+func (r *Renderer) isAnonymousFunctionDef(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeArrowFunction:
+		return true
+	case frontend.NodeFunctionExpression:
+		_, named := r.funcExprNameNode(n)
+		return !named
+	}
+	return false
+}
+
 // funcExprNameNode returns a function expression's own name node, the NodeIdentifier
 // child that sits before its parameters, if it has one. An anonymous function
 // expression has no such child and reads as not-named here.

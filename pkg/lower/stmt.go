@@ -2102,6 +2102,20 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
+	// Named evaluation: an anonymous function assigned to an identifier takes that
+	// identifier as its name (value ??= function() {} binds the name "value"). The
+	// dynamic target boxes the right-hand side to a function value, so wrap it in
+	// value.WithName to record the name a later f.name read returns. A named function
+	// keeps its own name and is not wrapped. logical-assignment/
+	// lgcl-nullish-assignment-operator-namedevaluation-function and -arrow-function
+	// exercise this.
+	if r.isDynamic(target) && r.isAnonymousFunctionDef(parts[2]) {
+		r.requireImport(valuePkg)
+		rhs = &ast.CallExpr{
+			Fun:  sel("value", "WithName"),
+			Args: []ast.Expr{rhs, &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(strings.TrimSpace(r.prog.Text(target)))}},
+		}
+	}
 	assign := &ast.AssignStmt{
 		Lhs: []ast.Expr{ident(name)},
 		Tok: token.ASSIGN,

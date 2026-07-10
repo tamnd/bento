@@ -26,6 +26,50 @@ console.log(pick(undefined, "fallback") !== undefined);
 	}
 }
 
+// TestNamedEvalLogicalAssignEmits pins that an anonymous function assigned to a
+// dynamic target through a logical assignment is wrapped in value.WithName carrying
+// the target's identifier, the named-evaluation step that gives value ??= function
+// () {} the name "value". Both the function-expression and arrow forms wrap, and the
+// name passed is the target identifier.
+func TestNamedEvalLogicalAssignEmits(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"function", "var value: any = undefined;\nvalue ??= function() {};\nconsole.log(value.name);\n", `value.WithName(value.NewFunc(`},
+		{"arrow", "var fn: any = 0;\nfn ||= () => {};\nconsole.log(fn.name);\n", `value.WithName(value.NewFunc(`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := renderProgram(t, c.src)
+			if !strings.Contains(out, c.want) {
+				t.Fatalf("named-eval %s did not wrap in WithName:\n%s", c.name, out)
+			}
+		})
+	}
+}
+
+// TestNamedEvalSkipsNamedFunction pins that a function expression with its own name
+// is not rewrapped: it already carries a name, so named evaluation leaves it alone.
+func TestNamedEvalSkipsNamedFunction(t *testing.T) {
+	const src = "var value: any = undefined;\nvalue ??= function keep() {};\nconsole.log(value.name);\n"
+	out := renderProgram(t, src)
+	if strings.Contains(out, "value.WithName(") {
+		t.Fatalf("a named function should not be wrapped in WithName:\n%s", out)
+	}
+}
+
+// TestNamedEvalLogicalAssignRuns builds and runs the named-evaluation forms so the
+// name a later read returns is proven end to end.
+func TestNamedEvalLogicalAssignRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "var value: any = undefined;\nvalue ??= function() {};\nconsole.log(value.name);\nvar fn: any = 0;\nfn ||= () => {};\nconsole.log(fn.name);\n"
+	if got, want := runProgramGo(t, src), "value\nfn\n"; got != want {
+		t.Fatalf("named-eval run printed %q, want %q", got, want)
+	}
+}
+
 // TestNullishAssignDefiniteHandsBack pins that x ??= y with a definite right-hand
 // side, which narrows the target, hands back until narrowing at an assignment
 // lands.
