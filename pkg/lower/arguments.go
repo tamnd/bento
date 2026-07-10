@@ -112,6 +112,15 @@ func (r *Renderer) scanArguments(n frontend.Node, reads, supported *bool) {
 			r.scanArguments(kids[0], reads, supported)
 			return
 		}
+	case frontend.NodeElementAccessExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 2 && r.isArgumentsIdent(kids[0]) {
+			*reads = true
+			// The receiver is the arguments object, backed by the store; scan only the
+			// index expression, which is an ordinary read.
+			r.scanArguments(kids[1], reads, supported)
+			return
+		}
 	}
 	for _, c := range r.prog.Children(n) {
 		r.scanArguments(c, reads, supported)

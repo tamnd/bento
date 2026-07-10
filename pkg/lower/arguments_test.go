@@ -45,6 +45,41 @@ console.log(g(7));
 	}
 }
 
+// TestArgumentsIndexReadsStore proves arguments[i] lowers to a read of the backing
+// store, and the materialization is still present.
+func TestArgumentsIndexReadsStore(t *testing.T) {
+	const src = "function f(a: number, b: number): unknown { return arguments[0]; }\n" +
+		"f(1, 2);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.NewArray[value.Value](value.Number(a), value.Number(b))") {
+		t.Errorf("the arguments store was not materialized from the parameters:\n%s", source)
+	}
+	if !strings.Contains(source, ".At(0)") {
+		t.Errorf("arguments[0] did not read the store:\n%s", source)
+	}
+}
+
+// TestArgumentsIndexRuns builds and runs a body that reads arguments by index, at a
+// literal and at a variable index, so the store read is proven against the
+// JavaScript result.
+func TestArgumentsIndexRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function first(a: number, b: number): unknown {
+  return arguments[0];
+}
+function pick(a: number, b: number, c: number): unknown {
+  const i = 2;
+  return arguments[i];
+}
+console.log(first(10, 20));
+console.log(pick(1, 2, 3));
+`
+	if got, want := runProgramGo(t, src), "10\n3\n"; got != want {
+		t.Fatalf("arguments index printed %q, want %q", got, want)
+	}
+}
+
 // TestArgumentsWithRestParameterHandsBack proves a body that reads arguments while
 // its signature carries a rest parameter hands back: the rest gathers a call-varying
 // tail, so the parameter count is not the call arity and the store cannot stand in.

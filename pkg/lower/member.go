@@ -474,6 +474,18 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "element access did not expose an object and an index"}
 	}
 	obj, idxNode := kids[0], kids[1]
+	// arguments[i] reads the i-th argument the call supplied. The current body backs
+	// arguments with a value.Array[value.Value] store, so the read is the store's At,
+	// which bounds-checks and yields the boxed argument (undefined out of range, the
+	// any the checker gives an arguments element). It routes before the shape and
+	// string paths, which expect a receiver whose type the checker pinned down.
+	if r.argsObjName != "" && r.isArgumentsIdent(obj) {
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.argsObjName), Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
+	}
 	// o["k"] with a string-literal key on a fixed-shape object is the struct-field
 	// read o.k spelled with brackets, so it lowers to the same selector through the
 	// same exportedField and internStruct the dotted read uses, and a read and its
