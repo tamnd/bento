@@ -192,6 +192,14 @@ type Renderer struct {
 	// program that cannot throw defers nothing, so its main and its imports are
 	// unchanged.
 	usesThrow bool
+	// usesPromise records that the program minted a promise: an async method
+	// lowered to a value.Promise, so the assembled main drains the microtask queue
+	// once at its end (value.RunMicrotasks). That drain is doc 11's
+	// run-to-completion point collapsed to the single turn a compiled test262 job
+	// has: every promise 6a mints is already settled, so one end-of-main drain runs
+	// each queued .then callback in order. A program that mints no promise drains
+	// nothing, so its main is unchanged.
+	usesPromise bool
 	// tmpSeq is a monotonic counter the lowerer draws generated temporary names from,
 	// for the places a single source construct needs a Go local with no source name:
 	// the element a destructuring for...of binds before it reads each position out of
@@ -597,6 +605,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// interface as fields. Its fingerprint is disjoint from a Map's, so the order
 			// against the Map check above does not matter.
 			return r.renderSet(t)
+		}
+		if r.isPromiseType(t) {
+			// A Promise<T> (the async slice) is the value model's settled promise,
+			// spelled as a pointer to the generic value.Promise header, the result type
+			// an async method's Go signature carries. Like Map and Set it is not a struct
+			// shape, so it routes here before renderObject would intern its then/catch
+			// interface as fields.
+			return r.renderPromise(t)
 		}
 		return r.renderObject(t)
 
@@ -1018,6 +1034,111 @@ func (r *Renderer) setElem(t frontend.Type) (elem frontend.Type, ok bool) {
 		return frontend.Type{}, false
 	}
 	return call[0].Params[0].Type, true
+}
+
+// renderPromise lowers a Promise<T> type to a pointer to the generic value.Promise
+// header, the result type an async method's Go signature carries. It reads the
+// element type off the promise's then callback and renders it through typeExpr, so
+// a Promise<number> becomes a *value.Promise[float64]. A Promise<void> carries no
+// value, so it lowers to the unit promise *value.Promise[value.Unit], the concrete
+// Go type a void async body's settled promise takes. An element type that has no
+// lowering yet hands back through the same NotYetLowerable typeExpr returns for it.
+func (r *Renderer) renderPromise(t frontend.Type) (ast.Expr, error) {
+	elem, ok := r.promiseElem(t)
+	if !ok {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "Promise type did not expose its value through a then signature"}
+	}
+	r.requireImport(valuePkg)
+	if isVoidReturn(elem) {
+		return star(index(sel("value", "Promise"), sel("value", "Unit"))), nil
+	}
+	eExpr, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	return star(index(sel("value", "Promise"), eExpr)), nil
+}
+
+// isPromiseType reports whether an object type is a JavaScript Promise, the async
+// result bento maps to value.Promise. The standard library types a promise with
+// then, catch, and finally together: then and catch are the two a thenable spells,
+// and finally separates a real Promise from a bare thenable or a user object that
+// happens to carry a then, so the three names together are the fingerprint, read
+// the same way isMapType reads its own. A caller must have already ruled the type
+// out as an array, so this runs only for the non-array object shapes.
+func (r *Renderer) isPromiseType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	var hasThen, hasCatch, hasFinally bool
+	for _, p := range r.prog.Properties(t) {
+		switch p.Name {
+		case "then":
+			hasThen = true
+		case "catch":
+			hasCatch = true
+		case "finally":
+			hasFinally = true
+		}
+	}
+	return hasThen && hasCatch && hasFinally
+}
+
+// isPromise reports whether the checker types a node as a Promise, the receiver
+// test the promise method lowerings share (a .then or .catch call). It is the
+// node-level companion to isPromiseType: it reads the node's type and applies the
+// same fingerprint, first ruling out an array so an array is never mistaken for a
+// promise.
+func (r *Renderer) isPromise(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isPromiseType(t)
+}
+
+// promiseElem returns the value type of a Promise type, read off its then method
+// whose first parameter is the fulfillment callback (value: T) => ... . The
+// standard library declares then on every promise, and the checker resolves that
+// callback's value parameter to T, so it carries the element type exactly. The
+// callback parameter is optional, so its declared type is a union with undefined
+// and null; the function member of that union carries the signature whose first
+// parameter is T. It reports false for a type with no such then signature, which a
+// non-promise object is.
+func (r *Renderer) promiseElem(t frontend.Type) (elem frontend.Type, ok bool) {
+	var thenType frontend.Type
+	found := false
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "then" {
+			thenType, found = p.Type, true
+			break
+		}
+	}
+	if !found {
+		return frontend.Type{}, false
+	}
+	call, _ := r.prog.Signatures(thenType)
+	if len(call) == 0 || len(call[0].Params) == 0 {
+		return frontend.Type{}, false
+	}
+	onFulfilled := call[0].Params[0].Type
+	// The callback parameter is optional, so its type is the callback function in a
+	// union with undefined and null. Read the function member out of that union; a
+	// non-union type is the function itself.
+	candidates := r.prog.UnionMembers(onFulfilled)
+	if len(candidates) == 0 {
+		candidates = []frontend.Type{onFulfilled}
+	}
+	for _, c := range candidates {
+		cbCall, _ := r.prog.Signatures(c)
+		if len(cbCall) > 0 && len(cbCall[0].Params) > 0 {
+			return cbCall[0].Params[0].Type, true
+		}
+	}
+	return frontend.Type{}, false
 }
 
 // Decls returns the generated declarations the rendered types referred to, in a

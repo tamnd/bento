@@ -810,6 +810,53 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
 }
 
+// promiseMethodCall lowers a method on a Promise receiver to a value.Promise
+// method. then(onFulfilled) schedules a callback on the fulfilled value and
+// catch(onRejected) on the rejection reason; both run at the single microtask drain
+// at the end of main. Only an inline single-parameter arrow with no result is
+// covered: the value methods take a func with no return, so a callback that returns
+// a value (promise chaining) hands back, as does a then with a second rejection
+// handler, since 6a mints only settled promises and observes fulfillment through
+// then and rejection through catch, one callback each. finally and any other member
+// keep their own reasons.
+func (r *Renderer) promiseMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	var goName string
+	switch method {
+	case "then":
+		goName = "Then"
+	case "catch":
+		goName = "Catch"
+	case "finally":
+		return nil, &NotYetLowerable{Reason: "a promise .finally is a later slice"}
+	default:
+		return nil, &NotYetLowerable{Reason: "a promise method ." + method + " is a later slice"}
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "a promise ." + method + " with other than one callback is a later slice"}
+	}
+	cb := argNodes[0]
+	if cb.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(cb) != 1 {
+		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback that does not take exactly the value is a later slice"}
+	}
+	if rt, ok := r.arrowResultFrontendType(cb); !ok || !isVoidReturn(rt) {
+		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback that returns a value (chaining) is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(cb)
+	if err != nil {
+		return nil, err
+	}
+	// A then or catch queues a microtask, so main must drain the queue at its end.
+	r.usesPromise = true
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: []ast.Expr{fn}}, nil
+}
+
 // setAlgebraCall lowers the ES2025 set-algebra methods (union, intersection,
 // difference, symmetricDifference, isSubsetOf, isSupersetOf, isDisjointFrom) to
 // the matching value.Set method over a second set. JavaScript accepts any

@@ -237,6 +237,20 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		return Program{}, err
 	}
 
+	// A program that minted a promise drains the microtask queue once at the end of
+	// main, doc 11's run-to-completion point collapsed to the single turn a compiled
+	// job has. Every promise 6a mints is already settled, so this one drain runs each
+	// then callback the synchronous body queued, in order, after that body. It is the
+	// last statement so a callback observes the finished synchronous run, the ordering
+	// JavaScript gives a microtask. The drain is appended after the classes render so a
+	// promise minted or observed inside a class method body, which lowers there, still
+	// sets the flag in time; a program that minted no promise drains nothing.
+	if r.usesPromise {
+		r.requireImport(valuePkg)
+		drain := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunMicrotasks")}}
+		mainDecl.Body.List = append(mainDecl.Body.List, drain)
+	}
+
 	file := &ast.File{Name: ident("main")}
 	if specs := r.importSpecs(); len(specs) > 0 {
 		file.Decls = append(file.Decls, importDecl(specs))

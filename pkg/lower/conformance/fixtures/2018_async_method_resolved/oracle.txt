@@ -1,0 +1,7 @@
+== stdout:
+start
+end
+double:42
+unit:10
+== exit:
+0
