@@ -198,12 +198,17 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "for...of loop variable is not a Go identifier"}
 	}
+	// A generator iterable is our state-machine closure: for...of pulls it until
+	// done rather than ranging a backing slice, so it takes its own path.
+	if r.isGeneratorIterable(kids[1]) {
+		return r.forOfGenerator(kids[1], dkids[0], name, kids[2])
+	}
 	// The iterable is an array (ranged over its Elems) or a string (ranged over its
 	// code points). A string yields one substring per Unicode code point, so it
 	// lowers to a range over CodePoints() the same way an array ranges over Elems();
 	// the loop variable is the string of that code point, which is how the checker
-	// types it. Any other iterable (a Set, a Map, a generator, a user iterator) is a
-	// later slice and hands back.
+	// types it. Any other iterable (a Set, a Map, a user iterator) is a later slice
+	// and hands back.
 	var elemsMethod string
 	switch {
 	case isArrayElem(r, kids[1]):
@@ -236,6 +241,60 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 		rng.Tok = token.DEFINE
 	}
 	return rng, nil
+}
+
+// isGeneratorIterable reports whether the checker types n as one of the built-in
+// generator or iterator shapes bento lowers to a next() closure, so for...of
+// pulls it rather than ranging a slice. The judgment is the iterable type's
+// symbol name, the same built-in family the generator method decl produces.
+func (r *Renderer) isGeneratorIterable(n frontend.Node) bool {
+	sym, ok := r.prog.TypeSymbol(r.prog.TypeAt(n))
+	if !ok {
+		return false
+	}
+	switch sym.Name {
+	case "Generator", "IterableIterator", "Iterator", "IteratorObject":
+		return true
+	}
+	return false
+}
+
+// forOfGenerator lowers a for...of over a generator to the plain Go loop a
+// developer writes against a next() closure: bind the closure once so its state
+// is shared across the loop, then pull a value and a done flag each turn and
+// stop when done. The closure is called once up front, not per turn, so two
+// iterations of the same source expression would each get their own fresh
+// generator, matching the JavaScript protocol. A binding the body never reads
+// drops to the blank identifier, since Go rejects an unused loop value.
+func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node) (ast.Stmt, error) {
+	iter, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	itName := r.freshTemp()
+	doneName := r.freshTemp()
+	loopVar := ast.Expr(ident("_"))
+	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
+		loopVar = ident(name)
+	}
+	pull := &ast.AssignStmt{
+		Lhs: []ast.Expr{loopVar, ident(doneName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.CallExpr{Fun: ident(itName)}},
+	}
+	brk := &ast.IfStmt{
+		Cond: ident(doneName),
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.BranchStmt{Tok: token.BREAK}}},
+	}
+	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: append([]ast.Stmt{pull, brk}, body.List...)}}
+	return &ast.BlockStmt{List: []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(itName)}, Tok: token.DEFINE, Rhs: []ast.Expr{iter}},
+		loop,
+	}}, nil
 }
 
 // forOfArrayDestructure lowers `for (const [a, b] of pairs)` over an array of arrays
