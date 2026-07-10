@@ -400,9 +400,11 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 		case frontend.NodeUnknown:
 			// A heritage clause surfaces as an unnamed node whose text starts with
 			// its keyword. An extends clause names the base class this slice embeds;
-			// implements stays a later slice, and an empty leftover token is skipped.
+			// implements stays a later slice. An empty leftover token and a stray
+			// semicolon are both no-op members the grammar allows between real ones,
+			// so they are skipped rather than misread as heritage.
 			text := strings.TrimSpace(r.prog.Text(m))
-			if text == "" {
+			if text == "" || text == ";" {
 				continue
 			}
 			if firstWord(text) != "extends" || info.base != nil {
