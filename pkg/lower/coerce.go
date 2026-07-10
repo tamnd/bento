@@ -401,9 +401,12 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature) (ast.
 	// in call position, and wrapping a plain identifier callee too is harmless.
 	inner := &ast.CallExpr{Fun: &ast.ParenExpr{X: expr}, Args: callArgs}
 	var body []ast.Stmt
-	if sig.Return.Flags&(frontend.TypeVoid|frontend.TypeUndefined) != 0 {
+	if sig.Return.Flags&(frontend.TypeVoid|frontend.TypeUndefined|frontend.TypeNever) != 0 {
 		// A void or undefined return runs the call for its effect and yields the
-		// undefined the language binds to the result of such a call.
+		// undefined the language binds to the result of such a call. A never return,
+		// a function whose body always throws, joins them: the call never completes
+		// normally, so the trailing undefined is unreachable at run time yet keeps the
+		// wrapper well-typed, the shape a throwing assert.throws callback takes.
 		body = []ast.Stmt{
 			&ast.ExprStmt{X: inner},
 			&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
