@@ -1084,6 +1084,22 @@ func (r *Renderer) isPromiseType(t frontend.Type) bool {
 	return hasThen && hasCatch && hasFinally
 }
 
+// isPromise reports whether the checker types a node as a Promise, the receiver
+// test the promise method lowerings share (a .then or .catch call). It is the
+// node-level companion to isPromiseType: it reads the node's type and applies the
+// same fingerprint, first ruling out an array so an array is never mistaken for a
+// promise.
+func (r *Renderer) isPromise(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isPromiseType(t)
+}
+
 // promiseElem returns the value type of a Promise type, read off its then method
 // whose first parameter is the fulfillment callback (value: T) => ... . The
 // standard library declares then on every promise, and the checker resolves that

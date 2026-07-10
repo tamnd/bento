@@ -550,6 +550,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isSet(recvNode) {
 		return r.setMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a Promise receiver, p.then(cb) or p.catch(cb), lowers to a
+	// value.Promise method. Like Map and Set it routes before the primitive and
+	// string paths, which expect a number, boolean, or string receiver a promise is
+	// not.
+	if r.isPromise(recvNode) {
+		return r.promiseMethodCall(recvNode, method, argNodes)
+	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
 	// bare use would take, so they route here before the string-method path.

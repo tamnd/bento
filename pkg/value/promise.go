@@ -115,26 +115,30 @@ func AsyncVoid(body func()) (p *Promise[Unit]) {
 // through a returned promise is a later slice, so a then with no rejection handler
 // simply does not fire on a rejected promise, which is safe because the fixtures
 // observe rejection through Catch. The callback is always deferred, never inlined,
-// so synchronous code after the then runs first.
-func (p *Promise[T]) Then(onFulfilled func(T)) {
-	if p.rejected {
-		return
+// so synchronous code after the then runs first. It returns a settled unit promise,
+// the promise then produces in JavaScript, so a then whose result is bound or
+// chained has a value of the right type; the callback covered here returns nothing,
+// so the returned promise carries no value.
+func (p *Promise[T]) Then(onFulfilled func(T)) *Promise[Unit] {
+	if !p.rejected {
+		v := p.value
+		enqueueMicrotask(func() { onFulfilled(v) })
 	}
-	v := p.value
-	enqueueMicrotask(func() { onFulfilled(v) })
+	return Resolved(Unit{})
 }
 
 // Catch schedules onRejected to run with the rejection reason at the next microtask
 // checkpoint. A fulfilled promise does not run onRejected. The reason is handed
 // over as a dynamic value: a caught rejection is typed any in JavaScript, so the
 // callback reads it through the value model the way a catch binding boxed into the
-// dynamic world does.
-func (p *Promise[T]) Catch(onRejected func(Value)) {
-	if !p.rejected {
-		return
+// dynamic world does. Like Then it returns a settled unit promise so a bound or
+// chained catch has a value of the right type.
+func (p *Promise[T]) Catch(onRejected func(Value)) *Promise[Unit] {
+	if p.rejected {
+		reason := p.reason
+		enqueueMicrotask(func() { onRejected(thrownValue(reason)) })
 	}
-	reason := p.reason
-	enqueueMicrotask(func() { onRejected(thrownValue(reason)) })
+	return Resolved(Unit{})
 }
 
 // thrownValue boxes a thrown value into the dynamic value a rejection handler
