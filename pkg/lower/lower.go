@@ -192,6 +192,14 @@ type Renderer struct {
 	// program that cannot throw defers nothing, so its main and its imports are
 	// unchanged.
 	usesThrow bool
+	// usesPromise records that the program minted a promise: an async method
+	// lowered to a value.Promise, so the assembled main drains the microtask queue
+	// once at its end (value.RunMicrotasks). That drain is doc 11's
+	// run-to-completion point collapsed to the single turn a compiled test262 job
+	// has: every promise 6a mints is already settled, so one end-of-main drain runs
+	// each queued .then callback in order. A program that mints no promise drains
+	// nothing, so its main is unchanged.
+	usesPromise bool
 	// tmpSeq is a monotonic counter the lowerer draws generated temporary names from,
 	// for the places a single source construct needs a Go local with no source name:
 	// the element a destructuring for...of binds before it reads each position out of
