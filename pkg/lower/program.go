@@ -101,6 +101,16 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
 	var mainBody []frontend.Node
+	// mainItems is the main body in source order with the static-init calls a class
+	// declaration contributes spliced in at its own position, the order JavaScript
+	// runs the top-level statements and each class's static blocks. mainBody keeps
+	// only the statement nodes the analysis passes below walk; the calls carry no
+	// binding, so they ride mainItems alone.
+	var mainItems []mainItem
+	pushStmt := func(n frontend.Node) {
+		mainBody = append(mainBody, n)
+		mainItems = append(mainItems, mainItem{node: n})
+	}
 	for _, stmt := range r.prog.Children(entry) {
 		switch stmt.Kind() {
 		case frontend.NodeFunctionDeclaration:
@@ -122,11 +132,17 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 			if hoist {
 				moduleVars = append(moduleVars, decl)
 			} else {
-				mainBody = append(mainBody, stmt)
+				pushStmt(stmt)
 			}
 		case frontend.NodeClassDeclaration:
 			// Already registered by collectClasses; the declarations render after
-			// every body lowers so a method body's interned shapes are collected.
+			// every body lowers so a method body's interned shapes are collected. A
+			// class with a static initialization block also contributes a call to its
+			// init function here, at the declaration's position, which is when the
+			// block's ordered work runs.
+			if info, ok := r.classInfoForDecl(stmt); ok && len(info.staticBlocks) > 0 {
+				mainItems = append(mainItems, mainItem{initClass: info})
+			}
 			continue
 		case frontend.NodeInterfaceDeclaration, frontend.NodeTypeAliasDeclaration:
 			// Type-level declarations carry no runtime code, so they emit nothing.
@@ -147,10 +163,10 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 			// statement; if lowerStatement does not know it either, it hands back there.
 			text := strings.TrimSpace(r.prog.Text(stmt))
 			if text != "" && !strings.HasPrefix(text, "import") {
-				mainBody = append(mainBody, stmt)
+				pushStmt(stmt)
 			}
 		default:
-			mainBody = append(mainBody, stmt)
+			pushStmt(stmt)
 		}
 	}
 
@@ -201,7 +217,7 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		restoreHoist()
 		return Program{}, err
 	}
-	stmts, err := r.lowerStatements(mainBody)
+	stmts, err := r.lowerMainItems(mainItems)
 	restoreHoist()
 	restoreFwd()
 	if err != nil {
@@ -283,6 +299,48 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		return Program{}, err
 	}
 	return Program{Source: src}, nil
+}
+
+// mainItem is one entry of the main body in source order: either a top-level
+// statement node to lower, or a class whose static-init function the main body
+// calls at the class declaration's position. Exactly one field is set.
+type mainItem struct {
+	node      frontend.Node
+	initClass *classInfo
+}
+
+// lowerMainItems lowers the main body in source order, emitting each statement
+// through the ordinary path and each class's static-init call at the class
+// declaration's position, the interleaving JavaScript runs. It opens one block
+// scope for the whole body, the same scope lowerStatements gives a plain list.
+func (r *Renderer) lowerMainItems(items []mainItem) ([]ast.Stmt, error) {
+	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
+	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
+	out := make([]ast.Stmt, 0, len(items))
+	for _, it := range items {
+		if it.initClass != nil {
+			out = append(out, &ast.ExprStmt{X: &ast.CallExpr{Fun: ident(staticInitName(it.initClass))}})
+			continue
+		}
+		stmts, err := r.lowerStatementMulti(it.node)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, stmts...)
+	}
+	return out, nil
+}
+
+// classInfoForDecl finds the registered class a class-declaration node belongs
+// to, so the main body can splice its static-init call in at the declaration's
+// position.
+func (r *Renderer) classInfoForDecl(decl frontend.Node) (*classInfo, bool) {
+	for _, info := range r.classes {
+		if info.decl == decl {
+			return info, true
+		}
+	}
+	return nil, false
 }
 
 // checkMangleCollisions declines a module that spells both a name needing the

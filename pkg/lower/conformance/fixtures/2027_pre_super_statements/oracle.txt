@@ -1,0 +1,6 @@
+== stdout:
+preparing
+n is 5
+d10
+== exit:
+0

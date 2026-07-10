@@ -62,16 +62,27 @@ type classInfo struct {
 	// routes to the call, the static twin of the instance accessor path.
 	staticGetters []classMethod
 	staticSetters []classSetter
+	// staticBlocks are the class's static initialization blocks, in member order.
+	// Each lowers into a package function the program assembler calls at the class
+	// declaration's position in the main body, which is when JavaScript runs it;
+	// package-level Go has no ordered statement execution, so the ordered work a
+	// static block does lives in that called function instead.
+	staticBlocks []frontend.Node
 	// base is the registered class this one extends, nil for a root class. The
 	// base embeds as the derived struct's first field, so Go promotion serves
 	// the inherited fields and methods; registration rejects a derived member
 	// sharing a base member's name, so promotion never has to break a tie.
 	base *classInfo
 	// superArgs are the argument nodes of the constructor's super(...) call,
-	// validated to be its first statement. They stay nil when the class has no
-	// constructor of its own; the synthesized constructor passes its parameters
-	// (the base's) straight through.
+	// validated to sit at the point past any this-free leading statements. They
+	// stay nil when the class has no constructor of its own; the synthesized
+	// constructor passes its parameters (the base's) straight through.
 	superArgs []frontend.Node
+	// preSuper are the constructor's statements before super(), each validated to
+	// be this-free and to declare no binding a later statement could read, so they
+	// lower before the base assignment the way JavaScript runs them (this is in the
+	// temporal dead zone until super returns).
+	preSuper []frontend.Node
 	// vprops, set only on a hierarchy root, names the methods some subclass
 	// overrides; each becomes a slot in the root's vtable (section 13).
 	// overrides names this class's own methods that fill an inherited slot.
@@ -395,9 +406,27 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 		case frontend.NodeUnknown:
 			// A heritage clause surfaces as an unnamed node whose text starts with
 			// its keyword. An extends clause names the base class this slice embeds;
-			// implements stays a later slice, and an empty leftover token is skipped.
+			// implements stays a later slice. An empty leftover token and a stray
+			// semicolon are both no-op members the grammar allows between real ones,
+			// so they are skipped rather than misread as heritage.
 			text := strings.TrimSpace(r.prog.Text(m))
-			if text == "" {
+			if text == "" || text == ";" {
+				continue
+			}
+			// A static initialization block surfaces as an unnamed node whose text
+			// starts with static and whose one child is the block; it is not heritage.
+			// The first block seen mints the init function's name so a name clash hands
+			// back with the module's other package-level names rather than emitting Go
+			// that redeclares one.
+			if blk, ok := r.staticBlockBody(m); ok {
+				if len(info.staticBlocks) == 0 {
+					if nm := staticInitName(info); taken[nm] {
+						return &NotYetLowerable{Reason: "the module already speaks " + nm + ", the name class " + name + "'s static block needs"}
+					} else {
+						taken[nm] = true
+					}
+				}
+				info.staticBlocks = append(info.staticBlocks, blk)
 				continue
 			}
 			if firstWord(text) != "extends" || info.base != nil {
@@ -496,27 +525,55 @@ func (r *Renderer) checkAccessorClashes(info *classInfo) error {
 }
 
 // baseClassOf resolves an extends clause to the registered base class. The
-// clause wraps one expression node whose single child must be a plain
-// identifier: a generic base (extends Base<T>) carries type-argument children
-// and an expression base (extends mixin()) is not an identifier at all, and
-// both need machinery this slice does not build. The identifier resolves the
-// way a class name reference does, through its symbol to the exact registered
-// declaration; the checker rejects a class used before its declaration, so a
-// resolvable base is always already registered when the derived class reads it.
+// clause wraps one expression node whose child is the base; a plain identifier
+// and a parenthesized one this slice resolves, and the other shapes each keep
+// their own named reason. A generic base (extends Base<T>) carries
+// type-argument children and needs monomorphization; extends null and a mixin
+// call (extends f()) each name a construct this slice does not build. The
+// identifier resolves the way a class name reference does, through its symbol to
+// the exact registered declaration; the checker rejects a class used before its
+// declaration, so a resolvable base is always already registered when the
+// derived class reads it.
 func (r *Renderer) baseClassOf(clause frontend.Node) (*classInfo, error) {
 	kids := r.prog.Children(clause)
 	if len(kids) != 1 {
 		return nil, &NotYetLowerable{Reason: "an extends clause that is not a single base class is a later slice"}
 	}
 	ekids := r.prog.Children(kids[0])
-	if len(ekids) != 1 || ekids[0].Kind() != frontend.NodeIdentifier {
+	// A generic base carries the type arguments as extra children after the name,
+	// so more than one child is the monomorphization case, the same reason the
+	// generic method path names.
+	if len(ekids) > 1 {
+		return nil, &NotYetLowerable{Reason: "a generic base class needs monomorphization, a later slice"}
+	}
+	if len(ekids) != 1 {
 		return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
 	}
-	base, ok := r.classNameRef(ekids[0])
-	if !ok {
-		return nil, &NotYetLowerable{Reason: "extending " + r.prog.Text(ekids[0]) + ", which is not a class this slice lowers, is a later slice"}
+	// A parenthesized base, extends (Base), is the name inside dressed in
+	// syntactic parens; unwrap them and resolve the name the same way a bare one
+	// resolves.
+	base := ekids[0]
+	for base.Kind() == frontend.NodeParenthesizedExpression {
+		inner := r.prog.Children(base)
+		if len(inner) != 1 {
+			return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
+		}
+		base = inner[0]
 	}
-	return base, nil
+	switch base.Kind() {
+	case frontend.NodeIdentifier:
+		info, ok := r.classNameRef(base)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "extending " + r.prog.Text(base) + ", which is not a class this slice lowers, is a later slice"}
+		}
+		return info, nil
+	case frontend.NodeNullKeyword:
+		return nil, &NotYetLowerable{Reason: "extends null is a later slice"}
+	case frontend.NodeCallExpression:
+		return nil, &NotYetLowerable{Reason: "a mixin base expression is a later slice"}
+	default:
+		return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
+	}
 }
 
 // classMember is one emitted member for the clash walk: its kind, its source
@@ -619,11 +676,12 @@ func (r *Renderer) recordOverrides(info *classInfo) error {
 
 // validateSuper checks a derived constructor's super call: exactly one in the
 // whole constructor (a conditional or repeated super has no single point to
-// become the base assignment), it must be the first statement (TypeScript
-// permits this-free statements before it, but the lowering runs the base
-// constructor before the derived field initializers, so anything earlier would
-// run out of order), and its argument count must match the base constructor.
-// The argument nodes are kept for the base-value construction.
+// become the base assignment), and an argument count matching the base
+// constructor. TypeScript permits this-free statements before super(), and the
+// lowering runs them before the base assignment the way JavaScript does; a
+// pre-super statement that reads this or super, or that declares a binding a
+// later statement could read, stays a later slice. The argument nodes and the
+// pre-super statements are kept for the constructor body.
 func (r *Renderer) validateSuper(info *classInfo) error {
 	if n := r.countSuperCalls(info.ctor); n != 1 {
 		return &NotYetLowerable{Reason: "a derived constructor that calls super() " + itoa(n) + " times is a later slice"}
@@ -635,17 +693,38 @@ func (r *Renderer) validateSuper(info *classInfo) error {
 		}
 	}
 	stmts := r.prog.Children(block)
-	if len(stmts) == 0 {
-		return &NotYetLowerable{Reason: "a derived constructor whose first statement is not super() is a later slice"}
+	superIdx := -1
+	for i, s := range stmts {
+		if _, ok := r.superCallOf(s); ok {
+			superIdx = i
+			break
+		}
 	}
-	args, ok := r.superCallOf(stmts[0])
-	if !ok {
-		return &NotYetLowerable{Reason: "a derived constructor whose first statement is not super() is a later slice"}
+	if superIdx < 0 {
+		return &NotYetLowerable{Reason: "a derived constructor with no super() statement is a later slice"}
 	}
+	// A statement before super() runs while this is still in the temporal dead
+	// zone, so one that reads this or super is the JavaScript error case and stays
+	// declined; one that declares a binding a later statement could read is
+	// declined too, because the pre-super statements lower in their own place
+	// before the base assignment rather than through the body's var-hoist scope.
+	for _, s := range stmts[:superIdx] {
+		if subtreeHasKind(r.prog, s, frontend.NodeThisKeyword) {
+			return &NotYetLowerable{Reason: "a statement that reads this before super() is a later slice"}
+		}
+		if subtreeHasKind(r.prog, s, frontend.NodeSuperKeyword) {
+			return &NotYetLowerable{Reason: "a statement that reads super before super() is a later slice"}
+		}
+		if subtreeHasKind(r.prog, s, frontend.NodeVariableStatement) {
+			return &NotYetLowerable{Reason: "a variable declaration before super() is a later slice"}
+		}
+	}
+	args, _ := r.superCallOf(stmts[superIdx])
 	if len(args) != len(info.base.ctorParams) {
 		return &NotYetLowerable{Reason: "super() with an argument count that differs from the base constructor is a later slice"}
 	}
 	info.superArgs = args
+	info.preSuper = stmts[:superIdx]
 	return nil
 }
 
@@ -1544,6 +1623,17 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		}
 		out = append(out, fd)
 	}
+	// A static initialization block emits its lowered statements into a package
+	// function the main body calls at the class declaration's position, the one
+	// place package-level Go can run ordered work; the class declares no such
+	// function when it has no static block.
+	if len(info.staticBlocks) > 0 {
+		fd, err := r.staticInitFuncDecl(info)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fd)
+	}
 	for _, s := range info.staticSetters {
 		fd, err := r.staticFuncDecl(classMethod{prop: s.prop, goName: s.goName, node: s.node})
 		if err != nil {
@@ -1555,6 +1645,56 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		out = append(out, r.thrownMethodDecls(info)...)
 	}
 	return out, nil
+}
+
+// staticInitName is the name of the package function a class's static
+// initialization blocks lower into, the function the main body calls at the
+// class declaration's position.
+func staticInitName(c *classInfo) string {
+	return "staticInit" + c.goName
+}
+
+// staticBlockBody reports whether a class member node is a static
+// initialization block and returns its statement block. A static block surfaces
+// as an unnamed node whose text starts with static and whose one child is the
+// block, which is how it tells apart from a static modifier token (childless)
+// and from the extends and implements heritage clauses.
+func (r *Renderer) staticBlockBody(m frontend.Node) (frontend.Node, bool) {
+	if firstWord(strings.TrimSpace(r.prog.Text(m))) != "static" {
+		return nil, false
+	}
+	kids := r.prog.Children(m)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodeBlock {
+		return nil, false
+	}
+	return kids[0], true
+}
+
+// staticInitFuncDecl lowers a class's static initialization blocks into one
+// package function, the blocks concatenated in member order the way JavaScript
+// runs them at class-definition time. A block that reads this or super touches
+// the class constructor object, a dynamic-world value this slice does not model,
+// so it hands back rather than drop the reference.
+func (r *Renderer) staticInitFuncDecl(info *classInfo) (ast.Decl, error) {
+	var stmts []ast.Stmt
+	for _, blk := range info.staticBlocks {
+		if subtreeHasKind(r.prog, blk, frontend.NodeThisKeyword) {
+			return nil, &NotYetLowerable{Reason: "a static block that reads this is a later slice"}
+		}
+		if subtreeHasKind(r.prog, blk, frontend.NodeSuperKeyword) {
+			return nil, &NotYetLowerable{Reason: "a static block that reads super is a later slice"}
+		}
+		body, err := r.scopedBlock(blk, 0)
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, body.List...)
+	}
+	return &ast.FuncDecl{
+		Name: ident(staticInitName(info)),
+		Type: &ast.FuncType{Params: &ast.FieldList{}},
+		Body: &ast.BlockStmt{List: stmts},
+	}, nil
 }
 
 // thrownMethodDecls emits the two methods that let a thrown instance ride the
@@ -1770,6 +1910,15 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 		Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(info.goName)}}},
 	}}
 	if info.base != nil {
+		// The this-free statements before super() run first, the order
+		// JavaScript runs them, then the base assignment stands in for super().
+		if len(info.preSuper) > 0 {
+			pre, err := r.scopedBlockRange(r.ctorBlock(info), 0, len(info.preSuper))
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, pre.List...)
+		}
 		superVal, err := r.superCtorExpr(info)
 		if err != nil {
 			return nil, err
@@ -1827,21 +1976,28 @@ func (r *Renderer) ctorBodyStmts(info *classInfo) ([]ast.Stmt, error) {
 	if info.ctor == nil {
 		return nil, nil
 	}
+	skip := 0
+	if info.base != nil {
+		// The pre-super statements and the validated super() call are all emitted
+		// by the caller ahead of the base assignment; the body picks up after them.
+		skip = len(info.preSuper) + 1
+	}
+	body, err := r.scopedBlock(r.ctorBlock(info), skip)
+	if err != nil {
+		return nil, err
+	}
+	return body.List, nil
+}
+
+// ctorBlock returns the declared constructor's body block.
+func (r *Renderer) ctorBlock(info *classInfo) frontend.Node {
 	var block frontend.Node
 	for _, k := range r.prog.Children(info.ctor) {
 		if k.Kind() == frontend.NodeBlock {
 			block = k
 		}
 	}
-	skip := 0
-	if info.base != nil {
-		skip = 1 // the validated super() call, already emitted by the caller
-	}
-	body, err := r.scopedBlock(block, skip)
-	if err != nil {
-		return nil, err
-	}
-	return body.List, nil
+	return block
 }
 
 // superCtorExpr builds the base value a derived constructor stores or folds:
