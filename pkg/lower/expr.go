@@ -857,6 +857,14 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	// property that every arm or no arm carries does not narrow and hands back, since
 	// a general in on an arbitrary object is its own later slice.
 	if opText == "in" {
+		// A private brand check (#m in obj) tests whether obj was constructed with
+		// this class's private member. The Go embedding makes the check trivially
+		// true where it compiles, so lowering it would need to model the TypeError a
+		// foreign object raises, dynamic-world work; it keeps its own reason rather
+		// than folding into the union-narrowing decline.
+		if strings.HasPrefix(strings.TrimSpace(r.prog.Text(left)), "#") {
+			return nil, &NotYetLowerable{Reason: "a private brand check (#m in obj) is a later slice"}
+		}
 		expr, handled, err := r.inUnionCompare(left, right)
 		if err != nil {
 			return nil, err
