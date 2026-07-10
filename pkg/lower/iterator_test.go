@@ -156,6 +156,31 @@ console.log(sum(100, ...new Countdown(3), 200));
 	}
 }
 
+// TestDestructureUserIterableRuns proves array destructuring off a user iterable
+// walks the iterator protocol: const [a, b] = iterable drains the iterable into an
+// array once and binds a and b to its first two values, so a Countdown to 5 binds 0
+// and 1.
+func TestDestructureUserIterableRuns(t *testing.T) {
+	skipIfShort(t)
+	src := selfIterator + "const [a, b] = new Countdown(5);\nconsole.log(a);\nconsole.log(b);\n"
+	if got, want := runProgramGo(t, src), "0\n1\n"; got != want {
+		t.Fatalf("destructuring off a user iterable printed %q, want %q", got, want)
+	}
+}
+
+// TestDestructureUserIterableLowers proves the destructuring drains the iterable
+// into a value.Array once and reads each binding off it by index, rather than
+// handing back the way a non-array source did before this slice.
+func TestDestructureUserIterableLowers(t *testing.T) {
+	src := selfIterator + "const [a, b] = new Countdown(5);\nconsole.log(a);\n"
+	source := renderProgram(t, src)
+	for _, want := range []string{"value.ArrayFrom(", ".SymbolIterator()", ".AtI(0)", ".AtI(1)"} {
+		if !strings.Contains(source, want) {
+			t.Errorf("destructuring did not drain the iterable through the protocol, missing %q:\n%s", want, source)
+		}
+	}
+}
+
 // TestForOfObjectLiteralIteratorHandsBack proves that an iterable whose
 // [Symbol.iterator]() returns an inline object literal with a next() method hands
 // back rather than mislower: an object literal that carries a method is a later
