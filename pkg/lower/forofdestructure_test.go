@@ -69,6 +69,40 @@ for (const [a, b] of pairs) {
 	}
 }
 
+// TestForOfDestructureDuplicateNameBindsLast proves a pattern that repeats a name,
+// for (var [x, x] of pairs), binds x once at the last position rather than emitting
+// two `x :=` lines. JavaScript binds the repeated name a single time with the last
+// element winning, and the positional reads are pure AtI lookups, so the earlier read
+// is a dead store. Emitting both would also make Go reject the second `x :=` as no new
+// variables on the left. for-of/head-var-bound-names-dup exercises this.
+func TestForOfDestructureDuplicateNameBindsLast(t *testing.T) {
+	const src = "for (var [x, x] of [[1, 2]]) {\n  console.log(String(x));\n}\n"
+	source := renderProgram(t, src)
+	if got := strings.Count(source, "x := "); got != 1 {
+		t.Errorf("repeated name should bind once, saw %d `x :=` lines:\n%s", got, source)
+	}
+	if !strings.Contains(source, ".AtI(1)") || strings.Contains(source, ".AtI(0)") {
+		t.Errorf("repeated name should read the last position 1, not 0:\n%s", source)
+	}
+}
+
+// TestForOfDestructureDuplicateNameRuns builds and runs the repeated-name loop so the
+// last-wins binding is proven end to end: x holds the second element each iteration.
+func TestForOfDestructureDuplicateNameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+var iterCount = 0;
+for (var [x, x] of [[1, 2]]) {
+  console.log(String(x));
+  iterCount += 1;
+}
+console.log(String(iterCount));
+`
+	if got, want := runProgramGo(t, src), "2\n1\n"; got != want {
+		t.Fatalf("for-of duplicate destructure printed %q, want %q", got, want)
+	}
+}
+
 // TestForOfDestructureHoleHandsBack proves a pattern with a hole hands back.
 func TestForOfDestructureHoleHandsBack(t *testing.T) {
 	const src = "const pairs: number[][] = [[1, 2]];\nfor (const [, b] of pairs) {\n  console.log(b);\n}\n"
