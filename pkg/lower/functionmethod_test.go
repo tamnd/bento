@@ -53,3 +53,34 @@ func TestFunctionCallSideEffectingThisHandsBack(t *testing.T) {
 		t.Fatalf("side-effecting this hand-back reason = %q, want a this-argument reason", reason)
 	}
 }
+
+// Function.prototype.apply invokes a function the same way call does, but gathers the
+// positional arguments in an array rather than spelling them inline. bento reads the
+// elements of a plain array literal as the positional arguments and lowers the whole
+// invocation to the direct call, so apply(null, [a, b]) is F(a, b).
+
+// TestFunctionApplyLowersToDirectCall proves f.apply(thisArg, [a, b]) lowers to the
+// direct Go call with the array literal's elements spread as positional arguments.
+func TestFunctionApplyLowersToDirectCall(t *testing.T) {
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"console.log(add.apply(null, [2, 3]));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "Add(2, 3)") {
+		t.Errorf("apply did not lower to the direct call over the array literal's elements:\n%s", source)
+	}
+}
+
+// TestFunctionApplyRuns builds and runs a function invoked through apply so the
+// lowered direct call is proven against the JavaScript result, including a
+// no-argument apply that passes only a this argument.
+func TestFunctionApplyRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function add(a: number, b: number): number { return a + b; }\n" +
+		"function pi(): number { return 3; }\n" +
+		"console.log(add.apply(null, [2, 3]));\n" +
+		"console.log(add.apply(undefined, [4, 5]));\n" +
+		"console.log(pi.apply(null));\n"
+	if got, want := runProgramGo(t, src), "5\n9\n3\n"; got != want {
+		t.Fatalf("apply printed %q, want %q", got, want)
+	}
+}

@@ -394,19 +394,21 @@ func (r *Renderer) restFuncValueArg(argNode frontend.Node, pt frontend.Type) (as
 	return ident(name), true
 }
 
-// functionMethodCall lowers f.call(...) on a plain function value: it invokes the
-// function with the this argument the source passes and the remaining positional
-// arguments. bento's plain functions take no this, since a body that reads this
-// hands back when the function is lowered, so the this argument only sets a receiver
-// the function never reads and drops once its evaluation is known to be pure. The
-// call then lowers exactly as the direct call F(args) would, so a call through .call
-// and a bare call share the same argument bridging. apply and bind are not this
-// path; they report ok=false and fall to the non-string handback, a later slice. A
-// this argument that could have a side effect, or a generic or omittable-arity
-// callee whose direct call has its own reconstruction, hands back rather than drop an
-// observable evaluation or emit a short call.
+// functionMethodCall lowers f.call(...) and f.apply(...) on a plain function value:
+// both invoke the function with the this argument the source passes and a list of
+// positional arguments, call spelling them inline and apply gathering them in an
+// array. bento's plain functions take no this, since a body that reads this hands
+// back when the function is lowered, so the this argument only sets a receiver the
+// function never reads and drops once its evaluation is known to be pure. The call
+// then lowers exactly as the direct call F(args) would, so an invocation through
+// .call or .apply and a bare call share the same argument bridging. bind is not this
+// path; it reports ok=false and falls to the non-string handback, a later slice. A
+// this argument that could have a side effect, an apply whose arguments are not a
+// plain array literal (a runtime array's length is not known here), or a generic or
+// omittable-arity callee whose direct call has its own reconstruction, hands back
+// rather than drop an observable evaluation or emit a call of the wrong arity.
 func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
-	if method != "call" || recvNode.Kind() != frontend.NodeIdentifier {
+	if (method != "call" && method != "apply") || recvNode.Kind() != frontend.NodeIdentifier {
 		return nil, false, nil
 	}
 	sym, ok := r.prog.SymbolAt(recvNode)
@@ -425,23 +427,52 @@ func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, arg
 		}
 	}
 	if len(sig.TypeParams) != 0 {
-		return nil, false, &NotYetLowerable{Reason: "call on a generic function is a later slice"}
+		return nil, false, &NotYetLowerable{Reason: method + " on a generic function is a later slice"}
 	}
 	if r.funcOmittable(sym) {
-		return nil, false, &NotYetLowerable{Reason: "call on a function with a defaulted or rest parameter is a later slice"}
+		return nil, false, &NotYetLowerable{Reason: method + " on a function with a defaulted or rest parameter is a later slice"}
 	}
-	callArgs := argNodes
-	if len(argNodes) > 0 {
-		if !r.droppableThisArg(argNodes[0]) {
-			return nil, false, &NotYetLowerable{Reason: "call with a this argument that is not a plain value is a later slice"}
-		}
-		callArgs = argNodes[1:]
+	if len(argNodes) > 0 && !r.droppableThisArg(argNodes[0]) {
+		return nil, false, &NotYetLowerable{Reason: method + " with a this argument that is not a plain value is a later slice"}
+	}
+	callArgs, err := r.functionInvokeArgs(method, argNodes)
+	if err != nil {
+		return nil, false, err
 	}
 	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false)
 	if err != nil {
 		return nil, false, err
 	}
 	return e, true, nil
+}
+
+// functionInvokeArgs returns the positional argument nodes an invocation through call
+// or apply passes to the function, past the leading this argument. call spells the
+// arguments inline, so they are the arguments after this. apply gathers them in an
+// array, so they are the elements of that array; only a plain array literal is read
+// here, since a runtime array's length is not known at lowering, and a spread inside
+// the literal waits on the spread slice.
+func (r *Renderer) functionInvokeArgs(method string, argNodes []frontend.Node) ([]frontend.Node, error) {
+	if method == "call" {
+		if len(argNodes) == 0 {
+			return nil, nil
+		}
+		return argNodes[1:], nil
+	}
+	if len(argNodes) < 2 {
+		return nil, nil
+	}
+	arr := argNodes[1]
+	if arr.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, &NotYetLowerable{Reason: "apply whose arguments are not a plain array literal is a later slice"}
+	}
+	elems := r.prog.Children(arr)
+	for _, el := range elems {
+		if el.Kind() == frontend.NodeSpreadElement {
+			return nil, &NotYetLowerable{Reason: "apply over an array literal with a spread element is a later slice"}
+		}
+	}
+	return elems, nil
 }
 
 // droppableThisArg reports whether the this argument of a .call can be dropped
