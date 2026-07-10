@@ -125,7 +125,7 @@ func TestForwardModuleRefDetection(t *testing.T) {
 		return s
 	}
 	a, b, c := sym(0), sym(1), sym(2)
-	if !(order[a] < order[b] && order[b] < order[c]) {
+	if order[a] >= order[b] || order[b] >= order[c] {
 		t.Fatalf("ordinals not increasing: a=%d b=%d c=%d", order[a], order[b], order[c])
 	}
 
