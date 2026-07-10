@@ -590,7 +590,41 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	if opText == "=" {
 		return r.assignValue(left, right)
 	}
+	if opText == "," {
+		return r.commaValue(n, left, right)
+	}
 	return r.combineBinary(opText, left, right)
+}
+
+// commaValue lowers a comma expression (a, b): JavaScript evaluates the left for
+// its effect, discards its value, then evaluates and yields the right. Go has no
+// comma operator and forbids a bare expression statement, so the pair rides an
+// immediately-called closure that evaluates the left into the blank identifier
+// (which accepts any single value and still runs the expression, so a
+// side-effecting left mutates and a throwing left throws) and returns the right,
+// typed by the whole expression's type, which the checker resolves to the right
+// operand's type. A pure left, the shape the checker flags 2695, is evaluated and
+// discarded the same way, harmlessly. A nested (a, b, c) is left-associative, so
+// the inner comma lowers to its own closure whose value the outer discards, and
+// every operand still runs left to right.
+func (r *Renderer) commaValue(n, left, right frontend.Node) (ast.Expr, error) {
+	retType, err := r.typeExpr(r.prog.TypeAt(n))
+	if err != nil {
+		return nil, err
+	}
+	lhs, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, err
+	}
+	body := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{lhs}},
+		&ast.ReturnStmt{Results: []ast.Expr{rhs}},
+	}
+	return r.valueClosure(retType, body), nil
 }
 
 // binaryEvalOrderHazard reports whether a binary expression cannot preserve
