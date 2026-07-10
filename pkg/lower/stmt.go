@@ -207,10 +207,15 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	// code points). A string yields one substring per Unicode code point, so it
 	// lowers to a range over CodePoints() the same way an array ranges over Elems();
 	// the loop variable is the string of that code point, which is how the checker
-	// types it. Any other iterable (a Set, a Map, a user iterator) is a later slice
-	// and hands back.
+	// types it. The arguments object ranges over the same Elems, off the store the
+	// body materialized, yielding each boxed argument. Any other iterable (a Set, a
+	// Map, a user iterator) is a later slice and hands back.
 	var elemsMethod string
+	var iter ast.Expr
 	switch {
+	case r.argsObjName != "" && r.isArgumentsIdent(kids[1]):
+		elemsMethod = "Elems"
+		iter = ident(r.argsObjName)
 	case isArrayElem(r, kids[1]):
 		elemsMethod = "Elems"
 	case r.isString(kids[1]):
@@ -218,9 +223,12 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	default:
 		return nil, &NotYetLowerable{Reason: "for...of over a non-array, non-string iterable is a later slice"}
 	}
-	iter, err := r.lowerExpr(kids[1])
-	if err != nil {
-		return nil, err
+	if iter == nil {
+		var err error
+		iter, err = r.lowerExpr(kids[1])
+		if err != nil {
+			return nil, err
+		}
 	}
 	body, err := r.loopBody(kids[2])
 	if err != nil {

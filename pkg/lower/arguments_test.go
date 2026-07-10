@@ -80,6 +80,47 @@ console.log(pick(1, 2, 3));
 	}
 }
 
+// TestArgumentsForOfRangesStore proves a for...of over arguments ranges the backing
+// store's elements.
+func TestArgumentsForOfRangesStore(t *testing.T) {
+	const src = "function f(a: number, b: number): number {\n" +
+		"  let n = 0;\n" +
+		"  for (const x of arguments) { n++; }\n" +
+		"  return n;\n" +
+		"}\n" +
+		"f(1, 2);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Elems()") {
+		t.Errorf("for...of over arguments did not range the store:\n%s", source)
+	}
+}
+
+// TestArgumentsForOfRuns builds and runs a counting for...of and an element-printing
+// for...of over arguments so the ranged store is proven against the JavaScript
+// result.
+func TestArgumentsForOfRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function count(a: number, b: number, c: number): number {
+  let n = 0;
+  for (const x of arguments) {
+    n++;
+  }
+  return n;
+}
+function each(a: number, b: number): void {
+  for (const x of arguments) {
+    console.log(x);
+  }
+}
+console.log(count(1, 2, 3));
+each(7, 8);
+`
+	if got, want := runProgramGo(t, src), "3\n7\n8\n"; got != want {
+		t.Fatalf("for...of over arguments printed %q, want %q", got, want)
+	}
+}
+
 // TestArgumentsWithRestParameterHandsBack proves a body that reads arguments while
 // its signature carries a rest parameter hands back: the rest gathers a call-varying
 // tail, so the parameter count is not the call arity and the store cannot stand in.

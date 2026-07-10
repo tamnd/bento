@@ -121,6 +121,16 @@ func (r *Renderer) scanArguments(n frontend.Node, reads, supported *bool) {
 			r.scanArguments(kids[1], reads, supported)
 			return
 		}
+	case frontend.NodeForOfStatement:
+		kids := r.prog.Children(n)
+		if len(kids) == 3 && r.isArgumentsIdent(kids[1]) {
+			*reads = true
+			// The iterable is the arguments object, ranged over the store; scan the loop
+			// binding and body but not the iterable identifier.
+			r.scanArguments(kids[0], reads, supported)
+			r.scanArguments(kids[2], reads, supported)
+			return
+		}
 	}
 	for _, c := range r.prog.Children(n) {
 		r.scanArguments(c, reads, supported)
