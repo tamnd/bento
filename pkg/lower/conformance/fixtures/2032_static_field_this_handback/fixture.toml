@@ -1,0 +1,2 @@
+feature = "class-static-field-initializer"
+handback = "a static field initializer that reads this is a later slice"

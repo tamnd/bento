@@ -62,12 +62,15 @@ type classInfo struct {
 	// routes to the call, the static twin of the instance accessor path.
 	staticGetters []classMethod
 	staticSetters []classSetter
-	// staticBlocks are the class's static initialization blocks, in member order.
-	// Each lowers into a package function the program assembler calls at the class
-	// declaration's position in the main body, which is when JavaScript runs it;
-	// package-level Go has no ordered statement execution, so the ordered work a
-	// static block does lives in that called function instead.
-	staticBlocks []frontend.Node
+	// staticInit is the class's ordered static initialization: static blocks and
+	// the assignments non-constant static field initializers become, interleaved
+	// in member order. Each step lowers into a package function the program
+	// assembler calls at the class declaration's position in the main body, which
+	// is when JavaScript runs it; package-level Go has no ordered statement
+	// execution, so the ordered work these steps do lives in that called function
+	// instead. A constant static field keeps its package var initializer and adds
+	// no step, so the common case emits no init function.
+	staticInit []staticInitStep
 	// base is the registered class this one extends, nil for a root class. The
 	// base embeds as the derived struct's first field, so Go promotion serves
 	// the inherited fields and methods; registration rejects a derived member
@@ -109,6 +112,21 @@ type classField struct {
 	goName string        // exported Go field name, or the package var name for a static
 	ident  frontend.Node // the name node, whose checker type is the declared field type
 	init   frontend.Node // the initializer expression, nil when none
+	// runtimeInit marks a static field whose initializer is not a constant
+	// expression, so the package var declares zero-valued and the initializer runs
+	// as an assignment in the class's static init function in member order rather
+	// than as the var's own initializer. It is always false for an instance field.
+	runtimeInit bool
+}
+
+// staticInitStep is one step of a class's ordered static initialization: either
+// a static initialization block or the assignment a non-constant static field
+// initializer becomes. The steps run in member order inside the class's init
+// function, which is when JavaScript runs them, so a static that reads an
+// earlier static (static b = C.a + 1) sees the value the earlier step wrote.
+type staticInitStep struct {
+	block frontend.Node // the block of a static { ... }, nil for a field step
+	field *classField   // the static field whose initializer runs here, nil for a block step
 }
 
 // classMethod is one instance method. An abstract method has no body: it
@@ -340,6 +358,16 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 					return err
 				}
 				info.statics = append(info.statics, f)
+				// A non-constant initializer runs in the static init function at its
+				// member position, so it is recorded as a step here in the order it
+				// appears among the blocks. The step holds a copy so a later static
+				// field appended to info.statics cannot move it.
+				if f.runtimeInit {
+					step := f
+					if err := r.noteStaticInit(info, staticInitStep{field: &step}, taken); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			f, err := r.classFieldOf(m)
@@ -415,18 +443,12 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			}
 			// A static initialization block surfaces as an unnamed node whose text
 			// starts with static and whose one child is the block; it is not heritage.
-			// The first block seen mints the init function's name so a name clash hands
-			// back with the module's other package-level names rather than emitting Go
-			// that redeclares one.
+			// It is recorded as a static init step in its member position, alongside
+			// any non-constant field initializers.
 			if blk, ok := r.staticBlockBody(m); ok {
-				if len(info.staticBlocks) == 0 {
-					if nm := staticInitName(info); taken[nm] {
-						return &NotYetLowerable{Reason: "the module already speaks " + nm + ", the name class " + name + "'s static block needs"}
-					} else {
-						taken[nm] = true
-					}
+				if err := r.noteStaticInit(info, staticInitStep{block: blk}, taken); err != nil {
+					return err
 				}
-				info.staticBlocks = append(info.staticBlocks, blk)
 				continue
 			}
 			if firstWord(text) != "extends" || info.base != nil {
@@ -1113,8 +1135,20 @@ func (r *Renderer) staticFieldOf(info *classInfo, m frontend.Node, taken map[str
 	if init == nil {
 		return classField{}, &NotYetLowerable{Reason: "a static field without an initializer is a later slice"}
 	}
+	// A constant initializer stays the package var's own initializer, the readable
+	// common case. A non-constant one runs in the class's static init function in
+	// member order, so it may read an earlier static or call a module function; an
+	// initializer that reads this reaches the class constructor object, a
+	// dynamic-world value this slice does not model, so it stays declined.
+	runtimeInit := false
 	if !r.pureStaticInit(init) {
-		return classField{}, &NotYetLowerable{Reason: "a static field initializer that is not a constant expression is a later slice"}
+		if subtreeHasKind(r.prog, init, frontend.NodeThisKeyword) {
+			return classField{}, &NotYetLowerable{Reason: "a static field initializer that reads this is a later slice"}
+		}
+		if subtreeHasKind(r.prog, init, frontend.NodeSuperKeyword) {
+			return classField{}, &NotYetLowerable{Reason: "a static field initializer that reads super is a later slice"}
+		}
+		runtimeInit = true
 	}
 	name := ""
 	for _, cand := range []string{lowerFirst(info.goName) + propGo, info.goName + propGo} {
@@ -1127,7 +1161,7 @@ func (r *Renderer) staticFieldOf(info *classInfo, m frontend.Node, taken map[str
 		return classField{}, &NotYetLowerable{Reason: "no free package name for static ." + prop + " of class " + info.name}
 	}
 	taken[name] = true
-	return classField{prop: prop, goName: name, ident: kids[1], init: init}, nil
+	return classField{prop: prop, goName: name, ident: kids[1], init: init, runtimeInit: runtimeInit}, nil
 }
 
 // pureStaticInit reports whether a static initializer may run as a package var
@@ -1623,11 +1657,12 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		}
 		out = append(out, fd)
 	}
-	// A static initialization block emits its lowered statements into a package
-	// function the main body calls at the class declaration's position, the one
-	// place package-level Go can run ordered work; the class declares no such
-	// function when it has no static block.
-	if len(info.staticBlocks) > 0 {
+	// Static initialization steps, blocks and non-constant field initializers in
+	// member order, emit their lowered statements into a package function the main
+	// body calls at the class declaration's position, the one place package-level
+	// Go can run ordered work; the class declares no such function when every
+	// static is a plain constant.
+	if len(info.staticInit) > 0 {
 		fd, err := r.staticInitFuncDecl(info)
 		if err != nil {
 			return nil, err
@@ -1648,7 +1683,7 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 }
 
 // staticInitName is the name of the package function a class's static
-// initialization blocks lower into, the function the main body calls at the
+// initialization steps lower into, the function the main body calls at the
 // class declaration's position.
 func staticInitName(c *classInfo) string {
 	return "staticInit" + c.goName
@@ -1677,7 +1712,16 @@ func (r *Renderer) staticBlockBody(m frontend.Node) (frontend.Node, bool) {
 // so it hands back rather than drop the reference.
 func (r *Renderer) staticInitFuncDecl(info *classInfo) (ast.Decl, error) {
 	var stmts []ast.Stmt
-	for _, blk := range info.staticBlocks {
+	for _, step := range info.staticInit {
+		if step.field != nil {
+			asn, err := r.staticInitAssign(*step.field)
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, asn)
+			continue
+		}
+		blk := step.block
 		if subtreeHasKind(r.prog, blk, frontend.NodeThisKeyword) {
 			return nil, &NotYetLowerable{Reason: "a static block that reads this is a later slice"}
 		}
@@ -1695,6 +1739,44 @@ func (r *Renderer) staticInitFuncDecl(info *classInfo) (ast.Decl, error) {
 		Type: &ast.FuncType{Params: &ast.FieldList{}},
 		Body: &ast.BlockStmt{List: stmts},
 	}, nil
+}
+
+// staticInitAssign lowers a non-constant static field initializer into the
+// assignment that runs in the class's static init function: the package var on
+// the left, the initializer coerced to the field's declared type on the right,
+// so a static reading an earlier static or calling a module function evaluates
+// where JavaScript evaluates it. An initializer that reaches a not-yet-lowerable
+// construct hands back through the ordinary expression path, no special casing.
+func (r *Renderer) staticInitAssign(f classField) (ast.Stmt, error) {
+	rhs, err := r.lowerExpr(f.init)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err = r.coerceToTarget(rhs, f.init, f.ident)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(f.goName)},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{rhs},
+	}, nil
+}
+
+// noteStaticInit appends a static initialization step, minting the class's init
+// function name on the first step so a clash with an existing package-level name
+// hands back rather than redeclare it. The first block or non-constant field
+// initializer a class has is what mints the name; a class of only constant
+// statics has no step and no init function.
+func (r *Renderer) noteStaticInit(info *classInfo, step staticInitStep, taken map[string]bool) error {
+	if len(info.staticInit) == 0 {
+		if nm := staticInitName(info); taken[nm] {
+			return &NotYetLowerable{Reason: "the module already speaks " + nm + ", the name class " + info.name + "'s static initialization needs"}
+		}
+		taken[staticInitName(info)] = true
+	}
+	info.staticInit = append(info.staticInit, step)
+	return nil
 }
 
 // thrownMethodDecls emits the two methods that let a thrown instance ride the
@@ -1742,27 +1824,33 @@ func (r *Renderer) thrownMethodDecls(info *classInfo) []ast.Decl {
 }
 
 // staticVarDecl emits one static field as a package var with an explicit type,
-// so the declaration reads the same as the struct field it sits next to.
+// so the declaration reads the same as the struct field it sits next to. A field
+// whose initializer is not a plain constant declares its var zero-valued here and
+// runs its initializer as an assignment in the class's static init function, in
+// member order, since package-level Go has no ordered execution.
 func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
 	goType, err := r.typeExpr(r.prog.TypeAt(f.ident))
 	if err != nil {
 		return nil, err
 	}
-	rhs, err := r.lowerExpr(f.init)
-	if err != nil {
-		return nil, err
+	spec := &ast.ValueSpec{
+		Names: []*ast.Ident{ident(f.goName)},
+		Type:  goType,
 	}
-	rhs, err = r.coerceToTarget(rhs, f.init, f.ident)
-	if err != nil {
-		return nil, err
+	if !f.runtimeInit {
+		rhs, err := r.lowerExpr(f.init)
+		if err != nil {
+			return nil, err
+		}
+		rhs, err = r.coerceToTarget(rhs, f.init, f.ident)
+		if err != nil {
+			return nil, err
+		}
+		spec.Values = []ast.Expr{rhs}
 	}
 	return &ast.GenDecl{
-		Tok: token.VAR,
-		Specs: []ast.Spec{&ast.ValueSpec{
-			Names:  []*ast.Ident{ident(f.goName)},
-			Type:   goType,
-			Values: []ast.Expr{rhs},
-		}},
+		Tok:   token.VAR,
+		Specs: []ast.Spec{spec},
 	}, nil
 }
 
