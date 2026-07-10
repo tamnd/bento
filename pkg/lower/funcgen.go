@@ -39,15 +39,68 @@ func (r *Renderer) RenderFunc(fn frontend.Node) (Decl, error) {
 // prints a whole file at once) share the one place a signature and body become a
 // FuncDecl. It returns the same NotYetLowerable for an unlowerable construct.
 func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
+	_, name, sig, err := r.funcDeclHead(fn)
+	if err != nil {
+		return nil, err
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
+	}
+	return r.funcDeclNamed(fn, sig, name)
+}
+
+// funcDecls builds the Go declarations a top-level function contributes: one for a
+// plain function, and one per monomorphization for a generic function, the
+// specializations collectMono recorded from the program's call sites. Each
+// specialization lowers the same body with typeSubst active, so a bare type
+// parameter resolves to the concrete type that instantiation fixed. A generic no
+// call site monomorphizes has no specialization to emit and hands back, since an
+// unspecialized generic has no single Go form. It is the program assembler's entry
+// point; RenderFunc keeps funcDecl for the single-declaration path.
+func (r *Renderer) funcDecls(fn frontend.Node) ([]ast.Decl, error) {
+	sym, name, sig, err := r.funcDeclHead(fn)
+	if err != nil {
+		return nil, err
+	}
+	if len(sig.TypeParams) == 0 {
+		fd, err := r.funcDeclNamed(fn, sig, name)
+		if err != nil {
+			return nil, err
+		}
+		return []ast.Decl{fd}, nil
+	}
+	specs := r.monoSpecs[sym]
+	if len(specs) == 0 {
+		return nil, &NotYetLowerable{Reason: "generic function no call site monomorphizes is a later slice"}
+	}
+	var decls []ast.Decl
+	for _, sp := range specs {
+		prev := r.typeSubst
+		r.typeSubst = sp.subst
+		fd, err := r.funcDeclNamed(fn, sig, name+"_"+sp.suffix)
+		r.typeSubst = prev
+		if err != nil {
+			return nil, err
+		}
+		decls = append(decls, fd)
+	}
+	return decls, nil
+}
+
+// funcDeclHead resolves the pieces every function-declaration lowering shares: the
+// callee symbol, its exported Go name, and its signature. It hands back for an
+// anonymous declaration, a name that is not a Go identifier, and a function that is
+// also a callable object (own data properties), each the same boundary funcDecl
+// kept before the generic split.
+func (r *Renderer) funcDeclHead(fn frontend.Node) (frontend.Symbol, string, frontend.Signature, error) {
 	sym, ok := r.prog.SymbolAt(fn)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "function declaration has no symbol (anonymous functions are a later slice)"}
+		return frontend.Symbol{}, "", frontend.Signature{}, &NotYetLowerable{Reason: "function declaration has no symbol (anonymous functions are a later slice)"}
 	}
 	name, ok := exportedField(sym.Name)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "function name is not a Go identifier"}
+		return frontend.Symbol{}, "", frontend.Signature{}, &NotYetLowerable{Reason: "function name is not a Go identifier"}
 	}
-
 	// A function declaration whose name later carries own data properties (foo.x = 1)
 	// is a callable object, not a bare func. The callable-object model interns a
 	// `type Foo struct { Call func(); ... }` for that shape, which collides with the
@@ -55,16 +108,20 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	// not compile. Modeling a named function that is also an object is a later slice,
 	// so hand back rather than emit the colliding pair.
 	if r.isCallableObject(r.prog.TypeAt(fn)) {
-		return nil, &NotYetLowerable{Reason: "a function declaration with own properties is a callable object, a later slice"}
+		return frontend.Symbol{}, "", frontend.Signature{}, &NotYetLowerable{Reason: "a function declaration with own properties is a callable object, a later slice"}
 	}
-
 	sig, ok := r.prog.SignatureAt(fn)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "function has no call signature"}
+		return frontend.Symbol{}, "", frontend.Signature{}, &NotYetLowerable{Reason: "function has no call signature"}
 	}
-	if len(sig.TypeParams) != 0 {
-		return nil, &NotYetLowerable{Reason: "generic function needs monomorphization, a later slice"}
-	}
+	return sym, name, sig, nil
+}
+
+// funcDeclNamed builds one Go function declaration for a body under a given Go
+// name, the shared core of a plain function and every monomorphization of a
+// generic one. The name is the caller's, so a specialization emits under its
+// mangled name (Identity_num) while a plain function emits under its exported name.
+func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name string) (*ast.FuncDecl, error) {
 	// A default that reads an earlier parameter cannot be filled at the call site,
 	// which does not see the callee's scope, so such a function collapses its optional
 	// tail into one Go variadic and fills each optional in the body. Every other

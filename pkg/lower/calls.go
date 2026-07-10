@@ -177,6 +177,16 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
 		}
+		// A call to a generic function resolves to the monomorphization its type
+		// arguments fix, so the callee is the specialized Go name (Identity_num) the
+		// declaration emitted, not the bare exported name. A generic bento could not
+		// monomorphize hands back here rather than name a Go function that was never
+		// emitted.
+		if monoName, ok, err := r.monoCalleeName(n); err != nil {
+			return nil, err
+		} else if ok {
+			name = monoName
+		}
 		callee = ident(name)
 		// A direct call to a top-level function may omit a defaulted trailing
 		// argument. A callee that fills its optional tail in its own body (a default

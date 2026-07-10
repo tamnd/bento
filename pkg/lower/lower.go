@@ -126,7 +126,14 @@ type Renderer struct {
 	// aliasing corner the snapshot cannot mirror, so it hands back. It is saved and
 	// restored alongside argsObjName.
 	argsWriteSafe bool
-	// int32Locals is the set of local names in the body currently being lowered that
+	// typeSubst maps a type parameter's identity to the concrete type it stands for in
+	// the specialization currently being lowered, so typeExpr resolves a bare T to the
+	// float64, value.BStr, or array type the call site fixed it to. It is set around one
+	// monomorphized instantiation of a generic function (see mono.go) and, like retType,
+	// saved and restored so one specialization's bindings do not leak into another. A nil
+	// map (the default, outside a generic body) resolves nothing, so a non-generic body
+	// lowers exactly as before.
+	typeSubst map[int]frontend.Type
 	// have been proven to hold only 32-bit integers and are therefore given a Go
 	// int32 type rather than a float64. It is computed once per body by int32LocalsOf
 	// and, like retType, saved and restored around each body so one function's
@@ -192,6 +199,13 @@ type Renderer struct {
 	// does not exist. It is set around the body of a named function expression and
 	// cleared after, so the self name does not leak past the expression.
 	funcExprSelf map[frontend.Symbol]string
+	// monoSpecs maps a generic top-level function's symbol to the distinct
+	// monomorphizations the program's call sites ask for, one Go function emitted per
+	// entry. It is filled once by collectMono in RenderProgram, before any body lowers,
+	// so the declaration knows every specialization to emit and a call site can look up
+	// the specialized Go name it resolves to. A symbol absent from the map is a generic
+	// no call site monomorphizes, which hands back rather than emit an unspecialized func.
+	monoSpecs map[frontend.Symbol][]monoSpec
 	// tryRet tells a return statement how to leave the try construct it sits in.
 	// The zero value is a plain function return. tryRetBody marks the body of the
 	// escape closure a try with an escaping return compiles to, where a return
@@ -390,7 +404,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a
@@ -489,6 +503,17 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	// asking for its type expression is a caller error, not a lowering gap.
 	if t.Flags == 0 {
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no type at this position (void or statement)"}
+	}
+
+	// Inside a monomorphized generic body a bare type parameter resolves to the
+	// concrete type the call site fixed it to, so typeExpr renders the float64 or
+	// value.BStr the specialization uses rather than reaching the type-parameter
+	// handback below. The substitution is set only around a specialization (mono.go);
+	// outside one it is nil and this is a no-op.
+	if t.Flags&frontend.TypeTypeParameter != 0 && r.typeSubst != nil {
+		if conc, ok := r.typeSubst[t.Identity()]; ok {
+			return r.typeExpr(conc)
+		}
 	}
 
 	// A self-referential type recurses through typeExpr without end (a function type

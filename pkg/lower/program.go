@@ -68,6 +68,13 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	if err := r.collectEnums(entry); err != nil {
 		return Program{}, err
 	}
+	// Generic functions register their monomorphizations in the same pre-pass so a
+	// call above a generic declaration, and the declaration itself, agree on which
+	// specializations to emit and what Go name each call resolves to. It reads only
+	// the checker and never lowers, so it cannot fail the way the collectors above
+	// can; a generic no call site monomorphizes simply records nothing and hands back
+	// at its declaration.
+	r.collectMono(entry)
 
 	// A module-level binding a top-level function or class body reads cannot stay a
 	// local of main, since a separate Go function cannot see main's locals; it hoists
@@ -122,11 +129,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	for _, stmt := range r.prog.Children(entry) {
 		switch stmt.Kind() {
 		case frontend.NodeFunctionDeclaration:
-			fd, err := r.funcDecl(stmt)
+			fds, err := r.funcDecls(stmt)
 			if err != nil {
 				return Program{}, err
 			}
-			funcs = append(funcs, fd)
+			funcs = append(funcs, fds...)
 		case frontend.NodeVariableStatement:
 			// A variable statement whose bindings a function reads becomes package-level
 			// state; one whose bindings stay inside main is an ordinary main local. A
