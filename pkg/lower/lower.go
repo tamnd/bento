@@ -126,7 +126,14 @@ type Renderer struct {
 	// aliasing corner the snapshot cannot mirror, so it hands back. It is saved and
 	// restored alongside argsObjName.
 	argsWriteSafe bool
-	// int32Locals is the set of local names in the body currently being lowered that
+	// typeSubst maps a type parameter's identity to the concrete type it stands for in
+	// the specialization currently being lowered, so typeExpr resolves a bare T to the
+	// float64, value.BStr, or array type the call site fixed it to. It is set around one
+	// monomorphized instantiation of a generic function (see mono.go) and, like retType,
+	// saved and restored so one specialization's bindings do not leak into another. A nil
+	// map (the default, outside a generic body) resolves nothing, so a non-generic body
+	// lowers exactly as before.
+	typeSubst map[int]frontend.Type
 	// have been proven to hold only 32-bit integers and are therefore given a Go
 	// int32 type rather than a float64. It is computed once per body by int32LocalsOf
 	// and, like retType, saved and restored around each body so one function's
@@ -192,6 +199,22 @@ type Renderer struct {
 	// does not exist. It is set around the body of a named function expression and
 	// cleared after, so the self name does not leak past the expression.
 	funcExprSelf map[frontend.Symbol]string
+	// monoSpecs maps a generic top-level function's symbol to the distinct
+	// monomorphizations the program's call sites ask for, one Go function emitted per
+	// entry. It is filled once by collectMono in RenderProgram, before any body lowers,
+	// so the declaration knows every specialization to emit and a call site can look up
+	// the specialized Go name it resolves to. A symbol absent from the map is a generic
+	// no call site monomorphizes, which hands back rather than emit an unspecialized func.
+	monoSpecs map[frontend.Symbol][]monoSpec
+	// monoMethodSpecs maps a generic method's declaration node to the distinct
+	// monomorphizations its call sites ask for. A Go method cannot carry a type
+	// parameter, so a generic method emits one mangled Go method per instantiation
+	// (Wrap_num, Wrap_str) and each call rewrites to the one it resolves to. It is
+	// filled once by collectMonoMethods in RenderProgram, before any body lowers, so
+	// the class knows every specialization to emit and a call site agrees on the name.
+	// A method absent from the map is a generic no call site monomorphizes, which
+	// hands back rather than emit an unspecialized method.
+	monoMethodSpecs map[frontend.Node][]monoSpec
 	// tryRet tells a return statement how to leave the try construct it sits in.
 	// The zero value is a plain function return. tryRetBody marks the body of the
 	// escape closure a try with an escaping return compiles to, where a return
@@ -390,7 +413,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a
@@ -489,6 +512,17 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	// asking for its type expression is a caller error, not a lowering gap.
 	if t.Flags == 0 {
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no type at this position (void or statement)"}
+	}
+
+	// Inside a monomorphized generic body a bare type parameter resolves to the
+	// concrete type the call site fixed it to, so typeExpr renders the float64 or
+	// value.BStr the specialization uses rather than reaching the type-parameter
+	// handback below. The substitution is set only around a specialization (mono.go);
+	// outside one it is nil and this is a no-op.
+	if t.Flags&frontend.TypeTypeParameter != 0 && r.typeSubst != nil {
+		if conc, ok := r.typeSubst[t.Identity()]; ok {
+			return r.typeExpr(conc)
+		}
 	}
 
 	// A self-referential type recurses through typeExpr without end (a function type
@@ -712,12 +746,14 @@ func (r *Renderer) renderFuncType(t frontend.Type) (ast.Expr, bool, error) {
 // optional parameter lowers to its plain type, since undefined lives inside the
 // value box natively and the call site fills an omitted argument with
 // value.Undefined, matching how paramFields lowers the function body parameter;
-// a static optional has no such room and hands back, as do a generic or a
-// rest-parameter signature. It is shared by renderFuncType's plain function
+// a static optional has no such room and hands back, as does a generic
+// signature. A rest parameter lowers to a trailing *value.Array[T] field, the
+// same array header a rest parameter of a function body takes, so it is a plain
+// (non-variadic) Go func value. It is shared by renderFuncType's plain function
 // value and the Call field of a callable-object struct.
 func (r *Renderer) funcTypeOf(sig frontend.Signature) (*ast.FuncType, error) {
-	if len(sig.TypeParams) != 0 || sig.RestParam != nil {
-		return nil, &NotYetLowerable{Reason: "generic or rest-parameter function type is a later slice"}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic function type is a later slice"}
 	}
 	var params []*ast.Field
 	for _, p := range sig.Params {
@@ -729,6 +765,19 @@ func (r *Renderer) funcTypeOf(sig frontend.Signature) (*ast.FuncType, error) {
 			return nil, err
 		}
 		params = append(params, &ast.Field{Type: pt})
+	}
+	// A rest parameter gathers the trailing arguments into the same *value.Array[T] a
+	// rest parameter of a function body takes (restParamField), so a callback typed
+	// with `...args: T[]` reads as one array field here and the call site packs the
+	// trailing arguments into an array, exactly as a call of a rest-parameter function
+	// does. The Go func value is not variadic: bento models rest through the array
+	// header, not Go's `...`, so a func value and the function body agree on the shape.
+	if sig.RestParam != nil {
+		rt, err := r.typeExpr(sig.RestParam.Type)
+		if err != nil {
+			return nil, err
+		}
+		params = append(params, &ast.Field{Type: rt})
 	}
 	ft := &ast.FuncType{Params: &ast.FieldList{List: params}}
 	if sig.Return.Flags != 0 && sig.Return.Flags&(frontend.TypeVoid|frontend.TypeNever) == 0 {

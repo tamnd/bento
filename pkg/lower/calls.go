@@ -177,6 +177,16 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
 		}
+		// A call to a generic function resolves to the monomorphization its type
+		// arguments fix, so the callee is the specialized Go name (Identity_num) the
+		// declaration emitted, not the bare exported name. A generic bento could not
+		// monomorphize hands back here rather than name a Go function that was never
+		// emitted.
+		if monoName, ok, err := r.monoCalleeName(n); err != nil {
+			return nil, err
+		} else if ok {
+			name = monoName
+		}
 		callee = ident(name)
 		// A direct call to a top-level function may omit a defaulted trailing
 		// argument. A callee that fills its optional tail in its own body (a default
@@ -276,6 +286,16 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		if !variadicTail && i < len(defaults) && defaults[i] != nil && r.isUndefinedLiteral(a) {
 			a = defaults[i]
 		}
+		// A bare reference to a pure rest-parameter function passed to a rest-parameter
+		// func-typed slot fits the slot's Go func type directly: funcTypeOf gives the
+		// slot the same trailing *value.Array[T] field the function's own rest parameter
+		// lowers to, so the exported name fits with no bridging. It routes here before
+		// the value path, which hands a rest function back as needing a defaulting
+		// wrapper because its arity is omittable in the source.
+		if name, ok := r.restFuncValueArg(a, params[i].Type); ok {
+			args = append(args, name)
+			continue
+		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -343,6 +363,57 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		}
 	}
 	return &ast.CallExpr{Fun: callee, Args: args}, nil
+}
+
+// restFuncValueArg lowers a bare reference to a top-level function passed as an
+// argument to a rest-parameter func-typed parameter. A pure rest-parameter function
+// (a rest, with no defaulted or optional parameter) lowers to a Go func whose single
+// trailing *value.Array[T] field is the same shape funcTypeOf gives the slot, so the
+// exported name fits the slot directly with no defaulting wrapper. It reports
+// ok=false for any other shape, leaving the general argument path to lower or hand
+// back: a slot that is not rest-typed takes a Go func of a different arity the name
+// does not fit, and the value path keeps its handback there.
+func (r *Renderer) restFuncValueArg(argNode frontend.Node, pt frontend.Type) (ast.Expr, bool) {
+	if argNode.Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	sym, ok := r.prog.SymbolAt(argNode)
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return nil, false
+	}
+	if !r.pureRestFunc(sym) {
+		return nil, false
+	}
+	if calls, _ := r.prog.Signatures(pt); len(calls) != 1 || calls[0].RestParam == nil {
+		return nil, false
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return nil, false
+	}
+	return ident(name), true
+}
+
+// pureRestFunc reports whether a function symbol is omittable only through a rest
+// parameter, with no defaulted or optional parameter. Such a function lowers to a
+// single fixed Go func shape, its fixed parameters followed by one trailing array
+// field, so it fits a rest-parameter func-typed slot directly, unlike a function
+// whose arity varies through a default the call site must fill.
+func (r *Renderer) pureRestFunc(sym frontend.Symbol) bool {
+	rest := false
+	for _, d := range r.prog.Declarations(sym) {
+		sig, ok := r.prog.SignatureAt(d)
+		if !ok {
+			continue
+		}
+		if sig.MinArgs < len(sig.Params) {
+			return false
+		}
+		if sig.RestParam != nil {
+			rest = true
+		}
+	}
+	return rest
 }
 
 // isDroppableExtraArg reports whether an argument past the callee's parameter
