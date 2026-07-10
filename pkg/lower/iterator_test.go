@@ -181,6 +181,82 @@ func TestDestructureUserIterableLowers(t *testing.T) {
 	}
 }
 
+// closingIterator is an endless iterable that records its close: it never reports
+// done on its own, so a for...of over it ends only by breaking, and its return()
+// prints a marker, which is how a test observes the close fired.
+const closingIterator = `
+class Guarded {
+  i: number = 0;
+  [Symbol.iterator]() { return this; }
+  next(): { value: number; done: boolean } {
+    const v = this.i;
+    this.i = this.i + 1;
+    return { value: v, done: false };
+  }
+  return(): { value: number; done: boolean } {
+    console.log("closed");
+    return { value: 0, done: true };
+  }
+}
+`
+
+// TestForOfIteratorCloseOnBreakRuns proves a for...of that breaks out of a user
+// iterable calls the iterator's return() to close it: the loop prints 0 and 1, then
+// breaks at 2, which fires return() (printing "closed"), and control falls through
+// to the line after the loop.
+func TestForOfIteratorCloseOnBreakRuns(t *testing.T) {
+	skipIfShort(t)
+	src := closingIterator + "for (const x of new Guarded()) { if (x >= 2) { break; } console.log(x); }\nconsole.log(\"after\");\n"
+	if got, want := runProgramGo(t, src), "0\n1\nclosed\nafter\n"; got != want {
+		t.Fatalf("closing for...of printed %q, want %q", got, want)
+	}
+}
+
+// TestForOfIteratorCloseNormalCompletionRuns proves the close does not fire when
+// the loop ends normally: a bounded iterable that reports done closes itself
+// through the done branch, so return() is not called and no marker prints.
+func TestForOfIteratorCloseNormalCompletionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class Bounded {
+  i: number = 0;
+  stop: number;
+  constructor(stop: number) { this.stop = stop; }
+  [Symbol.iterator]() { return this; }
+  next(): { value: number; done: boolean } {
+    if (this.i < this.stop) { const v = this.i; this.i = this.i + 1; return { value: v, done: false }; }
+    return { value: 0, done: true };
+  }
+  return(): { value: number; done: boolean } {
+    console.log("closed");
+    return { value: 0, done: true };
+  }
+}
+for (const x of new Bounded(2)) { console.log(x); }
+console.log("done");
+`
+	if got, want := runProgramGo(t, src), "0\n1\ndone\n"; got != want {
+		t.Fatalf("normally-completing for...of printed %q, want %q", got, want)
+	}
+}
+
+// TestForOfIteratorCloseOnReturnHandsBack proves the honest leftover: when the
+// iterator defines return() and the loop body exits by a return that would jump
+// past the after-loop close, the unit hands back rather than skip the close
+// silently, keeping the zero-fail invariant.
+func TestForOfIteratorCloseOnReturnHandsBack(t *testing.T) {
+	src := closingIterator + `function f(): number {
+  for (const x of new Guarded()) { if (x >= 2) { return x; } }
+  return -1;
+}
+f();
+`
+	reason := renderProgramHandBack(t, src)
+	if want := "iterator close on a return, throw, or labeled exit from for...of is a later slice"; reason != want {
+		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}
+
 // TestForOfObjectLiteralIteratorHandsBack proves that an iterable whose
 // [Symbol.iterator]() returns an inline object literal with a next() method hands
 // back rather than mislower: an object literal that carries a method is a later

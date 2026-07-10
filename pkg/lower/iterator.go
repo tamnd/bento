@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -47,6 +48,10 @@ type iteratorShape struct {
 	elem      frontend.Type
 	valueName string
 	doneName  string
+	// returnName is the Go method name of the iterator's optional return(), the one
+	// for...of calls to close the iterator on an early exit, or "" when the iterator
+	// has no return() and so needs no close.
+	returnName string
 }
 
 // isSymbolIteratorName reports whether a class member name node is the well-known
@@ -159,7 +164,47 @@ func (r *Renderer) symbolIteratorShape(t frontend.Type) (iteratorShape, bool) {
 	if !ok {
 		return iteratorShape{}, false
 	}
-	return iteratorShape{elem: valueProp.Type, valueName: valueName, doneName: doneName}, true
+	shape := iteratorShape{elem: valueProp.Type, valueName: valueName, doneName: doneName}
+	// An iterator may define an optional return(), which for...of calls to close it on
+	// an early exit. When it does, the Go method name is recorded so the loop can call
+	// it; when it does not, returnName stays empty and the loop needs no close.
+	if _, ok := r.memberByName(iterType, "return"); ok {
+		if name, ok := exportedField("return"); ok {
+			shape.returnName = name
+		}
+	}
+	return shape, true
+}
+
+// forOfBodyBypassesClose reports whether a for...of body contains a completion
+// that would jump past the after-loop iterator close: a return, a throw, or a
+// labeled break or continue, any of which leaves the loop without falling through
+// to the `if broke` that calls return(). An unlabeled break or continue is safe,
+// since it lands on the after-loop close (break) or re-enters the loop (continue),
+// so those do not count. A nested function body is not descended into, since its
+// own return belongs to it, not to this loop.
+func (r *Renderer) forOfBodyBypassesClose(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		return false
+	case frontend.NodeReturnStatement, frontend.NodeThrowStatement:
+		return true
+	case frontend.NodeUnknown:
+		if word := branchKeyword(strings.TrimSpace(r.prog.Text(n))); word == "break" || word == "continue" {
+			kids := r.prog.Children(n)
+			// A labeled branch names its target, so it may leave a loop enclosing this
+			// one; it is conservatively treated as a bypass. An unlabeled branch stays
+			// with the nearest loop and is safe.
+			return len(kids) == 1 && kids[0].Kind() == frontend.NodeIdentifier
+		}
+	}
+	for _, k := range r.prog.Children(n) {
+		if r.forOfBodyBypassesClose(k) {
+			return true
+		}
+	}
+	return false
 }
 
 // forOfIterator lowers a for...of over a user iterable through the iterator
@@ -184,6 +229,16 @@ func (r *Renderer) forOfIterator(iterable, bindNode frontend.Node, name string, 
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "an iterator whose next is not a Go method name is a later slice"}
 	}
+	// An iterator that defines return() is closed when the loop exits early, so the
+	// loop is exited normally only when next() reports done. A `broke` flag starts
+	// true and is cleared on the done branch, so after the loop an unbroken run (done)
+	// skips the close and a broken run (an unlabeled break) calls it. A body that can
+	// leave the loop another way, a return, a throw, or a labeled branch, would jump
+	// past the after-loop close, so it hands back rather than skip the close silently.
+	closes := shape.returnName != ""
+	if closes && r.forOfBodyBypassesClose(bodyNode) {
+		return nil, &NotYetLowerable{Reason: "iterator close on a return, throw, or labeled exit from for...of is a later slice"}
+	}
 	itName := r.freshTemp()
 	resName := r.freshTemp()
 	getIter := &ast.AssignStmt{
@@ -196,9 +251,26 @@ func (r *Renderer) forOfIterator(iterable, bindNode frontend.Node, name string, 
 		Tok: token.DEFINE,
 		Rhs: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(itName), Sel: ident(nextName)}}},
 	}
+	doneStmts := []ast.Stmt{}
+	block := []ast.Stmt{getIter}
+	var brokeName string
+	if closes {
+		brokeName = r.freshTemp()
+		block = append(block, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(brokeName)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{ident("true")},
+		})
+		doneStmts = append(doneStmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(brokeName)},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{ident("false")},
+		})
+	}
+	doneStmts = append(doneStmts, &ast.BranchStmt{Tok: token.BREAK})
 	brk := &ast.IfStmt{
 		Cond: &ast.SelectorExpr{X: ident(resName), Sel: ident(shape.doneName)},
-		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.BranchStmt{Tok: token.BREAK}}},
+		Body: &ast.BlockStmt{List: doneStmts},
 	}
 	loopStmts := []ast.Stmt{pull, brk}
 	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
@@ -209,8 +281,16 @@ func (r *Renderer) forOfIterator(iterable, bindNode frontend.Node, name string, 
 		})
 	}
 	loopStmts = append(loopStmts, body.List...)
-	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}}
-	return &ast.BlockStmt{List: []ast.Stmt{getIter, loop}}, nil
+	block = append(block, &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}})
+	if closes {
+		block = append(block, &ast.IfStmt{
+			Cond: ident(brokeName),
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{X: ident(itName), Sel: ident(shape.returnName)},
+			}}}},
+		})
+	}
+	return &ast.BlockStmt{List: block}, nil
 }
 
 // iterableToSliceExpr drains a user iterable into a Go slice of its element type,
