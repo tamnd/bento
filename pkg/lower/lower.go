@@ -328,6 +328,16 @@ type Renderer struct {
 	// binding's own site lowers to a plain assignment. It is set per scope and
 	// restored on exit, so one scope's forward hoists do not leak into another.
 	fwdHoisted map[string]bool
+	// moduleAssignVars names the module-level bindings hoisted to a package-level var
+	// whose initializer is not safe to evaluate at package-init time (a call, or an
+	// expression over other module state). The binding is declared zero-valued at
+	// package scope so a top-level function can read it, and its own statement stays
+	// in main to run as an assignment at its source position, preserving the order
+	// JavaScript evaluates the module top level. Like hoistedVars, membership turns
+	// the in-place `name = e` from a fresh declaration into a plain assignment. It is
+	// set once for the whole program, so it is not scoped or restored the way the
+	// per-body hoist sets are.
+	moduleAssignVars map[string]bool
 	// typeDepth counts the nesting typeExpr is currently rendering, so a
 	// self-referential type (a function whose return type reaches back to itself, an
 	// object with a property of its own shape) hands back at a bounded depth rather

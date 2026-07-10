@@ -565,7 +565,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 			continue
 		}
 		if name, ok := localName(r.prog.Text(kids[0])); ok {
-			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name]
+			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name]
 		}
 	}
 	s, err := r.lowerVarStatement(n)
@@ -643,7 +643,7 @@ func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, e
 		if !ok {
 			return nil, false, nil
 		}
-		if r.blockDeclares(name) || r.hoistedVars[name] {
+		if r.blockDeclares(name) || r.hoistedVars[name] || r.moduleAssignVars[name] {
 			redeclared++
 		}
 	}

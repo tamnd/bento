@@ -75,6 +75,14 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// before any statement lowers so the loop below can route a hoisted binding's
 	// declaration out of the main body.
 	hoisted := r.crossBoundaryModuleNames(entry)
+	// The source ordinal of each module binding, so a binding hoisted by in-place
+	// assignment can be checked against a forward reference: an initializer that reads
+	// a module binding declared later would, in main's source order, read an unset
+	// value, so that statement hands back rather than emit a wrong answer.
+	moduleOrder := moduleBindingOrder(r.prog, entry)
+	// Reset the in-place module-assignment set for this program: a binding hoisted to
+	// a zero-valued package var, whose statement stays in main to run as an assignment.
+	r.moduleAssignVars = map[string]bool{}
 
 	// Count how many identifiers resolve to each binding so a local declared and
 	// never read can be spotted when its statement lowers. A symbol is unique to
@@ -125,13 +133,22 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 			// hoisted binding whose initializer is not safe to evaluate at package-init
 			// time hands back, so the program routes to the interpreter rather than emit
 			// Go that reads a name main declared but a function cannot see.
-			decl, hoist, err := r.hoistModuleVar(stmt, hoisted)
+			decl, mode, err := r.hoistModuleVar(stmt, hoisted, moduleOrder)
 			if err != nil {
 				return Program{}, err
 			}
-			if hoist {
+			switch mode {
+			case hoistInit:
+				// The whole statement moves to package scope, initializer and all, since
+				// it is safe to evaluate at package-init time.
 				moduleVars = append(moduleVars, decl)
-			} else {
+			case hoistAssign:
+				// The binding is a zero-valued package var so a top-level function can
+				// read it, and the statement stays in main to assign it at its source
+				// position, keeping the module top-level evaluation order.
+				moduleVars = append(moduleVars, decl)
+				pushStmt(stmt)
+			default:
 				pushStmt(stmt)
 			}
 		case frontend.NodeClassDeclaration:
@@ -196,6 +213,21 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	r.unionLocals = r.unionLocalsOf(nil, mainBody)
 	r.dynLocals = r.dynLocalsOf(nil, mainBody)
 	r.bigOwned = r.bigOwnedLocalsOf(mainBody)
+	// A binding hoisted by in-place assignment keeps its statement in main, so the
+	// specialization passes above see it; but it is a package-level var of its declared
+	// type, read at that one type by main and the functions, so it is kept off every
+	// storage-narrowing tier the way an initializer-hoisted binding is by never being
+	// in mainBody at all. Without this the pass would read it through .Get() or a
+	// union tag while the package var holds the plain value.
+	for name := range r.moduleAssignVars {
+		delete(r.int32Locals, name)
+		delete(r.int64Locals, name)
+		delete(r.optLocals, name)
+		delete(r.unionLocals, name)
+		delete(r.dynLocals, name)
+		delete(r.fixedTArr, name)
+		delete(r.bigOwned, name)
+	}
 	r.strBuilders = nil
 	// A var written in a nested block of the module body and read outside it hoists
 	// to a package-visible top-of-main declaration. A hoisted binding reads at one Go
@@ -743,16 +775,34 @@ func elidedObjectReceiver(r *Renderer, call frontend.Node) (frontend.Node, bool)
 	return arg, true
 }
 
-// hoistModuleVar decides whether a module-level variable statement holds a binding a
-// function reads and, if so, lowers the whole statement to a package-level var
-// declaration. It returns hoist=false for a statement whose bindings all stay inside
-// main, which the caller then lowers as an ordinary main local. When a binding does
-// need hoisting, every binding in the statement moves with it, so each must carry a
-// package-init-safe initializer; one that does not hands back rather than split the
-// statement or evaluate a main-ordered side effect at init time.
-func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool) (ast.Decl, bool, error) {
+// moduleHoist is how a module-level variable statement a function reads reaches
+// package scope. hoistNone keeps the statement a local of main. hoistInit moves the
+// whole statement, initializer and all, to a package-level var, since the
+// initializer is safe to evaluate at package-init time. hoistAssign declares the
+// binding as a zero-valued package var and leaves the statement in main to run as an
+// assignment at its source position, for an initializer that is not init-safe (a
+// call, or an expression over other module state) but whose in-place evaluation
+// keeps the module top-level order.
+type moduleHoist int
+
+const (
+	hoistNone moduleHoist = iota
+	hoistInit
+	hoistAssign
+)
+
+// hoistModuleVar decides how a module-level variable statement holding a binding a
+// function reads reaches package scope. A statement whose bindings all stay inside
+// main returns hoistNone and is lowered as an ordinary main local. When a binding
+// does need hoisting, every binding in the statement moves with it: if all their
+// initializers are safe to evaluate at package-init time the statement hoists whole
+// (hoistInit), otherwise each binding becomes a zero-valued package var and the
+// statement stays in main to assign it in source order (hoistAssign). A binding with
+// no initializer, or one whose initializer forward-references a module binding
+// declared later, hands back rather than emit a var that reads an unset value.
+func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, order map[frontend.Symbol]int) (ast.Decl, moduleHoist, error) {
 	if len(hoisted) == 0 {
-		return nil, false, nil
+		return nil, hoistNone, nil
 	}
 	var decls []frontend.Node
 	collectVarDecls(r.prog, stmt, &decls)
@@ -768,17 +818,61 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool) (
 		}
 	}
 	if !needsHoist {
-		return nil, false, nil
+		return nil, hoistNone, nil
+	}
+	// Every binding must carry an initializer to hoist; a bare `let x;` a function
+	// reads is a later slice, not this group.
+	for _, d := range decls {
+		if kids := r.prog.Children(d); len(kids) != 2 && len(kids) != 3 {
+			return nil, hoistNone, &NotYetLowerable{Reason: "a module binding a function reads needs an initializer to hoist to a package var"}
+		}
+	}
+	// If every initializer is package-init-safe the statement hoists whole, the
+	// cleaner form with no zero-value window and no in-main assignment.
+	allSafe := true
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if !packageSafeInit(r.prog, kids[len(kids)-1]) {
+			allSafe = false
+			break
+		}
+	}
+	if allSafe {
+		specs := make([]ast.Spec, 0, len(decls))
+		for _, d := range decls {
+			spec, err := r.moduleVarSpec(d)
+			if err != nil {
+				return nil, hoistNone, err
+			}
+			specs = append(specs, spec)
+		}
+		return &ast.GenDecl{Tok: token.VAR, Specs: specs}, hoistInit, nil
+	}
+	// Otherwise the binding hoists by in-place assignment. Each initializer must read
+	// only module bindings declared before this one, so main's source-order assignment
+	// never reads an unset package var; a forward or cyclic reference hands back.
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		sym, ok := r.prog.SymbolAt(kids[0])
+		if !ok {
+			return nil, hoistNone, &NotYetLowerable{Reason: "a hoisted module binding has no resolved symbol"}
+		}
+		if r.forwardModuleRef(kids[len(kids)-1], order, order[sym]) {
+			return nil, hoistNone, &NotYetLowerable{Reason: "a module binding a function reads forward-references a later module binding, which the hoist cannot order"}
+		}
 	}
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
-		spec, err := r.moduleVarSpec(d)
+		spec, err := r.moduleZeroVarSpec(d)
 		if err != nil {
-			return nil, false, err
+			return nil, hoistNone, err
 		}
 		specs = append(specs, spec)
+		if name, ok := localName(r.prog.Text(r.prog.Children(d)[0])); ok {
+			r.moduleAssignVars[name] = true
+		}
 	}
-	return &ast.GenDecl{Tok: token.VAR, Specs: specs}, true, nil
+	return &ast.GenDecl{Tok: token.VAR, Specs: specs}, hoistAssign, nil
 }
 
 // moduleVarSpec lowers one binding of a hoisted variable statement to a Go value
@@ -811,6 +905,77 @@ func (r *Renderer) moduleVarSpec(d frontend.Node) (ast.Spec, error) {
 		Type:   typ,
 		Values: []ast.Expr{init},
 	}, nil
+}
+
+// moduleZeroVarSpec lowers one binding of an in-place-hoisted statement to a
+// zero-valued package var, var name T, typed by the checker. The value is written
+// in main at the statement's source position, so the spec carries the type only; Go
+// zero-initializes it, which stands in for the module-eval window before the
+// assignment runs. The type render is what proves the binding hoistable here, since
+// a type the lowerer cannot spell hands back before the statement stays in main.
+func (r *Renderer) moduleZeroVarSpec(d frontend.Node) (ast.Spec, error) {
+	kids := r.prog.Children(d)
+	name, ok := localName(r.prog.Text(kids[0]))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a hoisted module binding name is not a Go identifier"}
+	}
+	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ValueSpec{
+		Names: []*ast.Ident{ident(name)},
+		Type:  typ,
+	}, nil
+}
+
+// forwardModuleRef reports whether an initializer subtree reads a module binding
+// declared at or after ordinal self, the case an in-place assignment cannot order:
+// main runs the assignments in source order, so a read of a binding declared later,
+// or of the binding itself, would see an unset package var. A read of an earlier
+// module binding is fine, since its assignment has already run.
+func (r *Renderer) forwardModuleRef(n frontend.Node, order map[frontend.Symbol]int, self int) bool {
+	if n.Kind() == frontend.NodeIdentifier {
+		if sym, ok := r.prog.SymbolAt(n); ok {
+			if ord, ok := order[sym]; ok && ord >= self {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.forwardModuleRef(c, order, self) {
+			return true
+		}
+	}
+	return false
+}
+
+// moduleBindingOrder assigns each module-level variable binding a source ordinal, so
+// an in-place hoist can tell a backward reference (safe, already assigned) from a
+// forward or self reference (unsafe, an unset package var). The ordinal increases in
+// declaration order across every top-level variable statement.
+func moduleBindingOrder(prog *frontend.Program, entry frontend.Node) map[frontend.Symbol]int {
+	order := map[frontend.Symbol]int{}
+	next := 0
+	for _, stmt := range prog.Children(entry) {
+		if stmt.Kind() != frontend.NodeVariableStatement {
+			continue
+		}
+		var decls []frontend.Node
+		collectVarDecls(prog, stmt, &decls)
+		for _, d := range decls {
+			kids := prog.Children(d)
+			if len(kids) == 0 {
+				continue
+			}
+			if sym, ok := prog.SymbolAt(kids[0]); ok {
+				order[sym] = next
+			}
+			next++
+		}
+	}
+	return order
 }
 
 // packageSafeInit reports whether an initializer can be evaluated at package-init
