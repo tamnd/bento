@@ -277,6 +277,7 @@ func (r *Renderer) forOfArrayDestructure(iterable, pattern, bodyNode frontend.No
 		idx  int
 	}
 	var used []binding
+	seen := make(map[string]int)
 	for i, el := range elems {
 		ec := r.prog.Children(el)
 		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
@@ -298,9 +299,20 @@ func (r *Renderer) forOfArrayDestructure(iterable, pattern, bodyNode frontend.No
 		}
 		// A name the body never reads is dropped: binding it would leave an unused Go
 		// local, and the read it drives has no effect worth keeping.
-		if r.bodyUsesName(bodyNode, r.prog.Text(nameNode)) {
-			used = append(used, binding{name: name, idx: i})
+		if !r.bodyUsesName(bodyNode, r.prog.Text(nameNode)) {
+			continue
 		}
+		// A pattern may repeat a name ([x, x]), and JavaScript binds it once with the
+		// last element winning. The element reads are pure AtI lookups, so an earlier
+		// duplicate is a dead store; keep one binding per name and point it at the last
+		// index, which also avoids emitting a second `x :=` that Go rejects as no new
+		// variables on the left. for-of/head-var-bound-names-dup exercises this.
+		if pos, dup := seen[name]; dup {
+			used[pos].idx = i
+			continue
+		}
+		seen[name] = len(used)
+		used = append(used, binding{name: name, idx: i})
 	}
 	iter, err := r.lowerExpr(iterable)
 	if err != nil {
