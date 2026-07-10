@@ -222,6 +222,45 @@ func TestGenericFunctionTypeValueReturned(t *testing.T) {
 	}
 }
 
+// A call fixes a generic's type argument by inference from the arguments it passes,
+// not only from an explicit <T> the source spells, so the monomorphizer reads the
+// concrete type off the argument the same way the checker does. An argument typed
+// T[] fixes T to its element type, so first([10, 20, 30]) instantiates T=number and
+// first(words) over a string[] instantiates a second specialization at T=string.
+
+// TestGenericInfersTypeArgumentFromArrayArgument proves a type parameter reached
+// only through an array argument's element type is inferred, monomorphizing one
+// specialization per concrete element type with no explicit type argument written.
+func TestGenericInfersTypeArgumentFromArrayArgument(t *testing.T) {
+	const src = "function first<T>(xs: T[]): T { return xs[0]; }\n" +
+		"console.log(first([10, 20, 30]));\n" +
+		"const words: string[] = [\"a\", \"b\"];\n" +
+		"console.log(first(words));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func First_num(xs *value.Array[float64]) float64") {
+		t.Errorf("T was not inferred number from the array element type:\n%s", source)
+	}
+	if !strings.Contains(source, "func First_str(xs *value.Array[value.BStr]) value.BStr") {
+		t.Errorf("T was not inferred string from the array element type:\n%s", source)
+	}
+	if strings.Contains(source, "func First(") {
+		t.Errorf("an unspecialized generic was emitted:\n%s", source)
+	}
+}
+
+// TestGenericTypeArgumentInferenceRuns builds and runs both inferred instantiations
+// so the argument-inferred monomorphization is proven against the JavaScript result.
+func TestGenericTypeArgumentInferenceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function first<T>(xs: T[]): T { return xs[0]; }\n" +
+		"console.log(first([10, 20, 30]));\n" +
+		"const words: string[] = [\"a\", \"b\"];\n" +
+		"console.log(first(words));\n"
+	if got, want := runProgramGo(t, src), "10\na\n"; got != want {
+		t.Fatalf("argument-inferred generics printed %q, want %q", got, want)
+	}
+}
+
 // TestUncalledGenericHandsBack proves a generic no call site instantiates has no
 // specialization to emit and hands back, since an unspecialized generic has no
 // single Go form. The whole program routes to the engine rather than emit an
