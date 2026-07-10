@@ -101,6 +101,26 @@ func exportedField(name string) (string, bool) {
 	return string(runes), true
 }
 
+// privateGoName maps a JavaScript private member name (#x, #inc) to its Go
+// spelling. The leading # escapes to a p_ prefix, the mnemonic being private,
+// applied before the case rule, and the rest mangles the way any member name
+// does but without exportedField's uppercasing, because a private name never
+// participates in the class's public Go shape. The mapping is a pure function of
+// the name, so #m and m coexist on one class the way JavaScript allows, their Go
+// spellings differing (p_m and M). A name that does not start with # or whose
+// remainder is empty reports ok=false.
+func privateGoName(name string) (string, bool) {
+	inner, ok := strings.CutPrefix(name, "#")
+	if !ok || inner == "" {
+		return "", false
+	}
+	s, ok := mangleIdent(inner)
+	if !ok {
+		return "", false
+	}
+	return "p_" + s, true
+}
+
 // goKeywords is the set of reserved words a local name cannot spell in Go. A
 // TypeScript parameter or local named "type" or "range" is a legal identifier
 // there but not here, so localName appends an underscore to keep the same name
