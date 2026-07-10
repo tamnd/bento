@@ -1403,3 +1403,76 @@ new C();
 		t.Fatalf("handback reason = %q, want %q", reason, want)
 	}
 }
+
+// TestClassGeneratorMethodLinear pins slice 5: a generator method whose body is
+// a straight-line run of yields lowers to the state-machine closure a Go author
+// writes for an iterator, a method returning func() (T, bool). A for...of over
+// it pulls the closure until done, so the sum of the yielded values is what the
+// program prints.
+func TestClassGeneratorMethodLinear(t *testing.T) {
+	const src = `class C {
+  *g(): Generator<number> { yield 1; yield 2; yield 3; }
+}
+const c = new C();
+let sum = 0;
+for (const v of c.g()) { sum += v; }
+console.log(String(sum));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func (c *C) G() func() (float64, bool)") {
+		t.Errorf("generator method did not lower to a next() closure:\n%s", source)
+	}
+	if got, want := runProgramGo(t, src), "6\n"; got != want {
+		t.Fatalf("generator program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassGeneratorTwoIterators pins that state lives in the returned closure,
+// fresh per call, so two iterations that are live at the same time do not share
+// a cursor. Nesting a for...of over the same method inside another keeps both
+// iterators alive at once; the full nine-pair product prints only if they are
+// independent.
+func TestClassGeneratorTwoIterators(t *testing.T) {
+	const src = `class C {
+  *g(): Generator<number> { yield 1; yield 2; yield 3; }
+}
+const c = new C();
+let out = "";
+for (const a of c.g()) {
+  for (const b of c.g()) {
+    out += String(a) + String(b) + " ";
+  }
+}
+console.log(out);
+`
+	if got, want := runProgramGo(t, src), "11 12 13 21 22 23 31 32 33 \n"; got != want {
+		t.Fatalf("interleaved generators printed %q, want %q", got, want)
+	}
+}
+
+// TestClassGeneratorYieldInControlFlowHandsBack pins the honest leftover: a
+// yield inside a loop or branch needs real state splitting this slice does not
+// build, and its reason names that rather than the plain-statement one.
+func TestClassGeneratorYieldInControlFlowHandsBack(t *testing.T) {
+	const src = `class C {
+  *g(): Generator<number> { for (let i = 0; i < 2; i++) yield i; }
+}
+new C();
+`
+	if reason, want := renderProgramHandBack(t, src), "a yield inside control flow is a later slice"; reason != want {
+		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}
+
+// TestClassGeneratorYieldStarHandsBack pins that a yield* delegation keeps its
+// own reason, not the control-flow one, so the next baseline ranks it honestly.
+func TestClassGeneratorYieldStarHandsBack(t *testing.T) {
+	const src = `class C {
+  *g(): Generator<number> { yield* [1, 2]; }
+}
+new C();
+`
+	if reason, want := renderProgramHandBack(t, src), "a yield* delegation is a later slice"; reason != want {
+		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}

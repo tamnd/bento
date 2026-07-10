@@ -98,10 +98,11 @@ type classField struct {
 // declares a vtable slot on the hierarchy root that every concrete subclass
 // fills, so it emits the dispatching entry but no Impl.
 type classMethod struct {
-	prop     string
-	goName   string
-	node     frontend.Node
-	abstract bool
+	prop      string
+	goName    string
+	node      frontend.Node
+	abstract  bool
+	generator bool
 }
 
 // classSetter is one set accessor; param is its single parameter's name node,
@@ -857,6 +858,7 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	// hands back by its keyword.
 	kids := r.prog.Children(m)
 	abstract := false
+	generator := false
 	for len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown {
 		// A computed name [expr] surfaces as an unnamed node that wraps the
 		// expression, so it carries a child; a modifier (abstract, async, the
@@ -867,10 +869,17 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 			break
 		}
 		w := strings.TrimSpace(r.prog.Text(kids[0]))
-		if w != "abstract" {
+		switch w {
+		case "abstract":
+			abstract = true
+		case "*":
+			// The generator star is a recognized marker, not a decline: it flags
+			// the method to lower as a state-machine closure (generatorMethodDecl)
+			// the way abstract flags the body-less form.
+			generator = true
+		default:
 			return classMethod{}, &NotYetLowerable{Reason: "a " + w + " method is a later slice"}
 		}
-		abstract = true
 		kids = kids[1:]
 	}
 	if len(kids) == 0 {
@@ -896,7 +905,7 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 	if !abstract && !hasBody {
 		return classMethod{}, &NotYetLowerable{Reason: "a method overload signature is a later slice"}
 	}
-	return classMethod{prop: prop, goName: goName, node: m, abstract: abstract}, nil
+	return classMethod{prop: prop, goName: goName, node: m, abstract: abstract, generator: generator}, nil
 }
 
 // staticFieldOf reads one static field into a classField whose goName is the
@@ -1225,6 +1234,21 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		// method is the entry alone: it has no body, its slot panics until a
 		// concrete subclass's vtable fills it.
 		name := m.goName
+		if m.generator {
+			// A generator lowers to a state-machine closure under its own name.
+			// Its result type is the closure, not a plain value, so the vtable's
+			// forwarding entry and Impl split does not model it yet; a generator
+			// caught in a class hierarchy hands back rather than emit a mismatch.
+			if info.vprops[m.prop] || info.overrides[m.prop] {
+				return nil, &NotYetLowerable{Reason: "a generator method in a class hierarchy is a later slice"}
+			}
+			md, err := r.generatorMethodDecl(info, m)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, md)
+			continue
+		}
 		if info.vprops[m.prop] {
 			entry, err := r.virtualEntryDecl(info, m)
 			if err != nil {
@@ -1769,6 +1793,184 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 		}}},
 		Name: ident(name),
 		Type: &ast.FuncType{Params: params, Results: results},
+		Body: body,
+	}, nil
+}
+
+// intLit is a Go integer literal node, for the generator state tags.
+func intLit(n int) *ast.BasicLit {
+	return &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(n)}
+}
+
+// generatorYields reads a generator method's body as the straight-line sequence
+// of yielded expressions this slice lowers, or hands back with the reason that
+// names what is left. The body must be a run of `yield expr;` statements with an
+// optional trailing bare `return;`: a yield inside control flow, a yield*
+// delegation, a bare `yield` with no value, a returned value, or any other
+// statement each keep their own reason so the next baseline ranks them honestly.
+func (r *Renderer) generatorYields(method frontend.Node) ([]frontend.Node, error) {
+	var block frontend.Node
+	for _, k := range r.prog.Children(method) {
+		if k.Kind() == frontend.NodeBlock {
+			block = k
+		}
+	}
+	if block == nil {
+		return nil, &NotYetLowerable{Reason: "a generator method without a body is a later slice"}
+	}
+	stmts := r.prog.Children(block)
+	var yields []frontend.Node
+	for i, s := range stmts {
+		// A trailing bare return ends the sequence; iterating past it is done, so
+		// no case is emitted for it. A return with a value would set the iterator
+		// result's value at done, which this slice does not carry.
+		if s.Kind() == frontend.NodeReturnStatement {
+			if i != len(stmts)-1 {
+				return nil, &NotYetLowerable{Reason: "a return before the end of a generator is a later slice"}
+			}
+			if len(r.prog.Children(s)) != 0 {
+				return nil, &NotYetLowerable{Reason: "a generator return value is a later slice"}
+			}
+			break
+		}
+		if yield, isYield := r.stmtYield(s); isYield {
+			yk := r.prog.Children(yield)
+			switch {
+			case len(yk) == 1:
+				yields = append(yields, yk[0]) // a plain `yield expr;`
+			case len(yk) == 0:
+				return nil, &NotYetLowerable{Reason: "a valueless yield is a later slice"}
+			default:
+				// A yield* delegation carries a leading star child before the operand.
+				return nil, &NotYetLowerable{Reason: "a yield* delegation is a later slice"}
+			}
+			continue
+		}
+		if r.subtreeHasYield(s) {
+			return nil, &NotYetLowerable{Reason: "a yield inside control flow is a later slice"}
+		}
+		return nil, &NotYetLowerable{Reason: "a generator body statement that is not a plain yield is a later slice"}
+	}
+	if len(yields) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty generator body has no element type here, a later slice"}
+	}
+	return yields, nil
+}
+
+// stmtYield returns the yield expression node when statement s is a whole
+// `yield ...;` expression statement, so the caller can read its shape (a plain
+// single-operand yield, a valueless yield, or a yield* delegation) and either
+// lower it or hand back with the reason that names it. A yield that is only part
+// of a larger expression (a sent value read, `x = yield e`) is not a bare yield
+// statement and does not surface here, so it falls to the generic decline.
+func (r *Renderer) stmtYield(s frontend.Node) (frontend.Node, bool) {
+	if s.Kind() != frontend.NodeExpressionStatement {
+		return nil, false
+	}
+	kids := r.prog.Children(s)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodeYieldExpression {
+		return nil, false
+	}
+	return kids[0], true
+}
+
+// subtreeHasYield reports whether a yield expression appears anywhere under n,
+// so a statement that is not a top-level plain yield can still be recognized as
+// yield-inside-control-flow and given that reason instead of the generic one.
+func (r *Renderer) subtreeHasYield(n frontend.Node) bool {
+	if n.Kind() == frontend.NodeYieldExpression {
+		return true
+	}
+	for _, k := range r.prog.Children(n) {
+		if r.subtreeHasYield(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// generatorMethodDecl emits a generator method as the state-machine closure a Go
+// developer hand-writes for a simple iterator: the method sets a state counter
+// and returns a next() closure of type func() (T, bool), the value and the done
+// flag that are the two properties test262's generator-shape tests observe. Each
+// yield is one switch case that records the next state and returns its value not
+// done; the tail returns the element type's zero value done forever, matching
+// the JavaScript done-after-done protocol. Two iterations do not share state
+// because the state lives in the returned closure, fresh per call.
+func (r *Renderer) generatorMethodDecl(info *classInfo, m classMethod) (ast.Decl, error) {
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "generator method has no call signature"}
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic method needs monomorphization, a later slice"}
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+	params, err := r.paramFields(sig)
+	if err != nil {
+		return nil, err
+	}
+	yields, err := r.generatorYields(m.node)
+	if err != nil {
+		return nil, err
+	}
+
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = info, info.recv
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+
+	var elemType ast.Expr
+	cases := make([]ast.Stmt, 0, len(yields))
+	for i, y := range yields {
+		val, err := r.lowerExpr(y)
+		if err != nil {
+			return nil, err
+		}
+		yt, err := r.typeExpr(r.prog.TypeAt(y))
+		if err != nil {
+			return nil, err
+		}
+		if elemType == nil {
+			elemType = yt
+		} else if same, err := sameGoType(elemType, yt); err != nil || !same {
+			return nil, &NotYetLowerable{Reason: "a generator whose yields differ in type is a later slice"}
+		}
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{intLit(i)},
+			Body: []ast.Stmt{
+				&ast.AssignStmt{Lhs: []ast.Expr{ident("state")}, Tok: token.ASSIGN, Rhs: []ast.Expr{intLit(i + 1)}},
+				&ast.ReturnStmt{Results: []ast.Expr{val, ident("false")}},
+			},
+		})
+	}
+
+	nextType := &ast.FuncType{
+		Params:  &ast.FieldList{},
+		Results: &ast.FieldList{List: []*ast.Field{{Type: elemType}, {Type: ident("bool")}}},
+	}
+	next := &ast.FuncLit{
+		Type: nextType,
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.SwitchStmt{Tag: ident("state"), Body: &ast.BlockStmt{List: cases}},
+			&ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{
+				&ast.ValueSpec{Names: []*ast.Ident{ident("zero")}, Type: elemType},
+			}}},
+			&ast.ReturnStmt{Results: []ast.Expr{ident("zero"), ident("true")}},
+		}},
+	}
+	body := &ast.BlockStmt{List: []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident("state")}, Tok: token.DEFINE, Rhs: []ast.Expr{intLit(0)}},
+		&ast.ReturnStmt{Results: []ast.Expr{next}},
+	}}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{
+			Names: []*ast.Ident{ident(info.recv)},
+			Type:  star(ident(info.goName)),
+		}}},
+		Name: ident(m.goName),
+		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: nextType}}}},
 		Body: body,
 	}, nil
 }
