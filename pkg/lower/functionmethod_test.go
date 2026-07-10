@@ -225,3 +225,21 @@ func TestFunctionMethodAsValueHandsBack(t *testing.T) {
 		}
 	}
 }
+
+// A Function built from a source string, Function("a", "return a") or its new form,
+// parses source text at run time and belongs to the eval family, phase 11. bento hands
+// it back with a reason that names where it belongs rather than a generic ambient-global
+// or constructor reason.
+
+// TestFunctionFromSourceStringHandsBack proves both the call and the new form of a
+// Function built from a source string hand back with the eval reason.
+func TestFunctionFromSourceStringHandsBack(t *testing.T) {
+	for _, src := range []string{
+		"Function(\"a\", \"b\", \"return a + b\");\n",
+		"new Function(\"return 1\");\n",
+	} {
+		if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "eval, deferred to phase 11") {
+			t.Fatalf("Function-from-source hand-back reason = %q, want the eval phase-11 reason", reason)
+		}
+	}
+}

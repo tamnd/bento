@@ -101,6 +101,13 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Object" {
 		return r.newObject(kids[1:])
 	}
+	// new Function("a", "return a") builds a function from source text at run time,
+	// parsing the argument strings as a parameter list and a body. That is eval work,
+	// phase 11, so it hands back with the reason that names where it belongs rather
+	// than the generic constructor reason below.
+	if r.prog.Text(kids[0]) == "Function" {
+		return nil, &NotYetLowerable{Reason: "a Function built from a source string is eval, deferred to phase 11"}
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}

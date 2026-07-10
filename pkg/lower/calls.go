@@ -146,6 +146,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return r.unaryStringGlobal("Atob", callee, kids[1:])
 		}
 	}
+	// Function("a", "return a") called as a function builds a function from source
+	// text at run time, the same construction as new Function and a member of the
+	// eval family: the argument strings are parsed as a parameter list and a body. A
+	// program that parses source it was handed is phase 11 (eval) work, so bento hands
+	// it back with the reason that names where it belongs rather than the generic
+	// ambient-global reason below.
+	if r.prog.Text(kids[0]) == "Function" && r.isAmbientGlobal(kids[0]) {
+		return nil, &NotYetLowerable{Reason: "a Function built from a source string is eval, deferred to phase 11"}
+	}
 	// A bare call to any other ambient global (eval, and the globals whose lowering
 	// is a later slice) is not a user binding and has no generated Go function to
 	// stand behind it. The user-function path below would emit a call to the name's
