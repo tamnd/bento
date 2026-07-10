@@ -1567,6 +1567,18 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		// method is the entry alone: it has no body, its slot panics until a
 		// concrete subclass's vtable fills it.
 		name := m.goName
+		if sig, ok := r.prog.SignatureAt(m.node); ok && len(sig.TypeParams) != 0 {
+			// A generic method has no single Go form, since a Go method carries no type
+			// parameter. It emits one mangled method per instantiation a call site fixed,
+			// each body lowered with that instantiation's substitution active, and its
+			// call sites already resolve to the matching mangled name.
+			mds, err := r.genericMethodDecls(info, m)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, mds...)
+			continue
+		}
 		if m.generator {
 			// A generator lowers to a state-machine closure under its own name.
 			// Its result type is the closure, not a plain value, so the vtable's
@@ -2287,7 +2299,12 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "method has no call signature"}
 	}
-	if len(sig.TypeParams) != 0 {
+	if len(sig.TypeParams) != 0 && r.typeSubst == nil {
+		// A generic method with no active substitution is one no specialization pass
+		// entered: it has no single Go form and hands back. When a specialization is
+		// being emitted, genericMethodDecls sets typeSubst so the bare type parameters
+		// in the parameter and return types resolve to this instantiation's concrete
+		// types, and the method lowers under its mangled name like a plain one.
 		return nil, &NotYetLowerable{Reason: "generic method needs monomorphization, a later slice"}
 	}
 	if sig.RestParam != nil {
@@ -2328,6 +2345,41 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 		Type: &ast.FuncType{Params: params, Results: results},
 		Body: body,
 	}, nil
+}
+
+// genericMethodDecls emits the specialized Go methods a generic method needs, one
+// per distinct instantiation its call sites fixed (Wrap_num, Wrap_str). A Go method
+// carries no type parameter, so this is the method analogue of funcDecls: the
+// specialization set is the map collectMonoMethods filled before any body lowered,
+// and each specialization lowers through classMethodDecl with its substitution
+// active, so the bare type parameters in the signature and body resolve to that
+// instantiation's concrete types. A generic method no call site monomorphizes, or
+// one whose Go form does not model the vtable split yet, has no specialization to
+// emit and hands back rather than leave a call site naming a method that was never
+// emitted.
+func (r *Renderer) genericMethodDecls(info *classInfo, m classMethod) ([]ast.Decl, error) {
+	if m.generator || m.async {
+		return nil, &NotYetLowerable{Reason: "a generic generator or async method is a later slice"}
+	}
+	if info.vprops[m.prop] || info.overrides[m.prop] {
+		return nil, &NotYetLowerable{Reason: "a generic method in a class hierarchy is a later slice"}
+	}
+	specs := r.monoMethodSpecs[m.node]
+	if len(specs) == 0 {
+		return nil, &NotYetLowerable{Reason: "a generic method no call site monomorphizes is a later slice"}
+	}
+	out := make([]ast.Decl, 0, len(specs))
+	for _, sp := range specs {
+		prev := r.typeSubst
+		r.typeSubst = sp.subst
+		md, err := r.classMethodDecl(info, m, m.goName+"_"+sp.suffix)
+		r.typeSubst = prev
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, md)
+	}
+	return out, nil
 }
 
 // intLit is a Go integer literal node, for the generator state tags.
@@ -2739,6 +2791,17 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
 	name := m.goName
+	if len(sig.TypeParams) != 0 {
+		// A generic method resolves to the mangled Go method the call's type arguments
+		// fix (Wrap_num for wrap(5)), the one genericMethodDecls emitted for this
+		// instantiation. A call whose type arguments do not mangle names no emitted
+		// method, so it hands back rather than call a Go method that does not exist.
+		spec, ok := r.methodMonoSpec(sig, argNodes)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a generic method call whose type arguments do not monomorphize is a later slice"}
+		}
+		name = m.goName + "_" + spec.suffix
+	}
 	if viaSuper && info.isVirtual(method) {
 		name = implName(m)
 	}
