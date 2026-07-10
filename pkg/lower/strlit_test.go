@@ -30,6 +30,10 @@ func TestDecodeJSString(t *testing.T) {
 		{"loneSurrogate", `\uD83D`, []uint16{0xD83D}},
 		{"surrogatePairEscaped", `😀`, []uint16{0xD83D, 0xDE00}},
 		{"lineContinuation", "a\\\nb", []uint16{'a', 'b'}},
+		{"lineContinuationCR", "a\\\rb", []uint16{'a', 'b'}},
+		{"lineContinuationCRLF", "a\\\r\nb", []uint16{'a', 'b'}},
+		{"lineContinuationLS", "a\\ b", []uint16{'a', 'b'}},
+		{"lineContinuationPS", "a\\ b", []uint16{'a', 'b'}},
 		{"escapedLetter", `\a\z`, u16("az")},
 		{"astralLiteral", "a😀b", u16("a😀b")},
 	}
