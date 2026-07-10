@@ -460,14 +460,18 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
 	// A return inside a generator body completes the coroutine, whose func returns a
 	// value.Value the { value, done: true } result carries. A bare return completes
-	// with undefined; a return that carries a value is a later slice (item 5), so it
-	// hands back rather than drop the value.
+	// with undefined; a return that carries a value boxes it into the dynamic value
+	// the completion frame holds, so a manual driver reading the done result sees it.
 	if r.genCo != "" {
 		if len(kids) == 0 {
 			r.requireImport(valuePkg)
 			return &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "a generator return value is a later slice"}
+		boxed, err := r.boxOperand(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.ReturnStmt{Results: []ast.Expr{boxed}}, nil
 	}
 	if len(kids) == 0 {
 		// Inside a try escape closure the bare return of a void function still has

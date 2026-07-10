@@ -239,8 +239,11 @@ func (r *Renderer) generatorCoroutine(fn frontend.Node) (yieldGo ast.Expr, newGe
 	r.requireImport(valuePkg)
 	// A generator that runs off its end completes with undefined, so the coroutine func
 	// returns value.Undefined after the body, the value a { value, done: true } result
-	// carries for a return-less generator.
-	body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
+	// carries for a return-less generator. A body that already ends in a return
+	// completes with that value, so the fall-off return would be dead code and is left off.
+	if n := len(body.List); n == 0 || !isGoReturn(body.List[n-1]) {
+		body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
+	}
 
 	coParam := &ast.Field{
 		Names: []*ast.Ident{ident(coName)},

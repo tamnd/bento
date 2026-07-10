@@ -156,14 +156,28 @@ g();
 	}
 }
 
-// TestGeneratorValuedReturnHandsBack pins that a generator that returns a value keeps
-// its own reason until the return-value slice lands (item 5).
-func TestGeneratorValuedReturnHandsBack(t *testing.T) {
+// TestGeneratorReturnValueBoxes pins that a valued return inside a generator boxes
+// into the dynamic value the completion frame carries, so a { value, done: true }
+// result reports it. The body func returns a value.Value, so return 2 becomes
+// return value.Number(2).
+func TestGeneratorReturnValueBoxes(t *testing.T) {
 	const src = `function* g(): Generator<number> { yield 1; return 2; }
-g();
+g();`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "return value.Number(2)") {
+		t.Fatalf("valued return did not box into the completion value:\n%s", got)
+	}
+}
+
+// TestGeneratorReturnValueForOf pins that a for...of over a generator with a valued
+// return still yields each value and completes: for...of discards the return value,
+// matching the JavaScript rule, so the loop prints the yields and stops.
+func TestGeneratorReturnValueForOf(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 1; yield 2; return 99; }
+for (const x of g()) { console.log(String(x)); }
 `
-	if reason, want := renderProgramHandBack(t, src), "a generator return value is a later slice"; reason != want {
-		t.Fatalf("handback reason = %q, want %q", reason, want)
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("generator with valued return printed %q, want %q", got, want)
 	}
 }
 
