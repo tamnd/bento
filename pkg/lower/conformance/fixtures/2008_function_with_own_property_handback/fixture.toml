@@ -1,0 +1,2 @@
+feature = "function-with-own-property"
+handback = "a function declaration with own properties is a callable object, a later slice"

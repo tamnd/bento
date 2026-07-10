@@ -48,6 +48,16 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 		return nil, &NotYetLowerable{Reason: "function name is not a Go identifier"}
 	}
 
+	// A function declaration whose name later carries own data properties (foo.x = 1)
+	// is a callable object, not a bare func. The callable-object model interns a
+	// `type Foo struct { Call func(); ... }` for that shape, which collides with the
+	// `func Foo` this declaration emits: two Foo declarations in one block, which does
+	// not compile. Modeling a named function that is also an object is a later slice,
+	// so hand back rather than emit the colliding pair.
+	if r.isCallableObject(r.prog.TypeAt(fn)) {
+		return nil, &NotYetLowerable{Reason: "a function declaration with own properties is a callable object, a later slice"}
+	}
+
 	sig, ok := r.prog.SignatureAt(fn)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "function has no call signature"}
