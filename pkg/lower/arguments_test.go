@@ -161,6 +161,41 @@ console.log(first(9, 8));
 	}
 }
 
+// TestArgumentsInFunctionExpressionMaterializesStore proves a function expression
+// that reads arguments materializes its own store from its parameters inside the
+// closure, since a function expression carries an arguments object of its own.
+func TestArgumentsInFunctionExpressionMaterializesStore(t *testing.T) {
+	const src = "const f = function (a: number, b: number): number { return arguments.length; };\n" +
+		"f(1, 2);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.NewArray[value.Value](value.Number(a), value.Number(b))") {
+		t.Errorf("the function expression did not materialize its arguments store:\n%s", source)
+	}
+	if !strings.Contains(source, ".Len()") {
+		t.Errorf("arguments.length in the function expression did not read the store:\n%s", source)
+	}
+}
+
+// TestArgumentsInFunctionExpressionRuns builds and runs a function expression that
+// reads arguments by length and by index, so its own materialized store is proven
+// against the JavaScript result.
+func TestArgumentsInFunctionExpressionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const len = function (a: number, b: number): number {
+  return arguments.length;
+};
+const first = function (a: number, b: number): unknown {
+  return arguments[0];
+};
+console.log(len(1, 2));
+console.log(first(9, 8));
+`
+	if got, want := runProgramGo(t, src), "2\n9\n"; got != want {
+		t.Fatalf("arguments in a function expression printed %q, want %q", got, want)
+	}
+}
+
 // TestArgumentsWithRestParameterHandsBack proves a body that reads arguments while
 // its signature carries a rest parameter hands back: the rest gathers a call-varying
 // tail, so the parameter count is not the call arity and the store cannot stand in.

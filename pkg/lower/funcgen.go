@@ -918,9 +918,10 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 // function expression always has a block body, which is the same closure a
 // block-body arrow lowers to, so it routes through the same generator once the
 // forms an arrow does not share are ruled out. An async or generator function is
-// a coroutine, a body that reads this or arguments needs a receiver or the arity
-// object neither a Go closure carries, and a named function expression needs the
-// two-step a self-reference takes; each hands back.
+// a coroutine and a body that reads this needs a receiver neither a Go closure
+// carries, so each hands back; a body that reads arguments materializes its own
+// arity object in the closure the same way a named function does, and a named
+// function expression takes the two-step a self-reference needs.
 func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	text := strings.TrimSpace(r.prog.Text(n))
 	if firstWord(text) == "async" {
@@ -931,9 +932,6 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
-	}
-	if subtreeHasIdent(r.prog, n, "arguments") {
-		return nil, &NotYetLowerable{Reason: "a function expression that reads arguments needs the arity object, a later slice"}
 	}
 	fields, err := r.closureParamFields(n, "function")
 	if err != nil {
@@ -1174,6 +1172,26 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
 
+	// A function expression materializes its own arguments object; an arrow has none
+	// of its own and reads the enclosing function's, so only the function-expression
+	// form plans a store here and the arrow inherits argsObjName untouched. When the
+	// plan cannot back a read the whole expression hands back through the error.
+	var argsMat ast.Stmt
+	if n.Kind() == frontend.NodeFunctionExpression {
+		mat, storeName, argsOK, perr := r.argumentsPlan(n, sig)
+		if perr != nil {
+			return nil, perr
+		}
+		argsMat = mat
+		prevArgs := r.argsObjName
+		if argsOK {
+			r.argsObjName = storeName
+		} else {
+			r.argsObjName = ""
+		}
+		defer func() { r.argsObjName = prevArgs }()
+	}
+
 	// The dynamic-locals set rescopes to this nested body the way the named path
 	// scopes it, so an any-typed parameter of a function expression or an arrow
 	// binds a tracked box: a read the checker narrowed past a typeof guard unwraps
@@ -1196,6 +1214,9 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 		return nil, err
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	if argsMat != nil {
+		body.List = append([]ast.Stmt{argsMat}, body.List...)
+	}
 	return &ast.FuncLit{
 		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}, Results: results},
 		Body: body,
