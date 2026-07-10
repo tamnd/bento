@@ -1345,3 +1345,61 @@ console.log(new Kid().show());
 		t.Fatalf("abstract base program printed %q, want %q", got, want)
 	}
 }
+
+// TestClassStringLiteralMemberNames pins slice 4's declaration side: a method
+// and a field named by a string literal lower to a struct field and method
+// whose Go spelling is the same mangling a bracket read of that name uses, so
+// the two agree. A space is not a Go identifier rune, so "my method" mangles to
+// MyU20_method; the program reads both back through bracket access and prints
+// their values.
+func TestClassStringLiteralMemberNames(t *testing.T) {
+	const src = `class C {
+  "my method"(): number { return 42; }
+  "my field": number = 5;
+}
+const c = new C();
+console.log(String(c["my method"]()));
+console.log(String(c["my field"]));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "MyU20_method") || !strings.Contains(source, "MyU20_field") {
+		t.Errorf("string-literal member names did not mangle to a Go spelling:\n%s", source)
+	}
+	if got, want := runProgramGo(t, src), "42\n5\n"; got != want {
+		t.Fatalf("string-member program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassComputedConstantMemberName pins that a computed name whose expression
+// is a constant string is an ordinary property of that name, not a keyword: a
+// ["constructor"] method is a prototype method distinct from the class
+// constructor, so calling it returns its own value and NewC still constructs.
+func TestClassComputedConstantMemberName(t *testing.T) {
+	const src = `class C {
+  n: number = 1;
+  ["plain"](): number { return 7; }
+}
+const c = new C();
+console.log(String(c.n));
+console.log(String(c["plain"]()));
+`
+	if got, want := runProgramGo(t, src), "1\n7\n"; got != want {
+		t.Fatalf("computed-constant-name program printed %q, want %q", got, want)
+	}
+}
+
+// TestClassComputedNonConstantNameHandsBack pins the honest leftover: a computed
+// member name that is not a constant string ([Symbol.iterator] here) names
+// itself in the handback reason rather than borrowing the identifier-name
+// phrasing, so what remains after this slice is clear.
+func TestClassComputedNonConstantNameHandsBack(t *testing.T) {
+	const src = `class C {
+  [Symbol.iterator](): number { return 1; }
+}
+new C();
+`
+	reason := renderProgramHandBack(t, src)
+	if want := "a computed member name that is not a constant string is a later slice"; reason != want {
+		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}
