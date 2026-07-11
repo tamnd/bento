@@ -43,6 +43,12 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	if err != nil {
 		return nil, err
 	}
+	if r.isAsyncFunc(fn) {
+		if r.isGeneratorFunc(fn) {
+			return nil, &NotYetLowerable{Reason: "an async generator function is a later slice"}
+		}
+		return r.asyncFuncDecl(fn, sig, name)
+	}
 	if r.isGeneratorFunc(fn) {
 		return r.generatorFuncDecl(fn, sig, name)
 	}
@@ -64,6 +70,16 @@ func (r *Renderer) funcDecls(fn frontend.Node) ([]ast.Decl, error) {
 	sym, name, sig, err := r.funcDeclHead(fn)
 	if err != nil {
 		return nil, err
+	}
+	if r.isAsyncFunc(fn) {
+		if r.isGeneratorFunc(fn) {
+			return nil, &NotYetLowerable{Reason: "an async generator function is a later slice"}
+		}
+		fd, err := r.asyncFuncDecl(fn, sig, name)
+		if err != nil {
+			return nil, err
+		}
+		return []ast.Decl{fd}, nil
 	}
 	if r.isGeneratorFunc(fn) {
 		fd, err := r.generatorFuncDecl(fn, sig, name)
