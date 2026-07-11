@@ -6,11 +6,6 @@ import (
 	"github.com/tamnd/bento/pkg/value"
 )
 
-type ObjMyU20_fieldMyU20_methodXU20_y struct {
-	MyU20_method func() float64 `json:"my method"`
-	MyU20_field  float64        `json:"my field"`
-	XU20_y       float64        `json:"x y"`
-}
 type C struct {
 	MyU20_field float64 `json:"my field"`
 }

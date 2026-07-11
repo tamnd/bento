@@ -77,6 +77,24 @@ func (r *Renderer) stringLiteralKey(n frontend.Node) (string, bool) {
 	return string(utf16.Decode(units)), true
 }
 
+// constStringKey reads the constant string a member-name or index node resolves
+// to at class-definition time: a plain string literal through stringLiteralKey,
+// or an expression the checker gave a string-literal type, so a computed name
+// [k] whose k is a const of a literal string type folds to that string the same
+// way ["m"] folds to "m". It declines a non-string-literal type (a wide string,
+// a unique symbol, a number), which has no compile-time name and stays a later
+// slice, so a declaration [k] and a read obj[k] agree on one folded key only when
+// the checker proved the key constant.
+func (r *Renderer) constStringKey(n frontend.Node) (string, bool) {
+	if key, ok := r.stringLiteralKey(n); ok {
+		return key, true
+	}
+	if lit, ok := r.prog.LiteralValue(r.prog.TypeAt(n)); ok && lit.Kind == frontend.LiteralString {
+		return lit.Str, true
+	}
+	return "", false
+}
+
 func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
 	text := r.prog.Text(n)
 	if len(text) < 2 {

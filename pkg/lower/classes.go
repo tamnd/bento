@@ -825,10 +825,12 @@ func (r *Renderer) memberName(nameNode frontend.Node) (string, bool) {
 		return r.stringLiteralKey(nameNode)
 	case frontend.NodeUnknown:
 		// A computed name [expr] surfaces as an unnamed node wrapping the
-		// expression; only a lone string-literal expression is a constant name.
+		// expression; a constant name is one the checker resolved to a string,
+		// either a lone string-literal expression or a const of a literal string
+		// type, both folded to that string at class-definition time.
 		kids := r.prog.Children(nameNode)
-		if len(kids) == 1 && kids[0].Kind() == frontend.NodeStringLiteral {
-			return r.stringLiteralKey(kids[0])
+		if len(kids) == 1 {
+			return r.constStringKey(kids[0])
 		}
 	}
 	return "", false
@@ -2807,6 +2809,49 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
 }
 
+// bracketMethodCall lowers a method call whose callee is a bracket access with a
+// constant string key, C["m"](args) or c["m"](args), the call form a
+// non-identifier or computed method name takes. A key naming a static method on
+// the class name routes to staticMethodCall, and a key naming an instance method
+// on this or a typed instance to classMethodCall, so the bracket call resolves
+// the same Go function or method the dotted call would. It returns handled=false
+// when the callee is not a bracket access with a constant string key on a class
+// receiver whose key names a method, so the caller falls through to the
+// function-value path; a static field or accessor named by the key is not a
+// method, so it is left to that path too.
+func (r *Renderer) bracketMethodCall(callee frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	obj := kids[0]
+	key, ok := r.constStringKey(kids[1])
+	if !ok {
+		return nil, false, nil
+	}
+	if obj.Kind() == frontend.NodeIdentifier {
+		if info, ok := r.classNameRef(obj); ok {
+			if _, ok := info.staticMethodByName(key); !ok {
+				return nil, false, nil
+			}
+			expr, err := r.staticMethodCall(info, key, argNodes)
+			return expr, err == nil, err
+		}
+	}
+	if info, ok := r.classReceiver(obj); ok {
+		if _, ok := info.lookupMethod(key); !ok {
+			return nil, false, nil
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, false, err
+		}
+		expr, err := r.classMethodCall(info, recv, key, argNodes, false)
+		return expr, err == nil, err
+	}
+	return nil, false, nil
+}
+
 // staticMethodCall lowers A.m(args) to the package function the static method
 // became. Arguments lower plainly, the same way an instance method call's do.
 func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []frontend.Node) (ast.Expr, error) {
@@ -2907,16 +2952,36 @@ func (r *Renderer) fillOmittedMethodArgs(args *[]ast.Expr, node frontend.Node, s
 // property only an accessor serves, is an error, not a fall-through, so the
 // store never silently routes to a lowering that would treat the instance as
 // something else.
-func (r *Renderer) classFieldOfTarget(target frontend.Node) (*classInfo, classField, bool, error) {
+// targetProp reads the receiver and the member name an assignment target spells,
+// for both the dotted form a.x and the bracket form a["x"] or a[k] whose key is a
+// constant string, so a store through either spelling resolves the same class
+// member. It returns ok=false for a bracket target whose key is not a constant
+// string, which names no static member and stays a later slice, and for a target
+// that is neither a property nor an element access.
+func (r *Renderer) targetProp(target frontend.Node) (frontend.Node, string, bool) {
 	tkids := r.prog.Children(target)
 	if len(tkids) != 2 {
+		return nil, "", false
+	}
+	switch target.Kind() {
+	case frontend.NodePropertyAccessExpression:
+		return tkids[0], r.prog.Text(tkids[1]), true
+	case frontend.NodeElementAccessExpression:
+		if key, ok := r.constStringKey(tkids[1]); ok {
+			return tkids[0], key, true
+		}
+	}
+	return nil, "", false
+}
+
+func (r *Renderer) classFieldOfTarget(target frontend.Node) (*classInfo, classField, bool, error) {
+	obj, prop, ok := r.targetProp(target)
+	if !ok {
 		return nil, classField{}, false, nil
 	}
-	obj := tkids[0]
 	if obj.Kind() != frontend.NodeThisKeyword && obj.Kind() != frontend.NodeIdentifier {
 		return nil, classField{}, false, nil
 	}
-	prop := r.prog.Text(tkids[1])
 	if obj.Kind() == frontend.NodeIdentifier {
 		if info, ok := r.classNameRef(obj); ok {
 			f, ok := info.staticByName(prop)
@@ -2977,7 +3042,13 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 		return nil, false, nil
 	}
 	target := parts[0]
-	if target.Kind() != frontend.NodePropertyAccessExpression {
+	// A class member store is spelled either a.x, a property access, or a["x"], an
+	// element access whose key resolves to a constant string; both route through the
+	// same setter and field target resolution. A numeric or dynamic element store
+	// (arr[0] = v, obj[k] = v) is claimed by the array and dynamic paths that run
+	// before this, so an element access reaching here is the bracket spelling of a
+	// named member.
+	if target.Kind() != frontend.NodePropertyAccessExpression && target.Kind() != frontend.NodeElementAccessExpression {
 		return nil, false, nil
 	}
 	if stmt, ok, err := r.classSetterStore(target, opText, parts[2]); ok || err != nil {
@@ -3041,11 +3112,10 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 // hand-back) and a receiver that is the class name, which a same-named static
 // owns.
 func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNode frontend.Node) (ast.Stmt, bool, error) {
-	tkids := r.prog.Children(target)
-	if len(tkids) != 2 {
+	obj, prop, ok := r.targetProp(target)
+	if !ok {
 		return nil, false, nil
 	}
-	obj := tkids[0]
 	if obj.Kind() != frontend.NodeThisKeyword && obj.Kind() != frontend.NodeIdentifier {
 		return nil, false, nil
 	}
@@ -3058,7 +3128,7 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 	if !ok {
 		return nil, false, nil
 	}
-	s, ok := info.lookupSetter(r.prog.Text(tkids[1]))
+	s, ok := info.lookupSetter(prop)
 	if !ok || opText != "=" {
 		return nil, false, nil
 	}
@@ -3085,15 +3155,15 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 // the property back, which a write-only accessor cannot serve, so it hands back
 // with its own reason rather than falling through to the static-field path.
 func (r *Renderer) staticSetterStore(target frontend.Node, opText string, valueNode frontend.Node) (ast.Stmt, bool, error) {
-	tkids := r.prog.Children(target)
-	if len(tkids) != 2 || tkids[0].Kind() != frontend.NodeIdentifier {
+	obj, prop, ok := r.targetProp(target)
+	if !ok || obj.Kind() != frontend.NodeIdentifier {
 		return nil, false, nil
 	}
-	info, ok := r.classNameRef(tkids[0])
+	info, ok := r.classNameRef(obj)
 	if !ok {
 		return nil, false, nil
 	}
-	s, ok := info.staticSetterByName(r.prog.Text(tkids[1]))
+	s, ok := info.staticSetterByName(prop)
 	if !ok {
 		return nil, false, nil
 	}
