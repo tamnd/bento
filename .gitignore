@@ -8,6 +8,9 @@
 # run never leaves a tracked file behind.
 /eqrun-*/
 /progrun-*/
+# The conformance golden runner builds under pkg/lower/conformance, so its
+# scratch dirs are ignored wherever they land, not just at the module root.
+goldenrun-*/
 
 # Built docs site (tago output) and its cache
 /docs/public/

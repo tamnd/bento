@@ -130,6 +130,127 @@ func (r *Renderer) generatorYieldType(block frontend.Node) (frontend.Type, ast.E
 	return elemType, elemGo, nil
 }
 
+// isIteratorResult reports whether t is the IteratorResult union a generator's next,
+// return, and throw hand back: a union whose every member is an object carrying both a
+// `done` and a `value` property, the { value, done } shape the language reads .done and
+// .value off. The checker gives the union no symbol, so it is recognized by shape
+// rather than by name, which also means a hand-written type of the same shape reads the
+// same way. This is the union the general tagged-sum path declines, because its
+// discriminant `done` is a boolean literal rather than a string one; recognizing it
+// here routes it to the value.IterResult struct instead.
+func (r *Renderer) isIteratorResult(t frontend.Type) bool {
+	if t.Flags&frontend.TypeUnion == 0 {
+		return false
+	}
+	members := r.prog.UnionMembers(t)
+	if len(members) < 2 {
+		return false
+	}
+	for _, m := range members {
+		if m.Flags&frontend.TypeObject == 0 {
+			return false
+		}
+		hasValue, hasDone := false, false
+		for _, p := range r.prog.Properties(m) {
+			switch p.Name {
+			case "value":
+				hasValue = true
+			case "done":
+				hasDone = true
+			}
+		}
+		if !hasValue || !hasDone {
+			return false
+		}
+	}
+	return true
+}
+
+// isIterResultReceiver reports whether obj holds a value.IterResult, so a .value or
+// .done read off it routes to the struct fields. It matches the IteratorResult union
+// directly, and also the declared type of a binding whose narrowed type collapsed to a
+// single member: inside a `while (!r.done)` the checker narrows r to the yield branch,
+// a lone object, but the Go variable is still the value.IterResult its declared union
+// mapped to, so the read must reach the same fields regardless of the narrowing.
+func (r *Renderer) isIterResultReceiver(obj frontend.Node) bool {
+	if r.isIteratorResult(r.prog.TypeAt(obj)) {
+		return true
+	}
+	if obj.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(obj)
+	if !ok {
+		return false
+	}
+	return r.isIteratorResult(r.prog.TypeOfSymbol(sym))
+}
+
+// generatorMethodCall lowers a manual drive of a generator, it.next(v), to the runtime
+// helper that packs the { value, done } result the language hands a hand-rolled caller.
+// The receiver is the *value.Gen[Y] the generator produced; value.GenNext pulls one
+// step and returns a value.IterResult the caller reads .value and .done off. The value
+// the caller passes to next(v) is boxed into the generator's dynamic in-channel, and a
+// boxer closure lifts the yielded Y back into a value.Value, since GenNext is generic
+// over Y and cannot know the element type's constructor itself. A receiver that is not
+// a generator returns ok false so the caller keeps looking; a method other than next on
+// a generator is a later slice, return and throw land next.
+func (r *Renderer) generatorMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	elem, ok := r.generatorElemType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, false, nil
+	}
+	if method != "next" {
+		return nil, false, &NotYetLowerable{Reason: "a generator's ." + method + "() is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, false, err
+	}
+	// next(v) resumes the suspended yield with v; next() with no argument resumes with
+	// undefined, the value the language passes when the caller sends nothing.
+	sent := ast.Expr(sel("value", "Undefined"))
+	if len(argNodes) > 0 {
+		boxed, err := r.boxOperand(argNodes[0])
+		if err != nil {
+			return nil, false, err
+		}
+		sent = boxed
+	}
+	boxer, err := r.genElemBoxer(elem)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "GenNext"), Args: []ast.Expr{recv, sent, boxer}}, true, nil
+}
+
+// genElemBoxer builds the func(Y) value.Value closure a generator drive passes to
+// value.GenNext, which lifts the generator's typed yield into the dynamic value the
+// IteratorResult carries. The closure boxes its argument with the same primitive
+// constructor a static-to-dynamic crossing uses, so a Generator<number> yields
+// value.Number(y). A yield type with no dynamic boxing (an object or array element) is
+// a later slice, the same boundary boxStaticToDynamicFlags draws.
+func (r *Renderer) genElemBoxer(elem frontend.Type) (ast.Expr, error) {
+	elemGo, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	param := r.freshTemp()
+	body, err := r.boxStaticToDynamicFlags(ident(param), elem.Flags)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident(param)}, Type: elemGo}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{body}}}},
+	}, nil
+}
+
 // coerceToType bridges a value from a source node's type to a target type across the
 // dynamic boundary, the same static/dynamic coercion coerceToTarget applies but
 // against a type the caller holds rather than a target node. A generator yields

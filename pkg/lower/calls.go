@@ -940,6 +940,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isPromise(recvNode) {
 		return r.promiseMethodCall(recvNode, method, argNodes)
 	}
+	// A manual drive of a generator, it.next(v), lowers to the runtime helper that packs
+	// the { value, done } result. Like Map, Set, and Promise it routes before the
+	// primitive and string paths, which expect a number, boolean, or string receiver a
+	// generator is not. A non-generator receiver returns ok false and falls through.
+	if e, ok, err := r.generatorMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
+	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
 	// bare use would take, so they route here before the string-method path.

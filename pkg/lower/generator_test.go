@@ -181,6 +181,60 @@ for (const x of g()) { console.log(String(x)); }
 	}
 }
 
+// TestGeneratorManualNextShape pins that a manual it.next() lowers to the value.GenNext
+// drive that packs the { value, done } result, with a boxer closure lifting the yielded
+// number into a value.Value.
+func TestGeneratorManualNextShape(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 1; }
+const it = g();
+const r = it.next();
+console.log(String(r.done));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.GenNext(it,") {
+		t.Errorf("manual next did not lower to value.GenNext:\n%s", source)
+	}
+	if !strings.Contains(source, "value.Number(") {
+		t.Errorf("manual next boxer did not box the yielded number:\n%s", source)
+	}
+	if !strings.Contains(source, ".Done") {
+		t.Errorf("r.done did not lower to the IterResult .Done field:\n%s", source)
+	}
+}
+
+// TestGeneratorManualNextDrive pins the end-to-end hand drive: pulling with next() and
+// reading .value and .done off each result walks the generator exactly as a for...of
+// would, one value at a time until done latches.
+func TestGeneratorManualNextDrive(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 10; yield 20; yield 30; }
+const it = g();
+let out = "";
+let r = it.next();
+while (!r.done) { out += String(r.value) + " "; r = it.next(); }
+console.log(out);
+`
+	if got, want := runProgramGo(t, src), "10 20 30 \n"; got != want {
+		t.Fatalf("manual next drive printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorManualNextSends pins that a value passed to next(v) reaches the yield it
+// resumes, the same threading a for...of cannot express because it always sends
+// undefined. The first next starts the body, the second sends 5 into the first yield.
+func TestGeneratorManualNextSends(t *testing.T) {
+	const src = `function* g(): Generator<number, void, number> {
+  const a = yield 1;
+  console.log("got " + String(a));
+}
+const it = g();
+it.next();
+it.next(5);
+`
+	if got, want := runProgramGo(t, src), "got 5\n"; got != want {
+		t.Fatalf("manual next(v) send printed %q, want %q", got, want)
+	}
+}
+
 // TestGeneratorYieldStarNonGeneratorHandsBack pins that yield* over a plain iterable
 // such as an array is still a later slice: only a generator delegate is lowerable, so
 // the array form keeps a reason until the iterator-protocol delegation lands.

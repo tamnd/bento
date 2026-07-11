@@ -578,6 +578,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 				return ident("bool"), nil
 			}
 		}
+		// The IteratorResult union a generator's next/return/throw hand back lowers to
+		// the value.IterResult struct, its { value, done } read as fields. It routes
+		// before the general tagged-sum union path below, which declines this union
+		// because its discriminant `done` is a boolean literal, not a string one.
+		if r.isIteratorResult(t) {
+			r.requireImport(valuePkg)
+			return sel("value", "IterResult"), nil
+		}
 	}
 
 	switch {

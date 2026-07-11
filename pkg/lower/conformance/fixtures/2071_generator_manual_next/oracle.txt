@@ -1,0 +1,10 @@
+== stdout:
+of 1
+of 2
+of 3
+next 1
+next 2
+next 3
+got 7
+== exit:
+0

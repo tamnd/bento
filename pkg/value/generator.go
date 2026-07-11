@@ -195,6 +195,30 @@ func (co *GenCo[Y]) Yield(v Y) Value {
 	return sig.sent
 }
 
+// IterResult is the { value, done } object a generator hands back from a manual next,
+// return, or throw, the IteratorResult a hand-rolled driver reads .value and .done off.
+// Value carries the yielded value while Done is false and the completion value once
+// Done is true, so a manual loop reads Done to stop and Value for each step. It is a
+// plain struct passed by value: it packages, as the object the language gives a manual
+// caller, the same pair for...of already reads straight off the Gen.
+type IterResult struct {
+	Value Value
+	Done  bool
+}
+
+// GenNext drives one step of a generator for a manual next(v) and packs the { value,
+// done } result. The box closure lifts the generator's typed yield into a value.Value;
+// the lowerer supplies it because it alone knows the element type Y. On completion the
+// result carries the generator's return value, which is already a value.Value, and Done
+// is true.
+func GenNext[Y any](g *Gen[Y], sent Value, box func(Y) Value) IterResult {
+	v, done := g.Next(sent)
+	if done {
+		return IterResult{Value: g.Result(), Done: true}
+	}
+	return IterResult{Value: box(v), Done: false}
+}
+
 // YieldFrom drives a delegate generator on this coroutine's behalf, the runtime of a
 // yield* delegation. It pulls each value the delegate yields and re-yields it to this
 // generator's consumer, threading the value the consumer sends back through next(v)

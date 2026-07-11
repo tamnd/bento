@@ -1454,15 +1454,18 @@ console.log(out);
 	}
 }
 
-// TestClassGeneratorYieldStarHandsBack pins that a yield* delegation keeps its
-// own reason, not the control-flow one, so the next baseline ranks it honestly.
+// TestClassGeneratorYieldStarHandsBack pins that a yield* over a non-generator
+// iterable in a class generator method keeps the same yield*-specific reason the
+// function form gives, not the control-flow one, so the next baseline ranks it
+// honestly. A yield* over a generator delegate lowers through the shared YieldFrom
+// path; only the non-generator iterable, an array here, still hands back.
 func TestClassGeneratorYieldStarHandsBack(t *testing.T) {
 	const src = `class C {
   *g(): Generator<number> { yield* [1, 2]; }
 }
 new C();
 `
-	if reason, want := renderProgramHandBack(t, src), "a yield* delegation is a later slice"; reason != want {
+	if reason, want := renderProgramHandBack(t, src), "a yield* over a non-generator iterable is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)
 	}
 }

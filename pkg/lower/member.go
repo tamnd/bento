@@ -108,6 +108,34 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, nil
 	}
+	// A read of .value or .done on an IteratorResult, the { value, done } object a
+	// generator's next/return/throw hand back, lowers to the field on the
+	// value.IterResult the drive produced: .value carries the yielded or completion
+	// value as a dynamic value.Value, .done the Go bool a manual loop stops on. It routes
+	// before the interned-shape paths, which would try to derive a struct for the union
+	// and hand back on its boolean-literal discriminant.
+	if r.isIterResultReceiver(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		switch prop {
+		case "value":
+			// .value is a dynamic value.Value in the struct, but the checker types the
+			// read as the yielded element (number for Generator<number>), so a static
+			// consumer expects that Go type. A dynamic read stays the box; a static one
+			// coerces the box down to the number, string, or boolean the checker named.
+			field := &ast.SelectorExpr{X: recv, Sel: ident("Value")}
+			if r.isDynamic(n) {
+				return field, nil
+			}
+			return r.coerceDynamicToStaticFlags(field, r.prog.TypeAt(n).Flags)
+		case "done":
+			return &ast.SelectorExpr{X: recv, Sel: ident("Done")}, nil
+		default:
+			return nil, &NotYetLowerable{Reason: "an IteratorResult's ." + prop + " is a later slice"}
+		}
+	}
 	// A static read A.total lowers to the package var the static field became.
 	// The receiver here is the class name itself, whose type shares the class
 	// symbol an instance type walks to, so this routes before the instance path
