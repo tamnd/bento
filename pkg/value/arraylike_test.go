@@ -83,6 +83,68 @@ func TestGenericLastIndexOf(t *testing.T) {
 	}
 }
 
+// double is a boxed callback that returns twice its first argument, standing in for
+// a lowered arrow the generic-receiver methods invoke.
+func double() Value {
+	return NewFunc(func(args []Value) Value {
+		return Number(Arg(args, 0).AsNumber() * 2)
+	})
+}
+
+// isEven is a boxed predicate over the first argument.
+func isEven() Value {
+	return NewFunc(func(args []Value) Value {
+		return Bool(int(Arg(args, 0).AsNumber())%2 == 0)
+	})
+}
+
+// TestGenericCallbackMethods proves the callback methods invoke the callback on each
+// element and shape their results the array way: map builds a new array, filter keeps
+// the truthy elements, some and every fold to a boolean, and find and findIndex
+// report the first match.
+func TestGenericCallbackMethods(t *testing.T) {
+	o := arrayLike(3, Number(1), Number(2), Number(3))
+
+	m := GenericMap(o, double())
+	for i, w := range []float64{2, 4, 6} {
+		if v := m.GetIndex(float64(i)); v.AsNumber() != w {
+			t.Fatalf("map[%d] = %v, want %v", i, v.AsNumber(), w)
+		}
+	}
+	f := GenericFilter(o, isEven())
+	if f.Get(FromGoString("length")).AsNumber() != 1 {
+		t.Fatalf("filter length = %v, want 1", f.Get(FromGoString("length")).AsNumber())
+	}
+	if !GenericSome(o, isEven()).AsBool() {
+		t.Fatal("some even = false, want true")
+	}
+	if GenericEvery(o, isEven()).AsBool() {
+		t.Fatal("every even = true, want false")
+	}
+	if v := GenericFind(o, isEven()); v.AsNumber() != 2 {
+		t.Fatalf("find even = %v, want 2", v.AsNumber())
+	}
+	if v := GenericFindIndex(o, isEven()); v.AsNumber() != 1 {
+		t.Fatalf("findIndex even = %v, want 1", v.AsNumber())
+	}
+}
+
+// TestGenericForEach proves forEach visits each element and returns undefined.
+func TestGenericForEach(t *testing.T) {
+	o := arrayLike(3, Number(1), Number(2), Number(3))
+	sum := 0.0
+	cb := NewFunc(func(args []Value) Value {
+		sum += Arg(args, 0).AsNumber()
+		return Undefined
+	})
+	if got := GenericForEach(o, cb); got.kind != KindUndefined {
+		t.Fatalf("forEach returned %v, want undefined", got)
+	}
+	if sum != 6 {
+		t.Fatalf("forEach sum = %v, want 6", sum)
+	}
+}
+
 // TestGenericFill proves fill writes value into each index in range as the property
 // named by the number, honors relative bounds, and returns the receiver.
 func TestGenericFill(t *testing.T) {

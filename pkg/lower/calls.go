@@ -2441,6 +2441,20 @@ func (r *Renderer) arrayProtoBorrowedCall(name, method string, argNodes []fronte
 		return r.arrayGenericCall("GenericFill", args, methodArgs, 1)
 	case "reverse":
 		return r.arrayGenericCall("GenericReverse", args, methodArgs, 0)
+	case "forEach":
+		return r.arrayGenericCall("GenericForEach", args, methodArgs, 1)
+	case "map":
+		return r.arrayGenericCall("GenericMap", args, methodArgs, 1)
+	case "filter":
+		return r.arrayGenericCall("GenericFilter", args, methodArgs, 1)
+	case "some":
+		return r.arrayGenericCall("GenericSome", args, methodArgs, 1)
+	case "every":
+		return r.arrayGenericCall("GenericEvery", args, methodArgs, 1)
+	case "find":
+		return r.arrayGenericCall("GenericFind", args, methodArgs, 1)
+	case "findIndex":
+		return r.arrayGenericCall("GenericFindIndex", args, methodArgs, 1)
 	default:
 		return nil, &NotYetLowerable{Reason: "Array.prototype." + name + " on a generic receiver is a later slice"}
 	}
