@@ -2570,6 +2570,12 @@ func (r *Renderer) asyncStaticFuncDecl(m classMethod) (ast.Decl, error) {
 // settles. ret is the method's declared Promise<T> return; retNode is the method
 // node whose block holds the body.
 func (r *Renderer) asyncBody(ret frontend.Type, retNode frontend.Node) (*ast.BlockStmt, error) {
+	// A body that awaits suspends at each await and cannot run to completion on the
+	// calling stack, so it lowers through the coroutine rather than the synchronous
+	// value.Async wrapping this function builds for an await-free body.
+	if r.bodyHasAwait(retNode) {
+		return r.asyncCoroutineBody(ret, retNode)
+	}
 	elem, ok := r.promiseElem(ret)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "an async method whose return is not a Promise is a later slice"}
