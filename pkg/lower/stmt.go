@@ -1218,6 +1218,12 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		if err != nil {
 			return nil, true, err
 		}
+		// A nested pattern binds against the slot the outer element selects, so its
+		// inner names are validated when the sub-pattern is bound, not here.
+		if info.nested != nil {
+			infos[i] = info
+			continue
+		}
 		name, ok := localName(r.prog.Text(info.nameNode))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
@@ -1266,6 +1272,20 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		rc, err := recv()
 		if err != nil {
 			return nil, true, err
+		}
+		if info.nested != nil {
+			tmp := r.freshTemp()
+			read := &ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: rc, Sel: ident("AtI")},
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+			}
+			stmts = append(stmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{read}})
+			inner, err := r.bindSubPattern(info.nested, ident(tmp), elemT, token.DEFINE)
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, inner...)
+			continue
 		}
 		if info.hasDefault {
 			nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))

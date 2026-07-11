@@ -1011,6 +1011,11 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 		if err != nil {
 			return nil, err
 		}
+		// A nested pattern in a parameter binds the whole tree at body entry, a later
+		// slice; until then it hands back rather than reading a nil name node.
+		if info.nested != nil {
+			return nil, &NotYetLowerable{Reason: "a nested pattern in a destructured parameter is a later slice"}
+		}
 		name, ok := localName(r.prog.Text(info.nameNode))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
