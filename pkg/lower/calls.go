@@ -1424,6 +1424,14 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectIntegrityUnary("isSealed", "IsSealed", argNodes)
 	case "isFrozen":
 		return r.objectIntegrityUnary("isFrozen", "IsFrozen", argNodes)
+	case "assign":
+		return r.objectAssign(argNodes)
+	case "fromEntries":
+		return r.objectFromEntries(argNodes)
+	case "entries":
+		return r.objectEntries(argNodes)
+	case "getOwnPropertySymbols":
+		return r.objectOwnSymbols(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
@@ -1449,6 +1457,93 @@ func (r *Renderer) objectIntegrityUnary(apiName, runtimeMethod string, argNodes 
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(runtimeMethod)}}, nil
+}
+
+// objectAssign lowers Object.assign(target, ...sources) to a runtime Assign on the
+// dynamic target, which copies each source's own enumerable string and symbol
+// properties onto the target through the ordinary get and set path and returns the
+// target. The target must be a dynamic value, since a fixed-shape Go struct has no
+// runtime bag to copy onto, so a non-dynamic target hands back. Each source is boxed
+// the way any dynamic operand is, so the runtime reads a null or undefined source as
+// a no-op the way the spec skips it. A call with no source is the identity on the
+// target. Every operand is evaluated, so no read is dropped.
+func (r *Renderer) objectAssign(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "Object.assign with no target is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.assign onto a fixed-shape target, which has no runtime bag to copy onto, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]ast.Expr, 0, len(argNodes)-1)
+	for _, node := range argNodes[1:] {
+		src, err := r.boxOperand(node)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, src)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Assign")}, Args: sources}, nil
+}
+
+// objectFromEntries lowers Object.fromEntries(iterable) to a runtime
+// value.FromEntries, which walks the iterable's key-value pairs and sets each onto a
+// fresh object, so a later pair with the same key overwrites an earlier one. The
+// result is always a runtime object, so the iterable is boxed the way any dynamic
+// operand is and no receiver shape is involved. The single operand is evaluated, so
+// no read is dropped.
+func (r *Renderer) objectFromEntries(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.fromEntries with other than one argument is a later slice"}
+	}
+	iterable, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "FromEntries"), Args: []ast.Expr{iterable}}, nil
+}
+
+// objectEntries lowers Object.entries(o) to a runtime Entries on the dynamic
+// receiver, which walks the bag's own enumerable keys and returns an array of
+// [key, value] pairs in enumeration order. The receiver must be a dynamic value,
+// since a fixed-shape Go struct's field values need not share one element type the
+// way a pair array's second slot does, so a non-dynamic receiver hands back. The
+// receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectEntries(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.entries with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.entries on a fixed-shape receiver, whose field values need not share one element type, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Entries")}}, nil
+}
+
+// objectOwnSymbols lowers Object.getOwnPropertySymbols(o) to a runtime OwnSymbols on
+// the dynamic receiver, which returns the receiver's own symbol keys as a value
+// array in insertion order. The receiver must be a dynamic value, since a fixed-shape
+// Go struct carries no symbol keys to list, so a non-dynamic receiver hands back. The
+// receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectOwnSymbols(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertySymbols with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertySymbols on a fixed-shape receiver, which carries no symbol keys, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnSymbols")}}, nil
 }
 
 // objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime
