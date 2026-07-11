@@ -68,6 +68,19 @@ func TestObjectCreateNullProto(t *testing.T) {
 	}
 }
 
+// TestGetPrototype proves Object.getPrototypeOf reads the slot back: a created
+// object reports its prototype object, and a prototype-less object reports null.
+func TestGetPrototype(t *testing.T) {
+	proto := NewObject()
+	child := ObjectCreate(proto)
+	if got := child.GetPrototype(); got.ref != proto.ref {
+		t.Fatal("getPrototypeOf did not return the prototype object")
+	}
+	if got := ObjectCreate(Null).GetPrototype(); got.kind != KindNull {
+		t.Fatalf("getPrototypeOf of a null-proto object = %v, want null", got)
+	}
+}
+
 // TestObjectCreatePrimitiveThrows proves Object.create rejects a prototype that is
 // neither an object nor null with a TypeError.
 func TestObjectCreatePrimitiveThrows(t *testing.T) {
