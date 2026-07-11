@@ -2473,6 +2473,16 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	if err != nil {
 		return nil, err
 	}
+	// A destructured parameter arrives in one synthesized Go field holding the whole
+	// object or array; the names the pattern bound are read from it at the top of the
+	// body, the same entry bindings the top-level function path injects.
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(m.node), sig)
+	if err != nil {
+		return nil, err
+	}
+	if len(binds) != 0 {
+		body.List = append(binds, body.List...)
+	}
 	return &ast.FuncDecl{
 		Recv: &ast.FieldList{List: []*ast.Field{{
 			Names: []*ast.Ident{ident(info.recv)},
@@ -2537,6 +2547,11 @@ func (r *Renderer) generatorMethodDecl(info *classInfo, m classMethod) (ast.Decl
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
 	}
+	// A generator method wraps its body in the coroutine, which has no entry hook for
+	// the destructure bindings a pattern parameter needs, so it hands back.
+	if r.closureHasDestructuredParam(m.node) {
+		return nil, &NotYetLowerable{Reason: "a generator method with a destructured parameter is a later slice"}
+	}
 	params, err := r.paramFields(sig)
 	if err != nil {
 		return nil, err
@@ -2599,6 +2614,15 @@ func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, er
 	if err != nil {
 		return nil, err
 	}
+	// A destructured parameter arrives in one synthesized Go field; its bound names are
+	// read from it at body entry, the same as an instance method's.
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(m.node), sig)
+	if err != nil {
+		return nil, err
+	}
+	if len(binds) != 0 {
+		body.List = append(binds, body.List...)
+	}
 	return &ast.FuncDecl{
 		Name: ident(m.goName),
 		Type: &ast.FuncType{Params: params, Results: results},
@@ -2625,6 +2649,12 @@ func (r *Renderer) asyncMethodDecl(info *classInfo, m classMethod, name string) 
 	}
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+	// An async method wraps its body in the promise coroutine or value.Async closure,
+	// neither of which has an entry hook for the destructure bindings a pattern
+	// parameter needs, so it hands back.
+	if r.closureHasDestructuredParam(m.node) {
+		return nil, &NotYetLowerable{Reason: "an async method with a destructured parameter is a later slice"}
 	}
 	params, err := r.paramFields(sig)
 	if err != nil {
@@ -2664,6 +2694,11 @@ func (r *Renderer) asyncStaticFuncDecl(m classMethod) (ast.Decl, error) {
 	}
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+	// An async static method takes the same coroutine wrapping, so a destructured
+	// parameter hands back until the entry-binding hook lands.
+	if r.closureHasDestructuredParam(m.node) {
+		return nil, &NotYetLowerable{Reason: "an async static method with a destructured parameter is a later slice"}
 	}
 	params, err := r.paramFields(sig)
 	if err != nil {
