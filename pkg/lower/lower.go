@@ -217,6 +217,14 @@ type Renderer struct {
 	// does not exist. It is set around the body of a named function expression and
 	// cleared after, so the self name does not leak past the expression.
 	funcExprSelf map[frontend.Symbol]string
+	// promiseSettleParams maps a Promise executor's resolve and reject parameter names
+	// to how each settles the promise while that executor body lowers. A call to one
+	// is not a plain function-value call: resolve carries a value of the element type
+	// and reject an arbitrary boxed value, so the callee is intercepted in callExpr and
+	// its argument bridged the settle way rather than through the callback's lib.d.ts
+	// signature, whose unions and optionals do not render. It is set around the
+	// executor body by newPromise and cleared after, so the names do not leak.
+	promiseSettleParams map[string]promiseSettle
 	// monoSpecs maps a generic top-level function's symbol to the distinct
 	// monomorphizations the program's call sites ask for, one Go function emitted per
 	// entry. It is filled once by collectMono in RenderProgram, before any body lowers,
@@ -431,7 +439,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

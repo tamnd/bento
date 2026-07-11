@@ -309,6 +309,13 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 		r.requireImport(valuePkg)
 		drain := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunMicrotasks")}}
 		mainDecl.Body.List = append(mainDecl.Body.List, drain)
+		// After the drain, any promise that rejected and was never observed is an
+		// unhandled rejection: JavaScript runs the unhandledrejection path once the
+		// microtask checkpoint is clear. Reporting it (to stderr, with a non-zero exit)
+		// is what lets a test that asserts a rejection observe it, rather than the
+		// rejection vanishing into a false pass.
+		report := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "ReportUnhandledRejections")}}
+		mainDecl.Body.List = append(mainDecl.Body.List, report)
 	}
 
 	file := &ast.File{Name: ident("main")}

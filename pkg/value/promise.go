@@ -1,5 +1,7 @@
 package value
 
+import "os"
+
 // This file is the value-model side of a JavaScript promise, the smallest honest
 // piece the class-shape tests observe (spec 2075 doc 11 owns the full event loop).
 // A compiled test262 job runs to completion in a single turn: there are no timers
@@ -50,6 +52,47 @@ func RunMicrotasks() {
 	}
 }
 
+// ReportUnhandledRejections surfaces every promise that settled rejected and was never
+// subscribed to, the unhandled-rejection path JavaScript runs after the microtask
+// checkpoint. It prints each one to stderr in the shape Node uses and, if any exist,
+// exits non-zero, so a test that asserts a rejection observes the crash rather than a
+// false pass. The assembled main calls it once, right after the final microtask drain,
+// so every reaction that could still consume a rejection has already run.
+func ReportUnhandledRejections() {
+	reported := false
+	for _, p := range trackedRejections {
+		reason, unhandled := p.unhandledReason()
+		if !unhandled {
+			continue
+		}
+		v := thrownValue(reason)
+		line := "Uncaught (in promise) " + describeRejection(v)
+		_, _ = os.Stderr.WriteString(line + "\n")
+		reported = true
+	}
+	if reported {
+		os.Exit(1)
+	}
+}
+
+// describeRejection renders a rejection reason the way Node names it on the
+// unhandled-rejection line: an error object shows its name and message, and any other
+// value shows its string form, so a rejection with a plain string or number reason is
+// still legible rather than collapsed to a generic label.
+func describeRejection(v Value) string {
+	name := v.Get(FromGoString("name"))
+	if name.Kind() == KindString {
+		text := name.AsString().ToGoString()
+		if msg := v.Get(FromGoString("message")); msg.Kind() == KindString {
+			if m := msg.AsString().ToGoString(); m != "" {
+				return text + ": " + m
+			}
+		}
+		return text
+	}
+	return ToString(v).ToGoString()
+}
+
 // promiseState is which of the three states a promise is in: pending until it
 // settles, then fulfilled with a value or rejected with a reason. An await-free
 // async body settles its promise the moment it returns, so its promise is born in a
@@ -73,7 +116,29 @@ type Promise[T any] struct {
 	value    T
 	reason   Thrown
 	onSettle []func()
+	handled  bool
 }
+
+// rejectedPromise is the element-type-erased view the end-of-run check reads a
+// rejected promise through, so trackedRejections can hold promises of any element
+// type in one slice. unhandledReason reports the rejection reason and whether it is
+// still unhandled, the pair the reporter needs without knowing T.
+type rejectedPromise interface {
+	unhandledReason() (Thrown, bool)
+}
+
+// unhandledReason satisfies rejectedPromise: a promise is an unhandled rejection when
+// it settled rejected and no reaction ever subscribed to it, JavaScript's condition
+// for the unhandledrejection signal.
+func (p *Promise[T]) unhandledReason() (Thrown, bool) {
+	return p.reason, p.state == promiseRejected && !p.handled
+}
+
+// trackedRejections records every promise that rejects, so ReportUnhandledRejections
+// can surface the ones no handler consumed after the microtask queue drains. A single
+// package-level list matches the single event loop; the compiled job is single-turn,
+// so the list is filled during the run and read once at the end.
+var trackedRejections []rejectedPromise
 
 // Resolved mints a promise already fulfilled with v, the promise an await-free
 // async body returns when it runs to a normal completion.
@@ -84,7 +149,9 @@ func Resolved[T any](v T) *Promise[T] {
 // Rejected mints a promise already rejected with reason, the promise an async body
 // returns when it throws. The reason is the thrown value a catch would recover.
 func Rejected[T any](reason Thrown) *Promise[T] {
-	return &Promise[T]{state: promiseRejected, reason: reason}
+	p := &Promise[T]{state: promiseRejected, reason: reason}
+	trackedRejections = append(trackedRejections, p)
+	return p
 }
 
 // fulfill settles a pending promise with v, running its registered reactions as
@@ -107,6 +174,7 @@ func (p *Promise[T]) reject(reason Thrown) {
 	}
 	p.state = promiseRejected
 	p.reason = reason
+	trackedRejections = append(trackedRejections, p)
 	p.flush()
 }
 
@@ -125,6 +193,7 @@ func (p *Promise[T]) flush() {
 // JavaScript always defers a reaction to the microtask checkpoint rather than running
 // it inline.
 func (p *Promise[T]) subscribe(reaction func()) {
+	p.handled = true
 	if p.state == promisePending {
 		p.onSettle = append(p.onSettle, reaction)
 		return
@@ -170,36 +239,158 @@ func AsyncVoid(body func()) (p *Promise[Unit]) {
 }
 
 // Then schedules onFulfilled to run with the fulfilled value at the next microtask
-// checkpoint. A rejected promise does not run onFulfilled: rejection propagation
-// through a returned promise is a later slice, so a then with no rejection handler
-// simply does not fire on a rejected promise, which is safe because the fixtures
-// observe rejection through Catch. The callback is always deferred, never inlined,
-// so synchronous code after the then runs first. It returns a settled unit promise,
-// the promise then produces in JavaScript, so a then whose result is bound or
-// chained has a value of the right type; the callback covered here returns nothing,
-// so the returned promise carries no value.
+// checkpoint. The callback is always deferred, never inlined, so synchronous code after
+// the then runs first. It returns the promise then produces in JavaScript: a fresh
+// promise that fulfills with unit only once the callback has run, so a chained then runs
+// one turn later than this one, the ordering a following then observes. A rejection of
+// the receiver passes straight through to the returned promise, since a then with no
+// rejection handler forwards the rejection down the chain, and a callback that throws
+// (a Go panic carrying a Thrown) rejects the returned promise. The callback covered here
+// returns nothing, so the returned promise carries only unit.
 func (p *Promise[T]) Then(onFulfilled func(T)) *Promise[Unit] {
+	next := &Promise[Unit]{}
 	p.subscribe(func() {
-		if p.state == promiseFulfilled {
-			onFulfilled(p.value)
+		if p.state == promiseRejected {
+			next.reject(p.reason)
+			return
 		}
+		settleFromBody(next, func() Unit {
+			onFulfilled(p.value)
+			return Unit{}
+		})
 	})
-	return Resolved(Unit{})
+	return next
+}
+
+// ThenMap is Then for a callback that returns a plain value, the chaining form
+// p.then((v) => v + 1): the returned promise fulfills with the callback's result once
+// the receiver fulfills, so a following then reads the mapped value. A rejection of the
+// receiver passes straight through to the returned promise, since a then with no
+// rejection handler forwards the rejection down the chain, and a callback that throws
+// (a Go panic carrying a Thrown) rejects the returned promise rather than propagating.
+// The receiver's and result's element types are inferred from the receiver and the
+// callback, so a chain of thens carries each stage's value type without annotation.
+func ThenMap[T, U any](p *Promise[T], onFulfilled func(T) U) *Promise[U] {
+	next := &Promise[U]{}
+	p.subscribe(func() {
+		if p.state == promiseRejected {
+			next.reject(p.reason)
+			return
+		}
+		settleFromBody(next, func() U { return onFulfilled(p.value) })
+	})
+	return next
+}
+
+// ThenFlat is Then for a callback that returns a promise, the adoption form
+// p.then((v) => fetch(v)): the returned promise adopts the state of the promise the
+// callback returns, fulfilling or rejecting the way that inner promise settles, so the
+// chain flattens rather than nesting a promise of a promise. Like ThenMap a rejection
+// of the receiver passes through and a callback that throws rejects the returned
+// promise. The inner promise's value type is the returned promise's element type, so a
+// following then reads the inner value directly.
+func ThenFlat[T, U any](p *Promise[T], onFulfilled func(T) *Promise[U]) *Promise[U] {
+	next := &Promise[U]{}
+	p.subscribe(func() {
+		if p.state == promiseRejected {
+			next.reject(p.reason)
+			return
+		}
+		guardThrow(next, func() {
+			inner := onFulfilled(p.value)
+			inner.subscribe(func() {
+				if inner.state == promiseRejected {
+					next.reject(inner.reason)
+				} else {
+					next.fulfill(inner.value)
+				}
+			})
+		})
+	})
+	return next
+}
+
+// settleFromBody runs a then callback that produces a value and fulfills next with it,
+// turning a throw inside the callback (a Go panic carrying a Thrown) into a rejection
+// of next rather than a propagating panic. It is the value-producing half of the two
+// chaining reactions; a Go runtime panic that is not a Thrown stays a real crash.
+func settleFromBody[U any](next *Promise[U], body func() U) {
+	defer func() {
+		if r := recover(); r != nil {
+			t, ok := r.(Thrown)
+			if !ok {
+				panic(r)
+			}
+			next.reject(t)
+		}
+	}()
+	next.fulfill(body())
+}
+
+// guardThrow runs a then callback whose body settles next itself (the adoption case
+// subscribes next to an inner promise), turning a throw inside the body into a
+// rejection of next. It differs from settleFromBody in not fulfilling next on a normal
+// return, since the body arranges the settle. A non-Thrown panic stays a real crash.
+func guardThrow[U any](next *Promise[U], body func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			t, ok := r.(Thrown)
+			if !ok {
+				panic(r)
+			}
+			next.reject(t)
+		}
+	}()
+	body()
 }
 
 // Catch schedules onRejected to run with the rejection reason at the next microtask
-// checkpoint. A fulfilled promise does not run onRejected. The reason is handed
-// over as a dynamic value: a caught rejection is typed any in JavaScript, so the
-// callback reads it through the value model the way a catch binding boxed into the
-// dynamic world does. Like Then it returns a settled unit promise so a bound or
-// chained catch has a value of the right type.
+// checkpoint. A fulfilled promise does not run onRejected; its fulfillment passes
+// through, so the returned promise fulfills and a following then still runs. The reason
+// is handed over as a dynamic value: a caught rejection is typed any in JavaScript, so
+// the callback reads it through the value model the way a catch binding boxed into the
+// dynamic world does. Like Then it returns a fresh promise that settles only once the
+// reaction has run, so a chained then or finally runs one turn later, and a callback that
+// throws rejects the returned promise rather than swallowing the error.
 func (p *Promise[T]) Catch(onRejected func(Value)) *Promise[Unit] {
+	next := &Promise[Unit]{}
+	p.subscribe(func() {
+		if p.state != promiseRejected {
+			next.fulfill(Unit{})
+			return
+		}
+		settleFromBody(next, func() Unit {
+			onRejected(thrownValue(p.reason))
+			return Unit{}
+		})
+	})
+	return next
+}
+
+// Finally schedules onFinally to run when the promise settles, fulfilled or rejected
+// alike, with no argument: the cleanup reaction .finally registers to run whichever way
+// the promise ends. Like Then and Catch the callback is deferred to the microtask
+// checkpoint, never inlined, so it runs after the synchronous code and in settle order
+// among the reactions the promise gathered. It returns a fresh promise that settles only
+// once the callback has run, so a chained reaction runs a turn later. A finally does not
+// consume a rejection: the returned promise re-raises the receiver's rejection after the
+// callback, and a callback that throws overrides it, the rules .finally follows.
+func (p *Promise[T]) Finally(onFinally func()) *Promise[Unit] {
+	next := &Promise[Unit]{}
 	p.subscribe(func() {
 		if p.state == promiseRejected {
-			onRejected(thrownValue(p.reason))
+			guardThrow(next, func() {
+				onFinally()
+				next.reject(p.reason)
+			})
+			return
 		}
+		settleFromBody(next, func() Unit {
+			onFinally()
+			return Unit{}
+		})
 	})
-	return Resolved(Unit{})
+	return next
 }
 
 // thrownValue boxes a thrown value into the dynamic value a rejection handler
