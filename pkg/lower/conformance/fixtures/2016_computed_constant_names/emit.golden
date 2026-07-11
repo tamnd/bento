@@ -6,11 +6,6 @@ import (
 	"github.com/tamnd/bento/pkg/value"
 )
 
-type ObjConstructorPlainV struct {
-	V           float64        `json:"v"`
-	Constructor func() float64 `json:"constructor"`
-	Plain       func() float64 `json:"plain"`
-}
 type C struct {
 	V float64 `json:"v"`
 }

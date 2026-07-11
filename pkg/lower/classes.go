@@ -2807,6 +2807,49 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
 }
 
+// bracketMethodCall lowers a method call whose callee is a bracket access with a
+// constant string key, C["m"](args) or c["m"](args), the call form a
+// non-identifier or computed method name takes. A key naming a static method on
+// the class name routes to staticMethodCall, and a key naming an instance method
+// on this or a typed instance to classMethodCall, so the bracket call resolves
+// the same Go function or method the dotted call would. It returns handled=false
+// when the callee is not a bracket access with a constant string key on a class
+// receiver whose key names a method, so the caller falls through to the
+// function-value path; a static field or accessor named by the key is not a
+// method, so it is left to that path too.
+func (r *Renderer) bracketMethodCall(callee frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	obj := kids[0]
+	key, ok := r.stringLiteralKey(kids[1])
+	if !ok {
+		return nil, false, nil
+	}
+	if obj.Kind() == frontend.NodeIdentifier {
+		if info, ok := r.classNameRef(obj); ok {
+			if _, ok := info.staticMethodByName(key); !ok {
+				return nil, false, nil
+			}
+			expr, err := r.staticMethodCall(info, key, argNodes)
+			return expr, err == nil, err
+		}
+	}
+	if info, ok := r.classReceiver(obj); ok {
+		if _, ok := info.lookupMethod(key); !ok {
+			return nil, false, nil
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, false, err
+		}
+		expr, err := r.classMethodCall(info, recv, key, argNodes, false)
+		return expr, err == nil, err
+	}
+	return nil, false, nil
+}
+
 // staticMethodCall lowers A.m(args) to the package function the static method
 // became. Arguments lower plainly, the same way an instance method call's do.
 func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []frontend.Node) (ast.Expr, error) {
