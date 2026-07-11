@@ -261,6 +261,40 @@ func (v Value) Get(key BStr) Value {
 	}
 }
 
+// HasProperty implements the in operator, key in v: whether v carries the named
+// property, own or built in, for the kinds the AOT path produces. A string has a
+// length and its in-range character indices; an array has a length and its in-range
+// element indices as well as any own named property; an object or a function probes
+// its own keys. JavaScript throws a TypeError when the right operand of in is not an
+// object, so a primitive receiver raises rather than answering false.
+func (v Value) HasProperty(key BStr) bool {
+	name := key.ToGoString()
+	switch v.kind {
+	case KindString:
+		if name == "length" {
+			return true
+		}
+		if idx, ok := arrayIndex(name); ok {
+			return v.str().CharAt(float64(idx)).Length() != 0
+		}
+		return false
+	case KindArray:
+		o := v.object()
+		if name == "length" {
+			return true
+		}
+		if idx, ok := arrayIndex(name); ok {
+			return idx < len(o.elems)
+		}
+		return o.hasOwn(key)
+	case KindObject, KindFunc:
+		return v.object().hasOwn(key)
+	default:
+		Throw(NewTypeError(FromGoString("Cannot use 'in' operator to search for '" + name + "' in a non-object")))
+		return false
+	}
+}
+
 // ToBoolean implements the ToBoolean abstract operation, JavaScript truthiness:
 // undefined, null, false, +0, -0, NaN, and the empty string are falsy, and every
 // object, every nonempty string, and every other number is truthy.

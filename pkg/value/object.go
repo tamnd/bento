@@ -151,3 +151,16 @@ func (o *Object) getOwn(key BStr) Value {
 	}
 	return Undefined
 }
+
+// hasOwn reports whether the object carries key as an own named property, the
+// existence probe the in operator makes instead of reading the value, so a property
+// present with an undefined value still reports true where getOwn could not tell it
+// apart from a miss.
+func (o *Object) hasOwn(key BStr) bool {
+	for i := range o.keys {
+		if o.keys[i].Equal(key) {
+			return true
+		}
+	}
+	return false
+}

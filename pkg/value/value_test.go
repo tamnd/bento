@@ -238,6 +238,65 @@ func TestValueCoercions(t *testing.T) {
 	}
 }
 
+// TestHasProperty checks the in operator across the kinds the AOT path produces:
+// an object reports its own keys (including one holding undefined), an array reports
+// length and in-range indices, a string reports length and in-range character
+// indices, and a primitive receiver throws a TypeError the way JavaScript does.
+func TestHasProperty(t *testing.T) {
+	obj := NewObject()
+	obj.Set(FromGoString("name"), StringValue(FromGoString("bento")))
+	obj.Set(FromGoString("missing"), Undefined)
+	if !obj.HasProperty(FromGoString("name")) {
+		t.Fatalf("object should carry own key name")
+	}
+	if !obj.HasProperty(FromGoString("missing")) {
+		t.Fatalf("a key present with an undefined value should report true")
+	}
+	if obj.HasProperty(FromGoString("nope")) {
+		t.Fatalf("object should not carry an absent key")
+	}
+
+	arr := NewArrayValue([]Value{Number(10), Number(20)})
+	if !arr.HasProperty(FromGoString("length")) || !arr.HasProperty(FromGoString("1")) {
+		t.Fatalf("array should carry length and an in-range index")
+	}
+	if arr.HasProperty(FromGoString("2")) {
+		t.Fatalf("array should not carry an out-of-range index")
+	}
+
+	s := StringValue(FromGoString("hi"))
+	if !s.HasProperty(FromGoString("length")) || !s.HasProperty(FromGoString("0")) {
+		t.Fatalf("string should carry length and an in-range char index")
+	}
+	if s.HasProperty(FromGoString("2")) {
+		t.Fatalf("string should not carry an out-of-range char index")
+	}
+
+	if !hasPropertyThrewTypeError(t, Number(1), FromGoString("x")) {
+		t.Fatalf("in on a number should throw a TypeError")
+	}
+}
+
+// hasPropertyThrewTypeError runs v.HasProperty(key) and reports whether it threw a
+// TypeError, recovering the panic the Throw path raises so the test can assert on
+// the non-object case the way JavaScript's in operator signals it.
+func hasPropertyThrewTypeError(t *testing.T, v Value, key BStr) (threw bool) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		e, ok := r.(Thrown)
+		if !ok {
+			t.Fatalf("HasProperty panicked with a non-thrown value %v", r)
+		}
+		threw = e.ErrorName() == "TypeError"
+	}()
+	v.HasProperty(key)
+	return false
+}
+
 func isNaN(f float64) bool { return f != f }
 
 // FromEmpty is a tiny test helper for the empty-string boolean case, kept local so

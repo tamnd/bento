@@ -904,6 +904,25 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		if handled {
 			return expr, nil
 		}
+		// A general `key in obj` on a dynamic object probes the runtime for the
+		// property, obj.HasProperty(key). This is the existence check the async
+		// done-print seam makes, `'name' in error` on a caught error, where the object
+		// is a boxed value and the key a string literal that lowers to a BStr. A
+		// non-string key (which JavaScript would coerce through ToString) or a
+		// non-dynamic object stays a later slice.
+		lt := r.prog.TypeAt(left)
+		if r.isDynamic(right) && lt.Flags&frontend.TypeString != 0 && lt.Flags&(frontend.TypeObject|frontend.TypeUnion) == 0 {
+			key, err := r.lowerExpr(left)
+			if err != nil {
+				return nil, err
+			}
+			obj, err := r.lowerExpr(right)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: obj, Sel: ident("HasProperty")}, Args: []ast.Expr{key}}, nil
+		}
 		return nil, &NotYetLowerable{Reason: "the in operator outside a discriminated-union narrowing is a later slice"}
 	}
 
