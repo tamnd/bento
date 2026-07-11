@@ -98,3 +98,52 @@ console.log("sync");
 		t.Fatalf("for await...of = %q, want %q", got, want)
 	}
 }
+
+// TestForAwaitOfSyncArrayOfPromises checks that a for await...of over an array of
+// promises awaits each element before the body runs, the fallback the spec takes for a
+// sync iterable with no [Symbol.asyncIterator]: the array yields its promises
+// synchronously and for await settles each one, so the body binds the fulfilled value.
+// The loop parks inside the async body, so the synchronous tail runs before the first
+// element, the ordering Node fixes for the awaited loop.
+func TestForAwaitOfSyncArrayOfPromises(t *testing.T) {
+	src := `
+async function run(): Promise<void> {
+  console.log("start");
+  for await (const x of [Promise.resolve(1), Promise.resolve(2), Promise.resolve(3)]) {
+    console.log("x:" + x);
+  }
+  console.log("end");
+}
+run();
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "start\nsync\nx:1\nx:2\nx:3\nend\n"
+	if got != want {
+		t.Fatalf("for await...of array of promises = %q, want %q", got, want)
+	}
+}
+
+// TestForAwaitOfSyncArrayOfValues checks that a for await...of over an array of plain
+// values awaits each one, which JavaScript wraps in a resolved promise: the value comes
+// straight back after the one-turn delay await imposes, so the body binds each number in
+// order. Same fallback as the promise case, routed through value.AwaitValue rather than
+// value.Await because the element is a definite non-thenable.
+func TestForAwaitOfSyncArrayOfValues(t *testing.T) {
+	src := `
+async function run(): Promise<void> {
+  console.log("start");
+  for await (const n of [10, 20, 30]) {
+    console.log("n:" + n);
+  }
+  console.log("end");
+}
+run();
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "start\nsync\nn:10\nn:20\nn:30\nend\n"
+	if got != want {
+		t.Fatalf("for await...of array of values = %q, want %q", got, want)
+	}
+}
