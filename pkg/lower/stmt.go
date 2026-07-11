@@ -2606,6 +2606,15 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 			return nil, false, err
 		}
 		r.requireImport(valuePkg)
+		// A write o.__proto__ = v is the legacy prototype accessor, not an own property
+		// of that name: an object or null retargets the slot honoring extensibility, and
+		// any other value is left alone. It routes to SetProtoAssign rather than Set.
+		if r.prog.Text(tParts[1]) == "__proto__" {
+			return &ast.ExprStmt{X: &ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetProtoAssign")},
+				Args: []ast.Expr{val},
+			}}, true, nil
+		}
 		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(tParts[1]))},
 		}}
