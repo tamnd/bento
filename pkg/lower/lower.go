@@ -210,6 +210,16 @@ type Renderer struct {
 	// box, which is what the runtime helpers take. It is built per body next to
 	// unionLocals and saved and restored the same way. A nil map unwraps nothing.
 	dynLocals map[string]bool
+	// dynBoundLocals is the set of names in the body currently being lowered that an
+	// untyped destructuring pattern bound to a boxed value.Value even though the checker
+	// gave them a non-any type: an object rest element, whose type is the fixed object
+	// shape { the pattern did not name } rather than any. The runtime value is the plain
+	// object ObjectRest built, so a read of a property off it must dispatch through the
+	// dynamic Get and not fold to a fixed-shape miss. isDynamic consults this so such a
+	// read routes the boxed way, and it rides the same per-body save and restore as
+	// dynLocals so one function's rest bindings do not leak into another's reads. A nil
+	// map (the default) marks nothing.
+	dynBoundLocals map[string]bool
 	// errorLocals is the set of catch-binding names in scope while a catch block is
 	// lowered, each bound to the *value.Error the catch recovered. A read of the
 	// binding's .message or .name lowers to the matching method on the error; the

@@ -207,3 +207,38 @@ func (o *Object) hasOwn(key BStr) bool {
 	}
 	return false
 }
+
+// ObjectRest returns a new plain object holding the receiver's own enumerable
+// properties except those named in omit, the value an object rest element binds:
+// { a, ...rest } gathers every own property but a. An array's indexed elements
+// enumerate first as their canonical string keys, then named properties in insertion
+// order, the order JavaScript's own-property enumeration gives them. A receiver with
+// no object storage yields an empty object, the rest of nothing.
+func (v Value) ObjectRest(omit ...BStr) Value {
+	rest := NewObject()
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return rest
+	}
+	o := v.object()
+	skip := func(k BStr) bool {
+		for _, om := range omit {
+			if om.Equal(k) {
+				return true
+			}
+		}
+		return false
+	}
+	for i, e := range o.elems {
+		if k := NumberToString(float64(i)); !skip(k) {
+			rest.Set(k, e)
+		}
+	}
+	for i, k := range o.keys {
+		if !skip(k) {
+			rest.Set(k, o.vals[i])
+		}
+	}
+	return rest
+}

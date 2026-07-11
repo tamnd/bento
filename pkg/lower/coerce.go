@@ -240,6 +240,16 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.callOfDynamicStorage(n) {
 		return true
 	}
+	// An object rest binding an untyped pattern gathered holds the plain object
+	// ObjectRest built, a boxed value.Value, even though the checker gave it the fixed
+	// shape of the properties the pattern did not name. A property read off it must
+	// dispatch through the dynamic Get, so the read routes here off the binding's
+	// storage rather than its non-any type, which would fold to a fixed-shape miss.
+	if n.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
+			return true
+		}
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 
@@ -271,6 +281,11 @@ func (r *Renderer) callOfDynamicStorage(n frontend.Node) bool {
 // stays a box. A compound assignment reads its narrowed target and so needs the
 // slot's real storage to decide whether the static result must be boxed back.
 func (r *Renderer) localStorageDynamic(target frontend.Node) bool {
+	if target.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(target)); ok && r.dynBoundLocals[name] {
+			return true
+		}
+	}
 	sym, ok := r.prog.SymbolAt(target)
 	if !ok {
 		return false
@@ -313,6 +328,15 @@ func (r *Renderer) combineIsDynamic(opText string, left, right frontend.Node) bo
 // primitive is lifted through its box constructor. A non-primitive static operand
 // has no box constructor on this path yet and hands back.
 func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
+	// An array or object literal boxes member by member straight from its node, since its
+	// own type can be a shapeless tuple the typed literal path cannot spell; routing it
+	// here before lowerExpr keeps a nested literal, whose element type does not lower on the
+	// typed path, from handing the whole box back on a lowering it never needs.
+	if boxed, ok, err := r.boxLiteralToDynamic(n); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	e, err := r.lowerExpr(n)
 	if err != nil {
 		return nil, err
