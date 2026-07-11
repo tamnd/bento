@@ -66,6 +66,27 @@ func TestAssignStringSource(t *testing.T) {
 	}
 }
 
+// TestEntries proves the receiver's own enumerable properties come back as [key,
+// value] pairs in enumeration order, integer indices before named keys.
+func TestEntries(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("b"), Number(2))
+	o.Set(FromGoString("a"), Number(1))
+
+	got := o.Entries()
+	first := got.GetIndex(0)
+	if k := first.GetIndex(0); k.kind != KindString || k.str().ToGoString() != "b" {
+		t.Fatalf("first pair key = %v, want \"b\"", k)
+	}
+	if v := first.GetIndex(1); v.scalar != Number(2).scalar {
+		t.Fatalf("first pair value = %v, want 2", v)
+	}
+	second := got.GetIndex(1)
+	if k := second.GetIndex(0); k.kind != KindString || k.str().ToGoString() != "a" {
+		t.Fatalf("second pair key = %v, want \"a\"", k)
+	}
+}
+
 // TestFromEntries proves each key-value pair becomes an own property of the fresh
 // object and that a later pair overwrites an earlier one with the same key.
 func TestFromEntries(t *testing.T) {

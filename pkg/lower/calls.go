@@ -1428,6 +1428,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectAssign(argNodes)
 	case "fromEntries":
 		return r.objectFromEntries(argNodes)
+	case "entries":
+		return r.objectEntries(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
@@ -1501,6 +1503,26 @@ func (r *Renderer) objectFromEntries(argNodes []frontend.Node) (ast.Expr, error)
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "FromEntries"), Args: []ast.Expr{iterable}}, nil
+}
+
+// objectEntries lowers Object.entries(o) to a runtime Entries on the dynamic
+// receiver, which walks the bag's own enumerable keys and returns an array of
+// [key, value] pairs in enumeration order. The receiver must be a dynamic value,
+// since a fixed-shape Go struct's field values need not share one element type the
+// way a pair array's second slot does, so a non-dynamic receiver hands back. The
+// receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectEntries(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.entries with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.entries on a fixed-shape receiver, whose field values need not share one element type, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Entries")}}, nil
 }
 
 // objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime

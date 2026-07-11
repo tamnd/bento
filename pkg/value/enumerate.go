@@ -42,6 +42,28 @@ func (v Value) Assign(sources ...Value) Value {
 	return v
 }
 
+// Entries returns the receiver's own enumerable string-keyed properties as a boxed
+// array of [key, value] pairs in the spec's enumeration order, the value
+// Object.entries builds for a dynamic receiver. Each pair is a two-element array
+// whose first element is the key string and whose second is the value the same read
+// Object.values makes resolves. The result is a boxed value rather than a typed
+// array because its elements are themselves arrays, so a member read off a pair,
+// entries[i][0], dispatches through the dynamic Get the way the source's own reads
+// do. A receiver with no object storage yields an empty array.
+func (v Value) Entries() Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return NewArrayValue(nil)
+	}
+	keys := v.object().orderedStringKeysFiltered(true)
+	pairs := make([]Value, len(keys))
+	for i, k := range keys {
+		pairs[i] = NewArrayValue([]Value{StringValue(k), v.Get(k)})
+	}
+	return NewArrayValue(pairs)
+}
+
 // FromEntries builds a fresh object from an iterable of key-value pairs, the
 // runtime behind Object.fromEntries(iterable). Each entry is read for its first two
 // elements, the key and the value, and the key is set on the new object through the
