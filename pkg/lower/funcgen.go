@@ -838,16 +838,39 @@ func (r *Renderer) scopedBlockRange(block frontend.Node, lo, hi int) (*ast.Block
 // noun so the reason reads for the form the caller lowered. A named function
 // expression's own name is a NodeIdentifier child, not a NodeParameter, so it is
 // skipped here and ruled out separately by functionExpr.
-func (r *Renderer) closureParamFields(n frontend.Node, noun string) ([]*ast.Field, error) {
+func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, noun string) ([]*ast.Field, error) {
 	kids := r.prog.Children(n)
 	fields := make([]*ast.Field, 0, len(kids))
+	pi := 0
 	for _, k := range kids {
 		if k.Kind() != frontend.NodeParameter {
 			continue
 		}
 		pkids := r.prog.Children(k)
-		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
+		if len(pkids) == 0 {
 			return nil, &NotYetLowerable{Reason: noun + " parameter that is not a plain identifier is a later slice"}
+		}
+		// A binding-pattern parameter lowers to one synthesized Go field holding the
+		// whole object or array, the same __0-style field a top-level function's
+		// destructured parameter takes; the names the pattern binds are read out of it
+		// at body entry by paramDestructureBindings. Its Go name and type come from the
+		// call signature, which carries the checker's inferred shape even for a
+		// contextually typed pattern that has no annotation of its own.
+		if pkids[0].Kind() != frontend.NodeIdentifier {
+			if pi >= len(sig.Params) {
+				return nil, &NotYetLowerable{Reason: noun + " parameter that is not a plain identifier is a later slice"}
+			}
+			pname, ok := localName(sig.Params[pi].Name)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: noun + " destructured parameter has no Go name to read from, a later slice"}
+			}
+			ptype, err := r.typeExpr(sig.Params[pi].Type)
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: ptype})
+			pi++
+			continue
 		}
 		for _, extra := range pkids[1:] {
 			if extra.Kind() != frontend.NodeUnknown {
@@ -863,8 +886,27 @@ func (r *Renderer) closureParamFields(n frontend.Node, noun string) ([]*ast.Fiel
 			return nil, err
 		}
 		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
+		pi++
 	}
 	return fields, nil
+}
+
+// closureHasDestructuredParam reports whether an arrow or function expression takes
+// any binding-pattern parameter, the shape whose bound names are read out of a
+// synthesized field at body entry. A closure form that cannot inject those entry
+// bindings yet (async, generator, or a named function expression) uses this to hand
+// back rather than emit a field whose bound names never bind.
+func (r *Renderer) closureHasDestructuredParam(n frontend.Node) bool {
+	for _, k := range r.prog.Children(n) {
+		if k.Kind() != frontend.NodeParameter {
+			continue
+		}
+		pkids := r.prog.Children(k)
+		if len(pkids) > 0 && pkids[0].Kind() != frontend.NodeIdentifier {
+			return true
+		}
+	}
+	return false
 }
 
 // paramDestructureBindings returns the statements that bind the names an object or
@@ -1117,9 +1159,23 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
 	}
-	fields, err := r.closureParamFields(n, "function")
+	sig, _ := r.prog.SignatureAt(n)
+	fields, err := r.closureParamFields(n, sig, "function")
 	if err != nil {
 		return nil, err
+	}
+	// A destructured parameter reads its bound names out of the synthesized field at
+	// body entry, which only the plain closure form injects. The async, generator, and
+	// named forms wrap the body in a coroutine or self-reference two-step that has no
+	// entry-binding hook yet, so a destructured parameter on one of them hands back
+	// rather than emit a field whose bound names never bind.
+	if r.closureHasDestructuredParam(n) {
+		if r.isAsyncFunc(n) || r.isGeneratorFunc(n) {
+			return nil, &NotYetLowerable{Reason: "an async or generator function expression with a destructured parameter is a later slice"}
+		}
+		if _, named := r.funcExprNameNode(n); named {
+			return nil, &NotYetLowerable{Reason: "a named function expression with a destructured parameter is a later slice"}
+		}
 	}
 	// An async function expression returns a promise: its await-free body wraps in
 	// value.Async the same way an async function declaration's does, the closure form
@@ -1282,15 +1338,30 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "arrow function did not expose parameters and a body"}
 	}
 	body := kids[len(kids)-1]
-	fields, err := r.closureParamFields(n, "arrow")
+	sig, _ := r.prog.SignatureAt(n)
+	fields, err := r.closureParamFields(n, sig, "arrow")
 	if err != nil {
 		return nil, err
 	}
 	if r.isAsyncFunc(n) {
+		// An async arrow wraps its body in the promise coroutine, which has no entry
+		// hook for the destructure bindings a pattern parameter needs, so it hands back.
+		if r.closureHasDestructuredParam(n) {
+			return nil, &NotYetLowerable{Reason: "an async arrow with a destructured parameter is a later slice"}
+		}
 		return r.asyncArrow(n, fields)
 	}
 	if body.Kind() == frontend.NodeBlock {
 		return r.blockBodyArrow(n, fields)
+	}
+	// A concise-body arrow with a destructured parameter reads the bound names out of
+	// the synthesized field before the body expression runs, so the func literal takes
+	// a block body: the entry bindings sit above the single return the concise body
+	// lowers to. paramDestructureBindings returns nil when no parameter destructures,
+	// so a plain concise arrow keeps its bare form.
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(n), sig)
+	if err != nil {
+		return nil, err
 	}
 	bodyType := r.prog.TypeAt(body)
 	loweredBody, err := r.lowerExpr(body)
@@ -1309,7 +1380,7 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.FuncLit{
 			Type: &ast.FuncType{Params: &ast.FieldList{List: fields}},
-			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}},
+			Body: &ast.BlockStmt{List: append(binds, &ast.ExprStmt{X: call})},
 		}, nil
 	}
 	retType, err := r.typeExpr(bodyType)
@@ -1321,7 +1392,7 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 			Params:  &ast.FieldList{List: fields},
 			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
 		},
-		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{loweredBody}}}},
+		Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{loweredBody}})},
 	}, nil
 }
 
@@ -1426,6 +1497,16 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 		return nil, err
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	// A destructured parameter reads its bound names out of the synthesized field at
+	// body entry, the same entry bindings the top-level function path injects; nil when
+	// no parameter destructures, so a plain closure body is untouched.
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(n), sig)
+	if err != nil {
+		return nil, err
+	}
+	if len(binds) != 0 {
+		body.List = append(binds, body.List...)
+	}
 	if argsMat != nil {
 		body.List = append([]ast.Stmt{argsMat}, body.List...)
 	}
