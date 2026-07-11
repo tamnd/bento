@@ -1,0 +1,7 @@
+== stdout:
+sync
+empty:0
+all:1,2,3
+caught:bad
+== exit:
+0

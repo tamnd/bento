@@ -57,6 +57,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if expr, handled, err := r.arrayStaticCall(n, kids[0], kids[1:]); handled || err != nil {
 			return expr, err
 		}
+		// A static call on the global Promise constructor (Promise.resolve,
+		// Promise.reject) is a constructor-level factory, not a method on a promise
+		// value, so it routes here before methodCall, which expects a settled promise
+		// receiver. It needs the whole call node n to read the resolved element type.
+		if expr, handled, err := r.promiseStaticCall(n, kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
 		return r.methodCall(kids[0], kids[1:])
 	}
 	// A callee that is neither a bare identifier nor a member expression is a
@@ -76,6 +83,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		return r.finishCall(n, callee, kids[1:], nil, false)
+	}
+	// A call to a Promise executor's resolve or reject parameter settles the promise
+	// rather than calling a plain function value: the callback's lib.d.ts signature
+	// carries unions and optionals that do not render, so its argument is bridged the
+	// settle way here instead of through the normal value-callee path below.
+	if s, ok := r.promiseSettleParams[r.prog.Text(kids[0])]; ok {
+		return r.settleCall(s, r.prog.Text(kids[0]), kids[1:])
 	}
 	// A call to a name bound by a node: import is a call to a host builtin, not a
 	// user function, so it routes to the value helper the builtin maps to before the

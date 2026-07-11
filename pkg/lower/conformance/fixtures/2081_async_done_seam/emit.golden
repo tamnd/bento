@@ -36,4 +36,5 @@ func main() {
 		D_DONE(value.Undefined)
 	})
 	value.RunMicrotasks()
+	value.ReportUnhandledRejections()
 }
