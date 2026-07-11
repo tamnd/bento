@@ -2457,6 +2457,10 @@ func (r *Renderer) arrayProtoBorrowedCall(name, method string, argNodes []fronte
 		return r.arrayGenericCall("GenericFind", args, methodArgs, 1)
 	case "findIndex":
 		return r.arrayGenericCall("GenericFindIndex", args, methodArgs, 1)
+	case "reduce":
+		return r.arrayGenericCall("GenericReduce", args, methodArgs, 1)
+	case "reduceRight":
+		return r.arrayGenericCall("GenericReduceRight", args, methodArgs, 1)
 	default:
 		return nil, &NotYetLowerable{Reason: "Array.prototype." + name + " on a generic receiver is a later slice"}
 	}
