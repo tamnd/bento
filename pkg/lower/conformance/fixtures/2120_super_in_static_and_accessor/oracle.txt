@@ -1,0 +1,5 @@
+== stdout:
+shape-circle
+1
+== exit:
+0
