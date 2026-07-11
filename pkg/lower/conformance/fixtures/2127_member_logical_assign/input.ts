@@ -1,0 +1,11 @@
+const obj: any = {};
+obj.k ??= 7;
+console.log(obj.k);
+obj.k ??= 9;
+console.log(obj.k);
+const a: any = { v: 0 };
+a.v ||= 5;
+console.log(a.v);
+const b: any = { v: 3 };
+b.v &&= 8;
+console.log(b.v);
