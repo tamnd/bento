@@ -193,9 +193,8 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 		return nil, &NotYetLowerable{Reason: "for...of with other than a single loop binding is a later slice"}
 	}
 	dkids := r.prog.Children(decls[0])
-	if len(dkids) == 1 && dkids[0].Kind() == frontend.NodeUnknown &&
-		strings.HasPrefix(strings.TrimSpace(r.prog.Text(dkids[0])), "[") {
-		return r.forOfArrayDestructure(kids[1], dkids[0], kids[2])
+	if len(dkids) == 1 && dkids[0].Kind() == frontend.NodeUnknown && r.patternNode(dkids[0]) {
+		return r.forOfDestructure(kids[1], dkids[0], kids[2])
 	}
 	if len(dkids) != 1 || dkids[0].Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "for...of with a destructuring or annotated loop variable is a later slice"}
@@ -377,6 +376,140 @@ func (r *Renderer) forOfBodyMayBreak(n frontend.Node) bool {
 		}
 	}
 	return false
+}
+
+// forOfDestructure lowers a for...of whose loop binding is a destructuring pattern.
+// A flat array pattern over a homogeneous array of arrays keeps the optimized path
+// that can drop an unused element binding; an object pattern, a nested pattern, or any
+// other shape binds through the shared recursive binder against a per-iteration
+// temporary, the same struct-field selectors and indexed reads a `const {a} = e` or
+// `const [x] = e` statement lowers to. Only an array iterable is ranged over its Elems;
+// a Set, a Map, or a user iterator is a later slice, since destructuring one needs the
+// iterator protocol the single-variable loop walks, not a backing slice.
+func (r *Renderer) forOfDestructure(iterable, pattern, bodyNode frontend.Node) (ast.Stmt, error) {
+	if !isArrayElem(r, iterable) {
+		return nil, &NotYetLowerable{Reason: "a destructuring for...of over a non-array iterable is a later slice"}
+	}
+	outerElem, ok := r.prog.ElementType(r.prog.TypeAt(iterable))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a destructuring for...of whose iterable has no element type is a later slice"}
+	}
+	// A flat array pattern over a homogeneous array of arrays keeps the optimized path,
+	// which drops an unused element binding and reuses a name the pattern repeats.
+	if strings.HasPrefix(strings.TrimSpace(r.prog.Text(pattern)), "[") && r.forOfFlatArrayEligible(pattern, outerElem) {
+		return r.forOfArrayDestructure(iterable, pattern, bodyNode)
+	}
+	// The shared binder declares each bound name with :=, which Go rejects if the body
+	// never reads it. The flat path drops such a name; the general binder does not, so a
+	// pattern with an unused bound name hands back rather than emit a name that a
+	// declared-and-not-used error would reject.
+	for _, nm := range r.patternBoundNames(pattern) {
+		if !r.bodyUsesName(bodyNode, nm) {
+			return nil, &NotYetLowerable{Reason: "a for...of destructuring with an unused bound name is a later slice"}
+		}
+	}
+	iter, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	// The range value is a fresh binding each iteration, so the temporary needs no
+	// reset and each iteration's reads see that element.
+	tmp := r.freshTemp()
+	binds, err := r.bindSubPattern(pattern, ident(tmp), outerElem, token.DEFINE)
+	if err != nil {
+		return nil, err
+	}
+	body.List = append(binds, body.List...)
+	return &ast.RangeStmt{
+		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident("Elems")}},
+		Key:   ident("_"),
+		Value: ident(tmp),
+		Tok:   token.DEFINE,
+		Body:  body,
+	}, nil
+}
+
+// forOfFlatArrayEligible reports whether an array pattern loop variable is the flat
+// homogeneous shape the optimized forOfArrayDestructure path handles: the iterable's
+// element is itself an array, and every pattern element is a plain identifier whose
+// type matches that inner element type. Any other shape (an object element, a nested
+// pattern, a mixed-type tuple, a default, or a rest) falls to the general binder.
+func (r *Renderer) forOfFlatArrayEligible(pattern frontend.Node, outerElem frontend.Type) bool {
+	innerElem, ok := r.prog.ElementType(outerElem)
+	if !ok {
+		return false
+	}
+	innerGo, err := r.typeExpr(innerElem)
+	if err != nil {
+		return false
+	}
+	elems := r.prog.Children(pattern)
+	if len(elems) == 0 {
+		return false
+	}
+	for _, el := range elems {
+		ec := r.prog.Children(el)
+		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
+			return false
+		}
+		nameGo, err := r.typeExpr(r.prog.TypeAt(ec[0]))
+		if err != nil {
+			return false
+		}
+		if same, err := sameGoType(nameGo, innerGo); err != nil || !same {
+			return false
+		}
+	}
+	return true
+}
+
+// patternBoundNames collects the leaf names a binding pattern declares, recursing
+// through nested patterns so the for...of unused-name guard sees every name the
+// shared binder would declare. A property name in a rename ({a: b}) is not a binding,
+// so only the target b is collected; an element whose shape the binder itself hands
+// back on is skipped here, since the binder's own error carries the handback.
+func (r *Renderer) patternBoundNames(pat frontend.Node) []string {
+	isObj := strings.HasPrefix(strings.TrimSpace(r.prog.Text(pat)), "{")
+	var out []string
+	for _, el := range r.prog.Children(pat) {
+		if isObj {
+			if _, sub, ok := r.objectNestedElem(el); ok {
+				out = append(out, r.patternBoundNames(sub)...)
+				continue
+			}
+			info, err := r.classifyObjectElem(el)
+			if err != nil {
+				continue
+			}
+			if nm, ok := localName(r.prog.Text(info.bindNode)); ok {
+				out = append(out, nm)
+			}
+			continue
+		}
+		ec := r.prog.Children(el)
+		if len(ec) == 1 && r.patternNode(ec[0]) {
+			out = append(out, r.patternBoundNames(ec[0])...)
+			continue
+		}
+		info, err := r.classifyArrayElem(el)
+		if err != nil {
+			continue
+		}
+		if info.nested != nil {
+			out = append(out, r.patternBoundNames(info.nested)...)
+			continue
+		}
+		if info.nameNode != nil {
+			if nm, ok := localName(r.prog.Text(info.nameNode)); ok {
+				out = append(out, nm)
+			}
+		}
+	}
+	return out
 }
 
 // forOfArrayDestructure lowers `for (const [a, b] of pairs)` over an array of arrays
