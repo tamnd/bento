@@ -1,0 +1,6 @@
+== stdout:
+base ctor
+derived field init
+derived body
+== exit:
+0
