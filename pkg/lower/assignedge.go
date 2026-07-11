@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -71,4 +72,65 @@ func (r *Renderer) assignValueElement(n, left, right frontend.Node) (ast.Expr, e
 		return store, nil
 	}
 	return r.coerceDynamicToStatic(store, n)
+}
+
+// elementLoadMethod picks the runtime load method for a bracket read o[k] on a
+// dynamic receiver, the load half a compound member write needs, by the same key
+// type split elementStoreMethod uses: a number reads through GetIndex, a dynamic
+// value through GetElem, and a string through Get, so the loaded slot is the one
+// the matching store writes back.
+func (r *Renderer) elementLoadMethod(idxNode frontend.Node) (string, error) {
+	switch {
+	case r.isNumber(idxNode):
+		return "GetIndex", nil
+	case r.isDynamic(idxNode):
+		return "GetElem", nil
+	case r.isString(idxNode):
+		return "Get", nil
+	default:
+		return "", &NotYetLowerable{Reason: "a dynamic element read with a non-number, non-string index is a later slice"}
+	}
+}
+
+// dynamicCompoundResult builds the boxed value.Value a compound member write
+// stores, given the loaded old value (already a box) and the right-hand side node.
+// A + fuses through value.Add, which concatenates when a string is present and
+// adds otherwise, the same operation the dynamic + lowers to. Every other
+// arithmetic and bitwise operator coerces both sides to a number and boxes the
+// float64 result back with value.Number, reusing the same ToNumber-and-native-op
+// construction the dynamic binary path uses, so o[k] -= v and o[k] <<= v run the
+// arithmetic the language does before storing the box.
+func (r *Renderer) dynamicCompoundResult(baseOp string, old ast.Expr, right frontend.Node) (ast.Expr, error) {
+	if baseOp == "+" {
+		val, err := r.boxOperand(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Add"), Args: []ast.Expr{old, val}}, nil
+	}
+	r.requireImport(valuePkg)
+	ln := &ast.CallExpr{Fun: sel("value", "ToNumber"), Args: []ast.Expr{old}}
+	rn, err := r.operandToNumber(right)
+	if err != nil {
+		return nil, err
+	}
+	var num ast.Expr
+	switch baseOp {
+	case "-", "*", "/":
+		ops := map[string]token.Token{"-": token.SUB, "*": token.MUL, "/": token.QUO}
+		num = &ast.BinaryExpr{X: ln, Op: ops[baseOp], Y: rn}
+	case "%":
+		r.requireImport("math")
+		num = &ast.CallExpr{Fun: sel("math", "Mod"), Args: []ast.Expr{ln, rn}}
+	case "**":
+		num = &ast.CallExpr{Fun: sel("value", "Pow"), Args: []ast.Expr{ln, rn}}
+	default:
+		goOp, shift, unsignedLeft, ok := bitwiseOp(baseOp)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "compound assignment operator " + baseOp + "= on a dynamic member is a later slice"}
+		}
+		num = r.bitwiseFromFloat(goOp, shift, unsignedLeft, ln, rn)
+	}
+	return &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{num}}, nil
 }
