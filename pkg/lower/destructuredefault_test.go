@@ -87,6 +87,25 @@ console.log(calls);
 	}
 }
 
+// Item 6: a default may read a name bound earlier in the same pattern. Elements
+// lower in source order, so a later element's default refers to the already-bound
+// Go local, the same left-to-right binding JavaScript gives the pattern.
+
+func TestDestructureDefaultReadsEarlierBinding(t *testing.T) {
+	cases := map[string]string{
+		// b's default reads a: the missing b takes a's value, the present b keeps its own.
+		`let arr: number[] = [5]; let [a = 1, b = a] = arr; console.log(a, b);`:    "5 5\n",
+		`let arr: number[] = [5, 9]; let [a = 1, b = a] = arr; console.log(a, b);`: "5 9\n",
+		// The object form reads an earlier property the same way.
+		`let o: {x?: number, y?: number} = {x: 4}; let {x = 1, y = x} = o; console.log(x, y);`: "4 4\n",
+	}
+	for src, want := range cases {
+		if got := runProgramGo(t, src); got != want {
+			t.Errorf("%s:\n got %q\nwant %q", src, got, want)
+		}
+	}
+}
+
 // Item 2: an object destructuring declaration property with a default.
 
 func TestObjectDefaultLowers(t *testing.T) {
