@@ -79,6 +79,33 @@ console.log(b);
 	}
 }
 
+// TestObjectNestedInObjectLowers proves an object pattern nested inside an object
+// pattern reads the inner property from the value the outer property selected: the
+// outer property is held in a temporary, then the inner pattern reads off it.
+func TestObjectNestedInObjectLowers(t *testing.T) {
+	const src = "const o: { p: { x: number; y: number } } = { p: { x: 1, y: 2 } };\nconst { p: { x, y } } = o;\nconsole.log(x + y);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".P") || !strings.Contains(source, "x := ") || !strings.Contains(source, ".X") {
+		t.Errorf("nested object pattern did not read the inner property off the outer value:\n%s", source)
+	}
+}
+
+// TestObjectNestedInObjectRuns builds and runs a two-level object destructure so each
+// inner name is proven to carry the property the outer value held.
+func TestObjectNestedInObjectRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o: { p: { x: number; y: number }; q: { z: number } } = { p: { x: 1, y: 2 }, q: { z: 3 } };
+const { p: { x, y }, q: { z } } = o;
+console.log(x);
+console.log(y);
+console.log(z);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n"; got != want {
+		t.Fatalf("nested object destructure printed %q, want %q", got, want)
+	}
+}
+
 // TestObjectDestructureDefaultRuns proves a property default lowers: the missing
 // optional property takes the default while the present one keeps its value.
 func TestObjectDestructureDefaultRuns(t *testing.T) {

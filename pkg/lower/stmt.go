@@ -1402,17 +1402,38 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	// The pattern is validated before the source is lowered, so an unsupported shape
 	// hands back before a temporary is minted for the source.
 	type binding struct {
-		info     objectDefaultElem
-		name     string
-		field    string
-		optional bool
+		info       objectDefaultElem
+		name       string
+		field      string
+		optional   bool
+		nested     frontend.Node
+		nestedType frontend.Type
 	}
 	optionalField := map[string]bool{}
+	propType := map[string]frontend.Type{}
 	for _, pr := range r.prog.Properties(objType) {
 		optionalField[pr.Name] = pr.Optional
+		propType[pr.Name] = pr.Type
 	}
 	fields := make([]binding, len(elems))
 	for i, el := range elems {
+		// A nested pattern renames a source property into an inner pattern that binds
+		// against the value the property holds; its inner names are validated when the
+		// sub-pattern is bound, so it is routed straight through.
+		if source, sub, ok := r.objectNestedElem(el); ok {
+			prop := r.prog.Text(source)
+			srcName, nok := localName(prop)
+			pt, known := propType[prop]
+			if !nok || !known {
+				return nil, true, &NotYetLowerable{Reason: "a nested object pattern over an unknown property is a later slice"}
+			}
+			field, fok := exportedField(srcName)
+			if !fok {
+				return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
+			}
+			fields[i] = binding{field: field, nested: sub, nestedType: pt}
+			continue
+		}
 		info, err := r.classifyObjectElem(el)
 		if err != nil {
 			return nil, true, err
@@ -1441,6 +1462,16 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		rc, err := recv()
 		if err != nil {
 			return nil, true, err
+		}
+		if b.nested != nil {
+			tmp := r.freshTemp()
+			stmts = append(stmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident(b.field)}}})
+			inner, err := r.bindSubPattern(b.nested, ident(tmp), b.nestedType, token.DEFINE)
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, inner...)
+			continue
 		}
 		read := &ast.SelectorExpr{X: rc, Sel: ident(b.field)}
 		// A default over an optional field fills when the property is undefined; the

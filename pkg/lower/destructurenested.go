@@ -39,8 +39,94 @@ func (r *Renderer) bindSubPattern(pat frontend.Node, recv ast.Expr, patType fron
 	switch {
 	case strings.HasPrefix(txt, "["):
 		return r.bindSubArray(pat, recv, patType, tok)
+	case strings.HasPrefix(txt, "{"):
+		return r.bindSubObject(pat, recv, patType, tok)
 	}
 	return nil, &NotYetLowerable{Reason: "a nested destructuring element that is neither an array nor an object pattern is a later slice"}
+}
+
+// objectNestedElem reports whether an object binding pattern element renames a
+// source property into a nested pattern, `{ p: { x } }` or `{ p: [a] }`, and returns
+// the source property node and the nested pattern. Such an element has the source
+// property and the pattern as its two children under a `:`, the shape of a rename
+// whose target is a pattern rather than a plain identifier.
+func (r *Renderer) objectNestedElem(el frontend.Node) (source, sub frontend.Node, ok bool) {
+	ec := r.prog.Children(el)
+	if len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && r.patternNode(ec[1]) && strings.Contains(r.childGap(el, ec[0], ec[1]), ":") {
+		return ec[0], ec[1], true
+	}
+	return nil, nil, false
+}
+
+// bindSubObject binds an object pattern nested inside an outer pattern. It reads each
+// property off the receiver through the struct-field selector, the same read a
+// top-level object element takes, and binds a further-nested element by minting a
+// temporary for the selected property and recursing. A default or a rest inside the
+// nesting composes the fill and gather rules through a level and is a later item, so
+// it hands back for now.
+func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType frontend.Type, tok token.Token) ([]ast.Stmt, error) {
+	if patType.Flags&frontend.TypeObject == 0 {
+		return nil, &NotYetLowerable{Reason: "a nested object pattern over a non-object type is a later slice"}
+	}
+	if _, err := r.decls.internStruct(r, patType); err != nil {
+		return nil, err
+	}
+	elems := r.prog.Children(pat)
+	if len(elems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty object destructuring pattern binds nothing"}
+	}
+	propType := map[string]frontend.Type{}
+	for _, pr := range r.prog.Properties(patType) {
+		propType[pr.Name] = pr.Type
+	}
+	var out []ast.Stmt
+	for _, el := range elems {
+		if source, sub, ok := r.objectNestedElem(el); ok {
+			prop := r.prog.Text(source)
+			srcName, ok := localName(prop)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+			}
+			field, ok := exportedField(srcName)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
+			}
+			pt, known := propType[prop]
+			if !known {
+				return nil, &NotYetLowerable{Reason: "a nested object pattern over an unknown property is a later slice"}
+			}
+			tmp := r.freshTemp()
+			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident(field)}}})
+			inner, err := r.bindSubPattern(sub, ident(tmp), pt, tok)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, inner...)
+			continue
+		}
+		info, err := r.classifyObjectElem(el)
+		if err != nil {
+			return nil, err
+		}
+		if info.hasDefault {
+			return nil, &NotYetLowerable{Reason: "a default inside a nested object pattern composes the fill through the nesting, a later slice"}
+		}
+		prop := r.prog.Text(info.nameNode)
+		srcName, ok := localName(prop)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+		}
+		field, ok := exportedField(srcName)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(info.bindNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "destructured target is not a Go identifier"}
+		}
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident(field)}}})
+	}
+	return out, nil
 }
 
 // bindSubArray binds an array pattern nested inside an outer pattern. It reads each
