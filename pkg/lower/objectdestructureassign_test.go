@@ -59,11 +59,32 @@ console.log(active);
 	}
 }
 
-// TestObjectDestructureAssignRenameHandsBack proves a renamed property hands back,
-// since binding a property to a different local name is a later slice.
-func TestObjectDestructureAssignRenameHandsBack(t *testing.T) {
+// TestObjectDestructureAssignRenameLowers proves a renamed property stores the source
+// property of its own name into the renamed existing target: {x: a} reads o.X into a,
+// so the emitted Go selects the source field and assigns the renamed local.
+func TestObjectDestructureAssignRenameLowers(t *testing.T) {
 	const src = "const o = { x: 1, y: 2 };\nlet a = 0;\nlet b = 0;\n({ x: a, y: b } = o);\nconsole.log(a + b);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "a, b = o.X, o.Y") {
+		t.Errorf("object rename assignment did not store the source fields into the renamed targets:\n%s", source)
+	}
+}
+
+// TestObjectDestructureAssignRenameRuns builds and runs a renamed assignment so the
+// renamed targets are proven to carry the right source properties.
+func TestObjectDestructureAssignRenameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o = { x: 10, y: 20 };
+let a = 0;
+let b = 0;
+({ x: a, y: b } = o);
+console.log(a);
+console.log(b);
+`
+	if got, want := runProgramGo(t, src), "10\n20\n"; got != want {
+		t.Fatalf("object rename assignment printed %q, want %q", got, want)
+	}
 }
 
 // TestObjectDestructureAssignDefaultRuns proves a property default lowers in an
