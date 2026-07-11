@@ -1,0 +1,182 @@
+package lower
+
+import (
+	"go/ast"
+	"maps"
+
+	"github.com/tamnd/bento/pkg/frontend"
+)
+
+// This file lowers the Promise constructor, new Promise(executor). The executor is
+// an inline function the constructor runs now, handed a resolve and a reject callback
+// it calls to settle the promise. The lib.d.ts types of those two callbacks carry
+// unions and optionals (resolve takes T or a PromiseLike<T>, reject takes an optional
+// any) that the normal callback-parameter path cannot render, so the executor is
+// lowered with synthetic Go parameter types, resolve func(T) and reject
+// func(value.Value), and a call to either is intercepted in callExpr and bridged the
+// settle way rather than through its declared signature.
+
+// promiseSettle records how one executor parameter settles the promise. resolve
+// carries a value of the element type, so it holds that element type to bridge the
+// argument against; reject carries an arbitrary boxed value and needs no element
+// type. isVoid marks a resolve on a Promise<void>, whose element type is the unit
+// placeholder rather than a real value.
+type promiseSettle struct {
+	isReject bool
+	isVoid   bool
+	elem     frontend.Type
+}
+
+// newPromise lowers new Promise(executor) to value.NewPromise[T](func(resolve
+// func(T), reject func(value.Value)) { <executor body> }). The executor must be an
+// inline function so its body lowers in place with the two settle callbacks in scope;
+// a promise built from a stored executor value hands back. The element type T comes
+// off the promise the new expression produces, the same read the async paths make.
+// The executor's own parameter names bind the two callbacks, so a body that calls
+// resolve or reject routes through the settle interception in callExpr.
+func (r *Renderer) newPromise(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
+	// An explicit type argument, new Promise<number>(...), rides in as an unknown
+	// node ahead of the executor, so the value arguments are the ones that are not
+	// type nodes; only the executor may remain.
+	var valueArgs []frontend.Node
+	for _, a := range args {
+		if a.Kind() != frontend.NodeUnknown {
+			valueArgs = append(valueArgs, a)
+		}
+	}
+	if len(valueArgs) != 1 {
+		return nil, &NotYetLowerable{Reason: "new Promise takes a single executor argument"}
+	}
+	executor := valueArgs[0]
+	if executor.Kind() != frontend.NodeArrowFunction && executor.Kind() != frontend.NodeFunctionExpression {
+		return nil, &NotYetLowerable{Reason: "a Promise executor that is not an inline function is a later slice"}
+	}
+	ekids := r.prog.Children(executor)
+	if len(ekids) == 0 || ekids[len(ekids)-1].Kind() != frontend.NodeBlock {
+		return nil, &NotYetLowerable{Reason: "a Promise executor with a concise body is a later slice"}
+	}
+	elem, ok := r.promiseElem(r.prog.TypeAt(n))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "new Promise whose type is not a Promise is a later slice"}
+	}
+	names, err := r.promiseExecutorParams(executor)
+	if err != nil {
+		return nil, err
+	}
+
+	void := isVoidReturn(elem)
+	elemType := ast.Expr(sel("value", "Unit"))
+	if !void {
+		et, err := r.typeExpr(elem)
+		if err != nil {
+			return nil, err
+		}
+		elemType = et
+	}
+
+	// The two Go parameters are always emitted, even when the executor names only
+	// resolve, because value.NewPromise passes both callbacks and the func value must
+	// match its signature. An unnamed slot takes the blank identifier so it neither
+	// declares a Go local nor registers as a settle callee.
+	resolveName, rejectName := "_", "_"
+	if len(names) >= 1 && names[0] != "" {
+		resolveName = names[0]
+	}
+	if len(names) >= 2 && names[1] != "" {
+		rejectName = names[1]
+	}
+	fields := []*ast.Field{
+		{Names: []*ast.Ident{ident(resolveName)}, Type: &ast.FuncType{Params: &ast.FieldList{List: []*ast.Field{{Type: elemType}}}}},
+		{Names: []*ast.Ident{ident(rejectName)}, Type: &ast.FuncType{Params: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}}}},
+	}
+
+	prev := r.promiseSettleParams
+	r.promiseSettleParams = mergeSettle(prev, names, void, elem)
+	defer func() { r.promiseSettleParams = prev }()
+
+	lit, err := r.blockBodyArrow(executor, fields)
+	if err != nil {
+		return nil, err
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	call := &ast.CallExpr{Fun: index(sel("value", "NewPromise"), elemType), Args: []ast.Expr{lit}}
+	return call, nil
+}
+
+// promiseExecutorParams reads the executor's parameter names in order, the source
+// spellings a resolve or reject call in the body refers to. Each parameter must be a
+// plain identifier; a destructured or defaulted executor parameter is a later slice.
+// An empty slot (fewer than two parameters) yields an empty name, which newPromise
+// renders as the blank identifier.
+func (r *Renderer) promiseExecutorParams(executor frontend.Node) ([]string, error) {
+	var names []string
+	for _, k := range r.prog.Children(executor) {
+		if k.Kind() != frontend.NodeParameter {
+			continue
+		}
+		pkids := r.prog.Children(k)
+		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: "a Promise executor parameter that is not a plain identifier is a later slice"}
+		}
+		names = append(names, r.prog.Text(pkids[0]))
+	}
+	if len(names) > 2 {
+		return nil, &NotYetLowerable{Reason: "a Promise executor with more than a resolve and reject parameter is a later slice"}
+	}
+	return names, nil
+}
+
+// mergeSettle overlays the executor's settle parameters on the inherited set, so a
+// resolve or reject inside a nested Promise executor refers to its own promise while
+// an outer executor's callbacks stay reachable from code that did not shadow them. A
+// name the inner executor reuses shadows the outer entry, matching lexical scope.
+func mergeSettle(prev map[string]promiseSettle, names []string, void bool, elem frontend.Type) map[string]promiseSettle {
+	out := make(map[string]promiseSettle, len(prev)+len(names))
+	maps.Copy(out, prev)
+	if len(names) >= 1 && names[0] != "" {
+		out[names[0]] = promiseSettle{isVoid: void, elem: elem}
+	}
+	if len(names) >= 2 && names[1] != "" {
+		out[names[1]] = promiseSettle{isReject: true}
+	}
+	return out
+}
+
+// settleCall lowers a call to a Promise executor's resolve or reject callback. A
+// resolve carries a value of the promise's element type, bridged the way an argument
+// crosses into a typed parameter, or the unit placeholder for a Promise<void>; a
+// reject carries an arbitrary value boxed into a dynamic value.Value, or undefined
+// when called with no argument, since a promise may reject with any JavaScript value.
+func (r *Renderer) settleCall(s promiseSettle, name string, args []frontend.Node) (ast.Expr, error) {
+	goName, ok := localName(name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a Promise settle callback name is not a Go identifier"}
+	}
+	if s.isReject {
+		arg := ast.Expr(sel("value", "Undefined"))
+		if len(args) > 0 {
+			boxed, err := r.boxOperand(args[0])
+			if err != nil {
+				return nil, err
+			}
+			arg = boxed
+		}
+		return &ast.CallExpr{Fun: ident(goName), Args: []ast.Expr{arg}}, nil
+	}
+	if s.isVoid {
+		return &ast.CallExpr{Fun: ident(goName), Args: []ast.Expr{&ast.CompositeLit{Type: sel("value", "Unit")}}}, nil
+	}
+	if len(args) == 0 {
+		return nil, &NotYetLowerable{Reason: "resolve() with no value on a valued promise is a later slice"}
+	}
+	lowered, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	bridged, err := r.bridgeArg(lowered, args[0], s.elem)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: ident(goName), Args: []ast.Expr{bridged}}, nil
+}
