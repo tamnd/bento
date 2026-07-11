@@ -1,0 +1,6 @@
+== stdout:
+sync
+then:42
+catch:boom
+== exit:
+0
