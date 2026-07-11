@@ -144,3 +144,38 @@ func TestIsSealed(t *testing.T) {
 		t.Fatal("a non-extensible object with no properties reported not sealed")
 	}
 }
+
+// TestIsFrozen proves the predicate reports a frozen object frozen, a sealed but
+// still writable object not, and a fresh object not.
+func TestIsFrozen(t *testing.T) {
+	if NewObject().IsFrozen() {
+		t.Fatal("a fresh object reported frozen")
+	}
+	sealed := NewObject()
+	sealed.Set(FromGoString("a"), Number(1))
+	sealed.Seal()
+	if sealed.IsFrozen() {
+		t.Fatal("a sealed but still writable object reported frozen")
+	}
+	if !NewObject().Freeze().IsFrozen() {
+		t.Fatal("a frozen object reported not frozen")
+	}
+	if !Number(1).IsFrozen() {
+		t.Fatal("a number reported not frozen")
+	}
+	emptySealed := NewObject()
+	emptySealed.Seal()
+	if !emptySealed.IsFrozen() {
+		t.Fatal("a sealed object with no data properties reported not frozen")
+	}
+	frozenArr := NewArrayValue([]Value{Number(1)})
+	frozenArr.Freeze()
+	if !frozenArr.IsFrozen() {
+		t.Fatal("a frozen non-empty array reported not frozen")
+	}
+	sealedArr := NewArrayValue([]Value{Number(1)})
+	sealedArr.Seal()
+	if sealedArr.IsFrozen() {
+		t.Fatal("a sealed but writable non-empty array reported frozen")
+	}
+}
