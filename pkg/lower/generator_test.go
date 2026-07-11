@@ -362,3 +362,72 @@ console.log(out);
 		t.Fatalf("yield* return value printed %q, want %q", got, want)
 	}
 }
+
+// TestGeneratorForOfBreakStops pins that a for...of that breaks out of a generator
+// early lowers a close: the loop tracks that it broke and calls Stop after the loop, so
+// the abandoned goroutine unwinds rather than parking on its next yield forever.
+func TestGeneratorForOfBreakStops(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 1; yield 2; yield 3; }
+for (const x of g()) { console.log(String(x)); break; }
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Stop()") {
+		t.Errorf("a breakable generator for...of did not lower a Stop close:\n%s", source)
+	}
+}
+
+// TestGeneratorForOfNoBreakStaysPlain pins the other side: a for...of the body never
+// breaks out of runs the generator to done, which needs no close, so the drain
+// machinery is left out and the loop stays the plain pull-until-done form.
+func TestGeneratorForOfNoBreakStaysPlain(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 1; yield 2; }
+for (const x of g()) { console.log(String(x)); }
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, ".Stop()") {
+		t.Errorf("a generator for...of with no early exit should not lower a Stop close:\n%s", source)
+	}
+}
+
+// TestGeneratorForOfBreakRunsFinally pins the end-to-end drain: breaking out of a
+// generator mid-iteration unwinds its suspended body through its finally block right
+// after the loop, before the statement past the loop runs, matching JavaScript's rule
+// that abandoning an iterator closes it.
+func TestGeneratorForOfBreakRunsFinally(t *testing.T) {
+	const src = `function* g(): Generator<number> {
+  try {
+    yield 1;
+    yield 2;
+    yield 3;
+  } finally {
+    console.log("cleanup");
+  }
+}
+for (const x of g()) {
+  console.log(String(x));
+  if (x === 2) { break; }
+}
+console.log("after");
+`
+	if got, want := runProgramGo(t, src), "1\n2\ncleanup\nafter\n"; got != want {
+		t.Fatalf("generator for...of break drain printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorForOfReturnHandsBack pins that a for...of over a generator whose body
+// can leave through a return hands back: the return would jump past the after-loop
+// close and leak the goroutine, so the loop declines rather than leak silently.
+func TestGeneratorForOfReturnHandsBack(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 1; yield 2; }
+function h(): void {
+  for (const x of g()) {
+    if (x === 1) { return; }
+    console.log(String(x));
+  }
+}
+h();
+`
+	if reason, want := renderProgramHandBack(t, src), "stopping a generator on a return, throw, or labeled exit from for...of is a later slice"; reason != want {
+		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}

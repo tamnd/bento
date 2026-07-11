@@ -194,6 +194,14 @@ func (g *Gen[Y]) Throw(e Thrown) (Y, bool) {
 	return g.resume(genSignal{kind: genResumeThrow, thrown: e})
 }
 
+// Stop closes an abandoned generator, the drain a for...of runs when it leaves the
+// loop early through a break. It resumes the suspended body with a return signal so
+// the body unwinds through its finally blocks and the goroutine exits, rather than
+// parking forever on its next yield and leaking. It is Return with the completion
+// value discarded, the close a consumer that breaks out of iteration does not name a
+// value for; a generator already run to done is left as is.
+func (g *Gen[Y]) Stop() { g.Return(Undefined) }
+
 // Done reports whether the generator has completed, the state a manual driver reads
 // off the result's done between pulls.
 func (g *Gen[Y]) Done() bool { return g.done }
