@@ -1283,6 +1283,19 @@ func (r *Renderer) getterOf(m frontend.Node) (classMethod, error) {
 	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a get accessor without a plain identifier name is a later slice"}
 	}
+	// A private get accessor (get #x()) emits an unexported p_ method, the twin of
+	// the private field's p_ struct field, so a this.#x read inside the class body
+	// routes to the call the same way a public getter read does. It keeps the #x
+	// property so lookupGetter matches the read, and never joins the public Go
+	// shape, so it takes the unexported spelling rather than exportedField's.
+	if r.isPrivateName(kids[0]) {
+		prop := strings.TrimSpace(r.prog.Text(kids[0]))
+		goName, ok := privateGoName(prop)
+		if !ok {
+			return classMethod{}, &NotYetLowerable{Reason: "private accessor name is not a Go identifier"}
+		}
+		return classMethod{prop: prop, goName: goName, node: m}, nil
+	}
 	prop, ok := r.memberName(kids[0])
 	if !ok {
 		return classMethod{}, r.memberNameReason(kids[0], "get accessor")
@@ -1306,13 +1319,29 @@ func (r *Renderer) setterOf(m frontend.Node) (classSetter, error) {
 	if len(kids) == 0 {
 		return classSetter{}, &NotYetLowerable{Reason: "a set accessor without a plain identifier name is a later slice"}
 	}
-	prop, ok := r.memberName(kids[0])
-	if !ok {
-		return classSetter{}, r.memberNameReason(kids[0], "set accessor")
-	}
-	propGo, ok := exportedField(prop)
-	if !ok {
-		return classSetter{}, &NotYetLowerable{Reason: "accessor name is not a Go identifier"}
+	var prop, goName string
+	if r.isPrivateName(kids[0]) {
+		// A private set accessor (set #x(v)) emits an unexported p_set_ method, the
+		// write twin of the private getter's p_ read method. It keeps the #x
+		// property so a this.#x = v store routes through the setter, and takes a
+		// spelling distinct from the getter so a full get/set pair coexists.
+		prop = strings.TrimSpace(r.prog.Text(kids[0]))
+		base, ok := privateGoName(prop)
+		if !ok {
+			return classSetter{}, &NotYetLowerable{Reason: "private accessor name is not a Go identifier"}
+		}
+		goName = "p_set_" + strings.TrimPrefix(base, "p_")
+	} else {
+		var ok bool
+		prop, ok = r.memberName(kids[0])
+		if !ok {
+			return classSetter{}, r.memberNameReason(kids[0], "set accessor")
+		}
+		propGo, ok := exportedField(prop)
+		if !ok {
+			return classSetter{}, &NotYetLowerable{Reason: "accessor name is not a Go identifier"}
+		}
+		goName = "Set" + propGo
 	}
 	var param frontend.Node
 	for _, k := range kids[1:] {
@@ -1330,7 +1359,7 @@ func (r *Renderer) setterOf(m frontend.Node) (classSetter, error) {
 	if param == nil {
 		return classSetter{}, &NotYetLowerable{Reason: "a set accessor without a parameter is a later slice"}
 	}
-	return classSetter{prop: prop, goName: "Set" + propGo, node: m, param: param}, nil
+	return classSetter{prop: prop, goName: goName, node: m, param: param}, nil
 }
 
 // staticAccessorName strips a static accessor's leading modifiers and reads its
