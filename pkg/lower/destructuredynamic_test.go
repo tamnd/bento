@@ -24,11 +24,17 @@ func loadUntypedBinding(t *testing.T, src string) *frontend.Program {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	// The front door admits the untyped-form codes and lowers each against a dynamic
+	// value: 7031 for an implicit-any binding element, and the property-on-unknown codes
+	// a destructuring off an unknown catch binding draws (2339, 2551, 2571, 18046). This
+	// helper mirrors that set so the same programs reach the renderer here they reach
+	// through build.Compile; every other error still gates.
+	tolerated := map[int]bool{7031: true, 2339: true, 2551: true, 2571: true, 18046: true}
 	for _, d := range prog.Diagnostics() {
 		if d.Category != frontend.CategoryError {
 			continue
 		}
-		if d.Code == 7031 {
+		if tolerated[d.Code] {
 			continue
 		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
@@ -219,6 +225,83 @@ func TestUntypedArrayNestedParamRuns(t *testing.T) {
 console.log(f([[4, 5]]));`))
 	if got != "45\n" {
 		t.Fatalf("got %q, want %q", got, "45\n")
+	}
+}
+
+// TestUntypedCatchObjectDestructureRuns proves a destructured catch binding reads its
+// elements off the caught value's boxed form through the dynamic path, matching the typed
+// destructuring positions the untyped path now serves elsewhere. The caught value boxes
+// through value.Caught(rec).ToValue(), and { name, message } reads its properties off that
+// box; the checker gives a catch-destructured name a concrete type, so the bound names are
+// marked dynamic and their reads route the dynamic way rather than a typed coercion.
+func TestUntypedCatchObjectDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `try {
+  throw new TypeError("boom");
+} catch ({ name, message }) {
+  console.log(String(name) + " " + String(message));
+}`))
+	if got != "TypeError boom\n" {
+		t.Fatalf("got %q, want %q", got, "TypeError boom\n")
+	}
+}
+
+// TestUntypedForOfObjectDestructureLowersToDynamicHead proves a for-of over a boxed any[]
+// binds each element's properties through the dynamic Get off the ranged element, the
+// loop-head analog of the untyped parameter slot. The iterable is a parameter typed any[],
+// whose Go storage is a slice of boxed value.Value each element reads Get off, the
+// dynamic-sourced position the head serves. A call site passing an array literal into an
+// any[] parameter is a separate argument-boxing slice, so the head is proven at the render.
+func TestUntypedForOfObjectDestructureLowersToDynamicHead(t *testing.T) {
+	got := renderUntypedBinding(t, `function f(xs: any[]) {
+  let s = "";
+  for (const { a } of xs) { s += String(a); }
+  return s;
+}`)
+	for _, want := range []string{
+		"func F(xs *value.Array[value.Value])",
+		"range xs.Elems()",
+		`.Get(value.FromGoString("a"))`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated Go missing %q\n%s", want, got)
+		}
+	}
+}
+
+// TestUntypedForOfArrayDestructureLowersToDynamicHead proves a for-of over a boxed any[] of
+// arrays reads each element's positions through the dynamic GetIndex off the ranged element,
+// the index analog of the object head.
+func TestUntypedForOfArrayDestructureLowersToDynamicHead(t *testing.T) {
+	got := renderUntypedBinding(t, `function f(xs: any[]) {
+  let s = "";
+  for (const [a, b] of xs) { s += String(a) + String(b); }
+  return s;
+}`)
+	for _, want := range []string{
+		"func F(xs *value.Array[value.Value])",
+		"range xs.Elems()",
+		"a := ",
+		".GetIndex(0)",
+		".GetIndex(1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated Go missing %q\n%s", want, got)
+		}
+	}
+}
+
+// TestUntypedForOfShapedStorageHandsBack proves a for-of over a const bound to a typed
+// array literal, whose element the checker types any but whose Go slice holds the literal's
+// shaped element, hands back rather than emit a Get the shaped element does not carry. The
+// dynamic head serves a boxed-element iterable, not a shaped-storage one.
+func TestUntypedForOfShapedStorageHandsBack(t *testing.T) {
+	reason := renderUntypedBindingHandBack(t, `const xs: any[] = [{ a: 1 }, { a: 2 }];
+let s = "";
+for (const { a } of xs) { s += String(a); }
+console.log(s);`)
+	if !strings.Contains(reason, "shaped element") {
+		t.Fatalf("reason %q does not name the shaped-storage hand-back", reason)
 	}
 }
 

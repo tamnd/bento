@@ -760,6 +760,7 @@ func isGoReturn(s ast.Stmt) bool {
 // catch, since its closure has nowhere to carry the value.
 func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast.Stmt, error) {
 	var binding, bindingJS string
+	var catchPattern frontend.Node
 	var catchBlock frontend.Node
 	for _, k := range r.prog.Children(catchClause) {
 		switch k.Kind() {
@@ -770,17 +771,25 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 			// annotation (catch (err: any), the strict-checker spelling) rides
 			// along as a trailing child and changes nothing, since the binding
 			// is the *value.Error the recover converts regardless of what the
-			// author annotated. Only a binding pattern declines.
+			// author annotated. A binding pattern binds through the dynamic path.
 			vk := r.prog.Children(k)
 			if len(vk) == 0 || vk[0].Kind() != frontend.NodeIdentifier {
 				// The caught value has no static type, so a pattern over it is a
 				// dynamic-sourced destructuring: each element reads off the boxed
-				// value.Value through the dynamic Get and GetIndex protocol, not the
-				// typed selectors the pattern binder emits. That path is the phase 6
-				// group 6 dynamic-source work, so a destructured catch binding hands
-				// back and rides with it rather than bind through a typed receiver
-				// the caught value does not have.
-				return nil, &NotYetLowerable{Reason: "a destructured catch binding reads a dynamic source and is deferred to the group 6 dynamic-source path"}
+				// value.Value through the dynamic Get and GetIndex protocol, the same
+				// as an untyped pattern anywhere else. The caught error boxes to that
+				// value through value.Caught(rec).ToValue(), and the pattern binds
+				// against it below. Only an object or array pattern binds this way; a
+				// stranger shape hands back.
+				if len(vk) == 0 {
+					return nil, &NotYetLowerable{Reason: "a catch clause exposed no binding"}
+				}
+				txt := strings.TrimSpace(r.prog.Text(vk[0]))
+				if !strings.HasPrefix(txt, "{") && !strings.HasPrefix(txt, "[") {
+					return nil, &NotYetLowerable{Reason: "an unusual catch binding is a later slice"}
+				}
+				catchPattern = vk[0]
+				continue
 			}
 			name, ok := localName(r.prog.Text(vk[0]))
 			if !ok {
@@ -817,21 +826,52 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 		r.errorLocals[binding] = true
 		defer func() { r.errorLocals[binding] = prev }()
 	}
-	catchStmts, err := r.lowerBlock(catchBlock)
-	if err != nil {
-		return nil, err
-	}
 	r.requireImport(valuePkg)
-
 	// bind is `e := value.Caught(rec)` when the clause names the error, or a bare
 	// `value.Caught(rec)` call when it does not, so a Go runtime panic re-raises
 	// either way. A named binding is also assigned to blank so a catch that never
 	// reads the error still compiles.
 	caught := &ast.CallExpr{Fun: sel("value", "Caught"), Args: []ast.Expr{ident("rec")}}
+
+	// A destructured catch binding reads its elements off the caught value's boxed form:
+	// value.Caught(rec).ToValue() gives the thrown object or primitive as a value.Value,
+	// held once in a temporary the pattern binds against through the same dynamic protocol
+	// an untyped pattern uses everywhere else. The pattern binds before the block lowers so
+	// every name it introduces is marked dynamic: the checker gives a catch-destructured
+	// name a concrete type (a number, inferred off the throw), yet its Go slot is a boxed
+	// value.Value, so its reads must route the dynamic way or a typed coercion would meet a
+	// box. The set rides a save and restore, so the bindings do not leak past the clause.
+	var catchIntro []ast.Stmt
+	if catchPattern != nil {
+		tmp := r.freshTemp()
+		recvExpr := &ast.CallExpr{Fun: &ast.SelectorExpr{X: caught, Sel: ident("ToValue")}}
+		binds, err := r.bindDynamicPattern(catchPattern, ident(tmp), token.DEFINE)
+		if err != nil {
+			return nil, err
+		}
+		catchIntro = append(catchIntro, define(tmp, recvExpr))
+		catchIntro = append(catchIntro, binds...)
+		prevDyn := r.dynBoundLocals
+		m := map[string]bool{}
+		for name := range prevDyn {
+			m[name] = true
+		}
+		r.collectAssignedNames(binds, m)
+		r.dynBoundLocals = m
+		defer func() { r.dynBoundLocals = prevDyn }()
+	}
+	catchStmts, err := r.lowerBlock(catchBlock)
+	if err != nil {
+		return nil, err
+	}
+
 	var body []ast.Stmt
-	if binding == "" {
+	switch {
+	case catchPattern != nil:
+		body = append(body, catchIntro...)
+	case binding == "":
 		body = append(body, &ast.ExprStmt{X: caught})
-	} else {
+	default:
 		body = append(body,
 			&ast.AssignStmt{Lhs: []ast.Expr{ident(binding)}, Tok: token.DEFINE, Rhs: []ast.Expr{caught}},
 			&ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{ident(binding)}},
