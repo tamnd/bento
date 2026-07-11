@@ -362,6 +362,23 @@ func (p *Program) ElementType(t Type) (Type, bool) {
 	return p.wrapType(h), true
 }
 
+// TypeArguments returns the instantiated type arguments of a generic type, the [T]
+// in a Generator<T> or a Map<K, V>. It reads the element type off a built-in
+// generic whose members the structural queries do not expand, so lowering can spell
+// the Go representation the generic maps to. A non-generic type returns no
+// arguments.
+func (p *Program) TypeArguments(t Type) []Type {
+	hs := p.adapter.TypeArgsOf(p.handle, p.typeHandle(t))
+	if len(hs) == 0 {
+		return nil
+	}
+	out := make([]Type, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, p.wrapType(h))
+	}
+	return out
+}
+
 // LiteralValue returns the literal value of a literal type, so lowering can fold
 // closed unions into integer tags and refine integers.
 func (p *Program) LiteralValue(t Type) (LiteralValue, bool) {

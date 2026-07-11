@@ -1391,11 +1391,10 @@ new C();
 	}
 }
 
-// TestClassGeneratorMethodLinear pins slice 5: a generator method whose body is
-// a straight-line run of yields lowers to the state-machine closure a Go author
-// writes for an iterator, a method returning func() (T, bool). A for...of over
-// it pulls the closure until done, so the sum of the yielded values is what the
-// program prints.
+// TestClassGeneratorMethodLinear pins a generator method whose body is a
+// straight-line run of yields lowers to a method returning the running coroutine
+// value.NewGen builds, a *value.Gen[T]. A for...of over it pulls the coroutine until
+// done, so the sum of the yielded values is what the program prints.
 func TestClassGeneratorMethodLinear(t *testing.T) {
 	const src = `class C {
   *g(): Generator<number> { yield 1; yield 2; yield 3; }
@@ -1406,8 +1405,8 @@ for (const v of c.g()) { sum += v; }
 console.log(String(sum));
 `
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "func (c *C) G() func() (float64, bool)") {
-		t.Errorf("generator method did not lower to a next() closure:\n%s", source)
+	if !strings.Contains(source, "func (c *C) G() *value.Gen[float64]") {
+		t.Errorf("generator method did not lower to a *value.Gen coroutine:\n%s", source)
 	}
 	if got, want := runProgramGo(t, src), "6\n"; got != want {
 		t.Fatalf("generator program printed %q, want %q", got, want)
@@ -1437,29 +1436,36 @@ console.log(out);
 	}
 }
 
-// TestClassGeneratorYieldInControlFlowHandsBack pins the honest leftover: a
-// yield inside a loop or branch needs real state splitting this slice does not
-// build, and its reason names that rather than the plain-statement one.
-func TestClassGeneratorYieldInControlFlowHandsBack(t *testing.T) {
+// TestClassGeneratorYieldInControlFlow pins that a yield inside a loop or branch
+// lowers with the coroutine: the goroutine suspends at each yield wherever it sits in
+// the control flow, so a yield in a for loop drives the loop one turn per pull. The
+// for...of over it prints each yielded value in order.
+func TestClassGeneratorYieldInControlFlow(t *testing.T) {
 	const src = `class C {
-  *g(): Generator<number> { for (let i = 0; i < 2; i++) yield i; }
+  *g(): Generator<number> { for (let i = 0; i < 3; i++) { yield i; } }
 }
-new C();
+const c = new C();
+let out = "";
+for (const v of c.g()) { out += String(v); }
+console.log(out);
 `
-	if reason, want := renderProgramHandBack(t, src), "a yield inside control flow is a later slice"; reason != want {
-		t.Fatalf("handback reason = %q, want %q", reason, want)
+	if got, want := runProgramGo(t, src), "012\n"; got != want {
+		t.Fatalf("control-flow generator printed %q, want %q", got, want)
 	}
 }
 
-// TestClassGeneratorYieldStarHandsBack pins that a yield* delegation keeps its
-// own reason, not the control-flow one, so the next baseline ranks it honestly.
+// TestClassGeneratorYieldStarHandsBack pins that a yield* over a non-generator
+// iterable in a class generator method keeps the same yield*-specific reason the
+// function form gives, not the control-flow one, so the next baseline ranks it
+// honestly. A yield* over a generator delegate lowers through the shared YieldFrom
+// path; only the non-generator iterable, an array here, still hands back.
 func TestClassGeneratorYieldStarHandsBack(t *testing.T) {
 	const src = `class C {
   *g(): Generator<number> { yield* [1, 2]; }
 }
 new C();
 `
-	if reason, want := renderProgramHandBack(t, src), "a yield* delegation is a later slice"; reason != want {
+	if reason, want := renderProgramHandBack(t, src), "a yield* over a non-generator iterable is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)
 	}
 }

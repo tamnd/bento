@@ -126,6 +126,17 @@ type Renderer struct {
 	// aliasing corner the snapshot cannot mirror, so it hands back. It is saved and
 	// restored alongside argsObjName.
 	argsWriteSafe bool
+	// genCo is the Go name of the *value.GenCo handle the current generator body
+	// yields through, or "" when the body being lowered is not a generator. It is set
+	// around a generator function or method body, and a yield expression in that body
+	// lowers to a call on it (genCo.Yield). Like retType it is saved and restored around
+	// each body so a nested non-generator function does not inherit it.
+	genCo string
+	// genYieldType is the element type a generator body yields, the Y in *value.Gen[Y].
+	// It fixes the type argument of the NewGen call the body is wrapped in and the type
+	// a yield expression coerces its operand to. It is the zero type outside a generator
+	// body, and it is saved and restored alongside genCo.
+	genYieldType frontend.Type
 	// typeSubst maps a type parameter's identity to the concrete type it stands for in
 	// the specialization currently being lowered, so typeExpr resolves a bare T to the
 	// float64, value.BStr, or array type the call site fixed it to. It is set around one
@@ -567,6 +578,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 				return ident("bool"), nil
 			}
 		}
+		// The IteratorResult union a generator's next/return/throw hand back lowers to
+		// the value.IterResult struct, its { value, done } read as fields. It routes
+		// before the general tagged-sum union path below, which declines this union
+		// because its discriminant `done` is a boolean literal, not a string one.
+		if r.isIteratorResult(t) {
+			r.requireImport(valuePkg)
+			return sel("value", "IterResult"), nil
+		}
 	}
 
 	switch {
@@ -636,6 +655,20 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// first so a class whose fields spell an array-like or Map-like shape is
 			// never re-derived structurally.
 			return star(ident(info.goName)), nil
+		}
+		// A Generator (or the wider iterator family) is the *value.Gen[Y] coroutine the
+		// runtime drives, its yielded element type read off the generic's first type
+		// argument. It routes before renderFuncType and the structural array and object
+		// paths, which would otherwise expand the generator's next() result into the
+		// IteratorResult union and hand back. This is the return type a generator
+		// function value spells, the slot a `const it = g()` binding takes.
+		if elem, ok := r.generatorElemType(t); ok {
+			inner, err := r.typeExpr(elem)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return star(index(sel("value", "Gen"), inner)), nil
 		}
 		if ft, ok, err := r.renderFuncType(t); err != nil {
 			return nil, err

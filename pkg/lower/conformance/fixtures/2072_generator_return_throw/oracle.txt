@@ -1,0 +1,9 @@
+== stdout:
+value 1
+cleanup
+return 99 true
+first 1
+caught
+after 2
+== exit:
+0

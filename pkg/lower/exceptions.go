@@ -375,19 +375,33 @@ func (r *Renderer) lowerThrow(n frontend.Node) (ast.Stmt, error) {
 	if len(kids) != 1 {
 		return nil, &NotYetLowerable{Reason: "throw did not expose a single operand"}
 	}
+	operand, err := r.thrownOperand(kids[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "Throw"), Args: []ast.Expr{operand}}}, nil
+}
+
+// thrownOperand lowers a throw's operand to the Go expression that carries the
+// runtime's Thrown surface, the payload value.Throw and a generator's throw(e) both
+// raise. It is the shared conversion behind a throw statement and a generator throw:
+// a caught error re-raises the exact *value.Error it bound, a new built-in error or a
+// registered error class throws the instance itself, and a thrown string wraps in
+// value.ThrownString. Any other operand hands back until arbitrary thrown values box.
+func (r *Renderer) thrownOperand(node frontend.Node) (ast.Expr, error) {
 	// Re-throwing a caught error is the rethrow half of the exception model:
 	// catch (err) { ...; throw err } passes the recovered value straight back up.
 	// The binding is already a *value.Error, which carries the runtime's Thrown
 	// surface, so the throw re-raises that exact value with its identity intact.
 	// Reading the binding any other way still hands back at expr.go, so this is
 	// spelled out here rather than routed through lowerExpr, which would decline.
-	if kids[0].Kind() == frontend.NodeIdentifier {
-		if name, ok := localName(r.prog.Text(kids[0])); ok && r.errorLocals[name] {
+	if node.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(node)); ok && r.errorLocals[name] {
 			r.usesThrow = true
-			return &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "Throw"), Args: []ast.Expr{ident(name)}}}, nil
+			return ident(name), nil
 		}
 	}
-	if !r.isThrowable(kids[0]) {
+	if !r.isThrowable(node) {
 		// A new expression of a registered class whose instances carry a string
 		// message throws too: the instance itself is the panic payload, and the
 		// class gains the ErrorName and ErrorMessage methods (renderClasses) that
@@ -395,26 +409,25 @@ func (r *Renderer) lowerThrow(n frontend.Node) (ast.Stmt, error) {
 		// an error named after the class carrying the instance's message. A
 		// thrown string wraps in the runtime's ThrownString, which carries the
 		// same surface with the string as the name.
-		if info, ok := r.thrownClassOf(kids[0]); ok {
+		if info, ok := r.thrownClassOf(node); ok {
 			info.thrownAsError = true
-		} else if r.isString(kids[0]) {
-			operand, err := r.lowerExpr(kids[0])
+		} else if r.isString(node) {
+			operand, err := r.lowerExpr(node)
 			if err != nil {
 				return nil, err
 			}
 			r.usesThrow = true
-			wrapped := &ast.CallExpr{Fun: sel("value", "ThrownString"), Args: []ast.Expr{operand}}
-			return &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "Throw"), Args: []ast.Expr{wrapped}}}, nil
+			return &ast.CallExpr{Fun: sel("value", "ThrownString"), Args: []ast.Expr{operand}}, nil
 		} else {
 			return nil, &NotYetLowerable{Reason: "throwing a value that is not a built-in error is a later slice"}
 		}
 	}
-	operand, err := r.lowerExpr(kids[0])
+	operand, err := r.lowerExpr(node)
 	if err != nil {
 		return nil, err
 	}
 	r.usesThrow = true
-	return &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "Throw"), Args: []ast.Expr{operand}}}, nil
+	return operand, nil
 }
 
 // isThrowable reports whether a throw operand lowers to a value.Error the runtime

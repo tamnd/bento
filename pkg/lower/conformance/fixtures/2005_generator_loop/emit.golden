@@ -13,32 +13,19 @@ func NewSeq() *Seq {
 	return &Seq{}
 }
 func (s *Seq) Values() *value.Gen[float64] {
-	return value.NewGen[float64](func(_bt4 *value.GenCo[float64]) value.Value {
-		_ = _bt4.Yield(10)
-		_ = _bt4.Yield(20)
-		_ = _bt4.Yield(30)
+	return value.NewGen[float64](func(_bt2 *value.GenCo[float64]) value.Value {
+		for i := 0.0; i < 3; i++ {
+			_ = _bt2.Yield(i)
+		}
 		return value.Undefined
 	})
 }
 func main() {
-	s := NewSeq()
-	sum := 0.0
 	{
-		_bt0 := s.Values()
+		_bt0 := NewSeq().Values()
 		for {
 			v, _bt1 := _bt0.Next(value.Undefined)
 			if _bt1 {
-				break
-			}
-			sum += v
-		}
-	}
-	value.ConsoleLog(value.NumberToString(sum))
-	{
-		_bt2 := s.Values()
-		for {
-			v, _bt3 := _bt2.Next(value.Undefined)
-			if _bt3 {
 				break
 			}
 			value.ConsoleLog(value.NumberToString(v))

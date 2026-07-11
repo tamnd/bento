@@ -1,2 +1,0 @@
-feature = "class-generator-loop"
-handback = "a yield inside control flow is a later slice"
