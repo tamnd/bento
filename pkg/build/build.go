@@ -293,6 +293,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedArithOperand[d.Code] {
 			continue
 		}
+		if toleratedDeleteForm[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -422,6 +425,21 @@ var toleratedArity = map[int]bool{
 var toleratedArithOperand = map[int]bool{
 	2362: true, // The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 	2363: true, // The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+}
+
+// toleratedDeleteForm is the set of checker diagnostic codes bento admits because
+// a delete over a non-reference operand still has defined run-time behavior the
+// lowerer reproduces. 2703 ("The operand of a 'delete' operator must be a property
+// reference") flags delete over a literal, an arithmetic expression, or another
+// value that is not a property reference. JavaScript evaluates such an operand and
+// yields true without removing anything, exactly what the renderer emits: a
+// side-effect-free operand folds to the constant true and a side-effecting one
+// hands back to a later slice, so admitting the code lets the runnable forms
+// through and never produces Go that fails to compile. The strict-mode
+// identifier-delete error (1102) is a real early SyntaxError and is deliberately
+// absent, so delete of a bare variable still gates.
+var toleratedDeleteForm = map[int]bool{
+	2703: true, // The operand of a 'delete' operator must be a property reference.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and

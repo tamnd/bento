@@ -201,6 +201,27 @@ func (v Value) SetElem(key, val Value) Value {
 	return v.SetKey(ToString(key), val)
 }
 
+// DeleteIndex removes v[i] for a numeric index, the delete a[i] takes when the
+// receiver is a dynamic value and the index is a number. It mirrors GetIndex: the
+// index becomes a property key its canonical string, then the removal dispatches
+// by the receiver's kind through Delete, so an array element clears to a hole and
+// an object numeric property drops from the map the way delete a[3] does.
+func (v Value) DeleteIndex(i float64) bool {
+	return v.Delete(NumberToString(i))
+}
+
+// DeleteElem removes v[key] for a dynamic index whose own type is not known to be
+// a number, the mirror of GetElem. The key is coerced to a property key the way
+// JavaScript does, a string used as is and any other value taken through
+// ToString, then the removal dispatches through the same kind-aware Delete, so a
+// numeric string key round-trips to the same array element DeleteIndex would.
+func (v Value) DeleteElem(key Value) bool {
+	if key.kind == KindString {
+		return v.Delete(key.str())
+	}
+	return v.Delete(ToString(key))
+}
+
 // MissingProperty is the value of a property read whose receiver's fixed shape
 // does not declare the property. A shape interns to a Go struct that carries
 // exactly its declared fields, so such a read is a provable miss and the language

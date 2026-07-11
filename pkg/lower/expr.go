@@ -265,6 +265,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isTypeofExpr(n) {
 			return r.typeofExpr(n)
 		}
+		if r.isDeleteExpr(n) {
+			return r.deleteExpr(n)
+		}
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
 
 	default:
