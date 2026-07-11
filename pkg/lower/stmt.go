@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -394,6 +395,21 @@ func (r *Renderer) forOfDestructure(iterable, pattern, bodyNode frontend.Node) (
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "a destructuring for...of whose iterable has no element type is a later slice"}
 	}
+	// An array whose element is dynamic (a value.Value, the element of an any[]) has no
+	// static shape for the typed binder to read, so the pattern binds against each element
+	// through the same dynamic protocol an untyped pattern uses in a parameter or a
+	// declaration: object properties through Get and positions through GetIndex. The read
+	// is only sound when the array's Go storage is a value.Value slice, which a parameter
+	// typed any[] takes but a const bound to a typed array literal does not: the checker
+	// types both elements any, yet the const's slice holds the literal's shaped element,
+	// which carries no Get. So the dynamic head fires only for a provably boxed-element
+	// iterable and hands the shaped-storage case back rather than emit a read it cannot make.
+	if outerElem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		if !r.iterableElemBoxed(iterable) {
+			return nil, &NotYetLowerable{Reason: "a for...of over an array the checker types any[] but whose Go storage holds a shaped element is a later slice"}
+		}
+		return r.forOfDynamicDestructure(iterable, pattern, bodyNode)
+	}
 	// A flat array pattern over a homogeneous array of arrays keeps the optimized path,
 	// which drops an unused element binding and reuses a name the pattern repeats.
 	if strings.HasPrefix(strings.TrimSpace(r.prog.Text(pattern)), "[") && r.forOfFlatArrayEligible(pattern, outerElem) {
@@ -431,6 +447,74 @@ func (r *Renderer) forOfDestructure(iterable, pattern, bodyNode frontend.Node) (
 		Tok:   token.DEFINE,
 		Body:  body,
 	}, nil
+}
+
+// forOfDynamicDestructure lowers a for...of whose element is dynamic, `for (const {a} of
+// xs)` where xs is any[]: the array ranges over its Elems the way the typed path does, but
+// each element is a boxed value.Value the pattern binds against through the dynamic Get and
+// GetIndex protocol rather than the struct-field selectors a shaped element would take. The
+// per-iteration temporary holds one element, and the pattern's rest bindings are marked
+// dynamic before the body lowers so their reads route the boxed way, the same as an untyped
+// parameter's. An unused bound name is blanked by the shared unused-binding pass, so this
+// path does not hand back on one the way the typed general binder must.
+func (r *Renderer) forOfDynamicDestructure(iterable, pattern, bodyNode frontend.Node) (ast.Stmt, error) {
+	iter, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	// The pattern binds before the body lowers so every name it introduces is marked
+	// dynamic: an element read off a boxed value.Value is itself a value.Value, and the
+	// body's reads of that name must route the dynamic way rather than take the checker's
+	// element type. The names come straight off the emitted binds, exact for a leaf the
+	// checker typed concretely.
+	tmp := r.freshTemp()
+	binds, err := r.bindDynamicPattern(pattern, ident(tmp), token.DEFINE)
+	if err != nil {
+		return nil, err
+	}
+	prevDyn := r.dynBoundLocals
+	m := map[string]bool{}
+	for name := range prevDyn {
+		m[name] = true
+	}
+	r.collectAssignedNames(binds, m)
+	r.dynBoundLocals = m
+	defer func() { r.dynBoundLocals = prevDyn }()
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	body.List = append(binds, body.List...)
+	return &ast.RangeStmt{
+		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident("Elems")}},
+		Key:   ident("_"),
+		Value: ident(tmp),
+		Tok:   token.DEFINE,
+		Body:  body,
+	}, nil
+}
+
+// iterableElemBoxed reports whether a for...of iterable's Go storage is a slice of
+// boxed value.Value, the only shape whose element carries the dynamic Get and GetIndex
+// the untyped head reads through. A parameter typed any[] takes that slice, since a
+// parameter lowers to its declared type; a const or let bound to an array literal does
+// not, since foldShortDecl gives it the literal's shaped element even under an any[]
+// annotation. The two report the same any element type, so the storage is read off the
+// symbol's declaration, not the type: only a parameter declaration is provably boxed.
+// Any other iterable (a shaped-storage local, a call result, a member) is not proven
+// boxed here and stays on the hand-back branch, honest rather than emitting a read the
+// element cannot make.
+func (r *Renderer) iterableElemBoxed(iterable frontend.Node) bool {
+	if iterable.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(iterable)
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(r.prog.Declarations(sym), func(d frontend.Node) bool {
+		return d.Kind() == frontend.NodeParameter
+	})
 }
 
 // forOfFlatArrayEligible reports whether an array pattern loop variable is the flat
@@ -1314,6 +1398,12 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	}
 	// The pattern is an array binding, so from here the statement is ours: an early
 	// return reports ok=true with an error, not a fall-through.
+	// A dynamic source has no static array shape, so the pattern reads each position
+	// through the boxed value's index protocol rather than a typed AtI, the declaration
+	// sibling of the untyped parameter's dynamic slot.
+	if r.isDynamic(initNode) {
+		return r.dynamicSourceDestructure(patNode, initNode)
+	}
 	initType := r.prog.TypeAt(initNode)
 	elemT, ok := r.prog.ElementType(initType)
 	// A source that is not an array or tuple but is a user iterable destructures
@@ -1485,6 +1575,35 @@ func (r *Renderer) destructureSource(initNode frontend.Node) ([]ast.Stmt, func()
 	return prefix, func() (ast.Expr, error) { return ident(tmp), nil }, nil
 }
 
+// dynamicSourceDestructure lowers a declaration whose source is a dynamic value, `const
+// {a} = x` or `const [a] = x` where x is any: the source has no static shape, so each name
+// reads through the boxed value's member and index protocol the untyped parameter's slot
+// uses. The source is lowered once into a temporary when it is not a plain variable, so it
+// is evaluated a single time, then the pattern binds against it.
+func (r *Renderer) dynamicSourceDestructure(patNode, initNode frontend.Node) ([]ast.Stmt, bool, error) {
+	prefix, recv, err := r.destructureSource(initNode)
+	if err != nil {
+		return nil, true, err
+	}
+	recvExpr, err := recv()
+	if err != nil {
+		return nil, true, err
+	}
+	stmts, err := r.bindDynamicPattern(patNode, recvExpr, token.DEFINE)
+	if err != nil {
+		return nil, true, err
+	}
+	// An object rest this declaration binds is a boxed value the checker did not type any,
+	// so a read of it later in the scope must dispatch dynamically. Statements lower in
+	// order, so marking it here reaches every read below. The map is lazily created since
+	// a body with no destructured parameter never built one.
+	if r.dynBoundLocals == nil {
+		r.dynBoundLocals = map[string]bool{}
+	}
+	r.collectDynRestNames(patNode, r.dynBoundLocals)
+	return append(prefix, stmts...), true, nil
+}
+
 // flattenObjectDestructure lowers `const {x, y} = src` to one `:=` binding per
 // property, x := src.X and y := src.Y, the same struct-field selector a written-out
 // property access lowers to. It is the object sibling of flattenArrayDestructure and
@@ -1518,6 +1637,12 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	}
 	// The pattern is an object binding, so from here the statement is ours: an early
 	// return reports ok=true with an error, not a fall-through.
+	// A dynamic source has no static shape, so the pattern reads each property through the
+	// boxed value's member protocol rather than a struct-field selector, the declaration
+	// sibling of the untyped parameter's dynamic slot.
+	if r.isDynamic(initNode) {
+		return r.dynamicSourceDestructure(patNode, initNode)
+	}
 	objType := r.prog.TypeAt(initNode)
 	if objType.Flags&frontend.TypeObject == 0 || r.isTypedArray(initNode) {
 		return nil, true, &NotYetLowerable{Reason: "object destructuring on a non-object source is a later slice"}

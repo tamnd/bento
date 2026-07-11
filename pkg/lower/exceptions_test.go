@@ -349,22 +349,19 @@ func TestInstanceofOutsideCatchHandsBack(t *testing.T) {
 	handsBack(t, "class C {}\nconst c: unknown = new C();\nif (c instanceof C) { console.log(\"c\"); }\n")
 }
 
-// TestDestructuredCatchBindingHandsBack proves an object or array pattern in the
-// catch binding hands back rather than emit broken Go. The caught value has no static
-// type, so a pattern over it is a dynamic-sourced destructuring that reads off the
-// boxed value through the dynamic protocol, which is the group 6 dynamic-source work,
-// so it defers there rather than bind through a typed receiver the value does not
-// have.
-func TestDestructuredCatchBindingHandsBack(t *testing.T) {
-	// The catch parameter is annotated any so the pattern type-checks and reaches the
-	// lowerer; under the checker's default the caught value is unknown and a pattern
-	// over it is rejected before lowering, which is the front-door slot group 6 adds.
+// TestDestructuredCatchThrowValueHandsBack proves that with the destructured catch
+// binding now lowering against the caught value's boxed form, these snippets defer on
+// the throw side instead: throwing a plain object or array literal is a separate slice,
+// so the deferral moves off the catch binding and onto the thrown value. The catch
+// pattern itself lowers, as TestUntypedCatchObjectDestructureRuns shows over a thrown
+// built-in error the throw path already carries.
+func TestDestructuredCatchThrowValueHandsBack(t *testing.T) {
 	for _, src := range []string{
 		"try {\n  throw { code: 1 };\n} catch ({ code }: any) {\n  console.log(code);\n}\n",
 		"try {\n  throw [1, 2];\n} catch ([a, b]: any) {\n  console.log(a + b);\n}\n",
 	} {
-		if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "dynamic-source") {
-			t.Fatalf("destructured catch handback reason = %q, want a dynamic-source deferral", reason)
+		if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "not a built-in error") {
+			t.Fatalf("catch throw-value handback reason = %q, want a thrown-value deferral", reason)
 		}
 	}
 }
