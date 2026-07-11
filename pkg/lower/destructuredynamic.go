@@ -42,8 +42,43 @@ func (r *Renderer) dynamicParamSlot(p frontend.Param) bool {
 	if len(props) == 0 {
 		return false
 	}
+	// An untyped array pattern interns its positions as numeric-named properties, every
+	// one dynamic; a typed tuple types those positions to real leaves, so a numeric
+	// property that is not dynamic means the typed binder still serves. The array's own
+	// methods carry object types, so they are read past here rather than counted against
+	// the pattern's dynamic shape.
+	numeric := false
+	for _, pr := range props {
+		if !isNumericName(pr.Name) {
+			continue
+		}
+		numeric = true
+		if pr.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+			return false
+		}
+	}
+	if numeric {
+		return true
+	}
+	// An untyped object pattern infers an anonymous object every one of whose properties
+	// is dynamic.
 	for _, pr := range props {
 		if pr.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// isNumericName reports whether a property name is an all-digit index position, the
+// key an array pattern interns for each of its slots. It tells an array pattern's
+// positional properties from an object pattern's named ones.
+func isNumericName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if c < '0' || c > '9' {
 			return false
 		}
 	}
@@ -76,7 +111,49 @@ func (r *Renderer) bindDynamicPattern(pat frontend.Node, recv ast.Expr, tok toke
 	if strings.HasPrefix(txt, "{") {
 		return r.bindDynamicObject(pat, recv, tok)
 	}
-	return nil, &NotYetLowerable{Reason: "an untyped array destructuring pattern reads through the dynamic index protocol, a later slice"}
+	if strings.HasPrefix(txt, "[") {
+		return r.bindDynamicArray(pat, recv, tok)
+	}
+	return nil, &NotYetLowerable{Reason: "an untyped destructuring pattern that is neither an object nor an array is a later slice"}
+}
+
+// bindDynamicArray binds an array pattern against a dynamic receiver. Each fixed
+// position reads through GetIndex and binds its name as a value.Value, the same indexed
+// read a dynamic element access lowers to, so an untyped array pattern reads its slots
+// the way a typed one reads them through AtI. This first slice serves the plain-name
+// positions the bulk of the untyped-pattern cluster uses; a default, a rest, a hole, and
+// a nested element are later slices on this path and hand back, so the pattern lowers the
+// simple form and declines the rest honestly.
+func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.Token) ([]ast.Stmt, error) {
+	elems := r.prog.Children(pat)
+	if len(elems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty array destructuring pattern binds nothing"}
+	}
+	if _, _, hasRest, err := r.splitArrayRest(elems); err != nil {
+		return nil, err
+	} else if hasRest {
+		return nil, &NotYetLowerable{Reason: "a rest on an untyped array destructuring pattern is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	var out []ast.Stmt
+	for i, el := range elems {
+		info, err := r.classifyArrayElem(el)
+		if err != nil {
+			return nil, err
+		}
+		if info.nested != nil {
+			return nil, &NotYetLowerable{Reason: "a nested pattern on an untyped array destructuring element is a later slice"}
+		}
+		if info.hasDefault {
+			return nil, &NotYetLowerable{Reason: "a default on an untyped array destructuring element is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(info.nameNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "an untyped destructuring target is not a Go identifier"}
+		}
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{dynIndex(recv, i)}})
+	}
+	return out, nil
 }
 
 // bindDynamicObject binds an object pattern against a dynamic receiver. A shorthand
@@ -124,4 +201,11 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 func dynGet(recv ast.Expr, prop string) ast.Expr {
 	key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}
+}
+
+// dynIndex reads a position off a dynamic receiver, recv.GetIndex(i), the same boxed
+// indexed read a dynamic element access lowers to. GetIndex takes a float64, and an
+// untyped integer constant converts to it, so the position is emitted as an int literal.
+func dynIndex(recv ast.Expr, i int) ast.Expr {
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}}}
 }
