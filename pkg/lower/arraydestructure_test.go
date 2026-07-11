@@ -95,11 +95,122 @@ func TestArrayDestructureRestRuns(t *testing.T) {
 	}
 }
 
-// TestArrayDestructureNestedHandsBack proves a nested pattern hands back, since a
-// pattern inside a pattern is a later slice.
-func TestArrayDestructureNestedHandsBack(t *testing.T) {
-	const src = "const grid: number[][] = [[1], [2]];\nconst [[a], b] = grid;\nconsole.log(a);\n"
-	renderProgramHandBack(t, src)
+// TestArrayNestedInArrayLowers proves an array pattern nested inside an array pattern
+// reads the inner element from the slot the outer pattern selected: the outer slot is
+// held in a temporary, then the inner pattern reads off it by index.
+func TestArrayNestedInArrayLowers(t *testing.T) {
+	const src = "const grid: number[][] = [[1, 2], [3, 4]];\nconst [[a, b], [c, d]] = grid;\nconsole.log(a + b + c + d);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".AtI(0).AtI(0)") && !strings.Contains(source, "a := ") {
+		t.Errorf("nested array pattern did not read the inner element off the outer slot:\n%s", source)
+	}
+}
+
+// TestArrayNestedInArrayRuns builds and runs a two-level array destructure so each
+// inner name is proven to carry the element the outer slot held.
+func TestArrayNestedInArrayRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const grid: number[][] = [[1, 2], [3, 4]];
+const [[a, b], [c, d]] = grid;
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("nested array destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestObjectNestedInArrayRuns proves an object pattern nested inside an array pattern
+// reads the object off the slot the array pattern selected, then binds the inner
+// properties, so the two shapes cross.
+func TestObjectNestedInArrayRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const arr: { x: number; y: number }[] = [{ x: 1, y: 2 }, { x: 3, y: 4 }];
+const [{ x, y }, { x: p, y: q }] = arr;
+console.log(x);
+console.log(y);
+console.log(p);
+console.log(q);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("object-in-array destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayNestedDefaultRuns proves a default inside a nested array pattern composes
+// the fill through the nesting: the inner slot takes the default when the outer slot's
+// array has no element there, and its own value otherwise.
+func TestArrayNestedDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const grid: number[][] = [[1], [3, 4]];
+const [[a, b = 9], [c, d]] = grid;
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n9\n3\n4\n"; got != want {
+		t.Fatalf("nested array default destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayNestedRestRuns proves a rest inside a nested array pattern gathers the tail
+// past the inner fixed slots, composing the gather rule through the nesting.
+func TestArrayNestedRestRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const grid: number[][] = [[1, 2, 3], [4, 5]];
+const [[a, ...rest], [b]] = grid;
+console.log(a);
+console.log(rest.length);
+console.log(b);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n4\n"; got != want {
+		t.Fatalf("nested array rest destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayNestedInAssignmentRuns proves a nested array pattern in an assignment
+// target stores each leaf into its existing local through the nesting, reading each
+// inner element off the slot the outer pattern selected on the source variable.
+func TestArrayNestedInAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const m: number[][] = [[1, 2], [3, 4]];
+let a = 0, b = 0, c = 0, d = 0;
+([[a, b], [c, d]] = m);
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("nested array assignment printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayNestedInAssignmentDefaultRuns proves a default inside a nested array
+// assignment pattern fills the leaf from the outer slot when that slot has no element
+// there, composing the fill rule through the nesting into the existing target.
+func TestArrayNestedInAssignmentDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const m: number[][] = [[1], [3, 4]];
+let a = 0, b = 0, c = 0, d = 0;
+([[a, b = 9], [c, d]] = m);
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n9\n3\n4\n"; got != want {
+		t.Fatalf("nested array assignment default printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a

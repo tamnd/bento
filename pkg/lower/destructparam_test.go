@@ -135,15 +135,23 @@ func TestDestructuredParamRenameRuns(t *testing.T) {
 	}
 }
 
-// TestDestructuredParamNestedHandsBack proves a nested array pattern in a parameter
-// still hands back, a later slice the shorthand and rename bindings do not cover.
-func TestDestructuredParamNestedHandsBack(t *testing.T) {
-	const src = "function f([[a]]: number[][]): number { return a; }\nf([[1]]);\n"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+// TestDestructuredParamNestedArrayRuns proves a nested array pattern in a parameter
+// binds the whole tree at body entry, reading each inner element off the slot the
+// outer pattern selected on the held argument.
+func TestDestructuredParamNestedArrayRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function f([[a, b], [c, d]]: number[][]): number { return a + b + c + d; }\nconsole.log(f([[1, 2], [3, 4]]));\n"
+	if got, want := runProgramGo(t, src), "10\n"; got != want {
+		t.Fatalf("nested array parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestDestructuredParamNestedObjectRuns proves a nested object pattern in a parameter
+// binds the inner properties at body entry off the value the outer property selected.
+func TestDestructuredParamNestedObjectRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function f({ p: { x, y } }: { p: { x: number; y: number } }): number { return x + y; }\nconsole.log(f({ p: { x: 1, y: 2 } }));\n"
+	if got, want := runProgramGo(t, src), "3\n"; got != want {
+		t.Fatalf("nested object parameter printed %q, want %q", got, want)
 	}
 }
