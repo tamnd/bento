@@ -1,0 +1,51 @@
+package lower
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+// TestDeleteDynamicMemberLowers pins that delete o.k on a dynamic receiver lowers
+// to the runtime property removal, value.Value.Delete keyed by the source name.
+func TestDeleteDynamicMemberLowers(t *testing.T) {
+	const src = "const obj: any = { a: 1 };\nconst gone: boolean = delete obj.a;\nconsole.log(gone);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, `.Delete(value.FromGoString("a"))`) {
+		t.Fatalf("delete of a dynamic member did not lower to a runtime removal:\n%s", source)
+	}
+}
+
+// TestDeleteDynamicMemberRuns builds and runs delete o.k on a dynamic object: the
+// removal yields true, the deleted property reads back undefined, and a sibling
+// property is untouched.
+func TestDeleteDynamicMemberRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const obj: any = { a: 1, b: 2 };\n" +
+		"const gone: boolean = delete obj.a;\n" +
+		"console.log(gone);\n" +
+		"console.log(obj.a);\n" +
+		"console.log(obj.b);\n"
+	got := runProgramGo(t, src)
+	want := "true\nundefined\n2\n"
+	if got != want {
+		t.Fatalf("delete dynamic member program printed %q, want %q", got, want)
+	}
+}
+
+// TestDeleteStaticMemberHandsBack pins the boundary: a property whose fixed shape
+// makes it a Go struct field has no runtime slot to remove, so delete over it
+// hands back for the object descriptor model a later phase builds.
+func TestDeleteStaticMemberHandsBack(t *testing.T) {
+	const src = "interface P { a?: number; }\nfunction f(p: P): boolean { return delete p.a; }\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if !strings.Contains(nyl.Reason, "object descriptor model") {
+		t.Errorf("hand-back reason = %q, want it to mention the object descriptor model", nyl.Reason)
+	}
+}
