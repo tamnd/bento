@@ -1146,16 +1146,24 @@ func (r *Renderer) staticFieldOf(info *classInfo, m frontend.Node, taken map[str
 	if last := kids[len(kids)-1]; len(kids) > 2 && last.Kind() != frontend.NodeUnknown {
 		init = last
 	}
-	if init == nil {
-		return classField{}, &NotYetLowerable{Reason: "a static field without an initializer is a later slice"}
-	}
 	// A constant initializer stays the package var's own initializer, the readable
 	// common case. A non-constant one runs in the class's static init function in
 	// member order, so it may read an earlier static or call a module function; an
 	// initializer that reads this reaches the class constructor object, a
 	// dynamic-world value this slice does not model, so it stays declined.
 	runtimeInit := false
-	if !r.pureStaticInit(init) {
+	switch {
+	case init == nil:
+		// A static field with no initializer defaults to undefined. An untyped
+		// (implicit-any) static lowers to a boxed value.Value whose zero value is
+		// undefined, so the package var declares zero-valued with no static-init
+		// step and reads back undefined. A field with a concrete type annotation
+		// would zero to that type's Go zero (0, ""), not undefined, so it stays a
+		// later slice rather than miscompile the default.
+		if r.prog.TypeAt(kids[1]).Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+			return classField{}, &NotYetLowerable{Reason: "a typed static field without an initializer is a later slice"}
+		}
+	case !r.pureStaticInit(init):
 		if subtreeHasKind(r.prog, init, frontend.NodeThisKeyword) {
 			return classField{}, &NotYetLowerable{Reason: "a static field initializer that reads this is a later slice"}
 		}
@@ -1863,7 +1871,7 @@ func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
 		Names: []*ast.Ident{ident(f.goName)},
 		Type:  goType,
 	}
-	if !f.runtimeInit {
+	if !f.runtimeInit && f.init != nil {
 		rhs, err := r.lowerExpr(f.init)
 		if err != nil {
 			return nil, err
