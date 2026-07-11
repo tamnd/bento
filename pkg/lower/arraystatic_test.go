@@ -25,6 +25,16 @@ func TestArrayStaticEmits(t *testing.T) {
 			"export function names(): string[] { return Array.of(\"a\", \"b\"); }\n",
 			"value.NewArray[value.BStr](value.FromGoString(\"a\"), value.FromGoString(\"b\"))",
 		},
+		{
+			"fromArray",
+			"export function copy(a: number[]): number[] { return Array.from(a); }\n",
+			"value.ArrayFrom(append([]float64{}, a.Elems()...))",
+		},
+		{
+			"fromString",
+			"export function chars(s: string): string[] { return Array.from(s); }\n",
+			"value.ArrayFrom(s.CodePoints())",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,12 +46,12 @@ func TestArrayStaticEmits(t *testing.T) {
 	}
 }
 
-// TestArrayStaticHandsBack pins the boundary: Array.from, whose general form
-// walks an iterable or array-like and takes an optional map function, is a later
-// slice, so it hands back with a named reason rather than falling through to the
-// receiver-typed method dispatch.
+// TestArrayStaticHandsBack pins the boundary: Array.from over an array-like
+// object, a plain object carrying a length and integer keys but no iterator, is
+// its own later slice, so it hands back with a named reason rather than falling
+// through to the receiver-typed method dispatch.
 func TestArrayStaticHandsBack(t *testing.T) {
-	const src = "export function copy(a: number[]): number[] { return Array.from(a); }\n"
+	const src = "export function copy(o: { length: number }): unknown[] { return Array.from(o as any); }\n"
 	prog := compile(t, src)
 	r := NewRenderer(prog)
 	_, err := r.RenderProgram(entryFile(t, prog))
@@ -49,7 +59,7 @@ func TestArrayStaticHandsBack(t *testing.T) {
 	if !errors.As(err, &nyl) {
 		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
 	}
-	if !strings.Contains(nyl.Reason, "Array.from is a later slice") {
+	if !strings.Contains(nyl.Reason, "Array.from") {
 		t.Errorf("hand-back reason = %q, want it to mention Array.from", nyl.Reason)
 	}
 }

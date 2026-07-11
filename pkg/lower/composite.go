@@ -235,6 +235,9 @@ func (r *Renderer) arrayStaticCall(call, callee frontend.Node, argNodes []fronte
 	case "of":
 		expr, err := r.arrayOf(call, argNodes)
 		return expr, true, err
+	case "from":
+		expr, err := r.arrayFrom(call, argNodes)
+		return expr, true, err
 	default:
 		return nil, true, &NotYetLowerable{Reason: "Array." + method + " is a later slice"}
 	}
@@ -267,6 +270,84 @@ func (r *Renderer) arrayOf(call frontend.Node, argNodes []frontend.Node) (ast.Ex
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
+// arrayFrom lowers Array.from(source) where the source is iterable: a real
+// array, whose backing slice is copied so the result aliases nothing; a string,
+// whose code points become the elements; or a user iterable, drained through its
+// Symbol.iterator the same pull-until-done walk a spread of that iterable takes.
+// The result element type comes from the checker's type for the whole call and
+// must match the source's Go element type so the collected values need no
+// conversion. The array-like form (a plain object with a length and integer
+// keys) and the optional map callback and thisArg are their own later slice and
+// hand back.
+func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "Array.from with no source is a later slice"}
+	}
+	if len(argNodes) > 1 {
+		return nil, &NotYetLowerable{Reason: "Array.from with a map callback is a later slice"}
+	}
+	elemType, ok := r.arrayElem(call)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Array.from whose element type does not lower yet"}
+	}
+	src := argNodes[0]
+	r.requireImport(valuePkg)
+	// A real array copies its backing slice into a fresh []T, the same splice a
+	// person writes with append, so the result shares storage with nothing.
+	if opElemType, ok := r.arrayElem(src); ok {
+		same, err := sameGoType(elemType, opElemType)
+		if err != nil {
+			return nil, err
+		}
+		if !same {
+			return nil, &NotYetLowerable{Reason: "Array.from over an array with a different element type is a later slice"}
+		}
+		srcExpr, err := r.lowerExpr(src)
+		if err != nil {
+			return nil, err
+		}
+		elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: srcExpr, Sel: ident("Elems")}}
+		copied := &ast.CallExpr{
+			Fun:      ident("append"),
+			Args:     []ast.Expr{&ast.CompositeLit{Type: &ast.ArrayType{Elt: elemType}}, elems},
+			Ellipsis: token.Pos(1),
+		}
+		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{copied}}, nil
+	}
+	// A user iterable is drained through its Symbol.iterator into a slice of its
+	// element type, then handed to ArrayFrom the same way a spread splices it.
+	if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(src)); ok {
+		iterElemType, err := r.typeExpr(shape.elem)
+		if err != nil {
+			return nil, err
+		}
+		same, err := sameGoType(elemType, iterElemType)
+		if err != nil {
+			return nil, err
+		}
+		if !same {
+			return nil, &NotYetLowerable{Reason: "Array.from over an iterable with a different element type is a later slice"}
+		}
+		srcExpr, err := r.lowerExpr(src)
+		if err != nil {
+			return nil, err
+		}
+		drained := r.iterableToSliceExpr(srcExpr, elemType, shape)
+		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{drained}}, nil
+	}
+	// A string's elements are its code points, one substring per code point, the
+	// same walk a for...of over a string takes.
+	if r.isString(src) {
+		srcExpr, err := r.lowerExpr(src)
+		if err != nil {
+			return nil, err
+		}
+		points := &ast.CallExpr{Fun: &ast.SelectorExpr{X: srcExpr, Sel: ident("CodePoints")}}
+		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{points}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "Array.from over an array-like object is a later slice"}
 }
 
 // objectLiteral lowers an object literal { k: v, ... } to a composite literal
