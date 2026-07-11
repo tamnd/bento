@@ -27,3 +27,19 @@ func ObjectCreate(proto Value) Value {
 	}
 	return objectValue(o)
 }
+
+// GetPrototype returns the receiver's [[Prototype]] as a value, the runtime behind
+// Object.getPrototypeOf(o). A slot holding an object reports that object; a slot
+// left nil, whether never set or set to null through Object.create(null), reports
+// null. A non-object receiver has no slot this model tracks, so it reports null too.
+func (v Value) GetPrototype() Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		if o := v.object(); o.proto != nil {
+			return objectValue(o.proto)
+		}
+		return Null
+	default:
+		return Null
+	}
+}

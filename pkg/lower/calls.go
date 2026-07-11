@@ -1408,9 +1408,30 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectIs(argNodes)
 	case "create":
 		return r.objectCreate(argNodes)
+	case "getPrototypeOf":
+		return r.objectGetPrototypeOf(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
+}
+
+// objectGetPrototypeOf lowers Object.getPrototypeOf(o) to a runtime GetPrototype on
+// the dynamic receiver, which returns the object's prototype slot as a value or
+// null when it has none. The receiver must be a dynamic value, since a fixed-shape
+// Go struct has no runtime prototype slot to read, so a non-dynamic receiver hands
+// back. The receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectGetPrototypeOf(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.getPrototypeOf with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.getPrototypeOf on a fixed-shape receiver, which has no runtime prototype slot, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetPrototype")}}, nil
 }
 
 // objectCreate lowers Object.create(proto) and Object.create(proto, descs) to a
