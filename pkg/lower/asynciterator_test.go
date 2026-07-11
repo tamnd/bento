@@ -99,6 +99,81 @@ console.log("sync");
 	}
 }
 
+// TestForAwaitOfClosesOnBreak checks that breaking out of a for await...of over a user
+// async iterable that defines return() closes the iterator, awaiting the promise return()
+// hands back. The loop pulls three values, breaks on the third, then calls return() once,
+// so the close runs after the last body pass and before the after-loop statement. A loop
+// that runs to completion never calls return(), so the close is reached only on the early
+// break, the same broke-flag gate the sync iterator close uses.
+func TestForAwaitOfClosesOnBreak(t *testing.T) {
+	src := `
+class Counter {
+  n: number;
+  i: number;
+  constructor(n: number) { this.n = n; this.i = 0; }
+  [Symbol.asyncIterator](): Counter { return this; }
+  async next(): Promise<{ value: number; done: boolean }> {
+    if (this.i < this.n) { const v = this.i; this.i++; return { value: v, done: false }; }
+    return { value: 0, done: true };
+  }
+  async return(): Promise<{ value: number; done: boolean }> {
+    console.log("closed at " + this.i);
+    return { value: 0, done: true };
+  }
+}
+async function run(): Promise<void> {
+  for await (const x of new Counter(5)) {
+    console.log("x:" + x);
+    if (x === 2) break;
+  }
+  console.log("after");
+}
+run();
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\nx:0\nx:1\nx:2\nclosed at 3\nafter\n"
+	if got != want {
+		t.Fatalf("for await...of close on break = %q, want %q", got, want)
+	}
+}
+
+// TestForAwaitOfNoCloseOnCompletion checks that a for await...of that runs to completion
+// over an async iterable with return() never calls return(): the loop stops when next()
+// reports done, which clears the broke flag, so the after-loop close is skipped. Only an
+// early exit closes the iterator, matching the protocol.
+func TestForAwaitOfNoCloseOnCompletion(t *testing.T) {
+	src := `
+class Counter {
+  n: number;
+  i: number;
+  constructor(n: number) { this.n = n; this.i = 0; }
+  [Symbol.asyncIterator](): Counter { return this; }
+  async next(): Promise<{ value: number; done: boolean }> {
+    if (this.i < this.n) { const v = this.i; this.i++; return { value: v, done: false }; }
+    return { value: 0, done: true };
+  }
+  async return(): Promise<{ value: number; done: boolean }> {
+    console.log("closed");
+    return { value: 0, done: true };
+  }
+}
+async function run(): Promise<void> {
+  for await (const x of new Counter(3)) {
+    console.log("x:" + x);
+  }
+  console.log("after");
+}
+run();
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\nx:0\nx:1\nx:2\nafter\n"
+	if got != want {
+		t.Fatalf("for await...of no close on completion = %q, want %q", got, want)
+	}
+}
+
 // TestForAwaitOfSyncArrayOfPromises checks that a for await...of over an array of
 // promises awaits each element before the body runs, the fallback the spec takes for a
 // sync iterable with no [Symbol.asyncIterator]: the array yields its promises
