@@ -1,0 +1,6 @@
+== stdout:
+true
+undefined
+2
+== exit:
+0
