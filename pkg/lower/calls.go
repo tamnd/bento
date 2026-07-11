@@ -1396,6 +1396,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectValues(argNodes)
 	case "hasOwn":
 		return r.objectHasOwn(argNodes)
+	case "defineProperty":
+		return r.objectDefineProperty(argNodes)
 	case "is":
 		return r.objectIs(argNodes)
 	default:
@@ -1542,6 +1544,36 @@ func (r *Renderer) objectHasOwn(argNodes []frontend.Node) (ast.Expr, error) {
 	return ident("false"), nil
 }
 
+// objectDefineProperty lowers Object.defineProperty(o, key, desc) to a runtime
+// DefineProperty on the dynamic receiver, which reads the descriptor object's
+// value, writable, get, set, enumerable, and configurable fields and applies them
+// to the key on the bag. The receiver must be a dynamic value, since a fixed-shape
+// Go struct has no runtime descriptor bag to define onto, so a non-dynamic
+// receiver hands back. The key and the descriptor are boxed to values so the
+// runtime reads them the way it reads any dynamic operand. All three operands are
+// evaluated, so no read is dropped.
+func (r *Renderer) objectDefineProperty(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 3 {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperty with other than three arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperty on a fixed-shape receiver, which has no runtime descriptor bag, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	key, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	desc, err := r.boxOperand(argNodes[2])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DefineProperty")}, Args: []ast.Expr{key, desc}}, nil
+}
+
 // objectOwnNameArray lowers Object.keys(o) and Object.getOwnPropertyNames(o) on
 // a fixed-shape object to its own property names, in declaration order, which
 // the checker knows in full at compile time, so it lowers to a
@@ -1558,7 +1590,13 @@ func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnKeys")}}, nil
+		// keys drops the non-enumerable properties defineProperty can create;
+		// getOwnPropertyNames keeps them, so each routes to its own bag walk.
+		walk := "OwnKeys"
+		if method == "keys" {
+			walk = "OwnEnumerableKeys"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(walk)}}, nil
 	}
 	props, err := r.objectShapeArg(method, argNodes)
 	if err != nil {

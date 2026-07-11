@@ -253,6 +253,18 @@ func (o *Object) getSym(recv Value, key *Symbol) Value {
 	return Undefined
 }
 
+// getSymDesc returns the descriptor of a symbol-keyed own property and whether the
+// object carries it, the symbol mirror of getOwnDesc that defineProperty reads to
+// merge a redefine into the existing descriptor.
+func (o *Object) getSymDesc(key *Symbol) (descriptor, bool) {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			return o.symDescs[i], true
+		}
+	}
+	return descriptor{}, false
+}
+
 // hasSym reports whether the object carries key as an own symbol property, the
 // existence probe behind a symbol key in the in operator.
 func (o *Object) hasSym(key *Symbol) bool {
@@ -288,12 +300,25 @@ func (o *Object) deleteSym(key *Symbol) bool {
 // still enumerates them ascending, so the order is deterministic regardless of how
 // the keys arrived.
 func (o *Object) orderedStringKeys() []BStr {
+	return o.orderedStringKeysFiltered(false)
+}
+
+// orderedStringKeysFiltered returns the own string keys in the spec's enumeration
+// order, optionally dropping the non-enumerable ones. Object.getOwnPropertyNames
+// wants every own string key, so it passes enumerableOnly false; Object.keys and
+// Object.values want only the enumerable ones, so they pass true. An array's dense
+// element indices are always enumerable data properties, so they are kept either
+// way; a named property's enumerability comes from its descriptor.
+func (o *Object) orderedStringKeysFiltered(enumerableOnly bool) []BStr {
 	var idxKeys []int
 	var strKeys []BStr
 	for i := range o.elems {
 		idxKeys = append(idxKeys, i)
 	}
-	for _, k := range o.keys {
+	for i, k := range o.keys {
+		if enumerableOnly && !o.descs[i].enumerable {
+			continue
+		}
 		if n, ok := arrayIndex(k.ToGoString()); ok {
 			idxKeys = append(idxKeys, n)
 		} else {
@@ -338,28 +363,42 @@ func (v Value) ObjectRest(omit ...BStr) Value {
 	return rest
 }
 
-// OwnKeys returns the receiver's own enumerable string-keyed property names as a
-// string array in the spec's enumeration order, the value Object.keys and
-// Object.getOwnPropertyNames build for a dynamic receiver whose keys are known only
-// at runtime. Symbol keys never appear, which matches both statics on the string
-// side, and every property in this model is enumerable, so the two return the same
-// list. A receiver with no object storage yields an empty array.
+// OwnKeys returns the receiver's own string-keyed property names as a string array
+// in the spec's enumeration order, including the non-enumerable ones, the value
+// Object.getOwnPropertyNames builds for a dynamic receiver whose keys are known
+// only at runtime. Symbol keys never appear, which matches the string-side static.
+// A receiver with no object storage yields an empty array.
 func (v Value) OwnKeys() *Array[BStr] {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
-		return NewArray(v.object().orderedStringKeys()...)
+		return NewArray(v.object().orderedStringKeysFiltered(false)...)
+	default:
+		return NewArray[BStr]()
+	}
+}
+
+// OwnEnumerableKeys returns the receiver's own enumerable string-keyed property
+// names in the spec's enumeration order, the value Object.keys builds for a dynamic
+// receiver. It differs from OwnKeys only in that a property defined non-enumerable
+// through Object.defineProperty is left out. A receiver with no object storage
+// yields an empty array.
+func (v Value) OwnEnumerableKeys() *Array[BStr] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return NewArray(v.object().orderedStringKeysFiltered(true)...)
 	default:
 		return NewArray[BStr]()
 	}
 }
 
 // OwnValues returns the receiver's own enumerable property values as a value array
-// in the same order OwnKeys walks the names, the value Object.values builds for a
-// dynamic receiver. A receiver with no object storage yields an empty array.
+// in the same order OwnEnumerableKeys walks the names, the value Object.values
+// builds for a dynamic receiver. A non-enumerable property contributes no value,
+// matching Object.keys. A receiver with no object storage yields an empty array.
 func (v Value) OwnValues() *Array[Value] {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
-		keys := v.object().orderedStringKeys()
+		keys := v.object().orderedStringKeysFiltered(true)
 		vals := make([]Value, len(keys))
 		for i, k := range keys {
 			vals[i] = v.Get(k)
