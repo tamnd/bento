@@ -80,3 +80,15 @@ func (v Value) Freeze() Value {
 	}
 	return v
 }
+
+// IsExtensible reports whether new properties may still be added to the receiver,
+// the runtime behind Object.isExtensible(o). A non-object is never extensible, the
+// answer the spec gives for a primitive, which has no properties to add.
+func (v Value) IsExtensible() bool {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return v.object().isExtensible()
+	default:
+		return false
+	}
+}

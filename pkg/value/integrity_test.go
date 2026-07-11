@@ -96,3 +96,23 @@ func TestFreezeArrayElements(t *testing.T) {
 		t.Fatalf("a frozen array element took a write: got %v, want 1", got)
 	}
 }
+
+// TestIsExtensible proves the predicate reports a fresh object extensible and a
+// prevented, sealed, or frozen object not, and a primitive not.
+func TestIsExtensible(t *testing.T) {
+	if !NewObject().IsExtensible() {
+		t.Fatal("a fresh object reported not extensible")
+	}
+	if NewObject().PreventExtensions().IsExtensible() {
+		t.Fatal("a prevented object reported extensible")
+	}
+	if NewObject().Seal().IsExtensible() {
+		t.Fatal("a sealed object reported extensible")
+	}
+	if NewObject().Freeze().IsExtensible() {
+		t.Fatal("a frozen object reported extensible")
+	}
+	if Number(1).IsExtensible() {
+		t.Fatal("a number reported extensible")
+	}
+}
