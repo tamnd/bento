@@ -45,7 +45,7 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 	}
 	if r.isAsyncFunc(fn) {
 		if r.isGeneratorFunc(fn) {
-			return nil, &NotYetLowerable{Reason: "an async generator function is a later slice"}
+			return r.asyncGeneratorFuncDecl(fn, sig, name)
 		}
 		return r.asyncFuncDecl(fn, sig, name)
 	}
@@ -73,7 +73,11 @@ func (r *Renderer) funcDecls(fn frontend.Node) ([]ast.Decl, error) {
 	}
 	if r.isAsyncFunc(fn) {
 		if r.isGeneratorFunc(fn) {
-			return nil, &NotYetLowerable{Reason: "an async generator function is a later slice"}
+			fd, err := r.asyncGeneratorFuncDecl(fn, sig, name)
+			if err != nil {
+				return nil, err
+			}
+			return []ast.Decl{fd}, nil
 		}
 		fd, err := r.asyncFuncDecl(fn, sig, name)
 		if err != nil {
@@ -1017,8 +1021,15 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	// An async function expression returns a promise: its await-free body wraps in
 	// value.Async the same way an async function declaration's does, the closure form
-	// of asyncFuncDecl.
+	// of asyncFuncDecl. An async generator expression takes the async generator closure
+	// form instead, the coroutine an async function* value returns.
 	if r.isAsyncFunc(n) {
+		if r.isGeneratorFunc(n) {
+			if _, named := r.funcExprNameNode(n); named {
+				return nil, &NotYetLowerable{Reason: "a named async generator function expression is a later slice"}
+			}
+			return r.asyncGeneratorFuncExpr(n, fields)
+		}
 		return r.asyncFuncExpr(n, fields)
 	}
 	// A generator function expression lowers to a closure that returns the running
