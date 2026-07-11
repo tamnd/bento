@@ -175,6 +175,44 @@ console.log(b);
 	}
 }
 
+// TestArrayNestedInAssignmentRuns proves a nested array pattern in an assignment
+// target stores each leaf into its existing local through the nesting, reading each
+// inner element off the slot the outer pattern selected on the source variable.
+func TestArrayNestedInAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const m: number[][] = [[1, 2], [3, 4]];
+let a = 0, b = 0, c = 0, d = 0;
+([[a, b], [c, d]] = m);
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("nested array assignment printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayNestedInAssignmentDefaultRuns proves a default inside a nested array
+// assignment pattern fills the leaf from the outer slot when that slot has no element
+// there, composing the fill rule through the nesting into the existing target.
+func TestArrayNestedInAssignmentDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const m: number[][] = [[1], [3, 4]];
+let a = 0, b = 0, c = 0, d = 0;
+([[a, b = 9], [c, d]] = m);
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n9\n3\n4\n"; got != want {
+		t.Fatalf("nested array assignment default printed %q, want %q", got, want)
+	}
+}
+
 // TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a
 // call returning an array, lowers by holding the source in a generated temporary read
 // once, then reading each element off that temporary, so the source is evaluated once.

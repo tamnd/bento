@@ -135,6 +135,44 @@ func TestObjectNestedOptionalDefaultHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
+// TestObjectNestedInAssignmentRuns proves a nested object pattern in an assignment
+// target stores each inner property into its existing local through the nesting,
+// holding the outer property in a temporary and reading the inner names off it.
+func TestObjectNestedInAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o: { p: { x: number; y: number }; q: { z: number } } = { p: { x: 1, y: 2 }, q: { z: 3 } };
+let x = 0, y = 0, z = 0;
+({ p: { x, y }, q: { z } } = o);
+console.log(x);
+console.log(y);
+console.log(z);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n"; got != want {
+		t.Fatalf("nested object assignment printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayNestedInObjectAssignmentRuns proves an array pattern nested inside an
+// object assignment pattern reads the array off the property the object pattern
+// selected, then stores the inner elements into their existing locals by index, so the
+// two shapes cross in an assignment target.
+func TestArrayNestedInObjectAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o: { p: number[]; q: number[] } = { p: [1, 2], q: [3, 4] };
+let a = 0, b = 0, c = 0, d = 0;
+({ p: [a, b], q: [c, d] } = o);
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("array-in-object assignment printed %q, want %q", got, want)
+	}
+}
+
 // TestObjectDestructureDefaultRuns proves a property default lowers: the missing
 // optional property takes the default while the present one keeps its value.
 func TestObjectDestructureDefaultRuns(t *testing.T) {
