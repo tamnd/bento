@@ -589,10 +589,16 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	left, op, right := kids[0], kids[1], kids[2]
 	opText := r.prog.Text(op)
 	if opText == "=" {
+		if left.Kind() == frontend.NodeElementAccessExpression {
+			return r.assignValueElement(n, left, right)
+		}
 		return r.assignValue(left, right)
 	}
 	if opText == "," {
 		return r.commaValue(n, left, right)
+	}
+	if _, compound := compoundBaseOp(opText); compound {
+		return r.assignValueCompound(n, left)
 	}
 	return r.combineBinary(opText, left, right)
 }

@@ -1993,13 +1993,21 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 // a named property by the same rule the read resolves them. The value boxes through
 // boxOperand so a primitive rides its constructor and a nested dynamic passes
 // through. The store returns the assigned value, which the statement discards, so it
-// lowers to a bare call. It reports ok=false when the statement is not a bracket
-// write on a dynamic receiver, so lowerUpdate falls through to the paths that own the
-// other targets. Only a plain "=" is covered: a compound write o[k] += v reads and
-// writes and is a later slice, so it hands back rather than dropping the read.
+// lowers to a bare call. A compound write o[k] <op>= v reads the old value once,
+// runs the boxed arithmetic, and stores the result: the receiver and key are read
+// on both the load and the store, so a side-effecting receiver or key hands back to
+// keep the "evaluate the key once" rule, and a repeatable one reads the same slot
+// on both sides. It reports ok=false when the statement is not a bracket write on a
+// dynamic receiver, so lowerUpdate falls through to the paths that own the other
+// targets.
 func (r *Renderer) dynamicElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	parts := r.prog.Children(bin)
-	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+	if len(parts) != 3 {
+		return nil, false, nil
+	}
+	opText := r.prog.Text(parts[1])
+	baseOp, compound := compoundBaseOp(opText)
+	if opText != "=" && !compound {
 		return nil, false, nil
 	}
 	target := parts[0]
@@ -2014,6 +2022,10 @@ func (r *Renderer) dynamicElementAssign(bin frontend.Node) (ast.Stmt, bool, erro
 	if !r.isDynamic(recvNode) {
 		return nil, false, nil
 	}
+	storeMethod, err := r.elementStoreMethod(idxNode)
+	if err != nil {
+		return nil, false, err
+	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
 		return nil, false, err
@@ -2022,24 +2034,37 @@ func (r *Renderer) dynamicElementAssign(bin frontend.Node) (ast.Stmt, bool, erro
 	if err != nil {
 		return nil, false, err
 	}
-	val, err := r.boxOperand(parts[2])
-	if err != nil {
-		return nil, false, err
-	}
-	var method string
-	switch {
-	case r.isNumber(idxNode):
-		method = "SetIndex"
-	case r.isDynamic(idxNode):
-		method = "SetElem"
-	case r.isString(idxNode):
-		method = "SetKey"
-	default:
-		return nil, false, &NotYetLowerable{Reason: "a dynamic element write with a non-number, non-string index is a later slice"}
+	var val ast.Expr
+	if compound {
+		if !r.repeatableOperand(recvNode) || !r.repeatableOperand(idxNode) {
+			return nil, true, &NotYetLowerable{Reason: "compound assignment to a computed member with a side-effecting receiver or key is a later slice"}
+		}
+		loadMethod, err := r.elementLoadMethod(idxNode)
+		if err != nil {
+			return nil, false, err
+		}
+		recvLoad, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, false, err
+		}
+		idxLoad, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, false, err
+		}
+		old := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recvLoad, Sel: ident(loadMethod)}, Args: []ast.Expr{idxLoad}}
+		val, err = r.dynamicCompoundResult(baseOp, old, parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+	} else {
+		val, err = r.boxOperand(parts[2])
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	r.requireImport(valuePkg)
 	return &ast.ExprStmt{X: &ast.CallExpr{
-		Fun:  &ast.SelectorExpr{X: recv, Sel: ident(method)},
+		Fun:  &ast.SelectorExpr{X: recv, Sel: ident(storeMethod)},
 		Args: []ast.Expr{idx, val},
 	}}, true, nil
 }
@@ -2276,6 +2301,9 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 		return nil, false, nil
 	}
 	target := parts[0]
+	if target.Kind() == frontend.NodePropertyAccessExpression {
+		return r.memberLogicalAssign(target, op, parts[2])
+	}
 	if target.Kind() != frontend.NodeIdentifier {
 		return nil, true, &NotYetLowerable{Reason: "logical assignment to a non-identifier target is a later slice"}
 	}
