@@ -369,11 +369,6 @@ func TestClassHandsBack(t *testing.T) {
 			"return inside a constructor",
 		},
 		{
-			"thisInInitializer",
-			"class A { x: number = 1; y: number = this.x + 1; }\nconsole.log(new A().y);\n",
-			"initializer that reads this",
-		},
-		{
 			"methodAsValue",
 			"class A { f(): number { return 1; } }\nconst g: () => number = new A().f;\nconsole.log(g());\n",
 			"read as a value",

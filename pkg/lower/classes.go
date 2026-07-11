@@ -1944,11 +1944,6 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 	if info.ctor != nil && subtreeHasKind(r.prog, info.ctor, frontend.NodeReturnStatement) {
 		return nil, &NotYetLowerable{Reason: "a return inside a constructor is a later slice"}
 	}
-	for _, f := range info.fields {
-		if f.init != nil && subtreeHasKind(r.prog, f.init, frontend.NodeThisKeyword) {
-			return nil, &NotYetLowerable{Reason: "a field initializer that reads this is a later slice"}
-		}
-	}
 	params, err := r.ctorParamFields(info)
 	if err != nil {
 		return nil, err
