@@ -92,6 +92,42 @@ func (r *Renderer) elementLoadMethod(idxNode frontend.Node) (string, error) {
 	}
 }
 
+// assignValueCompound lowers a compound assignment read for its value, (x += 1)
+// in an expression position, whose result is the updated value the statement path
+// discards. It reuses the statement lowering to build the read-modify-write, then
+// wraps it in a closure that runs the store and returns the target, so the whole
+// expression evaluates to the value JavaScript's compound assignment yields. The
+// target must be a plain static-primitive local: a dynamic or narrowed-storage
+// local keeps its value in a box the returned identifier's narrowed type would not
+// name, and a refined-integer local returns an int a float64 context would
+// mismatch, so both hand back, and a member target hands back inside lowerAssign,
+// each a later slice.
+func (r *Renderer) assignValueCompound(n, left frontend.Node) (ast.Expr, error) {
+	if left.Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "compound assignment value on a non-identifier target is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(left))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "compound assignment value target is not a Go identifier"}
+	}
+	if r.int32Locals[name] || r.int64Locals[name] {
+		return nil, &NotYetLowerable{Reason: "compound assignment value on a refined-integer local is a later slice"}
+	}
+	if r.isDynamic(left) || r.localStorageDynamic(left) {
+		return nil, &NotYetLowerable{Reason: "compound assignment value on a dynamic or narrowed-storage local is a later slice"}
+	}
+	stmt, err := r.lowerAssign(n)
+	if err != nil {
+		return nil, err
+	}
+	retType, err := r.typeExpr(r.prog.TypeAt(left))
+	if err != nil {
+		return nil, err
+	}
+	body := []ast.Stmt{stmt, &ast.ReturnStmt{Results: []ast.Expr{ident(name)}}}
+	return r.valueClosure(retType, body), nil
+}
+
 // dynamicCompoundResult builds the boxed value.Value a compound member write
 // stores, given the loaded old value (already a box) and the right-hand side node.
 // A + fuses through value.Add, which concatenates when a string is present and

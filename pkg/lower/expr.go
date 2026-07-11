@@ -597,6 +597,9 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	if opText == "," {
 		return r.commaValue(n, left, right)
 	}
+	if _, compound := compoundBaseOp(opText); compound {
+		return r.assignValueCompound(n, left)
+	}
 	return r.combineBinary(opText, left, right)
 }
 
