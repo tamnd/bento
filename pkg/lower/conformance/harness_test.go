@@ -59,6 +59,42 @@ func fixtures(t *testing.T) []Fixture {
 	return kept
 }
 
+// TestMain redirects the golden go run builds to a build cache kept apart from the
+// developer's shared GOCACHE, and bounds it. Each golden is a one-shot program the
+// oracle compiles once and never reuses: its linked binary lands in the cache and,
+// on a machine that builds every day, never ages out of Go's five-day retention, so
+// sweep after sweep leaves gigabytes of dead binaries that fill the disk. A
+// dedicated cache keeps the stdlib and pkg/value warm across runs so the oracle
+// stays fast, and the teardown drops the whole cache once it grows past a cap, so
+// one-shot golden churn is bounded and the developer's own cache never sees it.
+func TestMain(m *testing.M) {
+	cache := filepath.Join(os.TempDir(), "bento-conformance-gocache")
+	if err := os.Setenv("GOCACHE", cache); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	// A cache past this size is mostly dead one-shot golden binaries, so drop it
+	// rather than let it grow; the next run rewarms the stdlib into a fresh one.
+	const maxGoldenCache = 2 << 30 // 2 GiB
+	if dirSize(cache) > maxGoldenCache {
+		_ = os.RemoveAll(cache)
+	}
+	os.Exit(code)
+}
+
+// dirSize sums the bytes of every file under root, the check TestMain uses to decide
+// whether the golden cache has grown past its cap. A missing root sums to zero.
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 // TestStructure proves the corpus is well formed before any check runs its content.
 // Every fixture directory must carry an input.ts and make at least one claim, and a
 // handback fixture must emit nothing, so a directory added without a golden, an
@@ -217,6 +253,9 @@ func runGolden(t *testing.T, root string, golden []byte) (string, int) {
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), golden, 0o644); err != nil {
 		t.Fatalf("write golden main: %v", err)
 	}
+	// The build inherits GOCACHE from TestMain, which points it at the dedicated,
+	// bounded golden cache rather than the developer's shared one, so a one-shot
+	// golden binary never accumulates in the cache everyday builds rely on.
 	cmd := exec.Command("go", "run", ".")
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
