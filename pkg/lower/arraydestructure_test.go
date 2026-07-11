@@ -76,11 +76,13 @@ func TestArrayDestructureHoleHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestArrayDestructureDefaultHandsBack proves an element default hands back, since
-// filling an undefined element with the default is a later slice.
-func TestArrayDestructureDefaultHandsBack(t *testing.T) {
+// TestArrayDestructureDefaultRuns proves an element default lowers: a present slot
+// keeps its value and a missing slot takes the default.
+func TestArrayDestructureDefaultRuns(t *testing.T) {
 	const src = "const pair: number[] = [1, 2];\nconst [a = 5, b] = pair;\nconsole.log(a + b);\n"
-	renderProgramHandBack(t, src)
+	if got, want := runProgramGo(t, src), "3\n"; got != want {
+		t.Fatalf("array default destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayDestructureRestHandsBack proves a rest element hands back, since gathering

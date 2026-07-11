@@ -66,11 +66,14 @@ func TestObjectDestructureAssignRenameHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestObjectDestructureAssignDefaultHandsBack proves a property default hands back,
-// since filling a missing property with the default is a later slice.
-func TestObjectDestructureAssignDefaultHandsBack(t *testing.T) {
+// TestObjectDestructureAssignDefaultRuns proves a property default lowers in an
+// assignment: the missing optional property takes the default while the present one
+// keeps its value.
+func TestObjectDestructureAssignDefaultRuns(t *testing.T) {
 	const src = "const o: { x: number; y?: number } = { x: 1 };\nlet x = 0;\nlet y = 0;\n({ x, y = 5 } = o);\nconsole.log(x + y);\n"
-	renderProgramHandBack(t, src)
+	if got, want := runProgramGo(t, src), "6\n"; got != want {
+		t.Fatalf("object default assignment printed %q, want %q", got, want)
+	}
 }
 
 // TestObjectDestructureAssignRestHandsBack proves a rest property hands back, since

@@ -33,6 +33,41 @@ func TestArrayDefaultRuns(t *testing.T) {
 	}
 }
 
+// Item 3: a destructuring assignment default, array and object forms.
+
+func TestArrayAssignDefaultRuns(t *testing.T) {
+	cases := map[string]string{
+		// The present slot keeps its value; the missing slot takes the default.
+		`let arr: number[] = [10]; let a = 0, b = 0; [a = 1, b = 2] = arr; console.log(a, b);`: "10 2\n",
+		// A present zero is not defaulted.
+		`let arr: number[] = [0, 5]; let a = 0, b = 0; [a = 9, b = 9] = arr; console.log(a, b);`: "0 5\n",
+		// A default mixes with a plain trailing target.
+		`let arr: number[] = [7]; let a = 0, b = 0; [a = 3, b] = arr; console.log(a, b);`: "7 0\n",
+		// The swap idiom still lowers, since it carries no default.
+		`let a = 1, b = 2; [a, b] = [b, a]; console.log(a, b);`: "2 1\n",
+	}
+	for src, want := range cases {
+		if got := runProgramGo(t, src); got != want {
+			t.Errorf("%s:\n got %q\nwant %q", src, got, want)
+		}
+	}
+}
+
+func TestObjectAssignDefaultRuns(t *testing.T) {
+	cases := map[string]string{
+		// The missing optional property takes the default; the present one keeps it.
+		`let o: {x?: number, y: number} = {y: 3}; let x = 0, y = 0; ({x = 5, y} = o); console.log(x, y);`:       "5 3\n",
+		`let o: {x?: number, y: number} = {x: 8, y: 3}; let x = 0, y = 0; ({x = 5, y} = o); console.log(x, y);`: "8 3\n",
+		// A present optional zero is not defaulted.
+		`let o: {x?: number} = {x: 0}; let x = 0; ({x = 5} = o); console.log(x);`: "0\n",
+	}
+	for src, want := range cases {
+		if got := runProgramGo(t, src); got != want {
+			t.Errorf("%s:\n got %q\nwant %q", src, got, want)
+		}
+	}
+}
+
 // Item 2: an object destructuring declaration property with a default.
 
 func TestObjectDefaultLowers(t *testing.T) {
