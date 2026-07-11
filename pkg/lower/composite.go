@@ -839,23 +839,26 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 }
 
 // promiseMethodCall lowers a method on a Promise receiver to a value.Promise
-// method. then(onFulfilled) schedules a callback on the fulfilled value and
-// catch(onRejected) on the rejection reason; both run at the single microtask drain
-// at the end of main. Only an inline single-parameter arrow with no result is
-// covered: the value methods take a func with no return, so a callback that returns
-// a value (promise chaining) hands back, as does a then with a second rejection
-// handler, since 6a mints only settled promises and observes fulfillment through
-// then and rejection through catch, one callback each. finally and any other member
-// keep their own reasons.
+// method. then(onFulfilled) schedules a callback on the fulfilled value,
+// catch(onRejected) on the rejection reason, and finally(onFinally) on either
+// settlement with no argument; all three run at the single microtask drain at the end
+// of main, in settle order. Only an inline arrow with no result is covered: the value
+// methods take a func with no return, so a callback that returns a value (promise
+// chaining) hands back, as does a then with a second rejection handler, since 6a
+// mints only settled promises and observes fulfillment through then, rejection
+// through catch, and cleanup through finally, one callback each. Any other member
+// keeps its own reason.
 func (r *Renderer) promiseMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	var goName string
+	wantParams := 1
 	switch method {
 	case "then":
 		goName = "Then"
 	case "catch":
 		goName = "Catch"
 	case "finally":
-		return nil, &NotYetLowerable{Reason: "a promise .finally is a later slice"}
+		goName = "Finally"
+		wantParams = 0
 	default:
 		return nil, &NotYetLowerable{Reason: "a promise method ." + method + " is a later slice"}
 	}
@@ -866,8 +869,8 @@ func (r *Renderer) promiseMethodCall(recvNode frontend.Node, method string, argN
 	if cb.Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback that is not an inline arrow function is a later slice"}
 	}
-	if r.arrowParamCount(cb) != 1 {
-		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback that does not take exactly the value is a later slice"}
+	if r.arrowParamCount(cb) != wantParams {
+		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback with an unexpected parameter count is a later slice"}
 	}
 	if rt, ok := r.arrowResultFrontendType(cb); !ok || !isVoidReturn(rt) {
 		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback that returns a value (chaining) is a later slice"}

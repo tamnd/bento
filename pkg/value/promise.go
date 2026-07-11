@@ -202,6 +202,19 @@ func (p *Promise[T]) Catch(onRejected func(Value)) *Promise[Unit] {
 	return Resolved(Unit{})
 }
 
+// Finally schedules onFinally to run when the promise settles, fulfilled or rejected
+// alike, with no argument: the cleanup reaction .finally registers to run whichever
+// way the promise ends. Like Then and Catch the callback is deferred to the microtask
+// checkpoint, never inlined, so it runs after the synchronous code, and in settle
+// order among the reactions the promise gathered. It returns a settled unit promise so
+// a bound or chained finally has a value of the right type; adopting the receiver's
+// state into that promise (so a later then sees the original value) is chaining, a
+// later slice.
+func (p *Promise[T]) Finally(onFinally func()) *Promise[Unit] {
+	p.subscribe(onFinally)
+	return Resolved(Unit{})
+}
+
 // thrownValue boxes a thrown value into the dynamic value a rejection handler
 // reads. A runtime *Error boxes to its stable object view (so reading .message off
 // the reason works); any other Thrown is surfaced through the same view its own
