@@ -8,6 +8,8 @@
 
 package value
 
+import "sort"
+
 // Object is the storage behind a KindObject or KindArray value. A plain object
 // keeps its properties in insertion order as parallel key and value slices, the
 // order JavaScript enumerates and serializes in. An array keeps its elements in a
@@ -264,12 +266,40 @@ func (o *Object) deleteSym(key *Symbol) bool {
 	return true
 }
 
+// orderedStringKeys returns the object's own string-keyed properties in the order
+// the specification enumerates them: canonical integer-index keys first in
+// ascending numeric order, then the remaining string keys in insertion order. An
+// array contributes its dense element indices, which are integer keys by
+// construction, and a plain object that was given numeric string keys out of order
+// still enumerates them ascending, so the order is deterministic regardless of how
+// the keys arrived.
+func (o *Object) orderedStringKeys() []BStr {
+	var idxKeys []int
+	var strKeys []BStr
+	for i := range o.elems {
+		idxKeys = append(idxKeys, i)
+	}
+	for _, k := range o.keys {
+		if n, ok := arrayIndex(k.ToGoString()); ok {
+			idxKeys = append(idxKeys, n)
+		} else {
+			strKeys = append(strKeys, k)
+		}
+	}
+	sort.Ints(idxKeys)
+	out := make([]BStr, 0, len(idxKeys)+len(strKeys))
+	for _, n := range idxKeys {
+		out = append(out, NumberToString(float64(n)))
+	}
+	return append(out, strKeys...)
+}
+
 // ObjectRest returns a new plain object holding the receiver's own enumerable
 // properties except those named in omit, the value an object rest element binds:
-// { a, ...rest } gathers every own property but a. An array's indexed elements
-// enumerate first as their canonical string keys, then named properties in insertion
-// order, the order JavaScript's own-property enumeration gives them. A receiver with
-// no object storage yields an empty object, the rest of nothing.
+// { a, ...rest } gathers every own property but a. The properties copy in the
+// spec's own-property order, integer indices ascending then the remaining string
+// keys in insertion order, so the rest object enumerates the way the source does. A
+// receiver with no object storage yields an empty object, the rest of nothing.
 func (v Value) ObjectRest(omit ...BStr) Value {
 	rest := NewObject()
 	switch v.kind {
@@ -286,14 +316,9 @@ func (v Value) ObjectRest(omit ...BStr) Value {
 		}
 		return false
 	}
-	for i, e := range o.elems {
-		if k := NumberToString(float64(i)); !skip(k) {
-			rest.Set(k, e)
-		}
-	}
-	for i, k := range o.keys {
+	for _, k := range o.orderedStringKeys() {
 		if !skip(k) {
-			rest.Set(k, o.vals[i])
+			rest.Set(k, v.Get(k))
 		}
 	}
 	return rest
