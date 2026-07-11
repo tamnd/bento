@@ -94,6 +94,30 @@ new C();
 	}
 }
 
+// TestBracketAccessorStore pins that a store through a computed or string-named
+// set accessor spelled with the bracket, b["val"] = v, routes to the accessor
+// method the class declared, b.SetVal(v), the same Set call the dotted store
+// takes, and the paired get accessor reads it back.
+func TestBracketAccessorStore(t *testing.T) {
+	const src = `class Box {
+  _v: number = 0;
+  get ["val"](): number { return this._v; }
+  set ["val"](n: number) { this._v = n; }
+}
+const b = new Box();
+b["val"] = 9;
+console.log(String(b["val"]));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "b.SetVal(9)") {
+		t.Errorf("bracket accessor store did not route to the setter method:\n%s", source)
+	}
+	got := runProgramGo(t, src)
+	if got != "9\n" {
+		t.Errorf("bracket accessor store ran wrong\n got: %q\nwant: %q", got, "9\n")
+	}
+}
+
 // TestBracketMethodCallThroughThis pins that a bracket method call through this
 // inside a class body, this["m x"](), dispatches to the Go method the class
 // declared rather than handing back the way a bare method read does.
