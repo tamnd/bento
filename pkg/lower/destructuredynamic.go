@@ -154,6 +154,27 @@ func (r *Renderer) dynBoundLocalsOf(paramNodes []frontend.Node, sig frontend.Sig
 // read the boxed way without help, and marking it would risk shadowing a same-named
 // static local later in the body. An array rest hands back at bind time and binds no
 // name, so only nested array positions are followed for a deeper object rest.
+// collectAssignedNames records every non-blank identifier a dynamic pattern's binding
+// statements assign, so each bound name is marked dynamic before the body that reads it
+// lowers. The names come straight off the emitted binds, which is exact where the pattern
+// gives a leaf a concrete checker type (a catch-destructured name inferred a number) whose
+// Go slot is nonetheless a boxed value.Value: reading the assign targets, not the checker
+// type, is what keeps the two in step. A per-iteration temporary the binder introduced is
+// harmless to include, since no user read names it.
+func (r *Renderer) collectAssignedNames(stmts []ast.Stmt, out map[string]bool) {
+	for _, s := range stmts {
+		a, ok := s.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		for _, lhs := range a.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+				out[id.Name] = true
+			}
+		}
+	}
+}
+
 func (r *Renderer) collectDynRestNames(pat frontend.Node, out map[string]bool) {
 	txt := strings.TrimSpace(r.prog.Text(pat))
 	if strings.HasPrefix(txt, "{") {
