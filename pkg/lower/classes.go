@@ -1248,6 +1248,9 @@ func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[st
 		if len(r.prog.Children(kids[0])) > 0 {
 			break // a computed name [expr] wrapper, not a modifier
 		}
+		if r.isPrivateName(kids[0]) {
+			break // the #name itself, a childless unnamed node the private branch below reads
+		}
 		w := strings.TrimSpace(r.prog.Text(kids[0]))
 		switch w {
 		case "static":
@@ -1273,15 +1276,29 @@ func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[st
 	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a static method without a plain identifier name is a later slice"}
 	}
-	prop, ok := r.memberName(kids[0])
-	if !ok {
-		return classMethod{}, r.memberNameReason(kids[0], "static method")
+	// A private static method (static #m()) lowers to an unexported package
+	// function; the #m property stays so a C.#m() call resolves to it, and the name
+	// takes the lowercase class_p_ spelling rather than the exported ClassM one.
+	var prop, name string
+	if r.isPrivateName(kids[0]) {
+		prop = strings.TrimSpace(r.prog.Text(kids[0]))
+		goPriv, ok := privateGoName(prop)
+		if !ok {
+			return classMethod{}, &NotYetLowerable{Reason: "private static method name is not a Go identifier"}
+		}
+		name = lowerFirst(info.goName) + "_" + goPriv
+	} else {
+		p, ok := r.memberName(kids[0])
+		if !ok {
+			return classMethod{}, r.memberNameReason(kids[0], "static method")
+		}
+		propGo, ok := exportedField(p)
+		if !ok {
+			return classMethod{}, &NotYetLowerable{Reason: "static method name is not a Go identifier"}
+		}
+		prop = p
+		name = info.goName + propGo
 	}
-	propGo, ok := exportedField(prop)
-	if !ok {
-		return classMethod{}, &NotYetLowerable{Reason: "static method name is not a Go identifier"}
-	}
-	name := info.goName + propGo
 	if taken[name] || goKeywords[name] {
 		return classMethod{}, &NotYetLowerable{Reason: "the module already speaks " + name + ", the name static ." + prop + " needs"}
 	}
