@@ -945,6 +945,12 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			args = append(args, lowered)
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Fill")}, Args: args}, nil
+	case "values":
+		return r.arrayIterConstructor(recvNode, "ArrayIterValues", argNodes)
+	case "keys":
+		return r.arrayIterConstructor(recvNode, "ArrayIterKeys", argNodes)
+	case "entries":
+		return r.arrayIterConstructor(recvNode, "ArrayIterEntries", argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
 	}

@@ -273,6 +273,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.arrayFromBoxedResultCall(n) {
 		return true
 	}
+	// A .value read off an IteratorResult whose type is not a clean primitive, the
+	// array iterator's `number | undefined` value being the first, stays the boxed
+	// value.Value the IterResult carries: there is no single Go type to coerce it to,
+	// so a member or element read off it and a flow into an any slot take the dynamic
+	// path. A generator whose value is a clean number keeps the static coercion.
+	if r.iterResultBoxedValueRead(n) {
+		return true
+	}
 	// An object rest binding an untyped pattern gathered holds the plain object
 	// ObjectRest built, a boxed value.Value, even though the checker gave it the fixed
 	// shape of the properties the pattern did not name. A property read off it must
