@@ -1,0 +1,21 @@
+const o: any = {};
+o[0] = 1;
+o[1] = 2;
+o[2] = 3;
+o[3] = 4;
+o.length = 4;
+Array.prototype.fill.call(o, 9, 1, 3);
+console.log(o[0]);
+console.log(o[1]);
+console.log(o[2]);
+console.log(o[3]);
+
+const r: any = {};
+r[0] = 1;
+r[1] = 2;
+r[2] = 3;
+r.length = 3;
+Array.prototype.reverse.call(r);
+console.log(r[0]);
+console.log(r[1]);
+console.log(r[2]);

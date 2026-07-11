@@ -1047,7 +1047,18 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// function receiver as a later slice. The assert prelude's compareArray.format
 	// is the reach that makes this worth lowering.
 	if r.isArrayProtoMap(recvNode) {
-		return r.arrayProtoMapCall(method, argNodes)
+		if e, err := r.arrayProtoMapCall(method, argNodes); err == nil {
+			return e, nil
+		}
+	}
+	// Array.prototype.<m>.call(arrayLike, ...) borrows an array method onto a generic
+	// receiver, a plain object with a length property and integer keys standing in for
+	// an array. The receiver is the function Array.prototype.<m>, not a value, so it
+	// routes here before the non-string gate below, which would reject a function
+	// receiver as a later slice. The map+String prelude form above is handled first;
+	// every other borrowed method runs the generic-receiver runtime.
+	if name, ok := r.arrayProtoMethodName(recvNode); ok {
+		return r.arrayProtoBorrowedCall(name, method, argNodes)
 	}
 	// A method on a fixed-shape object receiver whose property is itself a function
 	// (assert.sameValue(...) on a callable object, or a plain object that holds a
@@ -2332,6 +2343,133 @@ func (r *Renderer) isArrayProtoMap(n frontend.Node) bool {
 		return false
 	}
 	return r.isGlobalRef(pkids[0], "Array")
+}
+
+// arrayProtoMethodName reports whether n is the member chain Array.prototype.<name>
+// and returns the borrowed method's name. It matches a property access whose object
+// is a property access .prototype whose object is the ambient global Array, so a
+// user value that carries a like-named method does not match and stays on the
+// array-method path.
+func (r *Renderer) arrayProtoMethodName(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return "", false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return "", false
+	}
+	proto := kids[0]
+	if proto.Kind() != frontend.NodePropertyAccessExpression {
+		return "", false
+	}
+	pkids := r.prog.Children(proto)
+	if len(pkids) != 2 || r.prog.Text(pkids[1]) != "prototype" {
+		return "", false
+	}
+	if !r.isGlobalRef(pkids[0], "Array") {
+		return "", false
+	}
+	return r.prog.Text(kids[1]), true
+}
+
+// arrayBorrowedArgs splits the arguments of a borrowed call Array.prototype.<m>.call
+// or .apply into the array-like receiver and the arguments the method itself sees.
+// call spells the method arguments inline after the receiver; apply gathers them in
+// a plain array literal, the only apply form whose length is known at lowering. A
+// borrow with no receiver, or an apply whose arguments are not a plain array literal
+// or carry a spread, hands back rather than emit a call of the wrong shape.
+func (r *Renderer) arrayBorrowedArgs(name, method string, argNodes []frontend.Node) (frontend.Node, []frontend.Node, error) {
+	if len(argNodes) == 0 {
+		return nil, nil, &NotYetLowerable{Reason: "Array.prototype." + name + " borrowed with no receiver is a later slice"}
+	}
+	switch method {
+	case "call":
+		return argNodes[0], argNodes[1:], nil
+	case "apply":
+		if len(argNodes) < 2 {
+			return argNodes[0], nil, nil
+		}
+		arr := argNodes[1]
+		if arr.Kind() != frontend.NodeArrayLiteralExpression {
+			return nil, nil, &NotYetLowerable{Reason: "Array.prototype." + name + " applied over a non-literal argument array is a later slice"}
+		}
+		elems := r.prog.Children(arr)
+		for _, el := range elems {
+			if el.Kind() == frontend.NodeSpreadElement {
+				return nil, nil, &NotYetLowerable{Reason: "Array.prototype." + name + " applied over an array literal with a spread element is a later slice"}
+			}
+		}
+		return argNodes[0], elems, nil
+	default:
+		return nil, nil, &NotYetLowerable{Reason: "Array.prototype." + name + " borrowed with ." + method + " is a later slice"}
+	}
+}
+
+// arrayProtoBorrowedCall lowers Array.prototype.<name>.call/apply(arrayLike, ...) to
+// the matching generic-receiver runtime, which reads length and integer keys off the
+// receiver and runs the method's algorithm whatever the receiver's kind. The
+// receiver and each method argument box to a value.Value, the same box a dynamic
+// operand takes, so the runtime reads them uniformly. A method the generic runtime
+// does not cover yet hands back with its name, so the borrow is never mislowered.
+func (r *Renderer) arrayProtoBorrowedCall(name, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	recvNode, methodArgs, err := r.arrayBorrowedArgs(name, method, argNodes)
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.boxOperand(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]ast.Expr, 0, len(methodArgs)+1)
+	args = append(args, recv)
+	for _, a := range methodArgs {
+		boxed, err := r.boxOperand(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, boxed)
+	}
+	r.requireImport(valuePkg)
+	switch name {
+	case "indexOf":
+		return r.arrayGenericCall("GenericIndexOf", args, methodArgs, 1)
+	case "lastIndexOf":
+		return r.arrayGenericCall("GenericLastIndexOf", args, methodArgs, 1)
+	case "includes":
+		return r.arrayGenericCall("GenericIncludes", args, methodArgs, 1)
+	case "fill":
+		return r.arrayGenericCall("GenericFill", args, methodArgs, 1)
+	case "reverse":
+		return r.arrayGenericCall("GenericReverse", args, methodArgs, 0)
+	case "slice":
+		return r.arrayGenericCall("GenericSlice", args, methodArgs, 0)
+	case "forEach":
+		return r.arrayGenericCall("GenericForEach", args, methodArgs, 1)
+	case "map":
+		return r.arrayGenericCall("GenericMap", args, methodArgs, 1)
+	case "filter":
+		return r.arrayGenericCall("GenericFilter", args, methodArgs, 1)
+	case "some":
+		return r.arrayGenericCall("GenericSome", args, methodArgs, 1)
+	case "every":
+		return r.arrayGenericCall("GenericEvery", args, methodArgs, 1)
+	case "find":
+		return r.arrayGenericCall("GenericFind", args, methodArgs, 1)
+	case "findIndex":
+		return r.arrayGenericCall("GenericFindIndex", args, methodArgs, 1)
+	default:
+		return nil, &NotYetLowerable{Reason: "Array.prototype." + name + " on a generic receiver is a later slice"}
+	}
+}
+
+// arrayGenericCall emits the call to a generic-receiver runtime helper, checking the
+// method saw at least minArgs positional arguments so a borrow that omits a required
+// one hands back rather than emit a call that reads a missing argument.
+func (r *Renderer) arrayGenericCall(fn string, args []ast.Expr, methodArgs []frontend.Node, minArgs int) (ast.Expr, error) {
+	if len(methodArgs) < minArgs {
+		return nil, &NotYetLowerable{Reason: "borrowed " + fn + " with too few arguments is a later slice"}
+	}
+	return &ast.CallExpr{Fun: sel("value", fn), Args: args}, nil
 }
 
 // arrayProtoMapCall lowers Array.prototype.map.call(arrayLike, String) to the
