@@ -1019,6 +1019,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if e, ok, err := r.asyncGeneratorMethodCall(recvNode, method, argNodes); ok || err != nil {
 		return e, err
 	}
+	// A manual drive of an array iterator, it.next(), lowers to the runtime's Next,
+	// which packs the { value, done } result. Like the generator drives it routes
+	// before the primitive and string paths, which expect a number, boolean, or
+	// string receiver an array iterator is not; a non-iterator receiver falls through.
+	if e, ok, err := r.arrayIterMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
+	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
 	// bare use would take, so they route here before the string-method path.
