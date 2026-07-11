@@ -216,6 +216,11 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	r.dynLocals = r.dynLocalsOf(sig.Params, bodyStmts)
 	defer func() { r.dynLocals = prevDyn }()
 
+	// The object-rest bindings an untyped pattern parameter gathers are boxed values the
+	// checker did not type any, so a read of one routes the dynamic way off this set. It
+	// is built before the body lowers, since a read sits ahead of the entry bindings.
+	defer r.pushDynBound(r.funcParamNodes(fn), sig)()
+
 	// A body that reads arguments materializes a backing store from the parameters,
 	// set before the body is lowered so a read of arguments.length or arguments[i]
 	// inside it routes to the store. A body with a rest, an optional parameter, or an
@@ -316,7 +321,7 @@ func (r *Renderer) paramFields(sig frontend.Signature) (*ast.FieldList, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "parameter name is not a Go identifier"}
 		}
-		pt, err := r.typeExpr(p.Type)
+		pt, err := r.paramFieldType(p)
 		if err != nil {
 			return nil, err
 		}
@@ -364,13 +369,26 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 			}
 		}
-		pt, err := r.typeExpr(p.Type)
+		pt, err := r.paramFieldType(p)
 		if err != nil {
 			return nil, err
 		}
 		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
 	}
 	return fields, nil
+}
+
+// paramFieldType gives the Go type of a parameter's field. An untyped destructured
+// parameter takes one boxed value.Value slot, since its pattern has no static shape to
+// intern to a struct or a slice; every other parameter takes the Go type its checker
+// type maps to. It is the field counterpart to dynamicParamSlot: the field type and
+// the call-site coercion must agree, so both consult the same predicate.
+func (r *Renderer) paramFieldType(p frontend.Param) (ast.Expr, error) {
+	if r.dynamicParamSlot(p) {
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+	}
+	return r.typeExpr(p.Type)
 }
 
 // variadicPlan describes a top-level function whose trailing optional parameters
@@ -864,7 +882,7 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 			if !ok {
 				return nil, &NotYetLowerable{Reason: noun + " destructured parameter has no Go name to read from, a later slice"}
 			}
-			ptype, err := r.typeExpr(sig.Params[pi].Type)
+			ptype, err := r.paramFieldType(sig.Params[pi])
 			if err != nil {
 				return nil, err
 			}
@@ -931,6 +949,17 @@ func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig fron
 		goName, ok := localName(sig.Params[i].Name)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter has no Go name to read from, a later slice"}
+		}
+		// An untyped destructured parameter arrives as one boxed value.Value slot, so its
+		// names read out of it through the dynamic protocol rather than through the struct
+		// selectors and slice indices the typed binder emits, which no boxed value carries.
+		if r.dynamicParamSlot(sig.Params[i]) {
+			stmts, err := r.bindDynamicPattern(pat, ident(goName), token.DEFINE)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, stmts...)
+			continue
 		}
 		text := strings.TrimSpace(r.prog.Text(pat))
 		switch {
@@ -1354,6 +1383,10 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	if body.Kind() == frontend.NodeBlock {
 		return r.blockBodyArrow(n, fields)
 	}
+	// An object-rest binding a concise arrow's untyped pattern parameter gathers is a
+	// boxed value the checker did not type any, so its reads in the body expression route
+	// the dynamic way off this set, built before that expression lowers below.
+	defer r.pushDynBound(r.funcParamNodes(n), sig)()
 	// A concise-body arrow with a destructured parameter reads the bound names out of
 	// the synthesized field before the body expression runs, so the func literal takes
 	// a block body: the entry bindings sit above the single return the concise body
@@ -1491,6 +1524,11 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	prevDyn := r.dynLocals
 	r.dynLocals = mergeNameSets(prevDyn, r.dynLocalsOf(sig.Params, bodyStmts), r.scopeDeclaredNames(sig.Params, bodyStmts))
 	defer func() { r.dynLocals = prevDyn }()
+
+	// An object-rest binding an untyped pattern parameter gathers is a boxed value the
+	// checker did not type any, so its property reads route the dynamic way off this set,
+	// built before the closure body lowers ahead of the entry bindings.
+	defer r.pushDynBound(r.funcParamNodes(n), sig)()
 
 	body, err := r.blockOf(n)
 	if err != nil {

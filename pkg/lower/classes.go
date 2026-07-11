@@ -2469,6 +2469,11 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
 
+	// An object-rest binding an untyped pattern parameter gathers is a boxed value the
+	// checker did not type any, so its reads route the dynamic way off this set, built
+	// before the method body lowers ahead of the entry bindings.
+	defer r.pushDynBound(r.funcParamNodes(m.node), sig)()
+
 	body, err := r.blockOf(m.node)
 	if err != nil {
 		return nil, err
@@ -2609,6 +2614,11 @@ func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, er
 	prevClass, prevThis, prevStatic := r.curClass, r.thisName, r.staticClass
 	r.curClass, r.thisName, r.staticClass = nil, "", owner
 	defer func() { r.curClass, r.thisName, r.staticClass = prevClass, prevThis, prevStatic }()
+
+	// An object-rest binding an untyped pattern parameter gathers is a boxed value the
+	// checker did not type any, so its reads route the dynamic way off this set, built
+	// before the static method body lowers ahead of the entry bindings.
+	defer r.pushDynBound(r.funcParamNodes(m.node), sig)()
 
 	body, err := r.blockOf(m.node)
 	if err != nil {

@@ -330,6 +330,32 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 			args = append(args, name)
 			continue
 		}
+		// An untyped destructured parameter takes one boxed value.Value slot rather than
+		// the Go struct or slice its checker type would map to, so the argument boxes to a
+		// dynamic value here the same way a static value crossing into any does. Bridging
+		// against the parameter's object type instead would build the wrong struct, the one
+		// with dynamic fields the argument's own concrete struct does not match. An array or
+		// object literal boxes member by member straight from its node: its contextual type
+		// is the pattern's shapeless tuple, which the typed literal path cannot spell, so it
+		// skips that lowering rather than hand the whole call back on it.
+		if r.dynamicParamSlot(params[i]) {
+			if boxed, ok, err := r.boxLiteralToDynamic(a); err != nil {
+				return nil, err
+			} else if ok {
+				args = append(args, boxed)
+				continue
+			}
+			lowered, err := r.lowerExpr(a)
+			if err != nil {
+				return nil, err
+			}
+			lowered, err = r.bridgeArg(lowered, a, frontend.Type{Flags: frontend.TypeAny})
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, lowered)
+			continue
+		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
