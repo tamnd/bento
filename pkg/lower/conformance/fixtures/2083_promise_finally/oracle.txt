@@ -1,0 +1,8 @@
+== stdout:
+sync
+then:1
+finally-a
+catch:boom
+finally-b
+== exit:
+0

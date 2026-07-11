@@ -20,6 +20,23 @@ console.log("after");
 	}
 }
 
+// TestPromiseFinallyRunsOnSettle checks that a finally callback runs when the
+// promise settles, after the then reaction and after the synchronous code, taking no
+// argument: the cleanup reaction scheduled as a microtask in settle order.
+func TestPromiseFinallyRunsOnSettle(t *testing.T) {
+	src := `
+new Promise<number>((resolve, reject) => { resolve(1); })
+  .then((v) => console.log("then:" + v))
+  .finally(() => console.log("finally"));
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\nthen:1\nfinally\n"
+	if got != want {
+		t.Fatalf("promise finally order = %q, want %q", got, want)
+	}
+}
+
 // TestNewPromiseRejectReachesCatch checks that a reject settles the promise as
 // rejected carrying the arbitrary value it was handed, so a catch callback reads that
 // value back, a plain string here rather than an Error.
