@@ -914,9 +914,9 @@ func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig fron
 // objectPatternBindings binds each shorthand name an object pattern parameter
 // destructured from the field of the same name on the held object, name := __0.Name,
 // the same struct-field selector a written-out property access lowers to. It mirrors
-// flattenObjectDestructure's element loop over the pattern parameter's held value, so
-// a rename, default, rest, or nested member hands back the same way the statement form
-// does.
+// flattenObjectDestructure's element loop over the pattern parameter's held value: a
+// shorthand default over an optional field fills when the property is undefined, and a
+// rename, rest, or nested member hands back the same way the statement form does.
 func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objType frontend.Type) ([]ast.Stmt, error) {
 	if objType.Flags&frontend.TypeObject == 0 {
 		return nil, &NotYetLowerable{Reason: "an object-pattern parameter on a non-object type is a later slice"}
@@ -928,13 +928,18 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 	if len(elems) == 0 {
 		return nil, &NotYetLowerable{Reason: "an empty object-pattern parameter binds nothing"}
 	}
+	optionalField := map[string]bool{}
+	for _, pr := range r.prog.Properties(objType) {
+		optionalField[pr.Name] = pr.Optional
+	}
 	var out []ast.Stmt
 	for _, el := range elems {
-		ec := r.prog.Children(el)
-		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
-			return nil, &NotYetLowerable{Reason: "an object-pattern parameter rename, default, rest, or nested pattern is a later slice"}
+		info, err := r.classifyObjectElem(el)
+		if err != nil {
+			return nil, err
 		}
-		name, ok := localName(r.prog.Text(ec[0]))
+		prop := r.prog.Text(info.nameNode)
+		name, ok := localName(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
 		}
@@ -942,10 +947,30 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
 		}
+		read := &ast.SelectorExpr{X: ident(goName), Sel: ident(field)}
+		// A default over an optional field fills when the property is undefined; the
+		// field read is an Opt the fill peels. A default over a required field can
+		// never fire, so it binds the read directly and the default is dead.
+		if info.hasDefault && optionalField[prop] {
+			nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, r.defaultFillStmts(name, nameGo, read, def)...)
+			continue
+		}
 		out = append(out, &ast.AssignStmt{
 			Lhs: []ast.Expr{ident(name)},
 			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(goName), Sel: ident(field)}},
+			Rhs: []ast.Expr{read},
 		})
 	}
 	return out, nil
@@ -955,8 +980,8 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 // the matching position of the held array, name := __0.AtI(i), the same indexed read
 // a written-out element access lowers to. It mirrors flattenArrayDestructure's element
 // loop over the pattern parameter's held value: the type must be a homogeneous array,
-// so a tuple whose positions differ hands back, and a hole, default, rest, or nested
-// element is a later slice.
+// so a tuple whose positions differ hands back, a defaulted element fills when the
+// slot is undefined, and a hole, rest, or nested element is a later slice.
 func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrType frontend.Type) ([]ast.Stmt, error) {
 	elemT, ok := r.prog.ElementType(arrType)
 	if !ok {
@@ -972,22 +997,40 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 	}
 	var out []ast.Stmt
 	for i, el := range elems {
-		ec := r.prog.Children(el)
-		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
-			return nil, &NotYetLowerable{Reason: "an array-pattern parameter hole, default, rest, or nested pattern is a later slice"}
+		info, err := r.classifyArrayElem(el)
+		if err != nil {
+			return nil, err
 		}
-		name, ok := localName(r.prog.Text(ec[0]))
+		name, ok := localName(r.prog.Text(info.nameNode))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
 		}
-		nameGo, err := r.typeExpr(r.prog.TypeAt(ec[0]))
+		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
 		if err != nil {
 			return nil, err
 		}
 		if same, err := sameGoType(nameGo, elemGo); err != nil {
 			return nil, err
 		} else if !same {
+			// A defaulted element fills from the element type the read yields, the same
+			// match a plain element needs; an optional-element source, whose read is an
+			// Opt the default would have to peel, is a later slice.
+			if info.hasDefault {
+				return nil, &NotYetLowerable{Reason: "an array-pattern parameter default over an optional-element source is a later slice"}
+			}
 			return nil, &NotYetLowerable{Reason: "an array-pattern parameter whose element type differs from the array element type is a later slice"}
+		}
+		if info.hasDefault {
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, r.defaultFillStmts(name, nameGo, arrayOptRead(ident(goName), i), def)...)
+			continue
 		}
 		read := &ast.CallExpr{
 			Fun:  &ast.SelectorExpr{X: ident(goName), Sel: ident("AtI")},
