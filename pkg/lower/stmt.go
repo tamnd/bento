@@ -1218,6 +1218,12 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		if err != nil {
 			return nil, true, err
 		}
+		// A nested pattern binds against the slot the outer element selects, so its
+		// inner names are validated when the sub-pattern is bound, not here.
+		if info.nested != nil {
+			infos[i] = info
+			continue
+		}
 		name, ok := localName(r.prog.Text(info.nameNode))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
@@ -1266,6 +1272,20 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		rc, err := recv()
 		if err != nil {
 			return nil, true, err
+		}
+		if info.nested != nil {
+			tmp := r.freshTemp()
+			read := &ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: rc, Sel: ident("AtI")},
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+			}
+			stmts = append(stmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{read}})
+			inner, err := r.bindSubPattern(info.nested, ident(tmp), elemT, token.DEFINE)
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, inner...)
+			continue
 		}
 		if info.hasDefault {
 			nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
@@ -1382,17 +1402,38 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	// The pattern is validated before the source is lowered, so an unsupported shape
 	// hands back before a temporary is minted for the source.
 	type binding struct {
-		info     objectDefaultElem
-		name     string
-		field    string
-		optional bool
+		info       objectDefaultElem
+		name       string
+		field      string
+		optional   bool
+		nested     frontend.Node
+		nestedType frontend.Type
 	}
 	optionalField := map[string]bool{}
+	propType := map[string]frontend.Type{}
 	for _, pr := range r.prog.Properties(objType) {
 		optionalField[pr.Name] = pr.Optional
+		propType[pr.Name] = pr.Type
 	}
 	fields := make([]binding, len(elems))
 	for i, el := range elems {
+		// A nested pattern renames a source property into an inner pattern that binds
+		// against the value the property holds; its inner names are validated when the
+		// sub-pattern is bound, so it is routed straight through.
+		if source, sub, ok := r.objectNestedElem(el); ok {
+			prop := r.prog.Text(source)
+			srcName, nok := localName(prop)
+			pt, known := propType[prop]
+			if !nok || !known {
+				return nil, true, &NotYetLowerable{Reason: "a nested object pattern over an unknown property is a later slice"}
+			}
+			field, fok := exportedField(srcName)
+			if !fok {
+				return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
+			}
+			fields[i] = binding{field: field, nested: sub, nestedType: pt}
+			continue
+		}
 		info, err := r.classifyObjectElem(el)
 		if err != nil {
 			return nil, true, err
@@ -1421,6 +1462,16 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		rc, err := recv()
 		if err != nil {
 			return nil, true, err
+		}
+		if b.nested != nil {
+			tmp := r.freshTemp()
+			stmts = append(stmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident(b.field)}}})
+			inner, err := r.bindSubPattern(b.nested, ident(tmp), b.nestedType, token.DEFINE)
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, inner...)
+			continue
 		}
 		read := &ast.SelectorExpr{X: rc, Sel: ident(b.field)}
 		// A default over an optional field fills when the property is undefined; the
@@ -1562,6 +1613,14 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.objectDestructureAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		// An array destructuring assignment can also be parenthesized in statement
+		// position, ([a, b] = xs), so unwrap the paren and route the inner assignment
+		// through the array path the bare form takes.
+		if inner := r.prog.Children(n); len(inner) == 1 && inner[0].Kind() == frontend.NodeBinaryExpression {
+			if stmt, ok, err := r.arrayDestructureAssign(inner[0]); ok || err != nil {
+				return stmt, err
+			}
+		}
 		return nil, &NotYetLowerable{Reason: "a parenthesized expression statement that is not an object destructuring assignment is a later slice"}
 	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
 		return r.lowerIncDec(n)
@@ -1628,6 +1687,28 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 	fixedTargets, restNode, hasRest, err := r.splitArrayRest(targets)
 	if err != nil {
 		return nil, true, err
+	}
+	// A nested pattern in any target position, `[[a, b], c] = m`, turns the flat
+	// parallel assignment into a recursive tree of reads: the whole pattern routes
+	// through the assignment recursion, which holds each nested slot in a temporary and
+	// stores each leaf into its existing target. It needs the source to be a plain array
+	// variable so the repeated reads do not re-evaluate it.
+	for _, tgt := range fixedTargets {
+		if !r.assignPatternNode(tgt) {
+			continue
+		}
+		if rhs.Kind() != frontend.NodeIdentifier {
+			return nil, true, &NotYetLowerable{Reason: "a nested array assignment from anything but a plain array variable needs a temporary, a later slice"}
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		stmts, err := r.bindSubArrayAssign(lhs, recv, r.prog.TypeAt(rhs))
+		if err != nil {
+			return nil, true, err
+		}
+		return &ast.BlockStmt{List: stmts}, true, nil
 	}
 	elems := make([]arrayAssignElem, len(fixedTargets))
 	anyDefault := false
@@ -1840,6 +1921,24 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	props := r.prog.Children(lhs)
 	if len(props) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty object assignment pattern binds nothing"}
+	}
+	// A nested pattern renamed onto a property, `({ p: { x } } = o)`, routes the whole
+	// pattern through the assignment recursion, which holds each nested property in a
+	// temporary and stores each leaf into its existing target. The source is already a
+	// plain variable, so the repeated field reads do not re-evaluate it.
+	for _, prop := range props {
+		if _, _, ok := r.objectAssignNestedElem(prop); !ok {
+			continue
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		stmts, err := r.bindSubObjectAssign(lhs, recv, objType)
+		if err != nil {
+			return nil, true, err
+		}
+		return &ast.BlockStmt{List: stmts}, true, nil
 	}
 	optionalField := map[string]bool{}
 	for _, pr := range r.prog.Properties(objType) {
