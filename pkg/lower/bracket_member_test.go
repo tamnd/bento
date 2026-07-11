@@ -94,6 +94,23 @@ new C();
 	}
 }
 
+// TestDynamicComputedNameHandsBack pins the boundary: a computed member name
+// whose key is a runtime expression the checker cannot resolve to a constant
+// string, [key()] here, has no compile-time name to fold and stays a later slice
+// rather than lowering to a guessed member.
+func TestDynamicComputedNameHandsBack(t *testing.T) {
+	const src = `function key(): string { return "m"; }
+class C {
+  [key()](): number { return 5; }
+}
+new C();
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "computed member name that is not a constant string") {
+		t.Errorf("dynamic computed name hand-back reason %q does not name the computed-name boundary", reason)
+	}
+}
+
 // TestBracketAccessorStore pins that a store through a computed or string-named
 // set accessor spelled with the bracket, b["val"] = v, routes to the accessor
 // method the class declared, b.SetVal(v), the same Set call the dotted store
