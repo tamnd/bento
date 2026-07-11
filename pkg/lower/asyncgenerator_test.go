@@ -95,3 +95,40 @@ console.log("sync");
 		t.Fatalf("interleaved await/yield = %q, want %q", got, want)
 	}
 }
+
+// TestAsyncGeneratorDelegatesYieldStar runs an async generator that delegates part of its
+// sequence to another async generator with yield*, checking the delegate's values flow out
+// through the outer generator's pulls in order and the delegate's completion value becomes
+// the value of the yield* expression. The delegate awaits between its own yields, so the
+// outer drive stays parked while the delegate runs and the yields still arrive one at a
+// time, and the outer generator resumes with its own yield once the delegate completes.
+func TestAsyncGeneratorDelegatesYieldStar(t *testing.T) {
+	src := `
+async function* inner(): AsyncGenerator<number, number> {
+  yield await Promise.resolve(1);
+  yield await Promise.resolve(2);
+  return 99;
+}
+async function* outer(): AsyncGenerator<number> {
+  yield 0;
+  const r = yield* inner();
+  console.log("delegate returned:" + r);
+  yield 3;
+}
+async function run(): Promise<void> {
+  const g = outer();
+  let res = await g.next();
+  while (!res.done) {
+    console.log("v:" + res.value);
+    res = await g.next();
+  }
+}
+run();
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\nv:0\nv:1\nv:2\ndelegate returned:99\nv:3\n"
+	if got != want {
+		t.Fatalf("yield* delegation = %q, want %q", got, want)
+	}
+}
