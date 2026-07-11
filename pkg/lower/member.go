@@ -595,13 +595,14 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.argsObjName), Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
 	}
-	// C["m"] or c["m"] with a string-literal key on a class receiver is the bracket
+	// C["m"] or c["m"] with a constant string key on a class receiver is the bracket
 	// spelling of the dotted member read, the shape a non-identifier or computed
-	// member name (a string method name, a ["m"] accessor) is read through. It
-	// routes to the same class member dispatch the dotted read uses, before the
-	// object-shape path below whose internStruct would try to derive a struct for
-	// the class-constructor type and hand back.
-	if key, ok := r.stringLiteralKey(idxNode); ok {
+	// member name (a string method name, a ["m"] accessor, a [k] name whose k is a
+	// const of a literal string type) is read through. It routes to the same class
+	// member dispatch the dotted read uses, before the object-shape path below whose
+	// internStruct would try to derive a struct for the class-constructor type and
+	// hand back.
+	if key, ok := r.constStringKey(idxNode); ok {
 		if expr, ok, err := r.classKeyRead(obj, key); err != nil || ok {
 			return expr, err
 		}

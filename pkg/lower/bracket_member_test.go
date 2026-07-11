@@ -55,6 +55,45 @@ console.log(String(c["g"]));
 	}
 }
 
+// TestComputedLiteralConstName pins that a computed member name [k] whose k is a
+// const of a literal string type folds to that string at class-definition time,
+// so the declaration and a read agree on the member. The method declared under
+// [k] where k is "m" is reachable both as a bracket read c[k]() and as the dotted
+// c.m() the folded name spells, and a [k] field reads the same way.
+func TestComputedLiteralConstName(t *testing.T) {
+	const src = `const mk = "m";
+const fk = "f";
+class C {
+  [mk](): number { return 4; }
+  [fk]: number = 6;
+}
+const c = new C();
+console.log(String(c[mk]()));
+console.log(String(c.m()));
+console.log(String(c[fk]));
+`
+	got := runProgramGo(t, src)
+	const want = "4\n4\n6\n"
+	if got != want {
+		t.Errorf("computed literal-const name ran wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestSymbolKeyedMemberHandsBack pins the boundary: a symbol-keyed class member,
+// whose name the checker types as a unique symbol rather than a constant string,
+// stays a later slice and hands back rather than lowering to a wrong name.
+func TestSymbolKeyedMemberHandsBack(t *testing.T) {
+	const src = `class C {
+  static [Symbol.iterator](): number { return 3; }
+}
+new C();
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "computed member name that is not a constant string") {
+		t.Errorf("symbol-keyed member hand-back reason %q does not name the computed-name boundary", reason)
+	}
+}
+
 // TestBracketMethodCallThroughThis pins that a bracket method call through this
 // inside a class body, this["m x"](), dispatches to the Go method the class
 // declared rather than handing back the way a bare method read does.
