@@ -95,11 +95,32 @@ func TestArrayDestructureRestRuns(t *testing.T) {
 	}
 }
 
-// TestArrayDestructureNestedHandsBack proves a nested pattern hands back, since a
-// pattern inside a pattern is a later slice.
-func TestArrayDestructureNestedHandsBack(t *testing.T) {
-	const src = "const grid: number[][] = [[1], [2]];\nconst [[a], b] = grid;\nconsole.log(a);\n"
-	renderProgramHandBack(t, src)
+// TestArrayNestedInArrayLowers proves an array pattern nested inside an array pattern
+// reads the inner element from the slot the outer pattern selected: the outer slot is
+// held in a temporary, then the inner pattern reads off it by index.
+func TestArrayNestedInArrayLowers(t *testing.T) {
+	const src = "const grid: number[][] = [[1, 2], [3, 4]];\nconst [[a, b], [c, d]] = grid;\nconsole.log(a + b + c + d);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".AtI(0).AtI(0)") && !strings.Contains(source, "a := ") {
+		t.Errorf("nested array pattern did not read the inner element off the outer slot:\n%s", source)
+	}
+}
+
+// TestArrayNestedInArrayRuns builds and runs a two-level array destructure so each
+// inner name is proven to carry the element the outer slot held.
+func TestArrayNestedInArrayRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const grid: number[][] = [[1, 2], [3, 4]];
+const [[a, b], [c, d]] = grid;
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("nested array destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a

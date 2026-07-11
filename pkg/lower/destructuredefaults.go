@@ -25,21 +25,26 @@ type arrayDefaultElem struct {
 	nameNode   frontend.Node
 	hasDefault bool
 	defNode    frontend.Node
+	nested     frontend.Node
 }
 
 // classifyArrayElem reads one array binding pattern element into an
-// arrayDefaultElem. A single identifier child is a plain name; an identifier
-// followed by an expression is a defaulted name, `[a = d]`. A hole, a rest, or a
-// nested pattern is a later slice, so it hands back rather than mislowering.
+// arrayDefaultElem. A single identifier child is a plain name; a single array or
+// object pattern child is a nested pattern, `[[a, b]]` or `[{x}]`, whose inner
+// pattern binds against the slot the outer element selects; an identifier followed
+// by an expression is a defaulted name, `[a = d]`. A hole or a rest is a later
+// slice, so it hands back rather than mislowering.
 func (r *Renderer) classifyArrayElem(el frontend.Node) (arrayDefaultElem, error) {
 	ec := r.prog.Children(el)
 	switch {
 	case len(ec) == 1 && ec[0].Kind() == frontend.NodeIdentifier:
 		return arrayDefaultElem{nameNode: ec[0]}, nil
+	case len(ec) == 1 && r.patternNode(ec[0]):
+		return arrayDefaultElem{nested: ec[0]}, nil
 	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier:
 		return arrayDefaultElem{nameNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
 	default:
-		return arrayDefaultElem{}, &NotYetLowerable{Reason: "an array destructuring hole, rest, or nested pattern is a later slice"}
+		return arrayDefaultElem{}, &NotYetLowerable{Reason: "an array destructuring hole or rest is a later slice"}
 	}
 }
 
