@@ -29,6 +29,8 @@ func (r *Renderer) elementStoreMethod(idxNode frontend.Node) (string, error) {
 		return "SetElem", nil
 	case r.isString(idxNode):
 		return "SetKey", nil
+	case r.isSymbol(idxNode):
+		return "SetElem", nil
 	default:
 		return "", &NotYetLowerable{Reason: "a dynamic element write with a non-number, non-string index is a later slice"}
 	}
@@ -88,6 +90,8 @@ func (r *Renderer) elementLoadMethod(idxNode frontend.Node) (string, error) {
 		return "GetElem", nil
 	case r.isString(idxNode):
 		return "Get", nil
+	case r.isSymbol(idxNode):
+		return "GetElem", nil
 	default:
 		return "", &NotYetLowerable{Reason: "a dynamic element read with a non-number, non-string index is a later slice"}
 	}

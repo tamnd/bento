@@ -1117,6 +1117,40 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 			return boxed, nil
 		}
 	}
+	// An object literal whose shape is not statically fixed, one with a computed key
+	// naming a runtime value, has no closed key set a Go struct could declare, so it
+	// builds as the dynamic bag even when its binding was not written any. The binding
+	// is marked dynamic so it lands in a value.Value slot (foldShortDecl infers it from
+	// the boxed initializer) and every later read and write of it routes the dynamic
+	// way rather than reach for a struct field the shape never had. A literal whose
+	// keys are all plain or constant stays on the struct path above.
+	if initNode.Kind() == frontend.NodeObjectLiteralExpression && r.objectLiteralNotFixed(initNode) {
+		boxed, err := r.boxObjectLiteral(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
+	// A `const s = Symbol()` binding holds the boxed symbol value.NewSymbol builds, but
+	// the checker types it unique symbol, a flagless type the dynamic guards do not see
+	// and typeExpr cannot name. The boxed initializer is returned straight, so := infers
+	// its value.Value slot without a typed var, and the binding is marked dynamic so every
+	// later use of it, above all its use as a computed key `o[s]`, routes through the value
+	// model that keys the property bag by symbol identity. An annotated `let s: symbol`
+	// binding carries the symbol flag already, so isSymbol routes it without the mark.
+	if r.isSymbolConstructorCall(initNode) {
+		boxed, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
 	// An object literal in a slot whose declared shape has an optional property
 	// must build at that shape rather than its own all-required type, the contextual
 	// typing objectLiteralContextual applies. A slot that is itself T | undefined
@@ -1602,6 +1636,30 @@ func (r *Renderer) dynamicSourceDestructure(patNode, initNode frontend.Node) ([]
 	}
 	r.collectDynRestNames(patNode, r.dynBoundLocals)
 	return append(prefix, stmts...), true, nil
+}
+
+// isSymbolConstructorCall reports whether n is a call to the ambient Symbol
+// constructor, `Symbol()` or `Symbol(desc)`, whose result is a boxed symbol value.
+// A user binding named Symbol shadows the global and is not this call, so the
+// ambient-global check keeps the two apart.
+func (r *Renderer) isSymbolConstructorCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	return len(kids) >= 1 && r.prog.Text(kids[0]) == "Symbol" && r.isAmbientGlobal(kids[0])
+}
+
+// markDynBound records that a local's Go slot holds a boxed value.Value, so every
+// later read and write of it routes through the dynamic value model rather than the
+// static shape the checker gave the name. Statements lower in source order, so
+// marking a binding as it lowers reaches every use below it. The map is created
+// lazily since a body with no dynamic binding never needs one.
+func (r *Renderer) markDynBound(name string) {
+	if r.dynBoundLocals == nil {
+		r.dynBoundLocals = map[string]bool{}
+	}
+	r.dynBoundLocals[name] = true
 }
 
 // flattenObjectDestructure lowers `const {x, y} = src` to one `:=` binding per

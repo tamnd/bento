@@ -205,6 +205,16 @@ func (r *Renderer) caughtErrorStringRead(n frontend.Node) bool {
 	return prop == "message" || prop == "name"
 }
 
+// isSymbol reports whether the checker types n as a symbol, the guard that routes a
+// computed key `o[s]` through the runtime GetElem and SetElem, where the boxed
+// symbol looks up the property bag by identity. Only an explicitly annotated symbol
+// carries the flag: a `const s = Symbol()` binding is typed unique symbol, which
+// the frontend leaves flagless, so that form is recognized instead by the dynamic
+// mark its initializer set.
+func (r *Renderer) isSymbol(n frontend.Node) bool {
+	return r.prog.TypeAt(n).Flags&frontend.TypeSymbol != 0
+}
+
 // isBigInt reports whether the checker types n as bigint, the guard that routes the
 // operators and coercions to the *big.Int method forms rather than the float64
 // operator forms. It sees through a branded alias the same way isNumber does, so a
@@ -550,15 +560,34 @@ func (r *Renderer) boxArrayLiteral(n frontend.Node) (ast.Expr, error) {
 // boxObjectLiteral lowers { k: v, ... } into value.NewObject().Set(...) per member,
 // the ordered property map a boxed object keeps, so the keys enumerate in source
 // order the way JavaScript's own property order does. Each value boxes through
-// boxOperand; the key is the property name string. A member that is not a plain
-// key-value or shorthand assignment (a method, a spread, a computed or string key)
-// hands back to a later slice, matching what the fixed-shape object path claims.
+// boxOperand; a plain or shorthand key is the property name string set through Set,
+// and a computed key `[expr]: v` boxes the key expression and writes it through
+// SetElem, which resolves it to a string or symbol property at runtime the way the
+// dynamic bracket write does, so `{ [k]: 1 }` and `{ [s]: 1 }` land the same slot a
+// later `o[k]` or `o[s]` reads. A member that is not a plain, shorthand, or computed
+// key-value (a method or a spread) hands back to a later slice.
 func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 	r.requireImport(valuePkg)
 	var obj ast.Expr = &ast.CallExpr{Fun: sel("value", "NewObject")}
 	for _, p := range r.prog.Children(n) {
 		if p.Kind() != frontend.NodeUnknown {
 			return nil, &NotYetLowerable{Reason: "boxing an object literal with a method or accessor member is a later slice"}
+		}
+		if inner, ok := r.computedKey(p); ok {
+			kids := r.prog.Children(p)
+			if len(kids) != 2 {
+				return nil, &NotYetLowerable{Reason: "boxing an object literal computed member with an unexpected shape is a later slice"}
+			}
+			boxedKey, err := r.boxOperand(inner)
+			if err != nil {
+				return nil, err
+			}
+			boxedVal, err := r.boxOperand(kids[1])
+			if err != nil {
+				return nil, err
+			}
+			obj = &ast.CallExpr{Fun: &ast.SelectorExpr{X: obj, Sel: ident("SetKeyed")}, Args: []ast.Expr{boxedKey, boxedVal}}
+			continue
 		}
 		kids := r.prog.Children(p)
 		var keyNode, valNode frontend.Node
