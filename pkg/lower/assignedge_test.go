@@ -96,3 +96,43 @@ func TestCompoundValueOnDynamicHandsBack(t *testing.T) {
 		t.Fatalf("reason = %q, want a dynamic-local handback", reason)
 	}
 }
+
+// Item 5: a logical assignment on a member target.
+
+func TestMemberLogicalAssignRuns(t *testing.T) {
+	cases := map[string]string{
+		`let o: any = {}; o.k ??= 7; console.log(o.k); o.k ??= 9; console.log(o.k);`: "7\n7\n",
+		`let o: any = {a: 0}; o.a ||= 5; console.log(o.a);`:                          "5\n",
+		`let o: any = {a: 3}; o.a &&= 8; console.log(o.a);`:                          "8\n",
+	}
+	for src, want := range cases {
+		if got := runProgramGoTolerant(t, src); got != want {
+			t.Errorf("%s: got %q want %q", src, got, want)
+		}
+	}
+}
+
+func TestMemberLogicalAssignShortCircuits(t *testing.T) {
+	// ??= must not store when the property is already present, so the side-effecting
+	// right-hand side never runs.
+	const src = `let o: any = {k: 1}; let ran = 0; function v(): number { ran = 1; return 2; } o.k ??= v(); console.log(o.k, ran);`
+	if got, want := runProgramGoTolerant(t, src), "1 0\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestMemberLogicalStaticHandsBack(t *testing.T) {
+	const src = `interface P { a: number } function f(p: P): void { p.a ||= 5; }`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "object descriptor model") {
+		t.Fatalf("reason = %q, want an object-descriptor-model handback", reason)
+	}
+}
+
+func TestMemberLogicalSideEffectHandsBack(t *testing.T) {
+	const src = `let o: any = {a: 0}; function g(): any { return o; } g().a ||= 5;`
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "side-effecting receiver") {
+		t.Fatalf("reason = %q, want a side-effecting-receiver handback", reason)
+	}
+}

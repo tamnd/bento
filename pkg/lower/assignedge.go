@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -126,6 +127,59 @@ func (r *Renderer) assignValueCompound(n, left frontend.Node) (ast.Expr, error) 
 	}
 	body := []ast.Stmt{stmt, &ast.ReturnStmt{Results: []ast.Expr{ident(name)}}}
 	return r.valueClosure(retType, body), nil
+}
+
+// memberLogicalAssign lowers a logical assignment on a member target, o.k ??= v
+// and o.k ||= v and o.k &&= v, on a dynamic receiver. Like the identifier form it
+// short-circuits: the receiver's property is loaded, the operator's trigger is
+// tested, and the boxed right-hand side is stored only when the trigger fires, so
+// a right-hand side with a side effect runs only when it should. The receiver is
+// read on both the guard load and the store, so a side-effecting receiver hands
+// back to keep it evaluated once; a repeatable one reads the same object on both.
+// A statically typed receiver has no runtime slot to load and store and hands back
+// for the object descriptor model, the wall the dotted member delete hits.
+func (r *Renderer) memberLogicalAssign(target frontend.Node, op string, value frontend.Node) (ast.Stmt, bool, error) {
+	kids := r.prog.Children(target)
+	if len(kids) != 2 {
+		return nil, true, &NotYetLowerable{Reason: "logical assignment target did not expose an object and a property name"}
+	}
+	obj, nameNode := kids[0], kids[1]
+	if !r.isDynamic(obj) {
+		return nil, true, &NotYetLowerable{Reason: "logical assignment to a statically typed property needs the object descriptor model, a later slice"}
+	}
+	if !r.repeatableOperand(obj) {
+		return nil, true, &NotYetLowerable{Reason: "logical assignment to a member with a side-effecting receiver is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	key := func() ast.Expr {
+		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(nameNode))}}}
+	}
+	recvLoad, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, true, err
+	}
+	load := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recvLoad, Sel: ident("Get")}, Args: []ast.Expr{key()}}
+	var cond ast.Expr
+	switch op {
+	case "??=":
+		cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: load, Sel: ident("IsNullish")}}
+	case "||=":
+		cond = &ast.UnaryExpr{Op: token.NOT, X: &ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{load}}}
+	case "&&=":
+		cond = &ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{load}}
+	default:
+		return nil, false, nil
+	}
+	val, err := r.boxOperand(value)
+	if err != nil {
+		return nil, true, err
+	}
+	recvStore, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, true, err
+	}
+	store := &ast.ExprStmt{X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: recvStore, Sel: ident("Set")}, Args: []ast.Expr{key(), val}}}
+	return &ast.IfStmt{Cond: cond, Body: &ast.BlockStmt{List: []ast.Stmt{store}}}, true, nil
 }
 
 // dynamicCompoundResult builds the boxed value.Value a compound member write

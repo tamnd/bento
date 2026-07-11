@@ -2301,6 +2301,9 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 		return nil, false, nil
 	}
 	target := parts[0]
+	if target.Kind() == frontend.NodePropertyAccessExpression {
+		return r.memberLogicalAssign(target, op, parts[2])
+	}
 	if target.Kind() != frontend.NodeIdentifier {
 		return nil, true, &NotYetLowerable{Reason: "logical assignment to a non-identifier target is a later slice"}
 	}
