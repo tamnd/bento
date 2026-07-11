@@ -1,0 +1,10 @@
+== stdout:
+sync-start
+co-start
+sync-end
+then-A
+co-1
+then-B
+co-2
+== exit:
+0
