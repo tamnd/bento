@@ -1,0 +1,10 @@
+== stdout:
+3
+a
+undefined
+c
+10
+21
+32
+== exit:
+0

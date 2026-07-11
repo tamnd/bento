@@ -285,8 +285,19 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 	if len(argNodes) == 0 {
 		return nil, &NotYetLowerable{Reason: "Array.from with no source is a later slice"}
 	}
+	if len(argNodes) > 2 {
+		return nil, &NotYetLowerable{Reason: "Array.from with a thisArg is a later slice"}
+	}
+	// A dynamic source, or a map callback, walks the source as an array-like value
+	// at runtime, reading length and integer keys, and applies the optional map
+	// callback there. This is the general form, producing a boxed array;
+	// arrayFromBoxedResultCall keeps isDynamic in step so a read off the result
+	// stays on the dynamic path.
+	if r.arrayFromBoxedResultCall(call) {
+		return r.arrayFromDynamic(argNodes)
+	}
 	if len(argNodes) > 1 {
-		return nil, &NotYetLowerable{Reason: "Array.from with a map callback is a later slice"}
+		return nil, &NotYetLowerable{Reason: "Array.from with a map callback into a typed array is a later slice"}
 	}
 	elemType, ok := r.arrayElem(call)
 	if !ok {
@@ -348,6 +359,28 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{points}}, nil
 	}
 	return nil, &NotYetLowerable{Reason: "Array.from over an array-like object is a later slice"}
+}
+
+// arrayFromDynamic lowers Array.from into a boxed array by walking the source as
+// an array-like value at runtime: value.ArrayFromArrayLike reads its length and
+// integer keys and applies the optional map callback. The source and the callback
+// box the same way a dynamic call's arguments do, and an absent callback passes
+// value.Undefined so the runtime skips the map step. A thisArg is a later slice
+// and has already handed back before here.
+func (r *Renderer) arrayFromDynamic(argNodes []frontend.Node) (ast.Expr, error) {
+	src, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	mapFn := ast.Expr(sel("value", "Undefined"))
+	if len(argNodes) == 2 {
+		mapFn, err = r.boxOperand(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ArrayFromArrayLike"), Args: []ast.Expr{src, mapFn}}, nil
 }
 
 // objectLiteral lowers an object literal { k: v, ... } to a composite literal

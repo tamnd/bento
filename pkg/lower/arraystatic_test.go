@@ -46,12 +46,12 @@ func TestArrayStaticEmits(t *testing.T) {
 	}
 }
 
-// TestArrayStaticHandsBack pins the boundary: Array.from over an array-like
-// object, a plain object carrying a length and integer keys but no iterator, is
-// its own later slice, so it hands back with a named reason rather than falling
-// through to the receiver-typed method dispatch.
+// TestArrayStaticHandsBack pins the boundary: Array.from with a thisArg, the
+// third argument that binds this inside the map callback, is its own later slice,
+// so it hands back with a named reason rather than falling through to the
+// receiver-typed method dispatch.
 func TestArrayStaticHandsBack(t *testing.T) {
-	const src = "export function copy(o: { length: number }): unknown[] { return Array.from(o as any); }\n"
+	const src = "export function twice(a: number[]): number[] { return Array.from(a, (x: number) => x, null); }\n"
 	prog := compile(t, src)
 	r := NewRenderer(prog)
 	_, err := r.RenderProgram(entryFile(t, prog))
@@ -59,7 +59,18 @@ func TestArrayStaticHandsBack(t *testing.T) {
 	if !errors.As(err, &nyl) {
 		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
 	}
-	if !strings.Contains(nyl.Reason, "Array.from") {
-		t.Errorf("hand-back reason = %q, want it to mention Array.from", nyl.Reason)
+	if !strings.Contains(nyl.Reason, "Array.from with a thisArg") {
+		t.Errorf("hand-back reason = %q, want it to mention Array.from with a thisArg", nyl.Reason)
+	}
+}
+
+// TestArrayFromDynamicEmits pins the dynamic form: Array.from over a boxed source
+// lowers to value.ArrayFromArrayLike, which reads the source's length and integer
+// keys at runtime, with value.Undefined standing in for an absent map callback.
+func TestArrayFromDynamicEmits(t *testing.T) {
+	const src = "export function f(o: any): any { return Array.from(o); }\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.ArrayFromArrayLike(o, value.Undefined)") {
+		t.Errorf("Array.from over a dynamic source did not lower to ArrayFromArrayLike:\n%s", source)
 	}
 }
