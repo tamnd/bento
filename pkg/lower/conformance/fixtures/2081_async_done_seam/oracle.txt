@@ -1,0 +1,4 @@
+== stdout:
+Test262:AsyncTestComplete
+== exit:
+0

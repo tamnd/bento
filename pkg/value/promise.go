@@ -50,27 +50,86 @@ func RunMicrotasks() {
 	}
 }
 
-// Promise is a settled JavaScript promise of element type T. It holds either a
-// fulfilled value or the thrown value a rejection carries; rejected tells the two
-// apart. It is a pointer type so a promise has reference identity the way a
-// JavaScript promise object does. Only settled promises exist in 6a: no async
-// source can leave one pending, so there is no state beyond the two settled cases.
+// promiseState is which of the three states a promise is in: pending until it
+// settles, then fulfilled with a value or rejected with a reason. An await-free
+// async body settles its promise the moment it returns, so its promise is born in a
+// settled state; an async body that awaits returns a pending promise the coroutine
+// settles later, when the body runs off its end or throws (pkg/value/async.go).
+type promiseState uint8
+
+const (
+	promisePending promiseState = iota
+	promiseFulfilled
+	promiseRejected
+)
+
+// Promise is a JavaScript promise of element type T. It holds its state and, once
+// settled, either a fulfilled value or the thrown value a rejection carries. While
+// pending it holds the reactions a Then, a Catch, or an await registered, which fire
+// as microtasks when it settles. It is a pointer type so a promise has reference
+// identity the way a JavaScript promise object does.
 type Promise[T any] struct {
+	state    promiseState
 	value    T
-	rejected bool
 	reason   Thrown
+	onSettle []func()
 }
 
 // Resolved mints a promise already fulfilled with v, the promise an await-free
 // async body returns when it runs to a normal completion.
 func Resolved[T any](v T) *Promise[T] {
-	return &Promise[T]{value: v}
+	return &Promise[T]{state: promiseFulfilled, value: v}
 }
 
 // Rejected mints a promise already rejected with reason, the promise an async body
 // returns when it throws. The reason is the thrown value a catch would recover.
 func Rejected[T any](reason Thrown) *Promise[T] {
-	return &Promise[T]{rejected: true, reason: reason}
+	return &Promise[T]{state: promiseRejected, reason: reason}
+}
+
+// fulfill settles a pending promise with v, running its registered reactions as
+// microtasks. Settling an already-settled promise is a no-op, matching the
+// JavaScript rule that a promise settles once and keeps its first state.
+func (p *Promise[T]) fulfill(v T) {
+	if p.state != promisePending {
+		return
+	}
+	p.state = promiseFulfilled
+	p.value = v
+	p.flush()
+}
+
+// reject settles a pending promise as rejected with reason, running its reactions.
+// Like fulfill it is a no-op once the promise has settled.
+func (p *Promise[T]) reject(reason Thrown) {
+	if p.state != promisePending {
+		return
+	}
+	p.state = promiseRejected
+	p.reason = reason
+	p.flush()
+}
+
+// flush schedules every reaction the promise gathered while pending, in registration
+// order, then clears the list so a reaction runs once. Each reaction reads the now
+// settled state when its microtask runs.
+func (p *Promise[T]) flush() {
+	for _, r := range p.onSettle {
+		enqueueMicrotask(r)
+	}
+	p.onSettle = nil
+}
+
+// subscribe registers a reaction to run when the promise settles. A pending promise
+// stores it to fire on settle; an already-settled promise schedules it now, since
+// JavaScript always defers a reaction to the microtask checkpoint rather than running
+// it inline.
+func (p *Promise[T]) subscribe(reaction func()) {
+	if p.state == promisePending {
+		p.onSettle = append(p.onSettle, reaction)
+		return
+	}
+	enqueueMicrotask(reaction)
 }
 
 // Async runs an await-free async body now and turns its completion into a settled
@@ -120,10 +179,11 @@ func AsyncVoid(body func()) (p *Promise[Unit]) {
 // chained has a value of the right type; the callback covered here returns nothing,
 // so the returned promise carries no value.
 func (p *Promise[T]) Then(onFulfilled func(T)) *Promise[Unit] {
-	if !p.rejected {
-		v := p.value
-		enqueueMicrotask(func() { onFulfilled(v) })
-	}
+	p.subscribe(func() {
+		if p.state == promiseFulfilled {
+			onFulfilled(p.value)
+		}
+	})
 	return Resolved(Unit{})
 }
 
@@ -134,10 +194,11 @@ func (p *Promise[T]) Then(onFulfilled func(T)) *Promise[Unit] {
 // dynamic world does. Like Then it returns a settled unit promise so a bound or
 // chained catch has a value of the right type.
 func (p *Promise[T]) Catch(onRejected func(Value)) *Promise[Unit] {
-	if p.rejected {
-		reason := p.reason
-		enqueueMicrotask(func() { onRejected(thrownValue(reason)) })
-	}
+	p.subscribe(func() {
+		if p.state == promiseRejected {
+			onRejected(thrownValue(p.reason))
+		}
+	})
 	return Resolved(Unit{})
 }
 
