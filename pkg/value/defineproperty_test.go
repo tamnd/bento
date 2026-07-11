@@ -159,6 +159,53 @@ func TestDefinePropertyWritableAllowsValue(t *testing.T) {
 	}
 }
 
+// TestGetOwnPropertyDescriptorData proves the descriptor read returns an object
+// carrying the property's value and its writable, enumerable, and configurable
+// flags, the shape verifyProperty reads its assertions from.
+func TestGetOwnPropertyDescriptorData(t *testing.T) {
+	o := NewObject()
+	o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(42), "enumerable", True, "configurable", True))
+
+	d := o.GetOwnPropertyDescriptor(StringValue(FromGoString("a")))
+	if got := d.Get(FromGoString("value")); got.scalar != Number(42).scalar {
+		t.Fatalf("descriptor value = %v, want 42", got)
+	}
+	if d.Get(FromGoString("writable")).scalar != False.scalar {
+		t.Fatal("writable = true, want false")
+	}
+	if d.Get(FromGoString("enumerable")).scalar != True.scalar {
+		t.Fatal("enumerable = false, want true")
+	}
+	if d.Get(FromGoString("configurable")).scalar != True.scalar {
+		t.Fatal("configurable = false, want true")
+	}
+}
+
+// TestGetOwnPropertyDescriptorAbsent proves the descriptor read returns undefined
+// for a key the object does not carry, the value verifyProperty treats as absence.
+func TestGetOwnPropertyDescriptorAbsent(t *testing.T) {
+	o := NewObject()
+	if got := o.GetOwnPropertyDescriptor(StringValue(FromGoString("missing"))); got.kind != KindUndefined {
+		t.Fatalf("descriptor of a missing key = %v, want undefined", got)
+	}
+}
+
+// TestGetOwnPropertyDescriptorAccessor proves an accessor property reports its get
+// and set rather than a value and writable pair.
+func TestGetOwnPropertyDescriptorAccessor(t *testing.T) {
+	o := NewObject()
+	getter := NewFunc(func(args []Value) Value { return Number(7) })
+	o.DefineProperty(StringValue(FromGoString("g")), descObj("get", getter, "enumerable", True))
+
+	d := o.GetOwnPropertyDescriptor(StringValue(FromGoString("g")))
+	if d.Get(FromGoString("get")).kind != KindFunc {
+		t.Fatal("accessor descriptor is missing its getter")
+	}
+	if d.HasProperty(FromGoString("value")) {
+		t.Fatal("accessor descriptor carries a value field, want none")
+	}
+}
+
 func joinKeys(a *Array[BStr]) string {
 	out := ""
 	for i := 0.0; i < a.Len(); i++ {

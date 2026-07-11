@@ -83,6 +83,26 @@ func (d descriptor) read(receiver Value) Value {
 	return Undefined
 }
 
+// toObject renders the descriptor as the plain object Object.getOwnPropertyDescriptor
+// returns, the FromPropertyDescriptor step. A data descriptor exposes value and
+// writable; an accessor descriptor exposes get and set; both expose enumerable and
+// configurable, in the order the spec lists them so an enumeration of the returned
+// object reads value, writable, enumerable, configurable for data and get, set,
+// enumerable, configurable for an accessor.
+func (d descriptor) toObject() Value {
+	o := NewObject()
+	if d.accessor {
+		o.Set(FromGoString("get"), d.get)
+		o.Set(FromGoString("set"), d.set)
+	} else {
+		o.Set(FromGoString("value"), d.value)
+		o.Set(FromGoString("writable"), Bool(d.writable))
+	}
+	o.Set(FromGoString("enumerable"), Bool(d.enumerable))
+	o.Set(FromGoString("configurable"), Bool(d.configurable))
+	return o
+}
+
 // write returns the descriptor a plain property write leaves behind, given the
 // receiver the write went through and the assigned value. A data property keeps
 // its flags and takes the new value. An accessor property runs its setter with

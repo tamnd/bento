@@ -151,6 +151,52 @@ func (v Value) DefineProperty(key, descObj Value) Value {
 	return v
 }
 
+// GetOwnPropertyDescriptor returns the descriptor object for an own property of
+// the receiver, or undefined when the property is absent, the runtime behind
+// Object.getOwnPropertyDescriptor(o, key). A symbol key reads the symbol bag; any
+// other key takes its property-key string. An array answers for its length as a
+// non-enumerable, non-configurable writable data property and for each in-range
+// element index as a fully writable, enumerable, configurable data property, since
+// those live outside the named bag. A non-object receiver reports undefined for
+// every key, the value the spec gives once it coerces the target to an object with
+// no own properties of interest.
+func (v Value) GetOwnPropertyDescriptor(key Value) Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return Undefined
+	}
+	o := v.object()
+	if key.kind == KindSymbol {
+		if d, ok := o.getSymDesc(key.symbol()); ok {
+			return d.toObject()
+		}
+		return Undefined
+	}
+	var name BStr
+	if key.kind == KindString {
+		name = key.str()
+	} else {
+		name = ToString(key)
+	}
+	if v.kind == KindArray {
+		s := name.ToGoString()
+		if s == "length" {
+			return dataProperty(Number(float64(len(o.elems))), true, false, false).toObject()
+		}
+		if idx, ok := arrayIndex(s); ok {
+			if idx < len(o.elems) {
+				return dataProperty(o.elems[idx], true, true, true).toObject()
+			}
+			return Undefined
+		}
+	}
+	if d, ok := o.getOwnDesc(name); ok {
+		return d.toObject()
+	}
+	return Undefined
+}
+
 // validateDefine reports whether a define is allowed, the rejection half of
 // ValidateAndApplyPropertyDescriptor. A property that does not yet exist may be
 // added only when the object is extensible. An existing configurable property
