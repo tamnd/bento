@@ -135,16 +135,19 @@ func (e *Error) ToValue() Value {
 	}
 	if e.boxed == nil {
 		keys := []BStr{FromGoString("name"), FromGoString("message")}
-		vals := []Value{StringValue(e.name), StringValue(e.message)}
+		descs := []descriptor{
+			defaultDataProperty(StringValue(e.name)),
+			defaultDataProperty(StringValue(e.message)),
+		}
 		// An AggregateError also exposes an errors array, the rejection reasons
 		// Promise.any collected, so a catch reads err.errors and its indices the way it
 		// reads name and message. A non-aggregate error leaves errors nil and carries
 		// only the two base properties.
 		if e.errors != nil {
 			keys = append(keys, FromGoString("errors"))
-			vals = append(vals, NewArrayValue(e.errors))
+			descs = append(descs, defaultDataProperty(NewArrayValue(e.errors)))
 		}
-		e.boxed = &Object{kind: KindObject, keys: keys, vals: vals}
+		e.boxed = &Object{kind: KindObject, keys: keys, descs: descs}
 	}
 	return Value{kind: KindObject, ref: unsafe.Pointer(e.boxed)}
 }

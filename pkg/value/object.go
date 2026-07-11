@@ -17,14 +17,21 @@ import "sort"
 // not go through the property map. One struct backs both so an array can still
 // carry a named property without changing representation.
 type Object struct {
-	kind    Kind      // KindObject or KindArray
-	keys    []BStr    // string property names in insertion order (named properties)
-	vals    []Value   // property values, parallel to keys
-	symKeys []*Symbol // symbol property keys in insertion order, kept apart from string keys
-	symVals []Value   // property values, parallel to symKeys
-	elems   []Value   // dense element storage for an array
-	call    callFn    // the invocable body of a callable, nil for a plain object
+	kind          Kind         // KindObject or KindArray
+	keys          []BStr       // string property names in insertion order (named properties)
+	descs         []descriptor // property descriptors, parallel to keys
+	symKeys       []*Symbol    // symbol property keys in insertion order, kept apart from string keys
+	symDescs      []descriptor // symbol property descriptors, parallel to symKeys
+	elems         []Value      // dense element storage for an array
+	call          callFn       // the invocable body of a callable, nil for a plain object
+	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
 }
+
+// isExtensible reports whether new properties may still be added, the state
+// Object.isExtensible reads and Object.preventExtensions clears. The flag is
+// stored inverted so a freshly built object is extensible with no constructor
+// having to set it.
+func (o *Object) isExtensible() bool { return !o.nonExtensible }
 
 // callFn is the body of a callable function value: it takes its arguments already
 // boxed and returns a boxed result, so a dynamic call site invokes it uniformly
@@ -89,12 +96,12 @@ func (v Value) Set(key BStr, val Value) Value {
 	o := v.object()
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
-			o.vals[i] = val
+			o.descs[i] = o.descs[i].write(v, val)
 			return v
 		}
 	}
 	o.keys = append(o.keys, key)
-	o.vals = append(o.vals, val)
+	o.descs = append(o.descs, defaultDataProperty(val))
 	return v
 }
 
@@ -179,7 +186,7 @@ func (o *Object) deleteOwn(key BStr) bool {
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
 			o.keys = append(o.keys[:i], o.keys[i+1:]...)
-			o.vals = append(o.vals[:i], o.vals[i+1:]...)
+			o.descs = append(o.descs[:i], o.descs[i+1:]...)
 			return true
 		}
 	}
@@ -187,16 +194,30 @@ func (o *Object) deleteOwn(key BStr) bool {
 }
 
 // getOwn returns the value of a named own property, or undefined when the object
-// has no such key, the JavaScript result for a missing property. The lookup is a
-// linear scan of the ordered keys, which the shape machinery will later replace
-// with a shape check and an index.
-func (o *Object) getOwn(key BStr) Value {
+// has no such key, the JavaScript result for a missing property. The value comes
+// through the property's descriptor, so a data property reports its stored value
+// and an accessor property runs its getter with recv as the receiver. The lookup
+// is a linear scan of the ordered keys, which the shape machinery will later
+// replace with a shape check and an index.
+func (o *Object) getOwn(recv Value, key BStr) Value {
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
-			return o.vals[i]
+			return o.descs[i].read(recv)
 		}
 	}
 	return Undefined
+}
+
+// getOwnDesc returns the descriptor of a named own property and whether the object
+// carries it, the raw read Object.defineProperty and Object.getOwnPropertyDescriptor
+// build on, distinct from getOwn which resolves the descriptor to a value.
+func (o *Object) getOwnDesc(key BStr) (descriptor, bool) {
+	for i := range o.keys {
+		if o.keys[i].Equal(key) {
+			return o.descs[i], true
+		}
+	}
+	return descriptor{}, false
 }
 
 // hasOwn reports whether the object carries key as an own named property, the
@@ -217,26 +238,38 @@ func (o *Object) hasOwn(key BStr) bool {
 // with another symbol of the same description. A key already present is
 // overwritten in place; a new key appends, keeping the symbol properties in
 // insertion order the way the spec enumerates them after the string keys.
-func (o *Object) setSym(key *Symbol, val Value) {
+func (o *Object) setSym(recv Value, key *Symbol, val Value) {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
-			o.symVals[i] = val
+			o.symDescs[i] = o.symDescs[i].write(recv, val)
 			return
 		}
 	}
 	o.symKeys = append(o.symKeys, key)
-	o.symVals = append(o.symVals, val)
+	o.symDescs = append(o.symDescs, defaultDataProperty(val))
 }
 
 // getSym returns the value of a symbol-keyed own property, or undefined when the
 // object carries no such symbol, the JavaScript result for a missing property.
-func (o *Object) getSym(key *Symbol) Value {
+func (o *Object) getSym(recv Value, key *Symbol) Value {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
-			return o.symVals[i]
+			return o.symDescs[i].read(recv)
 		}
 	}
 	return Undefined
+}
+
+// getSymDesc returns the descriptor of a symbol-keyed own property and whether the
+// object carries it, the symbol mirror of getOwnDesc that defineProperty reads to
+// merge a redefine into the existing descriptor.
+func (o *Object) getSymDesc(key *Symbol) (descriptor, bool) {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			return o.symDescs[i], true
+		}
+	}
+	return descriptor{}, false
 }
 
 // hasSym reports whether the object carries key as an own symbol property, the
@@ -259,7 +292,7 @@ func (o *Object) deleteSym(key *Symbol) bool {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
 			o.symKeys = append(o.symKeys[:i], o.symKeys[i+1:]...)
-			o.symVals = append(o.symVals[:i], o.symVals[i+1:]...)
+			o.symDescs = append(o.symDescs[:i], o.symDescs[i+1:]...)
 			return true
 		}
 	}
@@ -274,12 +307,25 @@ func (o *Object) deleteSym(key *Symbol) bool {
 // still enumerates them ascending, so the order is deterministic regardless of how
 // the keys arrived.
 func (o *Object) orderedStringKeys() []BStr {
+	return o.orderedStringKeysFiltered(false)
+}
+
+// orderedStringKeysFiltered returns the own string keys in the spec's enumeration
+// order, optionally dropping the non-enumerable ones. Object.getOwnPropertyNames
+// wants every own string key, so it passes enumerableOnly false; Object.keys and
+// Object.values want only the enumerable ones, so they pass true. An array's dense
+// element indices are always enumerable data properties, so they are kept either
+// way; a named property's enumerability comes from its descriptor.
+func (o *Object) orderedStringKeysFiltered(enumerableOnly bool) []BStr {
 	var idxKeys []int
 	var strKeys []BStr
 	for i := range o.elems {
 		idxKeys = append(idxKeys, i)
 	}
-	for _, k := range o.keys {
+	for i, k := range o.keys {
+		if enumerableOnly && !o.descs[i].enumerable {
+			continue
+		}
 		if n, ok := arrayIndex(k.ToGoString()); ok {
 			idxKeys = append(idxKeys, n)
 		} else {
@@ -324,28 +370,42 @@ func (v Value) ObjectRest(omit ...BStr) Value {
 	return rest
 }
 
-// OwnKeys returns the receiver's own enumerable string-keyed property names as a
-// string array in the spec's enumeration order, the value Object.keys and
-// Object.getOwnPropertyNames build for a dynamic receiver whose keys are known only
-// at runtime. Symbol keys never appear, which matches both statics on the string
-// side, and every property in this model is enumerable, so the two return the same
-// list. A receiver with no object storage yields an empty array.
+// OwnKeys returns the receiver's own string-keyed property names as a string array
+// in the spec's enumeration order, including the non-enumerable ones, the value
+// Object.getOwnPropertyNames builds for a dynamic receiver whose keys are known
+// only at runtime. Symbol keys never appear, which matches the string-side static.
+// A receiver with no object storage yields an empty array.
 func (v Value) OwnKeys() *Array[BStr] {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
-		return NewArray(v.object().orderedStringKeys()...)
+		return NewArray(v.object().orderedStringKeysFiltered(false)...)
+	default:
+		return NewArray[BStr]()
+	}
+}
+
+// OwnEnumerableKeys returns the receiver's own enumerable string-keyed property
+// names in the spec's enumeration order, the value Object.keys builds for a dynamic
+// receiver. It differs from OwnKeys only in that a property defined non-enumerable
+// through Object.defineProperty is left out. A receiver with no object storage
+// yields an empty array.
+func (v Value) OwnEnumerableKeys() *Array[BStr] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return NewArray(v.object().orderedStringKeysFiltered(true)...)
 	default:
 		return NewArray[BStr]()
 	}
 }
 
 // OwnValues returns the receiver's own enumerable property values as a value array
-// in the same order OwnKeys walks the names, the value Object.values builds for a
-// dynamic receiver. A receiver with no object storage yields an empty array.
+// in the same order OwnEnumerableKeys walks the names, the value Object.values
+// builds for a dynamic receiver. A non-enumerable property contributes no value,
+// matching Object.keys. A receiver with no object storage yields an empty array.
 func (v Value) OwnValues() *Array[Value] {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
-		keys := v.object().orderedStringKeys()
+		keys := v.object().orderedStringKeysFiltered(true)
 		vals := make([]Value, len(keys))
 		for i, k := range keys {
 			vals[i] = v.Get(k)

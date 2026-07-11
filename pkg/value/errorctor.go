@@ -56,9 +56,9 @@ func buildErrorCtors() map[string]Value {
 // ready to intern with no further mutation.
 func newErrorCtorValue(name string) Value {
 	o := &Object{
-		kind: KindFunc,
-		keys: []BStr{FromGoString("name")},
-		vals: []Value{StringValue(FromGoString(name))},
+		kind:  KindFunc,
+		keys:  []BStr{FromGoString("name")},
+		descs: []descriptor{defaultDataProperty(StringValue(FromGoString(name)))},
 	}
 	return Value{kind: KindFunc, ref: unsafe.Pointer(o)}
 }
