@@ -323,3 +323,69 @@ func (v Value) ObjectRest(omit ...BStr) Value {
 	}
 	return rest
 }
+
+// OwnKeys returns the receiver's own enumerable string-keyed property names as a
+// string array in the spec's enumeration order, the value Object.keys and
+// Object.getOwnPropertyNames build for a dynamic receiver whose keys are known only
+// at runtime. Symbol keys never appear, which matches both statics on the string
+// side, and every property in this model is enumerable, so the two return the same
+// list. A receiver with no object storage yields an empty array.
+func (v Value) OwnKeys() *Array[BStr] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return NewArray(v.object().orderedStringKeys()...)
+	default:
+		return NewArray[BStr]()
+	}
+}
+
+// OwnValues returns the receiver's own enumerable property values as a value array
+// in the same order OwnKeys walks the names, the value Object.values builds for a
+// dynamic receiver. A receiver with no object storage yields an empty array.
+func (v Value) OwnValues() *Array[Value] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		keys := v.object().orderedStringKeys()
+		vals := make([]Value, len(keys))
+		for i, k := range keys {
+			vals[i] = v.Get(k)
+		}
+		return NewArray(vals...)
+	default:
+		return NewArray[Value]()
+	}
+}
+
+// HasOwnElem reports whether the receiver carries key as an own property, the
+// value Object.hasOwn returns for a dynamic receiver. A symbol key is looked up by
+// identity in the symbol bag; any other key is taken to its property-key string,
+// so o.hasOwn(s) and o.hasOwn("k") each probe the slot the matching read would
+// reach. An array answers for its length and its in-range element indices as well
+// as any named property, and a receiver with no object storage has nothing to own.
+func (v Value) HasOwnElem(key Value) bool {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return false
+	}
+	o := v.object()
+	if key.kind == KindSymbol {
+		return o.hasSym(key.symbol())
+	}
+	var name BStr
+	if key.kind == KindString {
+		name = key.str()
+	} else {
+		name = ToString(key)
+	}
+	if v.kind == KindArray {
+		s := name.ToGoString()
+		if s == "length" {
+			return true
+		}
+		if idx, ok := arrayIndex(s); ok {
+			return idx < len(o.elems)
+		}
+	}
+	return o.hasOwn(name)
+}

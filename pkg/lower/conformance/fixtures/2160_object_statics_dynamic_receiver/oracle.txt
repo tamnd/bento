@@ -1,0 +1,8 @@
+== stdout:
+a,b
+a,b
+1,2
+true
+false
+== exit:
+0

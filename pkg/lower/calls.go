@@ -1512,6 +1512,17 @@ func (r *Renderer) objectHasOwn(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 2 {
 		return nil, &NotYetLowerable{Reason: "Object.hasOwn with other than two arguments is a later slice"}
 	}
+	if r.isDynamic(argNodes[0]) {
+		recv, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		key, err := r.boxOperand(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("HasOwnElem")}, Args: []ast.Expr{key}}, nil
+	}
 	props, err := r.fixedShapeProps("hasOwn", argNodes[0])
 	if err != nil {
 		return nil, err
@@ -1542,6 +1553,13 @@ func (r *Renderer) objectHasOwn(argNodes []frontend.Node) (ast.Expr, error) {
 // match (a missing optional field is not a key), which objectShapeArg already
 // gates through internStruct.
 func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 1 && r.isDynamic(argNodes[0]) {
+		recv, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnKeys")}}, nil
+	}
 	props, err := r.objectShapeArg(method, argNodes)
 	if err != nil {
 		return nil, err
@@ -1563,6 +1581,13 @@ func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (
 // field types are compared through their rendered Go source so a number-literal
 // field type and a widened number field type read as the same element type.
 func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 1 && r.isDynamic(argNodes[0]) {
+		recv, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}}, nil
+	}
 	props, err := r.objectShapeArg("values", argNodes)
 	if err != nil {
 		return nil, err
