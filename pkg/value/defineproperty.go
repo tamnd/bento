@@ -141,6 +141,38 @@ func (v Value) DefineProperty(key, descObj Value) Value {
 	return v
 }
 
+// DefineProperties applies a map of descriptor objects to the receiver and returns
+// it, the runtime behind Object.defineProperties(o, props). It walks props's own
+// enumerable properties, string keys in enumeration order then symbol keys in
+// insertion order, and defines each onto the receiver through the same path
+// Object.defineProperty takes, so the batched form and the single form share one
+// definition. A non-object receiver or a nullish props throws a TypeError the way
+// the spec rejects them.
+func (v Value) DefineProperties(props Value) Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		Throw(NewTypeError(FromGoString("Object.defineProperties called on non-object")))
+		return v
+	}
+	switch props.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		Throw(NewTypeError(FromGoString("Object.defineProperties called with a non-object descriptor map")))
+		return v
+	}
+	p := props.object()
+	for _, name := range p.orderedStringKeysFiltered(true) {
+		v.DefineProperty(StringValue(name), props.Get(name))
+	}
+	for i := range p.symKeys {
+		if p.symDescs[i].enumerable {
+			v.DefineProperty(symbolValue(p.symKeys[i]), p.getSym(props, p.symKeys[i]))
+		}
+	}
+	return v
+}
+
 // defineOwn stores a descriptor at a named key, overwriting the slot in place when
 // the key already exists and appending in insertion order when it is new, the
 // store defineProperty makes once it has settled the descriptor.

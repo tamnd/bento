@@ -1398,6 +1398,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectHasOwn(argNodes)
 	case "defineProperty":
 		return r.objectDefineProperty(argNodes)
+	case "defineProperties":
+		return r.objectDefineProperties(argNodes)
 	case "is":
 		return r.objectIs(argNodes)
 	default:
@@ -1572,6 +1574,30 @@ func (r *Renderer) objectDefineProperty(argNodes []frontend.Node) (ast.Expr, err
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DefineProperty")}, Args: []ast.Expr{key, desc}}, nil
+}
+
+// objectDefineProperties lowers Object.defineProperties(o, props) to a runtime
+// DefineProperties on the dynamic receiver, which walks the descriptor map's own
+// enumerable properties and defines each onto the receiver through the same path
+// the single-property form takes. The receiver must be a dynamic value for the
+// same reason defineProperty requires it, so a fixed-shape receiver hands back.
+// Both operands are evaluated, so no read is dropped.
+func (r *Renderer) objectDefineProperties(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperties with other than two arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperties on a fixed-shape receiver, which has no runtime descriptor bag, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	props, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DefineProperties")}, Args: []ast.Expr{props}}, nil
 }
 
 // objectOwnNameArray lowers Object.keys(o) and Object.getOwnPropertyNames(o) on

@@ -39,6 +39,13 @@ func NewSymbolNoDesc() Value {
 // identity key in the property bag and compared by pointer in StrictEquals.
 func (v Value) symbol() *Symbol { return (*Symbol)(v.ref) }
 
+// symbolValue boxes an existing *Symbol back into a value, the reverse of symbol,
+// so a walk over an object's symbol-keyed properties can hand each key to an API
+// that takes a boxed key such as DefineProperty.
+func symbolValue(s *Symbol) Value {
+	return Value{kind: KindSymbol, ref: unsafe.Pointer(s)}
+}
+
 // SymbolDescription returns the symbol's description as a string value, or
 // undefined when it was created without one, the read Symbol.prototype.description
 // makes. It is only valid on a KindSymbol value.
