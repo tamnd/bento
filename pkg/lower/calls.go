@@ -334,7 +334,16 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		if err != nil {
 			return nil, err
 		}
-		lowered, err = r.bridgeArg(lowered, a, params[i].Type)
+		// An untyped destructured parameter takes one boxed value.Value slot rather than
+		// the Go struct or slice its checker type would map to, so the argument boxes to a
+		// dynamic value here the same way a static value crossing into any does. Bridging
+		// against the parameter's object type instead would build the wrong struct, the one
+		// with dynamic fields the argument's own concrete struct does not match.
+		if r.dynamicParamSlot(params[i]) {
+			lowered, err = r.bridgeArg(lowered, a, frontend.Type{Flags: frontend.TypeAny})
+		} else {
+			lowered, err = r.bridgeArg(lowered, a, params[i].Type)
+		}
 		if err != nil {
 			return nil, err
 		}

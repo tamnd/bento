@@ -316,7 +316,7 @@ func (r *Renderer) paramFields(sig frontend.Signature) (*ast.FieldList, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "parameter name is not a Go identifier"}
 		}
-		pt, err := r.typeExpr(p.Type)
+		pt, err := r.paramFieldType(p)
 		if err != nil {
 			return nil, err
 		}
@@ -364,13 +364,26 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 			}
 		}
-		pt, err := r.typeExpr(p.Type)
+		pt, err := r.paramFieldType(p)
 		if err != nil {
 			return nil, err
 		}
 		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(pname)}, Type: pt})
 	}
 	return fields, nil
+}
+
+// paramFieldType gives the Go type of a parameter's field. An untyped destructured
+// parameter takes one boxed value.Value slot, since its pattern has no static shape to
+// intern to a struct or a slice; every other parameter takes the Go type its checker
+// type maps to. It is the field counterpart to dynamicParamSlot: the field type and
+// the call-site coercion must agree, so both consult the same predicate.
+func (r *Renderer) paramFieldType(p frontend.Param) (ast.Expr, error) {
+	if r.dynamicParamSlot(p) {
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+	}
+	return r.typeExpr(p.Type)
 }
 
 // variadicPlan describes a top-level function whose trailing optional parameters
@@ -864,7 +877,7 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 			if !ok {
 				return nil, &NotYetLowerable{Reason: noun + " destructured parameter has no Go name to read from, a later slice"}
 			}
-			ptype, err := r.typeExpr(sig.Params[pi].Type)
+			ptype, err := r.paramFieldType(sig.Params[pi])
 			if err != nil {
 				return nil, err
 			}
@@ -931,6 +944,17 @@ func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig fron
 		goName, ok := localName(sig.Params[i].Name)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter has no Go name to read from, a later slice"}
+		}
+		// An untyped destructured parameter arrives as one boxed value.Value slot, so its
+		// names read out of it through the dynamic protocol rather than through the struct
+		// selectors and slice indices the typed binder emits, which no boxed value carries.
+		if r.dynamicParamSlot(sig.Params[i]) {
+			stmts, err := r.bindDynamicPattern(pat, ident(goName), token.DEFINE)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, stmts...)
+			continue
 		}
 		text := strings.TrimSpace(r.prog.Text(pat))
 		switch {

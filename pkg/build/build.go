@@ -318,11 +318,14 @@ func isPrivateNameMiss(d frontend.Diagnostic) bool {
 // (7052, 7053) moved to toleratedDynamicMember once the dynamic member path grew
 // to fold an absent element read; the remaining index-access and module-resolution
 // reports (7015, 7016, 7017) are still deliberately absent and gate until their
-// own slices land, staying attributable to them. Binding element (7031) is also absent: a
-// destructured parameter with no annotation is not typed `any`, the checker
-// infers an anonymous object type from the pattern, so tolerating it would emit
-// Go that does not compile rather than a dynamic slot. It waits on the
-// destructured-param lowering and stays a front-door handback until then.
+// own slices land, staying attributable to them. Binding element (7031) is
+// admitted now that the untyped destructured parameter lowers against a dynamic
+// slot: the checker infers an anonymous object type from the pattern, and the
+// lowerer gives such a parameter one boxed value.Value slot whose bound names read
+// out through the dynamic Get protocol. A pattern shape the dynamic path does not
+// serve yet (an array pattern, a rename, a default, a nested element) hands back
+// cleanly rather than emitting broken Go, so tolerating the code never produces Go
+// that does not compile.
 var toleratedImplicitAny = map[int]bool{
 	7005: true, // Variable 'X' implicitly has an 'any' type.
 	7006: true, // Parameter 'X' implicitly has an 'any' type.
@@ -332,6 +335,7 @@ var toleratedImplicitAny = map[int]bool{
 	7018: true, // Object literal's property 'X' implicitly has an 'any' type.
 	7019: true, // Rest parameter 'X' implicitly has an 'any[]' type.
 	7022: true, // 'X' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+	7031: true, // Binding element 'X' implicitly has an 'any' type.
 	7032: true, // Property 'X' implicitly has type 'any', because its set accessor lacks a parameter type annotation.
 	7033: true, // Property 'X' implicitly has type 'any', because its get accessor lacks a return type annotation.
 	7034: true, // Variable 'X' implicitly has type 'any' in some locations where its type cannot be determined.

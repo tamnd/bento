@@ -56,19 +56,33 @@ func TestImplicitAnyMemberLowers(t *testing.T) {
 	}
 }
 
-// TestDestructuredImplicitAnyStillGates pins the deliberate exclusion: an
-// untyped destructured parameter is not typed `any`, the checker infers an
-// anonymous object type from the pattern, so tolerating it would emit Go that
-// does not compile. It stays a front-door handback ("Binding element ...") until
-// the destructured-param lowering lands.
-func TestDestructuredImplicitAnyStillGates(t *testing.T) {
-	src := "function g({ a, b }) { return a + b; }\nconsole.log(g({ a: 3, b: 4 }));\n"
+// TestUntypedDestructuredParamLowers pins that an untyped destructured object
+// parameter now lowers rather than gating. The checker reports "Binding element
+// 'a' implicitly has an 'any' type" for each element, but the front door tolerates
+// it and the lowerer gives the parameter one boxed value.Value slot whose shorthand
+// names read out through the dynamic Get protocol.
+func TestUntypedDestructuredParamLowers(t *testing.T) {
+	src := "function g({ a, b }) { return a; }\nconsole.log(String(g({ a: 3, b: 4 })));\n"
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("untyped destructured parameter should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "func G(__0 value.Value)") {
+		t.Fatalf("expected the destructured parameter to take a dynamic slot, got:\n%s", out)
+	}
+	if !strings.Contains(out, `__0.Get(value.FromGoString("a"))`) {
+		t.Fatalf("expected the bound name to read through the dynamic Get protocol, got:\n%s", out)
+	}
+}
+
+// TestUntypedArrayDestructuredParamStillGates pins the honest boundary: an untyped
+// array destructuring parameter reads through the dynamic index protocol, a later
+// slice, so it hands back at the front door rather than emitting broken Go.
+func TestUntypedArrayDestructuredParamStillGates(t *testing.T) {
+	src := "function g([a, b]) { return a; }\nconsole.log(String(g([3, 4])));\n"
 	_, err := compileSource(t, src)
 	if err == nil {
-		t.Fatal("untyped destructured parameter should still gate at the front door")
-	}
-	if !strings.Contains(err.Error(), "Binding element") {
-		t.Fatalf("expected a binding-element handback, got: %v", err)
+		t.Fatal("untyped array destructured parameter should still gate at the front door")
 	}
 }
 
