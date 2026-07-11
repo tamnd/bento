@@ -627,6 +627,7 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 		}
 		kids := r.prog.Children(p)
 		var keyNode, valNode frontend.Node
+		colon := false
 		switch len(kids) {
 		case 1:
 			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
@@ -634,7 +635,7 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 			}
 			keyNode, valNode = kids[0], kids[0]
 		case 2:
-			keyNode, valNode = kids[0], kids[1]
+			keyNode, valNode, colon = kids[0], kids[1], true
 		default:
 			return nil, &NotYetLowerable{Reason: "boxing an object literal member with an unexpected shape is a later slice"}
 		}
@@ -644,6 +645,14 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 		boxedVal, err := r.boxOperand(valNode)
 		if err != nil {
 			return nil, err
+		}
+		// The __proto__: v member is a directive on the object's prototype, not an own
+		// property of that name, so it writes the slot rather than a slot Set would land.
+		// Only the colon form is the prototype directive; the { __proto__ } shorthand is
+		// an ordinary own property.
+		if colon && r.prog.Text(keyNode) == "__proto__" {
+			obj = &ast.CallExpr{Fun: &ast.SelectorExpr{X: obj, Sel: ident("SetProtoAssign")}, Args: []ast.Expr{boxedVal}}
+			continue
 		}
 		obj = &ast.CallExpr{
 			Fun: &ast.SelectorExpr{X: obj, Sel: ident("Set")},

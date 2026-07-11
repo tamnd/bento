@@ -1406,9 +1406,86 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectGetOwnPropertyDescriptors(argNodes)
 	case "is":
 		return r.objectIs(argNodes)
+	case "create":
+		return r.objectCreate(argNodes)
+	case "getPrototypeOf":
+		return r.objectGetPrototypeOf(argNodes)
+	case "setPrototypeOf":
+		return r.objectSetPrototypeOf(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
+}
+
+// objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime
+// SetPrototype on the dynamic receiver, which writes the prototype slot and returns
+// the receiver. An object or null becomes the new prototype; a non-extensible
+// object rejects a change to a different prototype with a TypeError. The receiver
+// must be a dynamic value, since a fixed-shape Go struct has no runtime prototype
+// slot to write, so a non-dynamic receiver hands back. The prototype is boxed the
+// way any dynamic operand is; both operands are evaluated, so no read is dropped.
+func (r *Renderer) objectSetPrototypeOf(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.setPrototypeOf with other than two arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.setPrototypeOf on a fixed-shape receiver, which has no runtime prototype slot, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	proto, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("SetPrototype")}, Args: []ast.Expr{proto}}, nil
+}
+
+// objectGetPrototypeOf lowers Object.getPrototypeOf(o) to a runtime GetPrototype on
+// the dynamic receiver, which returns the object's prototype slot as a value or
+// null when it has none. The receiver must be a dynamic value, since a fixed-shape
+// Go struct has no runtime prototype slot to read, so a non-dynamic receiver hands
+// back. The receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectGetPrototypeOf(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.getPrototypeOf with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.getPrototypeOf on a fixed-shape receiver, which has no runtime prototype slot, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetPrototype")}}, nil
+}
+
+// objectCreate lowers Object.create(proto) and Object.create(proto, descs) to a
+// runtime ObjectCreate on the boxed prototype, which returns a new object whose
+// [[Prototype]] is that value. The two-argument form applies the descriptor map
+// through the same DefineProperties path Object.defineProperties takes, so the
+// created object gets its properties in one expression. The prototype and the
+// descriptor map are boxed the way any dynamic operand is; both are evaluated, so
+// no read is dropped.
+func (r *Renderer) objectCreate(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 && len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.create with other than one or two arguments is a later slice"}
+	}
+	proto, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	created := &ast.CallExpr{Fun: sel("value", "ObjectCreate"), Args: []ast.Expr{proto}}
+	if len(argNodes) == 1 {
+		return created, nil
+	}
+	descs, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: created, Sel: ident("DefineProperties")}, Args: []ast.Expr{descs}}, nil
 }
 
 // objectIs lowers Object.is(a, b), the SameValue equality, over two operands the
