@@ -197,6 +197,36 @@ func (v Value) GetOwnPropertyDescriptor(key Value) Value {
 	return Undefined
 }
 
+// GetOwnPropertyDescriptors returns an object mapping every own property key of
+// the receiver to its descriptor object, the runtime behind
+// Object.getOwnPropertyDescriptors(o). It walks the own string keys in the spec's
+// enumeration order, including the non-enumerable ones, then the symbol keys in
+// insertion order, and stores each key's descriptor object under the same key on a
+// fresh object, so the result carries a string entry for every string key and a
+// symbol entry for every symbol key. An array contributes its element indices and
+// its length. A non-object receiver yields an empty object, the descriptors of
+// nothing.
+func (v Value) GetOwnPropertyDescriptors() Value {
+	result := NewObject()
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return result
+	}
+	o := v.object()
+	for _, k := range o.orderedStringKeysFiltered(false) {
+		result.Set(k, v.GetOwnPropertyDescriptor(StringValue(k)))
+	}
+	if v.kind == KindArray {
+		result.Set(FromGoString("length"), v.GetOwnPropertyDescriptor(StringValue(FromGoString("length"))))
+	}
+	ro := result.object()
+	for i := range o.symKeys {
+		ro.setSym(result, o.symKeys[i], o.symDescs[i].toObject())
+	}
+	return result
+}
+
 // validateDefine reports whether a define is allowed, the rejection half of
 // ValidateAndApplyPropertyDescriptor. A property that does not yet exist may be
 // added only when the object is extensible. An existing configurable property
