@@ -116,3 +116,31 @@ func TestIsExtensible(t *testing.T) {
 		t.Fatal("a number reported extensible")
 	}
 }
+
+// TestIsSealed proves the predicate reports a sealed or frozen object sealed, an
+// object that is only prevented but still configurable not, and a fresh object not.
+func TestIsSealed(t *testing.T) {
+	if NewObject().IsSealed() {
+		t.Fatal("a fresh object reported sealed")
+	}
+	prevented := NewObject()
+	prevented.Set(FromGoString("a"), Number(1))
+	prevented.PreventExtensions()
+	if prevented.IsSealed() {
+		t.Fatal("a prevented but still configurable object reported sealed")
+	}
+	if !NewObject().Seal().IsSealed() {
+		t.Fatal("a sealed object reported not sealed")
+	}
+	if !NewObject().Freeze().IsSealed() {
+		t.Fatal("a frozen object reported not sealed")
+	}
+	if !Number(1).IsSealed() {
+		t.Fatal("a number reported not sealed")
+	}
+	empty := NewObject()
+	empty.PreventExtensions()
+	if !empty.IsSealed() {
+		t.Fatal("a non-extensible object with no properties reported not sealed")
+	}
+}
