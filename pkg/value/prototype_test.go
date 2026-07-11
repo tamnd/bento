@@ -18,6 +18,15 @@ func TestObjectCreateSetsProto(t *testing.T) {
 	}
 }
 
+// TestObjectCreateNullProto proves Object.create(null) returns a prototype-less
+// object: its slot is nil so a read never climbs past its own bag.
+func TestObjectCreateNullProto(t *testing.T) {
+	o := ObjectCreate(Null)
+	if o.object().proto != nil {
+		t.Fatal("Object.create(null) left a non-nil prototype slot")
+	}
+}
+
 // TestObjectCreatePrimitiveThrows proves Object.create rejects a prototype that is
 // neither an object nor null with a TypeError.
 func TestObjectCreatePrimitiveThrows(t *testing.T) {

@@ -9,15 +9,18 @@ package value
 
 // ObjectCreate returns a new plain object whose [[Prototype]] is proto, the runtime
 // behind Object.create(proto). An object prototype is stored in the new object's
-// slot so a later read climbs into it. The result is a fresh, extensible object
-// with no own properties, the target Object.create hands back before an optional
-// descriptor map is applied. A prototype that is neither an object nor null throws
-// a TypeError the way the spec rejects it; the null case is layered on separately.
+// slot so a later read climbs into it, and a null prototype leaves the slot nil so
+// the object is prototype-less and a read never climbs past its own bag. The result
+// is a fresh, extensible object with no own properties, the target Object.create
+// hands back before an optional descriptor map is applied. A prototype that is
+// neither an object nor null throws a TypeError the way the spec rejects it.
 func ObjectCreate(proto Value) Value {
 	o := &Object{kind: KindObject}
 	switch proto.kind {
 	case KindObject, KindArray, KindFunc:
 		o.proto = proto.object()
+	case KindNull:
+		o.proto = nil
 	default:
 		Throw(NewTypeError(FromGoString("Object prototype may only be an Object or null")))
 		return Undefined
