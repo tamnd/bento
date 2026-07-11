@@ -116,7 +116,7 @@ type objectAssignElem struct {
 // default, or a nested pattern is a later slice.
 func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignElem, error) {
 	if strings.HasPrefix(strings.TrimSpace(r.prog.Text(prop)), "...") {
-		return objectAssignElem{}, &NotYetLowerable{Reason: "a rest property in an object assignment gathers the remaining fields into an object, a later slice"}
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
 	}
 	pc := r.prog.Children(prop)
 	switch {
