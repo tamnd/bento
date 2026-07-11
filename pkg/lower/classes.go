@@ -1134,13 +1134,30 @@ func (r *Renderer) staticFieldOf(info *classInfo, m frontend.Node, taken map[str
 	if len(kids) < 2 {
 		return classField{}, &NotYetLowerable{Reason: "a static field without a plain identifier name is a later slice"}
 	}
-	prop, ok := r.memberName(kids[1])
-	if !ok {
-		return classField{}, r.memberNameReason(kids[1], "static field")
-	}
-	propGo, ok := exportedField(prop)
-	if !ok {
-		return classField{}, &NotYetLowerable{Reason: "static field name is not a Go identifier"}
+	// A private static field (static #x) lowers to an unexported package var; the
+	// JS name (#x) stays the property so a C.#x or this.#x read or write resolves to
+	// it, and the candidate names take the lowercase p_ spelling rather than the
+	// exported one, since a private static never joins the class's public Go shape.
+	var prop string
+	var candidates []string
+	if r.isPrivateName(kids[1]) {
+		prop = strings.TrimSpace(r.prog.Text(kids[1]))
+		goPriv, ok := privateGoName(prop)
+		if !ok {
+			return classField{}, &NotYetLowerable{Reason: "private static field name is not a Go identifier"}
+		}
+		candidates = []string{lowerFirst(info.goName) + "_" + goPriv}
+	} else {
+		p, ok := r.memberName(kids[1])
+		if !ok {
+			return classField{}, r.memberNameReason(kids[1], "static field")
+		}
+		propGo, ok := exportedField(p)
+		if !ok {
+			return classField{}, &NotYetLowerable{Reason: "static field name is not a Go identifier"}
+		}
+		prop = p
+		candidates = []string{lowerFirst(info.goName) + propGo, info.goName + propGo}
 	}
 	var init frontend.Node
 	if last := kids[len(kids)-1]; len(kids) > 2 && last.Kind() != frontend.NodeUnknown {
@@ -1173,7 +1190,7 @@ func (r *Renderer) staticFieldOf(info *classInfo, m frontend.Node, taken map[str
 		runtimeInit = true
 	}
 	name := ""
-	for _, cand := range []string{lowerFirst(info.goName) + propGo, info.goName + propGo} {
+	for _, cand := range candidates {
 		if !taken[cand] && !goKeywords[cand] {
 			name = cand
 			break
@@ -1815,7 +1832,7 @@ func (r *Renderer) staticInitAssign(f classField) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	rhs, err = r.coerceToTarget(rhs, f.init, f.ident)
+	rhs, err = r.staticInitRHS(rhs, f, strings.HasPrefix(f.prop, "#"))
 	if err != nil {
 		return nil, err
 	}
@@ -1892,7 +1909,13 @@ func (r *Renderer) thrownMethodDecls(info *classInfo) []ast.Decl {
 // runs its initializer as an assignment in the class's static init function, in
 // member order, since package-level Go has no ordered execution.
 func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
-	goType, err := r.typeExpr(r.prog.TypeAt(f.ident))
+	// A private static field's accesses (C.#x) type as dynamic, unlike an instance
+	// private field whose this.#x reads type as the declared type, so its package
+	// var is a boxed value.Value and its initializer boxes into that box, the same
+	// dynamic shape an untyped public static takes. This keeps the read, write, and
+	// arithmetic that treat the field as a box consistent with its declaration.
+	boxed := strings.HasPrefix(f.prop, "#")
+	goType, err := r.staticGoType(f, boxed)
 	if err != nil {
 		return nil, err
 	}
@@ -1905,7 +1928,7 @@ func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
 		if err != nil {
 			return nil, err
 		}
-		rhs, err = r.coerceToTarget(rhs, f.init, f.ident)
+		rhs, err = r.staticInitRHS(rhs, f, boxed)
 		if err != nil {
 			return nil, err
 		}
@@ -1915,6 +1938,27 @@ func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
 		Tok:   token.VAR,
 		Specs: []ast.Spec{spec},
 	}, nil
+}
+
+// staticGoType is the Go type of a static field's package var: the declared type
+// for a public static, or a boxed value.Value for a private static whose accesses
+// type as dynamic.
+func (r *Renderer) staticGoType(f classField, boxed bool) (ast.Expr, error) {
+	if boxed {
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+	}
+	return r.typeExpr(r.prog.TypeAt(f.ident))
+}
+
+// staticInitRHS coerces a static field's initializer to its package var: boxed
+// into a value.Value for a private static, or coerced to the declared type for a
+// public one.
+func (r *Renderer) staticInitRHS(rhs ast.Expr, f classField, boxed bool) (ast.Expr, error) {
+	if boxed {
+		return r.boxStaticToDynamic(rhs, f.init)
+	}
+	return r.coerceToTarget(rhs, f.init, f.ident)
 }
 
 // classStruct emits the struct: one field per instance field, in declaration

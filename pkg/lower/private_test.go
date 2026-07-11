@@ -94,9 +94,14 @@ func TestPrivateHandsBack(t *testing.T) {
 			"a private brand check (#m in obj) is a later slice",
 		},
 		{
-			"privateStaticField",
-			"class C { static #x: number = 1; }\nnew C();\n",
-			"a private static field is a later slice",
+			"privateStaticGetter",
+			"class C { static get #x(): number { return 1; } }\nnew C();\n",
+			"a private get accessor is a later slice",
+		},
+		{
+			"privateStaticSetter",
+			"class C { static #v = 0; static set #x(v: number) { C.#v = v; } }\nnew C();\n",
+			"a private set accessor is a later slice",
 		},
 	}
 	for _, tc := range cases {
