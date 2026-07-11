@@ -929,6 +929,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if e, ok, err := r.functionMethodCall(recvNode, method, argNodes); ok || err != nil {
 		return e, err
 	}
+	// super.m(...) inside a static method calls the base class's static method,
+	// which lowered to a package function, so it routes to the same static call
+	// A.m(...) takes rather than to the instance path: a static body has no
+	// receiver, and the base's static method is a function, not a method on a
+	// value.
+	if recvNode.Kind() == frontend.NodeSuperKeyword && r.staticClass != nil && r.staticClass.base != nil {
+		return r.staticMethodCall(r.staticClass.base, method, argNodes)
+	}
 	// A method on a class instance, this.m(...) inside a class body or p.m(...)
 	// on an instance, lowers to the Go method the class declared. It routes
 	// before the array, map, and string paths so a class receiver is dispatched

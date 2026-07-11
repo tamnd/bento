@@ -314,6 +314,12 @@ type Renderer struct {
 	classOrder []string
 	curClass   *classInfo
 	thisName   string
+	// staticClass is the class whose static method body is being lowered, set
+	// only inside a static function where there is no receiver, so super.m() in a
+	// static method can resolve to the base class's static function while a bare
+	// super or an instance-shaped super read still hands back through the
+	// receiver gate the instance path uses.
+	staticClass *classInfo
 	// classTaken is the spoken-identifier set the class pre-pass built, kept
 	// so the vtable machinery can check the names it mints at render time
 	// (the vtable type and vars, the init functions) the same way
