@@ -188,6 +188,29 @@ func GenericForEach(recv, cb Value, thisArg ...Value) Value {
 	return Undefined
 }
 
+// GenericSlice runs Array.prototype.slice on a generic receiver, returning a new
+// array of the elements in the half-open range [start, end), read as the properties
+// named by their indices. start and end are relative indices: a negative bound
+// counts from the end and clamps at 0, a positive bound clamps at the length, an
+// omitted start is 0 and an omitted end is the length. The result is a real array
+// whatever the receiver's kind, so a borrowed slice on an array-like still yields an
+// array.
+func GenericSlice(recv Value, bounds ...Value) Value {
+	n := arrayLikeLen(recv)
+	start, end := 0, n
+	if len(bounds) > 0 {
+		start = relIndex(toIntegerValue(bounds[0]), n)
+	}
+	if len(bounds) > 1 {
+		end = relIndex(toIntegerValue(bounds[1]), n)
+	}
+	out := []Value{}
+	for k := start; k < end; k++ {
+		out = append(out, arrayLikeGet(recv, k))
+	}
+	return NewArrayValue(out)
+}
+
 // GenericMap runs Array.prototype.map on a generic receiver, returning a new array
 // whose element k is the callback's result on element k. The result is a real array
 // whatever the receiver's kind, so a borrowed map on an array-like still yields an
