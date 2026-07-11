@@ -929,11 +929,36 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 		return nil, &NotYetLowerable{Reason: "an empty object-pattern parameter binds nothing"}
 	}
 	optionalField := map[string]bool{}
+	propType := map[string]frontend.Type{}
 	for _, pr := range r.prog.Properties(objType) {
 		optionalField[pr.Name] = pr.Optional
+		propType[pr.Name] = pr.Type
 	}
 	var out []ast.Stmt
 	for _, el := range elems {
+		// A nested pattern renames a property into an inner pattern that binds at body
+		// entry against the value the property holds, the same read-into-a-temp step a
+		// nested declaration element takes.
+		if source, sub, ok := r.objectNestedElem(el); ok {
+			prop := r.prog.Text(source)
+			srcName, nok := localName(prop)
+			pt, known := propType[prop]
+			if !nok || !known {
+				return nil, &NotYetLowerable{Reason: "a nested object-pattern parameter over an unknown property is a later slice"}
+			}
+			field, fok := exportedField(srcName)
+			if !fok {
+				return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
+			}
+			tmp := r.freshTemp()
+			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(goName), Sel: ident(field)}}})
+			inner, err := r.bindSubPattern(sub, ident(tmp), pt, token.DEFINE)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, inner...)
+			continue
+		}
 		info, err := r.classifyObjectElem(el)
 		if err != nil {
 			return nil, err
@@ -1011,10 +1036,22 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 		if err != nil {
 			return nil, err
 		}
-		// A nested pattern in a parameter binds the whole tree at body entry, a later
-		// slice; until then it hands back rather than reading a nil name node.
+		// A nested pattern in a parameter binds the whole tree at body entry: the slot is
+		// held in a temporary, then the inner pattern binds against it the same way a
+		// nested declaration element does.
 		if info.nested != nil {
-			return nil, &NotYetLowerable{Reason: "a nested pattern in a destructured parameter is a later slice"}
+			tmp := r.freshTemp()
+			read := &ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: ident(goName), Sel: ident("AtI")},
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+			}
+			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{read}})
+			inner, err := r.bindSubPattern(info.nested, ident(tmp), elemT, token.DEFINE)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, inner...)
+			continue
 		}
 		name, ok := localName(r.prog.Text(info.nameNode))
 		if !ok {
