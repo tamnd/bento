@@ -319,11 +319,6 @@ func TestClassHandsBack(t *testing.T) {
 			"variable declaration before super()",
 		},
 		{
-			"superSetterStore",
-			"class A { n: number = 1; set x(v: number) { this.n = v; } }\nclass B extends A { put(v: number): void { super.x = v; } }\nconst b: B = new B();\nb.put(5);\nconsole.log(b.n);\n",
-			"later slice",
-		},
-		{
 			"uninitializedStaticField",
 			"class A { static n: number; }\nconsole.log(A.n);\n",
 			"without an initializer",
@@ -1462,5 +1457,30 @@ new C();
 `
 	if reason, want := renderProgramHandBack(t, src), "a yield* over a non-generator iterable is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}
+
+// TestSuperSetterStoreRuns pins that a store through a base set accessor spelled
+// with super, super.x = v, routes to the base setter method on the embedded base
+// value the way the super read and super method call do, so the write reaches the
+// base setter with no virtual dispatch.
+func TestSuperSetterStoreRuns(t *testing.T) {
+	const src = `class A {
+  n: number = 1;
+  set x(v: number) { this.n = v; }
+}
+class B extends A {
+  put(v: number): void { super.x = v; }
+}
+const b = new B();
+b.put(5);
+console.log(String(b.n));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "b.A.SetX(") {
+		t.Errorf("super setter store did not route to the base setter:\n%s", source)
+	}
+	if got := runProgramGo(t, src); got != "5\n" {
+		t.Errorf("super setter store ran wrong\n got: %q\nwant: %q", got, "5\n")
 	}
 }
