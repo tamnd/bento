@@ -2439,6 +2439,10 @@ func (r *Renderer) arrayProtoBorrowedCall(name, method string, argNodes []fronte
 		return r.arrayGenericCall("GenericIncludes", args, methodArgs, 1)
 	case "fill":
 		return r.arrayGenericCall("GenericFill", args, methodArgs, 1)
+	case "join":
+		return r.arrayGenericCall("GenericJoin", args, methodArgs, 0)
+	case "copyWithin":
+		return r.arrayGenericCall("GenericCopyWithin", args, methodArgs, 0)
 	case "reverse":
 		return r.arrayGenericCall("GenericReverse", args, methodArgs, 0)
 	case "slice":

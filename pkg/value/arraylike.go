@@ -10,7 +10,10 @@
 
 package value
 
-import "math"
+import (
+	"math"
+	"strings"
+)
 
 // maxArrayLength is 2^53 - 1, the largest integer a length can hold, the cap
 // ToLength applies so a fractional or over-large length property still yields a
@@ -158,6 +161,73 @@ func GenericFill(recv, value Value, bounds ...Value) Value {
 	}
 	for k := start; k < end; k++ {
 		arrayLikeSet(recv, k, value)
+	}
+	return recv
+}
+
+// GenericJoin runs Array.prototype.join on a generic receiver, concatenating the
+// string form of each element with a separator between them. The separator defaults
+// to a comma and an explicit undefined takes that default too, any other separator
+// coercing through ToString. A hole reads as undefined and undefined and null each
+// contribute the empty string, so join treats a hole as undefined the way the spec
+// does. The result boxes to a string.
+func GenericJoin(recv Value, sep ...Value) Value {
+	n := arrayLikeLen(recv)
+	separator := ","
+	if len(sep) > 0 && sep[0].kind != KindUndefined {
+		separator = ToString(sep[0]).ToGoString()
+	}
+	var b strings.Builder
+	for k := 0; k < n; k++ {
+		if k > 0 {
+			b.WriteString(separator)
+		}
+		elem := arrayLikeGet(recv, k)
+		if elem.kind == KindUndefined || elem.kind == KindNull {
+			continue // undefined and null, and so a hole, join as the empty string
+		}
+		b.WriteString(ToString(elem).ToGoString())
+	}
+	return StringValue(FromGoString(b.String()))
+}
+
+// GenericCopyWithin runs Array.prototype.copyWithin on a generic receiver, copying
+// the block of elements starting at from into the positions starting at to, both
+// relative indices that count from the end when negative, and returning the receiver.
+// The copy runs backward when the ranges overlap so a source is read before it is
+// overwritten. A hole in the source stays a hole: rather than writing undefined, the
+// target index is deleted, matching the spec's DeletePropertyOrThrow on a missing
+// source.
+func GenericCopyWithin(recv Value, bounds ...Value) Value {
+	n := arrayLikeLen(recv)
+	to, from, final := 0, 0, n
+	if len(bounds) > 0 {
+		to = relIndex(toIntegerValue(bounds[0]), n)
+	}
+	if len(bounds) > 1 {
+		from = relIndex(toIntegerValue(bounds[1]), n)
+	}
+	if len(bounds) > 2 {
+		final = relIndex(toIntegerValue(bounds[2]), n)
+	}
+	count := final - from
+	if n-to < count {
+		count = n - to
+	}
+	dir := 1
+	if from < to && to < from+count {
+		dir = -1
+		from += count - 1
+		to += count - 1
+	}
+	for ; count > 0; count-- {
+		if arrayLikeHas(recv, from) {
+			arrayLikeSet(recv, to, arrayLikeGet(recv, from))
+		} else {
+			recv.DeleteIndex(float64(to))
+		}
+		from += dir
+		to += dir
 	}
 	return recv
 }
