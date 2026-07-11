@@ -26,6 +26,7 @@ type Object struct {
 	call          callFn       // the invocable body of a callable, nil for a plain object
 	proto         *Object      // the [[Prototype]] a read climbs on an own miss; nil is the end of the user chain
 	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
+	elemsSealed   bool         // set once Object.seal marks an array's elements non-configurable, so a delete fails
 }
 
 // isExtensible reports whether new properties may still be added, the state
@@ -166,15 +167,18 @@ func (v Value) Call(args ...Value) Value {
 // map an array can still carry. An object and a function drop the own key through
 // deleteOwn. A primitive receiver has no own property this path stores, so there
 // is nothing to remove and the result is true, the value delete gives for a
-// property that is absent. Every property this model creates is configurable, so
-// a removal never fails and the result is always true; a non-configurable
-// property comes only from a descriptor the object model does not build yet.
+// property that is absent. A non-configurable property, whether from a descriptor
+// or from Object.seal, refuses removal and reports false, the value delete gives
+// when the property survives.
 func (v Value) Delete(key BStr) bool {
 	switch v.kind {
 	case KindArray:
 		o := v.object()
 		if idx, ok := arrayIndex(key.ToGoString()); ok {
 			if idx >= 0 && idx < len(o.elems) {
+				if o.elemsSealed {
+					return false
+				}
 				o.elems[idx] = Undefined
 			}
 			return true
@@ -194,6 +198,9 @@ func (v Value) Delete(key BStr) bool {
 func (o *Object) deleteOwn(key BStr) bool {
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
+			if !o.descs[i].configurable {
+				return false
+			}
 			o.keys = append(o.keys[:i], o.keys[i+1:]...)
 			o.descs = append(o.descs[:i], o.descs[i+1:]...)
 			return true

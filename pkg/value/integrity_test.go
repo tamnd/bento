@@ -34,3 +34,32 @@ func TestPreventExtensionsArrayGrowth(t *testing.T) {
 		t.Fatalf("an in-bounds write on a non-extensible array did not update: got %v, want 7", got)
 	}
 }
+
+// TestSeal proves a sealed object marks every own property non-configurable while
+// leaving it writable: a delete fails and the property survives, an assignment still
+// takes, and a new key is refused.
+func TestSeal(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("a"), Number(1))
+	o.Seal()
+
+	if d, ok := o.object().getOwnDesc(FromGoString("a")); !ok || d.configurable {
+		t.Fatal("seal did not clear the property's configurable flag")
+	} else if !d.writable {
+		t.Fatal("seal cleared the property's writable flag, which seal leaves alone")
+	}
+	if o.Delete(FromGoString("a")) {
+		t.Fatal("delete of a sealed property reported success")
+	}
+	if got := o.Get(FromGoString("a")); got.scalar != Number(1).scalar {
+		t.Fatalf("a sealed property did not survive delete: got %v, want 1", got)
+	}
+	o.Set(FromGoString("a"), Number(9))
+	if got := o.Get(FromGoString("a")); got.scalar != Number(9).scalar {
+		t.Fatalf("a sealed property is not writable: got %v, want 9", got)
+	}
+	o.Set(FromGoString("b"), Number(2))
+	if got := o.Get(FromGoString("b")); got.kind != KindUndefined {
+		t.Fatalf("a new key on a sealed object took: got %v, want undefined", got)
+	}
+}
