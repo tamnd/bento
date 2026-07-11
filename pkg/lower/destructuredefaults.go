@@ -60,6 +60,12 @@ type objectDefaultElem struct {
 // name and the second child tells a default (`=`) from a rename (`:`), which the
 // child kinds alone cannot when the default is itself an identifier.
 func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, error) {
+	// A rest property gathers the own enumerable properties the pattern did not name
+	// into a new object, which needs the object model to enumerate a value's own keys,
+	// a phase 7 capability. It hands back explicitly rather than emit a partial gather.
+	if strings.HasPrefix(strings.TrimSpace(r.prog.Text(el)), "...") {
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
+	}
 	ec := r.prog.Children(el)
 	switch {
 	case len(ec) == 1 && ec[0].Kind() == frontend.NodeIdentifier:
@@ -67,7 +73,7 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && !strings.Contains(r.elemSeparator(ec[0], ec[1]), ":"):
 		return objectDefaultElem{nameNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
 	default:
-		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rename, default, rest, or nested pattern is a later slice"}
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rename, default, or nested pattern is a later slice"}
 	}
 }
 
