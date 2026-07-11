@@ -1613,6 +1613,14 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.objectDestructureAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		// An array destructuring assignment can also be parenthesized in statement
+		// position, ([a, b] = xs), so unwrap the paren and route the inner assignment
+		// through the array path the bare form takes.
+		if inner := r.prog.Children(n); len(inner) == 1 && inner[0].Kind() == frontend.NodeBinaryExpression {
+			if stmt, ok, err := r.arrayDestructureAssign(inner[0]); ok || err != nil {
+				return stmt, err
+			}
+		}
 		return nil, &NotYetLowerable{Reason: "a parenthesized expression statement that is not an object destructuring assignment is a later slice"}
 	case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
 		return r.lowerIncDec(n)
@@ -1679,6 +1687,28 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 	fixedTargets, restNode, hasRest, err := r.splitArrayRest(targets)
 	if err != nil {
 		return nil, true, err
+	}
+	// A nested pattern in any target position, `[[a, b], c] = m`, turns the flat
+	// parallel assignment into a recursive tree of reads: the whole pattern routes
+	// through the assignment recursion, which holds each nested slot in a temporary and
+	// stores each leaf into its existing target. It needs the source to be a plain array
+	// variable so the repeated reads do not re-evaluate it.
+	for _, tgt := range fixedTargets {
+		if !r.assignPatternNode(tgt) {
+			continue
+		}
+		if rhs.Kind() != frontend.NodeIdentifier {
+			return nil, true, &NotYetLowerable{Reason: "a nested array assignment from anything but a plain array variable needs a temporary, a later slice"}
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		stmts, err := r.bindSubArrayAssign(lhs, recv, r.prog.TypeAt(rhs))
+		if err != nil {
+			return nil, true, err
+		}
+		return &ast.BlockStmt{List: stmts}, true, nil
 	}
 	elems := make([]arrayAssignElem, len(fixedTargets))
 	anyDefault := false
@@ -1891,6 +1921,24 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	props := r.prog.Children(lhs)
 	if len(props) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty object assignment pattern binds nothing"}
+	}
+	// A nested pattern renamed onto a property, `({ p: { x } } = o)`, routes the whole
+	// pattern through the assignment recursion, which holds each nested property in a
+	// temporary and stores each leaf into its existing target. The source is already a
+	// plain variable, so the repeated field reads do not re-evaluate it.
+	for _, prop := range props {
+		if _, _, ok := r.objectAssignNestedElem(prop); !ok {
+			continue
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		stmts, err := r.bindSubObjectAssign(lhs, recv, objType)
+		if err != nil {
+			return nil, true, err
+		}
+		return &ast.BlockStmt{List: stmts}, true, nil
 	}
 	optionalField := map[string]bool{}
 	for _, pr := range r.prog.Properties(objType) {
