@@ -235,6 +235,78 @@ it.next(5);
 	}
 }
 
+// TestGeneratorManualReturnShape pins that it.return(v) lowers to the value.GenReturn
+// helper, the runtime that closes the generator early and packs the { value, done }
+// completion the caller reads.
+func TestGeneratorManualReturnShape(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 1; }
+const it = g();
+it.return(0);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.GenReturn(it,") {
+		t.Errorf("manual return did not lower to value.GenReturn:\n%s", source)
+	}
+}
+
+// TestGeneratorManualReturnRunsFinally pins that return(v) closes a suspended generator
+// through its finally block, the JavaScript rule that an early close runs cleanup, and
+// that the completion the return packs carries the value and a done of true.
+func TestGeneratorManualReturnRunsFinally(t *testing.T) {
+	const src = `function* g(): Generator<number> {
+  try {
+    yield 1;
+    yield 2;
+  } finally {
+    console.log("cleanup");
+  }
+}
+const it = g();
+const a = it.next();
+console.log(String(a.value));
+const b = it.return(99);
+console.log(String(b.value) + " " + String(b.done));
+`
+	if got, want := runProgramGo(t, src), "1\ncleanup\n99 true\n"; got != want {
+		t.Fatalf("return early-close printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorManualThrowShape pins that it.throw(e) lowers to the value.GenThrow
+// helper, the runtime that raises the thrown value at the suspended yield.
+func TestGeneratorManualThrowShape(t *testing.T) {
+	const src = `function* g(): Generator<number> { try { yield 1; } catch (e) {} }
+const it = g();
+it.throw(new Error("x"));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.GenThrow(it,") {
+		t.Errorf("manual throw did not lower to value.GenThrow:\n%s", source)
+	}
+}
+
+// TestGeneratorManualThrowCaught pins that throw(e) raises the error at the suspended
+// yield so a try/catch in the body catches it and the generator resumes, yielding again
+// past the catch, the JavaScript rule that an injected throw a body catches is recoverable.
+func TestGeneratorManualThrowCaught(t *testing.T) {
+	const src = `function* g(): Generator<number> {
+  try {
+    yield 1;
+  } catch (e) {
+    console.log("caught");
+    yield 2;
+  }
+}
+const it = g();
+console.log(String(it.next().value));
+const r = it.throw(new Error("boom"));
+console.log(String(r.value));
+`
+	if got, want := runProgramGo(t, src), "1\ncaught\n2\n"; got != want {
+		t.Fatalf("throw caught printed %q, want %q", got, want)
+	}
+}
+
 // TestGeneratorYieldStarNonGeneratorHandsBack pins that yield* over a plain iterable
 // such as an array is still a later slice: only a generator delegate is lowerable, so
 // the array form keeps a reason until the iterator-protocol delegation lands.

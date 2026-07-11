@@ -186,43 +186,75 @@ func (r *Renderer) isIterResultReceiver(obj frontend.Node) bool {
 	return r.isIteratorResult(r.prog.TypeOfSymbol(sym))
 }
 
-// generatorMethodCall lowers a manual drive of a generator, it.next(v), to the runtime
-// helper that packs the { value, done } result the language hands a hand-rolled caller.
-// The receiver is the *value.Gen[Y] the generator produced; value.GenNext pulls one
-// step and returns a value.IterResult the caller reads .value and .done off. The value
-// the caller passes to next(v) is boxed into the generator's dynamic in-channel, and a
-// boxer closure lifts the yielded Y back into a value.Value, since GenNext is generic
-// over Y and cannot know the element type's constructor itself. A receiver that is not
-// a generator returns ok false so the caller keeps looking; a method other than next on
-// a generator is a later slice, return and throw land next.
+// generatorMethodCall lowers a manual drive of a generator, it.next(v), it.return(v),
+// or it.throw(e), to the runtime helper that packs the { value, done } result the
+// language hands a hand-rolled caller. The receiver is the *value.Gen[Y] the generator
+// produced; the helper pulls one step and returns a value.IterResult the caller reads
+// .value and .done off. next(v) and return(v) box their argument into the generator's
+// dynamic in-channel, throw(e) converts its argument to the runtime's Thrown surface the
+// same way a throw statement does, and a boxer closure lifts the yielded Y back into a
+// value.Value, since the helpers are generic over Y and cannot know the element type's
+// constructor themselves. A receiver that is not a generator returns ok false so the
+// caller keeps looking; a method other than next, return, or throw is a later slice.
 func (r *Renderer) generatorMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
 	elem, ok := r.generatorElemType(r.prog.TypeAt(recvNode))
 	if !ok {
 		return nil, false, nil
 	}
-	if method != "next" {
+	switch method {
+	case "next", "return", "throw":
+	default:
 		return nil, false, &NotYetLowerable{Reason: "a generator's ." + method + "() is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
 		return nil, false, err
 	}
-	// next(v) resumes the suspended yield with v; next() with no argument resumes with
-	// undefined, the value the language passes when the caller sends nothing.
-	sent := ast.Expr(sel("value", "Undefined"))
-	if len(argNodes) > 0 {
-		boxed, err := r.boxOperand(argNodes[0])
-		if err != nil {
-			return nil, false, err
-		}
-		sent = boxed
-	}
 	boxer, err := r.genElemBoxer(elem)
 	if err != nil {
 		return nil, false, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "GenNext"), Args: []ast.Expr{recv, sent, boxer}}, true, nil
+	switch method {
+	case "next":
+		// next(v) resumes the suspended yield with v; next() with no argument resumes
+		// with undefined, the value the language passes when the caller sends nothing.
+		sent, err := r.genSentArg(argNodes)
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "GenNext"), Args: []ast.Expr{recv, sent, boxer}}, true, nil
+	case "return":
+		// return(v) closes the generator early, completing it with v so the suspended
+		// body unwinds through its finally blocks; return() completes with undefined.
+		ret, err := r.genSentArg(argNodes)
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "GenReturn"), Args: []ast.Expr{recv, ret, boxer}}, true, nil
+	default: // "throw"
+		// throw(e) raises e at the suspended yield: a try/catch in the body catches it
+		// and the generator yields again or completes, an uncaught throw escapes. There
+		// is nothing to raise without an argument, so throw() hands back.
+		if len(argNodes) == 0 {
+			return nil, false, &NotYetLowerable{Reason: "a generator's throw() with no argument is a later slice"}
+		}
+		thrown, err := r.thrownOperand(argNodes[0])
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "GenThrow"), Args: []ast.Expr{recv, thrown, boxer}}, true, nil
+	}
+}
+
+// genSentArg boxes the argument a manual next(v) or return(v) passes into the
+// generator's dynamic in-channel, defaulting to undefined when the caller passes
+// nothing, the value the language sends for a bare next() or return().
+func (r *Renderer) genSentArg(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return sel("value", "Undefined"), nil
+	}
+	return r.boxOperand(argNodes[0])
 }
 
 // genElemBoxer builds the func(Y) value.Value closure a generator drive passes to

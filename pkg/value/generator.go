@@ -28,21 +28,23 @@ type genFrame[Y any] struct {
 	thrown   Thrown
 }
 
-// The resume kinds a consumer sends the suspended body: a plain next(v) or an
-// early return(v) that completes the generator. A throw(e) injection is a later
-// slice, so no throw kind is modeled yet.
+// The resume kinds a consumer sends the suspended body: a plain next(v), an early
+// return(v) that completes the generator, or a throw(e) that raises e at the
+// suspended yield so a try/catch in the body catches it and an uncaught one escapes.
 const (
 	genResumeNext = iota
 	genResumeReturn
+	genResumeThrow
 )
 
 // genSignal is the resume message the consumer sends the body on a pull: the kind
-// selects next or return, and the payload carries the value next(v) resumes the
-// yield with or the value return(v) completes with.
+// selects next, return, or throw, and the payload carries the value next(v) resumes
+// the yield with, the value return(v) completes with, or the value throw(e) raises.
 type genSignal struct {
-	kind int
-	sent Value
-	ret  Value
+	kind   int
+	sent   Value
+	ret    Value
+	thrown Thrown
 }
 
 // genAbort is the panic Yield raises when the consumer sends a return signal: it
@@ -173,6 +175,25 @@ func (g *Gen[Y]) Return(ret Value) (Y, bool) {
 	return g.resume(genSignal{kind: genResumeReturn, ret: ret})
 }
 
+// Throw injects a thrown value at the suspended yield, the way a hand driver raises
+// an error inside the generator with throw(e). A suspended body resumes with e raised
+// at its yield, so a try/catch there catches it and the generator may yield again or
+// complete; an uncaught throw unwinds the body and escapes to the caller. A generator
+// that has not started or is already done has no yield to raise at, so e propagates to
+// the caller and the generator latches done, matching the JavaScript rule that throw
+// on a newborn or completed generator throws straight back.
+func (g *Gen[Y]) Throw(e Thrown) (Y, bool) {
+	if g.done {
+		panic(e)
+	}
+	if !g.started {
+		g.started = true
+		g.done = true
+		panic(e)
+	}
+	return g.resume(genSignal{kind: genResumeThrow, thrown: e})
+}
+
 // Done reports whether the generator has completed, the state a manual driver reads
 // off the result's done between pulls.
 func (g *Gen[Y]) Done() bool { return g.done }
@@ -189,8 +210,14 @@ func (g *Gen[Y]) Result() Value { return g.result }
 func (co *GenCo[Y]) Yield(v Y) Value {
 	co.out <- genFrame[Y]{value: v}
 	sig := <-co.in
-	if sig.kind == genResumeReturn {
+	switch sig.kind {
+	case genResumeReturn:
 		panic(genAbort{ret: sig.ret})
+	case genResumeThrow:
+		// throw(e) raises e at the suspended yield: a try/catch around the yield
+		// catches it, and an uncaught one unwinds the body and escapes as a Thrown
+		// the goroutine's recover re-raises into the consumer.
+		panic(sig.thrown)
 	}
 	return sig.sent
 }
@@ -213,6 +240,32 @@ type IterResult struct {
 // is true.
 func GenNext[Y any](g *Gen[Y], sent Value, box func(Y) Value) IterResult {
 	v, done := g.Next(sent)
+	if done {
+		return IterResult{Value: g.Result(), Done: true}
+	}
+	return IterResult{Value: box(v), Done: false}
+}
+
+// GenReturn drives a manual return(v) and packs the { value, done } result, the runtime
+// of it.return(v). It closes the generator early through Gen.Return, so the suspended
+// body unwinds its finally blocks and completes carrying ret; the result is
+// { value: ret, done: true } unless a finally yields, in which case the box lifts that
+// yield the way GenNext does.
+func GenReturn[Y any](g *Gen[Y], ret Value, box func(Y) Value) IterResult {
+	v, done := g.Return(ret)
+	if done {
+		return IterResult{Value: g.Result(), Done: true}
+	}
+	return IterResult{Value: box(v), Done: false}
+}
+
+// GenThrow drives a manual throw(e) and packs the { value, done } result, the runtime
+// of it.throw(e). It raises e at the suspended yield through Gen.Throw: a try/catch in
+// the body catches it and the generator yields again (the box lifts that value) or
+// completes, and an uncaught throw propagates out of this call the way it does in
+// JavaScript.
+func GenThrow[Y any](g *Gen[Y], e Thrown, box func(Y) Value) IterResult {
+	v, done := g.Throw(e)
 	if done {
 		return IterResult{Value: g.Result(), Done: true}
 	}
