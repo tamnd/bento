@@ -24,6 +24,7 @@ type Object struct {
 	symDescs      []descriptor // symbol property descriptors, parallel to symKeys
 	elems         []Value      // dense element storage for an array
 	call          callFn       // the invocable body of a callable, nil for a plain object
+	proto         *Object      // the [[Prototype]] a read climbs on an own miss; nil is the end of the user chain
 	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
 }
 
