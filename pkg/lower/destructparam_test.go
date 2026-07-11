@@ -112,6 +112,21 @@ console.log(tail([7]));
 	}
 }
 
+// TestDestructuredParamObjectRestHandsBack proves an object rest in a parameter
+// pattern hands back, the same phase-7 gate the declaration and assignment forms take:
+// gathering the remaining own properties into an object needs the object model the AOT
+// cannot enumerate yet, so it hands back rather than emit a partial gather.
+func TestDestructuredParamObjectRestHandsBack(t *testing.T) {
+	const src = "function f({a, ...rest}: {a: number, b: number}): number { return a; }\nf({a: 1, b: 2});\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+}
+
 func TestDestructuredParamRenameHandsBack(t *testing.T) {
 	for _, src := range []string{
 		"function f({a: x}: {a: number}): number { return x; }\nf({a: 1});\n",
