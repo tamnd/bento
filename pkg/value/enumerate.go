@@ -93,6 +93,9 @@ func FromEntries(iterable Value) Value {
 	out := NewObject()
 	if iterable.kind == KindArray {
 		for _, entry := range iterable.object().elems {
+			if isHole(entry) {
+				continue // a hole contributes no entry, the same as a skipped index
+			}
 			out.SetElem(entry.GetIndex(0), entry.GetIndex(1))
 		}
 	}
