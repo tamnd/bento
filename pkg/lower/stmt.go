@@ -1398,13 +1398,17 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 			return nil, true, err
 		}
 		prop := r.prog.Text(info.nameNode)
-		name, ok := localName(prop)
+		srcName, ok := localName(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
-		field, ok := exportedField(name)
+		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(info.bindNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "destructured target is not a Go identifier"}
 		}
 		fields[i] = binding{info: info, name: name, field: field, optional: optionalField[prop]}
 	}
@@ -1424,7 +1428,7 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		// never fire, since the property is always present, so it binds the read
 		// directly and the default is dead.
 		if b.info.hasDefault && b.optional {
-			nameGo, err := r.typeExpr(r.prog.TypeAt(b.info.nameNode))
+			nameGo, err := r.typeExpr(r.prog.TypeAt(b.info.bindNode))
 			if err != nil {
 				return nil, true, err
 			}
@@ -1432,7 +1436,7 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 			if err != nil {
 				return nil, true, err
 			}
-			def, err = r.coerceToType(def, b.info.defNode, r.prog.TypeAt(b.info.nameNode))
+			def, err = r.coerceToType(def, b.info.defNode, r.prog.TypeAt(b.info.bindNode))
 			if err != nil {
 				return nil, true, err
 			}

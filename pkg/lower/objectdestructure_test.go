@@ -53,11 +53,30 @@ console.log(width);
 	}
 }
 
-// TestObjectDestructureRenameHandsBack proves a renamed property hands back, since
-// binding a property to a different local name is a later slice.
-func TestObjectDestructureRenameHandsBack(t *testing.T) {
+// TestObjectDestructureRenameLowers proves a renamed property reads the source
+// property of its own name and binds it to the renamed target: {x: a} reads o.X into
+// a, so the emitted Go selects the source field and defines the renamed local.
+func TestObjectDestructureRenameLowers(t *testing.T) {
 	const src = "const pt = { x: 1, y: 2 };\nconst { x: a, y: b } = pt;\nconsole.log(a + b);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "a := pt.X") || !strings.Contains(source, "b := pt.Y") {
+		t.Errorf("object rename did not read the source field into the renamed target:\n%s", source)
+	}
+}
+
+// TestObjectDestructureRenameRuns builds and runs a renamed destructuring so the
+// renamed locals are proven to carry the right source properties.
+func TestObjectDestructureRenameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const pt = { x: 1, y: 2 };
+const { x: a, y: b } = pt;
+console.log(a);
+console.log(b);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("object rename destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestObjectDestructureDefaultRuns proves a property default lowers: the missing
