@@ -63,3 +63,19 @@ func TestElementCompoundSideEffectHandsBack(t *testing.T) {
 		t.Fatalf("reason = %q, want a side-effecting-receiver handback", reason)
 	}
 }
+
+// Item 3: an assignment value flowing through a larger expression already lowers.
+
+func TestChainedAssignValueRuns(t *testing.T) {
+	const src = `let a = 0, b = 0; a = (b = 5); console.log(a, b);`
+	if got, want := runProgramGoTolerant(t, src), "5 5\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestAssignValueInCallArgRuns(t *testing.T) {
+	const src = `let a = 0; function f(x: number): number { return x; } console.log(f(a = 1)); console.log(a);`
+	if got, want := runProgramGoTolerant(t, src), "1\n1\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
