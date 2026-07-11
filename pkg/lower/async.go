@@ -125,6 +125,126 @@ func (r *Renderer) asyncArrow(n frontend.Node, fields []*ast.Field) (ast.Expr, e
 	}, nil
 }
 
+// blockHasAwait reports whether n contains an await expression that belongs to the
+// current async body, descending its statements but stopping at a nested function,
+// whose own awaits belong to its own async body. It is the await-side mirror of
+// collectYields: it decides whether a body suspends, which routes it to the coroutine
+// path instead of the synchronous value.Async wrapping.
+func (r *Renderer) blockHasAwait(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		return false
+	case frontend.NodeAwaitExpression:
+		return true
+	}
+	for _, k := range r.prog.Children(n) {
+		if r.blockHasAwait(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// bodyHasAwait reports whether the block body of fn awaits, so an async function whose
+// body suspends lowers through the coroutine rather than the synchronous value.Async
+// path. A concise-bodied arrow has no block for funcBodyBlock to find and reports
+// false, so it keeps the synchronous path; an await in a concise body is not lowered
+// yet and hands back cleanly at the await site.
+func (r *Renderer) bodyHasAwait(fn frontend.Node) bool {
+	block, ok := r.funcBodyBlock(fn)
+	if !ok {
+		return false
+	}
+	return r.blockHasAwait(block)
+}
+
+// asyncCoroutineBody lowers an async body that awaits into the single return that mints
+// its pending promise: return value.RunAsync[T](func(_co *value.AsyncCo) T { <body> })
+// for a valued promise, or value.RunAsyncVoid(func(_co *value.AsyncCo) { <body> }) for a
+// Promise<void>. The body lowers with the coroutine handle in scope, so each await in it
+// routes to awaitExpr and suspends on _co; the body's returns carry the element type T
+// the coroutine fulfills the promise with. It is the suspending counterpart of asyncBody,
+// which asyncBody dispatches to when the body awaits.
+func (r *Renderer) asyncCoroutineBody(ret frontend.Type, retNode frontend.Node) (*ast.BlockStmt, error) {
+	elem, ok := r.promiseElem(ret)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "an async function whose return is not a Promise is a later slice"}
+	}
+	coName := r.freshTemp()
+	prevCo := r.asyncCo
+	r.asyncCo = coName
+	defer func() { r.asyncCo = prevCo }()
+
+	prevRet := r.retType
+	if isVoidReturn(elem) {
+		r.retType = frontend.Type{}
+	} else {
+		r.retType = elem
+	}
+	defer func() { r.retType = prevRet }()
+
+	inner, err := r.blockOf(retNode)
+	if err != nil {
+		return nil, err
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+
+	coParam := &ast.Field{
+		Names: []*ast.Ident{ident(coName)},
+		Type:  star(sel("value", "AsyncCo")),
+	}
+	if isVoidReturn(elem) {
+		lit := &ast.FuncLit{
+			Type: &ast.FuncType{Params: &ast.FieldList{List: []*ast.Field{coParam}}},
+			Body: inner,
+		}
+		call := &ast.CallExpr{Fun: sel("value", "RunAsyncVoid"), Args: []ast.Expr{lit}}
+		return &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{call}}}}, nil
+	}
+	et, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{coParam}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: et}}},
+		},
+		Body: inner,
+	}
+	call := &ast.CallExpr{Fun: index(sel("value", "RunAsync"), et), Args: []ast.Expr{lit}}
+	return &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{call}}}}, nil
+}
+
+// awaitExpr lowers an await expression to a suspend on the current async body's
+// coroutine handle: value.Await(_co, p) parks the body until the awaited promise p
+// settles, then resumes it with the fulfilled value or raises the rejection at the
+// await. The operand must be a Promise here; awaiting a plain value or a thenable is a
+// later slice, so a non-promise operand hands back. An await outside a lowered async
+// body (a concise-bodied arrow's await, which took the synchronous path) has no handle
+// to park on and hands back too.
+func (r *Renderer) awaitExpr(n frontend.Node) (ast.Expr, error) {
+	if r.asyncCo == "" {
+		return nil, &NotYetLowerable{Reason: "an await outside a lowered async body is a later slice"}
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 {
+		return nil, &NotYetLowerable{Reason: "an await with no operand is a later slice"}
+	}
+	operand := kids[len(kids)-1]
+	if _, ok := r.promiseElem(r.prog.TypeAt(operand)); !ok {
+		return nil, &NotYetLowerable{Reason: "an await on a non-promise value is a later slice"}
+	}
+	p, err := r.lowerExpr(operand)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "Await"), Args: []ast.Expr{ident(r.asyncCo), p}}, nil
+}
+
 // asyncConciseBody mints the promise for a concise-bodied async arrow, whose body is
 // a single expression rather than a block. It wraps that expression the way asyncBody
 // wraps a block: value.Async(func() T { return <expr> }) for a valued promise, or

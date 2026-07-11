@@ -135,6 +135,78 @@ inc(9);
 	}
 }
 
+// TestAsyncAwaitEmitsCoroutine pins the shape of a body that awaits: it lowers
+// through value.RunAsync over an *value.AsyncCo handle instead of value.Async, and
+// each await becomes a value.Await on that handle.
+func TestAsyncAwaitEmitsCoroutine(t *testing.T) {
+	const src = `async function base(): Promise<number> {
+  return 1;
+}
+async function load(): Promise<number> {
+  const a = await base();
+  return a + 1;
+}
+load();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "return value.RunAsync[float64](func(") {
+		t.Errorf("awaiting async body did not wrap in value.RunAsync:\n%s", source)
+	}
+	if !strings.Contains(source, "*value.AsyncCo") {
+		t.Errorf("coroutine func did not take an *value.AsyncCo handle:\n%s", source)
+	}
+	if !strings.Contains(source, "value.Await(") {
+		t.Errorf("await did not lower to value.Await:\n%s", source)
+	}
+	// The await-free base still keeps the synchronous value.Async wrapping, so only a
+	// body that actually awaits pays for the coroutine.
+	if !strings.Contains(source, "return value.Async(func() float64 {") {
+		t.Errorf("await-free async body lost its synchronous value.Async wrapping:\n%s", source)
+	}
+}
+
+// TestAsyncVoidAwaitEmitsCoroutine pins that a void body that awaits lowers through
+// value.RunAsyncVoid, the unit-promise counterpart of value.RunAsync.
+func TestAsyncVoidAwaitEmitsCoroutine(t *testing.T) {
+	const src = `async function base(): Promise<number> {
+  return 1;
+}
+async function run(): Promise<void> {
+  const a = await base();
+  console.log(a);
+}
+run();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "return value.RunAsyncVoid(func(") {
+		t.Errorf("awaiting void async body did not wrap in value.RunAsyncVoid:\n%s", source)
+	}
+}
+
+// TestAsyncAwaitRunsInOrder runs the emitted Go and pins the suspend-and-resume: the
+// body runs synchronously up to its first await, parks, and the code after the await
+// runs in a later microtask turn, after the synchronous run has finished.
+func TestAsyncAwaitRunsInOrder(t *testing.T) {
+	const src = `async function base(): Promise<number> {
+  return 1;
+}
+async function load(): Promise<number> {
+  console.log("body-start");
+  const a = await base();
+  console.log("after-await:" + a);
+  return a + 1;
+}
+console.log("before");
+load().then(v => console.log("result:" + v));
+console.log("after-call");
+`
+	got := runProgramGo(t, src)
+	want := "before\nbody-start\nafter-call\nafter-await:1\nresult:2\n"
+	if got != want {
+		t.Errorf("await ordering wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestAsyncMethodResolvesAfterSyncCode runs the emitted Go and pins the
 // microtask ordering: a .then callback registered during the synchronous run
 // fires only after that run completes, at the end-of-main drain.
@@ -189,9 +261,12 @@ func TestAsyncHandsBack(t *testing.T) {
 		want string
 	}{
 		{
-			"await",
-			"class W { async f(): Promise<number> { const v = await Promise.resolve(1); return v; } }\nnew W().f();\n",
-			"await is a later slice",
+			// A block-bodied await lowers through the coroutine now; a concise-bodied
+			// arrow keeps the synchronous path and has no handle to park on, so its
+			// await still hands back.
+			"conciseAwait",
+			"const f = async (): Promise<number> => await Promise.resolve(1);\nf();\n",
+			"an await outside a lowered async body is a later slice",
 		},
 		{
 			"chainingThen",
