@@ -995,8 +995,14 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 	if len(elems) == 0 {
 		return nil, &NotYetLowerable{Reason: "an empty array-pattern parameter binds nothing"}
 	}
+	// A trailing rest gathers the tail of the held array past the fixed slots, so it
+	// is split off and bound from Slice after the fixed elements.
+	fixedElems, restNode, hasRest, err := r.splitArrayRest(elems)
+	if err != nil {
+		return nil, err
+	}
 	var out []ast.Stmt
-	for i, el := range elems {
+	for i, el := range fixedElems {
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, err
@@ -1041,6 +1047,13 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
+	}
+	if hasRest {
+		bind, err := r.arrayRestBinding(restNode, elemT, ident(goName), len(fixedElems), token.DEFINE)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bind)
 	}
 	return out, nil
 }

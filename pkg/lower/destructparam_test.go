@@ -96,6 +96,37 @@ console.log(head([10]));
 // TestDestructuredParamRenameHandsBack proves the shapes the shorthand binding does
 // not cover still hand back: a rename in an object pattern and a nested array
 // pattern each name their own later slice rather than emit an unbound read.
+// TestDestructuredParamRestRuns proves an array-pattern parameter with a trailing rest
+// binds the fixed slots by index and gathers the tail into the rest target at body
+// entry.
+func TestDestructuredParamRestRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function tail([first, ...rest]: number[]): number {
+  return first + rest.length;
+}
+console.log(tail([10, 20, 30, 40]));
+console.log(tail([7]));
+`
+	if got, want := runProgramGo(t, src), "13\n7\n"; got != want {
+		t.Fatalf("array rest parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestDestructuredParamObjectRestHandsBack proves an object rest in a parameter
+// pattern hands back, the same phase-7 gate the declaration and assignment forms take:
+// gathering the remaining own properties into an object needs the object model the AOT
+// cannot enumerate yet, so it hands back rather than emit a partial gather.
+func TestDestructuredParamObjectRestHandsBack(t *testing.T) {
+	const src = "function f({a, ...rest}: {a: number, b: number}): number { return a; }\nf({a: 1, b: 2});\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+}
+
 func TestDestructuredParamRenameHandsBack(t *testing.T) {
 	for _, src := range []string{
 		"function f({a: x}: {a: number}): number { return x; }\nf({a: 1});\n",
