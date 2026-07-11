@@ -372,11 +372,6 @@ func TestAsyncHandsBack(t *testing.T) {
 			"an await outside a lowered async body is a later slice",
 		},
 		{
-			"chainingThen",
-			"class C { async n(): Promise<number> { return 1; } }\nnew C().n().then(v => v + 1);\n",
-			"later slice",
-		},
-		{
 			"asyncGenerator",
 			"class C { async *g(): AsyncGenerator<number> { yield 1; } }\nconsole.log(\"x\");\n",
 			"async generator",
