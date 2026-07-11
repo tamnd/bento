@@ -16,6 +16,42 @@ func arrayLike(length float64, elems ...Value) Value {
 	return o
 }
 
+// TestToLength proves the length coercion matches ToLength: a fractional length
+// truncates toward zero, a negative or NaN length clamps to 0, a numeric-string
+// length coerces through ToNumber, and an over-large length caps at 2^53 - 1.
+func TestToLength(t *testing.T) {
+	cases := []struct {
+		in   Value
+		want int
+	}{
+		{Number(2.9), 2},
+		{Number(-5), 0},
+		{Number(math.NaN()), 0},
+		{StringValue(FromGoString("3")), 3},
+		{Number(1e21), maxArrayLength},
+		{Undefined, 0},
+	}
+	for _, c := range cases {
+		if got := toLength(c.in); got != c.want {
+			t.Fatalf("toLength(%v) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// TestGenericLenClamp proves a generic-receiver method walks only the indices below
+// the coerced length, so a fractional length hides the tail element and a negative
+// length yields an empty walk.
+func TestGenericLenClamp(t *testing.T) {
+	o := arrayLike(2.9, StringValue(FromGoString("a")), StringValue(FromGoString("b")), StringValue(FromGoString("c")))
+	if got := GenericIndexOf(o, StringValue(FromGoString("c"))); got.AsNumber() != -1 {
+		t.Fatalf("indexOf c past a 2.9 length = %v, want -1", got.AsNumber())
+	}
+	neg := arrayLike(-5, StringValue(FromGoString("x")))
+	if got := GenericIncludes(neg, StringValue(FromGoString("x"))); got.AsBool() {
+		t.Fatal("includes x under a negative length = true, want false")
+	}
+}
+
 // TestGenericIndexOf proves the search reads length and integer keys off a generic
 // receiver, finds the first strict match, honors a negative fromIndex, and reports
 // -1 when the element is absent.
