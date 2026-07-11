@@ -100,6 +100,13 @@ func NewArrayValue(elems []Value) Value {
 // expression.
 func (v Value) Set(key BStr, val Value) Value {
 	o := v.object()
+	// An array's length is not a stored named property but a view over the backing
+	// store, so a named write of it resizes the array rather than adding a key that a
+	// later read would ignore. This is the path a dynamic a.length = n assignment takes.
+	if v.kind == KindArray && key.ToGoString() == "length" {
+		setArrayLength(o, val)
+		return v
+	}
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
 			if o.descs[i].isData() && !o.descs[i].writable {
@@ -154,6 +161,36 @@ func (v Value) SetKey(key BStr, val Value) Value {
 		return val
 	default:
 		return val
+	}
+}
+
+// setArrayLength writes the length property of an array, the resize behind
+// a.length = n. The new length must be a valid array length, a non-negative integer
+// below 2^32 that ToUint32 leaves unchanged, else it throws a RangeError the way the
+// spec does for a.length = -1 or a fractional length. A shorter length truncates the
+// backing store, dropping the tail elements; a longer one extends it with holes, so
+// the new indices read undefined but are absent own properties rather than stored
+// undefineds. A frozen array refuses the resize, matching a non-writable length. The
+// grow is capped the way a sparse indexed write is, so a huge length throws rather
+// than allocating into an out-of-memory.
+func setArrayLength(o *Object, val Value) {
+	num := ToNumber(val)
+	if float64(ToUint32(num)) != num {
+		Throw(NewRangeError(FromGoString("Invalid array length")))
+	}
+	newLen := int(num)
+	if newLen < len(o.elems) {
+		if o.elemsFrozen {
+			return
+		}
+		o.elems = o.elems[:newLen]
+		return
+	}
+	if newLen-len(o.elems) > maxArrayGrow {
+		Throw(NewRangeError(FromGoString("Invalid array length")))
+	}
+	for len(o.elems) < newLen {
+		o.elems = append(o.elems, hole)
 	}
 }
 
