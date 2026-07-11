@@ -961,6 +961,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if e, ok, err := r.generatorMethodCall(recvNode, method, argNodes); ok || err != nil {
 		return e, err
 	}
+	// A manual drive of an async generator, it.next(v), lowers to the pull that returns
+	// the promise the consumer awaits. It routes next to the plain generator drive, since
+	// an async generator receiver carries the AsyncGenerator element type rather than the
+	// Generator one; a non-async-generator receiver returns ok false and falls through.
+	if e, ok, err := r.asyncGeneratorMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
+	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
 	// bare use would take, so they route here before the string-method path.

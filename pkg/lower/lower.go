@@ -144,6 +144,12 @@ type Renderer struct {
 	// genCo it is set around the body and saved and restored so a nested function does not
 	// inherit it.
 	asyncCo string
+	// inAsyncGen marks that the body being lowered is an async generator, whose single
+	// coroutine handle serves both yield and await: genCo and asyncCo both name it, and an
+	// await routes to value.AsyncGenAwait(co, p) rather than value.Await so it parks the
+	// async generator's driver instead of a plain async body's. It is set around the async
+	// generator body and saved and restored alongside genCo and asyncCo.
+	inAsyncGen bool
 	// typeSubst maps a type parameter's identity to the concrete type it stands for in
 	// the specialization currently being lowered, so typeExpr resolves a bare T to the
 	// float64, value.BStr, or array type the call site fixed it to. It is set around one
@@ -684,6 +690,19 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			}
 			r.requireImport(valuePkg)
 			return star(index(sel("value", "Gen"), inner)), nil
+		}
+		// An AsyncGenerator (or the wider async iterator family) is the *value.AsyncGen[Y]
+		// coroutine the runtime drives, the async mirror of the Generator slot above: it is
+		// the return type an async generator function value spells and the slot a
+		// `const g = ag()` binding takes, routed before the structural paths that would
+		// expand its next() promise into a Promise of the IteratorResult union and hand back.
+		if elem, ok := r.asyncGeneratorElemType(t); ok {
+			inner, err := r.typeExpr(elem)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return star(index(sel("value", "AsyncGen"), inner)), nil
 		}
 		if ft, ok, err := r.renderFuncType(t); err != nil {
 			return nil, err

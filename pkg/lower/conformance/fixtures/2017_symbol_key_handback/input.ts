@@ -1,5 +1,5 @@
 class C {
-  [Symbol.asyncIterator]() {
+  [Symbol.toPrimitive]() {
     return 1;
   }
 }

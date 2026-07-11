@@ -178,6 +178,12 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 // written for it.
 func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
+	// A for await...of leads with an await token before the loop binding, so the parser
+	// gives it a fourth child. It awaits each result the async iterator yields, a shape
+	// the plain for...of range loop does not model, so it takes its own path.
+	if r.isForAwait(n) {
+		return r.lowerForAwaitOf(kids[1], kids[2], kids[3])
+	}
 	if len(kids) != 3 {
 		return nil, &NotYetLowerable{Reason: "only for...of with a declaration and a body is lowered yet"}
 	}
