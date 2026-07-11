@@ -1412,9 +1412,33 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectGetPrototypeOf(argNodes)
 	case "setPrototypeOf":
 		return r.objectSetPrototypeOf(argNodes)
+	case "preventExtensions":
+		return r.objectIntegrityUnary("preventExtensions", "PreventExtensions", argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
+}
+
+// objectIntegrityUnary lowers a one-argument integrity static, the family that
+// takes a single object and either changes its integrity level or reads it back:
+// preventExtensions, seal, freeze, isExtensible, isSealed, and isFrozen. Each maps
+// to a runtime method of the same job on the dynamic receiver, so the mutators
+// return the receiver value and the predicates return a Go bool that lands in the
+// boolean slot the checker gives them. The receiver must be a dynamic value, since
+// a fixed-shape Go struct has no runtime integrity state to change or read, so a
+// non-dynamic receiver hands back. The receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectIntegrityUnary(apiName, runtimeMethod string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object." + apiName + " with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object." + apiName + " on a fixed-shape receiver, which has no runtime integrity state, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(runtimeMethod)}}, nil
 }
 
 // objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime
