@@ -1,0 +1,8 @@
+== stdout:
+before
+body-start
+after-call
+after-await
+42
+== exit:
+0

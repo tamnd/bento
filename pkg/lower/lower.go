@@ -137,6 +137,13 @@ type Renderer struct {
 	// a yield expression coerces its operand to. It is the zero type outside a generator
 	// body, and it is saved and restored alongside genCo.
 	genYieldType frontend.Type
+	// asyncCo is the Go name of the *value.AsyncCo handle the current suspending async
+	// body awaits through, or "" when the body being lowered is not an async body that
+	// awaits (an await-free async body settles synchronously and needs no handle). An
+	// await expression in that body lowers to a call on it (value.Await(asyncCo, p)). Like
+	// genCo it is set around the body and saved and restored so a nested function does not
+	// inherit it.
+	asyncCo string
 	// typeSubst maps a type parameter's identity to the concrete type it stands for in
 	// the specialization currently being lowered, so typeExpr resolves a bare T to the
 	// float64, value.BStr, or array type the call site fixed it to. It is set around one
