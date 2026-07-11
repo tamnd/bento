@@ -79,3 +79,20 @@ func TestAssignValueInCallArgRuns(t *testing.T) {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
+
+// Item 4: a compound assignment whose result is used.
+
+func TestCompoundValueRuns(t *testing.T) {
+	const src = `let x = 4; let r = (x += 1); console.log(r, x);`
+	if got, want := runProgramGoTolerant(t, src), "5 5\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestCompoundValueOnDynamicHandsBack(t *testing.T) {
+	const src = `let x: any = 1; let r = (x += 1); console.log(r);`
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "dynamic or narrowed-storage local") {
+		t.Fatalf("reason = %q, want a dynamic-local handback", reason)
+	}
+}
