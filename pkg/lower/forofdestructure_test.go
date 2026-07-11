@@ -109,10 +109,15 @@ func TestForOfDestructureHoleHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestForOfDestructureRestHandsBack proves a rest element hands back.
-func TestForOfDestructureRestHandsBack(t *testing.T) {
-	const src = "const rows: number[][] = [[1, 2, 3]];\nfor (const [a, ...rest] of rows) {\n  console.log(a);\n  console.log(rest.length);\n}\n"
-	renderProgramHandBack(t, src)
+// TestForOfDestructureRestRuns proves a rest element gathers the tail each iteration,
+// binding the fixed head and the remaining elements the same way a top-level array
+// pattern does.
+func TestForOfDestructureRestRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const rows: number[][] = [[1, 2, 3], [4, 5, 6]];\nfor (const [a, ...rest] of rows) {\n  console.log(a);\n  console.log(rest.length);\n}\n"
+	if got, want := runProgramGo(t, src), "1\n2\n4\n2\n"; got != want {
+		t.Fatalf("for-of rest destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestForOfDestructureNonArrayElementHandsBack proves destructuring over an array
@@ -122,4 +127,50 @@ func TestForOfDestructureRestHandsBack(t *testing.T) {
 func TestForOfDestructureNonArrayElementHandsBack(t *testing.T) {
 	const src = "const words: string[] = [\"hi\", \"yo\"];\nfor (const [a, b] of words) {\n  console.log(a + b);\n}\n"
 	renderProgramHandBack(t, src)
+}
+
+// TestForOfObjectDestructureRuns proves a for...of whose element is an object binds
+// each property through the shared object binder, the case where the bound name's type
+// differs from the iterable's element type.
+func TestForOfObjectDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const items = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+for (const { a, b } of items) {
+  console.log(a + b);
+}
+`
+	if got, want := runProgramGo(t, src), "3\n7\n"; got != want {
+		t.Fatalf("for-of object destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestForOfObjectDestructureRenameRuns proves a renamed property in the loop pattern
+// binds the target each iteration off the source field.
+func TestForOfObjectDestructureRenameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const items = [{ a: 1 }, { a: 2 }];\nfor (const { a: x } of items) {\n  console.log(x);\n}\n"
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("for-of object rename destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestForOfNestedDestructureRuns proves a nested array pattern in the loop binding
+// reads the inner elements off the value the outer position selected each iteration.
+func TestForOfNestedDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const m: number[][][] = [[[1, 2], [3, 4]]];\nfor (const [[a, b], [c, d]] of m) {\n  console.log(a + b + c + d);\n}\n"
+	if got, want := runProgramGo(t, src), "10\n"; got != want {
+		t.Fatalf("for-of nested destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestForOfObjectDestructureUnusedHandsBack proves a for...of object pattern whose
+// bound name the body never reads hands back rather than emit a Go local the compiler
+// rejects as declared-and-not-used, since the shared binder cannot drop it the way the
+// flat array path does.
+func TestForOfObjectDestructureUnusedHandsBack(t *testing.T) {
+	const src = "const items = [{ a: 1, b: 2 }];\nfor (const { a, b } of items) {\n  console.log(a);\n}\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "unused bound name") {
+		t.Fatalf("for-of unused handback reason = %q, want an unused-bound-name reason", reason)
+	}
 }

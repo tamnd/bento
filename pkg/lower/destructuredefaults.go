@@ -99,6 +99,41 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 	}
 }
 
+// memberAssignTarget lowers a destructuring assignment target that is a property
+// access on a fixed-shape object, o.a, to the Go selector that names its field, so a
+// destructured element or property can store into it. It hands back for a member the
+// static struct model cannot assign into as a Go lvalue: a dynamic receiver, an array
+// or typed-array element, a map, a set, a class instance whose field write the class
+// path owns, or a property the shape never declared. Each of those needs a runtime
+// store rather than a Go field selector.
+func (r *Renderer) memberAssignTarget(tgt frontend.Node) (ast.Expr, error) {
+	tParts := r.prog.Children(tgt)
+	if len(tParts) != 2 {
+		return nil, &NotYetLowerable{Reason: "a destructuring assignment into an unusual member target is a later slice"}
+	}
+	obj := tParts[0]
+	if r.isDynamic(obj) {
+		return nil, &NotYetLowerable{Reason: "a destructuring assignment into a property of a dynamic receiver needs the runtime store, a later slice"}
+	}
+	objType := r.prog.TypeAt(obj)
+	if objType.Flags&frontend.TypeObject == 0 {
+		return nil, &NotYetLowerable{Reason: "a destructuring assignment into a property of a non-object receiver is a later slice"}
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return nil, &NotYetLowerable{Reason: "a destructuring assignment into an array-element member target is a later slice"}
+	}
+	if r.isTypedArray(obj) || r.isMap(obj) || r.isSet(obj) {
+		return nil, &NotYetLowerable{Reason: "a destructuring assignment into a typed-array, map, or set member target is a later slice"}
+	}
+	if _, ok := r.classReceiver(obj); ok {
+		return nil, &NotYetLowerable{Reason: "a destructuring assignment into a class-instance field is a later slice"}
+	}
+	if _, present := r.shapeProp(objType, r.prog.Text(tParts[1])); !present {
+		return nil, &NotYetLowerable{Reason: "a destructuring assignment into a property the fixed-shape object never declared needs the object's runtime shape, a later slice"}
+	}
+	return r.lowerExpr(tgt)
+}
+
 // arrayAssignElem describes one target of an array destructuring assignment,
 // `[a, b = d] = rhs`. Unlike the declaration pattern, whose element wraps its
 // binding, an assignment target is the identifier itself, or an `a = d` assignment
@@ -107,20 +142,25 @@ type arrayAssignElem struct {
 	nameNode   frontend.Node
 	hasDefault bool
 	defNode    frontend.Node
+	memberNode frontend.Node
 }
 
 // classifyArrayAssignElem reads one array assignment target into an arrayAssignElem.
 // A bare identifier is a plain target; an `a = d` binary expression is a defaulted
-// target. A hole, a rest, a nested pattern, or a member target is a later slice.
+// target; a property access `o.a` is a member target the element stores into. A hole,
+// a rest, a nested pattern, or an element-access target is a later slice.
 func (r *Renderer) classifyArrayAssignElem(tgt frontend.Node) (arrayAssignElem, error) {
 	if tgt.Kind() == frontend.NodeIdentifier {
 		return arrayAssignElem{nameNode: tgt}, nil
+	}
+	if tgt.Kind() == frontend.NodePropertyAccessExpression {
+		return arrayAssignElem{memberNode: tgt}, nil
 	}
 	c := r.prog.Children(tgt)
 	if tgt.Kind() == frontend.NodeBinaryExpression && len(c) == 3 && r.prog.Text(c[1]) == "=" && c[0].Kind() == frontend.NodeIdentifier {
 		return arrayAssignElem{nameNode: c[0], hasDefault: true, defNode: c[2]}, nil
 	}
-	return arrayAssignElem{}, &NotYetLowerable{Reason: "an array assignment hole, rest, nested pattern, or member target is a later slice"}
+	return arrayAssignElem{}, &NotYetLowerable{Reason: "an array assignment hole, rest, nested pattern, or element-access target is a later slice"}
 }
 
 // objectAssignElem describes one target of an object destructuring assignment,
@@ -135,6 +175,7 @@ type objectAssignElem struct {
 	bindNode   frontend.Node
 	hasDefault bool
 	defNode    frontend.Node
+	bindMember frontend.Node
 }
 
 // classifyObjectAssignElem reads one object assignment property into an
@@ -158,6 +199,10 @@ func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignEle
 		return objectAssignElem{nameNode: pc[0], bindNode: pc[0]}, nil
 	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
 		return objectAssignElem{nameNode: pc[0], bindNode: pc[1]}, nil
+	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodePropertyAccessExpression && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
+		// A source property renamed onto a member target, {a: o.a}: the value stores
+		// into the property access rather than a fresh local.
+		return objectAssignElem{nameNode: pc[0], bindMember: pc[1]}, nil
 	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodeBinaryExpression && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
 		// A rename carrying a default, {x: a = d}: the target and default parse as an
 		// `a = d` assignment under the source property's colon.

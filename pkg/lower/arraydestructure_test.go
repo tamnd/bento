@@ -213,6 +213,41 @@ console.log(d);
 	}
 }
 
+// TestArrayMemberTargetAssignmentRuns proves an array destructuring assignment whose
+// targets are property accesses stores each element into the member target, reading the
+// source elements by index and landing them in the object fields.
+func TestArrayMemberTargetAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o = { a: 0, b: 0 };
+const xs: number[] = [1, 2];
+[o.a, o.b] = xs;
+console.log(o.a);
+console.log(o.b);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("array member-target assignment printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayMixedMemberTargetAssignmentRuns proves a target list that mixes a plain
+// local with a member target stores each element into its own kind of target in one
+// parallel assignment.
+func TestArrayMixedMemberTargetAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+let a = 0;
+const o = { b: 0 };
+const xs: number[] = [7, 8];
+[a, o.b] = xs;
+console.log(a);
+console.log(o.b);
+`
+	if got, want := runProgramGo(t, src), "7\n8\n"; got != want {
+		t.Fatalf("mixed member-target assignment printed %q, want %q", got, want)
+	}
+}
+
 // TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a
 // call returning an array, lowers by holding the source in a generated temporary read
 // once, then reading each element off that temporary, so the source is evaluated once.
@@ -247,4 +282,41 @@ console.log(b);
 func TestArrayDestructureTupleSourceHandsBack(t *testing.T) {
 	const src = "const [a, b] = [10, 20];\nconsole.log(a + b);\n"
 	renderProgramHandBack(t, src)
+}
+
+// TestArrayDestructureMemberSourceLowersToTemp proves a member-read array source is
+// held in a generated temporary read once, extending the call-source case in #258 to
+// a property access.
+func TestArrayDestructureMemberSourceLowersToTemp(t *testing.T) {
+	const src = "const o = { pair: [3, 4] };\nconst [a, b] = o.pair;\nconsole.log(a + b);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".AtI(0)") || !strings.Contains(source, ".AtI(1)") {
+		t.Errorf("member source did not read elements through AtI:\n%s", source)
+	}
+}
+
+// TestArrayDestructureMemberSourceRuns builds and runs a member-source destructure so
+// the held-once temporary is proven to feed the positional reads.
+func TestArrayDestructureMemberSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o = { pair: [3, 4] };\nconst [a, b] = o.pair;\nconsole.log(a);\nconsole.log(b);\n"
+	if got, want := runProgramGo(t, src), "3\n4\n"; got != want {
+		t.Fatalf("member-source array destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayDestructureCallSourceEvaluatesOnce builds and runs a call-source
+// destructure whose source increments a counter, so the held-once temporary is proven
+// to run the call a single time rather than once per bound element.
+func TestArrayDestructureCallSourceEvaluatesOnce(t *testing.T) {
+	skipIfShort(t)
+	const src = `let calls = 0;
+function make(): number[] { calls += 1; return [1, 2]; }
+const [a, b] = make();
+console.log(a + b);
+console.log(calls);
+`
+	if got, want := runProgramGo(t, src), "3\n1\n"; got != want {
+		t.Fatalf("call-source array destructure printed %q, want %q (source should run once)", got, want)
+	}
 }

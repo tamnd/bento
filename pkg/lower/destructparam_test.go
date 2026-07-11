@@ -155,3 +155,66 @@ func TestDestructuredParamNestedObjectRuns(t *testing.T) {
 		t.Fatalf("nested object parameter printed %q, want %q", got, want)
 	}
 }
+
+// TestArrowDestructuredParamRuns proves an arrow function reads its destructured
+// parameter's bound names out of the synthesized field at body entry, for both the
+// block body and the concise body forms and for object and array patterns.
+func TestArrowDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const area = ({w, h}: {w: number; h: number}): number => w * h;
+const diff = ([x, y]: number[]): number => { return x - y; };
+const shout = ({a}: {a: number}) => console.log(a);
+console.log(area({w: 3, h: 4}));
+console.log(diff([9, 4]));
+shout({a: 7});
+`
+	if got, want := runProgramGo(t, src), "12\n5\n7\n"; got != want {
+		t.Fatalf("arrow destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestFunctionExprDestructuredParamRuns proves an anonymous function expression binds
+// its destructured parameter the same way an arrow and a declaration do.
+func TestFunctionExprDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const area = function({w, h}: {w: number; h: number}): number { return w * h; };\nconsole.log(area({w: 5, h: 6}));\n"
+	if got, want := runProgramGo(t, src), "30\n"; got != want {
+		t.Fatalf("function expression destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestMethodDestructuredParamRuns proves an instance method reads its destructured
+// parameter's bound names at body entry, for object and array patterns.
+func TestMethodDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `class C {
+  area({w, h}: {w: number; h: number}): number { return w * h; }
+  diff([x, y]: number[]): number { return x - y; }
+}
+const c = new C();
+console.log(c.area({w: 3, h: 4}));
+console.log(c.diff([9, 4]));
+`
+	if got, want := runProgramGo(t, src), "12\n5\n"; got != want {
+		t.Fatalf("method destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestStaticMethodDestructuredParamRuns proves a static method binds its destructured
+// parameter through the same entry bindings a plain function takes.
+func TestStaticMethodDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "class C {\n  static twice({a}: {a: number}): number { return a * 2; }\n}\nconsole.log(C.twice({a: 5}));\n"
+	if got, want := runProgramGo(t, src), "10\n"; got != want {
+		t.Fatalf("static method destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncMethodDestructuredParamHandsBack proves an async method with a destructured
+// parameter hands back, since the promise coroutine has no entry-binding hook yet.
+func TestAsyncMethodDestructuredParamHandsBack(t *testing.T) {
+	const src = "class C {\n  async m({a}: {a: number}): Promise<number> { return a; }\n}\nnew C().m({a: 1});\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "destructured parameter") {
+		t.Fatalf("async method handback reason = %q, want a destructured-parameter reason", reason)
+	}
+}
