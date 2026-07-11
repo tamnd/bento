@@ -154,6 +154,34 @@ console.log("sync");
 	}
 }
 
+// TestMicrotaskOrderingInterleavesAwaitAndThen checks that an async body's await
+// continuations and a promise's then callbacks schedule onto one microtask queue in the
+// order JavaScript fixes: each await continuation runs a turn after its await and each
+// then callback a turn after the synchronous run, so the coroutine and the two thens
+// interleave step by step rather than one draining ahead of the other. The expected order
+// is the one Node prints, the event loop from group 3 this scheduling must match.
+func TestMicrotaskOrderingInterleavesAwaitAndThen(t *testing.T) {
+	src := `
+async function counter(): Promise<void> {
+  console.log("co-start");
+  await Promise.resolve(0);
+  console.log("co-1");
+  await Promise.resolve(0);
+  console.log("co-2");
+}
+console.log("sync-start");
+Promise.resolve(0).then((v) => console.log("then-A"));
+counter();
+Promise.resolve(0).then((v) => console.log("then-B"));
+console.log("sync-end");
+`
+	got := runProgramGo(t, src)
+	want := "sync-start\nco-start\nsync-end\nthen-A\nco-1\nthen-B\nco-2\n"
+	if got != want {
+		t.Fatalf("microtask ordering = %q, want %q", got, want)
+	}
+}
+
 // TestUnhandledRejectionReportsAndExits proves the unhandled-rejection path end to end:
 // a program that rejects a promise and never observes it runs to the end of main, drains
 // the microtask queue, then reports the rejection to standard error and exits non-zero,

@@ -239,21 +239,27 @@ func AsyncVoid(body func()) (p *Promise[Unit]) {
 }
 
 // Then schedules onFulfilled to run with the fulfilled value at the next microtask
-// checkpoint. A rejected promise does not run onFulfilled: rejection propagation
-// through a returned promise is a later slice, so a then with no rejection handler
-// simply does not fire on a rejected promise, which is safe because the fixtures
-// observe rejection through Catch. The callback is always deferred, never inlined,
-// so synchronous code after the then runs first. It returns a settled unit promise,
-// the promise then produces in JavaScript, so a then whose result is bound or
-// chained has a value of the right type; the callback covered here returns nothing,
-// so the returned promise carries no value.
+// checkpoint. The callback is always deferred, never inlined, so synchronous code after
+// the then runs first. It returns the promise then produces in JavaScript: a fresh
+// promise that fulfills with unit only once the callback has run, so a chained then runs
+// one turn later than this one, the ordering a following then observes. A rejection of
+// the receiver passes straight through to the returned promise, since a then with no
+// rejection handler forwards the rejection down the chain, and a callback that throws
+// (a Go panic carrying a Thrown) rejects the returned promise. The callback covered here
+// returns nothing, so the returned promise carries only unit.
 func (p *Promise[T]) Then(onFulfilled func(T)) *Promise[Unit] {
+	next := &Promise[Unit]{}
 	p.subscribe(func() {
-		if p.state == promiseFulfilled {
-			onFulfilled(p.value)
+		if p.state == promiseRejected {
+			next.reject(p.reason)
+			return
 		}
+		settleFromBody(next, func() Unit {
+			onFulfilled(p.value)
+			return Unit{}
+		})
 	})
-	return Resolved(Unit{})
+	return next
 }
 
 // ThenMap is Then for a callback that returns a plain value, the chaining form
@@ -339,31 +345,52 @@ func guardThrow[U any](next *Promise[U], body func()) {
 }
 
 // Catch schedules onRejected to run with the rejection reason at the next microtask
-// checkpoint. A fulfilled promise does not run onRejected. The reason is handed
-// over as a dynamic value: a caught rejection is typed any in JavaScript, so the
-// callback reads it through the value model the way a catch binding boxed into the
-// dynamic world does. Like Then it returns a settled unit promise so a bound or
-// chained catch has a value of the right type.
+// checkpoint. A fulfilled promise does not run onRejected; its fulfillment passes
+// through, so the returned promise fulfills and a following then still runs. The reason
+// is handed over as a dynamic value: a caught rejection is typed any in JavaScript, so
+// the callback reads it through the value model the way a catch binding boxed into the
+// dynamic world does. Like Then it returns a fresh promise that settles only once the
+// reaction has run, so a chained then or finally runs one turn later, and a callback that
+// throws rejects the returned promise rather than swallowing the error.
 func (p *Promise[T]) Catch(onRejected func(Value)) *Promise[Unit] {
+	next := &Promise[Unit]{}
 	p.subscribe(func() {
-		if p.state == promiseRejected {
-			onRejected(thrownValue(p.reason))
+		if p.state != promiseRejected {
+			next.fulfill(Unit{})
+			return
 		}
+		settleFromBody(next, func() Unit {
+			onRejected(thrownValue(p.reason))
+			return Unit{}
+		})
 	})
-	return Resolved(Unit{})
+	return next
 }
 
 // Finally schedules onFinally to run when the promise settles, fulfilled or rejected
-// alike, with no argument: the cleanup reaction .finally registers to run whichever
-// way the promise ends. Like Then and Catch the callback is deferred to the microtask
-// checkpoint, never inlined, so it runs after the synchronous code, and in settle
-// order among the reactions the promise gathered. It returns a settled unit promise so
-// a bound or chained finally has a value of the right type; adopting the receiver's
-// state into that promise (so a later then sees the original value) is chaining, a
-// later slice.
+// alike, with no argument: the cleanup reaction .finally registers to run whichever way
+// the promise ends. Like Then and Catch the callback is deferred to the microtask
+// checkpoint, never inlined, so it runs after the synchronous code and in settle order
+// among the reactions the promise gathered. It returns a fresh promise that settles only
+// once the callback has run, so a chained reaction runs a turn later. A finally does not
+// consume a rejection: the returned promise re-raises the receiver's rejection after the
+// callback, and a callback that throws overrides it, the rules .finally follows.
 func (p *Promise[T]) Finally(onFinally func()) *Promise[Unit] {
-	p.subscribe(onFinally)
-	return Resolved(Unit{})
+	next := &Promise[Unit]{}
+	p.subscribe(func() {
+		if p.state == promiseRejected {
+			guardThrow(next, func() {
+				onFinally()
+				next.reject(p.reason)
+			})
+			return
+		}
+		settleFromBody(next, func() Unit {
+			onFinally()
+			return Unit{}
+		})
+	})
+	return next
 }
 
 // thrownValue boxes a thrown value into the dynamic value a rejection handler
