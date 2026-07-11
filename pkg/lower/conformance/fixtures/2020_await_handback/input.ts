@@ -1,7 +1,7 @@
 class W {
-  async wait(): Promise<number> {
-    const v = await Promise.resolve(1);
-    return v;
+  async wait(v: any): Promise<number> {
+    const x = await v;
+    return x;
   }
 }
-new W().wait();
+new W().wait(1);
