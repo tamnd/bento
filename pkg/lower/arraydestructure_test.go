@@ -123,6 +123,24 @@ console.log(d);
 	}
 }
 
+// TestObjectNestedInArrayRuns proves an object pattern nested inside an array pattern
+// reads the object off the slot the array pattern selected, then binds the inner
+// properties, so the two shapes cross.
+func TestObjectNestedInArrayRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const arr: { x: number; y: number }[] = [{ x: 1, y: 2 }, { x: 3, y: 4 }];
+const [{ x, y }, { x: p, y: q }] = arr;
+console.log(x);
+console.log(y);
+console.log(p);
+console.log(q);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("object-in-array destructure printed %q, want %q", got, want)
+	}
+}
+
 // TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a
 // call returning an array, lowers by holding the source in a generated temporary read
 // once, then reading each element off that temporary, so the source is evaluated once.

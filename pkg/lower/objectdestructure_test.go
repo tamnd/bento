@@ -106,6 +106,24 @@ console.log(z);
 	}
 }
 
+// TestArrayNestedInObjectRuns proves an array pattern nested inside an object pattern
+// reads the array off the property the object pattern selected, then binds the inner
+// elements by index, so the two shapes cross.
+func TestArrayNestedInObjectRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o: { p: number[]; q: number[] } = { p: [1, 2], q: [3, 4] };
+const { p: [a, b], q: [c, d] } = o;
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n3\n4\n"; got != want {
+		t.Fatalf("array-in-object destructure printed %q, want %q", got, want)
+	}
+}
+
 // TestObjectDestructureDefaultRuns proves a property default lowers: the missing
 // optional property takes the default while the present one keeps its value.
 func TestObjectDestructureDefaultRuns(t *testing.T) {
