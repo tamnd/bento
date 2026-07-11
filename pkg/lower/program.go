@@ -791,6 +791,11 @@ func elidedObjectReceiver(r *Renderer, call frontend.Node) (frontend.Node, bool)
 	if arg.Kind() != frontend.NodeIdentifier {
 		return nil, false
 	}
+	// A dynamic receiver is not folded away: its Object static walks the runtime bag
+	// and lowers the receiver, so its read is real and must not be counted as elided.
+	if r.isDynamic(arg) {
+		return nil, false
+	}
 	return arg, true
 }
 

@@ -171,6 +171,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return r.unaryStringGlobal("Atob", callee, kids[1:])
 		}
 	}
+	// Symbol() and Symbol(desc) construct a fresh unique symbol, the boxed value a
+	// symbol-keyed property carries, and route before the user path the way the
+	// coercions do since Symbol is an ambient global, not a user binding.
+	if r.prog.Text(kids[0]) == "Symbol" && r.isAmbientGlobal(kids[0]) {
+		return r.symbolConstructor(kids[1:])
+	}
 	// Function("a", "return a") called as a function builds a function from source
 	// text at run time, the same construction as new Function and a member of the
 	// eval family: the argument strings are parsed as a parameter list and a body. A
@@ -1506,6 +1512,17 @@ func (r *Renderer) objectHasOwn(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 2 {
 		return nil, &NotYetLowerable{Reason: "Object.hasOwn with other than two arguments is a later slice"}
 	}
+	if r.isDynamic(argNodes[0]) {
+		recv, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		key, err := r.boxOperand(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("HasOwnElem")}, Args: []ast.Expr{key}}, nil
+	}
 	props, err := r.fixedShapeProps("hasOwn", argNodes[0])
 	if err != nil {
 		return nil, err
@@ -1536,6 +1553,13 @@ func (r *Renderer) objectHasOwn(argNodes []frontend.Node) (ast.Expr, error) {
 // match (a missing optional field is not a key), which objectShapeArg already
 // gates through internStruct.
 func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 1 && r.isDynamic(argNodes[0]) {
+		recv, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnKeys")}}, nil
+	}
 	props, err := r.objectShapeArg(method, argNodes)
 	if err != nil {
 		return nil, err
@@ -1557,6 +1581,13 @@ func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (
 // field types are compared through their rendered Go source so a number-literal
 // field type and a widened number field type read as the same element type.
 func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 1 && r.isDynamic(argNodes[0]) {
+		recv, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}}, nil
+	}
 	props, err := r.objectShapeArg("values", argNodes)
 	if err != nil {
 		return nil, err
@@ -2308,6 +2339,30 @@ func (r *Renderer) unaryStringGlobal(goName, jsName string, argNodes []frontend.
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{lowered}}, nil
+}
+
+// symbolConstructor lowers Symbol() and Symbol(desc) to the boxed symbol value the
+// property bag keys by identity. No argument builds the descriptionless symbol
+// through value.NewSymbolNoDesc, keeping Symbol() apart from Symbol(""); a string
+// description builds value.NewSymbol over the lowered string. A non-string
+// description would need the ToString coercion the constructor applies and is a
+// later slice, and more than one argument is not the constructor's shape.
+func (r *Renderer) symbolConstructor(argNodes []frontend.Node) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	if len(argNodes) == 0 {
+		return &ast.CallExpr{Fun: sel("value", "NewSymbolNoDesc")}, nil
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Symbol called with more than one argument is a later slice"}
+	}
+	if !r.isString(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Symbol with a non-string description is a later slice"}
+	}
+	desc, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewSymbol"), Args: []ast.Expr{desc}}, nil
 }
 
 // parseIntCall lowers parseInt(s) and parseInt(s, radix) to value.ParseInt. The

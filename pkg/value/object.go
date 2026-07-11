@@ -8,6 +8,8 @@
 
 package value
 
+import "sort"
+
 // Object is the storage behind a KindObject or KindArray value. A plain object
 // keeps its properties in insertion order as parallel key and value slices, the
 // order JavaScript enumerates and serializes in. An array keeps its elements in a
@@ -15,11 +17,13 @@ package value
 // not go through the property map. One struct backs both so an array can still
 // carry a named property without changing representation.
 type Object struct {
-	kind  Kind    // KindObject or KindArray
-	keys  []BStr  // property names in insertion order (named properties)
-	vals  []Value // property values, parallel to keys
-	elems []Value // dense element storage for an array
-	call  callFn  // the invocable body of a callable, nil for a plain object
+	kind    Kind      // KindObject or KindArray
+	keys    []BStr    // string property names in insertion order (named properties)
+	vals    []Value   // property values, parallel to keys
+	symKeys []*Symbol // symbol property keys in insertion order, kept apart from string keys
+	symVals []Value   // property values, parallel to symKeys
+	elems   []Value   // dense element storage for an array
+	call    callFn    // the invocable body of a callable, nil for a plain object
 }
 
 // callFn is the body of a callable function value: it takes its arguments already
@@ -208,12 +212,94 @@ func (o *Object) hasOwn(key BStr) bool {
 	return false
 }
 
+// setSym writes a symbol-keyed property, keyed by the symbol's identity rather
+// than by any string form, so a symbol key never collides with a string key or
+// with another symbol of the same description. A key already present is
+// overwritten in place; a new key appends, keeping the symbol properties in
+// insertion order the way the spec enumerates them after the string keys.
+func (o *Object) setSym(key *Symbol, val Value) {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			o.symVals[i] = val
+			return
+		}
+	}
+	o.symKeys = append(o.symKeys, key)
+	o.symVals = append(o.symVals, val)
+}
+
+// getSym returns the value of a symbol-keyed own property, or undefined when the
+// object carries no such symbol, the JavaScript result for a missing property.
+func (o *Object) getSym(key *Symbol) Value {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			return o.symVals[i]
+		}
+	}
+	return Undefined
+}
+
+// hasSym reports whether the object carries key as an own symbol property, the
+// existence probe behind a symbol key in the in operator.
+func (o *Object) hasSym(key *Symbol) bool {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteSym removes a symbol-keyed own property, closing the gap in the parallel
+// symbol key and value slices so the remaining symbol properties keep their
+// insertion order. A symbol the object does not carry is already absent, so the
+// result is true either way, the boolean delete gives for a configurable or
+// missing property.
+func (o *Object) deleteSym(key *Symbol) bool {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			o.symKeys = append(o.symKeys[:i], o.symKeys[i+1:]...)
+			o.symVals = append(o.symVals[:i], o.symVals[i+1:]...)
+			return true
+		}
+	}
+	return true
+}
+
+// orderedStringKeys returns the object's own string-keyed properties in the order
+// the specification enumerates them: canonical integer-index keys first in
+// ascending numeric order, then the remaining string keys in insertion order. An
+// array contributes its dense element indices, which are integer keys by
+// construction, and a plain object that was given numeric string keys out of order
+// still enumerates them ascending, so the order is deterministic regardless of how
+// the keys arrived.
+func (o *Object) orderedStringKeys() []BStr {
+	var idxKeys []int
+	var strKeys []BStr
+	for i := range o.elems {
+		idxKeys = append(idxKeys, i)
+	}
+	for _, k := range o.keys {
+		if n, ok := arrayIndex(k.ToGoString()); ok {
+			idxKeys = append(idxKeys, n)
+		} else {
+			strKeys = append(strKeys, k)
+		}
+	}
+	sort.Ints(idxKeys)
+	out := make([]BStr, 0, len(idxKeys)+len(strKeys))
+	for _, n := range idxKeys {
+		out = append(out, NumberToString(float64(n)))
+	}
+	return append(out, strKeys...)
+}
+
 // ObjectRest returns a new plain object holding the receiver's own enumerable
 // properties except those named in omit, the value an object rest element binds:
-// { a, ...rest } gathers every own property but a. An array's indexed elements
-// enumerate first as their canonical string keys, then named properties in insertion
-// order, the order JavaScript's own-property enumeration gives them. A receiver with
-// no object storage yields an empty object, the rest of nothing.
+// { a, ...rest } gathers every own property but a. The properties copy in the
+// spec's own-property order, integer indices ascending then the remaining string
+// keys in insertion order, so the rest object enumerates the way the source does. A
+// receiver with no object storage yields an empty object, the rest of nothing.
 func (v Value) ObjectRest(omit ...BStr) Value {
 	rest := NewObject()
 	switch v.kind {
@@ -230,15 +316,76 @@ func (v Value) ObjectRest(omit ...BStr) Value {
 		}
 		return false
 	}
-	for i, e := range o.elems {
-		if k := NumberToString(float64(i)); !skip(k) {
-			rest.Set(k, e)
-		}
-	}
-	for i, k := range o.keys {
+	for _, k := range o.orderedStringKeys() {
 		if !skip(k) {
-			rest.Set(k, o.vals[i])
+			rest.Set(k, v.Get(k))
 		}
 	}
 	return rest
+}
+
+// OwnKeys returns the receiver's own enumerable string-keyed property names as a
+// string array in the spec's enumeration order, the value Object.keys and
+// Object.getOwnPropertyNames build for a dynamic receiver whose keys are known only
+// at runtime. Symbol keys never appear, which matches both statics on the string
+// side, and every property in this model is enumerable, so the two return the same
+// list. A receiver with no object storage yields an empty array.
+func (v Value) OwnKeys() *Array[BStr] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return NewArray(v.object().orderedStringKeys()...)
+	default:
+		return NewArray[BStr]()
+	}
+}
+
+// OwnValues returns the receiver's own enumerable property values as a value array
+// in the same order OwnKeys walks the names, the value Object.values builds for a
+// dynamic receiver. A receiver with no object storage yields an empty array.
+func (v Value) OwnValues() *Array[Value] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		keys := v.object().orderedStringKeys()
+		vals := make([]Value, len(keys))
+		for i, k := range keys {
+			vals[i] = v.Get(k)
+		}
+		return NewArray(vals...)
+	default:
+		return NewArray[Value]()
+	}
+}
+
+// HasOwnElem reports whether the receiver carries key as an own property, the
+// value Object.hasOwn returns for a dynamic receiver. A symbol key is looked up by
+// identity in the symbol bag; any other key is taken to its property-key string,
+// so o.hasOwn(s) and o.hasOwn("k") each probe the slot the matching read would
+// reach. An array answers for its length and its in-range element indices as well
+// as any named property, and a receiver with no object storage has nothing to own.
+func (v Value) HasOwnElem(key Value) bool {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return false
+	}
+	o := v.object()
+	if key.kind == KindSymbol {
+		return o.hasSym(key.symbol())
+	}
+	var name BStr
+	if key.kind == KindString {
+		name = key.str()
+	} else {
+		name = ToString(key)
+	}
+	if v.kind == KindArray {
+		s := name.ToGoString()
+		if s == "length" {
+			return true
+		}
+		if idx, ok := arrayIndex(s); ok {
+			return idx < len(o.elems)
+		}
+	}
+	return o.hasOwn(name)
 }

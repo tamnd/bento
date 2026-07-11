@@ -204,7 +204,7 @@ func TestRealPrimitivesRender(t *testing.T) {
 		{"bigint", "const x: bigint = 1n;", "*big.Int"},
 		{"string", "const x: string = \"s\";", "value.BStr"},
 		{"boolean", "const x: boolean = true;", "bool"},
-		{"symbol", "const x: symbol = Symbol();", "*value.Symbol"},
+		{"symbol", "const x: symbol = Symbol();", "value.Value"},
 		// any and unknown have no static shape, so they lower to the boxed value.Value
 		// the dynamic world uses; the operations on such a value dispatch on its
 		// runtime kind through the value package.
