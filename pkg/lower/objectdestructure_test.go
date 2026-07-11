@@ -173,6 +173,22 @@ console.log(d);
 	}
 }
 
+// TestObjectMemberTargetAssignmentRuns proves an object destructuring assignment that
+// renames a source property onto a member target stores the property into the object
+// field, reading the source property and landing it in the existing field.
+func TestObjectMemberTargetAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o = { a: 0 };
+const s = { a: 5 };
+({ a: o.a } = s);
+console.log(o.a);
+`
+	if got, want := runProgramGo(t, src), "5\n"; got != want {
+		t.Fatalf("object member-target assignment printed %q, want %q", got, want)
+	}
+}
+
 // TestObjectDestructureDefaultRuns proves a property default lowers: the missing
 // optional property takes the default while the present one keeps its value.
 func TestObjectDestructureDefaultRuns(t *testing.T) {
