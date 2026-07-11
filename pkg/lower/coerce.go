@@ -509,11 +509,41 @@ func (r *Renderer) boxStaticToDynamicFlags(expr ast.Expr, flags frontend.TypeFla
 // is already a box. This lets the coercion pass the lowered expr through rather
 // than searching for a primitive constructor it has none of.
 func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
-	if src.Kind() != frontend.NodeNewExpression {
+	if src.Kind() == frontend.NodeNewExpression {
+		kids := r.prog.Children(src)
+		return len(kids) >= 1 && r.prog.Text(kids[0]) == "Object" && len(kids) == 1
+	}
+	// Object.getOwnPropertyDescriptor(o, key) lowers to a runtime call that returns a
+	// value.Value, the descriptor object or undefined, so a slot that takes it as a
+	// dynamic value needs no further boxing. The checker types the call
+	// PropertyDescriptor | undefined, which the primitive box path has no constructor
+	// for, so recognizing the call here is what lets const d: any = Object
+	// .getOwnPropertyDescriptor(o, k) store the box straight through.
+	return r.isDynamicDescriptorRead(src)
+}
+
+// isDynamicDescriptorRead reports whether src is an Object.getOwnPropertyDescriptor
+// call on a dynamic receiver, the one Object static that lowers to a boxed
+// value.Value rather than a static shape. The receiver must be dynamic for the call
+// to route to the runtime read; a fixed-shape receiver takes a later slice and does
+// not produce a box, so it is not claimed here.
+func (r *Renderer) isDynamicDescriptorRead(src frontend.Node) bool {
+	if src.Kind() != frontend.NodeCallExpression {
 		return false
 	}
 	kids := r.prog.Children(src)
-	return len(kids) >= 1 && r.prog.Text(kids[0]) == "Object" && len(kids) == 1
+	if len(kids) < 2 {
+		return false
+	}
+	callee := kids[0]
+	if callee.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	ck := r.prog.Children(callee)
+	if len(ck) != 2 {
+		return false
+	}
+	return r.isGlobalRef(ck[0], "Object") && r.prog.Text(ck[1]) == "getOwnPropertyDescriptor" && r.isDynamic(kids[1])
 }
 
 // boxLiteralToDynamic builds the boxed value form of an object or array literal
