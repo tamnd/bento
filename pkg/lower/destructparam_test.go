@@ -70,6 +70,29 @@ console.log(shift(10, {by: 5}));
 	}
 }
 
+// TestDestructuredParamDefaultRuns proves a default inside a destructured parameter
+// fills the bound name when the source slot is undefined and keeps the read value
+// otherwise, for both the object and the array pattern forms.
+func TestDestructuredParamDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function box({w = 2, h}: {w?: number, h: number}): number {
+  return w * h;
+}
+function head([a, b = 9]: number[]): number {
+  return a + b;
+}
+let missing: {w?: number, h: number} = {h: 4};
+let full: {w?: number, h: number} = {w: 3, h: 4};
+console.log(box(missing));
+console.log(box(full));
+console.log(head([10, 5]));
+console.log(head([10]));
+`
+	if got, want := runProgramGo(t, src), "8\n12\n15\n19\n"; got != want {
+		t.Fatalf("destructured parameter default printed %q, want %q", got, want)
+	}
+}
+
 // TestDestructuredParamRenameHandsBack proves the shapes the shorthand binding does
 // not cover still hand back: a rename in an object pattern and a nested array
 // pattern each name their own later slice rather than emit an unbound read.
