@@ -82,6 +82,46 @@ func TestDeleteMissingPropertyRuns(t *testing.T) {
 	}
 }
 
+// TestDeleteNonReferenceFolds pins that delete over a non-reference operand, which
+// the checker flags 2703 and the front door admits, folds to the constant true:
+// the operand is side-effect free, so JavaScript's evaluate-then-yield-true drops
+// it and delete becomes true.
+func TestDeleteNonReferenceFolds(t *testing.T) {
+	const src = "const b: boolean = delete 0;\nconsole.log(b);\n"
+	source := renderProgramTolerant(t, src)
+	if !strings.Contains(source, "b := true") {
+		t.Fatalf("delete of a non-reference operand did not fold to true:\n%s", source)
+	}
+}
+
+// TestDeleteNonReferenceRuns builds and runs a non-reference delete: it prints
+// true, the boolean JavaScript gives when the operand is not a property reference.
+func TestDeleteNonReferenceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const b: boolean = delete (1 + 2);\nconsole.log(b);\n"
+	got := runProgramGoTolerant(t, src)
+	if got != "true\n" {
+		t.Fatalf("delete of a non-reference operand printed %q, want %q", got, "true\n")
+	}
+}
+
+// TestDeleteSideEffectingNonReferenceHandsBack pins the boundary: a non-reference
+// operand with a side effect cannot fold to true without dropping that effect, so
+// it hands back until the sequencing slice lands.
+func TestDeleteSideEffectingNonReferenceHandsBack(t *testing.T) {
+	const src = "function eff(): number { console.log(\"ran\"); return 1; }\nfunction f(): boolean { return delete eff(); }\n"
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if !strings.Contains(nyl.Reason, "side effect") {
+		t.Errorf("hand-back reason = %q, want it to mention a side effect", nyl.Reason)
+	}
+}
+
 // TestDeleteStaticMemberHandsBack pins the boundary: a property whose fixed shape
 // makes it a Go struct field has no runtime slot to remove, so delete over it
 // hands back for the object descriptor model a later phase builds.

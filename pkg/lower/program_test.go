@@ -198,9 +198,23 @@ func runProgramTS(t *testing.T, src string) string {
 // apart from standard output so a build message never pollutes the comparison.
 func runProgramGo(t *testing.T, src string) string {
 	t.Helper()
-	source := renderProgram(t, src)
-	// What the program prints is fixed by its bytes and the runtime it links, so
-	// the compile and run is cached on both and only rebuilds when one changed.
+	return goRunSource(t, renderProgram(t, src))
+}
+
+// runProgramGoTolerant is runProgramGo through the tolerant front door, for a
+// program that only reaches the renderer because a tolerated checker diagnostic
+// was admitted.
+func runProgramGoTolerant(t *testing.T, src string) string {
+	t.Helper()
+	return goRunSource(t, renderProgramTolerant(t, src))
+}
+
+// goRunSource compiles and runs a rendered Go program inside the repository tree
+// so it links the real value package under bento's own go.mod, and returns what it
+// wrote to standard output. The compile and run is cached on the source bytes, so
+// it only rebuilds when the program changed.
+func goRunSource(t *testing.T, source string) string {
+	t.Helper()
 	return cachedGoRun(t, source, func() string {
 		dir, err := os.MkdirTemp(repoRoot(t), "progrun-")
 		if err != nil {

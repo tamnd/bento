@@ -96,9 +96,32 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2362 || d.Code == 2363 {
 			continue
 		}
+		// 2703 (a delete over a non-reference operand) is admitted because delete
+		// still yields true, folded or handed back, so mirror the front door here.
+		if d.Code == 2703 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog
+}
+
+// renderProgramTolerant compiles src through the tolerant front door and
+// assembles it to Go source, the counterpart to renderProgram for programs that
+// only reach the renderer because a tolerated diagnostic was admitted. A hand-back
+// is a test failure: the case is inside the lowerable subset by construction.
+func renderProgramTolerant(t *testing.T, src string) string {
+	t.Helper()
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	r.SetGoConstants(testGoConstants())
+	r.SetGoErrorVars(testGoErrorVars())
+	p, err := r.RenderProgram(entryFile(t, prog))
+	if err != nil {
+		t.Fatalf("RenderProgram: %v", err)
+	}
+	return p.Source
 }
 
 // renderProgramTolerantHandBack compiles src through the tolerant front door and

@@ -44,9 +44,25 @@ func (r *Renderer) deleteExpr(n frontend.Node) (ast.Expr, error) {
 		return r.deleteMember(target)
 	case frontend.NodeElementAccessExpression:
 		return r.deleteElement(target)
+	case frontend.NodeIdentifier:
+		return nil, &NotYetLowerable{Reason: "delete of an identifier binding is a later slice"}
 	default:
-		return nil, &NotYetLowerable{Reason: "delete of a " + kindName(target.Kind()) + " operand is a later slice"}
+		return r.deleteNonReference(target)
 	}
+}
+
+// deleteNonReference lowers delete over an operand that is not a property
+// reference, such as a literal, an arithmetic expression, or this. The delete
+// operator evaluates such an operand and then yields true without removing
+// anything, because there is no property slot to remove. A side-effect-free
+// operand folds to the constant true, dropping the operand the way JavaScript
+// discards its value; an operand that could run a call or an assignment hands back
+// rather than lose that effect, since folding to true would drop it.
+func (r *Renderer) deleteNonReference(target frontend.Node) (ast.Expr, error) {
+	if !r.repeatableOperand(target) {
+		return nil, &NotYetLowerable{Reason: "delete of a non-reference operand with a side effect is a later slice"}
+	}
+	return ident("true"), nil
 }
 
 // deleteMember lowers delete obj.k. Only a dynamic receiver lowers: its property
