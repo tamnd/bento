@@ -1203,10 +1203,17 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	if len(elems) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty array destructuring pattern binds nothing"}
 	}
+	// A trailing rest gathers the elements past the fixed slots into a fresh array,
+	// so it is split off and the fixed elements are classified as usual; the rest is
+	// bound after them from the same receiver.
+	fixedElems, restNode, hasRest, err := r.splitArrayRest(elems)
+	if err != nil {
+		return nil, true, err
+	}
 	// The pattern is validated before the source is lowered, so an unsupported shape
 	// hands back before a temporary is minted for the source.
-	infos := make([]arrayDefaultElem, len(elems))
-	for i, el := range elems {
+	infos := make([]arrayDefaultElem, len(fixedElems))
+	for i, el := range fixedElems {
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, true, err
@@ -1285,6 +1292,17 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
+	}
+	if hasRest {
+		rc, err := recv()
+		if err != nil {
+			return nil, true, err
+		}
+		bind, err := r.arrayRestBinding(restNode, elemT, rc, len(infos), token.DEFINE)
+		if err != nil {
+			return nil, true, err
+		}
+		stmts = append(stmts, bind)
 	}
 	return stmts, true, nil
 }
@@ -1601,9 +1619,15 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 	if len(targets) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty array assignment pattern binds nothing"}
 	}
-	elems := make([]arrayAssignElem, len(targets))
+	// A trailing rest gathers the tail into the rest target, so it is split off and
+	// the fixed targets take their per-index reads before the rest is assigned.
+	fixedTargets, restNode, hasRest, err := r.splitArrayRest(targets)
+	if err != nil {
+		return nil, true, err
+	}
+	elems := make([]arrayAssignElem, len(fixedTargets))
 	anyDefault := false
-	for i, tgt := range targets {
+	for i, tgt := range fixedTargets {
 		el, err := r.classifyArrayAssignElem(tgt)
 		if err != nil {
 			return nil, true, err
@@ -1611,13 +1635,13 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 		elems[i] = el
 		anyDefault = anyDefault || el.hasDefault
 	}
-	// A default turns the flat parallel assignment into a per-target fill, so the
-	// pattern with any default takes its own path; the default-free pattern keeps the
-	// single parallel assignment that makes the swap idiom fall out.
-	if anyDefault {
-		return r.arrayDestructureAssignDefaults(elems, rhs)
+	// A default or a rest turns the flat parallel assignment into a per-target fill,
+	// so a pattern with either takes its own path; the plain pattern keeps the single
+	// parallel assignment that makes the swap idiom fall out.
+	if anyDefault || hasRest {
+		return r.arrayDestructureAssignFill(elems, restNode, hasRest, rhs)
 	}
-	names := make([]ast.Expr, 0, len(targets))
+	names := make([]ast.Expr, 0, len(fixedTargets))
 	for _, el := range elems {
 		name, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
@@ -1625,24 +1649,24 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 		}
 		names = append(names, ident(name))
 	}
-	values, err := r.arrayDestructureValues(targets, rhs)
+	values, err := r.arrayDestructureValues(fixedTargets, rhs)
 	if err != nil {
 		return nil, true, err
 	}
 	return &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}, true, nil
 }
 
-// arrayDestructureAssignDefaults lowers an array destructuring assignment that
-// carries a default on at least one target, `[a = d, b] = arr`, to a block of
-// per-target fills: a plain target takes its element read, a defaulted target fills
-// from its default when the slot is undefined. The default breaks the flat parallel
-// assignment, so this reads element by element instead, which needs the source to be
-// a plain array variable; a literal or other source with a default hands back as a
-// later slice. Each target's type must match the array element type, the same guard
-// the default-free path applies.
-func (r *Renderer) arrayDestructureAssignDefaults(elems []arrayAssignElem, rhs frontend.Node) (ast.Stmt, bool, error) {
+// arrayDestructureAssignFill lowers an array destructuring assignment that carries a
+// default or a rest, `[a = d, b, ...rest] = arr`, to a block of per-target fills: a
+// plain target takes its element read, a defaulted target fills from its default when
+// the slot is undefined, and a trailing rest gathers the tail past the fixed targets.
+// A default or a rest breaks the flat parallel assignment, so this reads element by
+// element instead, which needs the source to be a plain array variable; a literal or
+// other source hands back as a later slice. Each fixed target's type must match the
+// array element type, the same guard the default-free path applies.
+func (r *Renderer) arrayDestructureAssignFill(elems []arrayAssignElem, restNode frontend.Node, hasRest bool, rhs frontend.Node) (ast.Stmt, bool, error) {
 	if rhs.Kind() != frontend.NodeIdentifier {
-		return nil, true, &NotYetLowerable{Reason: "an array assignment with a default from anything but a plain array variable needs a temporary, a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "an array assignment with a default or rest from anything but a plain array variable needs a temporary, a later slice"}
 	}
 	elemT, ok := r.prog.ElementType(r.prog.TypeAt(rhs))
 	if !ok {
@@ -1691,6 +1715,17 @@ func (r *Renderer) arrayDestructureAssignDefaults(elems []arrayAssignElem, rhs f
 				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
 			}},
 		})
+	}
+	if hasRest {
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		bind, err := r.arrayRestBinding(restNode, elemT, recv, len(elems), token.ASSIGN)
+		if err != nil {
+			return nil, true, err
+		}
+		out = append(out, bind)
 	}
 	return &ast.BlockStmt{List: out}, true, nil
 }

@@ -85,11 +85,14 @@ func TestArrayDestructureDefaultRuns(t *testing.T) {
 	}
 }
 
-// TestArrayDestructureRestHandsBack proves a rest element hands back, since gathering
-// the tail into an array is a later slice.
-func TestArrayDestructureRestHandsBack(t *testing.T) {
+// TestArrayDestructureRestRuns proves a rest element gathers the tail past the fixed
+// slots into a fresh array, binding the head by index.
+func TestArrayDestructureRestRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = "const pair: number[] = [1, 2, 3];\nconst [a, ...rest] = pair;\nconsole.log(a);\nconsole.log(rest.length);\n"
-	renderProgramHandBack(t, src)
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("array rest destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayDestructureNestedHandsBack proves a nested pattern hands back, since a
