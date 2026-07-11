@@ -1402,6 +1402,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectDefineProperties(argNodes)
 	case "getOwnPropertyDescriptor":
 		return r.objectGetOwnPropertyDescriptor(argNodes)
+	case "getOwnPropertyDescriptors":
+		return r.objectGetOwnPropertyDescriptors(argNodes)
 	case "is":
 		return r.objectIs(argNodes)
 	default:
@@ -1626,6 +1628,26 @@ func (r *Renderer) objectGetOwnPropertyDescriptor(argNodes []frontend.Node) (ast
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetOwnPropertyDescriptor")}, Args: []ast.Expr{key}}, nil
+}
+
+// objectGetOwnPropertyDescriptors lowers Object.getOwnPropertyDescriptors(o) to a
+// runtime GetOwnPropertyDescriptors on the dynamic receiver, which builds an object
+// mapping every own key to its descriptor object over the same read the single-key
+// form takes. The receiver must be a dynamic value, since a fixed-shape Go struct
+// has no runtime descriptor bag to read from, so a non-dynamic receiver hands back.
+// The receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectGetOwnPropertyDescriptors(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertyDescriptors with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertyDescriptors on a fixed-shape receiver, which has no runtime descriptor bag, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetOwnPropertyDescriptors")}}, nil
 }
 
 // objectOwnNameArray lowers Object.keys(o) and Object.getOwnPropertyNames(o) on
