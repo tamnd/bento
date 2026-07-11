@@ -63,6 +63,22 @@ func (v Value) SetPrototype(proto Value) Value {
 	return v
 }
 
+// SetProtoAssign applies the legacy __proto__ assignment, the runtime shared by the
+// object literal __proto__: member and the o.__proto__ = v accessor. An object or
+// null becomes the prototype through the same slot write Object.setPrototypeOf
+// takes, so a non-extensible object still rejects a real change with a TypeError;
+// any other value is ignored without error, the way both __proto__ forms leave a
+// primitive prototype alone rather than storing an own property of that name. It
+// returns the receiver so the object-literal builder keeps chaining Set calls.
+func (v Value) SetProtoAssign(proto Value) Value {
+	switch proto.kind {
+	case KindObject, KindArray, KindFunc, KindNull:
+		return v.SetPrototype(proto)
+	default:
+		return v
+	}
+}
+
 // GetPrototype returns the receiver's [[Prototype]] as a value, the runtime behind
 // Object.getPrototypeOf(o). A slot holding an object reports that object; a slot
 // left nil, whether never set or set to null through Object.create(null), reports

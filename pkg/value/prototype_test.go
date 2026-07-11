@@ -121,3 +121,32 @@ func TestObjectCreatePrimitiveThrows(t *testing.T) {
 		t.Fatal("Object.create on a number prototype did not throw")
 	}
 }
+
+// TestSetProtoAssign proves the legacy __proto__ assignment retargets the slot for an
+// object or null and leaves a primitive alone rather than storing an own property of
+// that name, unlike Object.setPrototypeOf which throws on a primitive.
+func TestSetProtoAssign(t *testing.T) {
+	proto := NewObject()
+	proto.Set(FromGoString("x"), Number(1))
+
+	child := NewObject()
+	child.SetProtoAssign(proto)
+	if got := child.Get(FromGoString("x")); got.scalar != Number(1).scalar {
+		t.Fatalf("read after __proto__ assignment = %v, want 1 inherited", got)
+	}
+
+	if throws(func() { child.SetProtoAssign(Number(5)) }) {
+		t.Fatal("__proto__ assignment of a primitive threw instead of being ignored")
+	}
+	if got := child.Get(FromGoString("x")); got.scalar != Number(1).scalar {
+		t.Fatalf("a primitive __proto__ assignment disturbed the prototype: read = %v, want 1", got)
+	}
+	if child.object().hasOwn(FromGoString("__proto__")) {
+		t.Fatal("a primitive __proto__ assignment stored an own property of that name")
+	}
+
+	child.SetProtoAssign(Null)
+	if got := child.Get(FromGoString("x")); got.kind != KindUndefined {
+		t.Fatalf("read after __proto__ = null = %v, want undefined", got)
+	}
+}
