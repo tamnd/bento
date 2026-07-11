@@ -123,6 +123,52 @@ func GenericLastIndexOf(recv, target Value, from ...Value) Value {
 	return Number(-1)
 }
 
+// arrayLikeSet writes element k onto the receiver as the property named by the
+// integer k, the write a mutating generic-receiver method makes at each index. It
+// dispatches through SetIndex, so a real array writes its dense storage and an
+// array-like object writes the property named by the index string, not a slice
+// slot.
+func arrayLikeSet(recv Value, k int, val Value) {
+	recv.SetIndex(float64(k), val)
+}
+
+// GenericFill runs Array.prototype.fill on a generic receiver, writing value into
+// each index in the half-open range [start, end) and returning the receiver. start
+// and end are relative indices: a negative bound counts from the end and clamps at
+// 0, a positive bound clamps at the length, and an omitted start is 0 and an omitted
+// end is the length. The receiver is returned so the borrowed call reads as the
+// in-place fill the array method evaluates to.
+func GenericFill(recv, value Value, bounds ...Value) Value {
+	n := arrayLikeLen(recv)
+	start, end := 0, n
+	if len(bounds) > 0 {
+		start = relIndex(toIntegerValue(bounds[0]), n)
+	}
+	if len(bounds) > 1 {
+		end = relIndex(toIntegerValue(bounds[1]), n)
+	}
+	for k := start; k < end; k++ {
+		arrayLikeSet(recv, k, value)
+	}
+	return recv
+}
+
+// GenericReverse runs Array.prototype.reverse on a generic receiver, swapping the
+// element at each index with its mirror across the middle and returning the
+// receiver. Each swap reads both elements as properties named by their indices and
+// writes them back, so a real array and an array-like object both reverse in place.
+func GenericReverse(recv Value) Value {
+	n := arrayLikeLen(recv)
+	for lower := 0; lower < n/2; lower++ {
+		upper := n - 1 - lower
+		lo := arrayLikeGet(recv, lower)
+		hi := arrayLikeGet(recv, upper)
+		arrayLikeSet(recv, lower, hi)
+		arrayLikeSet(recv, upper, lo)
+	}
+	return recv
+}
+
 // GenericIncludes runs Array.prototype.includes on a generic receiver, reporting
 // whether any element at or after fromIndex is SameValueZero-equal to target, so a
 // stored NaN is found where indexOf would miss it. The result boxes to a boolean.

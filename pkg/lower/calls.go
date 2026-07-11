@@ -2437,6 +2437,10 @@ func (r *Renderer) arrayProtoBorrowedCall(name, method string, argNodes []fronte
 		return r.arrayGenericCall("GenericLastIndexOf", args, methodArgs, 1)
 	case "includes":
 		return r.arrayGenericCall("GenericIncludes", args, methodArgs, 1)
+	case "fill":
+		return r.arrayGenericCall("GenericFill", args, methodArgs, 1)
+	case "reverse":
+		return r.arrayGenericCall("GenericReverse", args, methodArgs, 0)
 	default:
 		return nil, &NotYetLowerable{Reason: "Array.prototype." + name + " on a generic receiver is a later slice"}
 	}

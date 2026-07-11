@@ -83,6 +83,41 @@ func TestGenericLastIndexOf(t *testing.T) {
 	}
 }
 
+// TestGenericFill proves fill writes value into each index in range as the property
+// named by the number, honors relative bounds, and returns the receiver.
+func TestGenericFill(t *testing.T) {
+	o := arrayLike(4, Number(0), Number(0), Number(0), Number(0))
+	got := GenericFill(o, Number(7), Number(1), Number(3))
+	if !StrictEquals(got, o) {
+		t.Fatal("fill did not return the receiver")
+	}
+	want := []float64{0, 7, 7, 0}
+	for i, w := range want {
+		if v := o.GetIndex(float64(i)); v.AsNumber() != w {
+			t.Fatalf("o[%d] = %v, want %v", i, v.AsNumber(), w)
+		}
+	}
+	// The written element is a named property on the generic object, reachable by its
+	// key string, not a slice slot.
+	if v := o.Get(FromGoString("1")); v.AsNumber() != 7 {
+		t.Fatalf(`o["1"] = %v, want 7`, v.AsNumber())
+	}
+}
+
+// TestGenericReverse proves reverse swaps elements in place across the middle,
+// reading and writing each as the property named by its index, and returns the
+// receiver.
+func TestGenericReverse(t *testing.T) {
+	o := arrayLike(3, Number(1), Number(2), Number(3))
+	GenericReverse(o)
+	want := []float64{3, 2, 1}
+	for i, w := range want {
+		if v := o.GetIndex(float64(i)); v.AsNumber() != w {
+			t.Fatalf("o[%d] = %v, want %v", i, v.AsNumber(), w)
+		}
+	}
+}
+
 // TestGenericIncludes proves the membership test uses SameValueZero, so a stored NaN
 // is found where a strict search would miss it.
 func TestGenericIncludes(t *testing.T) {
