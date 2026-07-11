@@ -1410,9 +1410,36 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectCreate(argNodes)
 	case "getPrototypeOf":
 		return r.objectGetPrototypeOf(argNodes)
+	case "setPrototypeOf":
+		return r.objectSetPrototypeOf(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
+}
+
+// objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime
+// SetPrototype on the dynamic receiver, which writes the prototype slot and returns
+// the receiver. An object or null becomes the new prototype; a non-extensible
+// object rejects a change to a different prototype with a TypeError. The receiver
+// must be a dynamic value, since a fixed-shape Go struct has no runtime prototype
+// slot to write, so a non-dynamic receiver hands back. The prototype is boxed the
+// way any dynamic operand is; both operands are evaluated, so no read is dropped.
+func (r *Renderer) objectSetPrototypeOf(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.setPrototypeOf with other than two arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.setPrototypeOf on a fixed-shape receiver, which has no runtime prototype slot, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	proto, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("SetPrototype")}, Args: []ast.Expr{proto}}, nil
 }
 
 // objectGetPrototypeOf lowers Object.getPrototypeOf(o) to a runtime GetPrototype on
