@@ -1396,6 +1396,12 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectValues(argNodes)
 	case "hasOwn":
 		return r.objectHasOwn(argNodes)
+	case "defineProperty":
+		return r.objectDefineProperty(argNodes)
+	case "defineProperties":
+		return r.objectDefineProperties(argNodes)
+	case "getOwnPropertyDescriptor":
+		return r.objectGetOwnPropertyDescriptor(argNodes)
 	case "is":
 		return r.objectIs(argNodes)
 	default:
@@ -1542,6 +1548,86 @@ func (r *Renderer) objectHasOwn(argNodes []frontend.Node) (ast.Expr, error) {
 	return ident("false"), nil
 }
 
+// objectDefineProperty lowers Object.defineProperty(o, key, desc) to a runtime
+// DefineProperty on the dynamic receiver, which reads the descriptor object's
+// value, writable, get, set, enumerable, and configurable fields and applies them
+// to the key on the bag. The receiver must be a dynamic value, since a fixed-shape
+// Go struct has no runtime descriptor bag to define onto, so a non-dynamic
+// receiver hands back. The key and the descriptor are boxed to values so the
+// runtime reads them the way it reads any dynamic operand. All three operands are
+// evaluated, so no read is dropped.
+func (r *Renderer) objectDefineProperty(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 3 {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperty with other than three arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperty on a fixed-shape receiver, which has no runtime descriptor bag, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	key, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	desc, err := r.boxOperand(argNodes[2])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DefineProperty")}, Args: []ast.Expr{key, desc}}, nil
+}
+
+// objectDefineProperties lowers Object.defineProperties(o, props) to a runtime
+// DefineProperties on the dynamic receiver, which walks the descriptor map's own
+// enumerable properties and defines each onto the receiver through the same path
+// the single-property form takes. The receiver must be a dynamic value for the
+// same reason defineProperty requires it, so a fixed-shape receiver hands back.
+// Both operands are evaluated, so no read is dropped.
+func (r *Renderer) objectDefineProperties(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperties with other than two arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.defineProperties on a fixed-shape receiver, which has no runtime descriptor bag, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	props, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DefineProperties")}, Args: []ast.Expr{props}}, nil
+}
+
+// objectGetOwnPropertyDescriptor lowers Object.getOwnPropertyDescriptor(o, key)
+// to a runtime GetOwnPropertyDescriptor on the dynamic receiver, which returns the
+// descriptor object for the key, value, writable, get, set, enumerable, and
+// configurable as verifyProperty reads them, or undefined when the property is
+// absent. The receiver must be a dynamic value, since a fixed-shape Go struct has
+// no runtime descriptor bag to read from, so a non-dynamic receiver hands back.
+// The key is boxed the way any dynamic operand is. Both operands are evaluated, so
+// no read is dropped.
+func (r *Renderer) objectGetOwnPropertyDescriptor(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertyDescriptor with other than two arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertyDescriptor on a fixed-shape receiver, which has no runtime descriptor bag, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	key, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetOwnPropertyDescriptor")}, Args: []ast.Expr{key}}, nil
+}
+
 // objectOwnNameArray lowers Object.keys(o) and Object.getOwnPropertyNames(o) on
 // a fixed-shape object to its own property names, in declaration order, which
 // the checker knows in full at compile time, so it lowers to a
@@ -1558,7 +1644,13 @@ func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnKeys")}}, nil
+		// keys drops the non-enumerable properties defineProperty can create;
+		// getOwnPropertyNames keeps them, so each routes to its own bag walk.
+		walk := "OwnKeys"
+		if method == "keys" {
+			walk = "OwnEnumerableKeys"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(walk)}}, nil
 	}
 	props, err := r.objectShapeArg(method, argNodes)
 	if err != nil {

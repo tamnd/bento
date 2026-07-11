@@ -188,7 +188,7 @@ func (v Value) GetElem(key Value) Value {
 func (v Value) getSymKey(key *Symbol) Value {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
-		return v.object().getSym(key)
+		return v.object().getSym(v, key)
 	default:
 		return Undefined
 	}
@@ -238,7 +238,7 @@ func (v Value) SetKeyed(key, val Value) Value {
 func (v Value) setSymKey(key *Symbol, val Value) Value {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
-		v.object().setSym(key, val)
+		v.object().setSym(v, key, val)
 	}
 	return val
 }
@@ -327,15 +327,15 @@ func (v Value) Get(key BStr) Value {
 			}
 			return Undefined
 		}
-		return o.getOwn(key)
+		return o.getOwn(v, key)
 	case KindObject:
-		return v.object().getOwn(key)
+		return v.object().getOwn(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
 		// name a built-in error constructor carries is the read the caught-error tests
 		// make. A function box with no own properties still answers undefined for a
 		// miss through the same getOwn scan.
-		return v.object().getOwn(key)
+		return v.object().getOwn(v, key)
 	default:
 		return Undefined
 	}

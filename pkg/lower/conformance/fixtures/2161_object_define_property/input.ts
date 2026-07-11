@@ -1,0 +1,13 @@
+const o: any = {};
+Object.defineProperty(o, "a", { value: 1, writable: true, enumerable: false });
+Object.defineProperty(o, "b", { value: 2, enumerable: true });
+console.log(o.a);
+console.log(o.b);
+console.log(Object.keys(o).join(","));
+console.log(Object.getOwnPropertyNames(o).join(","));
+Object.defineProperty(o, "a", { value: 3 });
+console.log(o.a);
+console.log(Object.keys(o).join(","));
+Object.defineProperty(o, "c", { get: function () { return 42; }, enumerable: true });
+console.log(o.c);
+console.log(Object.keys(o).join(","));
