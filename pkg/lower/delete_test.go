@@ -66,6 +66,22 @@ func TestDeleteDynamicElementRuns(t *testing.T) {
 	}
 }
 
+// TestDeleteMissingPropertyRuns pins the missing-property result: delete of a key
+// the object never carried yields true, the boolean JavaScript gives for an absent
+// property, and the object's real properties are untouched.
+func TestDeleteMissingPropertyRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const obj: any = { a: 1 };\n" +
+		"const gone: boolean = delete obj.b;\n" +
+		"console.log(gone);\n" +
+		"console.log(obj.a);\n"
+	got := runProgramGo(t, src)
+	want := "true\n1\n"
+	if got != want {
+		t.Fatalf("delete of a missing property printed %q, want %q", got, want)
+	}
+}
+
 // TestDeleteStaticMemberHandsBack pins the boundary: a property whose fixed shape
 // makes it a Go struct field has no runtime slot to remove, so delete over it
 // hands back for the object descriptor model a later phase builds.
