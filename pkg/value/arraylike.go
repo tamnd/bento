@@ -206,7 +206,8 @@ func GenericForEach(recv, cb Value, thisArg ...Value) Value {
 // counts from the end and clamps at 0, a positive bound clamps at the length, an
 // omitted start is 0 and an omitted end is the length. The result is a real array
 // whatever the receiver's kind, so a borrowed slice on an array-like still yields an
-// array.
+// array. A hole in the range stays a hole in the result rather than materializing as
+// a stored undefined, matching the spec's HasProperty guard on each copied index.
 func GenericSlice(recv Value, bounds ...Value) Value {
 	n := arrayLikeLen(recv)
 	start, end := 0, n
@@ -218,7 +219,40 @@ func GenericSlice(recv Value, bounds ...Value) Value {
 	}
 	out := []Value{}
 	for k := start; k < end; k++ {
+		if !arrayLikeHas(recv, k) {
+			out = append(out, hole)
+			continue
+		}
 		out = append(out, arrayLikeGet(recv, k))
+	}
+	return NewArrayValue(out)
+}
+
+// GenericConcat runs Array.prototype.concat on a generic receiver, returning a new
+// array of the receiver's elements followed by each argument's. A spreadable
+// argument, an array, contributes its elements one by one; any other argument is
+// appended whole, the way concat folds a non-array into a single slot. A hole in the
+// receiver or in a spreadable argument stays a hole in the result, so concat carries
+// holes across rather than filling them with undefined.
+func GenericConcat(recv Value, items ...Value) Value {
+	out := []Value{}
+	appendFrom := func(src Value) {
+		if src.kind == KindArray {
+			n := arrayLikeLen(src)
+			for k := 0; k < n; k++ {
+				if !arrayLikeHas(src, k) {
+					out = append(out, hole)
+					continue
+				}
+				out = append(out, arrayLikeGet(src, k))
+			}
+			return
+		}
+		out = append(out, src)
+	}
+	appendFrom(recv)
+	for _, it := range items {
+		appendFrom(it)
 	}
 	return NewArrayValue(out)
 }
