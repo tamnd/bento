@@ -45,20 +45,27 @@ func (r *Renderer) classifyArrayElem(el frontend.Node) (arrayDefaultElem, error)
 
 // objectDefaultElem describes one element of an object binding pattern once its
 // shape is classified: a plain shorthand name binds the property of the same name,
-// a defaulted shorthand name fills from its default when the property is undefined.
+// a defaulted shorthand name fills from its default when the property is undefined,
+// and a rename ({a: b}) feeds a source property into a differently named target.
+// nameNode is the source property, read for the field and the optional flag; bindNode
+// is the local the value binds to. They are the same node for a shorthand and differ
+// only for a rename.
 type objectDefaultElem struct {
 	nameNode   frontend.Node
+	bindNode   frontend.Node
 	hasDefault bool
 	defNode    frontend.Node
 }
 
 // classifyObjectElem reads one object binding pattern element into an
-// objectDefaultElem. A single identifier is a plain shorthand, `{x}`; an
-// identifier followed by an expression under an `=` separator is a shorthand
-// default, `{x = d}`. A rename (`{a: b}`), a rename carrying a default, a rest, or
-// a nested pattern is a later slice, so it hands back. The separator between the
-// name and the second child tells a default (`=`) from a rename (`:`), which the
-// child kinds alone cannot when the default is itself an identifier.
+// objectDefaultElem. A single identifier is a plain shorthand, `{x}`; two
+// identifiers under a `:` separator are a rename, `{x: a}`, whose source property is
+// the first and whose target is the second; an identifier followed by an expression
+// under an `=` separator is a shorthand default, `{x = d}`; a source property, a
+// target, and a default under `:` then `=` are a renamed default, `{x: a = d}`. A
+// computed key, a rest, or a nested pattern is a later slice, so it hands back. The
+// separator between the name and the second child tells a default (`=`) from a rename
+// (`:`), which the child kinds alone cannot when the default is itself an identifier.
 func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, error) {
 	// A rest property gathers the own enumerable properties the pattern did not name
 	// into a new object, which needs the object model to enumerate a value's own keys,
@@ -67,13 +74,23 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
 	}
 	ec := r.prog.Children(el)
+	// A computed key ({[k]: v}) reads the source by a key the pattern computes at run
+	// time, which needs the dynamic object model to index a value by a run-time key, a
+	// phase 7 capability. It hands back rather than guess the key statically.
+	if len(ec) > 0 && strings.HasPrefix(strings.TrimSpace(r.prog.Text(ec[0])), "[") {
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring computed key reads the source by a key computed at run time, which needs the dynamic object model of phase 7"}
+	}
 	switch {
 	case len(ec) == 1 && ec[0].Kind() == frontend.NodeIdentifier:
-		return objectDefaultElem{nameNode: ec[0]}, nil
-	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && !strings.Contains(r.elemSeparator(ec[0], ec[1]), ":"):
-		return objectDefaultElem{nameNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
+		return objectDefaultElem{nameNode: ec[0], bindNode: ec[0]}, nil
+	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && ec[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(el, ec[0], ec[1]), ":"):
+		return objectDefaultElem{nameNode: ec[0], bindNode: ec[1]}, nil
+	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && !strings.Contains(r.childGap(el, ec[0], ec[1]), ":"):
+		return objectDefaultElem{nameNode: ec[0], bindNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
+	case len(ec) == 3 && ec[0].Kind() == frontend.NodeIdentifier && ec[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(el, ec[0], ec[1]), ":") && strings.Contains(r.childGap(el, ec[1], ec[2]), "="):
+		return objectDefaultElem{nameNode: ec[0], bindNode: ec[1], hasDefault: true, defNode: ec[2]}, nil
 	default:
-		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rename, default, or nested pattern is a later slice"}
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring nested pattern is a later slice"}
 	}
 }
 
@@ -103,54 +120,75 @@ func (r *Renderer) classifyArrayAssignElem(tgt frontend.Node) (arrayAssignElem, 
 
 // objectAssignElem describes one target of an object destructuring assignment,
 // `({x, y = d} = o)`. A plain shorthand property has a single identifier child; a
-// defaulted shorthand has the identifier, an `=` separator, and the default.
+// rename ({x: a}) has the source property and the target identifier under a `:`; a
+// defaulted shorthand has the identifier, an `=` separator, and the default. nameNode
+// is the source property, read for the field and the optional flag; bindNode is the
+// existing target the value stores into, the same node for a shorthand and different
+// only for a rename.
 type objectAssignElem struct {
 	nameNode   frontend.Node
+	bindNode   frontend.Node
 	hasDefault bool
 	defNode    frontend.Node
 }
 
 // classifyObjectAssignElem reads one object assignment property into an
-// objectAssignElem. A single identifier is a plain shorthand; an identifier, an `=`,
-// and an expression is a shorthand default. A rest, a rename, a rename carrying a
-// default, or a nested pattern is a later slice.
+// objectAssignElem. A single identifier is a plain shorthand; two identifiers under a
+// `:` separator are a rename, `{x: a}`; a source property under `:` over an `a = d`
+// assignment is a renamed default, `{x: a = d}`; an identifier, an `=`, and an
+// expression is a shorthand default. A computed key, a rest, or a nested pattern is a
+// later slice.
 func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignElem, error) {
 	if strings.HasPrefix(strings.TrimSpace(r.prog.Text(prop)), "...") {
 		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
 	}
 	pc := r.prog.Children(prop)
+	// A computed key reads the source by a run-time key, which needs the dynamic object
+	// model of phase 7 the same way the declaration form does.
+	if len(pc) > 0 && strings.HasPrefix(strings.TrimSpace(r.prog.Text(pc[0])), "[") {
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment computed key reads the source by a key computed at run time, which needs the dynamic object model of phase 7"}
+	}
 	switch {
 	case len(pc) == 1 && pc[0].Kind() == frontend.NodeIdentifier:
-		return objectAssignElem{nameNode: pc[0]}, nil
+		return objectAssignElem{nameNode: pc[0], bindNode: pc[0]}, nil
+	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
+		return objectAssignElem{nameNode: pc[0], bindNode: pc[1]}, nil
+	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodeBinaryExpression && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
+		// A rename carrying a default, {x: a = d}: the target and default parse as an
+		// `a = d` assignment under the source property's colon.
+		bc := r.prog.Children(pc[1])
+		if len(bc) == 3 && bc[0].Kind() == frontend.NodeIdentifier && r.prog.Text(bc[1]) == "=" {
+			return objectAssignElem{nameNode: pc[0], bindNode: bc[0], hasDefault: true, defNode: bc[2]}, nil
+		}
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment nested pattern is a later slice"}
 	case len(pc) == 3 && pc[0].Kind() == frontend.NodeIdentifier && r.prog.Text(pc[1]) == "=":
-		return objectAssignElem{nameNode: pc[0], hasDefault: true, defNode: pc[2]}, nil
+		return objectAssignElem{nameNode: pc[0], bindNode: pc[0], hasDefault: true, defNode: pc[2]}, nil
 	default:
-		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment rename, nested pattern, or member target is a later slice"}
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment nested pattern is a later slice"}
 	}
 }
 
-// elemSeparator returns the source text between two children of a pattern element,
-// the operator that joins them: `=` for a default, `:` for a rename. It reads the
-// gap straight from the source file by the children's absolute spans, so it sees
-// only the joining token and never the default expression's own text, which may
-// itself contain a colon. The spans are file-absolute, so the read is against the
-// file text rather than the element's own trimmed text, whose origin does not line
-// up with the spans.
-func (r *Renderer) elemSeparator(first, second frontend.Node) string {
-	for _, f := range r.prog.SourceFiles() {
-		base, end := int(f.Pos()), int(f.End())
-		lo, hi := int(first.End()), int(second.Pos())
-		if lo < base || hi > end || lo > hi {
-			continue
-		}
-		txt := r.prog.Text(f)
-		lo, hi = lo-base, hi-base
-		if lo < 0 || hi > len(txt) {
-			continue
-		}
-		return txt[lo:hi]
+// childGap returns the source text between two adjacent children of a pattern
+// element, the operator that joins them: `=` for a default, `:` for a rename. It
+// slices the parent element's own text between the first child's text and the
+// second's, so it sees only the joining token and never the second expression's own
+// text, which may itself contain a colon. Working within the element's text sidesteps
+// the leading-trivia skew a raw file-absolute span read carries, where an
+// identifier's end can reach past the joining token depending on the surrounding
+// whitespace. It returns "" when either child's text is not found in order, so a
+// caller reading it for a `:` treats an unreadable gap as not a rename.
+func (r *Renderer) childGap(el, first, second frontend.Node) string {
+	txt := r.prog.Text(el)
+	ft, st := r.prog.Text(first), r.prog.Text(second)
+	_, rest, ok := strings.Cut(txt, ft)
+	if !ok {
+		return ""
 	}
-	return ""
+	gap, _, ok := strings.Cut(rest, st)
+	if !ok {
+		return ""
+	}
+	return gap
 }
 
 // defaultFillStmts emits the lazy default fill for one binding: the target is

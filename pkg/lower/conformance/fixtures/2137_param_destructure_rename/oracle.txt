@@ -1,0 +1,4 @@
+== stdout:
+sam:7
+== exit:
+0

@@ -939,20 +939,24 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 			return nil, err
 		}
 		prop := r.prog.Text(info.nameNode)
-		name, ok := localName(prop)
+		srcName, ok := localName(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
 		}
-		field, ok := exportedField(name)
+		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(info.bindNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter target is not a Go identifier"}
 		}
 		read := &ast.SelectorExpr{X: ident(goName), Sel: ident(field)}
 		// A default over an optional field fills when the property is undefined; the
 		// field read is an Opt the fill peels. A default over a required field can
 		// never fire, so it binds the read directly and the default is dead.
 		if info.hasDefault && optionalField[prop] {
-			nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+			nameGo, err := r.typeExpr(r.prog.TypeAt(info.bindNode))
 			if err != nil {
 				return nil, err
 			}
@@ -960,7 +964,7 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 			if err != nil {
 				return nil, err
 			}
-			def, err = r.coerceToType(def, info.defNode, r.prog.TypeAt(info.nameNode))
+			def, err = r.coerceToType(def, info.defNode, r.prog.TypeAt(info.bindNode))
 			if err != nil {
 				return nil, err
 			}
