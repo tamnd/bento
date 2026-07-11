@@ -396,12 +396,6 @@ func (r *Renderer) isPromiseElem(t frontend.Type) bool {
 // matching the protocol. A binding the body never reads is not bound, since Go rejects
 // an unused variable.
 func (r *Renderer) forAwaitOfIterator(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node, shape iteratorShape) (ast.Stmt, error) {
-	// Closing an async iterator on an early exit awaits its return(); that awaited close
-	// is a later slice, so a loop over an iterator that defines return() hands back rather
-	// than leave it unclosed on a break.
-	if shape.returnName != "" {
-		return nil, &NotYetLowerable{Reason: "async iterator close via return() on early exit from for await...of is a later slice"}
-	}
 	src, err := r.lowerExpr(iterable)
 	if err != nil {
 		return nil, err
@@ -413,6 +407,16 @@ func (r *Renderer) forAwaitOfIterator(iterable, bindNode frontend.Node, name str
 	nextName, ok := exportedField("next")
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "an async iterator whose next is not a Go method name is a later slice"}
+	}
+	// An async iterator that defines return() is closed when the loop exits early, and the
+	// close is awaited since return() returns a promise. The close is reached only through
+	// an unlabeled break, which falls through to the after-loop `if broke`; a body that can
+	// leave the loop another way, a return, a throw, or a labeled branch, would jump past
+	// that close, so it hands back rather than leave the iterator unclosed, the same
+	// boundary the sync forOfIterator draws.
+	closes := shape.returnName != ""
+	if closes && r.forOfBodyBypassesClose(bodyNode) {
+		return nil, &NotYetLowerable{Reason: "async iterator close on a return, throw, or labeled exit from for await...of is a later slice"}
 	}
 	r.requireImport(valuePkg)
 	itName := r.freshTemp()
@@ -436,9 +440,28 @@ func (r *Renderer) forAwaitOfIterator(iterable, bindNode frontend.Node, name str
 			},
 		}},
 	}
+	block := []ast.Stmt{getIter}
+	// A `broke` flag, set on entry and cleared on the done branch, tells the after-loop
+	// close whether the loop ran to completion (done, no close) or broke out early (close).
+	doneStmts := []ast.Stmt{}
+	var brokeName string
+	if closes {
+		brokeName = r.freshTemp()
+		block = append(block, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(brokeName)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{ident("true")},
+		})
+		doneStmts = append(doneStmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(brokeName)},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{ident("false")},
+		})
+	}
+	doneStmts = append(doneStmts, &ast.BranchStmt{Tok: token.BREAK})
 	brk := &ast.IfStmt{
 		Cond: &ast.SelectorExpr{X: ident(resName), Sel: ident(shape.doneName)},
-		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.BranchStmt{Tok: token.BREAK}}},
+		Body: &ast.BlockStmt{List: doneStmts},
 	}
 	loopStmts := []ast.Stmt{pull, brk}
 	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
@@ -449,7 +472,23 @@ func (r *Renderer) forAwaitOfIterator(iterable, bindNode frontend.Node, name str
 		})
 	}
 	loopStmts = append(loopStmts, body.List...)
-	return &ast.BlockStmt{List: []ast.Stmt{getIter, &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}}}}, nil
+	block = append(block, &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}})
+	// The early-exit close awaits the promise return() hands back, parking the loop's async
+	// body until the iterator finishes closing, the async mirror of the sync path's bare
+	// it.Return() call.
+	if closes {
+		block = append(block, &ast.IfStmt{
+			Cond: ident(brokeName),
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: sel("value", "Await"),
+				Args: []ast.Expr{
+					ident(r.asyncCo),
+					&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(itName), Sel: ident(shape.returnName)}},
+				},
+			}}}},
+		})
+	}
+	return &ast.BlockStmt{List: block}, nil
 }
 
 // forOfBodyBypassesClose reports whether a for...of body contains a completion
