@@ -88,6 +88,14 @@ func TestObjectDestructureDefaultRuns(t *testing.T) {
 	}
 }
 
+// TestObjectDestructureComputedKeyHandsBack proves a computed key hands back, since
+// reading the source by a key computed at run time needs the dynamic object model of
+// phase 7 rather than a static field selector.
+func TestObjectDestructureComputedKeyHandsBack(t *testing.T) {
+	const src = "const k = \"x\";\nconst o = { x: 1 };\nconst { [k]: v } = o;\nconsole.log(v);\n"
+	renderProgramHandBack(t, src)
+}
+
 // TestObjectDestructureRestHandsBack proves a rest property hands back, since
 // gathering the remaining properties into an object needs the object model of phase 7.
 func TestObjectDestructureRestHandsBack(t *testing.T) {
