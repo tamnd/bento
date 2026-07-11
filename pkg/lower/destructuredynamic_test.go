@@ -315,3 +315,18 @@ console.log(String(f([1, 2, 3])));`)
 		t.Fatalf("reason %q does not name the array-rest hand-back", reason)
 	}
 }
+
+// TestUntypedObjectRestComputedKeyHandsBack proves the one object-side shape the dynamic
+// path genuinely cannot serve: a rest alongside a computed key. The rest gathers every own
+// property the pattern did not name, which needs each named key statically to omit it, and a
+// computed key is only known at run time, so the omit set cannot be spelled. This is the
+// honest, narrow decline the family keeps, not a decline of destructuring at large: every
+// other object form (rename, default, computed key alone, rest alone, nested) lowers.
+func TestUntypedObjectRestComputedKeyHandsBack(t *testing.T) {
+	reason := renderUntypedBindingHandBack(t, `const k = "a";
+function f({[k]: v, ...rest}) { return String(v) + String(rest.b); }
+console.log(f({ a: 1, b: 2 }));`)
+	if !strings.Contains(reason, "computed key") {
+		t.Fatalf("reason %q does not name the rest-with-computed-key hand-back", reason)
+	}
+}
