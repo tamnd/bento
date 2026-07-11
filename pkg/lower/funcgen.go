@@ -1008,16 +1008,18 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 // arity object in the closure the same way a named function does, and a named
 // function expression takes the two-step a self-reference needs.
 func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
-	text := strings.TrimSpace(r.prog.Text(n))
-	if firstWord(text) == "async" {
-		return nil, &NotYetLowerable{Reason: "an async function expression is a coroutine, a later slice"}
-	}
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
 	}
 	fields, err := r.closureParamFields(n, "function")
 	if err != nil {
 		return nil, err
+	}
+	// An async function expression returns a promise: its await-free body wraps in
+	// value.Async the same way an async function declaration's does, the closure form
+	// of asyncFuncDecl.
+	if r.isAsyncFunc(n) {
+		return r.asyncFuncExpr(n, fields)
 	}
 	// A generator function expression lowers to a closure that returns the running
 	// coroutine, the same *value.Gen the declaration form returns. A named generator
@@ -1170,6 +1172,9 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	fields, err := r.closureParamFields(n, "arrow")
 	if err != nil {
 		return nil, err
+	}
+	if r.isAsyncFunc(n) {
+		return r.asyncArrow(n, fields)
 	}
 	if body.Kind() == frontend.NodeBlock {
 		return r.blockBodyArrow(n, fields)
