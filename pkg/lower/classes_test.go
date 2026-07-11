@@ -1374,14 +1374,14 @@ console.log(String(c["plain"]()));
 }
 
 // TestClassComputedNonConstantNameHandsBack pins the honest leftover: a computed
-// member name that is not a constant string ([Symbol.asyncIterator] here, a
-// well-known symbol key this slice does not lower) names itself in the handback
-// reason rather than borrowing the identifier-name phrasing, so what remains after
-// this slice is clear. The [Symbol.iterator] key is no longer among them: it
-// lowers to the iterator protocol's entry point.
+// member name that is not a constant string ([Symbol.toPrimitive] here, a well-known
+// symbol key this slice does not lower) names itself in the handback reason rather than
+// borrowing the identifier-name phrasing, so what remains after this slice is clear. The
+// [Symbol.iterator] and [Symbol.asyncIterator] keys are no longer among them: each
+// lowers to its iterator protocol's entry point.
 func TestClassComputedNonConstantNameHandsBack(t *testing.T) {
 	const src = `class C {
-  [Symbol.asyncIterator](): number { return 1; }
+  [Symbol.toPrimitive](): number { return 1; }
 }
 new C();
 `
