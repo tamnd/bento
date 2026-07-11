@@ -311,6 +311,40 @@ func TestGenericMethodsSkipHoles(t *testing.T) {
 	}
 }
 
+// TestGenericSlicePreservesHoles proves slice carries a hole across as a hole rather
+// than materializing it as a stored undefined: the copied slot reads undefined but is
+// absent, the same as the source.
+func TestGenericSlicePreservesHoles(t *testing.T) {
+	s := GenericSlice(arrayWithHole())
+	if l := s.Get(FromGoString("length")).AsNumber(); l != 3 {
+		t.Fatalf("slice length = %v, want 3", l)
+	}
+	if hasIndex(s, 1) {
+		t.Fatal("slice filled the hole slot, want it preserved as a hole")
+	}
+	if !hasIndex(s, 0) || !hasIndex(s, 2) {
+		t.Fatal("slice dropped a present element")
+	}
+}
+
+// TestGenericConcatPreservesHoles proves concat spreads an array argument element by
+// element, carrying a hole across, and appends a non-array argument whole.
+func TestGenericConcatPreservesHoles(t *testing.T) {
+	got := GenericConcat(arrayWithHole(), NewArrayValue([]Value{Number(4)}), Number(5))
+	if l := got.Get(FromGoString("length")).AsNumber(); l != 5 {
+		t.Fatalf("concat length = %v, want 5 (3 + 1 + 1)", l)
+	}
+	if hasIndex(got, 1) {
+		t.Fatal("concat filled the receiver's hole, want it preserved")
+	}
+	if got.GetIndex(3).AsNumber() != 4 {
+		t.Fatalf("concat[3] = %v, want 4 (spread array element)", got.GetIndex(3).AsNumber())
+	}
+	if got.GetIndex(4).AsNumber() != 5 {
+		t.Fatalf("concat[4] = %v, want 5 (non-array appended whole)", got.GetIndex(4).AsNumber())
+	}
+}
+
 // TestGenericReduce proves reduce folds left to right over the present elements,
 // seeding from the first present element when no initial value is given and from the
 // initial value otherwise, and skipping a hole.
