@@ -96,6 +96,15 @@ func TestObjectDestructureComputedKeyHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
+// TestObjectDestructureComputedKeySideEffectHandsBack proves a computed key whose
+// expression has a side effect hands back rather than emit a partial read: getting the
+// evaluate-exactly-once order right against the other elements needs the dynamic object
+// model of phase 7, so the decline is honest rather than a half-evaluated key.
+func TestObjectDestructureComputedKeySideEffectHandsBack(t *testing.T) {
+	const src = "let count = 0;\nconst bump = (): \"x\" => { count++; return \"x\"; };\nconst o = { x: 1 };\nconst { [bump()]: v } = o;\nconsole.log(v);\n"
+	renderProgramHandBack(t, src)
+}
+
 // TestObjectDestructureRestHandsBack proves a rest property hands back, since
 // gathering the remaining properties into an object needs the object model of phase 7.
 func TestObjectDestructureRestHandsBack(t *testing.T) {
