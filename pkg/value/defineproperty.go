@@ -113,8 +113,10 @@ func (in descriptorInput) toDescriptor(current descriptor, exists bool) descript
 // DefineProperty applies a descriptor object to a key on the receiver and returns
 // the receiver, the runtime behind Object.defineProperty(o, key, desc). A symbol
 // key defines onto the symbol bag; any other key takes its property-key string and
-// defines onto the named bag. A non-object receiver throws a TypeError the way the
-// spec rejects a primitive target.
+// defines onto the named bag. The define is validated against the object's
+// extensibility and the existing property's configurability first, and a change
+// the spec forbids throws a TypeError rather than mutating the bag. A non-object
+// receiver throws a TypeError the way the spec rejects a primitive target.
 func (v Value) DefineProperty(key, descObj Value) Value {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
@@ -127,6 +129,10 @@ func (v Value) DefineProperty(key, descObj Value) Value {
 	if key.kind == KindSymbol {
 		sym := key.symbol()
 		current, exists := o.getSymDesc(sym)
+		if !validateDefine(current, exists, in, o.isExtensible()) {
+			Throw(NewTypeError(FromGoString("Cannot redefine property")))
+			return v
+		}
 		o.defineSym(sym, in.toDescriptor(current, exists))
 		return v
 	}
@@ -137,8 +143,77 @@ func (v Value) DefineProperty(key, descObj Value) Value {
 		name = ToString(key)
 	}
 	current, exists := o.getOwnDesc(name)
+	if !validateDefine(current, exists, in, o.isExtensible()) {
+		Throw(NewTypeError(FromGoString("Cannot redefine property: ").ConcatN(name)))
+		return v
+	}
 	o.defineOwn(name, in.toDescriptor(current, exists))
 	return v
+}
+
+// validateDefine reports whether a define is allowed, the rejection half of
+// ValidateAndApplyPropertyDescriptor. A property that does not yet exist may be
+// added only when the object is extensible. An existing configurable property
+// accepts any redefine. An existing non-configurable property rejects a change
+// that would make it configurable, flip its enumerable flag, change its kind
+// between data and accessor, or, when it is a non-writable data property, raise
+// its writable flag or replace its value; a non-configurable accessor likewise
+// rejects a getter or setter swap. A descriptor that names none of the value,
+// writable, get, or set fields is a generic redefine of only the shared flags,
+// which the configurable and enumerable checks above already cover.
+func validateDefine(current descriptor, exists bool, in descriptorInput, extensible bool) bool {
+	if !exists {
+		return extensible
+	}
+	if current.configurable {
+		return true
+	}
+	if in.hasConfigurable && in.configurable {
+		return false
+	}
+	if in.hasEnumerable && in.enumerable != current.enumerable {
+		return false
+	}
+	wantsAccessor := in.hasGet || in.hasSet
+	wantsData := in.hasValue || in.hasWritable
+	if !wantsAccessor && !wantsData {
+		return true
+	}
+	if wantsAccessor && !current.accessor {
+		return false
+	}
+	if wantsData && current.accessor {
+		return false
+	}
+	if current.accessor {
+		if in.hasGet && !StrictEquals(in.get, current.get) {
+			return false
+		}
+		if in.hasSet && !StrictEquals(in.set, current.set) {
+			return false
+		}
+		return true
+	}
+	if !current.writable {
+		if in.hasWritable && in.writable {
+			return false
+		}
+		if in.hasValue && !sameValue(in.value, current.value) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameValue is the SameValue comparison the define invariants use to tell whether
+// a redefine changes a non-writable property's value. It parts from strict
+// equality only on numbers, where it treats two NaNs as equal and the signed zeros
+// as distinct, so replacing a value with an equal one is not a change.
+func sameValue(a, b Value) bool {
+	if a.kind == KindNumber && b.kind == KindNumber {
+		return NumberSameValue(a.AsNumber(), b.AsNumber())
+	}
+	return StrictEquals(a, b)
 }
 
 // DefineProperties applies a map of descriptor objects to the receiver and returns

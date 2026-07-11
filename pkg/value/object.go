@@ -17,14 +17,21 @@ import "sort"
 // not go through the property map. One struct backs both so an array can still
 // carry a named property without changing representation.
 type Object struct {
-	kind     Kind         // KindObject or KindArray
-	keys     []BStr       // string property names in insertion order (named properties)
-	descs    []descriptor // property descriptors, parallel to keys
-	symKeys  []*Symbol    // symbol property keys in insertion order, kept apart from string keys
-	symDescs []descriptor // symbol property descriptors, parallel to symKeys
-	elems    []Value      // dense element storage for an array
-	call     callFn       // the invocable body of a callable, nil for a plain object
+	kind          Kind         // KindObject or KindArray
+	keys          []BStr       // string property names in insertion order (named properties)
+	descs         []descriptor // property descriptors, parallel to keys
+	symKeys       []*Symbol    // symbol property keys in insertion order, kept apart from string keys
+	symDescs      []descriptor // symbol property descriptors, parallel to symKeys
+	elems         []Value      // dense element storage for an array
+	call          callFn       // the invocable body of a callable, nil for a plain object
+	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
 }
+
+// isExtensible reports whether new properties may still be added, the state
+// Object.isExtensible reads and Object.preventExtensions clears. The flag is
+// stored inverted so a freshly built object is extensible with no constructor
+// having to set it.
+func (o *Object) isExtensible() bool { return !o.nonExtensible }
 
 // callFn is the body of a callable function value: it takes its arguments already
 // boxed and returns a boxed result, so a dynamic call site invokes it uniformly

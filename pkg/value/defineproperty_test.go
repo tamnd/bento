@@ -73,6 +73,92 @@ func TestDefinePropertyAccessor(t *testing.T) {
 	}
 }
 
+// throws runs fn and reports whether it threw a JavaScript value, the recovery a
+// catch block performs, so a test can assert Object.defineProperty rejected a
+// define with a TypeError.
+func throws(fn func()) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+				return
+			}
+			panic(r)
+		}
+	}()
+	fn()
+	return false
+}
+
+// TestDefinePropertyRejectsReconfigure proves redefining a non-configurable
+// property to be configurable, to flip its enumerable flag, or to change its kind
+// throws, while a redefine that changes nothing is allowed.
+func TestDefinePropertyRejectsReconfigure(t *testing.T) {
+	o := NewObject()
+	o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(1)))
+
+	if !throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("configurable", True))
+	}) {
+		t.Fatal("making a non-configurable property configurable did not throw")
+	}
+	if !throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("enumerable", True))
+	}) {
+		t.Fatal("flipping a non-configurable property's enumerable did not throw")
+	}
+	if !throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("get", NewFunc(func(args []Value) Value { return Undefined })))
+	}) {
+		t.Fatal("turning a non-configurable data property into an accessor did not throw")
+	}
+	// Redefining with the identical descriptor is a no-op, not a rejection.
+	if throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(1)))
+	}) {
+		t.Fatal("redefining a non-configurable property with its own value threw")
+	}
+}
+
+// TestDefinePropertyNonWritableValue proves a non-writable, non-configurable data
+// property rejects a value change but accepts rewriting the same value.
+func TestDefinePropertyNonWritableValue(t *testing.T) {
+	o := NewObject()
+	o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(1)))
+
+	if !throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(2)))
+	}) {
+		t.Fatal("changing a non-writable property's value did not throw")
+	}
+	if throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(1)))
+	}) {
+		t.Fatal("rewriting a non-writable property's own value threw")
+	}
+}
+
+// TestDefinePropertyWritableAllowsValue proves a writable but non-configurable
+// data property still accepts a value change and even a downgrade to non-writable.
+func TestDefinePropertyWritableAllowsValue(t *testing.T) {
+	o := NewObject()
+	o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(1), "writable", True))
+
+	if throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(2)))
+	}) {
+		t.Fatal("changing a writable property's value threw")
+	}
+	if throws(func() {
+		o.DefineProperty(StringValue(FromGoString("a")), descObj("writable", False))
+	}) {
+		t.Fatal("downgrading a writable property to non-writable threw")
+	}
+	if got := o.Get(FromGoString("a")); got.scalar != Number(2).scalar {
+		t.Fatalf("value after writable change = %v, want 2", got)
+	}
+}
+
 func joinKeys(a *Array[BStr]) string {
 	out := ""
 	for i := 0.0; i < a.Len(); i++ {
