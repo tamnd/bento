@@ -1,2 +1,2 @@
 feature = "class-async-await"
-handback = "await is a later slice"
+handback = "an await on a possibly-thenable or dynamic value is a later slice"
