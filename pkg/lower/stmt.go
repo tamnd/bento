@@ -1205,27 +1205,34 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	}
 	// The pattern is validated before the source is lowered, so an unsupported shape
 	// hands back before a temporary is minted for the source.
-	names := make([]string, len(elems))
+	infos := make([]arrayDefaultElem, len(elems))
 	for i, el := range elems {
-		ec := r.prog.Children(el)
-		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
-			return nil, true, &NotYetLowerable{Reason: "an array destructuring hole, default, rest, or nested pattern is a later slice"}
-		}
-		nameNode := ec[0]
-		name, ok := localName(r.prog.Text(nameNode))
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
-		}
-		nameGo, err := r.typeExpr(r.prog.TypeAt(nameNode))
+		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, true, err
 		}
+		name, ok := localName(r.prog.Text(info.nameNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+		}
+		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		if err != nil {
+			return nil, true, err
+		}
+		// A defaulted element fills from its default when the slot is undefined, so
+		// its binding type is the element type the source read yields, the same match
+		// a plain element needs; an optional-element source, whose read is an Opt the
+		// default would have to peel, is a later slice.
 		if same, err := sameGoType(nameGo, elemGo); err != nil {
 			return nil, true, err
 		} else if !same {
+			if info.hasDefault {
+				return nil, true, &NotYetLowerable{Reason: "an array destructuring default over an optional-element source is a later slice"}
+			}
 			return nil, true, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
 		}
-		names[i] = name
+		info.name = name
+		infos[i] = info
 	}
 	var prefix []ast.Stmt
 	var recv func() (ast.Expr, error)
@@ -1248,17 +1255,33 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		}
 	}
 	stmts := prefix
-	for i, name := range names {
+	for i, info := range infos {
 		rc, err := recv()
 		if err != nil {
 			return nil, true, err
+		}
+		if info.hasDefault {
+			nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, true, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, r.defaultFillStmts(info.name, nameGo, arrayOptRead(rc, i), def)...)
+			continue
 		}
 		read := &ast.CallExpr{
 			Fun:  &ast.SelectorExpr{X: rc, Sel: ident("AtI")},
 			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
 		}
 		stmts = append(stmts, &ast.AssignStmt{
-			Lhs: []ast.Expr{ident(name)},
+			Lhs: []ast.Expr{ident(info.name)},
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
