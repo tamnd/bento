@@ -219,12 +219,14 @@ func (r *Renderer) asyncCoroutineBody(ret frontend.Type, retNode frontend.Node) 
 }
 
 // awaitExpr lowers an await expression to a suspend on the current async body's
-// coroutine handle: value.Await(_co, p) parks the body until the awaited promise p
-// settles, then resumes it with the fulfilled value or raises the rejection at the
-// await. The operand must be a Promise here; awaiting a plain value or a thenable is a
-// later slice, so a non-promise operand hands back. An await outside a lowered async
-// body (a concise-bodied arrow's await, which took the synchronous path) has no handle
-// to park on and hands back too.
+// coroutine handle. Awaiting a promise lowers to value.Await(_co, p), which parks the
+// body until p settles, then resumes it with the fulfilled value or raises the
+// rejection at the await. Awaiting a definite non-thenable primitive lowers to
+// value.AwaitValue(_co, v), which JavaScript wraps in a resolved promise: it defers one
+// microtask turn and hands the value straight back. Awaiting a value that might be a
+// thenable (an object with a then method a real await adopts) or a dynamic value whose
+// shape is hidden hands back, as does an await outside a lowered async body, which has
+// no handle to park on.
 func (r *Renderer) awaitExpr(n frontend.Node) (ast.Expr, error) {
 	if r.asyncCo == "" {
 		return nil, &NotYetLowerable{Reason: "an await outside a lowered async body is a later slice"}
@@ -234,15 +236,43 @@ func (r *Renderer) awaitExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "an await with no operand is a later slice"}
 	}
 	operand := kids[len(kids)-1]
-	if _, ok := r.promiseElem(r.prog.TypeAt(operand)); !ok {
-		return nil, &NotYetLowerable{Reason: "an await on a non-promise value is a later slice"}
+	opType := r.prog.TypeAt(operand)
+	if _, ok := r.promiseElem(opType); ok {
+		p, err := r.lowerExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Await"), Args: []ast.Expr{ident(r.asyncCo), p}}, nil
 	}
-	p, err := r.lowerExpr(operand)
+	if !r.isDefiniteNonThenable(opType) {
+		return nil, &NotYetLowerable{Reason: "an await on a possibly-thenable or dynamic value is a later slice"}
+	}
+	v, err := r.lowerExpr(operand)
+	if err != nil {
+		return nil, err
+	}
+	// The element type is pinned as an explicit type argument so an untyped operand (a
+	// numeric literal defaulting to int) crosses to the value's Go type the await
+	// expression carries, the same type the surrounding code reads the await as.
+	et, err := r.typeExpr(opType)
 	if err != nil {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "Await"), Args: []ast.Expr{ident(r.asyncCo), p}}, nil
+	return &ast.CallExpr{Fun: index(sel("value", "AwaitValue"), et), Args: []ast.Expr{ident(r.asyncCo), v}}, nil
+}
+
+// isDefiniteNonThenable reports whether t is a value that certainly carries no then
+// method, so awaiting it only defers a microtask and yields the value straight back. A
+// primitive number, string, boolean, or bigint qualifies; an object might be a thenable,
+// and any, unknown, a union, an intersection, or a type parameter hide the shape, so
+// none of those do.
+func (r *Renderer) isDefiniteNonThenable(t frontend.Type) bool {
+	if t.Flags&(frontend.TypeObject|frontend.TypeAny|frontend.TypeUnknown|frontend.TypeUnion|frontend.TypeIntersection|frontend.TypeTypeParameter) != 0 {
+		return false
+	}
+	return t.Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean|frontend.TypeBigInt) != 0
 }
 
 // asyncConciseBody mints the promise for a concise-bodied async arrow, whose body is

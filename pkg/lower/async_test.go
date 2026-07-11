@@ -183,6 +183,22 @@ run();
 	}
 }
 
+// TestAsyncAwaitValueEmitsAwaitValue pins that awaiting a plain non-promise primitive
+// lowers to value.AwaitValue with the operand's element type pinned, so an untyped
+// operand crosses to the value's Go type.
+func TestAsyncAwaitValueEmitsAwaitValue(t *testing.T) {
+	const src = `async function run(): Promise<number> {
+  const a = await 40;
+  return a + 2;
+}
+run();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.AwaitValue[float64](") {
+		t.Errorf("await on a plain value did not lower to value.AwaitValue:\n%s", source)
+	}
+}
+
 // TestAsyncAwaitRunsInOrder runs the emitted Go and pins the suspend-and-resume: the
 // body runs synchronously up to its first await, parks, and the code after the await
 // runs in a later microtask turn, after the synchronous run has finished.
