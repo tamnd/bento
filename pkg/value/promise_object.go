@@ -73,6 +73,63 @@ func All[T any](ps *Array[*Promise[T]]) *Promise[*Array[T]] {
 	return result
 }
 
+// Race combines an array of promises into one promise that settles the way the first
+// input to settle does, the value.Promise side of Promise.race: it fulfills with that
+// input's value if it fulfilled, or rejects with its reason if it rejected, and later
+// settlements are ignored once the race is decided. An empty input never settles, the
+// forever-pending promise Promise.race([]) returns, so the loop simply subscribes
+// nothing and the result stays pending.
+func Race[T any](ps *Array[*Promise[T]]) *Promise[T] {
+	result := &Promise[T]{}
+	for _, p := range ps.Elems() {
+		p.subscribe(func() {
+			if result.state != promisePending {
+				return
+			}
+			if p.state == promiseRejected {
+				result.reject(p.reason)
+			} else {
+				result.fulfill(p.value)
+			}
+		})
+	}
+	return result
+}
+
+// Any combines an array of promises into one promise that fulfills with the first
+// input to fulfill, the value.Promise side of Promise.any: a rejection does not decide
+// the race, so the result stays pending while rejections accumulate, and only when every
+// input has rejected does it reject with an AggregateError whose errors array carries the
+// rejection reasons in input order. An empty input has no promise that can fulfill, so it
+// rejects at once with an AggregateError over no errors, matching Promise.any([]).
+func Any[T any](ps *Array[*Promise[T]]) *Promise[T] {
+	result := &Promise[T]{}
+	elems := ps.Elems()
+	if len(elems) == 0 {
+		result.reject(NewAggregateError([]Value{}, FromGoString("All promises were rejected")))
+		return result
+	}
+	reasons := make([]Value, len(elems))
+	remaining := len(elems)
+	for i, p := range elems {
+		p.subscribe(func() {
+			if result.state != promisePending {
+				return
+			}
+			if p.state == promiseRejected {
+				reasons[i] = thrownValue(p.reason)
+				remaining--
+				if remaining == 0 {
+					result.reject(NewAggregateError(reasons, FromGoString("All promises were rejected")))
+				}
+			} else {
+				result.fulfill(p.value)
+			}
+		})
+	}
+	return result
+}
+
 // NewRejection wraps an arbitrary value into the Thrown a rejected promise carries,
 // so Promise.reject and a manual Rejected can settle with any JavaScript value, not
 // only a runtime Error. A catch handler or a rejected await reads the value back

@@ -169,6 +169,12 @@ func (r *Renderer) promiseStaticCall(call, callee frontend.Node, argNodes []fron
 	case "all":
 		expr, err := r.promiseAll(call, argNodes)
 		return expr, true, err
+	case "race":
+		expr, err := r.promiseCombinator(call, argNodes, "Race")
+		return expr, true, err
+	case "any":
+		expr, err := r.promiseCombinator(call, argNodes, "Any")
+		return expr, true, err
 	case "allSettled":
 		// allSettled fulfills with a record per input carrying its status and value or
 		// reason, a discriminated union of objects the runtime would have to construct
@@ -290,6 +296,39 @@ func (r *Renderer) promiseAll(call frontend.Node, argNodes []frontend.Node) (ast
 	r.usesPromise = true
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "All"), elemType), Args: []ast.Expr{lowered}}, nil
+}
+
+// promiseCombinator lowers Promise.race and Promise.any, which share a shape: each
+// takes an array of promises of T and produces one Promise<T>, so the lowering differs
+// only in the runtime function it calls, value.Race or value.Any. The element type T is
+// the fulfilled value the call produces, read straight off the resulting promise rather
+// than through an array wrapper the way Promise.all's is, and the argument is an array
+// of promises of that same T, which lowers directly to the []*value.Promise[T] the
+// runtime takes. An argument that is not an array of runtime promises hands back.
+func (r *Renderer) promiseCombinator(call frontend.Node, argNodes []frontend.Node, runtimeFn string) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Promise." + runtimeFn + " takes a single iterable argument"}
+	}
+	elem, ok := r.promiseElem(r.prog.TypeAt(call))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Promise." + runtimeFn + " whose type is not a Promise is a later slice"}
+	}
+	elemType, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	arg := argNodes[0]
+	argElem, ok := r.arrayElem(arg)
+	if !ok || !isPromiseGoType(argElem) {
+		return nil, &NotYetLowerable{Reason: "Promise." + runtimeFn + " over a non-array or non-promise iterable is a later slice"}
+	}
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", runtimeFn), elemType), Args: []ast.Expr{lowered}}, nil
 }
 
 // isPromiseGoType reports whether a lowered Go type is *value.Promise[...], the shape

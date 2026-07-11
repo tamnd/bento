@@ -68,6 +68,11 @@ type Error struct {
 	// as the object.
 	thrown    Value
 	hasThrown bool
+	// errors is the aggregated reasons an AggregateError carries, the errors property
+	// Promise.any rejects with when every input rejects. It is nil for an ordinary
+	// error, which has no errors property, and a non-nil slice (empty included) marks
+	// the error as an aggregate, so ToValue exposes an errors array on the boxed object.
+	errors []Value
 }
 
 // Name reports the error's constructor name as a bento string, the lowering of
@@ -129,11 +134,17 @@ func (e *Error) ToValue() Value {
 		return e.thrown
 	}
 	if e.boxed == nil {
-		e.boxed = &Object{
-			kind: KindObject,
-			keys: []BStr{FromGoString("name"), FromGoString("message")},
-			vals: []Value{StringValue(e.name), StringValue(e.message)},
+		keys := []BStr{FromGoString("name"), FromGoString("message")}
+		vals := []Value{StringValue(e.name), StringValue(e.message)}
+		// An AggregateError also exposes an errors array, the rejection reasons
+		// Promise.any collected, so a catch reads err.errors and its indices the way it
+		// reads name and message. A non-aggregate error leaves errors nil and carries
+		// only the two base properties.
+		if e.errors != nil {
+			keys = append(keys, FromGoString("errors"))
+			vals = append(vals, NewArrayValue(e.errors))
 		}
+		e.boxed = &Object{kind: KindObject, keys: keys, vals: vals}
 	}
 	return Value{kind: KindObject, ref: unsafe.Pointer(e.boxed)}
 }
@@ -168,6 +179,14 @@ func NewTypeError(message BStr) *Error {
 // and the error a numeric range check raises.
 func NewRangeError(message BStr) *Error {
 	return &Error{name: FromGoString("RangeError"), message: message}
+}
+
+// NewAggregateError constructs an AggregateError, the error Promise.any rejects with
+// when every input rejects. It carries the rejection reasons as its errors array and a
+// summary message, and marks itself an aggregate through a non-nil errors slice so the
+// boxed object exposes the errors property alongside name and message.
+func NewAggregateError(errors []Value, message BStr) *Error {
+	return &Error{name: FromGoString("AggregateError"), message: message, errors: errors}
 }
 
 // NewSyntaxError constructs a SyntaxError, the error a runtime parse raises: a

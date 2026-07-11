@@ -91,3 +91,29 @@ console.log("sync");
 		t.Fatalf("promise all = %q, want %q", got, want)
 	}
 }
+
+// TestPromiseRaceAndAny checks that Promise.race settles the way the first input
+// settles, that Promise.any fulfills with the first fulfillment even past a rejection,
+// and that an all-rejected any rejects with an AggregateError whose errors array carries
+// the reasons in input order.
+func TestPromiseRaceAndAny(t *testing.T) {
+	src := `
+const first: Promise<number>[] = [Promise.resolve(1), Promise.reject("no")];
+Promise.race(first).then((v) => console.log("race:" + v));
+
+const slow: Promise<number>[] = [Promise.reject("a"), Promise.reject("b")];
+Promise.any(slow).catch((e) => {
+  console.log("any-name:" + e.name);
+  console.log("any-errors:" + e.errors[0] + "," + e.errors[1]);
+});
+
+const win: Promise<number>[] = [Promise.reject("x"), Promise.resolve(5)];
+Promise.any(win).then((v) => console.log("any-ok:" + v));
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\nrace:1\nany-name:AggregateError\nany-errors:a,b\nany-ok:5\n"
+	if got != want {
+		t.Fatalf("promise race/any = %q, want %q", got, want)
+	}
+}
