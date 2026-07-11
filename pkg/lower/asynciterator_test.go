@@ -34,3 +34,33 @@ run();
 		t.Errorf("manual obj[Symbol.asyncIterator]() did not lower to a SymbolAsyncIterator call:\n%s", got)
 	}
 }
+
+// TestAsyncIteratorResultAwaits checks that awaiting a user async iterator's next()
+// settles to its { value, done } result and the body reads value and done off it: the
+// awaited result crosses the settle path the way any awaited promise does, and the
+// object it fulfills with resolves to the struct fields the reads select. This is the
+// pull step for await...of drives, exercised here by hand so the result path is proven
+// before the loop wraps it.
+func TestAsyncIteratorResultAwaits(t *testing.T) {
+	src := `
+class Counter {
+  next(): Promise<{ value: number; done: boolean }> {
+    return Promise.resolve({ value: 7, done: false });
+  }
+  [Symbol.asyncIterator]() { return this; }
+}
+async function run(): Promise<void> {
+  const c = new Counter();
+  const it = c[Symbol.asyncIterator]();
+  const r = await it.next();
+  console.log("value:" + r.value);
+  console.log("done:" + r.done);
+}
+run();
+`
+	got := runProgramGo(t, src)
+	want := "value:7\ndone:false\n"
+	if got != want {
+		t.Fatalf("async iterator result = %q, want %q", got, want)
+	}
+}
