@@ -117,3 +117,32 @@ console.log("sync");
 		t.Fatalf("promise race/any = %q, want %q", got, want)
 	}
 }
+
+// TestPromiseThenChaining checks that a then whose callback returns a value chains the
+// value to the next then, that a callback returning a promise flattens so the next then
+// reads the inner value, and that a rejection passes through a value-returning then with
+// no rejection handler to the catch further down the chain.
+func TestPromiseThenChaining(t *testing.T) {
+	src := `
+Promise.resolve(1)
+  .then((v) => v + 1)
+  .then((v) => "n:" + v)
+  .then((s) => console.log(s));
+
+Promise.resolve(10)
+  .then((v) => Promise.resolve(v * 2))
+  .then((v) => console.log("flat:" + v));
+
+const failing: Promise<number> = Promise.reject("boom");
+failing
+  .then((v) => v + 100)
+  .catch((e) => console.log("caught:" + e));
+
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\ncaught:boom\nn:2\nflat:20\n"
+	if got != want {
+		t.Fatalf("promise then chaining = %q, want %q", got, want)
+	}
+}
