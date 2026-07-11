@@ -68,6 +68,41 @@ Calc.of(4);
 	}
 }
 
+// TestAsyncFuncDeclEmitsResolvedPromise pins that a top-level async function
+// declaration lowers to a package func returning a promise of its element type,
+// its await-free body wrapped in value.Async the same way an async method is.
+func TestAsyncFuncDeclEmitsResolvedPromise(t *testing.T) {
+	const src = `async function double(n: number): Promise<number> {
+  return n * 2;
+}
+double(21);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func Double(n float64) *value.Promise[float64]") {
+		t.Errorf("async function declaration did not return a promise of its element type:\n%s", source)
+	}
+	if !strings.Contains(source, "return value.Async(func() float64 {") {
+		t.Errorf("async function body did not wrap in value.Async:\n%s", source)
+	}
+}
+
+// TestAsyncVoidFuncDeclEmitsUnitPromise pins that an async function declaration
+// with no value lowers to a Promise<Unit> through value.AsyncVoid.
+func TestAsyncVoidFuncDeclEmitsUnitPromise(t *testing.T) {
+	const src = `async function shout(msg: string): Promise<void> {
+  console.log(msg);
+}
+shout("hi");
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func Shout(msg value.BStr) *value.Promise[value.Unit]") {
+		t.Errorf("void async function did not return a unit promise:\n%s", source)
+	}
+	if !strings.Contains(source, "return value.AsyncVoid(func() {") {
+		t.Errorf("void async function body did not wrap in value.AsyncVoid:\n%s", source)
+	}
+}
+
 // TestAsyncMethodResolvesAfterSyncCode runs the emitted Go and pins the
 // microtask ordering: a .then callback registered during the synchronous run
 // fires only after that run completes, at the end-of-main drain.
