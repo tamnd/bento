@@ -22,14 +22,18 @@ func TestArrayProtoMapCallStringLowers(t *testing.T) {
 	}
 }
 
-// TestArrayProtoMapCallOtherCallbackHandsBack pins that admitting the String form
-// did not open the borrow to an arbitrary callback: a callback that is not the
-// String built-in still hands back, since lowering a general first-class callback
-// through the borrow is a later slice. The worst case must stay handback, never a
-// call to a helper that only knows how to stringify.
-func TestArrayProtoMapCallOtherCallbackHandsBack(t *testing.T) {
+// TestArrayProtoMapCallOtherCallbackLowers pins that the generic-receiver map (08
+// group 1) opened the borrow to an arbitrary callback: a callback that is not the
+// String built-in now routes through value.GenericMap, which boxes the callback and
+// calls it with each element, its index, and the receiver. The String form still
+// wins its own faster path, so only the general callback reaches GenericMap.
+func TestArrayProtoMapCallOtherCallbackLowers(t *testing.T) {
 	src := "function dbl(x: any): any { return x; }\nfunction m(arrayLike: any): any {\n  return Array.prototype.map.call(arrayLike, dbl);\n}\nconsole.log(m([1, 2, 3]));\n"
-	if _, err := compileSource(t, src); err == nil {
-		t.Fatal("Array.prototype.map.call with a non-String callback should hand back, but it lowered")
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("Array.prototype.map.call with a general callback should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "value.GenericMap(") {
+		t.Fatalf("expected the borrow to route through value.GenericMap, got:\n%s", out)
 	}
 }
