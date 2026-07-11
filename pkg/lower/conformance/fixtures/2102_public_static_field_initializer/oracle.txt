@@ -1,0 +1,4 @@
+== stdout:
+bento v2
+== exit:
+0
