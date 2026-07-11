@@ -1424,6 +1424,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectIntegrityUnary("isSealed", "IsSealed", argNodes)
 	case "isFrozen":
 		return r.objectIntegrityUnary("isFrozen", "IsFrozen", argNodes)
+	case "assign":
+		return r.objectAssign(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
@@ -1449,6 +1451,36 @@ func (r *Renderer) objectIntegrityUnary(apiName, runtimeMethod string, argNodes 
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(runtimeMethod)}}, nil
+}
+
+// objectAssign lowers Object.assign(target, ...sources) to a runtime Assign on the
+// dynamic target, which copies each source's own enumerable string and symbol
+// properties onto the target through the ordinary get and set path and returns the
+// target. The target must be a dynamic value, since a fixed-shape Go struct has no
+// runtime bag to copy onto, so a non-dynamic target hands back. Each source is boxed
+// the way any dynamic operand is, so the runtime reads a null or undefined source as
+// a no-op the way the spec skips it. A call with no source is the identity on the
+// target. Every operand is evaluated, so no read is dropped.
+func (r *Renderer) objectAssign(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "Object.assign with no target is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.assign onto a fixed-shape target, which has no runtime bag to copy onto, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]ast.Expr, 0, len(argNodes)-1)
+	for _, node := range argNodes[1:] {
+		src, err := r.boxOperand(node)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, src)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Assign")}, Args: sources}, nil
 }
 
 // objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime
