@@ -220,6 +220,17 @@ func (v Value) SetElem(key, val Value) Value {
 	return v.SetKey(ToString(key), val)
 }
 
+// SetKeyed writes a property whose key is a boxed value, resolving it to a symbol,
+// string, or numeric-string property the way SetElem does, and returns the receiver
+// so a boxed object literal can chain a computed member `{ [k]: v }` in one
+// expression the way Set chains a named one. It differs from SetElem, whose
+// assignment semantics return the assigned value, because literal construction
+// needs the object back to keep building.
+func (v Value) SetKeyed(key, val Value) Value {
+	v.SetElem(key, val)
+	return v
+}
+
 // setSymKey writes a symbol-keyed property onto an object, array, or function
 // receiver, the symbol branch of a dynamic bracket write o[s] = val. It returns
 // val so the write reads as JavaScript's assignment expression; a primitive
