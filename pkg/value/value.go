@@ -35,7 +35,24 @@ const (
 	KindObject
 	KindArray
 	KindFunc
+	// KindHole is the internal tag of an array hole, an index below length that
+	// carries no own property. It fills a gap in an array's dense element storage so
+	// a hole is distinct from a stored undefined: a read sees undefined either way,
+	// but the in operator, hasOwnProperty, and enumeration treat a hole as absent. It
+	// never escapes to user code, so typeof and the coercions never see it.
+	KindHole
 )
+
+// hole is the singleton stored in an array's element slice for an index that has no
+// own property, the gap delete a[i] leaves and the padding a[5] = x on a shorter
+// array creates. It is compared by kind, never read as a value, so it needs no
+// scalar or reference payload.
+var hole = Value{kind: KindHole}
+
+// isHole reports whether an array element slot is a hole rather than a present
+// value, the presence test the hole-sensitive reads and enumeration make before
+// treating an index as an own property.
+func isHole(v Value) bool { return v.kind == KindHole }
 
 // Value is the boxed, self-describing dynamic value. It is three machine words:
 // the tag, a scalar for immediates (a bool in the low bit or a number's raw
@@ -322,10 +339,12 @@ func (v Value) Get(key BStr) Value {
 			return Number(float64(len(o.elems)))
 		}
 		if idx, ok := arrayIndex(name); ok {
-			if idx < len(o.elems) {
+			if idx < len(o.elems) && !isHole(o.elems[idx]) {
 				return o.elems[idx]
 			}
-			return Undefined
+			// A hole or an out-of-range index is not an own property, so the read climbs
+			// the prototype chain the way a missing property does and ends at undefined.
+			return o.getChained(v, key)
 		}
 		return o.getChained(v, key)
 	case KindObject:
@@ -364,7 +383,7 @@ func (v Value) HasProperty(key BStr) bool {
 			return true
 		}
 		if idx, ok := arrayIndex(name); ok {
-			return idx < len(o.elems)
+			return idx < len(o.elems) && !isHole(o.elems[idx])
 		}
 		return o.hasChained(key)
 	case KindObject, KindFunc:
@@ -658,7 +677,7 @@ func ordinaryToString(v Value) BStr {
 		if i > 0 {
 			b = append(b, ',')
 		}
-		if e.kind == KindNull || e.kind == KindUndefined {
+		if e.kind == KindNull || e.kind == KindUndefined || e.kind == KindHole {
 			continue
 		}
 		b = ToString(e).appendUnits(b)

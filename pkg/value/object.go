@@ -142,7 +142,7 @@ func (v Value) SetKey(key BStr, val Value) Value {
 				return val
 			}
 			for len(o.elems) <= idx {
-				o.elems = append(o.elems, Undefined)
+				o.elems = append(o.elems, hole)
 			}
 			o.elems[idx] = val
 			return val
@@ -191,7 +191,7 @@ func (v Value) Delete(key BStr) bool {
 				if o.elemsSealed {
 					return false
 				}
-				o.elems[idx] = Undefined
+				o.elems[idx] = hole
 			}
 			return true
 		}
@@ -378,6 +378,9 @@ func (o *Object) orderedStringKeysFiltered(enumerableOnly bool) []BStr {
 	var idxKeys []int
 	var strKeys []BStr
 	for i := range o.elems {
+		if isHole(o.elems[i]) {
+			continue // a hole is not an own property, so it is not enumerated
+		}
 		idxKeys = append(idxKeys, i)
 	}
 	for i, k := range o.keys {
@@ -502,7 +505,7 @@ func (v Value) HasOwnElem(key Value) bool {
 			return true
 		}
 		if idx, ok := arrayIndex(s); ok {
-			return idx < len(o.elems)
+			return idx < len(o.elems) && !isHole(o.elems[idx])
 		}
 	}
 	return o.hasOwn(name)

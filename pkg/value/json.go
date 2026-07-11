@@ -206,7 +206,7 @@ func encodeBoxedJSON(b *strings.Builder, v Value) {
 // the values SerializeJSONProperty drops: undefined itself, a function, and a
 // symbol. An array turns these into null and an object omits the property.
 func jsonUndefinedValue(v Value) bool {
-	return v.kind == KindUndefined || v.kind == KindFunc || v.kind == KindSymbol
+	return v.kind == KindUndefined || v.kind == KindFunc || v.kind == KindSymbol || v.kind == KindHole
 }
 
 // encodeJSONObject writes a generated object struct as a JSON object. The keys
