@@ -42,6 +42,8 @@ func (r *Renderer) deleteExpr(n frontend.Node) (ast.Expr, error) {
 	switch target.Kind() {
 	case frontend.NodePropertyAccessExpression:
 		return r.deleteMember(target)
+	case frontend.NodeElementAccessExpression:
+		return r.deleteElement(target)
 	default:
 		return nil, &NotYetLowerable{Reason: "delete of a " + kindName(target.Kind()) + " operand is a later slice"}
 	}
@@ -68,4 +70,41 @@ func (r *Renderer) deleteMember(target frontend.Node) (ast.Expr, error) {
 	r.requireImport(valuePkg)
 	key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(nameNode))}}}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Delete")}, Args: []ast.Expr{key}}, nil
+}
+
+// deleteElement lowers delete obj[k] with a computed key. It mirrors the dynamic
+// element read: the key is coerced to a property key by its type, a number through
+// DeleteIndex, another dynamic value through DeleteElem, and a string used as is
+// through Delete, so the removed slot is the same one the matching read would
+// reach. Only a dynamic receiver lowers, for the reason deleteMember hands back a
+// statically typed one; a key that is neither number, string, nor dynamic is its
+// own later slice.
+func (r *Renderer) deleteElement(target frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(target)
+	if len(kids) != 2 {
+		return nil, &NotYetLowerable{Reason: "delete target did not expose an object and an index"}
+	}
+	obj, idxNode := kids[0], kids[1]
+	if !r.isDynamic(obj) {
+		return nil, &NotYetLowerable{Reason: "delete of a statically typed property needs the object descriptor model, a later slice"}
+	}
+	recv, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	switch {
+	case r.isNumber(idxNode):
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DeleteIndex")}, Args: []ast.Expr{idx}}, nil
+	case r.isDynamic(idxNode):
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DeleteElem")}, Args: []ast.Expr{idx}}, nil
+	case r.isString(idxNode):
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Delete")}, Args: []ast.Expr{idx}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "delete with a non-number, non-string index is a later slice"}
+	}
 }

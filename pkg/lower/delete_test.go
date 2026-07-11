@@ -33,6 +33,39 @@ func TestDeleteDynamicMemberRuns(t *testing.T) {
 	}
 }
 
+// TestDeleteDynamicElementLowers pins that delete o[k] with a number key on a
+// dynamic receiver lowers to DeleteIndex, the numeric-key runtime removal.
+func TestDeleteDynamicElementLowers(t *testing.T) {
+	const src = "const arr: any = [1, 2];\nconst gone: boolean = delete arr[0];\nconsole.log(gone);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".DeleteIndex(") {
+		t.Fatalf("delete of a dynamic number-keyed element did not lower to DeleteIndex:\n%s", source)
+	}
+}
+
+// TestDeleteDynamicElementRuns builds and runs the computed-key form: a string
+// key removes an object property, and a number key clears an array element to a
+// hole without changing length.
+func TestDeleteDynamicElementRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const obj: any = { a: 1, b: 2 };\n" +
+		"const g1: boolean = delete obj[\"a\"];\n" +
+		"console.log(g1);\n" +
+		"console.log(obj.a);\n" +
+		"console.log(obj.b);\n" +
+		"const arr: any = [10, 20, 30];\n" +
+		"const g2: boolean = delete arr[1];\n" +
+		"console.log(g2);\n" +
+		"console.log(arr[1]);\n" +
+		"console.log(arr.length);\n" +
+		"console.log(arr[2]);\n"
+	got := runProgramGo(t, src)
+	want := "true\nundefined\n2\ntrue\nundefined\n3\n30\n"
+	if got != want {
+		t.Fatalf("delete dynamic element program printed %q, want %q", got, want)
+	}
+}
+
 // TestDeleteStaticMemberHandsBack pins the boundary: a property whose fixed shape
 // makes it a Go struct field has no runtime slot to remove, so delete over it
 // hands back for the object descriptor model a later phase builds.
