@@ -271,3 +271,30 @@ console.log(y);
 		t.Fatalf("call-source object destructure printed %q, want %q", got, want)
 	}
 }
+
+// TestObjectDestructureMemberSourceRuns builds and runs a member-source object
+// destructure so the held-once temporary is proven to feed the property reads,
+// extending the call-source case in #258 to a property access.
+func TestObjectDestructureMemberSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o = { pt: { x: 5, y: 6 } };\nconst { x, y } = o.pt;\nconsole.log(x + y);\n"
+	if got, want := runProgramGo(t, src), "11\n"; got != want {
+		t.Fatalf("member-source object destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestObjectDestructureCallSourceEvaluatesOnce builds and runs a call-source object
+// destructure whose source increments a counter, so the held-once temporary is proven
+// to run the call a single time rather than once per bound property.
+func TestObjectDestructureCallSourceEvaluatesOnce(t *testing.T) {
+	skipIfShort(t)
+	const src = `let calls = 0;
+function make(): { x: number; y: number } { calls += 1; return { x: 5, y: 6 }; }
+const { x, y } = make();
+console.log(x + y);
+console.log(calls);
+`
+	if got, want := runProgramGo(t, src), "11\n1\n"; got != want {
+		t.Fatalf("call-source object destructure printed %q, want %q (source should run once)", got, want)
+	}
+}
