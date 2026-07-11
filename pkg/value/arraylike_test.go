@@ -145,6 +145,27 @@ func TestGenericForEach(t *testing.T) {
 	}
 }
 
+// TestGenericCallbackReceivesIndexAndObject proves the callback is invoked with the
+// element, its index, and the receiver object, so a callback that reads the second or
+// third parameter sees them.
+func TestGenericCallbackReceivesIndexAndObject(t *testing.T) {
+	o := arrayLike(2, StringValue(FromGoString("a")), StringValue(FromGoString("b")))
+	var gotIndices []float64
+	var gotObject Value
+	cb := NewFunc(func(args []Value) Value {
+		gotIndices = append(gotIndices, Arg(args, 1).AsNumber())
+		gotObject = Arg(args, 2)
+		return Arg(args, 0)
+	})
+	GenericMap(o, cb)
+	if len(gotIndices) != 2 || gotIndices[0] != 0 || gotIndices[1] != 1 {
+		t.Fatalf("callback indices = %v, want [0 1]", gotIndices)
+	}
+	if !StrictEquals(gotObject, o) {
+		t.Fatal("callback did not receive the receiver as the third argument")
+	}
+}
+
 // TestGenericFill proves fill writes value into each index in range as the property
 // named by the number, honors relative bounds, and returns the receiver.
 func TestGenericFill(t *testing.T) {
