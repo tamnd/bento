@@ -55,6 +55,15 @@ func arrayLikeGet(recv Value, k int) Value {
 	return recv.GetIndex(float64(k))
 }
 
+// arrayLikeHas reports whether the receiver carries an own or inherited property at
+// index k, the HasProperty probe the hole-skipping methods make before visiting an
+// index. It dispatches through HasProperty, so a real array answers false for a hole
+// and an array-like object answers by whether it carries the integer key, each the
+// presence the spec's kPresent step tests.
+func arrayLikeHas(recv Value, k int) bool {
+	return recv.HasProperty(NumberToString(float64(k)))
+}
+
 // sameValueZero compares two values the way SameValueZero does, strict equality
 // except that NaN equals NaN, the equality Array.prototype.includes uses so a hole
 // or a stored NaN is found.
@@ -90,7 +99,7 @@ func GenericIndexOf(recv, target Value, from ...Value) Value {
 		}
 	}
 	for k := start; k < n; k++ {
-		if StrictEquals(arrayLikeGet(recv, k), target) {
+		if arrayLikeHas(recv, k) && StrictEquals(arrayLikeGet(recv, k), target) {
 			return Number(float64(k))
 		}
 	}
@@ -116,7 +125,7 @@ func GenericLastIndexOf(recv, target Value, from ...Value) Value {
 		}
 	}
 	for k := start; k >= 0; k-- {
-		if StrictEquals(arrayLikeGet(recv, k), target) {
+		if arrayLikeHas(recv, k) && StrictEquals(arrayLikeGet(recv, k), target) {
 			return Number(float64(k))
 		}
 	}
@@ -183,6 +192,9 @@ func callBack(cb, recv, elem Value, k int) Value {
 func GenericForEach(recv, cb Value, thisArg ...Value) Value {
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
+		if !arrayLikeHas(recv, k) {
+			continue // a hole is skipped, the callback never sees it
+		}
 		callBack(cb, recv, arrayLikeGet(recv, k), k)
 	}
 	return Undefined
@@ -219,6 +231,10 @@ func GenericMap(recv, cb Value, thisArg ...Value) Value {
 	n := arrayLikeLen(recv)
 	out := make([]Value, n)
 	for k := 0; k < n; k++ {
+		if !arrayLikeHas(recv, k) {
+			out[k] = hole // a hole is skipped and left a hole in the result
+			continue
+		}
 		out[k] = callBack(cb, recv, arrayLikeGet(recv, k), k)
 	}
 	return NewArrayValue(out)
@@ -230,6 +246,9 @@ func GenericFilter(recv, cb Value, thisArg ...Value) Value {
 	n := arrayLikeLen(recv)
 	out := []Value{}
 	for k := 0; k < n; k++ {
+		if !arrayLikeHas(recv, k) {
+			continue // a hole is skipped, never tested and never kept
+		}
 		elem := arrayLikeGet(recv, k)
 		if ToBoolean(callBack(cb, recv, elem, k)) {
 			out = append(out, elem)
@@ -243,6 +262,9 @@ func GenericFilter(recv, cb Value, thisArg ...Value) Value {
 func GenericSome(recv, cb Value, thisArg ...Value) Value {
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
+		if !arrayLikeHas(recv, k) {
+			continue // a hole is skipped, never tested
+		}
 		if ToBoolean(callBack(cb, recv, arrayLikeGet(recv, k), k)) {
 			return Bool(true)
 		}
@@ -256,6 +278,9 @@ func GenericSome(recv, cb Value, thisArg ...Value) Value {
 func GenericEvery(recv, cb Value, thisArg ...Value) Value {
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
+		if !arrayLikeHas(recv, k) {
+			continue // a hole is skipped, never tested
+		}
 		if !ToBoolean(callBack(cb, recv, arrayLikeGet(recv, k), k)) {
 			return Bool(false)
 		}
@@ -265,6 +290,8 @@ func GenericEvery(recv, cb Value, thisArg ...Value) Value {
 
 // GenericFind runs Array.prototype.find on a generic receiver, returning the first
 // element for which the callback's result is truthy, or undefined when none is.
+// Unlike the hole-skipping methods, find visits a hole as undefined, so the callback
+// is called for every index in range.
 func GenericFind(recv, cb Value, thisArg ...Value) Value {
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
@@ -314,4 +341,68 @@ func GenericIncludes(recv, target Value, from ...Value) Value {
 		}
 	}
 	return Bool(false)
+}
+
+// GenericReduce runs Array.prototype.reduce on a generic receiver, folding the
+// present elements left to right into a single accumulator. With an initial value
+// the fold seeds from it and runs over every present index; with no initial value
+// it seeds from the first present element and runs from the next, so an all-hole or
+// empty receiver with no initial value throws a TypeError the way the array method
+// does. A hole is skipped, never visited, matching the spec's kPresent guard. The
+// callback takes the four arguments the spec passes, the accumulator, the element,
+// its index as a number, and the receiver.
+func GenericReduce(recv, cb Value, initial ...Value) Value {
+	n := arrayLikeLen(recv)
+	k := 0
+	var acc Value
+	if len(initial) > 0 {
+		acc = initial[0]
+	} else {
+		for k < n && !arrayLikeHas(recv, k) {
+			k++
+		}
+		if k >= n {
+			Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+		}
+		acc = arrayLikeGet(recv, k)
+		k++
+	}
+	for ; k < n; k++ {
+		if !arrayLikeHas(recv, k) {
+			continue
+		}
+		acc = cb.Call(acc, arrayLikeGet(recv, k), Number(float64(k)), recv)
+	}
+	return acc
+}
+
+// GenericReduceRight runs Array.prototype.reduceRight on a generic receiver, folding
+// the present elements right to left into a single accumulator. It mirrors
+// GenericReduce: with an initial value the fold seeds from it, otherwise it seeds
+// from the last present element and an all-hole or empty receiver with no initial
+// value throws a TypeError. A hole is skipped, and the callback takes the
+// accumulator, the element, its index, and the receiver.
+func GenericReduceRight(recv, cb Value, initial ...Value) Value {
+	n := arrayLikeLen(recv)
+	k := n - 1
+	var acc Value
+	if len(initial) > 0 {
+		acc = initial[0]
+	} else {
+		for k >= 0 && !arrayLikeHas(recv, k) {
+			k--
+		}
+		if k < 0 {
+			Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+		}
+		acc = arrayLikeGet(recv, k)
+		k--
+	}
+	for ; k >= 0; k-- {
+		if !arrayLikeHas(recv, k) {
+			continue
+		}
+		acc = cb.Call(acc, arrayLikeGet(recv, k), Number(float64(k)), recv)
+	}
+	return acc
 }
