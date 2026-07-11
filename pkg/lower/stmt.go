@@ -1117,6 +1117,23 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 			return boxed, nil
 		}
 	}
+	// An object literal whose shape is not statically fixed, one with a computed key
+	// naming a runtime value, has no closed key set a Go struct could declare, so it
+	// builds as the dynamic bag even when its binding was not written any. The binding
+	// is marked dynamic so it lands in a value.Value slot (foldShortDecl infers it from
+	// the boxed initializer) and every later read and write of it routes the dynamic
+	// way rather than reach for a struct field the shape never had. A literal whose
+	// keys are all plain or constant stays on the struct path above.
+	if initNode.Kind() == frontend.NodeObjectLiteralExpression && r.objectLiteralNotFixed(initNode) {
+		boxed, err := r.boxObjectLiteral(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
 	// An object literal in a slot whose declared shape has an optional property
 	// must build at that shape rather than its own all-required type, the contextual
 	// typing objectLiteralContextual applies. A slot that is itself T | undefined
@@ -1602,6 +1619,18 @@ func (r *Renderer) dynamicSourceDestructure(patNode, initNode frontend.Node) ([]
 	}
 	r.collectDynRestNames(patNode, r.dynBoundLocals)
 	return append(prefix, stmts...), true, nil
+}
+
+// markDynBound records that a local's Go slot holds a boxed value.Value, so every
+// later read and write of it routes through the dynamic value model rather than the
+// static shape the checker gave the name. Statements lower in source order, so
+// marking a binding as it lowers reaches every use below it. The map is created
+// lazily since a body with no dynamic binding never needs one.
+func (r *Renderer) markDynBound(name string) {
+	if r.dynBoundLocals == nil {
+		r.dynBoundLocals = map[string]bool{}
+	}
+	r.dynBoundLocals[name] = true
 }
 
 // flattenObjectDestructure lowers `const {x, y} = src` to one `:=` binding per
