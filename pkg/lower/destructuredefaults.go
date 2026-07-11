@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -40,6 +41,50 @@ func (r *Renderer) classifyArrayElem(el frontend.Node) (arrayDefaultElem, error)
 	default:
 		return arrayDefaultElem{}, &NotYetLowerable{Reason: "an array destructuring hole, rest, or nested pattern is a later slice"}
 	}
+}
+
+// objectDefaultElem describes one element of an object binding pattern once its
+// shape is classified: a plain shorthand name binds the property of the same name,
+// a defaulted shorthand name fills from its default when the property is undefined.
+type objectDefaultElem struct {
+	name       string
+	nameNode   frontend.Node
+	hasDefault bool
+	defNode    frontend.Node
+}
+
+// classifyObjectElem reads one object binding pattern element into an
+// objectDefaultElem. A single identifier is a plain shorthand, `{x}`; an
+// identifier followed by an expression under an `=` separator is a shorthand
+// default, `{x = d}`. A rename (`{a: b}`), a rename carrying a default, a rest, or
+// a nested pattern is a later slice, so it hands back. The separator between the
+// name and the second child tells a default (`=`) from a rename (`:`), which the
+// child kinds alone cannot when the default is itself an identifier.
+func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, error) {
+	ec := r.prog.Children(el)
+	switch {
+	case len(ec) == 1 && ec[0].Kind() == frontend.NodeIdentifier:
+		return objectDefaultElem{nameNode: ec[0]}, nil
+	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && !strings.Contains(r.elemSeparator(el, ec[0], ec[1]), ":"):
+		return objectDefaultElem{nameNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
+	default:
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rename, default, rest, or nested pattern is a later slice"}
+	}
+}
+
+// elemSeparator returns the source text between two children of a pattern element,
+// the operator that joins them: `=` for a default, `:` for a rename. It reads the
+// gap by the children's spans relative to the element, so it sees only the joining
+// token and never the default expression's own text, which may itself contain a
+// colon.
+func (r *Renderer) elemSeparator(el, first, second frontend.Node) string {
+	txt := r.prog.Text(el)
+	lo := int(first.End()) - int(el.Pos())
+	hi := int(second.Pos()) - int(el.Pos())
+	if lo < 0 || hi > len(txt) || lo > hi {
+		return ""
+	}
+	return txt[lo:hi]
 }
 
 // defaultFillStmts emits the lazy default fill for one binding: the target is
