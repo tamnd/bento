@@ -825,10 +825,12 @@ func (r *Renderer) memberName(nameNode frontend.Node) (string, bool) {
 		return r.stringLiteralKey(nameNode)
 	case frontend.NodeUnknown:
 		// A computed name [expr] surfaces as an unnamed node wrapping the
-		// expression; only a lone string-literal expression is a constant name.
+		// expression; a constant name is one the checker resolved to a string,
+		// either a lone string-literal expression or a const of a literal string
+		// type, both folded to that string at class-definition time.
 		kids := r.prog.Children(nameNode)
-		if len(kids) == 1 && kids[0].Kind() == frontend.NodeStringLiteral {
-			return r.stringLiteralKey(kids[0])
+		if len(kids) == 1 {
+			return r.constStringKey(kids[0])
 		}
 	}
 	return "", false
@@ -2823,7 +2825,7 @@ func (r *Renderer) bracketMethodCall(callee frontend.Node, argNodes []frontend.N
 		return nil, false, nil
 	}
 	obj := kids[0]
-	key, ok := r.stringLiteralKey(kids[1])
+	key, ok := r.constStringKey(kids[1])
 	if !ok {
 		return nil, false, nil
 	}
