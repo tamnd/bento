@@ -311,6 +311,51 @@ func TestGenericMethodsSkipHoles(t *testing.T) {
 	}
 }
 
+// TestGenericJoinTreatsHoleAsUndefined proves join contributes the empty string for a
+// hole, the same as it does for a stored undefined or null, with the separator between
+// every pair. The separator defaults to a comma.
+func TestGenericJoinTreatsHoleAsUndefined(t *testing.T) {
+	if got := ToString(GenericJoin(arrayWithHole())).ToGoString(); got != "1,,3" {
+		t.Fatalf("join with a hole = %q, want %q", got, "1,,3")
+	}
+	if got := ToString(GenericJoin(arrayWithHole(), StringValue(FromGoString("-")))).ToGoString(); got != "1--3" {
+		t.Fatalf("join with separator - = %q, want %q", got, "1--3")
+	}
+	if got := ToString(GenericJoin(arrayLike(0))).ToGoString(); got != "" {
+		t.Fatalf("join of empty = %q, want empty", got)
+	}
+}
+
+// TestGenericCopyWithinDense proves copyWithin copies a block into another position,
+// overwriting in place and leaving the length unchanged.
+func TestGenericCopyWithinDense(t *testing.T) {
+	a := NewArrayValue([]Value{Number(1), Number(2), Number(3), Number(4), Number(5)})
+	GenericCopyWithin(a, Number(0), Number(3))
+	for i, w := range []float64{4, 5, 3, 4, 5} {
+		if got := a.GetIndex(float64(i)); got.AsNumber() != w {
+			t.Fatalf("copyWithin[%d] = %v, want %v", i, got.AsNumber(), w)
+		}
+	}
+}
+
+// TestGenericCopyWithinPreservesHoles proves copyWithin deletes the target when the
+// source is a hole, so a hole is carried across rather than written as undefined.
+func TestGenericCopyWithinPreservesHoles(t *testing.T) {
+	a := NewArrayValue([]Value{Number(1), Number(2), Number(3)})
+	a.DeleteIndex(1)
+	// copyWithin(0, 1): copy [hole, 3] over indices 0 and 1.
+	GenericCopyWithin(a, Number(0), Number(1))
+	if hasIndex(a, 0) {
+		t.Fatal("copyWithin wrote undefined where the source was a hole, want a hole")
+	}
+	if got := a.GetIndex(1); got.AsNumber() != 3 {
+		t.Fatalf("copyWithin[1] = %v, want 3", got.AsNumber())
+	}
+	if l := a.Get(FromGoString("length")).AsNumber(); l != 3 {
+		t.Fatalf("copyWithin changed length to %v, want 3", l)
+	}
+}
+
 // TestGenericSlicePreservesHoles proves slice carries a hole across as a hole rather
 // than materializing it as a stored undefined: the copied slot reads undefined but is
 // absent, the same as the source.
