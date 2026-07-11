@@ -61,11 +61,11 @@ type objectDefaultElem struct {
 // objectDefaultElem. A single identifier is a plain shorthand, `{x}`; two
 // identifiers under a `:` separator are a rename, `{x: a}`, whose source property is
 // the first and whose target is the second; an identifier followed by an expression
-// under an `=` separator is a shorthand default, `{x = d}`. A rename carrying a
-// default, a computed key, a rest, or a nested pattern is a later slice, so it hands
-// back. The separator between the name and the second child tells a default (`=`)
-// from a rename (`:`), which the child kinds alone cannot when the default is itself
-// an identifier.
+// under an `=` separator is a shorthand default, `{x = d}`; a source property, a
+// target, and a default under `:` then `=` are a renamed default, `{x: a = d}`. A
+// computed key, a rest, or a nested pattern is a later slice, so it hands back. The
+// separator between the name and the second child tells a default (`=`) from a rename
+// (`:`), which the child kinds alone cannot when the default is itself an identifier.
 func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, error) {
 	// A rest property gathers the own enumerable properties the pattern did not name
 	// into a new object, which needs the object model to enumerate a value's own keys,
@@ -87,8 +87,10 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 		return objectDefaultElem{nameNode: ec[0], bindNode: ec[1]}, nil
 	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && !strings.Contains(r.childGap(el, ec[0], ec[1]), ":"):
 		return objectDefaultElem{nameNode: ec[0], bindNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
+	case len(ec) == 3 && ec[0].Kind() == frontend.NodeIdentifier && ec[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(el, ec[0], ec[1]), ":") && strings.Contains(r.childGap(el, ec[1], ec[2]), "="):
+		return objectDefaultElem{nameNode: ec[0], bindNode: ec[1], hasDefault: true, defNode: ec[2]}, nil
 	default:
-		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring renamed default or nested pattern is a later slice"}
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring nested pattern is a later slice"}
 	}
 }
 
@@ -132,8 +134,9 @@ type objectAssignElem struct {
 
 // classifyObjectAssignElem reads one object assignment property into an
 // objectAssignElem. A single identifier is a plain shorthand; two identifiers under a
-// `:` separator are a rename, `{x: a}`; an identifier, an `=`, and an expression is a
-// shorthand default. A rename carrying a default, a rest, or a nested pattern is a
+// `:` separator are a rename, `{x: a}`; a source property under `:` over an `a = d`
+// assignment is a renamed default, `{x: a = d}`; an identifier, an `=`, and an
+// expression is a shorthand default. A computed key, a rest, or a nested pattern is a
 // later slice.
 func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignElem, error) {
 	if strings.HasPrefix(strings.TrimSpace(r.prog.Text(prop)), "...") {
@@ -150,10 +153,18 @@ func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignEle
 		return objectAssignElem{nameNode: pc[0], bindNode: pc[0]}, nil
 	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
 		return objectAssignElem{nameNode: pc[0], bindNode: pc[1]}, nil
+	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodeBinaryExpression && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
+		// A rename carrying a default, {x: a = d}: the target and default parse as an
+		// `a = d` assignment under the source property's colon.
+		bc := r.prog.Children(pc[1])
+		if len(bc) == 3 && bc[0].Kind() == frontend.NodeIdentifier && r.prog.Text(bc[1]) == "=" {
+			return objectAssignElem{nameNode: pc[0], bindNode: bc[0], hasDefault: true, defNode: bc[2]}, nil
+		}
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment nested pattern is a later slice"}
 	case len(pc) == 3 && pc[0].Kind() == frontend.NodeIdentifier && r.prog.Text(pc[1]) == "=":
 		return objectAssignElem{nameNode: pc[0], bindNode: pc[0], hasDefault: true, defNode: pc[2]}, nil
 	default:
-		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment renamed default or nested pattern is a later slice"}
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment nested pattern is a later slice"}
 	}
 }
 
