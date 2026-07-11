@@ -85,3 +85,56 @@ func TestHoleHasNoDescriptor(t *testing.T) {
 		t.Fatalf("descriptor of hole a[1] = %v, want undefined", d)
 	}
 }
+
+// TestLengthGrowMakesHoles proves that writing a larger length extends the array with
+// holes: the length spans the new indices, the original elements stay present, and the
+// added indices are absent own properties that read undefined.
+func TestLengthGrowMakesHoles(t *testing.T) {
+	a := NewArrayValue([]Value{Number(1), Number(2), Number(3)})
+	a.SetKey(FromGoString("length"), Number(5))
+	if l := a.Get(FromGoString("length")).AsNumber(); l != 5 {
+		t.Fatalf("length after grow = %v, want 5", l)
+	}
+	if !hasIndex(a, 0) || !hasIndex(a, 2) {
+		t.Fatal("grow dropped an original element")
+	}
+	if hasIndex(a, 3) || hasIndex(a, 4) {
+		t.Fatal("grow left a present index where a hole was expected")
+	}
+	if a.GetIndex(4).kind != KindUndefined {
+		t.Fatalf("a[4] after grow = %v, want undefined", a.GetIndex(4))
+	}
+}
+
+// TestLengthShrinkTruncates proves that writing a smaller length drops the tail: the
+// length shrinks, the surviving elements stay present, and the dropped indices are
+// absent.
+func TestLengthShrinkTruncates(t *testing.T) {
+	a := NewArrayValue([]Value{Number(1), Number(2), Number(3), Number(4), Number(5)})
+	a.SetKey(FromGoString("length"), Number(2))
+	if l := a.Get(FromGoString("length")).AsNumber(); l != 2 {
+		t.Fatalf("length after shrink = %v, want 2", l)
+	}
+	if !hasIndex(a, 0) || !hasIndex(a, 1) {
+		t.Fatal("shrink dropped a surviving element")
+	}
+	if hasIndex(a, 2) || hasIndex(a, 4) {
+		t.Fatal("shrink left a dropped index present")
+	}
+}
+
+// TestLengthInvalidThrows proves that a length that ToUint32 does not leave unchanged,
+// a negative or fractional value, throws a RangeError rather than resizing.
+func TestLengthInvalidThrows(t *testing.T) {
+	for _, bad := range []Value{Number(-1), Number(1.5)} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("a.length = %v did not throw", bad)
+				}
+			}()
+			a := NewArrayValue([]Value{Number(1)})
+			a.SetKey(FromGoString("length"), bad)
+		}()
+	}
+}
