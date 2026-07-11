@@ -185,9 +185,10 @@ func (v Value) GetOwnPropertyDescriptor(key Value) Value {
 			return dataProperty(Number(float64(len(o.elems))), true, false, false).toObject()
 		}
 		if idx, ok := arrayIndex(s); ok {
-			if idx < len(o.elems) {
+			if idx < len(o.elems) && !isHole(o.elems[idx]) {
 				return dataProperty(o.elems[idx], true, true, true).toObject()
 			}
+			// A hole carries no descriptor, the same as an out-of-range index.
 			return Undefined
 		}
 	}

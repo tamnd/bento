@@ -259,3 +259,182 @@ func TestGenericIncludes(t *testing.T) {
 		t.Fatal("includes 9 = true, want false")
 	}
 }
+
+// arrayWithHole builds a real boxed array of the given values then deletes index 1,
+// so the middle slot is a hole the hole-skipping methods must pass over.
+func arrayWithHole() Value {
+	a := NewArrayValue([]Value{Number(1), Number(2), Number(3)})
+	a.DeleteIndex(1)
+	return a
+}
+
+// TestGenericMethodsSkipHoles proves the hole-skipping methods never visit a hole:
+// forEach and reduce fold only the present elements, filter and map pass the hole
+// through without calling the callback, and indexOf reports -1 for a value that only
+// lived at the deleted index.
+func TestGenericMethodsSkipHoles(t *testing.T) {
+	seen := func() (Value, *[]float64) {
+		var idx []float64
+		cb := NewFunc(func(args []Value) Value {
+			idx = append(idx, Arg(args, 1).AsNumber())
+			return Undefined
+		})
+		return cb, &idx
+	}
+
+	cb, idx := seen()
+	GenericForEach(arrayWithHole(), cb)
+	if len(*idx) != 2 || (*idx)[0] != 0 || (*idx)[1] != 2 {
+		t.Fatalf("forEach visited indices %v, want [0 2] (the hole is skipped)", *idx)
+	}
+
+	cb, idx = seen()
+	GenericMap(arrayWithHole(), cb)
+	if len(*idx) != 2 || (*idx)[0] != 0 || (*idx)[1] != 2 {
+		t.Fatalf("map visited indices %v, want [0 2]", *idx)
+	}
+
+	// map preserves the hole in the result: index 1 is absent, not a stored undefined.
+	m := GenericMap(arrayWithHole(), double())
+	if hasIndex(m, 1) {
+		t.Fatal("map filled the hole slot, want it preserved as a hole")
+	}
+
+	cb, idx = seen()
+	GenericFilter(arrayWithHole(), cb)
+	if len(*idx) != 2 {
+		t.Fatalf("filter visited %d indices, want 2", len(*idx))
+	}
+
+	if got := GenericIndexOf(arrayWithHole(), Number(2)); got.AsNumber() != -1 {
+		t.Fatalf("indexOf of a deleted value = %v, want -1", got.AsNumber())
+	}
+}
+
+// TestGenericJoinTreatsHoleAsUndefined proves join contributes the empty string for a
+// hole, the same as it does for a stored undefined or null, with the separator between
+// every pair. The separator defaults to a comma.
+func TestGenericJoinTreatsHoleAsUndefined(t *testing.T) {
+	if got := ToString(GenericJoin(arrayWithHole())).ToGoString(); got != "1,,3" {
+		t.Fatalf("join with a hole = %q, want %q", got, "1,,3")
+	}
+	if got := ToString(GenericJoin(arrayWithHole(), StringValue(FromGoString("-")))).ToGoString(); got != "1--3" {
+		t.Fatalf("join with separator - = %q, want %q", got, "1--3")
+	}
+	if got := ToString(GenericJoin(arrayLike(0))).ToGoString(); got != "" {
+		t.Fatalf("join of empty = %q, want empty", got)
+	}
+}
+
+// TestGenericCopyWithinDense proves copyWithin copies a block into another position,
+// overwriting in place and leaving the length unchanged.
+func TestGenericCopyWithinDense(t *testing.T) {
+	a := NewArrayValue([]Value{Number(1), Number(2), Number(3), Number(4), Number(5)})
+	GenericCopyWithin(a, Number(0), Number(3))
+	for i, w := range []float64{4, 5, 3, 4, 5} {
+		if got := a.GetIndex(float64(i)); got.AsNumber() != w {
+			t.Fatalf("copyWithin[%d] = %v, want %v", i, got.AsNumber(), w)
+		}
+	}
+}
+
+// TestGenericCopyWithinPreservesHoles proves copyWithin deletes the target when the
+// source is a hole, so a hole is carried across rather than written as undefined.
+func TestGenericCopyWithinPreservesHoles(t *testing.T) {
+	a := NewArrayValue([]Value{Number(1), Number(2), Number(3)})
+	a.DeleteIndex(1)
+	// copyWithin(0, 1): copy [hole, 3] over indices 0 and 1.
+	GenericCopyWithin(a, Number(0), Number(1))
+	if hasIndex(a, 0) {
+		t.Fatal("copyWithin wrote undefined where the source was a hole, want a hole")
+	}
+	if got := a.GetIndex(1); got.AsNumber() != 3 {
+		t.Fatalf("copyWithin[1] = %v, want 3", got.AsNumber())
+	}
+	if l := a.Get(FromGoString("length")).AsNumber(); l != 3 {
+		t.Fatalf("copyWithin changed length to %v, want 3", l)
+	}
+}
+
+// TestGenericSlicePreservesHoles proves slice carries a hole across as a hole rather
+// than materializing it as a stored undefined: the copied slot reads undefined but is
+// absent, the same as the source.
+func TestGenericSlicePreservesHoles(t *testing.T) {
+	s := GenericSlice(arrayWithHole())
+	if l := s.Get(FromGoString("length")).AsNumber(); l != 3 {
+		t.Fatalf("slice length = %v, want 3", l)
+	}
+	if hasIndex(s, 1) {
+		t.Fatal("slice filled the hole slot, want it preserved as a hole")
+	}
+	if !hasIndex(s, 0) || !hasIndex(s, 2) {
+		t.Fatal("slice dropped a present element")
+	}
+}
+
+// TestGenericConcatPreservesHoles proves concat spreads an array argument element by
+// element, carrying a hole across, and appends a non-array argument whole.
+func TestGenericConcatPreservesHoles(t *testing.T) {
+	got := GenericConcat(arrayWithHole(), NewArrayValue([]Value{Number(4)}), Number(5))
+	if l := got.Get(FromGoString("length")).AsNumber(); l != 5 {
+		t.Fatalf("concat length = %v, want 5 (3 + 1 + 1)", l)
+	}
+	if hasIndex(got, 1) {
+		t.Fatal("concat filled the receiver's hole, want it preserved")
+	}
+	if got.GetIndex(3).AsNumber() != 4 {
+		t.Fatalf("concat[3] = %v, want 4 (spread array element)", got.GetIndex(3).AsNumber())
+	}
+	if got.GetIndex(4).AsNumber() != 5 {
+		t.Fatalf("concat[4] = %v, want 5 (non-array appended whole)", got.GetIndex(4).AsNumber())
+	}
+}
+
+// TestGenericReduce proves reduce folds left to right over the present elements,
+// seeding from the first present element when no initial value is given and from the
+// initial value otherwise, and skipping a hole.
+func TestGenericReduce(t *testing.T) {
+	add := NewFunc(func(args []Value) Value {
+		return Number(Arg(args, 0).AsNumber() + Arg(args, 1).AsNumber())
+	})
+
+	if got := GenericReduce(arrayLike(3, Number(1), Number(2), Number(3)), add); got.AsNumber() != 6 {
+		t.Fatalf("reduce with no init = %v, want 6", got.AsNumber())
+	}
+	if got := GenericReduce(arrayLike(3, Number(1), Number(2), Number(3)), add, Number(10)); got.AsNumber() != 16 {
+		t.Fatalf("reduce with init 10 = %v, want 16", got.AsNumber())
+	}
+	if got := GenericReduce(arrayWithHole(), add); got.AsNumber() != 4 {
+		t.Fatalf("reduce over a hole = %v, want 4 (1 + 3)", got.AsNumber())
+	}
+}
+
+// TestGenericReduceRight proves reduceRight folds right to left, seeding from the last
+// present element with no initial value, and that both reduce forms throw a TypeError
+// on an empty receiver with no initial value.
+func TestGenericReduceRight(t *testing.T) {
+	sub := NewFunc(func(args []Value) Value {
+		return Number(Arg(args, 0).AsNumber() - Arg(args, 1).AsNumber())
+	})
+	// [1,2,3] right to left with no init: 3 - 2 - 1 = 0.
+	if got := GenericReduceRight(arrayLike(3, Number(1), Number(2), Number(3)), sub); got.AsNumber() != 0 {
+		t.Fatalf("reduceRight with no init = %v, want 0", got.AsNumber())
+	}
+
+	for _, tc := range []struct {
+		name string
+		run  func()
+	}{
+		{"reduce", func() { GenericReduce(arrayLike(0), sub) }},
+		{"reduceRight", func() { GenericReduceRight(arrayLike(0), sub) }},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s of empty array with no init did not throw", tc.name)
+				}
+			}()
+			tc.run()
+		}()
+	}
+}
