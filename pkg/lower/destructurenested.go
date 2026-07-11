@@ -76,8 +76,10 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 		return nil, &NotYetLowerable{Reason: "an empty object destructuring pattern binds nothing"}
 	}
 	propType := map[string]frontend.Type{}
+	optionalField := map[string]bool{}
 	for _, pr := range r.prog.Properties(patType) {
 		propType[pr.Name] = pr.Type
+		optionalField[pr.Name] = pr.Optional
 	}
 	var out []ast.Stmt
 	for _, el := range elems {
@@ -108,9 +110,6 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 		if err != nil {
 			return nil, err
 		}
-		if info.hasDefault {
-			return nil, &NotYetLowerable{Reason: "a default inside a nested object pattern composes the fill through the nesting, a later slice"}
-		}
 		prop := r.prog.Text(info.nameNode)
 		srcName, ok := localName(prop)
 		if !ok {
@@ -124,9 +123,34 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "destructured target is not a Go identifier"}
 		}
-		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident(field)}}})
+		read := &ast.SelectorExpr{X: recv, Sel: ident(field)}
+		// A default over a required field can never fire, since the property is always
+		// present, so it binds the read directly and the default is dead. A default over
+		// an optional field fills only when the property is undefined, which needs the
+		// source to omit it; an omitting nested object literal is inferred into a struct
+		// whose omitted field is a plain value rather than the annotated Opt, so the Opt
+		// fill would read a field the source value does not carry. That nested-object
+		// literal coercion is a phase 7 capability, so a live optional default composed
+		// through the nesting hands back rather than emit an Opt read the source cannot
+		// answer.
+		if info.hasDefault && optionalField[prop] {
+			return nil, &NotYetLowerable{Reason: "an optional-field default composed through a nested object pattern needs the nested-object literal coercion of phase 7"}
+		}
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
 	}
 	return out, nil
+}
+
+// defaultFillFor emits the lazy default fill for a nested leaf, picking the shape
+// the leaf's binding token needs: a declaration or parameter leaf declares a fresh
+// local and fills it, an assignment leaf fills into the existing target without a new
+// declaration. It routes a default composed through a nesting to the same fill the
+// top-level paths use.
+func (r *Renderer) defaultFillFor(tok token.Token, name string, nameGo, read, def ast.Expr) []ast.Stmt {
+	if tok == token.DEFINE {
+		return r.defaultFillStmts(name, nameGo, read, def)
+	}
+	return []ast.Stmt{r.defaultFillAssign(ident(name), read, def)}
 }
 
 // bindSubArray binds an array pattern nested inside an outer pattern. It reads each
@@ -134,8 +158,8 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 // array element takes, and binds a further-nested element by minting a temporary for
 // the slot and recursing. The receiver already holds the value, so no source
 // temporary or iterator draining is needed here; that machinery stays with the
-// top-level path. A default or a rest inside the nesting composes the fill and
-// gather rules through a level and is a later item, so it hands back for now.
+// top-level path. A default fills through the nesting from AtOpt and a trailing rest
+// gathers the tail, the same fill and gather rules the top-level array path applies.
 func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType frontend.Type, tok token.Token) ([]ast.Stmt, error) {
 	elemT, ok := r.prog.ElementType(patType)
 	if !ok {
@@ -149,18 +173,22 @@ func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType fronte
 	if len(elems) == 0 {
 		return nil, &NotYetLowerable{Reason: "an empty array destructuring pattern binds nothing"}
 	}
+	fixedElems, restNode, hasRest, err := r.splitArrayRest(elems)
+	if err != nil {
+		return nil, err
+	}
 	var out []ast.Stmt
-	for i, el := range elems {
+	for i, el := range fixedElems {
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, err
 		}
-		read := &ast.CallExpr{
-			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("AtI")},
-			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
-		}
 		if info.nested != nil {
 			tmp := r.freshTemp()
+			read := &ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: recv, Sel: ident("AtI")},
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+			}
 			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{read}})
 			inner, err := r.bindSubPattern(info.nested, ident(tmp), elemT, tok)
 			if err != nil {
@@ -168,9 +196,6 @@ func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType fronte
 			}
 			out = append(out, inner...)
 			continue
-		}
-		if info.hasDefault {
-			return nil, &NotYetLowerable{Reason: "a default inside a nested array pattern composes the fill through the nesting, a later slice"}
 		}
 		name, ok := localName(r.prog.Text(info.nameNode))
 		if !ok {
@@ -183,9 +208,35 @@ func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType fronte
 		if same, err := sameGoType(nameGo, elemGo); err != nil {
 			return nil, err
 		} else if !same {
+			if info.hasDefault {
+				return nil, &NotYetLowerable{Reason: "a nested array default over an optional-element source is a later slice"}
+			}
 			return nil, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
 		}
+		if info.hasDefault {
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, r.defaultFillFor(tok, name, nameGo, arrayOptRead(recv, i), def)...)
+			continue
+		}
+		read := &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("AtI")},
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
 		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
+	}
+	if hasRest {
+		bind, err := r.arrayRestBinding(restNode, elemT, recv, len(fixedElems), tok)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bind)
 	}
 	return out, nil
 }

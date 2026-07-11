@@ -124,6 +124,17 @@ console.log(d);
 	}
 }
 
+// TestObjectNestedOptionalDefaultHandsBack proves an optional-field default composed
+// through a nested object pattern hands back: a live default needs the source to omit
+// the field, and an omitting nested object literal is inferred into a struct whose
+// omitted field is a plain value rather than the annotated Opt, which the phase 7
+// nested-object literal coercion resolves. The decline is honest rather than an Opt
+// read the source value cannot answer.
+func TestObjectNestedOptionalDefaultHandsBack(t *testing.T) {
+	const src = "const o: { p: { x: number; y?: number } } = { p: { x: 1 } };\nconst { p: { x, y = 9 } } = o;\nconsole.log(x + y);\n"
+	renderProgramHandBack(t, src)
+}
+
 // TestObjectDestructureDefaultRuns proves a property default lowers: the missing
 // optional property takes the default while the present one keeps its value.
 func TestObjectDestructureDefaultRuns(t *testing.T) {
