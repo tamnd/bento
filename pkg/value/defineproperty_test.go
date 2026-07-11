@@ -206,6 +206,31 @@ func TestGetOwnPropertyDescriptorAccessor(t *testing.T) {
 	}
 }
 
+// TestGetOwnPropertyDescriptors proves the all-keys read returns an object that
+// carries a descriptor for every own property, the enumerable and the
+// non-enumerable alike, each descriptor holding the property's value and flags.
+func TestGetOwnPropertyDescriptors(t *testing.T) {
+	o := NewObject()
+	o.DefineProperty(StringValue(FromGoString("a")), descObj("value", Number(1), "enumerable", True))
+	o.DefineProperty(StringValue(FromGoString("hidden")), descObj("value", Number(2)))
+
+	all := o.GetOwnPropertyDescriptors()
+	if keys := joinKeys(all.OwnKeys()); keys != "a,hidden" {
+		t.Fatalf("descriptors object keys = %q, want \"a,hidden\"", keys)
+	}
+	da := all.Get(FromGoString("a"))
+	if da.Get(FromGoString("value")).scalar != Number(1).scalar {
+		t.Fatalf("a descriptor value = %v, want 1", da.Get(FromGoString("value")))
+	}
+	if da.Get(FromGoString("enumerable")).scalar != True.scalar {
+		t.Fatal("a descriptor enumerable = false, want true")
+	}
+	dh := all.Get(FromGoString("hidden"))
+	if dh.Get(FromGoString("enumerable")).scalar != False.scalar {
+		t.Fatal("hidden descriptor enumerable = true, want false")
+	}
+}
+
 func joinKeys(a *Array[BStr]) string {
 	out := ""
 	for i := 0.0; i < a.Len(); i++ {
