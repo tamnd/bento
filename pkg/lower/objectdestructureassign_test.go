@@ -59,11 +59,32 @@ console.log(active);
 	}
 }
 
-// TestObjectDestructureAssignRenameHandsBack proves a renamed property hands back,
-// since binding a property to a different local name is a later slice.
-func TestObjectDestructureAssignRenameHandsBack(t *testing.T) {
+// TestObjectDestructureAssignRenameLowers proves a renamed property stores the source
+// property of its own name into the renamed existing target: {x: a} reads o.X into a,
+// so the emitted Go selects the source field and assigns the renamed local.
+func TestObjectDestructureAssignRenameLowers(t *testing.T) {
 	const src = "const o = { x: 1, y: 2 };\nlet a = 0;\nlet b = 0;\n({ x: a, y: b } = o);\nconsole.log(a + b);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "a, b = o.X, o.Y") {
+		t.Errorf("object rename assignment did not store the source fields into the renamed targets:\n%s", source)
+	}
+}
+
+// TestObjectDestructureAssignRenameRuns builds and runs a renamed assignment so the
+// renamed targets are proven to carry the right source properties.
+func TestObjectDestructureAssignRenameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o = { x: 10, y: 20 };
+let a = 0;
+let b = 0;
+({ x: a, y: b } = o);
+console.log(a);
+console.log(b);
+`
+	if got, want := runProgramGo(t, src), "10\n20\n"; got != want {
+		t.Fatalf("object rename assignment printed %q, want %q", got, want)
+	}
 }
 
 // TestObjectDestructureAssignDefaultRuns proves a property default lowers in an
@@ -74,6 +95,24 @@ func TestObjectDestructureAssignDefaultRuns(t *testing.T) {
 	if got, want := runProgramGo(t, src), "6\n"; got != want {
 		t.Fatalf("object default assignment printed %q, want %q", got, want)
 	}
+}
+
+// TestObjectDestructureAssignRenameDefaultRuns proves a renamed target carrying a
+// default in an assignment stores the source property into the renamed existing target
+// and fills the default under that name when the property is undefined.
+func TestObjectDestructureAssignRenameDefaultRuns(t *testing.T) {
+	const src = "const o: { x: number; y?: number } = { x: 1 };\nlet a = 0;\nlet b = 0;\n({ x: a, y: b = 9 } = o);\nconsole.log(a + b);\n"
+	if got, want := runProgramGo(t, src), "10\n"; got != want {
+		t.Fatalf("object rename-default assignment printed %q, want %q", got, want)
+	}
+}
+
+// TestObjectDestructureAssignComputedKeyHandsBack proves a computed key hands back in
+// an assignment, since reading the source by a run-time key needs the dynamic object
+// model of phase 7 rather than a static field selector.
+func TestObjectDestructureAssignComputedKeyHandsBack(t *testing.T) {
+	const src = "const k = \"x\";\nconst o = { x: 1 };\nlet v = 0;\n({ [k]: v } = o);\nconsole.log(v);\n"
+	renderProgramHandBack(t, src)
 }
 
 // TestObjectDestructureAssignRestHandsBack proves a rest property hands back, since

@@ -1398,13 +1398,17 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 			return nil, true, err
 		}
 		prop := r.prog.Text(info.nameNode)
-		name, ok := localName(prop)
+		srcName, ok := localName(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
-		field, ok := exportedField(name)
+		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(info.bindNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "destructured target is not a Go identifier"}
 		}
 		fields[i] = binding{info: info, name: name, field: field, optional: optionalField[prop]}
 	}
@@ -1424,7 +1428,7 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		// never fire, since the property is always present, so it binds the read
 		// directly and the default is dead.
 		if b.info.hasDefault && b.optional {
-			nameGo, err := r.typeExpr(r.prog.TypeAt(b.info.nameNode))
+			nameGo, err := r.typeExpr(r.prog.TypeAt(b.info.bindNode))
 			if err != nil {
 				return nil, true, err
 			}
@@ -1432,7 +1436,7 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 			if err != nil {
 				return nil, true, err
 			}
-			def, err = r.coerceToType(def, b.info.defNode, r.prog.TypeAt(b.info.nameNode))
+			def, err = r.coerceToType(def, b.info.defNode, r.prog.TypeAt(b.info.bindNode))
 			if err != nil {
 				return nil, true, err
 			}
@@ -1860,13 +1864,17 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	names := make([]ast.Expr, 0, len(props))
 	values := make([]ast.Expr, 0, len(props))
 	for _, el := range elems {
-		name, ok := localName(r.prog.Text(el.nameNode))
+		srcName, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
+			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
 		}
-		field, ok := exportedField(name)
+		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(el.bindNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
 		}
 		recv, err := r.lowerExpr(rhs)
 		if err != nil {
@@ -1888,13 +1896,17 @@ func (r *Renderer) objectDestructureAssignDefaults(elems []objectAssignElem, opt
 	out := make([]ast.Stmt, 0, len(elems))
 	for _, el := range elems {
 		prop := r.prog.Text(el.nameNode)
-		name, ok := localName(prop)
+		srcName, ok := localName(prop)
 		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
+			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
 		}
-		field, ok := exportedField(name)
+		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(el.bindNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
 		}
 		recv, err := r.lowerExpr(rhs)
 		if err != nil {
@@ -1906,7 +1918,7 @@ func (r *Renderer) objectDestructureAssignDefaults(elems []objectAssignElem, opt
 			if err != nil {
 				return nil, true, err
 			}
-			def, err = r.coerceToType(def, el.defNode, r.prog.TypeAt(el.nameNode))
+			def, err = r.coerceToType(def, el.defNode, r.prog.TypeAt(el.bindNode))
 			if err != nil {
 				return nil, true, err
 			}

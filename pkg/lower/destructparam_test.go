@@ -93,9 +93,6 @@ console.log(head([10]));
 	}
 }
 
-// TestDestructuredParamRenameHandsBack proves the shapes the shorthand binding does
-// not cover still hand back: a rename in an object pattern and a nested array
-// pattern each name their own later slice rather than emit an unbound read.
 // TestDestructuredParamRestRuns proves an array-pattern parameter with a trailing rest
 // binds the fixed slots by index and gathers the tail into the rest target at body
 // entry.
@@ -127,17 +124,26 @@ func TestDestructuredParamObjectRestHandsBack(t *testing.T) {
 	}
 }
 
-func TestDestructuredParamRenameHandsBack(t *testing.T) {
-	for _, src := range []string{
-		"function f({a: x}: {a: number}): number { return x; }\nf({a: 1});\n",
-		"function f([[a]]: number[][]): number { return a; }\nf([[1]]);\n",
-	} {
-		prog := compile(t, src)
-		r := NewRenderer(prog)
-		_, err := r.RenderProgram(entryFile(t, prog))
-		var nyl *NotYetLowerable
-		if !errors.As(err, &nyl) {
-			t.Fatalf("RenderProgram(%q) err = %v, want a *NotYetLowerable", src, err)
-		}
+// TestDestructuredParamRenameRuns proves a renamed target in an object-pattern
+// parameter binds the renamed name at body entry, reading the source property off the
+// held object into the renamed local.
+func TestDestructuredParamRenameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function f({a: x}: {a: number}): number { return x; }\nconsole.log(f({a: 41}));\n"
+	if got, want := runProgramGo(t, src), "41\n"; got != want {
+		t.Fatalf("object rename parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestDestructuredParamNestedHandsBack proves a nested array pattern in a parameter
+// still hands back, a later slice the shorthand and rename bindings do not cover.
+func TestDestructuredParamNestedHandsBack(t *testing.T) {
+	const src = "function f([[a]]: number[][]): number { return a; }\nf([[1]]);\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
 	}
 }
