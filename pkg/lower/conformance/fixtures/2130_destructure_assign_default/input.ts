@@ -1,0 +1,12 @@
+let a = 0;
+let b = 0;
+const arr: number[] = [7];
+[a = 3, b = 9] = arr;
+console.log(a);
+console.log(b);
+const o: { x: number; y?: number } = { x: 1 };
+let x = 0;
+let y = 0;
+({ x, y = 5 } = o);
+console.log(x);
+console.log(y);
