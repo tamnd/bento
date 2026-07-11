@@ -250,6 +250,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.callOfDynamicStorage(n) {
 		return true
 	}
+	// Object.fromEntries builds a runtime object, a boxed value.Value, even though
+	// the checker types its result as an index-signature object. A binding holds the
+	// box and a member read off it must dispatch through the dynamic Get, so the call
+	// reads as dynamic off its callee rather than its non-any result type.
+	if r.objectFromEntriesCall(n) {
+		return true
+	}
 	// An object rest binding an untyped pattern gathered holds the plain object
 	// ObjectRest built, a boxed value.Value, even though the checker gave it the fixed
 	// shape of the properties the pattern did not name. A property read off it must
@@ -261,6 +268,26 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 		}
 	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
+// objectFromEntriesCall reports whether n is a call to Object.fromEntries, whose
+// runtime result is a boxed value.Value object. The checker types the result as an
+// index-signature object, not any, so isDynamic recognizes the call by shape here to
+// keep the box on the dynamic path, where a member read dispatches through Get and a
+// flow into an any slot is the identity.
+func (r *Renderer) objectFromEntriesCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 {
+		return false
+	}
+	return r.isGlobalRef(parts[0], "Object") && r.prog.Text(parts[1]) == "fromEntries"
 }
 
 // callOfDynamicStorage reports whether n is a call whose callee is a bare

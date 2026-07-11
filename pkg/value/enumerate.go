@@ -41,3 +41,19 @@ func (v Value) Assign(sources ...Value) Value {
 	}
 	return v
 }
+
+// FromEntries builds a fresh object from an iterable of key-value pairs, the
+// runtime behind Object.fromEntries(iterable). Each entry is read for its first two
+// elements, the key and the value, and the key is set on the new object through the
+// ordinary property-key coercion, so a later entry with the same key overwrites an
+// earlier one. The entries are taken from the iterable's dense elements, the array
+// form the static covers, so a non-array iterable yields an empty object.
+func FromEntries(iterable Value) Value {
+	out := NewObject()
+	if iterable.kind == KindArray {
+		for _, entry := range iterable.object().elems {
+			out.SetElem(entry.GetIndex(0), entry.GetIndex(1))
+		}
+	}
+	return out
+}

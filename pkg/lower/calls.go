@@ -1426,6 +1426,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectIntegrityUnary("isFrozen", "IsFrozen", argNodes)
 	case "assign":
 		return r.objectAssign(argNodes)
+	case "fromEntries":
+		return r.objectFromEntries(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
@@ -1481,6 +1483,24 @@ func (r *Renderer) objectAssign(argNodes []frontend.Node) (ast.Expr, error) {
 		sources = append(sources, src)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Assign")}, Args: sources}, nil
+}
+
+// objectFromEntries lowers Object.fromEntries(iterable) to a runtime
+// value.FromEntries, which walks the iterable's key-value pairs and sets each onto a
+// fresh object, so a later pair with the same key overwrites an earlier one. The
+// result is always a runtime object, so the iterable is boxed the way any dynamic
+// operand is and no receiver shape is involved. The single operand is evaluated, so
+// no read is dropped.
+func (r *Renderer) objectFromEntries(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.fromEntries with other than one argument is a later slice"}
+	}
+	iterable, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "FromEntries"), Args: []ast.Expr{iterable}}, nil
 }
 
 // objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime
