@@ -194,19 +194,49 @@ func (o *Object) deleteOwn(key BStr) bool {
 	return true
 }
 
-// getOwn returns the value of a named own property, or undefined when the object
-// has no such key, the JavaScript result for a missing property. The value comes
-// through the property's descriptor, so a data property reports its stored value
-// and an accessor property runs its getter with recv as the receiver. The lookup
-// is a linear scan of the ordered keys, which the shape machinery will later
-// replace with a shape check and an index.
-func (o *Object) getOwn(recv Value, key BStr) Value {
-	for i := range o.keys {
-		if o.keys[i].Equal(key) {
-			return o.descs[i].read(recv)
+// getChained resolves a named property by walking the prototype chain: it returns
+// the own value when the key is present, else climbs to the prototype and repeats,
+// so a read finds an inherited property the way JavaScript's [[Get]] does. The
+// receiver stays the original object across the climb, so an inherited accessor
+// runs its getter with the right this. A miss at the end of the chain, where the
+// prototype slot is nil, is undefined.
+func (o *Object) getChained(recv Value, key BStr) Value {
+	for cur := o; cur != nil; cur = cur.proto {
+		for i := range cur.keys {
+			if cur.keys[i].Equal(key) {
+				return cur.descs[i].read(recv)
+			}
 		}
 	}
 	return Undefined
+}
+
+// getSymChained is the symbol mirror of getChained: it resolves a symbol-keyed
+// property by identity, climbing the prototype chain on an own miss so an inherited
+// symbol property reads through the same way a string-keyed one does.
+func (o *Object) getSymChained(recv Value, key *Symbol) Value {
+	for cur := o; cur != nil; cur = cur.proto {
+		for i := range cur.symKeys {
+			if cur.symKeys[i] == key {
+				return cur.symDescs[i].read(recv)
+			}
+		}
+	}
+	return Undefined
+}
+
+// hasChained reports whether the object carries key as a named property anywhere on
+// its prototype chain, the existence probe the in operator makes: unlike hasOwn it
+// climbs, so key in child is true when a prototype supplies the key.
+func (o *Object) hasChained(key BStr) bool {
+	for cur := o; cur != nil; cur = cur.proto {
+		for i := range cur.keys {
+			if cur.keys[i].Equal(key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // getOwnDesc returns the descriptor of a named own property and whether the object

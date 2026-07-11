@@ -188,7 +188,7 @@ func (v Value) GetElem(key Value) Value {
 func (v Value) getSymKey(key *Symbol) Value {
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
-		return v.object().getSym(v, key)
+		return v.object().getSymChained(v, key)
 	default:
 		return Undefined
 	}
@@ -327,15 +327,15 @@ func (v Value) Get(key BStr) Value {
 			}
 			return Undefined
 		}
-		return o.getOwn(v, key)
+		return o.getChained(v, key)
 	case KindObject:
-		return v.object().getOwn(v, key)
+		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
 		// name a built-in error constructor carries is the read the caught-error tests
-		// make. A function box with no own properties still answers undefined for a
-		// miss through the same getOwn scan.
-		return v.object().getOwn(v, key)
+		// make. A function box with no own properties still climbs its prototype chain
+		// and answers undefined for a miss at the end of it.
+		return v.object().getChained(v, key)
 	default:
 		return Undefined
 	}
@@ -366,9 +366,9 @@ func (v Value) HasProperty(key BStr) bool {
 		if idx, ok := arrayIndex(name); ok {
 			return idx < len(o.elems)
 		}
-		return o.hasOwn(key)
+		return o.hasChained(key)
 	case KindObject, KindFunc:
-		return v.object().hasOwn(key)
+		return v.object().hasChained(key)
 	default:
 		Throw(NewTypeError(FromGoString("Cannot use 'in' operator to search for '" + name + "' in a non-object")))
 		return false
