@@ -139,6 +139,49 @@ func (v Value) Call(args ...Value) Value {
 	return Undefined
 }
 
+// Delete removes v[key] by the receiver's kind, the runtime behind the delete
+// operator, and reports the boolean delete yields. An array clears a numeric key
+// to a hole rather than shifting the later elements, the way delete a[i] leaves a
+// gap without changing length, and a non-numeric key falls to the named property
+// map an array can still carry. An object and a function drop the own key through
+// deleteOwn. A primitive receiver has no own property this path stores, so there
+// is nothing to remove and the result is true, the value delete gives for a
+// property that is absent. Every property this model creates is configurable, so
+// a removal never fails and the result is always true; a non-configurable
+// property comes only from a descriptor the object model does not build yet.
+func (v Value) Delete(key BStr) bool {
+	switch v.kind {
+	case KindArray:
+		o := v.object()
+		if idx, ok := arrayIndex(key.ToGoString()); ok {
+			if idx >= 0 && idx < len(o.elems) {
+				o.elems[idx] = Undefined
+			}
+			return true
+		}
+		return o.deleteOwn(key)
+	case KindObject, KindFunc:
+		return v.object().deleteOwn(key)
+	default:
+		return true
+	}
+}
+
+// deleteOwn removes a named own property, closing the gap in the parallel key and
+// value slices so the remaining properties keep their insertion order. A key the
+// object does not carry is already absent, so the result is true either way, the
+// boolean the delete operator gives for a configurable or missing property.
+func (o *Object) deleteOwn(key BStr) bool {
+	for i := range o.keys {
+		if o.keys[i].Equal(key) {
+			o.keys = append(o.keys[:i], o.keys[i+1:]...)
+			o.vals = append(o.vals[:i], o.vals[i+1:]...)
+			return true
+		}
+	}
+	return true
+}
+
 // getOwn returns the value of a named own property, or undefined when the object
 // has no such key, the JavaScript result for a missing property. The lookup is a
 // linear scan of the ordered keys, which the shape machinery will later replace
