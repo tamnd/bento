@@ -179,7 +179,10 @@ func encodeBoxedJSON(b *strings.Builder, v Value) {
 		b.WriteByte('{')
 		first := true
 		for i := range o.keys {
-			val := o.vals[i]
+			if !o.descs[i].enumerable {
+				continue
+			}
+			val := o.descs[i].read(v)
 			if jsonUndefinedValue(val) {
 				continue
 			}

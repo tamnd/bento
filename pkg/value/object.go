@@ -17,13 +17,13 @@ import "sort"
 // not go through the property map. One struct backs both so an array can still
 // carry a named property without changing representation.
 type Object struct {
-	kind    Kind      // KindObject or KindArray
-	keys    []BStr    // string property names in insertion order (named properties)
-	vals    []Value   // property values, parallel to keys
-	symKeys []*Symbol // symbol property keys in insertion order, kept apart from string keys
-	symVals []Value   // property values, parallel to symKeys
-	elems   []Value   // dense element storage for an array
-	call    callFn    // the invocable body of a callable, nil for a plain object
+	kind     Kind         // KindObject or KindArray
+	keys     []BStr       // string property names in insertion order (named properties)
+	descs    []descriptor // property descriptors, parallel to keys
+	symKeys  []*Symbol    // symbol property keys in insertion order, kept apart from string keys
+	symDescs []descriptor // symbol property descriptors, parallel to symKeys
+	elems    []Value      // dense element storage for an array
+	call     callFn       // the invocable body of a callable, nil for a plain object
 }
 
 // callFn is the body of a callable function value: it takes its arguments already
@@ -89,12 +89,12 @@ func (v Value) Set(key BStr, val Value) Value {
 	o := v.object()
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
-			o.vals[i] = val
+			o.descs[i] = o.descs[i].write(v, val)
 			return v
 		}
 	}
 	o.keys = append(o.keys, key)
-	o.vals = append(o.vals, val)
+	o.descs = append(o.descs, defaultDataProperty(val))
 	return v
 }
 
@@ -179,7 +179,7 @@ func (o *Object) deleteOwn(key BStr) bool {
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
 			o.keys = append(o.keys[:i], o.keys[i+1:]...)
-			o.vals = append(o.vals[:i], o.vals[i+1:]...)
+			o.descs = append(o.descs[:i], o.descs[i+1:]...)
 			return true
 		}
 	}
@@ -187,16 +187,30 @@ func (o *Object) deleteOwn(key BStr) bool {
 }
 
 // getOwn returns the value of a named own property, or undefined when the object
-// has no such key, the JavaScript result for a missing property. The lookup is a
-// linear scan of the ordered keys, which the shape machinery will later replace
-// with a shape check and an index.
-func (o *Object) getOwn(key BStr) Value {
+// has no such key, the JavaScript result for a missing property. The value comes
+// through the property's descriptor, so a data property reports its stored value
+// and an accessor property runs its getter with recv as the receiver. The lookup
+// is a linear scan of the ordered keys, which the shape machinery will later
+// replace with a shape check and an index.
+func (o *Object) getOwn(recv Value, key BStr) Value {
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
-			return o.vals[i]
+			return o.descs[i].read(recv)
 		}
 	}
 	return Undefined
+}
+
+// getOwnDesc returns the descriptor of a named own property and whether the object
+// carries it, the raw read Object.defineProperty and Object.getOwnPropertyDescriptor
+// build on, distinct from getOwn which resolves the descriptor to a value.
+func (o *Object) getOwnDesc(key BStr) (descriptor, bool) {
+	for i := range o.keys {
+		if o.keys[i].Equal(key) {
+			return o.descs[i], true
+		}
+	}
+	return descriptor{}, false
 }
 
 // hasOwn reports whether the object carries key as an own named property, the
@@ -217,23 +231,23 @@ func (o *Object) hasOwn(key BStr) bool {
 // with another symbol of the same description. A key already present is
 // overwritten in place; a new key appends, keeping the symbol properties in
 // insertion order the way the spec enumerates them after the string keys.
-func (o *Object) setSym(key *Symbol, val Value) {
+func (o *Object) setSym(recv Value, key *Symbol, val Value) {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
-			o.symVals[i] = val
+			o.symDescs[i] = o.symDescs[i].write(recv, val)
 			return
 		}
 	}
 	o.symKeys = append(o.symKeys, key)
-	o.symVals = append(o.symVals, val)
+	o.symDescs = append(o.symDescs, defaultDataProperty(val))
 }
 
 // getSym returns the value of a symbol-keyed own property, or undefined when the
 // object carries no such symbol, the JavaScript result for a missing property.
-func (o *Object) getSym(key *Symbol) Value {
+func (o *Object) getSym(recv Value, key *Symbol) Value {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
-			return o.symVals[i]
+			return o.symDescs[i].read(recv)
 		}
 	}
 	return Undefined
@@ -259,7 +273,7 @@ func (o *Object) deleteSym(key *Symbol) bool {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
 			o.symKeys = append(o.symKeys[:i], o.symKeys[i+1:]...)
-			o.symVals = append(o.symVals[:i], o.symVals[i+1:]...)
+			o.symDescs = append(o.symDescs[:i], o.symDescs[i+1:]...)
 			return true
 		}
 	}
