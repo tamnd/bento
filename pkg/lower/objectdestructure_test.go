@@ -173,6 +173,22 @@ console.log(d);
 	}
 }
 
+// TestObjectMemberTargetAssignmentRuns proves an object destructuring assignment that
+// renames a source property onto a member target stores the property into the object
+// field, reading the source property and landing it in the existing field.
+func TestObjectMemberTargetAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o = { a: 0 };
+const s = { a: 5 };
+({ a: o.a } = s);
+console.log(o.a);
+`
+	if got, want := runProgramGo(t, src), "5\n"; got != want {
+		t.Fatalf("object member-target assignment printed %q, want %q", got, want)
+	}
+}
+
 // TestObjectDestructureDefaultRuns proves a property default lowers: the missing
 // optional property takes the default while the present one keeps its value.
 func TestObjectDestructureDefaultRuns(t *testing.T) {
@@ -253,5 +269,32 @@ console.log(y);
 `
 	if got, want := runProgramGo(t, src), "10\n20\n"; got != want {
 		t.Fatalf("call-source object destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestObjectDestructureMemberSourceRuns builds and runs a member-source object
+// destructure so the held-once temporary is proven to feed the property reads,
+// extending the call-source case in #258 to a property access.
+func TestObjectDestructureMemberSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o = { pt: { x: 5, y: 6 } };\nconst { x, y } = o.pt;\nconsole.log(x + y);\n"
+	if got, want := runProgramGo(t, src), "11\n"; got != want {
+		t.Fatalf("member-source object destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestObjectDestructureCallSourceEvaluatesOnce builds and runs a call-source object
+// destructure whose source increments a counter, so the held-once temporary is proven
+// to run the call a single time rather than once per bound property.
+func TestObjectDestructureCallSourceEvaluatesOnce(t *testing.T) {
+	skipIfShort(t)
+	const src = `let calls = 0;
+function make(): { x: number; y: number } { calls += 1; return { x: 5, y: 6 }; }
+const { x, y } = make();
+console.log(x + y);
+console.log(calls);
+`
+	if got, want := runProgramGo(t, src), "11\n1\n"; got != want {
+		t.Fatalf("call-source object destructure printed %q, want %q (source should run once)", got, want)
 	}
 }
