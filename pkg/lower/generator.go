@@ -100,8 +100,14 @@ func (r *Renderer) generatorYieldType(block frontend.Node) (frontend.Type, ast.E
 			// yield* delegates to a sub-iterable, whose element type joins the channel's
 			// Y since every value the delegate yields flows out through this generator. A
 			// generator delegate reports its Y the same way a Generator-typed slot does;
-			// a non-generator iterable has no such element type here and is a later slice.
-			elem, ok := r.generatorElemType(r.prog.TypeAt(kids[len(kids)-1]))
+			// inside an async generator the delegate is an async generator, whose element
+			// type reads off its own AsyncGenerator symbol. A delegate that is neither has
+			// no such element type here and is a later slice.
+			delegateT := r.prog.TypeAt(kids[len(kids)-1])
+			elem, ok := r.generatorElemType(delegateT)
+			if !ok && r.inAsyncGen {
+				elem, ok = r.asyncGeneratorElemType(delegateT)
+			}
 			if !ok {
 				return frontend.Type{}, nil, &NotYetLowerable{Reason: "a yield* over a non-generator iterable is a later slice"}
 			}
@@ -371,7 +377,27 @@ func (r *Renderer) yieldExpr(n frontend.Node) (ast.Expr, error) {
 // coercion. Only a generator delegate is lowerable; a non-generator iterable is a later
 // slice, the same reason generatorYieldType reports for the element type.
 func (r *Renderer) yieldStar(delegate frontend.Node) (ast.Expr, error) {
-	if _, ok := r.generatorElemType(r.prog.TypeAt(delegate)); !ok {
+	delegateT := r.prog.TypeAt(delegate)
+	// Inside an async generator the delegate is another async generator: pulling it awaits
+	// each of its pulls, so YieldFrom takes the boxer that lifts the delegate's yield into
+	// the value.Value the awaited pull carries, the async mirror of the plain delegate drive.
+	if r.inAsyncGen {
+		elem, ok := r.asyncGeneratorElemType(delegateT)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a yield* over a non-async-generator iterable is a later slice"}
+		}
+		sub, err := r.lowerExpr(delegate)
+		if err != nil {
+			return nil, err
+		}
+		boxer, err := r.genElemBoxer(elem)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("YieldFrom")}, Args: []ast.Expr{sub, boxer}}, nil
+	}
+	if _, ok := r.generatorElemType(delegateT); !ok {
 		return nil, &NotYetLowerable{Reason: "a yield* over a non-generator iterable is a later slice"}
 	}
 	sub, err := r.lowerExpr(delegate)

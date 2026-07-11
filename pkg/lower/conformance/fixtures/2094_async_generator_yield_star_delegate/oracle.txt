@@ -1,0 +1,9 @@
+== stdout:
+sync
+v:0
+v:1
+v:2
+delegate returned:99
+v:3
+== exit:
+0

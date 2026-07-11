@@ -53,6 +53,13 @@ func (r *Renderer) asyncGeneratorCoroutine(fn frontend.Node) (yieldGo ast.Expr, 
 	if !ok {
 		return nil, nil, &NotYetLowerable{Reason: "an async generator without a body is a later slice"}
 	}
+	// inAsyncGen is set for the whole build, not just the body lowering, so the element-type
+	// scan already reads a yield* delegate as an async generator: its delegate carries an
+	// AsyncGenerator symbol rather than a Generator one, which generatorYieldType only
+	// consults under this flag.
+	prevInAG := r.inAsyncGen
+	r.inAsyncGen = true
+	defer func() { r.inAsyncGen = prevInAG }()
 	elemType, elemGo, err := r.generatorYieldType(block)
 	if err != nil {
 		return nil, nil, err
@@ -75,10 +82,10 @@ func (r *Renderer) asyncGeneratorCoroutine(fn frontend.Node) (yieldGo ast.Expr, 
 	defer func() { r.dynLocals = prevDyn }()
 
 	coName := r.freshTemp()
-	prevCo, prevYT, prevAsync, prevInAG := r.genCo, r.genYieldType, r.asyncCo, r.inAsyncGen
-	r.genCo, r.genYieldType, r.asyncCo, r.inAsyncGen = coName, elemType, coName, true
+	prevCo, prevYT, prevAsync := r.genCo, r.genYieldType, r.asyncCo
+	r.genCo, r.genYieldType, r.asyncCo = coName, elemType, coName
 	defer func() {
-		r.genCo, r.genYieldType, r.asyncCo, r.inAsyncGen = prevCo, prevYT, prevAsync, prevInAG
+		r.genCo, r.genYieldType, r.asyncCo = prevCo, prevYT, prevAsync
 	}()
 
 	body, err := r.blockOf(fn)

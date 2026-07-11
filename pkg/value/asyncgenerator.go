@@ -29,13 +29,17 @@ const (
 // asyncGenFrame is one message the body sends its driver when it parks. kind selects why
 // it parked: a yield carries the value, an await carries a subscriber that registers the
 // body's resume on the awaited promise, a completion carries the return value, and an
-// escaped throw carries the thrown value the driver rejects the pull with.
+// escaped throw carries the thrown value the driver rejects the pull with. A yield* over a
+// delegate re-yields a value already boxed by the delegate's own pull, so a yield frame can
+// carry that boxed value directly rather than a typed one, which boxed marks.
 type asyncGenFrame[Y any] struct {
-	kind    int
-	value   Y
-	ret     Value
-	awaited func(func(settled any, thrown Thrown, isThrow bool))
-	thrown  Thrown
+	kind     int
+	value    Y
+	boxed    bool
+	boxedVal Value
+	ret      Value
+	awaited  func(func(settled any, thrown Thrown, isThrow bool))
+	thrown   Thrown
 }
 
 // The resume kinds a driver sends the parked body: a plain next(v) that resumes a yield
@@ -159,7 +163,11 @@ func (g *AsyncGen[Y]) drive(p *Promise[IterResult], box func(Y) Value, sig async
 	f := g.step(sig)
 	switch f.kind {
 	case asyncGenYield:
-		p.fulfill(IterResult{Value: box(f.value), Done: false})
+		v := box(f.value)
+		if f.boxed {
+			v = f.boxedVal
+		}
+		p.fulfill(IterResult{Value: v, Done: false})
 	case asyncGenDone:
 		g.done = true
 		p.fulfill(IterResult{Value: f.ret, Done: true})
@@ -187,6 +195,43 @@ func (co *AsyncGenCo[Y]) Yield(v Y) Value {
 		panic(sig.thrown)
 	}
 	return sig.sent
+}
+
+// YieldBoxed sends an already-boxed value to the driver rather than a typed Y, then blocks
+// for the resume the way Yield does. A yield* over an async delegate pulls each value
+// through the delegate's own Next, which returns it boxed in an IterResult, so re-yielding
+// it through Yield would box it a second time; YieldBoxed carries the boxed value straight
+// to the driver, which fulfills the outer pull with it. The resume handling matches Yield:
+// a return unwinds the body, a throw raises at the yield, and a next resumes with its value.
+func (co *AsyncGenCo[Y]) YieldBoxed(v Value) Value {
+	co.out <- asyncGenFrame[Y]{kind: asyncGenYield, boxed: true, boxedVal: v}
+	sig := <-co.in
+	switch sig.kind {
+	case asyncGenResumeReturn:
+		panic(genAbort{ret: sig.ret})
+	case asyncGenResumeThrow:
+		panic(sig.thrown)
+	}
+	return sig.sent
+}
+
+// YieldFrom delegates a yield* to another async generator: it pulls sub one value at a
+// time, awaiting each pull, and re-yields every value the delegate produces until the
+// delegate completes, then returns the delegate's completion value as the value of the
+// yield* expression. Awaiting each sub.Next parks the outer body the same await path a
+// plain await takes, so the outer generator's own driver stays suspended while the delegate
+// runs, and the delegate's yields flow through the outer pull one at a time in order. The
+// box closure lifts the delegate's yield type into a value.Value for its own pulls; the
+// re-yield uses YieldBoxed since that pull already boxed the value.
+func (co *AsyncGenCo[Y]) YieldFrom(sub *AsyncGen[Y], box func(Y) Value) Value {
+	sent := Undefined
+	for {
+		res := AsyncGenAwait(co, sub.Next(sent, box))
+		if res.Done {
+			return res.Value
+		}
+		sent = co.YieldBoxed(res.Value)
+	}
 }
 
 // promiseSettle erases a promise's element type into the subscriber an await frame
