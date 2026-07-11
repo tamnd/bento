@@ -651,6 +651,14 @@ func (r *Renderer) checkBaseClashes(info *classInfo) error {
 			if o.kind == "method" && their.kind == "method" && o.prop == their.prop {
 				continue // an override, recorded by recordOverrides below
 			}
+			if o.kind == "accessor" && their.kind == "accessor" && o.prop == their.prop {
+				// A derived accessor overriding a same-named base accessor would need a
+				// virtual accessor slot so a base-typed read of the property reaches the
+				// override, the vtable machinery methods have and accessors do not yet;
+				// until that lands the override hands back rather than dispatch statically
+				// to the base accessor and read the wrong value through a base reference.
+				return &NotYetLowerable{Reason: "class " + info.name + "'s " + o.desc + " overrides base class " + b.name + "'s " + their.desc + "; a virtual accessor override is a later slice"}
+			}
 			return &NotYetLowerable{Reason: "class " + info.name + "'s " + o.desc + " collides with base class " + b.name + "'s " + their.desc + "; only a method overriding a same-named base method lowers"}
 		}
 		if their, ok := theirs[info.base.goName]; ok {
@@ -1568,6 +1576,21 @@ func (r *Renderer) classReceiver(obj frontend.Node) (*classInfo, bool) {
 	return r.classOfNode(obj)
 }
 
+// superOrReceiver resolves the class a store target's receiver names, treating
+// super as the direct base of the class being lowered. A super member store,
+// super.x = v, targets the base member by name with no virtual dispatch, so it
+// resolves to the base class the way the super read does, while every other
+// receiver defers to classReceiver.
+func (r *Renderer) superOrReceiver(obj frontend.Node) (*classInfo, bool) {
+	if obj.Kind() == frontend.NodeSuperKeyword {
+		if r.curClass == nil || r.curClass.base == nil {
+			return nil, false
+		}
+		return r.curClass.base, true
+	}
+	return r.classReceiver(obj)
+}
+
 // classNameRef resolves an identifier that names a class itself, the A of new
 // A() or of a static access A.total, to the registered class. The identifier's
 // symbol must declare the exact registered declaration, so a nested class that
@@ -1738,7 +1761,7 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		if m.async {
 			fd, err = r.asyncStaticFuncDecl(m)
 		} else {
-			fd, err = r.staticFuncDecl(m)
+			fd, err = r.staticFuncDecl(info, m)
 		}
 		if err != nil {
 			return nil, err
@@ -1750,7 +1773,7 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 	// setter's is the one parameter and a void return, exactly the CX and CSetX
 	// functions a read and a write route to.
 	for _, g := range info.staticGetters {
-		fd, err := r.staticFuncDecl(g)
+		fd, err := r.staticFuncDecl(info, g)
 		if err != nil {
 			return nil, err
 		}
@@ -1769,7 +1792,7 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		out = append(out, fd)
 	}
 	for _, s := range info.staticSetters {
-		fd, err := r.staticFuncDecl(classMethod{prop: s.prop, goName: s.goName, node: s.node})
+		fd, err := r.staticFuncDecl(info, classMethod{prop: s.prop, goName: s.goName, node: s.node})
 		if err != nil {
 			return nil, err
 		}
@@ -2542,7 +2565,7 @@ func (r *Renderer) generatorMethodDecl(info *classInfo, m classMethod) (ast.Decl
 // lowers with no current class and no this name, so a this inside a static
 // body hands back the way it does in a plain function; the class's statics
 // stay reachable because A.total routes through the class name, not this.
-func (r *Renderer) staticFuncDecl(m classMethod) (ast.Decl, error) {
+func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, error) {
 	sig, ok := r.prog.SignatureAt(m.node)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "static method has no call signature"}
@@ -2568,9 +2591,9 @@ func (r *Renderer) staticFuncDecl(m classMethod) (ast.Decl, error) {
 	prevRet := r.retType
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
-	prevClass, prevThis := r.curClass, r.thisName
-	r.curClass, r.thisName = nil, ""
-	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+	prevClass, prevThis, prevStatic := r.curClass, r.thisName, r.staticClass
+	r.curClass, r.thisName, r.staticClass = nil, "", owner
+	defer func() { r.curClass, r.thisName, r.staticClass = prevClass, prevThis, prevStatic }()
 
 	body, err := r.blockOf(m.node)
 	if err != nil {
@@ -3116,7 +3139,7 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 	if !ok {
 		return nil, false, nil
 	}
-	if obj.Kind() != frontend.NodeThisKeyword && obj.Kind() != frontend.NodeIdentifier {
+	if obj.Kind() != frontend.NodeThisKeyword && obj.Kind() != frontend.NodeIdentifier && obj.Kind() != frontend.NodeSuperKeyword {
 		return nil, false, nil
 	}
 	if obj.Kind() == frontend.NodeIdentifier {
@@ -3124,7 +3147,7 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 			return nil, false, nil
 		}
 	}
-	info, ok := r.classReceiver(obj)
+	info, ok := r.superOrReceiver(obj)
 	if !ok {
 		return nil, false, nil
 	}

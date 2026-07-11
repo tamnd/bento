@@ -281,7 +281,7 @@ func TestClassHandsBack(t *testing.T) {
 		{
 			"accessorOverride",
 			"class A { get n(): number { return 1; } }\nclass B extends A { get n(): number { return 2; } }\nconsole.log(new B().n);\n",
-			"only a method overriding a same-named base method",
+			"a virtual accessor override is a later slice",
 		},
 		{
 			"stringifyExtendedClass",
@@ -317,11 +317,6 @@ func TestClassHandsBack(t *testing.T) {
 			"declBeforeSuper",
 			"class A { x: number = 1; }\nclass B extends A { constructor() { const y: number = 2; super(); } }\nconsole.log(new B().x);\n",
 			"variable declaration before super()",
-		},
-		{
-			"superSetterStore",
-			"class A { n: number = 1; set x(v: number) { this.n = v; } }\nclass B extends A { put(v: number): void { super.x = v; } }\nconst b: B = new B();\nb.put(5);\nconsole.log(b.n);\n",
-			"later slice",
 		},
 		{
 			"uninitializedStaticField",
@@ -1462,5 +1457,70 @@ new C();
 `
 	if reason, want := renderProgramHandBack(t, src), "a yield* over a non-generator iterable is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}
+
+// TestSuperSetterStoreRuns pins that a store through a base set accessor spelled
+// with super, super.x = v, routes to the base setter method on the embedded base
+// value the way the super read and super method call do, so the write reaches the
+// base setter with no virtual dispatch.
+func TestSuperSetterStoreRuns(t *testing.T) {
+	const src = `class A {
+  n: number = 1;
+  set x(v: number) { this.n = v; }
+}
+class B extends A {
+  put(v: number): void { super.x = v; }
+}
+const b = new B();
+b.put(5);
+console.log(String(b.n));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "b.A.SetX(") {
+		t.Errorf("super setter store did not route to the base setter:\n%s", source)
+	}
+	if got := runProgramGo(t, src); got != "5\n" {
+		t.Errorf("super setter store ran wrong\n got: %q\nwant: %q", got, "5\n")
+	}
+}
+
+// TestSuperStaticMethodRuns pins that super.m() inside a static method calls the
+// base class's static method, which lowered to a package function, so a static
+// override reaches the base static the way A.m() does rather than through an
+// instance receiver the static body does not have.
+func TestSuperStaticMethodRuns(t *testing.T) {
+	const src = `class A {
+  static make(): number { return 1; }
+}
+class B extends A {
+  static make(): number { return super.make() + 1; }
+}
+console.log(String(B.make()));
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "AMake() + 1") {
+		t.Errorf("super static call did not route to the base static function:\n%s", source)
+	}
+	if got := runProgramGo(t, src); got != "2\n" {
+		t.Errorf("super static method ran wrong\n got: %q\nwant: %q", got, "2\n")
+	}
+}
+
+// TestSuperOverridingAccessorHandsBack pins the boundary: a derived accessor
+// overriding a same-named base accessor needs a virtual accessor slot so a
+// base-typed read reaches the override, machinery only methods have today, so
+// the override hands back rather than dispatch statically to the base accessor.
+func TestSuperOverridingAccessorHandsBack(t *testing.T) {
+	const src = `class A {
+  get v(): number { return 2; }
+}
+class B extends A {
+  get v(): number { return super.v + 3; }
+}
+new B();
+`
+	if reason, want := renderProgramHandBack(t, src), "a virtual accessor override is a later slice"; !strings.Contains(reason, want) {
+		t.Fatalf("handback reason = %q, want it to contain %q", reason, want)
 	}
 }
