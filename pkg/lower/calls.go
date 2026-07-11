@@ -66,6 +66,17 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		return r.methodCall(kids[0], kids[1:])
 	}
+	// A method call spelled with a bracket key, C["m"](...) or c["m"](...), is the
+	// call form a non-identifier or computed method name takes. When the key is a
+	// constant string naming a static or instance method, it routes to the same
+	// static or instance method dispatch the dotted call uses, before the
+	// function-value path below, which would lower the callee as a bare method read
+	// and hand back since a method read as a value is a later slice.
+	if kids[0].Kind() == frontend.NodeElementAccessExpression {
+		if expr, handled, err := r.bracketMethodCall(kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
+	}
 	// A callee that is neither a bare identifier nor a member expression is a
 	// larger expression that evaluates to a function value: an array element
 	// fs[0](x), the result of another call mk(5)(), a parenthesized arrow. It has

@@ -11,6 +11,61 @@ import (
 // This file lowers member access: property reads, element access, and the Math
 // and Number constants a property read can name.
 
+// classKeyRead lowers a read of member prop off a class receiver. A static read
+// off the class name lowers to the package var a static field became or the call
+// a static get accessor became; an instance read off this or a typed instance
+// lowers to the struct-field selector a field became or the accessor-method call
+// a get accessor became. It returns ok=false when obj is not a class receiver, so
+// the caller falls through to its other receiver paths, and a hand-back for a
+// class receiver whose prop only a set accessor serves, names a method read as a
+// value (a bound-function value is a later slice), or names no member this slice
+// reads. A dotted read A.total and a bracket read A["total"] with a constant
+// string key share this, so o.k and o["k"] resolve the same class member.
+func (r *Renderer) classKeyRead(obj frontend.Node, prop string) (ast.Expr, bool, error) {
+	if obj.Kind() == frontend.NodeIdentifier {
+		if info, ok := r.classNameRef(obj); ok {
+			if f, ok := info.staticByName(prop); ok {
+				return ident(f.goName), true, nil
+			}
+			// A read C.x through a static get accessor lowers to the call CX(), the
+			// package function the accessor became, the static twin of an instance
+			// getter read routing to c.X().
+			if g, ok := info.staticGetterByName(prop); ok {
+				return &ast.CallExpr{Fun: ident(g.goName)}, true, nil
+			}
+			if _, isSetter := info.staticSetterByName(prop); isSetter {
+				return nil, true, &NotYetLowerable{Reason: "reading the write-only static accessor ." + prop + " of class " + info.name + " is a later slice"}
+			}
+			if _, isMethod := info.staticMethodByName(prop); isMethod {
+				return nil, true, &NotYetLowerable{Reason: "a static method of class " + info.name + " read as a value is a later slice"}
+			}
+			return nil, true, &NotYetLowerable{Reason: "class " + info.name + " has no static ." + prop + " this slice lowers"}
+		}
+	}
+	if info, ok := r.classReceiver(obj); ok {
+		f, isField := info.lookupField(prop)
+		g, isGetter := info.lookupGetter(prop)
+		if !isField && !isGetter {
+			if _, isMethod := info.lookupMethod(prop); isMethod {
+				return nil, true, &NotYetLowerable{Reason: "a method of class " + info.name + " read as a value is a later slice"}
+			}
+			if _, isSetter := info.lookupSetter(prop); isSetter {
+				return nil, true, &NotYetLowerable{Reason: "reading the write-only accessor ." + prop + " of class " + info.name + " is a later slice"}
+			}
+			return nil, true, &NotYetLowerable{Reason: "class " + info.name + " has no property ." + prop + " this slice lowers"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, true, err
+		}
+		if isGetter {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(g.goName)}}, true, nil
+		}
+		return &ast.SelectorExpr{X: recv, Sel: ident(f.goName)}, true, nil
+	}
+	return nil, false, nil
+}
+
 // propertyAccess lowers a member expression. Two members are covered: .length on
 // a string, which is the code-unit count and lowers to the value.BStr Length
 // method, a float64 that matches the number type the checker gives .length; and a
@@ -136,56 +191,13 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			return nil, &NotYetLowerable{Reason: "an IteratorResult's ." + prop + " is a later slice"}
 		}
 	}
-	// A static read A.total lowers to the package var the static field became.
-	// The receiver here is the class name itself, whose type shares the class
-	// symbol an instance type walks to, so this routes before the instance path
-	// below or the read would resolve against the instance fields.
-	if obj.Kind() == frontend.NodeIdentifier {
-		if info, ok := r.classNameRef(obj); ok {
-			if f, ok := info.staticByName(prop); ok {
-				return ident(f.goName), nil
-			}
-			// A read C.x through a static get accessor lowers to the call CX(), the
-			// package function the accessor became, the static twin of an instance
-			// getter read routing to c.X().
-			if g, ok := info.staticGetterByName(prop); ok {
-				return &ast.CallExpr{Fun: ident(g.goName)}, nil
-			}
-			if _, isSetter := info.staticSetterByName(prop); isSetter {
-				return nil, &NotYetLowerable{Reason: "reading the write-only static accessor ." + prop + " of class " + info.name + " is a later slice"}
-			}
-			if _, isMethod := info.staticMethodByName(prop); isMethod {
-				return nil, &NotYetLowerable{Reason: "a static method of class " + info.name + " read as a value is a later slice"}
-			}
-			return nil, &NotYetLowerable{Reason: "class " + info.name + " has no static ." + prop + " this slice lowers"}
-		}
-	}
-	// A field read on a class instance, this.x inside a class body or p.x on an
-	// instance, lowers to the Go struct field the class declared, and a getter
-	// read to the method call the accessor became. It routes before the length,
-	// size, and interned-shape paths so a class whose fields happen to spell one
-	// of those fingerprints is still read as the class it is. A method read
-	// without a call is a bound-function value, a later slice.
-	if info, ok := r.classReceiver(obj); ok {
-		f, isField := info.lookupField(prop)
-		g, isGetter := info.lookupGetter(prop)
-		if !isField && !isGetter {
-			if _, isMethod := info.lookupMethod(prop); isMethod {
-				return nil, &NotYetLowerable{Reason: "a method of class " + info.name + " read as a value is a later slice"}
-			}
-			if _, isSetter := info.lookupSetter(prop); isSetter {
-				return nil, &NotYetLowerable{Reason: "reading the write-only accessor ." + prop + " of class " + info.name + " is a later slice"}
-			}
-			return nil, &NotYetLowerable{Reason: "class " + info.name + " has no property ." + prop + " this slice lowers"}
-		}
-		recv, err := r.lowerExpr(obj)
-		if err != nil {
-			return nil, err
-		}
-		if isGetter {
-			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(g.goName)}}, nil
-		}
-		return &ast.SelectorExpr{X: recv, Sel: ident(f.goName)}, nil
+	// A read off a class receiver, a static member off the class name or an
+	// instance member off this or a typed instance, routes to the class member
+	// dispatch. It routes before the length, size, and interned-shape paths so a
+	// class whose fields happen to spell one of those fingerprints is still read
+	// as the class it is.
+	if expr, ok, err := r.classKeyRead(obj, prop); err != nil || ok {
+		return expr, err
 	}
 	if r.isString(obj) && prop == "length" {
 		recv, err := r.lowerExpr(obj)
@@ -582,6 +594,18 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.argsObjName), Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
+	}
+	// C["m"] or c["m"] with a constant string key on a class receiver is the bracket
+	// spelling of the dotted member read, the shape a non-identifier or computed
+	// member name (a string method name, a ["m"] accessor, a [k] name whose k is a
+	// const of a literal string type) is read through. It routes to the same class
+	// member dispatch the dotted read uses, before the object-shape path below whose
+	// internStruct would try to derive a struct for the class-constructor type and
+	// hand back.
+	if key, ok := r.constStringKey(idxNode); ok {
+		if expr, ok, err := r.classKeyRead(obj, key); err != nil || ok {
+			return expr, err
+		}
 	}
 	// o["k"] with a string-literal key on a fixed-shape object is the struct-field
 	// read o.k spelled with brackets, so it lowers to the same selector through the
