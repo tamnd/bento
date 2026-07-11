@@ -1,0 +1,8 @@
+== stdout:
+sync
+race:1
+any-name:AggregateError
+any-errors:a,b
+any-ok:5
+== exit:
+0
