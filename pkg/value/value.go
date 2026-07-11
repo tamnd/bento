@@ -172,10 +172,26 @@ func (v Value) GetIndex(i float64) Value {
 // dispatches through Get. A number key round-trips to its canonical string, so a
 // dynamic index reads the same element GetIndex would.
 func (v Value) GetElem(key Value) Value {
+	if key.kind == KindSymbol {
+		return v.getSymKey(key.symbol())
+	}
 	if key.kind == KindString {
 		return v.Get(key.str())
 	}
 	return v.Get(ToString(key))
+}
+
+// getSymKey reads a symbol-keyed property off an object, array, or function
+// receiver, the symbol branch of a dynamic bracket read o[s]. A symbol key never
+// coerces to a string, so it is looked up by identity in the symbol bag; a
+// primitive receiver carries no such property and reads undefined.
+func (v Value) getSymKey(key *Symbol) Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return v.object().getSym(key)
+	default:
+		return Undefined
+	}
 }
 
 // SetIndex writes v[i] = val for a numeric index, the bracket write a[i] = val
@@ -195,10 +211,25 @@ func (v Value) SetIndex(i float64, val Value) Value {
 // then the write dispatches through the same kind-aware path SetIndex uses, so a
 // numeric string key round-trips to the same array element GetIndex would read.
 func (v Value) SetElem(key, val Value) Value {
+	if key.kind == KindSymbol {
+		return v.setSymKey(key.symbol(), val)
+	}
 	if key.kind == KindString {
 		return v.SetKey(key.str(), val)
 	}
 	return v.SetKey(ToString(key), val)
+}
+
+// setSymKey writes a symbol-keyed property onto an object, array, or function
+// receiver, the symbol branch of a dynamic bracket write o[s] = val. It returns
+// val so the write reads as JavaScript's assignment expression; a primitive
+// receiver has no writable symbol storage and drops the write, returning val.
+func (v Value) setSymKey(key *Symbol, val Value) Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		v.object().setSym(key, val)
+	}
+	return val
 }
 
 // DeleteIndex removes v[i] for a numeric index, the delete a[i] takes when the
@@ -216,10 +247,27 @@ func (v Value) DeleteIndex(i float64) bool {
 // ToString, then the removal dispatches through the same kind-aware Delete, so a
 // numeric string key round-trips to the same array element DeleteIndex would.
 func (v Value) DeleteElem(key Value) bool {
+	if key.kind == KindSymbol {
+		return v.deleteSymKey(key.symbol())
+	}
 	if key.kind == KindString {
 		return v.Delete(key.str())
 	}
 	return v.Delete(ToString(key))
+}
+
+// deleteSymKey removes a symbol-keyed property from an object, array, or function
+// receiver, the symbol branch of delete o[s]. Every property this model creates is
+// configurable, so a removal never fails and a primitive receiver has nothing to
+// remove, both reporting true the way delete does for a configurable or absent
+// property.
+func (v Value) deleteSymKey(key *Symbol) bool {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return v.object().deleteSym(key)
+	default:
+		return true
+	}
 }
 
 // MissingProperty is the value of a property read whose receiver's fixed shape
