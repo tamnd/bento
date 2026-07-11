@@ -137,6 +137,13 @@ func (r *Renderer) blockHasAwait(n frontend.Node) bool {
 		return false
 	case frontend.NodeAwaitExpression:
 		return true
+	case frontend.NodeForOfStatement:
+		// A for await...of awaits each result even though its await is a token on the
+		// loop rather than an await expression, so a body that contains one suspends and
+		// takes the coroutine path the same as an explicit await.
+		if r.isForAwait(n) {
+			return true
+		}
 	}
 	for _, k := range r.prog.Children(n) {
 		if r.blockHasAwait(k) {
@@ -237,13 +244,22 @@ func (r *Renderer) awaitExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	operand := kids[len(kids)-1]
 	opType := r.prog.TypeAt(operand)
+	// An await inside an async generator parks that generator's driver rather than a plain
+	// async body's, so it routes to the AsyncGen await helpers, which share the coroutine
+	// handle the body also yields on. Everything else about the await is the same: a promise
+	// operand awaits directly, a definite non-thenable wraps and awaits, and the rest hands
+	// back at the same boundary.
+	awaitFn, awaitValueFn := "Await", "AwaitValue"
+	if r.inAsyncGen {
+		awaitFn, awaitValueFn = "AsyncGenAwait", "AsyncGenAwaitValue"
+	}
 	if _, ok := r.promiseElem(opType); ok {
 		p, err := r.lowerExpr(operand)
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "Await"), Args: []ast.Expr{ident(r.asyncCo), p}}, nil
+		return &ast.CallExpr{Fun: sel("value", awaitFn), Args: []ast.Expr{ident(r.asyncCo), p}}, nil
 	}
 	if !r.isDefiniteNonThenable(opType) {
 		return nil, &NotYetLowerable{Reason: "an await on a possibly-thenable or dynamic value is a later slice"}
@@ -260,7 +276,7 @@ func (r *Renderer) awaitExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: index(sel("value", "AwaitValue"), et), Args: []ast.Expr{ident(r.asyncCo), v}}, nil
+	return &ast.CallExpr{Fun: index(sel("value", awaitValueFn), et), Args: []ast.Expr{ident(r.asyncCo), v}}, nil
 }
 
 // isDefiniteNonThenable reports whether t is a value that certainly carries no then

@@ -54,12 +54,43 @@ type iteratorShape struct {
 	returnName string
 }
 
+// symbolAsyncIteratorGoName is the Go method name a [Symbol.asyncIterator] member
+// lowers to, the name for await...of calls to obtain the async iterator. Like the
+// sync SymbolIterator it is fixed so the loop can name it without threading the class
+// through.
+const symbolAsyncIteratorGoName = "SymbolAsyncIterator"
+
+// symbolAsyncIteratorProp is the sentinel property key the [Symbol.asyncIterator]
+// method carries in the member map, the async mirror of symbolIteratorProp.
+const symbolAsyncIteratorProp = "[Symbol.asyncIterator]"
+
+// symbolAsyncIteratorMemberPrefix is the mangled property-name prefix the checker
+// gives a [Symbol.asyncIterator] member: the internal-symbol prefix byte, then
+// @asyncIterator, then a per-symbol id the prefix match skips over. It never
+// collides with the sync @iterator prefix, which differs from its third byte on.
+const symbolAsyncIteratorMemberPrefix = "\xFE@asyncIterator"
+
 // isSymbolIteratorName reports whether a class member name node is the well-known
 // [Symbol.iterator] computed name, the key an iterable class defines its iterator
 // factory under. The parser surfaces it as an unnamed node wrapping the property
 // access Symbol.iterator, so it is told apart from a [expr] or a ["str"] computed
 // name by that exact shape.
 func (r *Renderer) isSymbolIteratorName(nameNode frontend.Node) bool {
+	return r.isSymbolMemberName(nameNode, "iterator")
+}
+
+// isSymbolAsyncIteratorName reports whether a class member name node is the
+// well-known [Symbol.asyncIterator] computed name, the key an async iterable class
+// defines its async iterator factory under. It reads the same unnamed-node-wrapping
+// -a-property-access shape isSymbolIteratorName matches, but for Symbol.asyncIterator.
+func (r *Renderer) isSymbolAsyncIteratorName(nameNode frontend.Node) bool {
+	return r.isSymbolMemberName(nameNode, "asyncIterator")
+}
+
+// isSymbolMemberName reports whether a class member name node is the well-known
+// computed name Symbol.<member>, the shared shape check the sync and async iterator
+// name matchers use: an unnamed node wrapping a Symbol.<member> property access.
+func (r *Renderer) isSymbolMemberName(nameNode frontend.Node, member string) bool {
 	if nameNode.Kind() != frontend.NodeUnknown {
 		return false
 	}
@@ -68,7 +99,7 @@ func (r *Renderer) isSymbolIteratorName(nameNode frontend.Node) bool {
 		return false
 	}
 	pa := r.prog.Children(kids[0])
-	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "iterator"
+	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == member
 }
 
 // isSymbolIteratorExpr reports whether an expression node is the well-known
@@ -83,6 +114,18 @@ func (r *Renderer) isSymbolIteratorExpr(node frontend.Node) bool {
 	}
 	pa := r.prog.Children(node)
 	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "iterator"
+}
+
+// isSymbolAsyncIteratorExpr reports whether an expression node is the well-known
+// Symbol.asyncIterator property access, the key a manual `obj[Symbol.asyncIterator]()`
+// reference reads the async iterator factory through, the async mirror of
+// isSymbolIteratorExpr.
+func (r *Renderer) isSymbolAsyncIteratorExpr(node frontend.Node) bool {
+	if node.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	pa := r.prog.Children(node)
+	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "asyncIterator"
 }
 
 // memberByPrefix returns the first property of a type whose name starts with the
@@ -174,6 +217,278 @@ func (r *Renderer) symbolIteratorShape(t frontend.Type) (iteratorShape, bool) {
 		}
 	}
 	return shape, true
+}
+
+// asyncIteratorShape returns how a type drives the async iterator protocol, or false
+// when it does not. It is the async mirror of symbolIteratorShape: it navigates the
+// [Symbol.asyncIterator] member to its iterator type, the iterator's next() to the
+// promise it returns, and through that promise to the awaited { value, done } result.
+// The one extra step over the sync path is the promiseElem unwrap: an async iterator's
+// next() returns Promise<{ value, done }>, so the result the loop reads is what awaiting
+// that promise yields. The path is taken only when the iterator is a user type bento
+// lowers to a struct with Go Next and (optionally) Return methods, not a built-in async
+// generator closure, and only when the result's done is a Go bool the loop breaks on.
+func (r *Renderer) asyncIteratorShape(t frontend.Type) (iteratorShape, bool) {
+	iterMethod, ok := r.memberByPrefix(t, symbolAsyncIteratorMemberPrefix)
+	if !ok {
+		return iteratorShape{}, false
+	}
+	call, _ := r.prog.Signatures(iterMethod.Type)
+	if len(call) == 0 {
+		return iteratorShape{}, false
+	}
+	iterType := call[0].Return
+	if sym, ok := r.prog.TypeSymbol(iterType); ok && builtinIteratorTypeNames[sym.Name] {
+		return iteratorShape{}, false
+	}
+	next, ok := r.memberByName(iterType, "next")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	nextCall, _ := r.prog.Signatures(next.Type)
+	if len(nextCall) == 0 {
+		return iteratorShape{}, false
+	}
+	result, ok := r.promiseElem(nextCall[0].Return)
+	if !ok {
+		return iteratorShape{}, false
+	}
+	valueProp, ok := r.memberByName(result, "value")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	doneProp, ok := r.memberByName(result, "done")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	if r.primitiveFlagsOfType(doneProp.Type)&frontend.TypeBoolean == 0 {
+		return iteratorShape{}, false
+	}
+	valueName, ok := exportedField("value")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	doneName, ok := exportedField("done")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	shape := iteratorShape{elem: valueProp.Type, valueName: valueName, doneName: doneName}
+	// An async iterator may define an optional return(), which for await...of awaits to
+	// close it on an early exit, the same close the sync path records for the sync loop.
+	if _, ok := r.memberByName(iterType, "return"); ok {
+		if name, ok := exportedField("return"); ok {
+			shape.returnName = name
+		}
+	}
+	return shape, true
+}
+
+// isForAwait reports whether a for...of node is a for await...of: the parser leads such
+// a loop with an await token before the loop binding, giving it a fourth child the plain
+// for...of lacks. It is read both to route the statement to the async path and to mark an
+// enclosing async body as suspending.
+func (r *Renderer) isForAwait(n frontend.Node) bool {
+	kids := r.prog.Children(n)
+	return len(kids) == 4 && kids[0].Kind() == frontend.NodeUnknown &&
+		strings.TrimSpace(r.prog.Text(kids[0])) == "await"
+}
+
+// lowerForAwaitOf lowers a for await...of loop, the async iteration statement that
+// awaits each result before the body runs. It resolves the loop binding the way
+// lowerForOf does, then dispatches on the iterable: a user async iterable, a class that
+// defines [Symbol.asyncIterator], is driven through the async iterator protocol. The
+// loop must sit inside a lowered async body, whose coroutine handle each await parks on;
+// a for await outside one, or over an iterable this slice does not yet drive, hands back.
+func (r *Renderer) lowerForAwaitOf(declNode, iterable, bodyNode frontend.Node) (ast.Stmt, error) {
+	if r.asyncCo == "" {
+		return nil, &NotYetLowerable{Reason: "a for await...of outside a lowered async body is a later slice"}
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, declNode, &decls)
+	if len(decls) != 1 {
+		return nil, &NotYetLowerable{Reason: "for await...of with other than a single loop binding is a later slice"}
+	}
+	dkids := r.prog.Children(decls[0])
+	if len(dkids) != 1 || dkids[0].Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "for await...of with a destructuring or annotated loop variable is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(dkids[0]))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "for await...of loop variable is not a Go identifier"}
+	}
+	if shape, ok := r.asyncIteratorShape(r.prog.TypeAt(iterable)); ok {
+		return r.forAwaitOfIterator(iterable, dkids[0], name, bodyNode, shape)
+	}
+	// A source with no [Symbol.asyncIterator] falls back to its sync iterator and awaits
+	// each value it yields, the spec's rule for for await over a sync iterable. An array
+	// is the common such source, ranged over its backing slice with each element awaited.
+	if elemT, ok := r.prog.ElementType(r.prog.TypeAt(iterable)); ok {
+		return r.forAwaitOfSyncArray(iterable, dkids[0], name, bodyNode, elemT)
+	}
+	return nil, &NotYetLowerable{Reason: "for await...of over this iterable is a later slice"}
+}
+
+// forAwaitOfSyncArray lowers a for await...of over an array, the fallback the spec takes
+// when the source has no [Symbol.asyncIterator]: it ranges the backing slice and awaits
+// each element before the body runs, so an array of promises binds each fulfilled value
+// and an array of plain values binds each after the one-turn delay await imposes. The
+// await form follows the element type: a promise element is awaited to its inner value,
+// a plain non-thenable element is wrapped and awaited to itself. An element that might be
+// a thenable or is dynamic hands back, the same boundary awaitExpr draws. An element the
+// body never reads is still awaited, for the ordering and side effects for await fixes.
+func (r *Renderer) forAwaitOfSyncArray(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node, elemT frontend.Type) (ast.Stmt, error) {
+	var awaitFn string
+	switch {
+	case r.isPromiseElem(elemT):
+		awaitFn = "Await"
+	case r.isDefiniteNonThenable(elemT):
+		awaitFn = "AwaitValue"
+	default:
+		return nil, &NotYetLowerable{Reason: "for await...of over a sync iterable whose element may be a thenable or is dynamic is a later slice"}
+	}
+	src, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	elemName := r.freshTemp()
+	awaitCall := &ast.CallExpr{
+		Fun:  sel("value", awaitFn),
+		Args: []ast.Expr{ident(r.asyncCo), ident(elemName)},
+	}
+	var loopStmts []ast.Stmt
+	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
+		loopStmts = append(loopStmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{awaitCall}})
+	} else {
+		// The value is unused, but for await still awaits each element, so the await runs
+		// as an expression statement that discards its result rather than binding it.
+		loopStmts = append(loopStmts, &ast.ExprStmt{X: awaitCall})
+	}
+	loopStmts = append(loopStmts, body.List...)
+	return &ast.RangeStmt{
+		Key:   ident("_"),
+		Value: ident(elemName),
+		Tok:   token.DEFINE,
+		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Elems")}},
+		Body:  &ast.BlockStmt{List: loopStmts},
+	}, nil
+}
+
+// isPromiseElem reports whether t is a Promise, the element form for await awaits
+// directly rather than wrapping. It is the promiseElem probe read as a bool, the same
+// judgment awaitExpr makes to route an awaited operand to value.Await.
+func (r *Renderer) isPromiseElem(t frontend.Type) bool {
+	_, ok := r.promiseElem(t)
+	return ok
+}
+
+// forAwaitOfIterator lowers a for await...of over a user async iterable through the
+// async iterator protocol: obtain the async iterator once, then each turn await the
+// promise next() returns, stop when the settled result is done, and bind its value. It
+// is the async mirror of forOfIterator, the same pull-until-done loop but with each
+// pull wrapped in value.Await on the enclosing async body's coroutine handle, so the
+// loop parks until the result settles before the body runs. The iterator is obtained
+// once up front, so a second for await over the same source gets its own fresh iterator,
+// matching the protocol. A binding the body never reads is not bound, since Go rejects
+// an unused variable.
+func (r *Renderer) forAwaitOfIterator(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node, shape iteratorShape) (ast.Stmt, error) {
+	src, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	nextName, ok := exportedField("next")
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "an async iterator whose next is not a Go method name is a later slice"}
+	}
+	// An async iterator that defines return() is closed when the loop exits early, and the
+	// close is awaited since return() returns a promise. The close is reached only through
+	// an unlabeled break, which falls through to the after-loop `if broke`; a body that can
+	// leave the loop another way, a return, a throw, or a labeled branch, would jump past
+	// that close, so it hands back rather than leave the iterator unclosed, the same
+	// boundary the sync forOfIterator draws.
+	closes := shape.returnName != ""
+	if closes && r.forOfBodyBypassesClose(bodyNode) {
+		return nil, &NotYetLowerable{Reason: "async iterator close on a return, throw, or labeled exit from for await...of is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	itName := r.freshTemp()
+	resName := r.freshTemp()
+	getIter := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(itName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident(symbolAsyncIteratorGoName)}}},
+	}
+	// Each turn awaits the promise next() returns, parking the loop on the coroutine
+	// handle until the result settles, then reads done and value off the { value, done }
+	// result the await yields.
+	pull := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(resName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.CallExpr{
+			Fun: sel("value", "Await"),
+			Args: []ast.Expr{
+				ident(r.asyncCo),
+				&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(itName), Sel: ident(nextName)}},
+			},
+		}},
+	}
+	block := []ast.Stmt{getIter}
+	// A `broke` flag, set on entry and cleared on the done branch, tells the after-loop
+	// close whether the loop ran to completion (done, no close) or broke out early (close).
+	doneStmts := []ast.Stmt{}
+	var brokeName string
+	if closes {
+		brokeName = r.freshTemp()
+		block = append(block, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(brokeName)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{ident("true")},
+		})
+		doneStmts = append(doneStmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(brokeName)},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{ident("false")},
+		})
+	}
+	doneStmts = append(doneStmts, &ast.BranchStmt{Tok: token.BREAK})
+	brk := &ast.IfStmt{
+		Cond: &ast.SelectorExpr{X: ident(resName), Sel: ident(shape.doneName)},
+		Body: &ast.BlockStmt{List: doneStmts},
+	}
+	loopStmts := []ast.Stmt{pull, brk}
+	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
+		loopStmts = append(loopStmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(resName), Sel: ident(shape.valueName)}},
+		})
+	}
+	loopStmts = append(loopStmts, body.List...)
+	block = append(block, &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}})
+	// The early-exit close awaits the promise return() hands back, parking the loop's async
+	// body until the iterator finishes closing, the async mirror of the sync path's bare
+	// it.Return() call.
+	if closes {
+		block = append(block, &ast.IfStmt{
+			Cond: ident(brokeName),
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: sel("value", "Await"),
+				Args: []ast.Expr{
+					ident(r.asyncCo),
+					&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(itName), Sel: ident(shape.returnName)}},
+				},
+			}}}},
+		})
+	}
+	return &ast.BlockStmt{List: block}, nil
 }
 
 // forOfBodyBypassesClose reports whether a for...of body contains a completion

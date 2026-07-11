@@ -1091,6 +1091,13 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 		// ordinary [expr] name would hand back.
 		prop = symbolIteratorProp
 		goName = symbolIteratorGoName
+	} else if r.isSymbolAsyncIteratorName(kids[0]) {
+		// A [Symbol.asyncIterator] member is the async iterable protocol's entry
+		// point: it lowers to a Go method under the fixed name the for await...of
+		// lowering calls to obtain the async iterator, the async mirror of the
+		// [Symbol.iterator] case.
+		prop = symbolAsyncIteratorProp
+		goName = symbolAsyncIteratorGoName
 	} else {
 		prop, ok = r.memberName(kids[0])
 		if !ok {

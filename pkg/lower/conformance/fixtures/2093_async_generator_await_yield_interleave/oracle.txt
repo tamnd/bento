@@ -1,0 +1,9 @@
+== stdout:
+sync
+acc:1
+acc:3
+acc:6
+acc:10
+final:10
+== exit:
+0
