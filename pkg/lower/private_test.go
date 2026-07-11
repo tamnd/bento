@@ -98,16 +98,6 @@ func TestPrivateHandsBack(t *testing.T) {
 			"class C { static #x: number = 1; }\nnew C();\n",
 			"a private static field is a later slice",
 		},
-		{
-			"privateGetter",
-			"class C { get #x(): number { return 1; } }\nnew C();\n",
-			"a private get accessor is a later slice",
-		},
-		{
-			"privateSetter",
-			"class C { set #x(v: number) { } }\nnew C();\n",
-			"a private set accessor is a later slice",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
