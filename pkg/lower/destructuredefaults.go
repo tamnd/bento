@@ -112,17 +112,23 @@ func (r *Renderer) classifyArrayAssignElem(tgt frontend.Node) (arrayAssignElem, 
 
 // objectAssignElem describes one target of an object destructuring assignment,
 // `({x, y = d} = o)`. A plain shorthand property has a single identifier child; a
-// defaulted shorthand has the identifier, an `=` separator, and the default.
+// rename ({x: a}) has the source property and the target identifier under a `:`; a
+// defaulted shorthand has the identifier, an `=` separator, and the default. nameNode
+// is the source property, read for the field and the optional flag; bindNode is the
+// existing target the value stores into, the same node for a shorthand and different
+// only for a rename.
 type objectAssignElem struct {
 	nameNode   frontend.Node
+	bindNode   frontend.Node
 	hasDefault bool
 	defNode    frontend.Node
 }
 
 // classifyObjectAssignElem reads one object assignment property into an
-// objectAssignElem. A single identifier is a plain shorthand; an identifier, an `=`,
-// and an expression is a shorthand default. A rest, a rename, a rename carrying a
-// default, or a nested pattern is a later slice.
+// objectAssignElem. A single identifier is a plain shorthand; two identifiers under a
+// `:` separator are a rename, `{x: a}`; an identifier, an `=`, and an expression is a
+// shorthand default. A rename carrying a default, a rest, or a nested pattern is a
+// later slice.
 func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignElem, error) {
 	if strings.HasPrefix(strings.TrimSpace(r.prog.Text(prop)), "...") {
 		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
@@ -130,11 +136,13 @@ func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignEle
 	pc := r.prog.Children(prop)
 	switch {
 	case len(pc) == 1 && pc[0].Kind() == frontend.NodeIdentifier:
-		return objectAssignElem{nameNode: pc[0]}, nil
+		return objectAssignElem{nameNode: pc[0], bindNode: pc[0]}, nil
+	case len(pc) == 2 && pc[0].Kind() == frontend.NodeIdentifier && pc[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(prop, pc[0], pc[1]), ":"):
+		return objectAssignElem{nameNode: pc[0], bindNode: pc[1]}, nil
 	case len(pc) == 3 && pc[0].Kind() == frontend.NodeIdentifier && r.prog.Text(pc[1]) == "=":
-		return objectAssignElem{nameNode: pc[0], hasDefault: true, defNode: pc[2]}, nil
+		return objectAssignElem{nameNode: pc[0], bindNode: pc[0], hasDefault: true, defNode: pc[2]}, nil
 	default:
-		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment rename, nested pattern, or member target is a later slice"}
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment computed key, renamed default, or nested pattern is a later slice"}
 	}
 }
 

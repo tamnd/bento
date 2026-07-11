@@ -1864,13 +1864,17 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	names := make([]ast.Expr, 0, len(props))
 	values := make([]ast.Expr, 0, len(props))
 	for _, el := range elems {
-		name, ok := localName(r.prog.Text(el.nameNode))
+		srcName, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
+			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
 		}
-		field, ok := exportedField(name)
+		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(el.bindNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
 		}
 		recv, err := r.lowerExpr(rhs)
 		if err != nil {
@@ -1892,13 +1896,17 @@ func (r *Renderer) objectDestructureAssignDefaults(elems []objectAssignElem, opt
 	out := make([]ast.Stmt, 0, len(elems))
 	for _, el := range elems {
 		prop := r.prog.Text(el.nameNode)
-		name, ok := localName(prop)
+		srcName, ok := localName(prop)
 		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
+			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
 		}
-		field, ok := exportedField(name)
+		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
+		}
+		name, ok := localName(r.prog.Text(el.bindNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
 		}
 		recv, err := r.lowerExpr(rhs)
 		if err != nil {
@@ -1910,7 +1918,7 @@ func (r *Renderer) objectDestructureAssignDefaults(elems []objectAssignElem, opt
 			if err != nil {
 				return nil, true, err
 			}
-			def, err = r.coerceToType(def, el.defNode, r.prog.TypeAt(el.nameNode))
+			def, err = r.coerceToType(def, el.defNode, r.prog.TypeAt(el.bindNode))
 			if err != nil {
 				return nil, true, err
 			}
