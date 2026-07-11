@@ -661,9 +661,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		return ident("bool"), nil
 
 	case t.Flags&frontend.TypeSymbol != 0:
-		// A symbol is a unique opaque value whose whole purpose is identity, so
-		// a pointer whose identity is the symbol's identity (section 8).
-		return star(sel("value", "Symbol")), nil
+		// A symbol is a unique opaque value whose whole purpose is identity, so it
+		// rides the boxed value.Value the dynamic world uses, its identity the
+		// identity of the value's backing symbol. Boxing it uniformly is what lets a
+		// symbol flow into a property bag as a computed key beside the string keys,
+		// where GetElem and SetElem dispatch on the boxed kind (section 8).
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
 
 	case t.Flags&frontend.TypeEnum != 0:
 		// An enum-typed slot (a parameter, return, or annotated binding typed as

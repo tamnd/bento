@@ -709,6 +709,15 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 				return nil, err
 			}
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{idx}}, nil
+		case r.isSymbol(idxNode):
+			// A symbol key reads through GetElem, which looks the boxed symbol up in the
+			// property bag by identity rather than coercing it to a string the way a
+			// number or string key resolves.
+			idx, err := r.lowerExpr(idxNode)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, nil
 		default:
 			return nil, &NotYetLowerable{Reason: "a dynamic element access with a non-number, non-string index is a later slice"}
 		}
