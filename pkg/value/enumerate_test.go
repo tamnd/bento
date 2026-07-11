@@ -65,3 +65,20 @@ func TestAssignStringSource(t *testing.T) {
 		t.Fatalf("target[1] = %v, want \"i\"", v)
 	}
 }
+
+// TestFromEntries proves each key-value pair becomes an own property of the fresh
+// object and that a later pair overwrites an earlier one with the same key.
+func TestFromEntries(t *testing.T) {
+	pairs := NewArrayValue([]Value{
+		NewArrayValue([]Value{StringValue(FromGoString("a")), Number(1)}),
+		NewArrayValue([]Value{StringValue(FromGoString("b")), Number(2)}),
+		NewArrayValue([]Value{StringValue(FromGoString("a")), Number(9)}),
+	})
+	o := FromEntries(pairs)
+	if v := o.Get(FromGoString("a")); v.scalar != Number(9).scalar {
+		t.Fatalf("o[a] = %v, want 9", v)
+	}
+	if v := o.Get(FromGoString("b")); v.scalar != Number(2).scalar {
+		t.Fatalf("o[b] = %v, want 2", v)
+	}
+}
