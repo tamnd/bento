@@ -1314,6 +1314,12 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	}
 	// The pattern is an array binding, so from here the statement is ours: an early
 	// return reports ok=true with an error, not a fall-through.
+	// A dynamic source has no static array shape, so the pattern reads each position
+	// through the boxed value's index protocol rather than a typed AtI, the declaration
+	// sibling of the untyped parameter's dynamic slot.
+	if r.isDynamic(initNode) {
+		return r.dynamicSourceDestructure(patNode, initNode)
+	}
 	initType := r.prog.TypeAt(initNode)
 	elemT, ok := r.prog.ElementType(initType)
 	// A source that is not an array or tuple but is a user iterable destructures
@@ -1485,6 +1491,35 @@ func (r *Renderer) destructureSource(initNode frontend.Node) ([]ast.Stmt, func()
 	return prefix, func() (ast.Expr, error) { return ident(tmp), nil }, nil
 }
 
+// dynamicSourceDestructure lowers a declaration whose source is a dynamic value, `const
+// {a} = x` or `const [a] = x` where x is any: the source has no static shape, so each name
+// reads through the boxed value's member and index protocol the untyped parameter's slot
+// uses. The source is lowered once into a temporary when it is not a plain variable, so it
+// is evaluated a single time, then the pattern binds against it.
+func (r *Renderer) dynamicSourceDestructure(patNode, initNode frontend.Node) ([]ast.Stmt, bool, error) {
+	prefix, recv, err := r.destructureSource(initNode)
+	if err != nil {
+		return nil, true, err
+	}
+	recvExpr, err := recv()
+	if err != nil {
+		return nil, true, err
+	}
+	stmts, err := r.bindDynamicPattern(patNode, recvExpr, token.DEFINE)
+	if err != nil {
+		return nil, true, err
+	}
+	// An object rest this declaration binds is a boxed value the checker did not type any,
+	// so a read of it later in the scope must dispatch dynamically. Statements lower in
+	// order, so marking it here reaches every read below. The map is lazily created since
+	// a body with no destructured parameter never built one.
+	if r.dynBoundLocals == nil {
+		r.dynBoundLocals = map[string]bool{}
+	}
+	r.collectDynRestNames(patNode, r.dynBoundLocals)
+	return append(prefix, stmts...), true, nil
+}
+
 // flattenObjectDestructure lowers `const {x, y} = src` to one `:=` binding per
 // property, x := src.X and y := src.Y, the same struct-field selector a written-out
 // property access lowers to. It is the object sibling of flattenArrayDestructure and
@@ -1518,6 +1553,12 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	}
 	// The pattern is an object binding, so from here the statement is ours: an early
 	// return reports ok=true with an error, not a fall-through.
+	// A dynamic source has no static shape, so the pattern reads each property through the
+	// boxed value's member protocol rather than a struct-field selector, the declaration
+	// sibling of the untyped parameter's dynamic slot.
+	if r.isDynamic(initNode) {
+		return r.dynamicSourceDestructure(patNode, initNode)
+	}
 	objType := r.prog.TypeAt(initNode)
 	if objType.Flags&frontend.TypeObject == 0 || r.isTypedArray(initNode) {
 		return nil, true, &NotYetLowerable{Reason: "object destructuring on a non-object source is a later slice"}

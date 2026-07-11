@@ -140,22 +140,95 @@ console.log(f([1, 2]));`))
 	}
 }
 
-// TestUntypedArrayRestParamHandsBack proves a rest on an untyped array pattern, a later
-// slice on this path, hands back rather than mislowering.
-func TestUntypedArrayRestParamHandsBack(t *testing.T) {
-	reason := renderUntypedBindingHandBack(t, `function f([a, ...rest]) { return a; }
-console.log(String(f([1, 2, 3])));`)
-	if !strings.Contains(reason, "rest") {
-		t.Fatalf("reason %q does not name the rest hand-back", reason)
+// TestUntypedObjectRenameParamRuns proves a rename on an untyped object pattern reads
+// the source property and binds the differently named target through the dynamic path.
+func TestUntypedObjectRenameParamRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function f({a: x}) { return String(x); }
+console.log(f({ a: 7 }));`))
+	if got != "7\n" {
+		t.Fatalf("got %q, want %q", got, "7\n")
 	}
 }
 
-// TestUntypedObjectRenameParamHandsBack proves a rename on an untyped object pattern,
-// a later slice on this path, hands back rather than mislowering.
-func TestUntypedObjectRenameParamHandsBack(t *testing.T) {
-	reason := renderUntypedBindingHandBack(t, `function f({a: x}) { return x; }
-console.log(String(f({ a: 1 })));`)
-	if !strings.Contains(reason, "rename") {
-		t.Fatalf("reason %q does not name the rename hand-back", reason)
+// TestUntypedObjectDefaultFromDynamicSourceRuns proves a default on an object pattern over
+// a dynamic source fills from the default only when the source property is undefined. A
+// default on a parameter types the element, so a dynamic source is where the default form
+// meets a dynamic leaf.
+func TestUntypedObjectDefaultFromDynamicSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `let src: any = { b: 2 };
+const { a = 9, b } = src;
+console.log(String(a) + String(b));`))
+	if got != "92\n" {
+		t.Fatalf("got %q, want %q", got, "92\n")
+	}
+}
+
+// TestUntypedObjectComputedKeyParamRuns proves a computed key on an untyped object pattern
+// reads the source by a key evaluated at run time through the dynamic bracket read.
+func TestUntypedObjectComputedKeyParamRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `const k = "a";
+function f({[k]: v}) { return String(v); }
+console.log(f({ a: 5 }));`))
+	if got != "5\n" {
+		t.Fatalf("got %q, want %q", got, "5\n")
+	}
+}
+
+// TestUntypedObjectNestedParamRuns proves a nested pattern on an untyped object binds its
+// inner names against the held source, composing the dynamic read one level down.
+func TestUntypedObjectNestedParamRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function f({p: {x, y}}) { return String(x) + String(y); }
+console.log(f({ p: { x: 1, y: 2 } }));`))
+	if got != "12\n" {
+		t.Fatalf("got %q, want %q", got, "12\n")
+	}
+}
+
+// TestUntypedObjectRestParamRuns proves a rest on an untyped object gathers every own
+// property the pattern did not name into a new object through ObjectRest.
+func TestUntypedObjectRestParamRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function f({a, ...rest}) { return String(a) + String(rest.b) + String(rest.c); }
+console.log(f({ a: 1, b: 2, c: 3 }));`))
+	if got != "123\n" {
+		t.Fatalf("got %q, want %q", got, "123\n")
+	}
+}
+
+// TestUntypedArrayDefaultFromDynamicSourceRuns proves a default on an array position over
+// a dynamic source fills from the default only when the position is undefined.
+func TestUntypedArrayDefaultFromDynamicSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `let src: any = [1];
+const [a, b = 8] = src;
+console.log(String(a) + String(b));`))
+	if got != "18\n" {
+		t.Fatalf("got %q, want %q", got, "18\n")
+	}
+}
+
+// TestUntypedArrayNestedParamRuns proves a nested pattern on an untyped array binds its
+// inner names against the held position.
+func TestUntypedArrayNestedParamRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function f([[a, b]]) { return String(a) + String(b); }
+console.log(f([[4, 5]]));`))
+	if got != "45\n" {
+		t.Fatalf("got %q, want %q", got, "45\n")
+	}
+}
+
+// TestUntypedArrayRestParamHandsBack proves an array rest, whose target the checker types
+// any[] and whose body reads through the typed array's own methods a boxed value does not
+// carry, hands back rather than emit a read the body cannot make.
+func TestUntypedArrayRestParamHandsBack(t *testing.T) {
+	reason := renderUntypedBindingHandBack(t, `function f([a, ...rest]) { return a; }
+console.log(String(f([1, 2, 3])));`)
+	if !strings.Contains(reason, "array rest") {
+		t.Fatalf("reason %q does not name the array-rest hand-back", reason)
 	}
 }

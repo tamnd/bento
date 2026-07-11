@@ -216,6 +216,11 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	r.dynLocals = r.dynLocalsOf(sig.Params, bodyStmts)
 	defer func() { r.dynLocals = prevDyn }()
 
+	// The object-rest bindings an untyped pattern parameter gathers are boxed values the
+	// checker did not type any, so a read of one routes the dynamic way off this set. It
+	// is built before the body lowers, since a read sits ahead of the entry bindings.
+	defer r.pushDynBound(r.funcParamNodes(fn), sig)()
+
 	// A body that reads arguments materializes a backing store from the parameters,
 	// set before the body is lowered so a read of arguments.length or arguments[i]
 	// inside it routes to the store. A body with a rest, an optional parameter, or an
@@ -1378,6 +1383,10 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	if body.Kind() == frontend.NodeBlock {
 		return r.blockBodyArrow(n, fields)
 	}
+	// An object-rest binding a concise arrow's untyped pattern parameter gathers is a
+	// boxed value the checker did not type any, so its reads in the body expression route
+	// the dynamic way off this set, built before that expression lowers below.
+	defer r.pushDynBound(r.funcParamNodes(n), sig)()
 	// A concise-body arrow with a destructured parameter reads the bound names out of
 	// the synthesized field before the body expression runs, so the func literal takes
 	// a block body: the entry bindings sit above the single return the concise body
@@ -1515,6 +1524,11 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	prevDyn := r.dynLocals
 	r.dynLocals = mergeNameSets(prevDyn, r.dynLocalsOf(sig.Params, bodyStmts), r.scopeDeclaredNames(sig.Params, bodyStmts))
 	defer func() { r.dynLocals = prevDyn }()
+
+	// An object-rest binding an untyped pattern parameter gathers is a boxed value the
+	// checker did not type any, so its property reads route the dynamic way off this set,
+	// built before the closure body lowers ahead of the entry bindings.
+	defer r.pushDynBound(r.funcParamNodes(n), sig)()
 
 	body, err := r.blockOf(n)
 	if err != nil {
