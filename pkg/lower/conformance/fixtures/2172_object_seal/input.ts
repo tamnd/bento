@@ -1,0 +1,11 @@
+const o: any = { a: 1 };
+Object.seal(o);
+const d: any = Object.getOwnPropertyDescriptor(o, "a");
+console.log(d.configurable);
+console.log(d.writable);
+delete o.a;
+console.log(o.a);
+o.a = 9;
+console.log(o.a);
+o.b = 2;
+console.log(o.b);

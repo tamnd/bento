@@ -20,3 +20,29 @@ func (v Value) PreventExtensions() Value {
 	}
 	return v
 }
+
+// Seal prevents extensions and marks every own property non-configurable, so no
+// property can be added, removed, or redefined, the runtime behind Object.seal(o).
+// A sealed property keeps its value and writability, so a data property can still be
+// assigned; only its configurability is cleared. An array's elements are marked
+// non-configurable through the elemsSealed flag, since they carry no per-element
+// descriptor. A non-object receiver has nothing to seal and is returned unchanged.
+func (v Value) Seal() Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return v
+	}
+	o := v.object()
+	o.nonExtensible = true
+	for i := range o.descs {
+		o.descs[i].configurable = false
+	}
+	for i := range o.symDescs {
+		o.symDescs[i].configurable = false
+	}
+	if v.kind == KindArray {
+		o.elemsSealed = true
+	}
+	return v
+}
