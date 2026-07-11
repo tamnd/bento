@@ -91,8 +91,10 @@ func NewArrayValue(elems []Value) Value {
 
 // Set writes a named property, appending it in insertion order if the key is new
 // and overwriting in place if it already exists, so a repeated key keeps its first
-// position the way JavaScript's own property order does. It returns the receiver
-// value so JSON.parse can build an object in an expression.
+// position the way JavaScript's own property order does. A new key on a
+// non-extensible object is dropped, the silent failure a plain write takes once
+// Object.preventExtensions has closed the object. It returns the receiver value so
+// JSON.parse can build an object in an expression.
 func (v Value) Set(key BStr, val Value) Value {
 	o := v.object()
 	for i := range o.keys {
@@ -100,6 +102,9 @@ func (v Value) Set(key BStr, val Value) Value {
 			o.descs[i] = o.descs[i].write(v, val)
 			return v
 		}
+	}
+	if o.nonExtensible {
+		return v
 	}
 	o.keys = append(o.keys, key)
 	o.descs = append(o.descs, defaultDataProperty(val))
@@ -120,6 +125,9 @@ func (v Value) SetKey(key BStr, val Value) Value {
 	case KindArray:
 		o := v.object()
 		if idx, ok := arrayIndex(key.ToGoString()); ok {
+			if idx >= len(o.elems) && o.nonExtensible {
+				return val
+			}
 			for len(o.elems) <= idx {
 				o.elems = append(o.elems, Undefined)
 			}
