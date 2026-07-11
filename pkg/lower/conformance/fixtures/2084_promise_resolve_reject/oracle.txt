@@ -1,0 +1,7 @@
+== stdout:
+sync
+resolve:42
+reject:boom
+adopt:7
+== exit:
+0

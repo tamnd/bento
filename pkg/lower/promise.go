@@ -143,6 +143,129 @@ func mergeSettle(prev map[string]promiseSettle, names []string, void bool, elem 
 	return out
 }
 
+// promiseStaticCall lowers a static call on the global Promise constructor. It
+// reports handled=false when the callee is not Promise.<method> on the ambient
+// global, so the caller falls through to the ordinary dispatch; a call that is on
+// Promise but names a method this slice does not cover reports handled=true with a
+// hand-back so it does not fall through to a misleading receiver-typed error.
+// Promise.resolve and Promise.reject are covered; Promise.all and the rest wait on
+// their own slices.
+func (r *Renderer) promiseStaticCall(call, callee frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	recvNode, method := kids[0], r.prog.Text(kids[1])
+	if !r.isGlobalRef(recvNode, "Promise") {
+		return nil, false, nil
+	}
+	switch method {
+	case "resolve":
+		expr, err := r.promiseResolve(call, argNodes)
+		return expr, true, err
+	case "reject":
+		expr, err := r.promiseReject(call, argNodes)
+		return expr, true, err
+	default:
+		return nil, true, &NotYetLowerable{Reason: "Promise." + method + " is a later slice"}
+	}
+}
+
+// promiseResolve lowers Promise.resolve(value). A value that is already a promise is
+// handed back untouched, the same-promise rule Promise.resolve applies to a genuine
+// promise (the common thenable); a plain, non-thenable value mints a settled promise
+// carrying it, value.Resolved[T](value). A foreign thenable, an object with a then
+// method that is not a runtime promise, needs the adoption machinery and is a later
+// slice, as is a resolve of a dynamic value whose shape is hidden. The element type
+// comes off the promise the call produces, the resolved Awaited<T>.
+func (r *Renderer) promiseResolve(call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	elem, ok := r.promiseElem(r.prog.TypeAt(call))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Promise.resolve whose type is not a Promise is a later slice"}
+	}
+	elemType := ast.Expr(sel("value", "Unit"))
+	if !isVoidReturn(elem) {
+		et, err := r.typeExpr(elem)
+		if err != nil {
+			return nil, err
+		}
+		elemType = et
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	if len(argNodes) == 0 {
+		return &ast.CallExpr{Fun: index(sel("value", "Resolved"), elemType), Args: []ast.Expr{&ast.CompositeLit{Type: sel("value", "Unit")}}}, nil
+	}
+	arg := argNodes[0]
+	argType := r.prog.TypeAt(arg)
+	if _, isThenable := r.promiseElem(argType); isThenable {
+		argGo, err := r.typeExpr(argType)
+		if err != nil {
+			return nil, err
+		}
+		if !isPromiseGoType(argGo) {
+			return nil, &NotYetLowerable{Reason: "Promise.resolve of a foreign thenable is a later slice"}
+		}
+		return r.lowerExpr(arg)
+	}
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	bridged, err := r.bridgeArg(lowered, arg, elem)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: index(sel("value", "Resolved"), elemType), Args: []ast.Expr{bridged}}, nil
+}
+
+// promiseReject lowers Promise.reject(reason) to a promise already rejected carrying
+// the reason, value.Rejected[T](value.NewRejection(reason)). The reason boxes to a
+// dynamic value.Value, or undefined when omitted, since a promise may reject with any
+// JavaScript value. The element type comes off the promise the call produces; a reject
+// whose element type is never or otherwise does not lower carries the unit type, since
+// a rejected promise holds no fulfilled value the surrounding code reads.
+func (r *Renderer) promiseReject(call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	elemType := ast.Expr(sel("value", "Unit"))
+	if elem, ok := r.promiseElem(r.prog.TypeAt(call)); ok && !isVoidReturn(elem) {
+		if et, err := r.typeExpr(elem); err == nil {
+			elemType = et
+		}
+	}
+	reason := ast.Expr(sel("value", "Undefined"))
+	if len(argNodes) > 0 {
+		boxed, err := r.boxOperand(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		reason = boxed
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	rejection := &ast.CallExpr{Fun: sel("value", "NewRejection"), Args: []ast.Expr{reason}}
+	return &ast.CallExpr{Fun: index(sel("value", "Rejected"), elemType), Args: []ast.Expr{rejection}}, nil
+}
+
+// isPromiseGoType reports whether a lowered Go type is *value.Promise[...], the shape
+// a genuine runtime promise takes, so Promise.resolve can tell a real promise (handed
+// back untouched) from a foreign thenable object (whose lowered type is a struct).
+func isPromiseGoType(e ast.Expr) bool {
+	star, ok := e.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	idx, ok := star.X.(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	s, ok := idx.X.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := s.X.(*ast.Ident)
+	return ok && pkg.Name == "value" && s.Sel.Name == "Promise"
+}
+
 // settleCall lowers a call to a Promise executor's resolve or reject callback. A
 // resolve carries a value of the promise's element type, bridged the way an argument
 // crosses into a typed parameter, or the unit placeholder for a Promise<void>; a

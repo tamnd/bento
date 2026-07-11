@@ -52,3 +52,22 @@ new Promise<number>((resolve, reject) => {
 		t.Fatalf("promise reject = %q, want %q", got, want)
 	}
 }
+
+// TestPromiseResolveAndReject checks the constructor-level factories: Promise.resolve
+// mints a settled promise a then reads, Promise.reject one a catch reads, and
+// Promise.resolve of a promise hands that promise straight back so its fulfilled value
+// flows through unchanged.
+func TestPromiseResolveAndReject(t *testing.T) {
+	src := `
+Promise.resolve(41).then((v) => console.log("r:" + v));
+Promise.reject("boom").catch((e) => console.log("j:" + e));
+const p: Promise<number> = Promise.resolve(7);
+Promise.resolve(p).then((v) => console.log("id:" + v));
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\nr:41\nj:boom\nid:7\n"
+	if got != want {
+		t.Fatalf("promise resolve/reject = %q, want %q", got, want)
+	}
+}
