@@ -773,7 +773,14 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 			// author annotated. Only a binding pattern declines.
 			vk := r.prog.Children(k)
 			if len(vk) == 0 || vk[0].Kind() != frontend.NodeIdentifier {
-				return nil, &NotYetLowerable{Reason: "a destructured catch binding is a later slice"}
+				// The caught value has no static type, so a pattern over it is a
+				// dynamic-sourced destructuring: each element reads off the boxed
+				// value.Value through the dynamic Get and GetIndex protocol, not the
+				// typed selectors the pattern binder emits. That path is the phase 6
+				// group 6 dynamic-source work, so a destructured catch binding hands
+				// back and rides with it rather than bind through a typed receiver
+				// the caught value does not have.
+				return nil, &NotYetLowerable{Reason: "a destructured catch binding reads a dynamic source and is deferred to the group 6 dynamic-source path"}
 			}
 			name, ok := localName(r.prog.Text(vk[0]))
 			if !ok {

@@ -349,6 +349,26 @@ func TestInstanceofOutsideCatchHandsBack(t *testing.T) {
 	handsBack(t, "class C {}\nconst c: unknown = new C();\nif (c instanceof C) { console.log(\"c\"); }\n")
 }
 
+// TestDestructuredCatchBindingHandsBack proves an object or array pattern in the
+// catch binding hands back rather than emit broken Go. The caught value has no static
+// type, so a pattern over it is a dynamic-sourced destructuring that reads off the
+// boxed value through the dynamic protocol, which is the group 6 dynamic-source work,
+// so it defers there rather than bind through a typed receiver the value does not
+// have.
+func TestDestructuredCatchBindingHandsBack(t *testing.T) {
+	// The catch parameter is annotated any so the pattern type-checks and reaches the
+	// lowerer; under the checker's default the caught value is unknown and a pattern
+	// over it is rejected before lowering, which is the front-door slot group 6 adds.
+	for _, src := range []string{
+		"try {\n  throw { code: 1 };\n} catch ({ code }: any) {\n  console.log(code);\n}\n",
+		"try {\n  throw [1, 2];\n} catch ([a, b]: any) {\n  console.log(a + b);\n}\n",
+	} {
+		if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "dynamic-source") {
+			t.Fatalf("destructured catch handback reason = %q, want a dynamic-source deferral", reason)
+		}
+	}
+}
+
 // TestTryCatchFinallyRunsEndToEnd proves the whole construct end to end: a program
 // that throws inside a try, catches with an instanceof narrowing, reads the
 // message, and runs a finally compiles to a binary whose output is the catch line
