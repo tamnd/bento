@@ -137,6 +137,13 @@ func (r *Renderer) blockHasAwait(n frontend.Node) bool {
 		return false
 	case frontend.NodeAwaitExpression:
 		return true
+	case frontend.NodeForOfStatement:
+		// A for await...of awaits each result even though its await is a token on the
+		// loop rather than an await expression, so a body that contains one suspends and
+		// takes the coroutine path the same as an explicit await.
+		if r.isForAwait(n) {
+			return true
+		}
 	}
 	for _, k := range r.prog.Children(n) {
 		if r.blockHasAwait(k) {

@@ -64,3 +64,37 @@ run();
 		t.Fatalf("async iterator result = %q, want %q", got, want)
 	}
 }
+
+// TestForAwaitOfAsyncIterable checks that a for await...of over a user async iterable
+// awaits each next() result before the body runs, binds its value, and stops when the
+// result is done: the async mirror of a for...of over a user iterable, driven through
+// the [Symbol.asyncIterator] factory and value.Await on each pull. The loop runs inside
+// an async body, so it parks and resumes on the microtask queue, and the synchronous
+// code after the call runs first, the ordering Node fixes for the awaited loop.
+func TestForAwaitOfAsyncIterable(t *testing.T) {
+	src := `
+class Counter {
+  i = 0;
+  next(): Promise<{ value: number; done: boolean }> {
+    const cur = this.i;
+    this.i = cur + 1;
+    return Promise.resolve({ value: cur, done: cur >= 3 });
+  }
+  [Symbol.asyncIterator]() { return this; }
+}
+async function run(): Promise<void> {
+  console.log("start");
+  for await (const x of new Counter()) {
+    console.log("x:" + x);
+  }
+  console.log("end");
+}
+run();
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "start\nsync\nx:0\nx:1\nx:2\nend\n"
+	if got != want {
+		t.Fatalf("for await...of = %q, want %q", got, want)
+	}
+}
