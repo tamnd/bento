@@ -1,0 +1,6 @@
+== stdout:
+field a
+field b
+ctor body
+== exit:
+0
