@@ -28,6 +28,41 @@ func ObjectCreate(proto Value) Value {
 	return objectValue(o)
 }
 
+// SetPrototype writes the receiver's [[Prototype]] slot and returns the receiver,
+// the runtime behind Object.setPrototypeOf(o, proto). An object becomes the new
+// prototype and null clears the slot; a prototype that is neither an object nor
+// null throws a TypeError the way the spec rejects it. Changing the prototype of a
+// non-extensible object to a different one throws a TypeError, while setting it to
+// the value it already holds is allowed and leaves the object untouched. A
+// non-object receiver has no slot to write, so it is returned unchanged.
+func (v Value) SetPrototype(proto Value) Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return v
+	}
+	o := v.object()
+	var np *Object
+	switch proto.kind {
+	case KindObject, KindArray, KindFunc:
+		np = proto.object()
+	case KindNull:
+		np = nil
+	default:
+		Throw(NewTypeError(FromGoString("Object prototype may only be an Object or null")))
+		return v
+	}
+	if np == o.proto {
+		return v
+	}
+	if !o.isExtensible() {
+		Throw(NewTypeError(FromGoString("#<Object> is not extensible")))
+		return v
+	}
+	o.proto = np
+	return v
+}
+
 // GetPrototype returns the receiver's [[Prototype]] as a value, the runtime behind
 // Object.getPrototypeOf(o). A slot holding an object reports that object; a slot
 // left nil, whether never set or set to null through Object.create(null), reports

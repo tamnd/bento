@@ -68,6 +68,39 @@ func TestObjectCreateNullProto(t *testing.T) {
 	}
 }
 
+// TestSetPrototype proves Object.setPrototypeOf writes the slot: after the write a
+// child inherits from the new prototype, and setting the slot to null clears it.
+func TestSetPrototype(t *testing.T) {
+	proto := NewObject()
+	proto.Set(FromGoString("x"), Number(1))
+
+	child := NewObject()
+	child.SetPrototype(proto)
+	if got := child.Get(FromGoString("x")); got.scalar != Number(1).scalar {
+		t.Fatalf("read after setPrototypeOf = %v, want 1 inherited", got)
+	}
+	child.SetPrototype(Null)
+	if got := child.Get(FromGoString("x")); got.kind != KindUndefined {
+		t.Fatalf("read after clearing the prototype = %v, want undefined", got)
+	}
+}
+
+// TestSetPrototypeExtensibility proves a non-extensible object rejects a change to a
+// different prototype with a TypeError, while setting the same prototype it already
+// holds is allowed.
+func TestSetPrototypeExtensibility(t *testing.T) {
+	proto := NewObject()
+	child := ObjectCreate(proto)
+	child.object().nonExtensible = true
+
+	if throws(func() { child.SetPrototype(proto) }) {
+		t.Fatal("setting the same prototype on a non-extensible object threw")
+	}
+	if !throws(func() { child.SetPrototype(NewObject()) }) {
+		t.Fatal("changing the prototype of a non-extensible object did not throw")
+	}
+}
+
 // TestGetPrototype proves Object.getPrototypeOf reads the slot back: a created
 // object reports its prototype object, and a prototype-less object reports null.
 func TestGetPrototype(t *testing.T) {
