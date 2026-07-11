@@ -1,0 +1,4 @@
+== stdout:
+sync
+== exit:
+1

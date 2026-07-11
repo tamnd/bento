@@ -26,4 +26,5 @@ func main() {
 	})
 	value.ConsoleLog(value.FromGoString("end"))
 	value.RunMicrotasks()
+	value.ReportUnhandledRejections()
 }
