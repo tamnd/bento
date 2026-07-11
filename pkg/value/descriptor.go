@@ -82,3 +82,21 @@ func (d descriptor) read(receiver Value) Value {
 	}
 	return Undefined
 }
+
+// write returns the descriptor a plain property write leaves behind, given the
+// receiver the write went through and the assigned value. A data property keeps
+// its flags and takes the new value. An accessor property runs its setter with
+// the receiver and the value and is otherwise unchanged, since an accessor has no
+// stored value to replace; an accessor with no setter drops the write. The
+// writable and extensibility invariants a strict write enforces are layered on at
+// the define path, so this is the ordinary o.k = v store.
+func (d descriptor) write(receiver, val Value) descriptor {
+	if !d.accessor {
+		d.value = val
+		return d
+	}
+	if d.set.kind == KindFunc {
+		d.set.Call(receiver, val)
+	}
+	return d
+}
