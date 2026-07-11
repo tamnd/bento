@@ -15,11 +15,13 @@ package value
 // not go through the property map. One struct backs both so an array can still
 // carry a named property without changing representation.
 type Object struct {
-	kind  Kind    // KindObject or KindArray
-	keys  []BStr  // property names in insertion order (named properties)
-	vals  []Value // property values, parallel to keys
-	elems []Value // dense element storage for an array
-	call  callFn  // the invocable body of a callable, nil for a plain object
+	kind    Kind      // KindObject or KindArray
+	keys    []BStr    // string property names in insertion order (named properties)
+	vals    []Value   // property values, parallel to keys
+	symKeys []*Symbol // symbol property keys in insertion order, kept apart from string keys
+	symVals []Value   // property values, parallel to symKeys
+	elems   []Value   // dense element storage for an array
+	call    callFn    // the invocable body of a callable, nil for a plain object
 }
 
 // callFn is the body of a callable function value: it takes its arguments already
@@ -206,6 +208,60 @@ func (o *Object) hasOwn(key BStr) bool {
 		}
 	}
 	return false
+}
+
+// setSym writes a symbol-keyed property, keyed by the symbol's identity rather
+// than by any string form, so a symbol key never collides with a string key or
+// with another symbol of the same description. A key already present is
+// overwritten in place; a new key appends, keeping the symbol properties in
+// insertion order the way the spec enumerates them after the string keys.
+func (o *Object) setSym(key *Symbol, val Value) {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			o.symVals[i] = val
+			return
+		}
+	}
+	o.symKeys = append(o.symKeys, key)
+	o.symVals = append(o.symVals, val)
+}
+
+// getSym returns the value of a symbol-keyed own property, or undefined when the
+// object carries no such symbol, the JavaScript result for a missing property.
+func (o *Object) getSym(key *Symbol) Value {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			return o.symVals[i]
+		}
+	}
+	return Undefined
+}
+
+// hasSym reports whether the object carries key as an own symbol property, the
+// existence probe behind a symbol key in the in operator.
+func (o *Object) hasSym(key *Symbol) bool {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			return true
+		}
+	}
+	return false
+}
+
+// deleteSym removes a symbol-keyed own property, closing the gap in the parallel
+// symbol key and value slices so the remaining symbol properties keep their
+// insertion order. A symbol the object does not carry is already absent, so the
+// result is true either way, the boolean delete gives for a configurable or
+// missing property.
+func (o *Object) deleteSym(key *Symbol) bool {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			o.symKeys = append(o.symKeys[:i], o.symKeys[i+1:]...)
+			o.symVals = append(o.symVals[:i], o.symVals[i+1:]...)
+			return true
+		}
+	}
+	return true
 }
 
 // ObjectRest returns a new plain object holding the receiver's own enumerable
