@@ -68,6 +68,25 @@ func TestObjectAssignDefaultRuns(t *testing.T) {
 	}
 }
 
+// Item 5: a default is evaluated lazily, only for a slot that is undefined and at
+// most once. A side-effecting default proves the present slot never runs its default
+// while the missing slot runs its default exactly once.
+
+func TestDestructureDefaultIsLazy(t *testing.T) {
+	skipIfShort(t)
+	const src = `let calls = 0;
+function d(): number { calls = calls + 1; return 7; }
+let arr: number[] = [3];
+let [a = d(), b = d()] = arr;
+console.log(a);
+console.log(b);
+console.log(calls);
+`
+	if got, want := runProgramGo(t, src), "3\n7\n1\n"; got != want {
+		t.Fatalf("lazy default printed %q, want %q", got, want)
+	}
+}
+
 // Item 2: an object destructuring declaration property with a default.
 
 func TestObjectDefaultLowers(t *testing.T) {
