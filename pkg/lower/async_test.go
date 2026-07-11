@@ -273,6 +273,43 @@ console.log("sync");
 	}
 }
 
+// TestAsyncDoneSeamReachesConsole runs the emitted Go for the test262 async
+// harness seam: an async test drives its completion through the doneprintHandle
+// $DONE callback, which prints the judge line the harness reads. It pins that an
+// awaited async body's completion reaches the $DONE console.log seam with the
+// success line, and that $DONE's failure branch, which probes 'name' in error
+// (the in operator on a boxed value), compiles alongside it.
+func TestAsyncDoneSeamReachesConsole(t *testing.T) {
+	const src = `function __consolePrintHandle__(msg: any): void {
+  console.log(msg);
+}
+function $DONE(error?: any): void {
+  if (error) {
+    if (typeof error === "object" && error !== null && "name" in error) {
+      __consolePrintHandle__("Test262:AsyncTestFailure:" + error.name + ": " + error.message);
+    } else {
+      __consolePrintHandle__("Test262:AsyncTestFailure:Test262Error: " + String(error));
+    }
+  } else {
+    __consolePrintHandle__("Test262:AsyncTestComplete");
+  }
+}
+async function step(): Promise<number> {
+  return 1;
+}
+async function test(): Promise<number> {
+  const a = await step();
+  return a + 1;
+}
+test().then((v) => $DONE());
+`
+	got := runProgramGo(t, src)
+	want := "Test262:AsyncTestComplete\n"
+	if got != want {
+		t.Errorf("async done seam did not reach the console\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestAsyncMethodResolvesAfterSyncCode runs the emitted Go and pins the
 // microtask ordering: a .then callback registered during the synchronous run
 // fires only after that run completes, at the end-of-main drain.
