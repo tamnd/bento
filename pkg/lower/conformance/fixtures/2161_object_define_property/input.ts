@@ -1,5 +1,5 @@
 const o: any = {};
-Object.defineProperty(o, "a", { value: 1, enumerable: false });
+Object.defineProperty(o, "a", { value: 1, writable: true, enumerable: false });
 Object.defineProperty(o, "b", { value: 2, enumerable: true });
 console.log(o.a);
 console.log(o.b);
