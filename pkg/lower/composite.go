@@ -286,6 +286,72 @@ func (r *Renderer) arrayOf(call frontend.Node, argNodes []frontend.Node) (ast.Ex
 // one by one never re-evaluates a side-effecting expression; a spread of a call
 // or other expression is a later slice. A computed or string key, and a method
 // or accessor member, still hand back, each its own later slice.
+// computedKey returns the key expression of a computed-name member `[expr]: v`
+// and reports whether the member has one. The frontend leaves a computed property
+// name unclassified, so it is recognized by that unclassified kind together with
+// the bracket its text opens on, and its single child is the expression the
+// brackets wrap. A plain identifier, string, or numeric key is not a computed name
+// and reports false.
+func (r *Renderer) computedKey(member frontend.Node) (frontend.Node, bool) {
+	kids := r.prog.Children(member)
+	if len(kids) < 1 {
+		return nil, false
+	}
+	key := kids[0]
+	if key.Kind() != frontend.NodeUnknown {
+		return nil, false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(r.prog.Text(key)), "[") {
+		return nil, false
+	}
+	inner := r.prog.Children(key)
+	if len(inner) != 1 {
+		return nil, false
+	}
+	return inner[0], true
+}
+
+// staticKeyLiteral reports whether a computed key's expression is a compile-time
+// string or numeric constant, so the key it names is known and folds into a fixed
+// shape the same way a plain key does. A parenthesized literal `(("b"))` unwraps to
+// the literal inside, and a no-substitution template `\`b\“ is a constant string
+// too. Any other expression, an identifier, a symbol, a call, is a runtime value
+// whose key is not known until the literal runs.
+func (r *Renderer) staticKeyLiteral(key frontend.Node) bool {
+	for key.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(key)
+		if len(kids) != 1 {
+			return false
+		}
+		key = kids[0]
+	}
+	switch key.Kind() {
+	case frontend.NodeStringLiteral, frontend.NodeNumericLiteral, frontend.NodeNoSubstitutionTemplateLiteral:
+		return true
+	}
+	return false
+}
+
+// objectLiteralNotFixed reports whether an object literal's set of property keys is
+// unknown at compile time, so it cannot be named by a Go struct and must build as
+// the dynamic bag. The only member that makes a shape non-fixed is a computed name
+// `[expr]` whose expression is a runtime value: an identifier, a symbol, or any
+// computed key. A computed name that brackets a string or numeric literal folds to
+// that constant and keeps the shape fixed, the same closed key set a plain key
+// gives, so a literal with only plain and constant-computed keys reports false.
+func (r *Renderer) objectLiteralNotFixed(n frontend.Node) bool {
+	for _, m := range r.prog.Children(n) {
+		key, ok := r.computedKey(m)
+		if !ok {
+			continue
+		}
+		if !r.staticKeyLiteral(key) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	t := r.prog.TypeAt(n)
 	if t.Flags&frontend.TypeObject == 0 {
