@@ -64,6 +64,41 @@ func TestArrayStaticHandsBack(t *testing.T) {
 	}
 }
 
+// TestArrayIsArrayEmits pins the brand check: a dynamic value dispatches through
+// value.IsArray, a statically typed array folds to true, and any other static
+// type folds to false.
+func TestArrayIsArrayEmits(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"dynamic",
+			"export function f(x: any): boolean { return Array.isArray(x); }\n",
+			"value.IsArray(x)",
+		},
+		{
+			"typedArray",
+			"export function f(a: number[]): boolean { return Array.isArray(a); }\n",
+			"return true",
+		},
+		{
+			"nonArray",
+			"export function f(s: string): boolean { return Array.isArray(s); }\n",
+			"return false",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := renderProgram(t, tc.src)
+			if !strings.Contains(source, tc.want) {
+				t.Errorf("Array.isArray did not print %q:\n%s", tc.want, source)
+			}
+		})
+	}
+}
+
 // TestArrayFromDynamicEmits pins the dynamic form: Array.from over a boxed source
 // lowers to value.ArrayFromArrayLike, which reads the source's length and integer
 // keys at runtime, with value.Undefined standing in for an absent map callback.

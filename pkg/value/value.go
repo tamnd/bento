@@ -122,6 +122,12 @@ func (v Value) IsUndefined() bool { return v.kind == KindUndefined }
 func (v Value) IsNull() bool      { return v.kind == KindNull }
 func (v Value) IsNullish() bool   { return v.kind == KindUndefined || v.kind == KindNull }
 
+// IsArray reports whether v is a real array, the runtime brand check Array.isArray
+// makes. It asks the tag, so it says true only for an array value and false for an
+// array-like object, a typed array box, a string, or any other value, matching the
+// exotic-array brand the spec tests rather than a duck-typed length probe.
+func IsArray(v Value) bool { return v.Kind() == KindArray }
+
 // TypeOf returns the JavaScript typeof string for the boxed value, the lowering
 // of typeof x when the operand is dynamic and its kind is only known at runtime.
 // The mapping is the language's, not Go's: null reports "object" (the historical

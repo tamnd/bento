@@ -238,6 +238,9 @@ func (r *Renderer) arrayStaticCall(call, callee frontend.Node, argNodes []fronte
 	case "from":
 		expr, err := r.arrayFrom(call, argNodes)
 		return expr, true, err
+	case "isArray":
+		expr, err := r.arrayIsArray(argNodes)
+		return expr, true, err
 	default:
 		return nil, true, &NotYetLowerable{Reason: "Array." + method + " is a later slice"}
 	}
@@ -381,6 +384,31 @@ func (r *Renderer) arrayFromDynamic(argNodes []frontend.Node) (ast.Expr, error) 
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ArrayFromArrayLike"), Args: []ast.Expr{src, mapFn}}, nil
+}
+
+// arrayIsArray lowers Array.isArray(x), the runtime array-brand check. A dynamic
+// value carries its kind at runtime, so the check dispatches through
+// value.IsArray, which says false for an array-like object the way the spec's
+// brand check does. A statically typed value's brand is known at compile time: a
+// real array folds to true, and any other type, including an array-like object,
+// folds to false.
+func (r *Renderer) arrayIsArray(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Array.isArray takes exactly one argument"}
+	}
+	arg := argNodes[0]
+	if r.isDynamic(arg) {
+		boxed, err := r.boxOperand(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "IsArray"), Args: []ast.Expr{boxed}}, nil
+	}
+	if _, ok := r.arrayElem(arg); ok {
+		return ident("true"), nil
+	}
+	return ident("false"), nil
 }
 
 // objectLiteral lowers an object literal { k: v, ... } to a composite literal
