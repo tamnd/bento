@@ -20,3 +20,7 @@ goldenrun-*/
 
 # compiled go test binaries
 *.test
+
+# Stray AOT build binaries from ad hoc build -o checks
+/sy
+/sy2
