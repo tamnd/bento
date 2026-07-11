@@ -141,6 +141,40 @@ console.log(q);
 	}
 }
 
+// TestArrayNestedDefaultRuns proves a default inside a nested array pattern composes
+// the fill through the nesting: the inner slot takes the default when the outer slot's
+// array has no element there, and its own value otherwise.
+func TestArrayNestedDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const grid: number[][] = [[1], [3, 4]];
+const [[a, b = 9], [c, d]] = grid;
+console.log(a);
+console.log(b);
+console.log(c);
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "1\n9\n3\n4\n"; got != want {
+		t.Fatalf("nested array default destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayNestedRestRuns proves a rest inside a nested array pattern gathers the tail
+// past the inner fixed slots, composing the gather rule through the nesting.
+func TestArrayNestedRestRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const grid: number[][] = [[1, 2, 3], [4, 5]];
+const [[a, ...rest], [b]] = grid;
+console.log(a);
+console.log(rest.length);
+console.log(b);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n4\n"; got != want {
+		t.Fatalf("nested array rest destructure printed %q, want %q", got, want)
+	}
+}
+
 // TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a
 // call returning an array, lowers by holding the source in a generated temporary read
 // once, then reading each element off that temporary, so the source is evaluated once.
