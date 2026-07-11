@@ -1,0 +1,9 @@
+== stdout:
+start
+sync
+v:1
+v:2
+v:3
+end
+== exit:
+0
