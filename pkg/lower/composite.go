@@ -872,7 +872,14 @@ func (r *Renderer) promiseMethodCall(recvNode frontend.Node, method string, argN
 	if r.arrowParamCount(cb) != wantParams {
 		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback with an unexpected parameter count is a later slice"}
 	}
-	if rt, ok := r.arrowResultFrontendType(cb); !ok || !isVoidReturn(rt) {
+	rt, rtOK := r.arrowResultFrontendType(cb)
+	// A then whose callback returns a value chains: the returned promise carries that
+	// value, or adopts the state of a promise the callback returns. This is the
+	// value-producing form, distinct from the void form the plain .Then method covers.
+	if method == "then" && rtOK && !isVoidReturn(rt) {
+		return r.promiseThenChain(recvNode, cb, rt)
+	}
+	if !rtOK || !isVoidReturn(rt) {
 		return nil, &NotYetLowerable{Reason: "a promise ." + method + " callback that returns a value (chaining) is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
@@ -886,6 +893,33 @@ func (r *Renderer) promiseMethodCall(recvNode frontend.Node, method string, argN
 	// A then or catch queues a microtask, so main must drain the queue at its end.
 	r.usesPromise = true
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: []ast.Expr{fn}}, nil
+}
+
+// promiseThenChain lowers a then whose callback returns a value to the chaining runtime
+// helper, value.ThenMap when the callback returns a plain value and value.ThenFlat when
+// it returns a promise the chain adopts. Both infer their element types from the
+// receiver and the callback, so the call needs no explicit type arguments and reads as
+// value.ThenMap(recv, fn). The map-versus-adopt choice is the callback's result type: a
+// result that lowers to a *value.Promise means the returned promise adopts that inner
+// promise's state, and any other result is mapped through as the fulfilled value.
+func (r *Renderer) promiseThenChain(recvNode, cb frontend.Node, rt frontend.Type) (ast.Expr, error) {
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(cb)
+	if err != nil {
+		return nil, err
+	}
+	goFn := "ThenMap"
+	if _, ok := r.promiseElem(rt); ok {
+		if rtGo, err := r.typeExpr(rt); err == nil && isPromiseGoType(rtGo) {
+			goFn = "ThenFlat"
+		}
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goFn), Args: []ast.Expr{recv, fn}}, nil
 }
 
 // setAlgebraCall lowers the ES2025 set-algebra methods (union, intersection,

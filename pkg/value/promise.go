@@ -187,6 +187,88 @@ func (p *Promise[T]) Then(onFulfilled func(T)) *Promise[Unit] {
 	return Resolved(Unit{})
 }
 
+// ThenMap is Then for a callback that returns a plain value, the chaining form
+// p.then((v) => v + 1): the returned promise fulfills with the callback's result once
+// the receiver fulfills, so a following then reads the mapped value. A rejection of the
+// receiver passes straight through to the returned promise, since a then with no
+// rejection handler forwards the rejection down the chain, and a callback that throws
+// (a Go panic carrying a Thrown) rejects the returned promise rather than propagating.
+// The receiver's and result's element types are inferred from the receiver and the
+// callback, so a chain of thens carries each stage's value type without annotation.
+func ThenMap[T, U any](p *Promise[T], onFulfilled func(T) U) *Promise[U] {
+	next := &Promise[U]{}
+	p.subscribe(func() {
+		if p.state == promiseRejected {
+			next.reject(p.reason)
+			return
+		}
+		settleFromBody(next, func() U { return onFulfilled(p.value) })
+	})
+	return next
+}
+
+// ThenFlat is Then for a callback that returns a promise, the adoption form
+// p.then((v) => fetch(v)): the returned promise adopts the state of the promise the
+// callback returns, fulfilling or rejecting the way that inner promise settles, so the
+// chain flattens rather than nesting a promise of a promise. Like ThenMap a rejection
+// of the receiver passes through and a callback that throws rejects the returned
+// promise. The inner promise's value type is the returned promise's element type, so a
+// following then reads the inner value directly.
+func ThenFlat[T, U any](p *Promise[T], onFulfilled func(T) *Promise[U]) *Promise[U] {
+	next := &Promise[U]{}
+	p.subscribe(func() {
+		if p.state == promiseRejected {
+			next.reject(p.reason)
+			return
+		}
+		guardThrow(next, func() {
+			inner := onFulfilled(p.value)
+			inner.subscribe(func() {
+				if inner.state == promiseRejected {
+					next.reject(inner.reason)
+				} else {
+					next.fulfill(inner.value)
+				}
+			})
+		})
+	})
+	return next
+}
+
+// settleFromBody runs a then callback that produces a value and fulfills next with it,
+// turning a throw inside the callback (a Go panic carrying a Thrown) into a rejection
+// of next rather than a propagating panic. It is the value-producing half of the two
+// chaining reactions; a Go runtime panic that is not a Thrown stays a real crash.
+func settleFromBody[U any](next *Promise[U], body func() U) {
+	defer func() {
+		if r := recover(); r != nil {
+			t, ok := r.(Thrown)
+			if !ok {
+				panic(r)
+			}
+			next.reject(t)
+		}
+	}()
+	next.fulfill(body())
+}
+
+// guardThrow runs a then callback whose body settles next itself (the adoption case
+// subscribes next to an inner promise), turning a throw inside the body into a
+// rejection of next. It differs from settleFromBody in not fulfilling next on a normal
+// return, since the body arranges the settle. A non-Thrown panic stays a real crash.
+func guardThrow[U any](next *Promise[U], body func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			t, ok := r.(Thrown)
+			if !ok {
+				panic(r)
+			}
+			next.reject(t)
+		}
+	}()
+	body()
+}
+
 // Catch schedules onRejected to run with the rejection reason at the next microtask
 // checkpoint. A fulfilled promise does not run onRejected. The reason is handed
 // over as a dynamic value: a caught rejection is typed any in JavaScript, so the

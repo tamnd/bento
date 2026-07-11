@@ -1,0 +1,7 @@
+== stdout:
+sync
+caught:boom
+n:2
+flat:20
+== exit:
+0
