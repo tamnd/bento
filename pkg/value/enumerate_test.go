@@ -66,6 +66,28 @@ func TestAssignStringSource(t *testing.T) {
 	}
 }
 
+// TestOwnSymbols proves the receiver's own symbol keys come back in insertion order
+// by identity, including a non-enumerable one, and that a receiver with no symbol
+// keys yields an empty array.
+func TestOwnSymbols(t *testing.T) {
+	s1 := NewSymbol(FromGoString("one"))
+	s2 := NewSymbol(FromGoString("two"))
+	o := NewObject()
+	o.SetElem(s1, Number(1))
+	o.SetElem(s2, Number(2))
+
+	got := o.OwnSymbols()
+	if got.Len() != 2 {
+		t.Fatalf("OwnSymbols len = %v, want 2", got.Len())
+	}
+	if !StrictEquals(got.At(0), s1) || !StrictEquals(got.At(1), s2) {
+		t.Fatal("OwnSymbols did not return the symbol keys by identity in insertion order")
+	}
+	if NewObject().OwnSymbols().Len() != 0 {
+		t.Fatal("an object with no symbol keys reported symbols")
+	}
+}
+
 // TestEntries proves the receiver's own enumerable properties come back as [key,
 // value] pairs in enumeration order, integer indices before named keys.
 func TestEntries(t *testing.T) {

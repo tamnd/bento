@@ -428,6 +428,12 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
 	case r.isBool(src):
 		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	case r.isSymbol(src):
+		// A symbol expression already lowers to a value.Value: Symbol(x) builds one,
+		// a symbol binding stores it, and a symbol read off the bag hands one back. So
+		// boxing a symbol into a dynamic slot is the identity, the way null and
+		// undefined are boxes already.
+		return expr, nil
 	case src.Kind() == frontend.NodeNullKeyword, r.isUndefinedLiteral(src):
 		// The null and undefined literals already lower to the value.Null and
 		// value.Undefined singletons, which are boxes, so boxing them into a dynamic
