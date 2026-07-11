@@ -71,3 +71,23 @@ console.log("sync");
 		t.Fatalf("promise resolve/reject = %q, want %q", got, want)
 	}
 }
+
+// TestPromiseAllFulfillsInOrder checks that Promise.all fulfills with the inputs'
+// values in input order once every input has fulfilled, after the synchronous code,
+// and that a single rejection among the inputs rejects the combined promise with that
+// reason rather than fulfilling.
+func TestPromiseAllFulfillsInOrder(t *testing.T) {
+	src := `
+const ps: Promise<number>[] = [Promise.resolve(1), Promise.resolve(2), Promise.resolve(3)];
+Promise.all(ps).then((vs) => console.log("all:" + vs.join(",")));
+
+const mixed: Promise<number>[] = [Promise.resolve(9), Promise.reject("bad")];
+Promise.all(mixed).catch((e) => console.log("caught:" + e));
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\nall:1,2,3\ncaught:bad\n"
+	if got != want {
+		t.Fatalf("promise all = %q, want %q", got, want)
+	}
+}

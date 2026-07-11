@@ -166,6 +166,15 @@ func (r *Renderer) promiseStaticCall(call, callee frontend.Node, argNodes []fron
 	case "reject":
 		expr, err := r.promiseReject(call, argNodes)
 		return expr, true, err
+	case "all":
+		expr, err := r.promiseAll(call, argNodes)
+		return expr, true, err
+	case "allSettled":
+		// allSettled fulfills with a record per input carrying its status and value or
+		// reason, a discriminated union of objects the runtime would have to construct
+		// from the fulfilled values. Building that union from a generated object value
+		// is the union-construction slice, so allSettled hands back until it lands.
+		return nil, true, &NotYetLowerable{Reason: "Promise.allSettled needs discriminated-union construction, a later slice"}
 	default:
 		return nil, true, &NotYetLowerable{Reason: "Promise." + method + " is a later slice"}
 	}
@@ -244,6 +253,43 @@ func (r *Renderer) promiseReject(call frontend.Node, argNodes []frontend.Node) (
 	r.requireImport(valuePkg)
 	rejection := &ast.CallExpr{Fun: sel("value", "NewRejection"), Args: []ast.Expr{reason}}
 	return &ast.CallExpr{Fun: index(sel("value", "Rejected"), elemType), Args: []ast.Expr{rejection}}, nil
+}
+
+// promiseAll lowers Promise.all(iterable) to value.All[T](iterable), the promise that
+// fulfills with the slice of the inputs' values once every input fulfills and rejects
+// with the first rejection. The element type T is the array element of the fulfilled
+// value the call produces, a Promise<T[]>, and the argument is an array of promises of
+// that same T, which lowers directly to the []*value.Promise[T] the runtime takes. An
+// argument that is not an array of runtime promises, a bare iterable or a mixed slice,
+// hands back rather than pass the runtime a slice it cannot combine.
+func (r *Renderer) promiseAll(call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Promise.all takes a single iterable argument"}
+	}
+	resultElem, ok := r.promiseElem(r.prog.TypeAt(call))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Promise.all whose type is not a Promise is a later slice"}
+	}
+	elem, ok := r.prog.ElementType(resultElem)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Promise.all whose fulfilled value is not an array is a later slice"}
+	}
+	elemType, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, err
+	}
+	arg := argNodes[0]
+	argElem, ok := r.arrayElem(arg)
+	if !ok || !isPromiseGoType(argElem) {
+		return nil, &NotYetLowerable{Reason: "Promise.all over a non-array or non-promise iterable is a later slice"}
+	}
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "All"), elemType), Args: []ast.Expr{lowered}}, nil
 }
 
 // isPromiseGoType reports whether a lowered Go type is *value.Promise[...], the shape
