@@ -37,6 +37,42 @@ func NewPromise[T any](executor func(resolve func(T), reject func(Value))) (p *P
 	return p
 }
 
+// All combines an array of promises into one promise of the array of their fulfilled
+// values, the value.Promise side of Promise.all. It fulfills with the values in input
+// order once every input has fulfilled, and rejects with the reason of the first input
+// to reject, ignoring later settlements the way the first rejection wins. An empty
+// input fulfills immediately with an empty array. Each input is subscribed, so a
+// reaction runs at the microtask checkpoint when the input settles; the combined
+// promise stays pending until its count reaches zero, then fulfills and flushes its
+// own reactions.
+func All[T any](ps *Array[*Promise[T]]) *Promise[*Array[T]] {
+	result := &Promise[*Array[T]]{}
+	elems := ps.Elems()
+	if len(elems) == 0 {
+		result.fulfill(NewArray[T]())
+		return result
+	}
+	vals := make([]T, len(elems))
+	remaining := len(elems)
+	for i, p := range elems {
+		p.subscribe(func() {
+			if result.state != promisePending {
+				return
+			}
+			if p.state == promiseRejected {
+				result.reject(p.reason)
+				return
+			}
+			vals[i] = p.value
+			remaining--
+			if remaining == 0 {
+				result.fulfill(NewArray[T](vals...))
+			}
+		})
+	}
+	return result
+}
+
 // NewRejection wraps an arbitrary value into the Thrown a rejected promise carries,
 // so Promise.reject and a manual Rejected can settle with any JavaScript value, not
 // only a runtime Error. A catch handler or a rejected await reads the value back
