@@ -54,12 +54,43 @@ type iteratorShape struct {
 	returnName string
 }
 
+// symbolAsyncIteratorGoName is the Go method name a [Symbol.asyncIterator] member
+// lowers to, the name for await...of calls to obtain the async iterator. Like the
+// sync SymbolIterator it is fixed so the loop can name it without threading the class
+// through.
+const symbolAsyncIteratorGoName = "SymbolAsyncIterator"
+
+// symbolAsyncIteratorProp is the sentinel property key the [Symbol.asyncIterator]
+// method carries in the member map, the async mirror of symbolIteratorProp.
+const symbolAsyncIteratorProp = "[Symbol.asyncIterator]"
+
+// symbolAsyncIteratorMemberPrefix is the mangled property-name prefix the checker
+// gives a [Symbol.asyncIterator] member: the internal-symbol prefix byte, then
+// @asyncIterator, then a per-symbol id the prefix match skips over. It never
+// collides with the sync @iterator prefix, which differs from its third byte on.
+const symbolAsyncIteratorMemberPrefix = "\xFE@asyncIterator"
+
 // isSymbolIteratorName reports whether a class member name node is the well-known
 // [Symbol.iterator] computed name, the key an iterable class defines its iterator
 // factory under. The parser surfaces it as an unnamed node wrapping the property
 // access Symbol.iterator, so it is told apart from a [expr] or a ["str"] computed
 // name by that exact shape.
 func (r *Renderer) isSymbolIteratorName(nameNode frontend.Node) bool {
+	return r.isSymbolMemberName(nameNode, "iterator")
+}
+
+// isSymbolAsyncIteratorName reports whether a class member name node is the
+// well-known [Symbol.asyncIterator] computed name, the key an async iterable class
+// defines its async iterator factory under. It reads the same unnamed-node-wrapping
+// -a-property-access shape isSymbolIteratorName matches, but for Symbol.asyncIterator.
+func (r *Renderer) isSymbolAsyncIteratorName(nameNode frontend.Node) bool {
+	return r.isSymbolMemberName(nameNode, "asyncIterator")
+}
+
+// isSymbolMemberName reports whether a class member name node is the well-known
+// computed name Symbol.<member>, the shared shape check the sync and async iterator
+// name matchers use: an unnamed node wrapping a Symbol.<member> property access.
+func (r *Renderer) isSymbolMemberName(nameNode frontend.Node, member string) bool {
 	if nameNode.Kind() != frontend.NodeUnknown {
 		return false
 	}
@@ -68,7 +99,7 @@ func (r *Renderer) isSymbolIteratorName(nameNode frontend.Node) bool {
 		return false
 	}
 	pa := r.prog.Children(kids[0])
-	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "iterator"
+	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == member
 }
 
 // isSymbolIteratorExpr reports whether an expression node is the well-known
@@ -83,6 +114,18 @@ func (r *Renderer) isSymbolIteratorExpr(node frontend.Node) bool {
 	}
 	pa := r.prog.Children(node)
 	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "iterator"
+}
+
+// isSymbolAsyncIteratorExpr reports whether an expression node is the well-known
+// Symbol.asyncIterator property access, the key a manual `obj[Symbol.asyncIterator]()`
+// reference reads the async iterator factory through, the async mirror of
+// isSymbolIteratorExpr.
+func (r *Renderer) isSymbolAsyncIteratorExpr(node frontend.Node) bool {
+	if node.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	pa := r.prog.Children(node)
+	return len(pa) == 2 && r.prog.Text(pa[0]) == "Symbol" && r.prog.Text(pa[1]) == "asyncIterator"
 }
 
 // memberByPrefix returns the first property of a type whose name starts with the
@@ -168,6 +211,70 @@ func (r *Renderer) symbolIteratorShape(t frontend.Type) (iteratorShape, bool) {
 	// An iterator may define an optional return(), which for...of calls to close it on
 	// an early exit. When it does, the Go method name is recorded so the loop can call
 	// it; when it does not, returnName stays empty and the loop needs no close.
+	if _, ok := r.memberByName(iterType, "return"); ok {
+		if name, ok := exportedField("return"); ok {
+			shape.returnName = name
+		}
+	}
+	return shape, true
+}
+
+// asyncIteratorShape returns how a type drives the async iterator protocol, or false
+// when it does not. It is the async mirror of symbolIteratorShape: it navigates the
+// [Symbol.asyncIterator] member to its iterator type, the iterator's next() to the
+// promise it returns, and through that promise to the awaited { value, done } result.
+// The one extra step over the sync path is the promiseElem unwrap: an async iterator's
+// next() returns Promise<{ value, done }>, so the result the loop reads is what awaiting
+// that promise yields. The path is taken only when the iterator is a user type bento
+// lowers to a struct with Go Next and (optionally) Return methods, not a built-in async
+// generator closure, and only when the result's done is a Go bool the loop breaks on.
+func (r *Renderer) asyncIteratorShape(t frontend.Type) (iteratorShape, bool) {
+	iterMethod, ok := r.memberByPrefix(t, symbolAsyncIteratorMemberPrefix)
+	if !ok {
+		return iteratorShape{}, false
+	}
+	call, _ := r.prog.Signatures(iterMethod.Type)
+	if len(call) == 0 {
+		return iteratorShape{}, false
+	}
+	iterType := call[0].Return
+	if sym, ok := r.prog.TypeSymbol(iterType); ok && builtinIteratorTypeNames[sym.Name] {
+		return iteratorShape{}, false
+	}
+	next, ok := r.memberByName(iterType, "next")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	nextCall, _ := r.prog.Signatures(next.Type)
+	if len(nextCall) == 0 {
+		return iteratorShape{}, false
+	}
+	result, ok := r.promiseElem(nextCall[0].Return)
+	if !ok {
+		return iteratorShape{}, false
+	}
+	valueProp, ok := r.memberByName(result, "value")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	doneProp, ok := r.memberByName(result, "done")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	if r.primitiveFlagsOfType(doneProp.Type)&frontend.TypeBoolean == 0 {
+		return iteratorShape{}, false
+	}
+	valueName, ok := exportedField("value")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	doneName, ok := exportedField("done")
+	if !ok {
+		return iteratorShape{}, false
+	}
+	shape := iteratorShape{elem: valueProp.Type, valueName: valueName, doneName: doneName}
+	// An async iterator may define an optional return(), which for await...of awaits to
+	// close it on an early exit, the same close the sync path records for the sync loop.
 	if _, ok := r.memberByName(iterType, "return"); ok {
 		if name, ok := exportedField("return"); ok {
 			shape.returnName = name
