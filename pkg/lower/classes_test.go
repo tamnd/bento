@@ -281,7 +281,7 @@ func TestClassHandsBack(t *testing.T) {
 		{
 			"accessorOverride",
 			"class A { get n(): number { return 1; } }\nclass B extends A { get n(): number { return 2; } }\nconsole.log(new B().n);\n",
-			"only a method overriding a same-named base method",
+			"a virtual accessor override is a later slice",
 		},
 		{
 			"stringifyExtendedClass",
