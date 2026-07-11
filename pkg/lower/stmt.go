@@ -1601,12 +1601,25 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 	if len(targets) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty array assignment pattern binds nothing"}
 	}
-	names := make([]ast.Expr, 0, len(targets))
-	for _, tgt := range targets {
-		if tgt.Kind() != frontend.NodeIdentifier {
-			return nil, true, &NotYetLowerable{Reason: "an array assignment hole, rest, nested pattern, or member target is a later slice"}
+	elems := make([]arrayAssignElem, len(targets))
+	anyDefault := false
+	for i, tgt := range targets {
+		el, err := r.classifyArrayAssignElem(tgt)
+		if err != nil {
+			return nil, true, err
 		}
-		name, ok := localName(r.prog.Text(tgt))
+		elems[i] = el
+		anyDefault = anyDefault || el.hasDefault
+	}
+	// A default turns the flat parallel assignment into a per-target fill, so the
+	// pattern with any default takes its own path; the default-free pattern keeps the
+	// single parallel assignment that makes the swap idiom fall out.
+	if anyDefault {
+		return r.arrayDestructureAssignDefaults(elems, rhs)
+	}
+	names := make([]ast.Expr, 0, len(targets))
+	for _, el := range elems {
+		name, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "array assignment target is not a Go identifier"}
 		}
@@ -1617,6 +1630,69 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 		return nil, true, err
 	}
 	return &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}, true, nil
+}
+
+// arrayDestructureAssignDefaults lowers an array destructuring assignment that
+// carries a default on at least one target, `[a = d, b] = arr`, to a block of
+// per-target fills: a plain target takes its element read, a defaulted target fills
+// from its default when the slot is undefined. The default breaks the flat parallel
+// assignment, so this reads element by element instead, which needs the source to be
+// a plain array variable; a literal or other source with a default hands back as a
+// later slice. Each target's type must match the array element type, the same guard
+// the default-free path applies.
+func (r *Renderer) arrayDestructureAssignDefaults(elems []arrayAssignElem, rhs frontend.Node) (ast.Stmt, bool, error) {
+	if rhs.Kind() != frontend.NodeIdentifier {
+		return nil, true, &NotYetLowerable{Reason: "an array assignment with a default from anything but a plain array variable needs a temporary, a later slice"}
+	}
+	elemT, ok := r.prog.ElementType(r.prog.TypeAt(rhs))
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "array destructuring assignment from a non-array or tuple source is a later slice"}
+	}
+	elemGo, err := r.typeExpr(elemT)
+	if err != nil {
+		return nil, true, err
+	}
+	out := make([]ast.Stmt, 0, len(elems))
+	for i, el := range elems {
+		name, ok := localName(r.prog.Text(el.nameNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "array assignment target is not a Go identifier"}
+		}
+		tgtGo, err := r.typeExpr(r.prog.TypeAt(el.nameNode))
+		if err != nil {
+			return nil, true, err
+		}
+		if same, err := sameGoType(tgtGo, elemGo); err != nil {
+			return nil, true, err
+		} else if !same {
+			return nil, true, &NotYetLowerable{Reason: "array destructuring assignment where a target's type differs from the array element type is a later slice"}
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		if el.hasDefault {
+			def, err := r.lowerExpr(el.defNode)
+			if err != nil {
+				return nil, true, err
+			}
+			def, err = r.coerceToType(def, el.defNode, r.prog.TypeAt(el.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			out = append(out, r.defaultFillAssign(ident(name), arrayOptRead(recv, i), def))
+			continue
+		}
+		out = append(out, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{&ast.CallExpr{
+				Fun:  &ast.SelectorExpr{X: recv, Sel: ident("AtI")},
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+			}},
+		})
+	}
+	return &ast.BlockStmt{List: out}, true, nil
 }
 
 // arrayDestructureValues lowers the right side of an array destructuring assignment
@@ -1726,19 +1802,30 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	if len(props) == 0 {
 		return nil, true, &NotYetLowerable{Reason: "an empty object assignment pattern binds nothing"}
 	}
+	optionalField := map[string]bool{}
+	for _, pr := range r.prog.Properties(objType) {
+		optionalField[pr.Name] = pr.Optional
+	}
+	elems := make([]objectAssignElem, len(props))
+	anyDefault := false
+	for i, prop := range props {
+		el, err := r.classifyObjectAssignElem(prop)
+		if err != nil {
+			return nil, true, err
+		}
+		elems[i] = el
+		anyDefault = anyDefault || el.hasDefault
+	}
+	// A default turns the flat parallel assignment into a per-property fill, so the
+	// pattern with any default takes the block path; the default-free pattern keeps
+	// the single parallel assignment.
+	if anyDefault {
+		return r.objectDestructureAssignDefaults(elems, optionalField, rhs)
+	}
 	names := make([]ast.Expr, 0, len(props))
 	values := make([]ast.Expr, 0, len(props))
-	for _, prop := range props {
-		// A rest property reads as a single-identifier property whose text carries the
-		// leading `...`, so the spread is caught by the text a child count would miss.
-		if strings.HasPrefix(strings.TrimSpace(r.prog.Text(prop)), "...") {
-			return nil, true, &NotYetLowerable{Reason: "a rest property in an object assignment gathers the remaining fields into an object, a later slice"}
-		}
-		pc := r.prog.Children(prop)
-		if len(pc) != 1 || pc[0].Kind() != frontend.NodeIdentifier {
-			return nil, true, &NotYetLowerable{Reason: "an object assignment rename, default, nested pattern, or member target is a later slice"}
-		}
-		name, ok := localName(r.prog.Text(pc[0]))
+	for _, el := range elems {
+		name, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
 		}
@@ -1754,6 +1841,46 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 		values = append(values, &ast.SelectorExpr{X: recv, Sel: ident(field)})
 	}
 	return &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}, true, nil
+}
+
+// objectDestructureAssignDefaults lowers an object destructuring assignment that
+// carries a default on at least one property, `({x = d, y} = o)`, to a block of
+// per-property fills. A default over an optional field fills when the property is
+// undefined, reading the field's Opt; a default over a required field can never
+// fire, so it binds the read directly and the default is dead. A plain property
+// takes its field read, the same as the default-free path.
+func (r *Renderer) objectDestructureAssignDefaults(elems []objectAssignElem, optionalField map[string]bool, rhs frontend.Node) (ast.Stmt, bool, error) {
+	out := make([]ast.Stmt, 0, len(elems))
+	for _, el := range elems {
+		prop := r.prog.Text(el.nameNode)
+		name, ok := localName(prop)
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
+		}
+		field, ok := exportedField(name)
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, true, err
+		}
+		read := &ast.SelectorExpr{X: recv, Sel: ident(field)}
+		if el.hasDefault && optionalField[prop] {
+			def, err := r.lowerExpr(el.defNode)
+			if err != nil {
+				return nil, true, err
+			}
+			def, err = r.coerceToType(def, el.defNode, r.prog.TypeAt(el.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			out = append(out, r.defaultFillAssign(ident(name), read, def))
+			continue
+		}
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{read}})
+	}
+	return &ast.BlockStmt{List: out}, true, nil
 }
 
 // argumentsElementAssign lowers a write to arguments[i] to the backing store's Set,
