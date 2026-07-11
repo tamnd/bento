@@ -75,30 +75,40 @@ func (r *Renderer) collectYields(n frontend.Node, out *[]frontend.Node) {
 }
 
 // generatorYieldType reads the element type a generator body yields, the Y in
-// *value.Gen[Y], off its yielded expressions: the common type of every plain yield,
-// required to lower to one Go type so the single channel of Y carries them all. A
-// yield node carries its operand as its one child; a valueless yield or a yield*
-// delegation has a different arity and no single operand to read a type off, so a
-// body whose only yields are those keeps their own precise reason rather than the
-// generic no-element-type one. A body whose plain yields disagree in Go type hands
-// back rather than pick one.
+// *value.Gen[Y], off its yielded expressions: the common type of every yield, required
+// to lower to one Go type so the single channel of Y carries them all. A plain yield
+// carries its operand as its one child and contributes that operand's type; a yield*
+// delegation carries an extra star child and contributes the delegate's element type,
+// since every value the delegate yields flows out through this generator. A valueless
+// yield has no operand to read a type off, so a body whose only yields are those keeps
+// its own precise reason rather than the generic no-element-type one. A body whose
+// yields disagree in Go type hands back rather than pick one.
 func (r *Renderer) generatorYieldType(block frontend.Node) (frontend.Type, ast.Expr, error) {
 	var yields []frontend.Node
 	r.collectYields(block, &yields)
 	var elemGo ast.Expr
 	var elemType frontend.Type
-	sawDelegation, sawValueless := false, false
+	sawValueless := false
 	for _, y := range yields {
 		kids := r.prog.Children(y)
+		var t frontend.Type
 		switch {
 		case len(kids) == 0:
 			sawValueless = true
 			continue
 		case len(kids) > 1:
-			sawDelegation = true
-			continue
+			// yield* delegates to a sub-iterable, whose element type joins the channel's
+			// Y since every value the delegate yields flows out through this generator. A
+			// generator delegate reports its Y the same way a Generator-typed slot does;
+			// a non-generator iterable has no such element type here and is a later slice.
+			elem, ok := r.generatorElemType(r.prog.TypeAt(kids[len(kids)-1]))
+			if !ok {
+				return frontend.Type{}, nil, &NotYetLowerable{Reason: "a yield* over a non-generator iterable is a later slice"}
+			}
+			t = elem
+		default:
+			t = r.prog.TypeAt(kids[0])
 		}
-		t := r.prog.TypeAt(kids[0])
 		g, err := r.typeExpr(t)
 		if err != nil {
 			return frontend.Type{}, nil, err
@@ -112,14 +122,10 @@ func (r *Renderer) generatorYieldType(block frontend.Node) (frontend.Type, ast.E
 		}
 	}
 	if elemGo == nil {
-		switch {
-		case sawDelegation:
-			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a yield* delegation is a later slice"}
-		case sawValueless:
+		if sawValueless {
 			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a valueless yield is a later slice"}
-		default:
-			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a generator with no yielded value has no element type here, a later slice"}
 		}
+		return frontend.Type{}, nil, &NotYetLowerable{Reason: "a generator with no yielded value has no element type here, a later slice"}
 	}
 	return elemType, elemGo, nil
 }
@@ -156,10 +162,13 @@ func (r *Renderer) coerceToType(expr ast.Expr, src frontend.Node, target fronten
 }
 
 // yieldExpr lowers a yield expression to a call on the current generator's coroutine
-// handle: _co.Yield(v) sends v to the consumer and blocks until the next pull, and
-// evaluates to the value the consumer passed back through next(v). A yield outside a
-// lowered generator body has no handle to send on and hands back; a valueless yield
-// or a yield* delegation is a later slice.
+// handle. A plain yield lowers to _co.Yield(v), which sends v to the consumer and
+// blocks until the next pull; a yield* delegation lowers to _co.YieldFrom(sub), which
+// drives the delegate generator and forwards its values. Either way the call evaluates
+// to the value the yield expression takes on: the value the consumer passed back
+// through next(v) for a plain yield, the delegate's return value for a yield*. A yield
+// outside a lowered generator body has no handle to send on and hands back; a valueless
+// yield is a later slice.
 func (r *Renderer) yieldExpr(n frontend.Node) (ast.Expr, error) {
 	if r.genCo == "" {
 		return nil, &NotYetLowerable{Reason: "a yield outside a lowered generator body is a later slice"}
@@ -168,30 +177,56 @@ func (r *Renderer) yieldExpr(n frontend.Node) (ast.Expr, error) {
 	if len(kids) == 0 {
 		return nil, &NotYetLowerable{Reason: "a valueless yield is a later slice"}
 	}
-	if len(kids) != 1 {
-		return nil, &NotYetLowerable{Reason: "a yield* delegation is a later slice"}
+	var call ast.Expr
+	if len(kids) > 1 {
+		c, err := r.yieldStar(kids[len(kids)-1])
+		if err != nil {
+			return nil, err
+		}
+		call = c
+	} else {
+		val, err := r.lowerExpr(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		val, err = r.coerceToType(val, kids[0], r.genYieldType)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		call = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("Yield")}, Args: []ast.Expr{val}}
 	}
-	val, err := r.lowerExpr(kids[0])
-	if err != nil {
-		return nil, err
+	// The call hands its result back as a dynamic value.Value: the argument the consumer
+	// passed to next(v) for a plain yield, or the delegate's completion value for a
+	// yield*. The yield expression reads as the generator's TNext type (a plain yield) or
+	// the delegate's TReturn type (a yield*), so when that type is a concrete primitive
+	// the dynamic result coerces to it through the ToNumber family, the same crossing an
+	// assignment applies. A type that is itself dynamic, the unknown a plain Generator<Y>
+	// carries, needs no coercion and the value.Value passes through as the yield's value.
+	result := r.prog.TypeAt(n)
+	if result.Flags != 0 && result.Flags&(frontend.TypeAny|frontend.TypeUnknown|frontend.TypeVoid) == 0 {
+		return r.coerceDynamicToStaticFlags(call, result.Flags)
 	}
-	val, err = r.coerceToType(val, kids[0], r.genYieldType)
+	return call, nil
+}
+
+// yieldStar lowers a yield* delegation to a drive of the delegate generator on the
+// current coroutine: _co.YieldFrom(sub) pulls every value the delegate yields, re-yields
+// it to this generator's consumer, threads the value the consumer sends back into the
+// delegate's own next, and evaluates to the value the delegate completed with. The
+// element types already agree by generatorYieldType, so the forwarded values need no
+// coercion. Only a generator delegate is lowerable; a non-generator iterable is a later
+// slice, the same reason generatorYieldType reports for the element type.
+func (r *Renderer) yieldStar(delegate frontend.Node) (ast.Expr, error) {
+	if _, ok := r.generatorElemType(r.prog.TypeAt(delegate)); !ok {
+		return nil, &NotYetLowerable{Reason: "a yield* over a non-generator iterable is a later slice"}
+	}
+	sub, err := r.lowerExpr(delegate)
 	if err != nil {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("Yield")}, Args: []ast.Expr{val}}
-	// The coroutine hands the sent value back as a dynamic value.Value, the argument
-	// the consumer passed to next(v). A yield expression reads as the generator's TNext
-	// type, so when TNext is a concrete primitive the dynamic result coerces to it
-	// through the ToNumber family, the same crossing an assignment applies. A TNext that
-	// is itself dynamic, the unknown a plain Generator<Y> carries, needs no coercion and
-	// the value.Value passes through as the yield's own value.
-	sent := r.prog.TypeAt(n)
-	if sent.Flags != 0 && sent.Flags&(frontend.TypeAny|frontend.TypeUnknown|frontend.TypeVoid) == 0 {
-		return r.coerceDynamicToStaticFlags(call, sent.Flags)
-	}
-	return call, nil
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("YieldFrom")}, Args: []ast.Expr{sub}}, nil
 }
 
 // generatorCoroutine builds the value.NewGen[Y](func(_co *value.GenCo[Y]) value.Value

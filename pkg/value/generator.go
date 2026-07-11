@@ -194,3 +194,22 @@ func (co *GenCo[Y]) Yield(v Y) Value {
 	}
 	return sig.sent
 }
+
+// YieldFrom drives a delegate generator on this coroutine's behalf, the runtime of a
+// yield* delegation. It pulls each value the delegate yields and re-yields it to this
+// generator's consumer, threading the value the consumer sends back through next(v)
+// into the delegate's own next, so a value sent through the outer generator reaches
+// the delegate. The first pull resumes the delegate with undefined, the argument
+// yield* passes on its opening next(). It returns once the delegate completes,
+// evaluating to the value the delegate finished with, the value the yield* expression
+// takes on.
+func (co *GenCo[Y]) YieldFrom(sub *Gen[Y]) Value {
+	sent := Undefined
+	for {
+		v, done := sub.Next(sent)
+		if done {
+			return sub.Result()
+		}
+		sent = co.Yield(v)
+	}
+}

@@ -181,13 +181,58 @@ for (const x of g()) { console.log(String(x)); }
 	}
 }
 
-// TestGeneratorYieldStarHandsBack pins that a yield* delegation keeps its own reason
-// until the delegation slice lands (item 6).
-func TestGeneratorYieldStarHandsBack(t *testing.T) {
+// TestGeneratorYieldStarNonGeneratorHandsBack pins that yield* over a plain iterable
+// such as an array is still a later slice: only a generator delegate is lowerable, so
+// the array form keeps a reason until the iterator-protocol delegation lands.
+func TestGeneratorYieldStarNonGeneratorHandsBack(t *testing.T) {
 	const src = `function* g(): Generator<number> { yield* [1, 2]; }
 g();
 `
-	if reason, want := renderProgramHandBack(t, src), "a yield* delegation is a later slice"; reason != want {
+	if reason, want := renderProgramHandBack(t, src), "a yield* over a non-generator iterable is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)
+	}
+}
+
+// TestGeneratorYieldStarShape pins that yield* over a generator delegate lowers to a
+// YieldFrom drive on the coroutine handle, the runtime that forwards the delegate's
+// values and threads the sent value into it.
+func TestGeneratorYieldStarShape(t *testing.T) {
+	const src = `function* inner(): Generator<number> { yield 1; yield 2; }
+function* g(): Generator<number> { yield* inner(); }
+g();
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".YieldFrom(Inner())") {
+		t.Errorf("yield* did not lower to a YieldFrom drive of the delegate:\n%s", source)
+	}
+}
+
+// TestGeneratorYieldStarForOf pins the end-to-end delegation: a for...of over the outer
+// generator sees every value the delegate yields, in order, as if the delegate's body
+// were spliced into the outer one.
+func TestGeneratorYieldStarForOf(t *testing.T) {
+	const src = `function* inner(): Generator<number> { yield 2; yield 3; }
+function* g(): Generator<number> { yield 1; yield* inner(); yield 4; }
+let out = "";
+for (const x of g()) { out += String(x) + " "; }
+console.log(out);
+`
+	if got, want := runProgramGo(t, src), "1 2 3 4 \n"; got != want {
+		t.Fatalf("yield* delegation for...of printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorYieldStarReturnValue pins that the yield* expression evaluates to the
+// delegate's return value, the number a { value, done: true } from the delegate
+// carries, so a delegate that returns 5 makes `yield* inner()` read as 5.
+func TestGeneratorYieldStarReturnValue(t *testing.T) {
+	const src = `function* inner(): Generator<number, number> { yield 1; return 5; }
+function* g(): Generator<number> { const r = yield* inner(); yield r + 10; }
+let out = "";
+for (const x of g()) { out += String(x) + " "; }
+console.log(out);
+`
+	if got, want := runProgramGo(t, src), "1 15 \n"; got != want {
+		t.Fatalf("yield* return value printed %q, want %q", got, want)
 	}
 }
