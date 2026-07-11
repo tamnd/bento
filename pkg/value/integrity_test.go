@@ -63,3 +63,36 @@ func TestSeal(t *testing.T) {
 		t.Fatalf("a new key on a sealed object took: got %v, want undefined", got)
 	}
 }
+
+// TestFreeze proves a frozen object marks every own data property non-writable and
+// non-configurable: an assignment drops, the value survives, and a new key is
+// refused.
+func TestFreeze(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("a"), Number(1))
+	o.Freeze()
+
+	if d, ok := o.object().getOwnDesc(FromGoString("a")); !ok || d.configurable || d.writable {
+		t.Fatal("freeze did not clear the property's writable and configurable flags")
+	}
+	o.Set(FromGoString("a"), Number(9))
+	if got := o.Get(FromGoString("a")); got.scalar != Number(1).scalar {
+		t.Fatalf("a frozen property took a write: got %v, want 1", got)
+	}
+	o.Set(FromGoString("b"), Number(2))
+	if got := o.Get(FromGoString("b")); got.kind != KindUndefined {
+		t.Fatalf("a new key on a frozen object took: got %v, want undefined", got)
+	}
+}
+
+// TestFreezeArrayElements proves a frozen array drops an element write and keeps the
+// original element.
+func TestFreezeArrayElements(t *testing.T) {
+	arr := NewArrayValue([]Value{Number(1), Number(2)})
+	arr.Freeze()
+
+	arr.SetKey(FromGoString("0"), Number(9))
+	if got := arr.Get(FromGoString("0")); got.scalar != Number(1).scalar {
+		t.Fatalf("a frozen array element took a write: got %v, want 1", got)
+	}
+}

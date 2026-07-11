@@ -27,6 +27,7 @@ type Object struct {
 	proto         *Object      // the [[Prototype]] a read climbs on an own miss; nil is the end of the user chain
 	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
 	elemsSealed   bool         // set once Object.seal marks an array's elements non-configurable, so a delete fails
+	elemsFrozen   bool         // set once Object.freeze marks an array's elements non-writable, so a write drops
 }
 
 // isExtensible reports whether new properties may still be added, the state
@@ -92,14 +93,18 @@ func NewArrayValue(elems []Value) Value {
 
 // Set writes a named property, appending it in insertion order if the key is new
 // and overwriting in place if it already exists, so a repeated key keeps its first
-// position the way JavaScript's own property order does. A new key on a
-// non-extensible object is dropped, the silent failure a plain write takes once
-// Object.preventExtensions has closed the object. It returns the receiver value so
-// JSON.parse can build an object in an expression.
+// position the way JavaScript's own property order does. A write to a non-writable
+// data property is dropped, the silent failure Object.freeze produces, and a new key
+// on a non-extensible object is dropped, the failure Object.preventExtensions
+// produces. It returns the receiver value so JSON.parse can build an object in an
+// expression.
 func (v Value) Set(key BStr, val Value) Value {
 	o := v.object()
 	for i := range o.keys {
 		if o.keys[i].Equal(key) {
+			if o.descs[i].isData() && !o.descs[i].writable {
+				return v
+			}
 			o.descs[i] = o.descs[i].write(v, val)
 			return v
 		}
@@ -126,7 +131,14 @@ func (v Value) SetKey(key BStr, val Value) Value {
 	case KindArray:
 		o := v.object()
 		if idx, ok := arrayIndex(key.ToGoString()); ok {
-			if idx >= len(o.elems) && o.nonExtensible {
+			if idx < len(o.elems) {
+				if o.elemsFrozen {
+					return val
+				}
+				o.elems[idx] = val
+				return val
+			}
+			if o.nonExtensible {
 				return val
 			}
 			for len(o.elems) <= idx {

@@ -1416,6 +1416,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectIntegrityUnary("preventExtensions", "PreventExtensions", argNodes)
 	case "seal":
 		return r.objectIntegrityUnary("seal", "Seal", argNodes)
+	case "freeze":
+		return r.objectIntegrityUnary("freeze", "Freeze", argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}

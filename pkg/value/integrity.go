@@ -46,3 +46,37 @@ func (v Value) Seal() Value {
 	}
 	return v
 }
+
+// Freeze seals the object and additionally marks every own data property
+// non-writable, so no property can be added, removed, redefined, or reassigned, the
+// runtime behind Object.freeze(o). An accessor property has no value to lock, so its
+// getter and setter are left in place; only its configurability is cleared, by the
+// seal. An array's elements are marked non-writable through the elemsFrozen flag, so
+// an element write drops. A non-object receiver has nothing to freeze and is
+// returned unchanged.
+func (v Value) Freeze() Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return v
+	}
+	o := v.object()
+	o.nonExtensible = true
+	for i := range o.descs {
+		o.descs[i].configurable = false
+		if o.descs[i].isData() {
+			o.descs[i].writable = false
+		}
+	}
+	for i := range o.symDescs {
+		o.symDescs[i].configurable = false
+		if o.symDescs[i].isData() {
+			o.symDescs[i].writable = false
+		}
+	}
+	if v.kind == KindArray {
+		o.elemsSealed = true
+		o.elemsFrozen = true
+	}
+	return v
+}
