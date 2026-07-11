@@ -1406,9 +1406,38 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectGetOwnPropertyDescriptors(argNodes)
 	case "is":
 		return r.objectIs(argNodes)
+	case "create":
+		return r.objectCreate(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
+}
+
+// objectCreate lowers Object.create(proto) and Object.create(proto, descs) to a
+// runtime ObjectCreate on the boxed prototype, which returns a new object whose
+// [[Prototype]] is that value. The two-argument form applies the descriptor map
+// through the same DefineProperties path Object.defineProperties takes, so the
+// created object gets its properties in one expression. The prototype and the
+// descriptor map are boxed the way any dynamic operand is; both are evaluated, so
+// no read is dropped.
+func (r *Renderer) objectCreate(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 && len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Object.create with other than one or two arguments is a later slice"}
+	}
+	proto, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	created := &ast.CallExpr{Fun: sel("value", "ObjectCreate"), Args: []ast.Expr{proto}}
+	if len(argNodes) == 1 {
+		return created, nil
+	}
+	descs, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: created, Sel: ident("DefineProperties")}, Args: []ast.Expr{descs}}, nil
 }
 
 // objectIs lowers Object.is(a, b), the SameValue equality, over two operands the
