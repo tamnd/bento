@@ -92,3 +92,41 @@ func (v Value) IsExtensible() bool {
 		return false
 	}
 }
+
+// sealed reports whether the object is sealed: not extensible and every own
+// property non-configurable, the state Object.seal leaves and TestIntegrityLevel
+// checks for "sealed". An array with elements is sealed only once its elements are
+// marked non-configurable too, which the elemsSealed flag records. The kind is
+// passed in because only an array carries element state apart from the descriptor
+// bag.
+func (o *Object) sealed(kind Kind) bool {
+	if o.isExtensible() {
+		return false
+	}
+	for i := range o.descs {
+		if o.descs[i].configurable {
+			return false
+		}
+	}
+	for i := range o.symDescs {
+		if o.symDescs[i].configurable {
+			return false
+		}
+	}
+	if kind == KindArray && len(o.elems) > 0 && !o.elemsSealed {
+		return false
+	}
+	return true
+}
+
+// IsSealed reports whether the receiver is sealed, the runtime behind
+// Object.isSealed(o). A non-object is treated as sealed, the answer the spec gives
+// for a primitive, which has no property to configure.
+func (v Value) IsSealed() bool {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return v.object().sealed(v.kind)
+	default:
+		return true
+	}
+}
