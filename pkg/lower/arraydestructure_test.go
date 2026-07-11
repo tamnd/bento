@@ -213,6 +213,41 @@ console.log(d);
 	}
 }
 
+// TestArrayMemberTargetAssignmentRuns proves an array destructuring assignment whose
+// targets are property accesses stores each element into the member target, reading the
+// source elements by index and landing them in the object fields.
+func TestArrayMemberTargetAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o = { a: 0, b: 0 };
+const xs: number[] = [1, 2];
+[o.a, o.b] = xs;
+console.log(o.a);
+console.log(o.b);
+`
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("array member-target assignment printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayMixedMemberTargetAssignmentRuns proves a target list that mixes a plain
+// local with a member target stores each element into its own kind of target in one
+// parallel assignment.
+func TestArrayMixedMemberTargetAssignmentRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+let a = 0;
+const o = { b: 0 };
+const xs: number[] = [7, 8];
+[a, o.b] = xs;
+console.log(a);
+console.log(o.b);
+`
+	if got, want := runProgramGo(t, src), "7\n8\n"; got != want {
+		t.Fatalf("mixed member-target assignment printed %q, want %q", got, want)
+	}
+}
+
 // TestArrayDestructureCallSourceLowersToTemp proves a non-variable array source, a
 // call returning an array, lowers by holding the source in a generated temporary read
 // once, then reading each element off that temporary, so the source is evaluated once.

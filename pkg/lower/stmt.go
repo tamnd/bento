@@ -1724,10 +1724,23 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 	// so a pattern with either takes its own path; the plain pattern keeps the single
 	// parallel assignment that makes the swap idiom fall out.
 	if anyDefault || hasRest {
+		for _, el := range elems {
+			if el.memberNode != nil {
+				return nil, true, &NotYetLowerable{Reason: "an array assignment that combines a member target with a default or rest is a later slice"}
+			}
+		}
 		return r.arrayDestructureAssignFill(elems, restNode, hasRest, rhs)
 	}
 	names := make([]ast.Expr, 0, len(fixedTargets))
 	for _, el := range elems {
+		if el.memberNode != nil {
+			lhs, err := r.memberAssignTarget(el.memberNode)
+			if err != nil {
+				return nil, true, err
+			}
+			names = append(names, lhs)
+			continue
+		}
 		name, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "array assignment target is not a Go identifier"}
@@ -1958,6 +1971,11 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	// pattern with any default takes the block path; the default-free pattern keeps
 	// the single parallel assignment.
 	if anyDefault {
+		for _, el := range elems {
+			if el.bindMember != nil {
+				return nil, true, &NotYetLowerable{Reason: "an object assignment that combines a member target with a default is a later slice"}
+			}
+		}
 		return r.objectDestructureAssignDefaults(elems, optionalField, rhs)
 	}
 	names := make([]ast.Expr, 0, len(props))
@@ -1971,15 +1989,24 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
 		}
-		name, ok := localName(r.prog.Text(el.bindNode))
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
-		}
 		recv, err := r.lowerExpr(rhs)
 		if err != nil {
 			return nil, true, err
 		}
-		names = append(names, ident(name))
+		var lhs ast.Expr
+		if el.bindMember != nil {
+			lhs, err = r.memberAssignTarget(el.bindMember)
+			if err != nil {
+				return nil, true, err
+			}
+		} else {
+			name, ok := localName(r.prog.Text(el.bindNode))
+			if !ok {
+				return nil, true, &NotYetLowerable{Reason: "object assignment target is not a Go identifier"}
+			}
+			lhs = ident(name)
+		}
+		names = append(names, lhs)
 		values = append(values, &ast.SelectorExpr{X: recv, Sel: ident(field)})
 	}
 	return &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}, true, nil

@@ -69,11 +69,14 @@ console.log(c);
 	}
 }
 
-// TestArrayDestructureAssignMemberTargetHandsBack proves a member target hands back,
-// since assigning into a field through the pattern is a later slice.
-func TestArrayDestructureAssignMemberTargetHandsBack(t *testing.T) {
-	const src = "const o = { x: 0, y: 0 };\nconst pair: number[] = [1, 2];\n[o.x, o.y] = pair;\nconsole.log(o.x);\n"
-	renderProgramHandBack(t, src)
+// TestArrayDestructureAssignMemberTargetRuns proves a member target lowers and runs,
+// storing each element into the field it names.
+func TestArrayDestructureAssignMemberTargetRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o = { x: 0, y: 0 };\nconst pair: number[] = [1, 2];\n[o.x, o.y] = pair;\nconsole.log(o.x);\nconsole.log(o.y);\n"
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("array member target assignment printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayDestructureAssignArityMismatchHandsBack proves a literal source with a
