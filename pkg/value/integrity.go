@@ -130,3 +130,40 @@ func (v Value) IsSealed() bool {
 		return true
 	}
 }
+
+// frozen reports whether the object is frozen: sealed and every own data property
+// non-writable, the state Object.freeze leaves and TestIntegrityLevel checks for
+// "frozen". An accessor property has no writability to check, so only data
+// properties are examined. An array with elements is frozen only once its elements
+// are marked non-writable too, which the elemsFrozen flag records.
+func (o *Object) frozen(kind Kind) bool {
+	if !o.sealed(kind) {
+		return false
+	}
+	for i := range o.descs {
+		if o.descs[i].isData() && o.descs[i].writable {
+			return false
+		}
+	}
+	for i := range o.symDescs {
+		if o.symDescs[i].isData() && o.symDescs[i].writable {
+			return false
+		}
+	}
+	if kind == KindArray && len(o.elems) > 0 && !o.elemsFrozen {
+		return false
+	}
+	return true
+}
+
+// IsFrozen reports whether the receiver is frozen, the runtime behind
+// Object.isFrozen(o). A non-object is treated as frozen, the answer the spec gives
+// for a primitive, which has no property to write.
+func (v Value) IsFrozen() bool {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		return v.object().frozen(v.kind)
+	default:
+		return true
+	}
+}
