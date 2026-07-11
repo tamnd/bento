@@ -1,6 +1,13 @@
 package lower
 
-import "testing"
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // TestNewPromiseResolveReachesThen checks that new Promise runs its executor now and
 // that a resolve settles the promise so a then callback fires, after the synchronous
@@ -144,5 +151,46 @@ console.log("sync");
 	want := "sync\ncaught:boom\nn:2\nflat:20\n"
 	if got != want {
 		t.Fatalf("promise then chaining = %q, want %q", got, want)
+	}
+}
+
+// TestUnhandledRejectionReportsAndExits proves the unhandled-rejection path end to end:
+// a program that rejects a promise and never observes it runs to the end of main, drains
+// the microtask queue, then reports the rejection to standard error and exits non-zero,
+// the way a runtime surfaces an unhandledrejection once the checkpoint is clear. Building
+// and running is the oracle: the whole point is that a test asserting a rejection can
+// observe it through the crash rather than have it vanish into a false pass. The
+// synchronous log still reaches stdout, since the report runs only after the run finishes.
+func TestUnhandledRejectionReportsAndExits(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the unhandled-rejection test builds and runs generated Go")
+	}
+	source := renderProgram(t, "const failing: Promise<number> = Promise.reject(\"boom\");\nconsole.log(\"sync\");\n")
+	dir, err := os.MkdirTemp(repoRoot(t), "rejectrun-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err == nil {
+		t.Fatalf("an unhandled rejection exited zero:\n--- program ---\n%s", source)
+	}
+	if _, ok := err.(*exec.ExitError); !ok {
+		t.Fatalf("go run failed to launch: %v\n--- program ---\n%s\n--- stderr ---\n%s", err, source, stderr.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "Uncaught (in promise) boom") {
+		t.Errorf("unhandled rejection printed %q to stderr, want the unhandled-rejection line", got)
+	}
+	if got := stdout.String(); got != "sync\n" {
+		t.Errorf("unhandled rejection wrote %q to stdout, want the synchronous log only", got)
 	}
 }

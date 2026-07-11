@@ -27,4 +27,5 @@ func main() {
 	})
 	value.ConsoleLog(value.FromGoString("sync"))
 	value.RunMicrotasks()
+	value.ReportUnhandledRejections()
 }

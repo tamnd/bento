@@ -1,5 +1,7 @@
 package value
 
+import "os"
+
 // This file is the value-model side of a JavaScript promise, the smallest honest
 // piece the class-shape tests observe (spec 2075 doc 11 owns the full event loop).
 // A compiled test262 job runs to completion in a single turn: there are no timers
@@ -50,6 +52,47 @@ func RunMicrotasks() {
 	}
 }
 
+// ReportUnhandledRejections surfaces every promise that settled rejected and was never
+// subscribed to, the unhandled-rejection path JavaScript runs after the microtask
+// checkpoint. It prints each one to stderr in the shape Node uses and, if any exist,
+// exits non-zero, so a test that asserts a rejection observes the crash rather than a
+// false pass. The assembled main calls it once, right after the final microtask drain,
+// so every reaction that could still consume a rejection has already run.
+func ReportUnhandledRejections() {
+	reported := false
+	for _, p := range trackedRejections {
+		reason, unhandled := p.unhandledReason()
+		if !unhandled {
+			continue
+		}
+		v := thrownValue(reason)
+		line := "Uncaught (in promise) " + describeRejection(v)
+		_, _ = os.Stderr.WriteString(line + "\n")
+		reported = true
+	}
+	if reported {
+		os.Exit(1)
+	}
+}
+
+// describeRejection renders a rejection reason the way Node names it on the
+// unhandled-rejection line: an error object shows its name and message, and any other
+// value shows its string form, so a rejection with a plain string or number reason is
+// still legible rather than collapsed to a generic label.
+func describeRejection(v Value) string {
+	name := v.Get(FromGoString("name"))
+	if name.Kind() == KindString {
+		text := name.AsString().ToGoString()
+		if msg := v.Get(FromGoString("message")); msg.Kind() == KindString {
+			if m := msg.AsString().ToGoString(); m != "" {
+				return text + ": " + m
+			}
+		}
+		return text
+	}
+	return ToString(v).ToGoString()
+}
+
 // promiseState is which of the three states a promise is in: pending until it
 // settles, then fulfilled with a value or rejected with a reason. An await-free
 // async body settles its promise the moment it returns, so its promise is born in a
@@ -73,7 +116,29 @@ type Promise[T any] struct {
 	value    T
 	reason   Thrown
 	onSettle []func()
+	handled  bool
 }
+
+// rejectedPromise is the element-type-erased view the end-of-run check reads a
+// rejected promise through, so trackedRejections can hold promises of any element
+// type in one slice. unhandledReason reports the rejection reason and whether it is
+// still unhandled, the pair the reporter needs without knowing T.
+type rejectedPromise interface {
+	unhandledReason() (Thrown, bool)
+}
+
+// unhandledReason satisfies rejectedPromise: a promise is an unhandled rejection when
+// it settled rejected and no reaction ever subscribed to it, JavaScript's condition
+// for the unhandledrejection signal.
+func (p *Promise[T]) unhandledReason() (Thrown, bool) {
+	return p.reason, p.state == promiseRejected && !p.handled
+}
+
+// trackedRejections records every promise that rejects, so ReportUnhandledRejections
+// can surface the ones no handler consumed after the microtask queue drains. A single
+// package-level list matches the single event loop; the compiled job is single-turn,
+// so the list is filled during the run and read once at the end.
+var trackedRejections []rejectedPromise
 
 // Resolved mints a promise already fulfilled with v, the promise an await-free
 // async body returns when it runs to a normal completion.
@@ -84,7 +149,9 @@ func Resolved[T any](v T) *Promise[T] {
 // Rejected mints a promise already rejected with reason, the promise an async body
 // returns when it throws. The reason is the thrown value a catch would recover.
 func Rejected[T any](reason Thrown) *Promise[T] {
-	return &Promise[T]{state: promiseRejected, reason: reason}
+	p := &Promise[T]{state: promiseRejected, reason: reason}
+	trackedRejections = append(trackedRejections, p)
+	return p
 }
 
 // fulfill settles a pending promise with v, running its registered reactions as
@@ -107,6 +174,7 @@ func (p *Promise[T]) reject(reason Thrown) {
 	}
 	p.state = promiseRejected
 	p.reason = reason
+	trackedRejections = append(trackedRejections, p)
 	p.flush()
 }
 
@@ -125,6 +193,7 @@ func (p *Promise[T]) flush() {
 // JavaScript always defers a reaction to the microtask checkpoint rather than running
 // it inline.
 func (p *Promise[T]) subscribe(reaction func()) {
+	p.handled = true
 	if p.state == promisePending {
 		p.onSettle = append(p.onSettle, reaction)
 		return
