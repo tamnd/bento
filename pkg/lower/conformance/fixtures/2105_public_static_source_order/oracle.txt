@@ -1,0 +1,7 @@
+== stdout:
+field a
+static block
+field b
+1,2
+== exit:
+0
