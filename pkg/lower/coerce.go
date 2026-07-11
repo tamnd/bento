@@ -258,6 +258,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.objectBoxedResultCall(n) {
 		return true
 	}
+	// A borrowed Array.prototype.<m>.call/apply on a generic receiver runs the
+	// generic-receiver runtime, whose result is a boxed value.Value whatever the
+	// method returns. The checker types the borrowed call off the method's static
+	// signature, not any, so isDynamic recognizes it by shape here to keep the box on
+	// the dynamic path where a member or element read dispatches through Get.
+	if r.arrayProtoBorrowedResultCall(n) {
+		return true
+	}
 	// An object rest binding an untyped pattern gathered holds the plain object
 	// ObjectRest built, a boxed value.Value, even though the checker gave it the fixed
 	// shape of the properties the pattern did not name. A property read off it must
@@ -294,6 +302,32 @@ func (r *Renderer) objectBoxedResultCall(n frontend.Node) bool {
 	}
 	method := r.prog.Text(parts[1])
 	return method == "fromEntries" || method == "entries"
+}
+
+// arrayProtoBorrowedResultCall reports whether n is a call whose callee is
+// Array.prototype.<m>.call or Array.prototype.<m>.apply, the borrowed form the
+// generic-receiver runtime lowers to a boxed value.Value. isDynamic recognizes it
+// by shape so the box stays on the dynamic path whatever static type the checker
+// gave the borrowed method's result.
+func (r *Renderer) arrayProtoBorrowedResultCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 {
+		return false
+	}
+	switch r.prog.Text(parts[1]) {
+	case "call", "apply":
+	default:
+		return false
+	}
+	_, ok := r.arrayProtoMethodName(parts[0])
+	return ok
 }
 
 // callOfDynamicStorage reports whether n is a call whose callee is a bare
