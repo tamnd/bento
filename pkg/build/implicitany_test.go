@@ -75,14 +75,22 @@ func TestUntypedDestructuredParamLowers(t *testing.T) {
 	}
 }
 
-// TestUntypedArrayDestructuredParamStillGates pins the honest boundary: an untyped
-// array destructuring parameter reads through the dynamic index protocol, a later
-// slice, so it hands back at the front door rather than emitting broken Go.
-func TestUntypedArrayDestructuredParamStillGates(t *testing.T) {
+// TestUntypedArrayDestructuredParamLowers pins that an untyped array destructuring
+// parameter now lowers rather than gating. Each element draws "Binding element
+// implicitly has an 'any' type", which the front door tolerates, and the lowerer gives
+// the parameter one boxed value.Value slot whose positions read out through the dynamic
+// GetIndex protocol.
+func TestUntypedArrayDestructuredParamLowers(t *testing.T) {
 	src := "function g([a, b]) { return a; }\nconsole.log(String(g([3, 4])));\n"
-	_, err := compileSource(t, src)
-	if err == nil {
-		t.Fatal("untyped array destructured parameter should still gate at the front door")
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("untyped array destructured parameter should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "func G(__0 value.Value)") {
+		t.Fatalf("expected the array parameter to take a dynamic slot, got:\n%s", out)
+	}
+	if !strings.Contains(out, "__0.GetIndex(0)") {
+		t.Fatalf("expected the bound position to read through the dynamic GetIndex protocol, got:\n%s", out)
 	}
 }
 

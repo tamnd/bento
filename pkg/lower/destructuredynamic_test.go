@@ -112,13 +112,41 @@ console.log(f({ x: 4, y: 5, z: 6 }));`))
 	}
 }
 
-// TestUntypedArrayParamHandsBack proves an untyped array-pattern parameter, whose
-// dynamic index reads are a later slice, hands back rather than emitting broken Go.
-func TestUntypedArrayParamHandsBack(t *testing.T) {
-	reason := renderUntypedBindingHandBack(t, `function f([a, b]) { return a; }
+// TestUntypedArrayParamLowersToDynamicSlot proves an untyped array-pattern parameter
+// takes one boxed value.Value slot and reads its positions through the dynamic GetIndex
+// protocol, the index analog of the object pattern's Get.
+func TestUntypedArrayParamLowersToDynamicSlot(t *testing.T) {
+	got := renderUntypedBinding(t, `function f([a, b]) { return a; }
 console.log(String(f([1, 2])));`)
-	if !strings.Contains(reason, "later slice") {
-		t.Fatalf("reason %q does not read as a later-slice hand-back", reason)
+	for _, want := range []string{
+		"func F(__0 value.Value) value.Value",
+		"a := __0.GetIndex(0)",
+		"b := __0.GetIndex(1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated Go missing %q\n%s", want, got)
+		}
+	}
+}
+
+// TestUntypedArrayParamRuns compiles and runs the array dynamic-slot lowering end to end,
+// so the boxed array flows into the parameter and each position reads back out.
+func TestUntypedArrayParamRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function f([a, b]) { return String(a) + String(b); }
+console.log(f([1, 2]));`))
+	if got != "12\n" {
+		t.Fatalf("got %q, want %q", got, "12\n")
+	}
+}
+
+// TestUntypedArrayRestParamHandsBack proves a rest on an untyped array pattern, a later
+// slice on this path, hands back rather than mislowering.
+func TestUntypedArrayRestParamHandsBack(t *testing.T) {
+	reason := renderUntypedBindingHandBack(t, `function f([a, ...rest]) { return a; }
+console.log(String(f([1, 2, 3])));`)
+	if !strings.Contains(reason, "rest") {
+		t.Fatalf("reason %q does not name the rest hand-back", reason)
 	}
 }
 
