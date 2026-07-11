@@ -705,6 +705,20 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return nil, &NotYetLowerable{Reason: "a Symbol.iterator reference on a non-user-iterable receiver is a later slice"}
 	}
+	// A manual obj[Symbol.asyncIterator] reads the async iterator factory a user async
+	// iterable defines, the Go SymbolAsyncIterator method, the async mirror of the
+	// Symbol.iterator reference: obj[Symbol.asyncIterator]() obtains the async iterator,
+	// then awaiting its .next() pulls each result.
+	if r.isSymbolAsyncIteratorExpr(idxNode) {
+		if _, ok := r.asyncIteratorShape(r.prog.TypeAt(obj)); ok {
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.SelectorExpr{X: recv, Sel: ident(symbolAsyncIteratorGoName)}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "a Symbol.asyncIterator reference on a non-user-async-iterable receiver is a later slice"}
+	}
 	// A typed-array read a[i] returns its element as a Number through the buffer's own
 	// At, the same method name a typed Array indexes through, so the receivers share
 	// this shape and differ only in which value type carries At. A typed array is not
