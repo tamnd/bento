@@ -67,6 +67,27 @@ func arrayLikeHas(recv Value, k int) bool {
 	return recv.HasProperty(NumberToString(float64(k)))
 }
 
+// ArrayFromArrayLike builds an array from an array-like source, the general form
+// Array.from takes when the source is a plain object carrying a length and
+// integer keys rather than an iterable. It reads length the spec's ToLength way,
+// then reads each index in order, a missing index reading undefined, so the
+// result is dense with an undefined wherever the source had no key. When mapFn is
+// not undefined it is called with each element and its index and the result
+// becomes the element, matching Array.from's optional map callback.
+func ArrayFromArrayLike(src, mapFn Value) Value {
+	n := arrayLikeLen(src)
+	elems := make([]Value, n)
+	mapped := !mapFn.IsUndefined()
+	for i := 0; i < n; i++ {
+		v := arrayLikeGet(src, i)
+		if mapped {
+			v = mapFn.Call(v, Number(float64(i)))
+		}
+		elems[i] = v
+	}
+	return NewArrayValue(elems)
+}
+
 // sameValueZero compares two values the way SameValueZero does, strict equality
 // except that NaN equals NaN, the equality Array.prototype.includes uses so a hole
 // or a stored NaN is found.

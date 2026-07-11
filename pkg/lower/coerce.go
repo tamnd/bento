@@ -266,6 +266,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.arrayProtoBorrowedResultCall(n) {
 		return true
 	}
+	// Array.from over a dynamic source, or with a map callback, lowers to
+	// value.ArrayFromArrayLike, whose result is a boxed value.Value. The checker
+	// types Array.from as a concrete array, so isDynamic recognizes the boxed form
+	// by shape to keep a member or element read off the result on the dynamic path.
+	if r.arrayFromBoxedResultCall(n) {
+		return true
+	}
 	// An object rest binding an untyped pattern gathered holds the plain object
 	// ObjectRest built, a boxed value.Value, even though the checker gave it the fixed
 	// shape of the properties the pattern did not name. A property read off it must
@@ -328,6 +335,35 @@ func (r *Renderer) arrayProtoBorrowedResultCall(n frontend.Node) bool {
 	}
 	_, ok := r.arrayProtoMethodName(parts[0])
 	return ok
+}
+
+// arrayFromBoxedResultCall reports whether n is an Array.from call the lowerer
+// routes to value.ArrayFromArrayLike, whose result is a boxed value.Value: the
+// form over a dynamic source, with or without a map callback, as opposed to the
+// copy of a typed array, string, or user iterable. A dynamic source means the
+// surrounding context is dynamic too, so the boxed array flows without a
+// representation mismatch; a map callback over a typed source, whose result the
+// checker types a concrete array, is a later slice and does not take this path.
+// isDynamic recognizes the boxed form by shape so a read off the result stays on
+// the dynamic path whatever array type the checker gave Array.from. The routing
+// in arrayFrom shares this same rule.
+func (r *Renderer) arrayFromBoxedResultCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 || !r.isGlobalRef(parts[0], "Array") || r.prog.Text(parts[1]) != "from" {
+		return false
+	}
+	args := kids[1:]
+	if len(args) < 1 || len(args) > 2 {
+		return false
+	}
+	return r.isDynamic(args[0])
 }
 
 // callOfDynamicStorage reports whether n is a call whose callee is a bare
