@@ -223,6 +223,56 @@ console.log("after-call");
 	}
 }
 
+// TestAsyncAwaitThenThrowRejects runs the emitted Go and pins that a throw after an
+// await rejects the returned promise: the coroutine unwinds the throw and settles its
+// promise rejected, which a .catch observes at the microtask checkpoint.
+func TestAsyncAwaitThenThrowRejects(t *testing.T) {
+	const src = `async function base(): Promise<number> {
+  return 1;
+}
+async function boom(): Promise<number> {
+  const a = await base();
+  if (a > 0) {
+    throw new Error("bang:" + a);
+  }
+  return a;
+}
+boom().catch((e) => console.log("caught:" + e.message));
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\ncaught:bang:1\n"
+	if got != want {
+		t.Errorf("reject-after-await ordering wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestAwaitRejectedThrowsIntoBody runs the emitted Go and pins that awaiting a rejected
+// promise raises the rejection at the await, where a try/catch around it recovers: the
+// body returns a fallback and the returned promise fulfills with it.
+func TestAwaitRejectedThrowsIntoBody(t *testing.T) {
+	const src = `async function rejects(): Promise<number> {
+  throw new Error("inner");
+  return 0;
+}
+async function outer(): Promise<number> {
+  try {
+    return await rejects();
+  } catch (e: any) {
+    console.log("caught-in-body:" + e.message);
+    return -1;
+  }
+}
+outer().then((v) => console.log("result:" + v));
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "sync\ncaught-in-body:inner\nresult:-1\n"
+	if got != want {
+		t.Errorf("await-on-rejected ordering wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestAsyncMethodResolvesAfterSyncCode runs the emitted Go and pins the
 // microtask ordering: a .then callback registered during the synchronous run
 // fires only after that run completes, at the end-of-main drain.
