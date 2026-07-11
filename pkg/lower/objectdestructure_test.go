@@ -88,6 +88,23 @@ func TestObjectDestructureDefaultRuns(t *testing.T) {
 	}
 }
 
+// TestObjectDestructureRenameDefaultRuns proves a renamed target carrying a default
+// applies the rename to the target and the default to the undefined case together: the
+// present property feeds the renamed local, and the missing optional property takes the
+// default under the renamed name.
+func TestObjectDestructureRenameDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o: { x: number; y?: number } = { x: 1 };
+const { x: a, y: b = 9 } = o;
+console.log(a);
+console.log(b);
+`
+	if got, want := runProgramGo(t, src), "1\n9\n"; got != want {
+		t.Fatalf("object rename-default destructure printed %q, want %q", got, want)
+	}
+}
+
 // TestObjectDestructureComputedKeyHandsBack proves a computed key hands back, since
 // reading the source by a key computed at run time needs the dynamic object model of
 // phase 7 rather than a static field selector.
