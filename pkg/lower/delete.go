@@ -120,6 +120,8 @@ func (r *Renderer) deleteElement(target frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DeleteElem")}, Args: []ast.Expr{idx}}, nil
 	case r.isString(idxNode):
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Delete")}, Args: []ast.Expr{idx}}, nil
+	case r.isSymbol(idxNode):
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DeleteElem")}, Args: []ast.Expr{idx}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "delete with a non-number, non-string index is a later slice"}
 	}

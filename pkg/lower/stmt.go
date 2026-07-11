@@ -1134,6 +1134,23 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 		}
 		return boxed, nil
 	}
+	// A `const s = Symbol()` binding holds the boxed symbol value.NewSymbol builds, but
+	// the checker types it unique symbol, a flagless type the dynamic guards do not see
+	// and typeExpr cannot name. The boxed initializer is returned straight, so := infers
+	// its value.Value slot without a typed var, and the binding is marked dynamic so every
+	// later use of it, above all its use as a computed key `o[s]`, routes through the value
+	// model that keys the property bag by symbol identity. An annotated `let s: symbol`
+	// binding carries the symbol flag already, so isSymbol routes it without the mark.
+	if r.isSymbolConstructorCall(initNode) {
+		boxed, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
 	// An object literal in a slot whose declared shape has an optional property
 	// must build at that shape rather than its own all-required type, the contextual
 	// typing objectLiteralContextual applies. A slot that is itself T | undefined
@@ -1619,6 +1636,18 @@ func (r *Renderer) dynamicSourceDestructure(patNode, initNode frontend.Node) ([]
 	}
 	r.collectDynRestNames(patNode, r.dynBoundLocals)
 	return append(prefix, stmts...), true, nil
+}
+
+// isSymbolConstructorCall reports whether n is a call to the ambient Symbol
+// constructor, `Symbol()` or `Symbol(desc)`, whose result is a boxed symbol value.
+// A user binding named Symbol shadows the global and is not this call, so the
+// ambient-global check keeps the two apart.
+func (r *Renderer) isSymbolConstructorCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	return len(kids) >= 1 && r.prog.Text(kids[0]) == "Symbol" && r.isAmbientGlobal(kids[0])
 }
 
 // markDynBound records that a local's Go slot holds a boxed value.Value, so every

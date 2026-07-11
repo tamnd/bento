@@ -205,6 +205,16 @@ func (r *Renderer) caughtErrorStringRead(n frontend.Node) bool {
 	return prop == "message" || prop == "name"
 }
 
+// isSymbol reports whether the checker types n as a symbol, the guard that routes a
+// computed key `o[s]` through the runtime GetElem and SetElem, where the boxed
+// symbol looks up the property bag by identity. Only an explicitly annotated symbol
+// carries the flag: a `const s = Symbol()` binding is typed unique symbol, which
+// the frontend leaves flagless, so that form is recognized instead by the dynamic
+// mark its initializer set.
+func (r *Renderer) isSymbol(n frontend.Node) bool {
+	return r.prog.TypeAt(n).Flags&frontend.TypeSymbol != 0
+}
+
 // isBigInt reports whether the checker types n as bigint, the guard that routes the
 // operators and coercions to the *big.Int method forms rather than the float64
 // operator forms. It sees through a branded alias the same way isNumber does, so a
