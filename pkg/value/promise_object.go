@@ -37,6 +37,12 @@ func NewPromise[T any](executor func(resolve func(T), reject func(Value))) (p *P
 	return p
 }
 
+// NewRejection wraps an arbitrary value into the Thrown a rejected promise carries,
+// so Promise.reject and a manual Rejected can settle with any JavaScript value, not
+// only a runtime Error. A catch handler or a rejected await reads the value back
+// through the Thrown's ToValue.
+func NewRejection(reason Value) Thrown { return rejectionValue{reason} }
+
 // rejectionValue wraps the arbitrary value a reject call carries into a Thrown, so a
 // promise's reason field (typed Thrown) can hold any JavaScript value, not only a
 // runtime Error. A catch handler or a rejected await reads the original value back
