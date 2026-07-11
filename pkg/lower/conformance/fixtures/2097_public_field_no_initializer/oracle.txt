@@ -1,0 +1,5 @@
+== stdout:
+ctor sees undefined|undefined
+undefined|undefined
+== exit:
+0
