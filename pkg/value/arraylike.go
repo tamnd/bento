@@ -169,6 +169,102 @@ func GenericReverse(recv Value) Value {
 	return recv
 }
 
+// callBack invokes a boxed callback with the three arguments the array iteration
+// methods pass, the element, its index as a number, and the receiver object, the
+// (value, index, object) signature the spec calls the callback with. A thisArg, if
+// the borrow supplied one, is dropped: bento's functions take no this, so a callback
+// that reads this hands back when it is lowered, and one that does not is unaffected.
+func callBack(cb, recv, elem Value, k int) Value {
+	return cb.Call(elem, Number(float64(k)), recv)
+}
+
+// GenericForEach runs Array.prototype.forEach on a generic receiver, calling the
+// callback with each element, its index, and the receiver, and returning undefined.
+func GenericForEach(recv, cb Value, thisArg ...Value) Value {
+	n := arrayLikeLen(recv)
+	for k := 0; k < n; k++ {
+		callBack(cb, recv, arrayLikeGet(recv, k), k)
+	}
+	return Undefined
+}
+
+// GenericMap runs Array.prototype.map on a generic receiver, returning a new array
+// whose element k is the callback's result on element k. The result is a real array
+// whatever the receiver's kind, so a borrowed map on an array-like still yields an
+// array.
+func GenericMap(recv, cb Value, thisArg ...Value) Value {
+	n := arrayLikeLen(recv)
+	out := make([]Value, n)
+	for k := 0; k < n; k++ {
+		out[k] = callBack(cb, recv, arrayLikeGet(recv, k), k)
+	}
+	return NewArrayValue(out)
+}
+
+// GenericFilter runs Array.prototype.filter on a generic receiver, returning a new
+// array of the elements for which the callback's result is truthy, in order.
+func GenericFilter(recv, cb Value, thisArg ...Value) Value {
+	n := arrayLikeLen(recv)
+	out := []Value{}
+	for k := 0; k < n; k++ {
+		elem := arrayLikeGet(recv, k)
+		if ToBoolean(callBack(cb, recv, elem, k)) {
+			out = append(out, elem)
+		}
+	}
+	return NewArrayValue(out)
+}
+
+// GenericSome runs Array.prototype.some on a generic receiver, reporting whether the
+// callback's result is truthy for any element, stopping at the first that is.
+func GenericSome(recv, cb Value, thisArg ...Value) Value {
+	n := arrayLikeLen(recv)
+	for k := 0; k < n; k++ {
+		if ToBoolean(callBack(cb, recv, arrayLikeGet(recv, k), k)) {
+			return Bool(true)
+		}
+	}
+	return Bool(false)
+}
+
+// GenericEvery runs Array.prototype.every on a generic receiver, reporting whether
+// the callback's result is truthy for every element, stopping at the first that is
+// not.
+func GenericEvery(recv, cb Value, thisArg ...Value) Value {
+	n := arrayLikeLen(recv)
+	for k := 0; k < n; k++ {
+		if !ToBoolean(callBack(cb, recv, arrayLikeGet(recv, k), k)) {
+			return Bool(false)
+		}
+	}
+	return Bool(true)
+}
+
+// GenericFind runs Array.prototype.find on a generic receiver, returning the first
+// element for which the callback's result is truthy, or undefined when none is.
+func GenericFind(recv, cb Value, thisArg ...Value) Value {
+	n := arrayLikeLen(recv)
+	for k := 0; k < n; k++ {
+		elem := arrayLikeGet(recv, k)
+		if ToBoolean(callBack(cb, recv, elem, k)) {
+			return elem
+		}
+	}
+	return Undefined
+}
+
+// GenericFindIndex runs Array.prototype.findIndex on a generic receiver, returning
+// the index of the first element for which the callback's result is truthy, or -1.
+func GenericFindIndex(recv, cb Value, thisArg ...Value) Value {
+	n := arrayLikeLen(recv)
+	for k := 0; k < n; k++ {
+		if ToBoolean(callBack(cb, recv, arrayLikeGet(recv, k), k)) {
+			return Number(float64(k))
+		}
+	}
+	return Number(-1)
+}
+
 // GenericIncludes runs Array.prototype.includes on a generic receiver, reporting
 // whether any element at or after fromIndex is SameValueZero-equal to target, so a
 // stored NaN is found where indexOf would miss it. The result boxes to a boolean.
