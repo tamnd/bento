@@ -74,6 +74,12 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
 	}
 	ec := r.prog.Children(el)
+	// A computed key ({[k]: v}) reads the source by a key the pattern computes at run
+	// time, which needs the dynamic object model to index a value by a run-time key, a
+	// phase 7 capability. It hands back rather than guess the key statically.
+	if len(ec) > 0 && strings.HasPrefix(strings.TrimSpace(r.prog.Text(ec[0])), "[") {
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring computed key reads the source by a key computed at run time, which needs the dynamic object model of phase 7"}
+	}
 	switch {
 	case len(ec) == 1 && ec[0].Kind() == frontend.NodeIdentifier:
 		return objectDefaultElem{nameNode: ec[0], bindNode: ec[0]}, nil
@@ -82,7 +88,7 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && !strings.Contains(r.childGap(el, ec[0], ec[1]), ":"):
 		return objectDefaultElem{nameNode: ec[0], bindNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
 	default:
-		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring computed key, renamed default, or nested pattern is a later slice"}
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring renamed default or nested pattern is a later slice"}
 	}
 }
 
@@ -134,6 +140,11 @@ func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignEle
 		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
 	}
 	pc := r.prog.Children(prop)
+	// A computed key reads the source by a run-time key, which needs the dynamic object
+	// model of phase 7 the same way the declaration form does.
+	if len(pc) > 0 && strings.HasPrefix(strings.TrimSpace(r.prog.Text(pc[0])), "[") {
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment computed key reads the source by a key computed at run time, which needs the dynamic object model of phase 7"}
+	}
 	switch {
 	case len(pc) == 1 && pc[0].Kind() == frontend.NodeIdentifier:
 		return objectAssignElem{nameNode: pc[0], bindNode: pc[0]}, nil
@@ -142,7 +153,7 @@ func (r *Renderer) classifyObjectAssignElem(prop frontend.Node) (objectAssignEle
 	case len(pc) == 3 && pc[0].Kind() == frontend.NodeIdentifier && r.prog.Text(pc[1]) == "=":
 		return objectAssignElem{nameNode: pc[0], bindNode: pc[0], hasDefault: true, defNode: pc[2]}, nil
 	default:
-		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment computed key, renamed default, or nested pattern is a later slice"}
+		return objectAssignElem{}, &NotYetLowerable{Reason: "an object assignment renamed default or nested pattern is a later slice"}
 	}
 }
 
