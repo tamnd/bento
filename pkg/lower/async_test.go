@@ -103,6 +103,38 @@ shout("hi");
 	}
 }
 
+// TestAsyncArrowEmitsResolvedPromise pins that an async arrow returns a promise,
+// with a concise body wrapped directly in value.Async.
+func TestAsyncArrowEmitsResolvedPromise(t *testing.T) {
+	const src = `const triple = async (n: number): Promise<number> => n * 3;
+triple(4);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func(n float64) *value.Promise[float64]") {
+		t.Errorf("async arrow did not return a promise of its element type:\n%s", source)
+	}
+	if !strings.Contains(source, "return value.Async(func() float64 {") {
+		t.Errorf("async arrow body did not wrap in value.Async:\n%s", source)
+	}
+}
+
+// TestAsyncFuncExprEmitsResolvedPromise pins that an async function expression
+// returns a promise, its block body wrapped in value.Async.
+func TestAsyncFuncExprEmitsResolvedPromise(t *testing.T) {
+	const src = `const inc = async function (n: number): Promise<number> {
+  return n + 1;
+};
+inc(9);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func(n float64) *value.Promise[float64]") {
+		t.Errorf("async function expression did not return a promise:\n%s", source)
+	}
+	if !strings.Contains(source, "return value.Async(func() float64 {") {
+		t.Errorf("async function expression body did not wrap in value.Async:\n%s", source)
+	}
+}
+
 // TestAsyncMethodResolvesAfterSyncCode runs the emitted Go and pins the
 // microtask ordering: a .then callback registered during the synchronous run
 // fires only after that run completes, at the end-of-main drain.
