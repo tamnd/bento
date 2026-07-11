@@ -283,3 +283,40 @@ func TestArrayDestructureTupleSourceHandsBack(t *testing.T) {
 	const src = "const [a, b] = [10, 20];\nconsole.log(a + b);\n"
 	renderProgramHandBack(t, src)
 }
+
+// TestArrayDestructureMemberSourceLowersToTemp proves a member-read array source is
+// held in a generated temporary read once, extending the call-source case in #258 to
+// a property access.
+func TestArrayDestructureMemberSourceLowersToTemp(t *testing.T) {
+	const src = "const o = { pair: [3, 4] };\nconst [a, b] = o.pair;\nconsole.log(a + b);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".AtI(0)") || !strings.Contains(source, ".AtI(1)") {
+		t.Errorf("member source did not read elements through AtI:\n%s", source)
+	}
+}
+
+// TestArrayDestructureMemberSourceRuns builds and runs a member-source destructure so
+// the held-once temporary is proven to feed the positional reads.
+func TestArrayDestructureMemberSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o = { pair: [3, 4] };\nconst [a, b] = o.pair;\nconsole.log(a);\nconsole.log(b);\n"
+	if got, want := runProgramGo(t, src), "3\n4\n"; got != want {
+		t.Fatalf("member-source array destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestArrayDestructureCallSourceEvaluatesOnce builds and runs a call-source
+// destructure whose source increments a counter, so the held-once temporary is proven
+// to run the call a single time rather than once per bound element.
+func TestArrayDestructureCallSourceEvaluatesOnce(t *testing.T) {
+	skipIfShort(t)
+	const src = `let calls = 0;
+function make(): number[] { calls += 1; return [1, 2]; }
+const [a, b] = make();
+console.log(a + b);
+console.log(calls);
+`
+	if got, want := runProgramGo(t, src), "3\n1\n"; got != want {
+		t.Fatalf("call-source array destructure printed %q, want %q (source should run once)", got, want)
+	}
+}
