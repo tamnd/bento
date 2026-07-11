@@ -1568,6 +1568,21 @@ func (r *Renderer) classReceiver(obj frontend.Node) (*classInfo, bool) {
 	return r.classOfNode(obj)
 }
 
+// superOrReceiver resolves the class a store target's receiver names, treating
+// super as the direct base of the class being lowered. A super member store,
+// super.x = v, targets the base member by name with no virtual dispatch, so it
+// resolves to the base class the way the super read does, while every other
+// receiver defers to classReceiver.
+func (r *Renderer) superOrReceiver(obj frontend.Node) (*classInfo, bool) {
+	if obj.Kind() == frontend.NodeSuperKeyword {
+		if r.curClass == nil || r.curClass.base == nil {
+			return nil, false
+		}
+		return r.curClass.base, true
+	}
+	return r.classReceiver(obj)
+}
+
 // classNameRef resolves an identifier that names a class itself, the A of new
 // A() or of a static access A.total, to the registered class. The identifier's
 // symbol must declare the exact registered declaration, so a nested class that
@@ -3116,7 +3131,7 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 	if !ok {
 		return nil, false, nil
 	}
-	if obj.Kind() != frontend.NodeThisKeyword && obj.Kind() != frontend.NodeIdentifier {
+	if obj.Kind() != frontend.NodeThisKeyword && obj.Kind() != frontend.NodeIdentifier && obj.Kind() != frontend.NodeSuperKeyword {
 		return nil, false, nil
 	}
 	if obj.Kind() == frontend.NodeIdentifier {
@@ -3124,7 +3139,7 @@ func (r *Renderer) classSetterStore(target frontend.Node, opText string, valueNo
 			return nil, false, nil
 		}
 	}
-	info, ok := r.classReceiver(obj)
+	info, ok := r.superOrReceiver(obj)
 	if !ok {
 		return nil, false, nil
 	}
