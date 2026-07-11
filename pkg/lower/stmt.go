@@ -1363,14 +1363,24 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	}
 	// The pattern is validated before the source is lowered, so an unsupported shape
 	// hands back before a temporary is minted for the source.
-	type binding struct{ name, field string }
+	type binding struct {
+		info     objectDefaultElem
+		name     string
+		field    string
+		optional bool
+	}
+	optionalField := map[string]bool{}
+	for _, pr := range r.prog.Properties(objType) {
+		optionalField[pr.Name] = pr.Optional
+	}
 	fields := make([]binding, len(elems))
 	for i, el := range elems {
-		ec := r.prog.Children(el)
-		if len(ec) != 1 || ec[0].Kind() != frontend.NodeIdentifier {
-			return nil, true, &NotYetLowerable{Reason: "an object destructuring rename, default, rest, or nested pattern is a later slice"}
+		info, err := r.classifyObjectElem(el)
+		if err != nil {
+			return nil, true, err
 		}
-		name, ok := localName(r.prog.Text(ec[0]))
+		prop := r.prog.Text(info.nameNode)
+		name, ok := localName(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
@@ -1378,7 +1388,7 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 		}
-		fields[i] = binding{name: name, field: field}
+		fields[i] = binding{info: info, name: name, field: field, optional: optionalField[prop]}
 	}
 	prefix, recv, err := r.destructureSource(initNode)
 	if err != nil {
@@ -1390,10 +1400,31 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		if err != nil {
 			return nil, true, err
 		}
+		read := &ast.SelectorExpr{X: rc, Sel: ident(b.field)}
+		// A default over an optional field fills when the property is undefined; the
+		// field read is an Opt the fill peels. A default over a required field can
+		// never fire, since the property is always present, so it binds the read
+		// directly and the default is dead.
+		if b.info.hasDefault && b.optional {
+			nameGo, err := r.typeExpr(r.prog.TypeAt(b.info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			def, err := r.lowerExpr(b.info.defNode)
+			if err != nil {
+				return nil, true, err
+			}
+			def, err = r.coerceToType(def, b.info.defNode, r.prog.TypeAt(b.info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, r.defaultFillStmts(b.name, nameGo, read, def)...)
+			continue
+		}
 		stmts = append(stmts, &ast.AssignStmt{
 			Lhs: []ast.Expr{ident(b.name)},
 			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident(b.field)}},
+			Rhs: []ast.Expr{read},
 		})
 	}
 	return stmts, true, nil
