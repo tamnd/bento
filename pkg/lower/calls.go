@@ -2441,6 +2441,8 @@ func (r *Renderer) arrayProtoBorrowedCall(name, method string, argNodes []fronte
 		return r.arrayGenericCall("GenericFill", args, methodArgs, 1)
 	case "reverse":
 		return r.arrayGenericCall("GenericReverse", args, methodArgs, 0)
+	case "slice":
+		return r.arrayGenericCall("GenericSlice", args, methodArgs, 0)
 	case "forEach":
 		return r.arrayGenericCall("GenericForEach", args, methodArgs, 1)
 	case "map":

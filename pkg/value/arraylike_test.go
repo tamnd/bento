@@ -201,6 +201,50 @@ func TestGenericReverse(t *testing.T) {
 	}
 }
 
+// TestGenericSlice proves slice reads the range [start, end) off a generic receiver,
+// honors relative bounds, and returns a new array of those elements.
+func TestGenericSlice(t *testing.T) {
+	o := arrayLike(4, Number(1), Number(2), Number(3), Number(4))
+	s := GenericSlice(o, Number(1), Number(3))
+	if s.Get(FromGoString("length")).AsNumber() != 2 {
+		t.Fatalf("slice length = %v, want 2", s.Get(FromGoString("length")).AsNumber())
+	}
+	for i, w := range []float64{2, 3} {
+		if v := s.GetIndex(float64(i)); v.AsNumber() != w {
+			t.Fatalf("slice[%d] = %v, want %v", i, v.AsNumber(), w)
+		}
+	}
+	// A negative start counts from the end, and an omitted end runs to the length.
+	tail := GenericSlice(o, Number(-2))
+	if tail.Get(FromGoString("length")).AsNumber() != 2 || tail.GetIndex(0).AsNumber() != 3 {
+		t.Fatalf("slice(-2) = %v, want [3 4]", ToString(tail))
+	}
+}
+
+// TestGenericResultIsRealArray proves map, filter, and slice on a generic receiver
+// return a real array, not a plain object: the result stringifies the array way, as
+// its elements joined by commas rather than the [object Object] tag an object gives.
+func TestGenericResultIsRealArray(t *testing.T) {
+	o := arrayLike(3, Number(1), Number(2), Number(3))
+	cases := []struct {
+		name string
+		got  Value
+		want string
+	}{
+		{"map", GenericMap(o, double()), "2,4,6"},
+		{"filter", GenericFilter(o, isEven()), "2"},
+		{"slice", GenericSlice(o, Number(1)), "2,3"},
+	}
+	for _, c := range cases {
+		if c.got.kind != KindArray {
+			t.Fatalf("%s result kind = %v, want array", c.name, c.got.kind)
+		}
+		if s := ToString(c.got).ToGoString(); s != c.want {
+			t.Fatalf("%s result string = %q, want %q", c.name, s, c.want)
+		}
+	}
+}
+
 // TestGenericIncludes proves the membership test uses SameValueZero, so a stored NaN
 // is found where a strict search would miss it.
 func TestGenericIncludes(t *testing.T) {
