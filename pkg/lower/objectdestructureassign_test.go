@@ -77,7 +77,7 @@ func TestObjectDestructureAssignDefaultRuns(t *testing.T) {
 }
 
 // TestObjectDestructureAssignRestHandsBack proves a rest property hands back, since
-// gathering the remaining properties into an object is a later slice.
+// gathering the remaining properties into an object needs the object model of phase 7.
 func TestObjectDestructureAssignRestHandsBack(t *testing.T) {
 	const src = "const o = { x: 1, y: 2, z: 3 };\nlet x = 0;\nlet rest = { y: 0, z: 0 };\n({ x, ...rest } = o);\nconsole.log(x);\n"
 	renderProgramHandBack(t, src)
