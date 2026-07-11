@@ -64,6 +64,25 @@ func (v Value) Entries() Value {
 	return NewArrayValue(pairs)
 }
 
+// OwnSymbols returns the receiver's own symbol-keyed property keys as a value array
+// in insertion order, the value Object.getOwnPropertySymbols builds for a dynamic
+// receiver. Both enumerable and non-enumerable symbol keys appear, since the spec
+// does not filter symbols by enumerability the way the string-keyed statics filter
+// named keys. A receiver with no object storage yields an empty array.
+func (v Value) OwnSymbols() *Array[Value] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return NewArray[Value]()
+	}
+	o := v.object()
+	syms := make([]Value, len(o.symKeys))
+	for i, s := range o.symKeys {
+		syms[i] = symbolValue(s)
+	}
+	return NewArray(syms...)
+}
+
 // FromEntries builds a fresh object from an iterable of key-value pairs, the
 // runtime behind Object.fromEntries(iterable). Each entry is read for its first two
 // elements, the key and the value, and the key is set on the new object through the

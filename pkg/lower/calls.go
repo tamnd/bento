@@ -1430,6 +1430,8 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 		return r.objectFromEntries(argNodes)
 	case "entries":
 		return r.objectEntries(argNodes)
+	case "getOwnPropertySymbols":
+		return r.objectOwnSymbols(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
@@ -1523,6 +1525,25 @@ func (r *Renderer) objectEntries(argNodes []frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Entries")}}, nil
+}
+
+// objectOwnSymbols lowers Object.getOwnPropertySymbols(o) to a runtime OwnSymbols on
+// the dynamic receiver, which returns the receiver's own symbol keys as a value
+// array in insertion order. The receiver must be a dynamic value, since a fixed-shape
+// Go struct carries no symbol keys to list, so a non-dynamic receiver hands back. The
+// receiver is evaluated, so no read is dropped.
+func (r *Renderer) objectOwnSymbols(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertySymbols with other than one argument is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.getOwnPropertySymbols on a fixed-shape receiver, which carries no symbol keys, is a later slice"}
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnSymbols")}}, nil
 }
 
 // objectSetPrototypeOf lowers Object.setPrototypeOf(o, proto) to a runtime
