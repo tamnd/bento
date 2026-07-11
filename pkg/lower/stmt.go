@@ -274,13 +274,26 @@ func (r *Renderer) isGeneratorIterable(n frontend.Node) bool {
 }
 
 // forOfGenerator lowers a for...of over a generator to the plain Go loop a
-// developer writes against a next() closure: bind the closure once so its state
-// is shared across the loop, then pull a value and a done flag each turn and
-// stop when done. The closure is called once up front, not per turn, so two
-// iterations of the same source expression would each get their own fresh
-// generator, matching the JavaScript protocol. A binding the body never reads
-// drops to the blank identifier, since Go rejects an unused loop value.
+// developer writes against a coroutine: obtain the *value.Gen once so its state is
+// shared across the loop, then pull a value and a done flag each turn with
+// Next(value.Undefined) and stop when done. The generator is obtained once up front,
+// not per turn, so two iterations of the same source expression would each get their
+// own fresh coroutine, matching the JavaScript protocol. A binding the body never
+// reads drops to the blank identifier, since Go rejects an unused loop value.
+//
+// A loop the body can break out of early abandons the generator with its goroutine
+// still parked on the next yield, so an early break must close it: the loop tracks
+// whether it broke with a flag and calls Stop after the loop when it did, which
+// resumes the suspended body through its finally blocks and lets the goroutine exit,
+// the same shape forOfIterator uses to call an iterator's return(). A body that can
+// leave the loop another way, a return, a throw, or a labeled branch, would jump past
+// that close and leak the goroutine, so it hands back rather than leak silently. A
+// body with no early exit runs the generator to done, which needs no close, so the
+// drain machinery is left out and the loop stays the plain pull-until-done form.
 func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node) (ast.Stmt, error) {
+	if r.forOfBodyBypassesClose(bodyNode) {
+		return nil, &NotYetLowerable{Reason: "stopping a generator on a return, throw, or labeled exit from for...of is a later slice"}
+	}
 	iter, err := r.lowerExpr(iterable)
 	if err != nil {
 		return nil, err
@@ -289,7 +302,8 @@ func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string,
 	if err != nil {
 		return nil, err
 	}
-	itName := r.freshTemp()
+	r.requireImport(valuePkg)
+	genName := r.freshTemp()
 	doneName := r.freshTemp()
 	loopVar := ast.Expr(ident("_"))
 	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
@@ -298,17 +312,65 @@ func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string,
 	pull := &ast.AssignStmt{
 		Lhs: []ast.Expr{loopVar, ident(doneName)},
 		Tok: token.DEFINE,
-		Rhs: []ast.Expr{&ast.CallExpr{Fun: ident(itName)}},
+		Rhs: []ast.Expr{&ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident(genName), Sel: ident("Next")},
+			Args: []ast.Expr{sel("value", "Undefined")},
+		}},
 	}
-	brk := &ast.IfStmt{
-		Cond: ident(doneName),
-		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.BranchStmt{Tok: token.BREAK}}},
+	// A break that abandons the generator needs the close, done exhaustion does not.
+	// When the body can break, a flag starts true and clears on the done branch, so
+	// after the loop a break leaves it true and Stop runs, while a run to done leaves
+	// it false and Stop is skipped.
+	closes := r.forOfBodyMayBreak(bodyNode)
+	block := []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(genName)}, Tok: token.DEFINE, Rhs: []ast.Expr{iter}}}
+	doneStmts := []ast.Stmt{}
+	var brokeName string
+	if closes {
+		brokeName = r.freshTemp()
+		block = append(block, &ast.AssignStmt{Lhs: []ast.Expr{ident(brokeName)}, Tok: token.DEFINE, Rhs: []ast.Expr{ident("true")}})
+		doneStmts = append(doneStmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(brokeName)}, Tok: token.ASSIGN, Rhs: []ast.Expr{ident("false")}})
 	}
+	doneStmts = append(doneStmts, &ast.BranchStmt{Tok: token.BREAK})
+	brk := &ast.IfStmt{Cond: ident(doneName), Body: &ast.BlockStmt{List: doneStmts}}
 	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: append([]ast.Stmt{pull, brk}, body.List...)}}
-	return &ast.BlockStmt{List: []ast.Stmt{
-		&ast.AssignStmt{Lhs: []ast.Expr{ident(itName)}, Tok: token.DEFINE, Rhs: []ast.Expr{iter}},
-		loop,
-	}}, nil
+	block = append(block, loop)
+	if closes {
+		block = append(block, &ast.IfStmt{
+			Cond: ident(brokeName),
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{X: ident(genName), Sel: ident("Stop")},
+			}}}},
+		})
+	}
+	return &ast.BlockStmt{List: block}, nil
+}
+
+// forOfBodyMayBreak reports whether a for...of body can leave the loop through an
+// unlabeled break that targets this loop, the one exit that abandons a generator with
+// the goroutine still parked. An unlabeled break inside a nested loop or switch targets
+// that construct, not this loop, so those are not descended into, and neither is a
+// nested function whose own break belongs to a loop of its own. When no such break
+// exists the loop can only end by running the generator to done, which needs no close.
+func (r *Renderer) forOfBodyMayBreak(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor,
+		frontend.NodeForStatement, frontend.NodeForOfStatement, frontend.NodeForInStatement,
+		frontend.NodeWhileStatement, frontend.NodeSwitchStatement:
+		return false
+	case frontend.NodeUnknown:
+		if branchKeyword(strings.TrimSpace(r.prog.Text(n))) == "break" {
+			// An unlabeled break carries no target identifier and hits this loop; a
+			// labeled break is handled as a bypass in forOfBodyBypassesClose.
+			return len(r.prog.Children(n)) == 0
+		}
+	}
+	for _, k := range r.prog.Children(n) {
+		if r.forOfBodyMayBreak(k) {
+			return true
+		}
+	}
+	return false
 }
 
 // forOfArrayDestructure lowers `for (const [a, b] of pairs)` over an array of arrays
@@ -454,6 +516,21 @@ func (r *Renderer) bodyUsesName(n frontend.Node, name string) bool {
 // lowerReturn lowers a return, with or without a value.
 func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
+	// A return inside a generator body completes the coroutine, whose func returns a
+	// value.Value the { value, done: true } result carries. A bare return completes
+	// with undefined; a return that carries a value boxes it into the dynamic value
+	// the completion frame holds, so a manual driver reading the done result sees it.
+	if r.genCo != "" {
+		if len(kids) == 0 {
+			r.requireImport(valuePkg)
+			return &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}}, nil
+		}
+		boxed, err := r.boxOperand(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.ReturnStmt{Results: []ast.Expr{boxed}}, nil
+	}
 	if len(kids) == 0 {
 		// Inside a try escape closure the bare return of a void function still has
 		// to raise done, or the call site would not return; the closure's own

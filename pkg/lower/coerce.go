@@ -89,9 +89,29 @@ func (r *Renderer) isNumber(n frontend.Node) bool {
 }
 
 // isBool reports whether the checker types n as boolean, the guard that keeps a
-// control-flow condition a real Go bool rather than a coerced value.
+// control-flow condition a real Go bool rather than a coerced value. A read of an
+// IteratorResult's .done counts too: the checker types it undefined | false | true
+// (the optional done? on the yield branch widens in undefined), so it carries no
+// folded boolean facet, but member.go lowers it to the IterResult.Done field, a real
+// Go bool, so every consumer of the predicate sees the bool the lowered read is.
 func (r *Renderer) isBool(n frontend.Node) bool {
-	return r.primitiveFlags(n)&frontend.TypeBoolean != 0
+	return r.primitiveFlags(n)&frontend.TypeBoolean != 0 || r.iterResultDoneRead(n)
+}
+
+// iterResultDoneRead reports whether n reads .done off an IteratorResult, the read
+// member.go lowers to the value.IterResult Done field, a Go bool. The checker types
+// .done as undefined | false | true rather than boolean, so it needs this hook to
+// take the boolean path in truthiness and String() coercion the way a caught error's
+// string read needs caughtErrorStringRead.
+func (r *Renderer) iterResultDoneRead(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || r.prog.Text(kids[1]) != "done" {
+		return false
+	}
+	return r.isIterResultReceiver(kids[0])
 }
 
 // isString reports whether the checker types n as string, the guard that routes

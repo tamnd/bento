@@ -1,0 +1,7 @@
+== stdout:
+saw 1
+saw 2
+cleanup
+done
+== exit:
+0

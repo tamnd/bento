@@ -453,6 +453,33 @@ func (a *RealAdapter) ElementOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool
 	return wrapType(elem), true
 }
 
+// TypeArgsOf returns the instantiated type arguments of a generic type reference,
+// the [T] in a Generator<T> or a Map<K, V>, so lowering can read the element type
+// off a built-in generic the structural queries do not expand. GetTypeArguments
+// assumes a type reference; a non-reference type reaches the checker's unhandled
+// case and panics, so a recover converts that into no arguments and the caller
+// keeps whatever handback it had rather than crashing the worker.
+func (a *RealAdapter) TypeArgsOf(p ProgramHandle, t TypeHandle) (args []TypeHandle) {
+	c, release := prog(p).checker()
+	defer release()
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			args = nil
+		}
+	}()
+	for _, arg := range c.GetTypeArguments(ty) {
+		if arg == nil {
+			return nil
+		}
+		args = append(args, wrapType(arg))
+	}
+	return args
+}
+
 func (a *RealAdapter) LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool) {
 	ty := typeOfHandle(t)
 	if ty == nil {

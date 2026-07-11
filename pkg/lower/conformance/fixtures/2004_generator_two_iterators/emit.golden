@@ -12,23 +12,13 @@ type Seq struct {
 func NewSeq() *Seq {
 	return &Seq{}
 }
-func (s *Seq) Values() func() (float64, bool) {
-	state := 0
-	return func() (float64, bool) {
-		switch state {
-		case 0:
-			state = 1
-			return 1, false
-		case 1:
-			state = 2
-			return 2, false
-		case 2:
-			state = 3
-			return 3, false
-		}
-		var zero float64
-		return zero, true
-	}
+func (s *Seq) Values() *value.Gen[float64] {
+	return value.NewGen[float64](func(_bt4 *value.GenCo[float64]) value.Value {
+		_ = _bt4.Yield(1)
+		_ = _bt4.Yield(2)
+		_ = _bt4.Yield(3)
+		return value.Undefined
+	})
 }
 func main() {
 	s := NewSeq()
@@ -36,14 +26,14 @@ func main() {
 	{
 		_bt2 := s.Values()
 		for {
-			a, _bt3 := _bt2()
+			a, _bt3 := _bt2.Next(value.Undefined)
 			if _bt3 {
 				break
 			}
 			{
 				_bt0 := s.Values()
 				for {
-					b, _bt1 := _bt0()
+					b, _bt1 := _bt0.Next(value.Undefined)
 					if _bt1 {
 						break
 					}

@@ -239,6 +239,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeFunctionExpression:
 		return r.functionExpr(n)
 
+	case frontend.NodeYieldExpression:
+		return r.yieldExpr(n)
+
 	case frontend.NodeNewExpression:
 		return r.newExpr(n)
 

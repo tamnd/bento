@@ -1,0 +1,7 @@
+== stdout:
+v=1
+a=undefined
+v=2
+b=undefined
+== exit:
+0
