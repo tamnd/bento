@@ -319,7 +319,71 @@ func (r *Renderer) lowerForAwaitOf(declNode, iterable, bodyNode frontend.Node) (
 	if shape, ok := r.asyncIteratorShape(r.prog.TypeAt(iterable)); ok {
 		return r.forAwaitOfIterator(iterable, dkids[0], name, bodyNode, shape)
 	}
+	// A source with no [Symbol.asyncIterator] falls back to its sync iterator and awaits
+	// each value it yields, the spec's rule for for await over a sync iterable. An array
+	// is the common such source, ranged over its backing slice with each element awaited.
+	if elemT, ok := r.prog.ElementType(r.prog.TypeAt(iterable)); ok {
+		return r.forAwaitOfSyncArray(iterable, dkids[0], name, bodyNode, elemT)
+	}
 	return nil, &NotYetLowerable{Reason: "for await...of over this iterable is a later slice"}
+}
+
+// forAwaitOfSyncArray lowers a for await...of over an array, the fallback the spec takes
+// when the source has no [Symbol.asyncIterator]: it ranges the backing slice and awaits
+// each element before the body runs, so an array of promises binds each fulfilled value
+// and an array of plain values binds each after the one-turn delay await imposes. The
+// await form follows the element type: a promise element is awaited to its inner value,
+// a plain non-thenable element is wrapped and awaited to itself. An element that might be
+// a thenable or is dynamic hands back, the same boundary awaitExpr draws. An element the
+// body never reads is still awaited, for the ordering and side effects for await fixes.
+func (r *Renderer) forAwaitOfSyncArray(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node, elemT frontend.Type) (ast.Stmt, error) {
+	var awaitFn string
+	switch {
+	case r.isPromiseElem(elemT):
+		awaitFn = "Await"
+	case r.isDefiniteNonThenable(elemT):
+		awaitFn = "AwaitValue"
+	default:
+		return nil, &NotYetLowerable{Reason: "for await...of over a sync iterable whose element may be a thenable or is dynamic is a later slice"}
+	}
+	src, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	elemName := r.freshTemp()
+	awaitCall := &ast.CallExpr{
+		Fun:  sel("value", awaitFn),
+		Args: []ast.Expr{ident(r.asyncCo), ident(elemName)},
+	}
+	var loopStmts []ast.Stmt
+	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
+		loopStmts = append(loopStmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{awaitCall}})
+	} else {
+		// The value is unused, but for await still awaits each element, so the await runs
+		// as an expression statement that discards its result rather than binding it.
+		loopStmts = append(loopStmts, &ast.ExprStmt{X: awaitCall})
+	}
+	loopStmts = append(loopStmts, body.List...)
+	return &ast.RangeStmt{
+		Key:   ident("_"),
+		Value: ident(elemName),
+		Tok:   token.DEFINE,
+		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Elems")}},
+		Body:  &ast.BlockStmt{List: loopStmts},
+	}, nil
+}
+
+// isPromiseElem reports whether t is a Promise, the element form for await awaits
+// directly rather than wrapping. It is the promiseElem probe read as a bool, the same
+// judgment awaitExpr makes to route an awaited operand to value.Await.
+func (r *Renderer) isPromiseElem(t frontend.Type) bool {
+	_, ok := r.promiseElem(t)
+	return ok
 }
 
 // forAwaitOfIterator lowers a for await...of over a user async iterable through the
