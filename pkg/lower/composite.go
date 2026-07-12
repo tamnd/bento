@@ -238,6 +238,9 @@ func (r *Renderer) arrayStaticCall(call, callee frontend.Node, argNodes []fronte
 	case "from":
 		expr, err := r.arrayFrom(call, argNodes)
 		return expr, true, err
+	case "fromAsync":
+		expr, err := r.arrayFromAsync(call, argNodes)
+		return expr, true, err
 	case "isArray":
 		expr, err := r.arrayIsArray(argNodes)
 		return expr, true, err
