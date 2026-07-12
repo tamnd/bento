@@ -759,6 +759,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "ArrayBuffer")), nil
 		}
+		if r.dataViewType(t) {
+			// A DataView (section 25.3) is the value model's arbitrary-offset view over an
+			// ArrayBuffer, spelled as a pointer to value.DataView. Like the buffer it is not a
+			// struct shape, so it routes here before renderObject would intern its getInt8
+			// family as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "DataView")), nil
+		}
 		if name, ok := r.typedArrayName(t); ok {
 			// A typed array (section 6.3) is the value model's fixed-width numeric buffer,
 			// spelled as a pointer the same way a typed Array is. Uint8Array carries its own
@@ -1011,6 +1019,28 @@ func (r *Renderer) arrayBufferType(t frontend.Type) bool {
 // the .byteLength read shares with the constructor lowering.
 func (r *Renderer) isArrayBuffer(n frontend.Node) bool {
 	return r.arrayBufferType(r.prog.TypeAt(n))
+}
+
+// dataViewType reports whether a type is a DataView, the arbitrary-offset view over
+// an ArrayBuffer (25 §25.3). Like ArrayBuffer it is named by its type symbol: a
+// DataView carries no BYTES_PER_ELEMENT, so it is not a typed array, and its getInt8
+// family of methods separates it from every other view. A caller reaching this has
+// already ruled the type out as an array.
+func (r *Renderer) dataViewType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "DataView"
+}
+
+// isDataView reports whether a node's type is a DataView, the receiver test the
+// getter, setter, and geometry-read lowerings share with the constructor lowering.
+func (r *Renderer) isDataView(n frontend.Node) bool {
+	return r.dataViewType(r.prog.TypeAt(n))
 }
 
 func (r *Renderer) typedArrayName(t frontend.Type) (string, bool) {

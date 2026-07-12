@@ -98,6 +98,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "ArrayBuffer" {
 		return r.newArrayBuffer(kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "DataView" {
+		return r.newDataView(kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
 	}
@@ -333,6 +336,52 @@ func (r *Renderer) newTypedArrayOverBuffer(name string, args []frontend.Node) (a
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", name+"View"), Args: callArgs}, nil
+}
+
+// newDataView lowers a DataView construction, the arbitrary-offset view over an
+// ArrayBuffer (25 §25.3.2). new DataView(buffer), new DataView(buffer, byteOffset),
+// and new DataView(buffer, byteOffset, byteLength) lower to value.NewDataView(buf),
+// value.NewDataView(buf, offset), and value.NewDataView(buf, offset, length), the
+// variadic length carrying the optionality the way the typed-array view path does.
+// The first argument must be an ArrayBuffer, since a DataView has no from-a-length or
+// from-an-array form; a byte offset or length that is not a number is a later slice
+// and hands back, as does a call with more than three arguments.
+func (r *Renderer) newDataView(args []frontend.Node) (ast.Expr, error) {
+	if len(args) == 0 || !r.isArrayBuffer(args[0]) {
+		return nil, &NotYetLowerable{Reason: "new DataView takes an ArrayBuffer as its first argument"}
+	}
+	if len(args) > 3 {
+		return nil, &NotYetLowerable{Reason: "new DataView takes at most a byte offset and a length"}
+	}
+	buf, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	callArgs := []ast.Expr{buf}
+	if len(args) >= 2 {
+		if !r.isNumber(args[1]) {
+			return nil, &NotYetLowerable{Reason: "a DataView byte offset that is not a number is a later slice"}
+		}
+		offset, err := r.lowerExpr(args[1])
+		if err != nil {
+			return nil, err
+		}
+		callArgs = append(callArgs, offset)
+	} else {
+		callArgs = append(callArgs, &ast.BasicLit{Kind: token.FLOAT, Value: "0"})
+	}
+	if len(args) == 3 {
+		if !r.isNumber(args[2]) {
+			return nil, &NotYetLowerable{Reason: "a DataView byte length that is not a number is a later slice"}
+		}
+		length, err := r.lowerExpr(args[2])
+		if err != nil {
+			return nil, err
+		}
+		callArgs = append(callArgs, length)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewDataView"), Args: callArgs}, nil
 }
 
 // newArrayBuffer lowers an ArrayBuffer construction, the raw byte backing store of
