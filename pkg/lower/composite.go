@@ -187,6 +187,30 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
 				continue
 			}
+			// A spread of a string splices its code points, each a one-code-point
+			// string, the same walk for...of over a string takes. value.BStr.CodePoints
+			// returns the []BStr the append splices, so the target must be a string
+			// array; a different element type hands back rather than mixing kinds.
+			if r.isString(operand) {
+				same, err := sameGoType(elemType, sel("value", "BStr"))
+				if err != nil {
+					return nil, err
+				}
+				if !same {
+					return nil, &NotYetLowerable{Reason: "spread of a string into a non-string array is a later slice"}
+				}
+				src, err := r.lowerExpr(operand)
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				points := &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("CodePoints")}}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, points}, Ellipsis: token.Pos(1)}
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "spread of a non-array value in an array literal is a later slice"}
 		}
 		same, err := sameGoType(elemType, opElemType)

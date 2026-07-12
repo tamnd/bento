@@ -27,12 +27,15 @@ func TestArraySpreadOnlyEmitsSeededAppend(t *testing.T) {
 	}
 }
 
-// TestArraySpreadOfStringHandsBack pins that spreading a string, which is
-// iterable in JavaScript but not a value.Array in Go, hands the unit back rather
-// than emitting an Elems call on a value that has none.
-func TestArraySpreadOfStringHandsBack(t *testing.T) {
+// TestArraySpreadOfStringSplicesCodePoints pins that spreading a string, iterable
+// in JavaScript but not a value.Array in Go, splices its code points through
+// value.BStr.CodePoints rather than an Elems call the string type has no method for.
+func TestArraySpreadOfStringSplicesCodePoints(t *testing.T) {
 	src := "const s = \"ab\";\nconst b = [...s];\nconsole.log(b.length);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".CodePoints()...") {
+		t.Errorf("string spread did not splice CodePoints:\n%s", source)
+	}
 }
 
 // TestArraySpreadRuns builds and runs spliced-array code against the Node
