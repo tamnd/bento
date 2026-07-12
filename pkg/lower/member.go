@@ -74,6 +74,40 @@ func (r *Renderer) classKeyRead(obj frontend.Node, prop string) (ast.Expr, bool,
 // so it lowers to the matching value-package constant. Every other property (a
 // field of a lowered object, a method call, .length on an array) is its own later
 // slice and hands back.
+// wellKnownSymbolAccessor maps a well-known symbol name read off the ambient Symbol
+// global to the value package accessor that returns its interned identity, so
+// Symbol.match lowers to value.SymbolMatch(). Symbol.iterator and
+// Symbol.asyncIterator are deliberately absent: the iteration protocol recognizes
+// them by name through the class-member mechanism rather than as a value read. A
+// name that is not a well-known symbol reports false and keeps its own lookup.
+func wellKnownSymbolAccessor(prop string) (string, bool) {
+	switch prop {
+	case "hasInstance":
+		return "SymbolHasInstance", true
+	case "isConcatSpreadable":
+		return "SymbolIsConcatSpreadable", true
+	case "match":
+		return "SymbolMatch", true
+	case "matchAll":
+		return "SymbolMatchAll", true
+	case "replace":
+		return "SymbolReplace", true
+	case "search":
+		return "SymbolSearch", true
+	case "species":
+		return "SymbolSpecies", true
+	case "split":
+		return "SymbolSplit", true
+	case "toPrimitive":
+		return "SymbolToPrimitive", true
+	case "toStringTag":
+		return "SymbolToStringTag", true
+	case "unscopables":
+		return "SymbolUnscopables", true
+	}
+	return "", false
+}
+
 func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
 	// An optional property access a?.b carries a ?. token between the receiver and
@@ -145,6 +179,31 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	} else if ok {
 		return expr, nil
+	}
+	// A read of .description on a statically-typed symbol lowers to the symbol's
+	// description, a string or undefined. A dynamic symbol binding takes the Get path
+	// below, which answers the same read off the boxed KindSymbol; this branch covers
+	// the receiver the checker pinned down to symbol, which is not on the dynamic path.
+	if prop == "description" && r.isSymbol(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("SymbolDescription")}}, nil
+	}
+	// Symbol.toStringTag and the other well-known symbols read as the one interned
+	// identity the value model holds for each, so Symbol.match === Symbol.match holds
+	// and a well-known symbol used as a property key lands in the same slot on every
+	// read. Only a read off the ambient Symbol global routes here; a like-named
+	// property on a user value keeps its own lookup. Symbol.iterator and
+	// Symbol.asyncIterator are left to the class-member iteration mechanism that
+	// already recognizes them by name, so they are not among the accessors here.
+	if r.isGlobalRef(obj, "Symbol") {
+		if fn, ok := wellKnownSymbolAccessor(prop); ok {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", fn)}, nil
+		}
 	}
 	// A read o.k on a dynamic receiver (one typed any or unknown) has no static
 	// shape to intern to a Go field, so it dispatches at runtime through the boxed

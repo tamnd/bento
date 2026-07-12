@@ -964,6 +964,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Map") {
 		return r.mapStaticCall(method, argNodes)
 	}
+	// Symbol.for(key) and Symbol.keyFor(sym) are static calls on the ambient Symbol
+	// global that read and write the global symbol registry, not methods on a symbol
+	// value, so they lower to the value registry helpers before the receiver-value
+	// paths below. Symbol(desc) as a construction is handled at the bare-call path.
+	if r.isGlobalRef(recvNode, "Symbol") {
+		return r.symbolStaticCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.
@@ -1182,10 +1189,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		r.requireImport(valuePkg)
 		call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToStringMethod")}}
 		// A receiver typed any keeps the boxed result: any.toString() is itself any,
-		// so the call node stays a value the consumer takes. A receiver narrowed to a
-		// concrete kind types the call string, so the boxed result unboxes to its BStr
-		// to match the string the checker promised the consumer.
-		if r.isDynamic(recvNode) {
+		// so the call node stays a value the consumer takes. A receiver whose kind the
+		// checker knows types the call string, so the boxed result unboxes to its BStr
+		// to match the string the checker promised the consumer. The gate is the
+		// receiver's declared type, not its storage: a symbol binding is a boxed value
+		// yet the checker types it symbol, so its toString() unboxes like any other
+		// known kind, only a genuinely any or unknown receiver stays boxed.
+		if r.prog.TypeAt(recvNode).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
 			return call, nil
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: call, Sel: ident("AsString")}}, nil
@@ -3158,6 +3168,44 @@ func (r *Renderer) symbolConstructor(argNodes []frontend.Node) (ast.Expr, error)
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: sel("value", "NewSymbol"), Args: []ast.Expr{desc}}, nil
+}
+
+// symbolStaticCall lowers the static calls on the ambient Symbol global that read
+// the global symbol registry. Symbol.for(key) interns and returns one symbol per
+// string key through value.SymbolFor, so two calls with an equal key share a
+// reference; Symbol.keyFor(sym) reads back the key a registered symbol was
+// interned under through value.SymbolKeyFor. Symbol.for takes a string and
+// Symbol.keyFor a symbol; a different method or argument shape hands back.
+func (r *Renderer) symbolStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "for":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Symbol.for with this argument count is a later slice"}
+		}
+		if !r.isString(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Symbol.for with a non-string key is a later slice"}
+		}
+		key, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "SymbolFor"), Args: []ast.Expr{key}}, nil
+	case "keyFor":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Symbol.keyFor with this argument count is a later slice"}
+		}
+		if !r.isSymbol(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Symbol.keyFor on a non-symbol argument is a later slice"}
+		}
+		sym, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "SymbolKeyFor"), Args: []ast.Expr{sym}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "this static Symbol method is a later slice"}
 }
 
 // parseIntCall lowers parseInt(s) and parseInt(s, radix) to value.ParseInt. The

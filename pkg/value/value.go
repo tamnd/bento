@@ -361,6 +361,15 @@ func (v Value) Get(key BStr) Value {
 		// make. A function box with no own properties still climbs its prototype chain
 		// and answers undefined for a miss at the end of it.
 		return v.object().getChained(v, key)
+	case KindSymbol:
+		// A symbol's only own readable property is its description; every other named
+		// read reaches Symbol.prototype and answers undefined here. A dynamic symbol
+		// binding routes s.description through this path, matching the dedicated
+		// SymbolDescription the statically-typed symbol path emits.
+		if name == "description" {
+			return v.SymbolDescription()
+		}
+		return Undefined
 	default:
 		return Undefined
 	}
@@ -524,6 +533,11 @@ func (v Value) ToStringMethod() Value {
 		Throw(NewTypeError(FromGoString("Cannot read properties of null (reading 'toString')")))
 	case KindString:
 		return v
+	case KindSymbol:
+		// A symbol has no abstract ToString (that throws), but Symbol.prototype.toString
+		// renders "Symbol(desc)", so the method form answers that descriptive string
+		// rather than routing through ToString the way the other kinds do.
+		return StringValue(v.SymbolDescriptiveString())
 	}
 	return StringValue(ToString(v))
 }
@@ -536,11 +550,12 @@ func (v Value) ToStringMethod() Value {
 // the tag for its type. It is called only where the AOT path proved the borrow is
 // Object.prototype.toString.call, so the receiver kind alone decides the tag.
 //
-// Two spec cases bento does not model yet: an object with a Symbol.toStringTag
-// property reports that tag instead of "[object Object]", and an Error, Date, or
-// RegExp built with the corresponding internal slot reports "[object Error]" and
-// the like. Those wait on the runtime carrying the slots; a plain object reaches
-// the object case and reports "[object Object]".
+// One spec case bento does not model yet: an Error, Date, or RegExp built with the
+// corresponding internal slot reports "[object Error]" and the like, which waits on
+// the runtime carrying the slots. The other, an object whose Symbol.toStringTag
+// property is a string, is honored here: such an object reports "[object <tag>]"
+// with that string, the hook a library uses to name its own instances. A plain
+// object with no such property reaches the object case and reports "[object Object]".
 func ClassTag(v Value) BStr {
 	switch v.kind {
 	case KindUndefined:
@@ -562,8 +577,28 @@ func ClassTag(v Value) BStr {
 	case KindFunc:
 		return FromGoString("[object Function]")
 	default:
+		if tag, ok := toStringTagOf(v); ok {
+			return FromGoString("[object ").ConcatN(tag, FromGoString("]"))
+		}
 		return FromGoString("[object Object]")
 	}
+}
+
+// toStringTagOf reads an object's Symbol.toStringTag property, the hook
+// Object.prototype.toString honors to name an instance. It reports the tag string
+// and true only when the receiver is an object carrying that well-known symbol key
+// with a string value, the case the specification uses to override the default
+// tag; a non-object receiver, a missing property, or a non-string tag reports
+// false so ClassTag falls back to "[object Object]".
+func toStringTagOf(v Value) (BStr, bool) {
+	if v.kind != KindObject {
+		return BStr{}, false
+	}
+	tag := v.getSymKey(symbolToStringTag)
+	if tag.kind != KindString {
+		return BStr{}, false
+	}
+	return tag.str(), true
 }
 
 // NamedClassTag returns the "[object <Name>]" tag Object.prototype.toString.call

@@ -1,0 +1,2 @@
+feature = "symbol-isconcatspreadable"
+handback = "array concat with an argument that is neither the element type nor an array of it is a later slice"
