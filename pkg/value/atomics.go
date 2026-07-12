@@ -10,15 +10,23 @@ package value
 // agent races on the buffer. Every Atomics operation is therefore already indivisible
 // with respect to the one agent that runs it: a plain read-modify-write observes and
 // stores exactly what the spec's atomic step would, because there is no concurrent
-// writer to interleave with. load, store, add, sub, and, or, xor, and exchange all run
-// with full single-agent fidelity here.
+// writer to interleave with. load, store, add, sub, and, or, xor, exchange, and
+// compareExchange all run with full single-agent fidelity here.
+//
+// The one place the single-agent model is visible is wait and notify, which exist to
+// block one agent until another wakes it: with no second agent to send the wake, a wait
+// that would block has no notifier, so it can only report that the value changed
+// (not-equal) or that it timed out, and notify never finds a waiter to wake so it wakes
+// zero. A program that needs a real second agent to make progress is the multi-agent
+// slice this group states as a handback rather than emits.
 
 import "math"
 
 // AtomicView is the integer typed array an Atomics operation runs over: the numeric
 // family value.TypedArray[T] and the byte-backed value.Uint8Array both satisfy it, so
 // one set of Atomics functions covers every integer element width. It exposes the
-// element read and write the operations share.
+// element read and write the operations share and the element coercion compareExchange
+// needs to compare a stored element against a coerced operand.
 type AtomicView interface {
 	// Len is the view's element count, the bound an access index is checked against.
 	Len() float64
@@ -27,7 +35,20 @@ type AtomicView interface {
 	// SetAt writes an element at an index, coercing the value with the element's store
 	// rule, the same write a plain indexed assignment makes.
 	SetAt(i float64, v float64)
+	// coerceElem returns the value the element store rule would keep, widened back to a
+	// Number, so compareExchange can compare a stored element against a coerced operand
+	// without a destructive write.
+	coerceElem(v float64) float64
 }
+
+// coerceElem exposes a numeric typed array's store coercion, widened back to a Number,
+// so the Atomics compare step can round an operand to the element's representation the
+// same way a store would.
+func (a *TypedArray[T]) coerceElem(v float64) float64 { return float64(a.coerce(v)) }
+
+// coerceElem exposes a Uint8Array's byte store coercion, the ToUint8 wrap a Uint8Array
+// element write applies, widened back to a Number.
+func (a *Uint8Array) coerceElem(v float64) float64 { return float64(toUint8(v)) }
 
 // atomicIndex resolves and bounds-checks an Atomics access index, throwing a
 // RangeError when it is out of range, the throw ValidateAtomicAccess raises (25
@@ -122,3 +143,60 @@ func AtomicExchange(a AtomicView, index float64, value float64) float64 {
 	a.SetAt(i, value)
 	return old
 }
+
+// AtomicCompareExchange stores replacement only if the element equals expected and
+// returns the previous element either way, the lowering of Atomics.compareExchange. The
+// comparison is against the element representation, so expected is coerced to the
+// element's store form before the compare, matching the spec's byte-equal check; the
+// returned value is the element from before any store.
+func AtomicCompareExchange(a AtomicView, index float64, expected float64, replacement float64) float64 {
+	i := atomicIndex(a, index)
+	old := a.At(i)
+	if old == a.coerceElem(expected) {
+		a.SetAt(i, replacement)
+	}
+	return old
+}
+
+// AtomicIsLockFree reports whether an atomic operation on an element of the given byte
+// size is lock-free, the lowering of Atomics.isLockFree. A size of 1, 2, 4, or 8 bytes
+// is lock-free on the platforms bento targets, matching what a modern engine reports;
+// any other size is not.
+func AtomicIsLockFree(size float64) bool {
+	switch size {
+	case 1, 2, 4, 8:
+		return true
+	default:
+		return false
+	}
+}
+
+// AtomicNotify wakes up to count agents waiting on the index and returns the number
+// woken, the lowering of Atomics.notify. In a single agent there is never a waiter to
+// wake, since the one agent that could wait is the one calling notify, so it always
+// wakes zero. The index is bounds-checked the same way the read-modify-write path
+// checks it.
+func AtomicNotify(a AtomicView, index float64, count ...float64) float64 {
+	atomicIndex(a, index)
+	return 0
+}
+
+// AtomicWait blocks until the element at the index changes from value or a notify
+// arrives, the lowering of Atomics.wait, and returns "ok", "not-equal", or
+// "timed-out". In a single agent there is no other agent to change the element or send
+// a notify, so a wait that would block cannot make progress: it returns "not-equal"
+// when the element already differs from value, and "timed-out" otherwise, since a wait
+// with no possible notifier is a wait that has already timed out. The "ok" result,
+// which only a real notify from a second agent produces, never occurs single-agent.
+func AtomicWait(a AtomicView, index float64, value float64, timeout ...float64) BStr {
+	i := atomicIndex(a, index)
+	if a.At(i) != value {
+		return FromGoString("not-equal")
+	}
+	return FromGoString("timed-out")
+}
+
+// AtomicPause is a hint to the processor that the agent is in a spin-wait loop, the
+// lowering of Atomics.pause. It has no observable effect on program state and returns
+// undefined; with one agent there is no contention to back off from, so it is a no-op.
+func AtomicPause(iterations ...float64) {}
