@@ -1,0 +1,7 @@
+== stdout:
+ff
+0.1
+lfls
+RangeError
+== exit:
+0
