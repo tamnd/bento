@@ -351,6 +351,56 @@ func TestProxyPreventExtensionsTrap(t *testing.T) {
 	}
 }
 
+// TestProxyApplyTrap pins that an apply trap intercepts a call to a callable proxy,
+// receiving the target, the this value, and the arguments as one array.
+func TestProxyApplyTrap(t *testing.T) {
+	target := NewFunc(func(args []Value) Value { return Number(0) })
+	handler := NewObject()
+	handler.Set(FromGoString("apply"), NewFunc(func(args []Value) Value {
+		list := Arg(args, 2)
+		return Number(list.GetIndex(0).AsNumber() + list.GetIndex(1).AsNumber() + 100)
+	}))
+	p := NewProxy(target, handler)
+	if got := p.Call(Number(2), Number(3)); got.AsNumber() != 105 {
+		t.Errorf("apply trap did not intercept the call, got %v", got)
+	}
+}
+
+// TestProxyConstructTrap pins that a construct trap produces the object new returns,
+// receiving the target, the arguments as one array, and the new target.
+func TestProxyConstructTrap(t *testing.T) {
+	target := NewFunc(func(args []Value) Value { return Undefined })
+	handler := NewObject()
+	handler.Set(FromGoString("construct"), NewFunc(func(args []Value) Value {
+		o := NewObject()
+		o.Set(FromGoString("built"), Bool(true))
+		o.Set(FromGoString("first"), Arg(args, 1).GetIndex(0))
+		return o
+	}))
+	p := NewProxy(target, handler)
+	res := p.asProxy().construct([]Value{Number(7)}, p)
+	if res.kind != KindObject || !ToBoolean(res.Get(FromGoString("built"))) || res.Get(FromGoString("first")).AsNumber() != 7 {
+		t.Errorf("construct trap did not produce the object, got %v", res)
+	}
+}
+
+// TestProxyConstructInvariant pins that a construct trap must return an object: a
+// primitive return throws a TypeError.
+func TestProxyConstructInvariant(t *testing.T) {
+	target := NewFunc(func(args []Value) Value { return Undefined })
+	handler := NewObject()
+	handler.Set(FromGoString("construct"), NewFunc(func(args []Value) Value {
+		return Number(1)
+	}))
+	p := NewProxy(target, handler)
+	defer func() {
+		if recover() == nil {
+			t.Error("construct trap returning a non-object did not throw")
+		}
+	}()
+	p.asProxy().construct(nil, p)
+}
+
 // TestProxyCallableForwards pins that a Proxy over a callable target is itself
 // callable and forwards the call to the target when the handler has no apply trap.
 func TestProxyCallableForwards(t *testing.T) {

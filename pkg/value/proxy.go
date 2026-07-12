@@ -220,9 +220,39 @@ func (p *proxyData) deleteWith(keyVal Value) bool {
 	return true
 }
 
+// call runs the apply trap, the [[Call]](thisArg, argumentsList) internal method
+// behind calling a callable proxy. With no trap the call forwards to the target.
+// With a trap the result is handler.apply(target, thisArg, argumentsList), where the
+// arguments are handed over as one array. This model does not thread a this value
+// through a dynamic call, so the trap sees undefined for its thisArg, which is what a
+// call with no bound receiver passes.
 func (p *proxyData) call(args []Value) Value {
 	p.checkRevoked("apply")
-	return p.target.Call(args...)
+	trap := p.trap("apply")
+	if trap.kind == KindUndefined {
+		return p.target.Call(args...)
+	}
+	return trap.Call(p.target, Undefined, NewArrayValue(args))
+}
+
+// construct runs the construct trap, the [[Construct]](argumentsList, newTarget)
+// internal method behind new over a constructable proxy. With a trap the result is
+// handler.construct(target, argumentsList, newTarget) and must be an object, the
+// invariant that a constructor produces an object. The lowerer hands back new over a
+// dynamic proxy today, since new over an arbitrary value needs the [[Construct]] and
+// newTarget path that is a later slice, so this runs the trap directly for the paths
+// that reach it rather than through a lowered new expression.
+func (p *proxyData) construct(args []Value, newTarget Value) Value {
+	p.checkRevoked("construct")
+	trap := p.trap("construct")
+	if trap.kind == KindUndefined {
+		return p.target.Call(args...)
+	}
+	res := trap.Call(p.target, NewArrayValue(args), newTarget)
+	if !isObjectLike(res) {
+		Throw(NewTypeError(FromGoString("'construct' on proxy: trap must return an object")))
+	}
+	return res
 }
 
 // defineProperty runs the defineProperty trap, the [[DefineOwnProperty]](P, Desc)
