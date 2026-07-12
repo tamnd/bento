@@ -15,17 +15,40 @@ import "math"
 // length, from a JavaScript number list, and from a Go slice, the .length as a
 // Number, indexed reads and writes with JavaScript's byte coercion, and the
 // backing slice the bridge passes to Go. Like the numeric family, a Uint8Array is
-// a view: it records the ArrayBuffer it reads and the byte offset it starts at, and
-// its bytes slice is a subslice of the buffer's storage, so a Uint8Array over a
-// shared ArrayBuffer aliases the same bytes as any other view of it. A byte is the
-// buffer's own element, so the subslice aliases directly with no unsafe step. The
-// remaining view methods (subarray, DataView) and the copying methods (set, slice,
-// fill) land in later slices; the type carries the buffer now so those grow it in
-// place.
+// a view: it records the ArrayBuffer it reads, the byte offset it starts at, and its
+// byte length. It does not cache the subslice; live forms one over the buffer's
+// current storage on each access, so a Uint8Array over a shared ArrayBuffer aliases
+// the same bytes as any other view of it and reacts to a detach or a resize of the
+// buffer. A byte is the buffer's own element, so the subslice aliases directly with
+// no unsafe step. The length is consulted against the buffer's live state through
+// liveLen, so a view over a detached buffer reads as zero-length. The remaining view
+// methods (subarray, DataView) and the copying methods (set, slice, fill) land in
+// later slices; the type carries the buffer now so those grow it in place.
 type Uint8Array struct {
 	buffer     *ArrayBuffer
 	byteOffset int
-	bytes      []byte
+	length     int
+}
+
+// liveLen is the view's byte length as of this access, clamped against the buffer's
+// current length so a view over a detached buffer, or once resizable buffers land a
+// shrunk one, reports zero. A byte is one element wide, so the count is the span.
+func (a *Uint8Array) liveLen() int {
+	if avail := len(a.buffer.data) - a.byteOffset; avail < a.length {
+		return 0
+	}
+	return a.length
+}
+
+// live forms the byte subslice this view reads right now over the buffer's current
+// storage for liveLen bytes, recomputed on each access so a detach or a resize shows
+// through immediately. A zero length returns nil rather than index an empty buffer.
+func (a *Uint8Array) live() []byte {
+	n := a.liveLen()
+	if n == 0 {
+		return nil
+	}
+	return a.buffer.data[a.byteOffset : a.byteOffset+n]
 }
 
 // NewUint8Array builds a zeroed buffer of the given length, the lowering of
@@ -37,8 +60,9 @@ type Uint8Array struct {
 // JavaScript raises for a negative length is a later slice, and the covered subset
 // passes a valid length.
 func NewUint8Array(length float64) *Uint8Array {
-	buf := NewArrayBuffer(float64(typedLen(length)))
-	return &Uint8Array{buffer: buf, bytes: buf.data}
+	n := typedLen(length)
+	buf := NewArrayBuffer(float64(n))
+	return &Uint8Array{buffer: buf, length: n}
 }
 
 // Uint8ArrayOf builds a buffer from a list of JavaScript numbers, the lowering of
@@ -48,8 +72,9 @@ func NewUint8Array(length float64) *Uint8Array {
 // it, so the array owns its storage.
 func Uint8ArrayOf(elems ...float64) *Uint8Array {
 	a := NewUint8Array(float64(len(elems)))
+	d := a.live()
 	for i, e := range elems {
-		a.bytes[i] = toUint8(e)
+		d[i] = toUint8(e)
 	}
 	return a
 }
@@ -75,7 +100,7 @@ func Uint8ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *Ui
 	if max := len(buf.data) - off; n > max {
 		n = max
 	}
-	return &Uint8Array{buffer: buf, byteOffset: off, bytes: buf.data[off : off+n]}
+	return &Uint8Array{buffer: buf, byteOffset: off, length: n}
 }
 
 // Uint8ArrayFromGo wraps a Go []byte as a Uint8Array, the Go-to-bento crossing of
@@ -87,13 +112,13 @@ func Uint8ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *Ui
 // The adopted slice is wrapped in an ArrayBuffer so the array exposes a buffer like
 // every other typed array.
 func Uint8ArrayFromGo(b []byte) *Uint8Array {
-	return &Uint8Array{buffer: &ArrayBuffer{data: b}, bytes: b}
+	return &Uint8Array{buffer: &ArrayBuffer{data: b}, length: len(b)}
 }
 
 // Len is the buffer's length in bytes. JavaScript's .length is a Number, so it is
 // a float64 here to match the type the checker gives the property and to compose
 // with the numeric path with no conversion at the use site.
-func (a *Uint8Array) Len() float64 { return float64(len(a.bytes)) }
+func (a *Uint8Array) Len() float64 { return float64(a.liveLen()) }
 
 // Buffer is the ArrayBuffer the view aliases, the .buffer getter, the same backing
 // store every other view of the buffer holds so an identity comparison of two
@@ -107,7 +132,7 @@ func (a *Uint8Array) ByteOffset() float64 { return float64(a.byteOffset) }
 // ByteLength is the view's span in bytes, the .byteLength getter. A byte is the
 // element, so the span equals the element count and Len reports the same Number,
 // but both getters exist because the numeric family separates the two.
-func (a *Uint8Array) ByteLength() float64 { return float64(len(a.bytes)) }
+func (a *Uint8Array) ByteLength() float64 { return float64(a.liveLen()) }
 
 // BytesPerElement is the element width in bytes, the instance BYTES_PER_ELEMENT
 // property, one for a byte array. It is a method so a read keeps the receiver
@@ -119,15 +144,16 @@ func (a *Uint8Array) BytesPerElement() float64 { return 1 }
 // read these bytes, and the caller in the bridge decides whether a copy is needed
 // before handing them over, so a Go API that retains the slice never aliases
 // bento's buffer by surprise.
-func (a *Uint8Array) Bytes() []byte { return a.bytes }
+func (a *Uint8Array) Bytes() []byte { return a.live() }
 
 // Floats widens every byte to the Number a read hands out, the source a fresh
 // typed array copies when it is constructed from a Uint8Array. It allocates a new
 // slice so the copy does not alias the source, matching the from-a-typed-array
 // constructor's fresh-buffer rule.
 func (a *Uint8Array) Floats() []float64 {
-	out := make([]float64, len(a.bytes))
-	for i, b := range a.bytes {
+	d := a.live()
+	out := make([]float64, len(d))
+	for i, b := range d {
 		out[i] = float64(b)
 	}
 	return out
@@ -140,8 +166,9 @@ func (a *Uint8Array) Floats() []float64 {
 // Number. A read that flows into a dynamic slot takes GetIndex, which answers
 // undefined for those indices.
 func (a *Uint8Array) At(i float64) float64 {
-	if idx, ok := typedElemIndex(i, len(a.bytes)); ok {
-		return float64(a.bytes[idx])
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		return float64(d[idx])
 	}
 	return 0
 }
@@ -152,8 +179,9 @@ func (a *Uint8Array) At(i float64) float64 {
 // index inside the buffer names a byte; a write to an out-of-range or non-canonical
 // index is dropped, the no-op the spec requires rather than growing the buffer.
 func (a *Uint8Array) SetAt(i float64, v float64) {
-	if idx, ok := typedElemIndex(i, len(a.bytes)); ok {
-		a.bytes[idx] = toUint8(v)
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		d[idx] = toUint8(v)
 	}
 }
 
@@ -163,8 +191,9 @@ func (a *Uint8Array) SetAt(i float64, v float64) {
 // out-of-range or non-canonical one, so a[100] and a[1.5] read as undefined the way
 // the spec requires, which the numeric At cannot express.
 func (a *Uint8Array) GetIndex(i float64) Value {
-	if idx, ok := typedElemIndex(i, len(a.bytes)); ok {
-		return Number(float64(a.bytes[idx]))
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		return Number(float64(d[idx]))
 	}
 	return Undefined
 }
