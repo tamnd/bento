@@ -26,6 +26,21 @@ type jsonArray interface {
 	jsonElements() []any
 }
 
+// jsonOptional is the hook a value.Opt[T] field exposes so the encoder can tell an
+// absent optional property from a present one without reaching through the Opt's
+// unexported present flag by reflection. An optional property lowers to an Opt[T]
+// field, and JSON.stringify omits a property whose value is undefined, which for
+// an Opt is the not-present case; jsonOptField reports the wrapped value and
+// whether it is present, so the walk omits the key when it is not and serializes
+// the wrapped value when it is.
+type jsonOptional interface {
+	jsonOptField() (any, bool)
+}
+
+// jsonOptField reports the wrapped value boxed as any and whether the optional
+// holds it, the hook encodeJSONFields reads to omit an absent optional property.
+func (o Opt[T]) jsonOptField() (any, bool) { return o.val, o.present }
+
 // jsonArmer is the hook a generated tagged-sum union exposes so the encoder reads
 // its active member rather than reflecting the struct's unexported arm fields into
 // an empty object. The method is exported because the generated union type lives in
@@ -116,7 +131,44 @@ func encodeJSON(b *strings.Builder, v any) {
 			// value does not reach NumField and panic.
 			return
 		}
+		if r, ok := jsonToJSONGo(v); ok {
+			// A value whose class declares a toJSON method serializes that method's
+			// return in its place, so the walk re-dispatches on the returned value.
+			encodeJSON(b, r)
+			return
+		}
 		encodeJSONObject(b, reflect.ValueOf(v))
+	}
+}
+
+// jsonToJSONGo applies a value's toJSON hook, the first step of
+// SerializeJSONProperty: a value with a toJSON method serializes what the method
+// returns rather than the value itself. A lowered class method named toJSON
+// becomes an exported Go method ToJSON, which this finds by reflection so the
+// serializer need not know each class's type. It reports the method's result and
+// true when the value has such a method taking no arguments or a single string
+// key (passed the empty string, the key of the value the caller is serializing at
+// the point a hook is consulted), and false when it does not, so the caller falls
+// back to the reflection walk over the value's fields.
+func jsonToJSONGo(v any) (any, bool) {
+	m := reflect.ValueOf(v).MethodByName("ToJSON")
+	if !m.IsValid() {
+		return nil, false
+	}
+	mt := m.Type()
+	if mt.NumOut() != 1 {
+		return nil, false
+	}
+	switch mt.NumIn() {
+	case 0:
+		return m.Call(nil)[0].Interface(), true
+	case 1:
+		if mt.In(0) != reflect.TypeOf(BStr{}) {
+			return nil, false
+		}
+		return m.Call([]reflect.Value{reflect.ValueOf(BStr{})})[0].Interface(), true
+	default:
+		return nil, false
 	}
 }
 
@@ -245,6 +297,18 @@ func encodeJSONFields(b *strings.Builder, rv reflect.Value, first *bool) {
 			continue
 		}
 		val := rv.Field(i).Interface()
+		// An optional property lowers to a value.Opt[T]. JSON.stringify omits a
+		// property whose value is undefined, which for an Opt is the not-present
+		// case, so an absent optional (and an explicit undefined, which lowers to
+		// the same empty Opt) omits its key; a present optional serializes the
+		// value it wraps.
+		if opt, ok := val.(jsonOptional); ok {
+			inner, present := opt.jsonOptField()
+			if !present {
+				continue
+			}
+			val = inner
+		}
 		if jsonUndefinedGo(val) {
 			// A function-valued property has no JSON form, so the object omits the
 			// key rather than reflecting the func and faulting on NumField.
