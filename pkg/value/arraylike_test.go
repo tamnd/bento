@@ -438,3 +438,33 @@ func TestGenericReduceRight(t *testing.T) {
 		}()
 	}
 }
+
+// TestArrayFromArrayLike proves Array.from's array-like path reads length and the
+// integer keys, filling a missing index with undefined, and that the optional map
+// callback rewrites each element from its value and index.
+func TestArrayFromArrayLike(t *testing.T) {
+	// A sparse array-like: length 3 with only indices 0 and 2 set, so index 1 reads
+	// undefined the way Array.from fills a gap.
+	src := arrayLike(3, Number(10))
+	src.SetIndex(2, Number(30))
+
+	out := ArrayFromArrayLike(src, Undefined)
+	if out.GetIndex(0).AsNumber() != 10 || out.GetIndex(2).AsNumber() != 30 {
+		t.Fatalf("ArrayFromArrayLike copied wrong values: %v", out)
+	}
+	if !out.GetIndex(1).IsUndefined() {
+		t.Errorf("missing index 1 should read undefined, got %v", out.GetIndex(1))
+	}
+	if int(out.Get(FromGoString("length")).AsNumber()) != 3 {
+		t.Errorf("result length = %v, want 3", out.Get(FromGoString("length")))
+	}
+
+	// The map callback receives (value, index) and its result becomes the element.
+	double := NewFunc(func(args []Value) Value {
+		return Number(Arg(args, 0).AsNumber()*10 + Arg(args, 1).AsNumber())
+	})
+	mapped := ArrayFromArrayLike(arrayLike(2, Number(1), Number(2)), double)
+	if mapped.GetIndex(0).AsNumber() != 10 || mapped.GetIndex(1).AsNumber() != 21 {
+		t.Errorf("mapped result = [%v %v], want [10 21]", mapped.GetIndex(0), mapped.GetIndex(1))
+	}
+}
