@@ -3,6 +3,7 @@ package value
 import (
 	"encoding/binary"
 	"math"
+	"math/big"
 )
 
 // DataView is bento's runtime representation of a JavaScript DataView, the view
@@ -204,6 +205,26 @@ func (d *DataView) GetFloat32(byteOffset float64, littleEndian ...bool) float64 
 func (d *DataView) GetFloat64(byteOffset float64, littleEndian ...bool) float64 {
 	bi := d.access(byteOffset, 8)
 	return math.Float64frombits(dataViewOrder(littleEndian).Uint64(d.buffer.data[bi:]))
+}
+
+// GetBigInt64 reads the signed 64-bit integer at the offset with the given
+// endianness as a bigint, DataView.prototype.getBigInt64 (25 §25.3.4). A bigint
+// lowers to a *big.Int, so the read widens the stored two's-complement value into
+// one rather than the Number the numeric getters return, since a 64-bit integer does
+// not fit a Number without loss.
+func (d *DataView) GetBigInt64(byteOffset float64, littleEndian ...bool) *big.Int {
+	bi := d.access(byteOffset, 8)
+	u := dataViewOrder(littleEndian).Uint64(d.buffer.data[bi:])
+	return new(big.Int).SetInt64(int64(u))
+}
+
+// GetBigUint64 reads the unsigned 64-bit integer at the offset with the given
+// endianness as a bigint, DataView.prototype.getBigUint64, the unsigned sibling of
+// GetBigInt64 that keeps the full 64-bit magnitude a signed value could not.
+func (d *DataView) GetBigUint64(byteOffset float64, littleEndian ...bool) *big.Int {
+	bi := d.access(byteOffset, 8)
+	u := dataViewOrder(littleEndian).Uint64(d.buffer.data[bi:])
+	return new(big.Int).SetUint64(u)
 }
 
 // float16ToFloat64 decodes an IEEE 754 half-precision bit pattern to the Number a
