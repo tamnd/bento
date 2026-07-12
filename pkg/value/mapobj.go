@@ -50,6 +50,18 @@ func NewBoolMap[V any]() *Map[bool, V] {
 	return &Map[bool, V]{eq: func(a, b bool) bool { return a == b }}
 }
 
+// NewRefMap builds an empty Map whose keys are objects compared by reference
+// identity, the lowering of new Map<K, V>() for an object key type K. A JavaScript
+// object key matches under SameValueZero, which for objects is reference identity:
+// two object keys are the same key exactly when they are the same object. Objects
+// lower to Go struct pointers, so Go's == on those pointers is that identity, and
+// there is no NaN case to fold in the way a number key has. K is constrained to
+// comparable because only a comparable key can back the == the equality uses; the
+// lowerer only reaches this constructor for a key type that renders to a pointer.
+func NewRefMap[K comparable, V any]() *Map[K, V] {
+	return &Map[K, V]{eq: func(a, b K) bool { return a == b }}
+}
+
 // find returns the index of the entry whose key matches k, or -1 when the map has
 // no such key. It is the linear scan every keyed operation shares; the hashed index
 // that replaces it is a later performance slice.

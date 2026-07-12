@@ -53,6 +53,17 @@ func NewBoolSet() *Set[bool] {
 	return &Set[bool]{eq: func(a, b bool) bool { return a == b }}
 }
 
+// NewRefSet builds an empty Set whose members are objects compared by reference
+// identity, the lowering of new Set<T>() for an object member type T. As with
+// NewRefMap, an object member matches under SameValueZero by reference identity,
+// which is Go's == on the struct pointers objects lower to, so two members are the
+// same member exactly when they are the same object. T is constrained to comparable
+// because only a comparable member can back that ==; the lowerer only reaches this
+// constructor for a member type that renders to a pointer.
+func NewRefSet[T comparable]() *Set[T] {
+	return &Set[T]{eq: func(a, b T) bool { return a == b }}
+}
+
 // find returns the index of the member that matches v, or -1 when the set has no
 // such member. It is the linear scan every membership operation shares; the hashed
 // index that replaces it is a later performance slice.
