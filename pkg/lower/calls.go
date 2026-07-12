@@ -2749,12 +2749,18 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 }
 
 // numberCoercion lowers Number(x) called as a function over a primitive argument.
-// A string goes through value.StringToNumber (the exact ECMAScript ToNumber over
-// the StrNumericLiteral grammar, not strconv), a boolean through value.BoolToNumber
-// (true is 1, false is 0), and a number is already a float64 so it passes through
-// unchanged. It takes exactly one argument; a different arity, or an argument this
-// slice does not coerce (an object, whose valueOf runs user code), hands back.
+// Number() with no argument is +0, the coercion-edge count the spec fixes: with no
+// value to convert the result is zero, so it lowers to a float64 zero literal, the
+// mirror of String()'s empty-string default. A string goes through
+// value.StringToNumber (the exact ECMAScript ToNumber over the StrNumericLiteral
+// grammar, not strconv), a boolean through value.BoolToNumber (true is 1, false is
+// 0), and a number is already a float64 so it passes through unchanged. Any other
+// arity, or an argument this slice does not coerce (an object, whose valueOf runs
+// user code), hands back.
 func (r *Renderer) numberCoercion(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return &ast.BasicLit{Kind: token.FLOAT, Value: "0"}, nil
+	}
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "Number() with this argument count is a later slice"}
 	}
