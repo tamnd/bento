@@ -24,3 +24,6 @@ goldenrun-*/
 # Stray AOT build binaries from ad hoc build -o checks
 /sy
 /sy2
+
+# stray build artifact from `go build -o ts`
+/ts
