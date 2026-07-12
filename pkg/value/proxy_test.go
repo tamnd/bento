@@ -280,6 +280,77 @@ func TestProxyDefinePropertyTrap(t *testing.T) {
 	}
 }
 
+// TestProxyGetPrototypeOfTrap pins that a getPrototypeOf trap supplies the prototype
+// Object.getPrototypeOf reports over an extensible target.
+func TestProxyGetPrototypeOfTrap(t *testing.T) {
+	custom := NewObject()
+	custom.Set(FromGoString("tag"), Number(1))
+	handler := NewObject()
+	handler.Set(FromGoString("getPrototypeOf"), NewFunc(func(args []Value) Value {
+		return custom
+	}))
+	p := NewProxy(NewObject(), handler)
+	if got := p.GetPrototype(); got.kind != KindObject || got.Get(FromGoString("tag")).AsNumber() != 1 {
+		t.Errorf("getPrototypeOf trap did not supply the prototype, got %v", got)
+	}
+}
+
+// TestProxySetPrototypeOfTrap pins that a setPrototypeOf trap intercepts the
+// assignment and that a falsy return throws the way a refused assignment does.
+func TestProxySetPrototypeOfTrap(t *testing.T) {
+	var saw bool
+	handler := NewObject()
+	handler.Set(FromGoString("setPrototypeOf"), NewFunc(func(args []Value) Value {
+		saw = true
+		return Bool(false)
+	}))
+	p := NewProxy(NewObject(), handler)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("setPrototypeOf trap returning falsy did not throw")
+			}
+		}()
+		p.SetPrototype(NewObject())
+	}()
+	if !saw {
+		t.Error("setPrototypeOf trap was not called")
+	}
+}
+
+// TestProxyIsExtensibleInvariant pins that an isExtensible trap must agree with the
+// target's own extensibility: a disagreeing boolean throws a TypeError.
+func TestProxyIsExtensibleInvariant(t *testing.T) {
+	handler := NewObject()
+	handler.Set(FromGoString("isExtensible"), NewFunc(func(args []Value) Value {
+		return Bool(false)
+	}))
+	p := NewProxy(NewObject(), handler) // target is extensible, trap says not
+	defer func() {
+		if recover() == nil {
+			t.Error("isExtensible trap disagreeing with the target did not throw")
+		}
+	}()
+	p.IsExtensible()
+}
+
+// TestProxyPreventExtensionsTrap pins that a preventExtensions trap intercepts the
+// request and that a truthy return is honored only once the target is itself
+// non-extensible, so a trap that seals the target passes the invariant.
+func TestProxyPreventExtensionsTrap(t *testing.T) {
+	target := NewObject()
+	handler := NewObject()
+	handler.Set(FromGoString("preventExtensions"), NewFunc(func(args []Value) Value {
+		Arg(args, 0).PreventExtensions()
+		return Bool(true)
+	}))
+	p := NewProxy(target, handler)
+	p.PreventExtensions()
+	if target.IsExtensible() {
+		t.Error("preventExtensions trap did not seal the target")
+	}
+}
+
 // TestProxyCallableForwards pins that a Proxy over a callable target is itself
 // callable and forwards the call to the target when the handler has no apply trap.
 func TestProxyCallableForwards(t *testing.T) {

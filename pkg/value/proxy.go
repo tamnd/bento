@@ -272,24 +272,85 @@ func (p *proxyData) getOwnPropertyDescriptor(key Value) Value {
 	return res
 }
 
+// getPrototypeOf runs the getPrototypeOf trap, the [[GetPrototypeOf]]() internal
+// method behind Object.getPrototypeOf. With no trap the prototype forwards from the
+// target. With a trap the result must be an object or null, and over a
+// non-extensible target it must be the target's actual prototype, so the trap cannot
+// lie about a prototype that can no longer change.
 func (p *proxyData) getPrototypeOf() Value {
 	p.checkRevoked("getPrototypeOf")
-	return p.target.GetPrototype()
+	trap := p.trap("getPrototypeOf")
+	if trap.kind == KindUndefined {
+		return p.target.GetPrototype()
+	}
+	res := trap.Call(p.target)
+	if res.kind != KindObject && res.kind != KindArray && res.kind != KindFunc && res.kind != KindNull {
+		Throw(NewTypeError(FromGoString("'getPrototypeOf' on proxy: trap must return an object or null")))
+	}
+	if !p.target.IsExtensible() && !sameValue(res, p.target.GetPrototype()) {
+		Throw(NewTypeError(FromGoString("'getPrototypeOf' on proxy: proxy target is non-extensible but the trap did not return its actual prototype")))
+	}
+	return res
 }
 
+// setPrototypeOf runs the setPrototypeOf trap, the [[SetPrototypeOf]](V) internal
+// method behind Object.setPrototypeOf. With no trap the assignment forwards to the
+// target. With a trap a falsy return is a refused assignment the Object.set
+// PrototypeOf layer turns into a TypeError, and over a non-extensible target the new
+// prototype must equal the target's current one, so the trap cannot swap a prototype
+// that can no longer change.
 func (p *proxyData) setPrototypeOf(proto Value) {
 	p.checkRevoked("setPrototypeOf")
-	p.target.SetPrototype(proto)
+	trap := p.trap("setPrototypeOf")
+	if trap.kind == KindUndefined {
+		p.target.SetPrototype(proto)
+		return
+	}
+	if !ToBoolean(trap.Call(p.target, proto)) {
+		Throw(NewTypeError(FromGoString("'setPrototypeOf' on proxy: trap returned falsy")))
+	}
+	if !p.target.IsExtensible() && !sameValue(proto, p.target.GetPrototype()) {
+		Throw(NewTypeError(FromGoString("'setPrototypeOf' on proxy: proxy target is non-extensible but the trap set a different prototype")))
+	}
 }
 
+// isExtensible runs the isExtensible trap, the [[IsExtensible]]() internal method
+// behind Object.isExtensible. With no trap the answer forwards from the target. With
+// a trap the boolean must agree with the target's own extensibility, the invariant
+// that keeps a proxy from disagreeing with the object it wraps on whether new
+// properties can be added.
 func (p *proxyData) isExtensible() bool {
 	p.checkRevoked("isExtensible")
-	return p.target.IsExtensible()
+	trap := p.trap("isExtensible")
+	if trap.kind == KindUndefined {
+		return p.target.IsExtensible()
+	}
+	res := ToBoolean(trap.Call(p.target))
+	if res != p.target.IsExtensible() {
+		Throw(NewTypeError(FromGoString("'isExtensible' on proxy: trap result does not match the target's extensibility")))
+	}
+	return res
 }
 
+// preventExtensions runs the preventExtensions trap, the [[PreventExtensions]]()
+// internal method behind Object.preventExtensions. With no trap the request forwards
+// to the target. With a trap a falsy return is a refused request the Object.prevent
+// Extensions layer turns into a TypeError, and a truthy return is honored only when
+// the target is already non-extensible, so the trap cannot claim to have sealed a
+// target that still accepts new properties.
 func (p *proxyData) preventExtensions() {
 	p.checkRevoked("preventExtensions")
-	p.target.PreventExtensions()
+	trap := p.trap("preventExtensions")
+	if trap.kind == KindUndefined {
+		p.target.PreventExtensions()
+		return
+	}
+	if !ToBoolean(trap.Call(p.target)) {
+		Throw(NewTypeError(FromGoString("'preventExtensions' on proxy: trap returned falsy")))
+	}
+	if p.target.IsExtensible() {
+		Throw(NewTypeError(FromGoString("'preventExtensions' on proxy: trap returned truthy but the proxy target is still extensible")))
+	}
 }
 
 // ownKeys runs the ownKeys trap, the [[OwnPropertyKeys]]() internal method behind
