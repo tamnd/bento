@@ -156,3 +156,19 @@ func (m *Map[K, V]) ForEachValue(fn func(V)) {
 		fn(v)
 	}
 }
+
+// Keys returns the map's keys in insertion order, the traversal map.keys() and a
+// for...of over the keys read. It copies the backing slice so a mutation to the map
+// during the loop does not disturb the range in progress; the live-view an iterator
+// has of concurrent mutation is a later slice.
+func (m *Map[K, V]) Keys() []K {
+	return append([]K(nil), m.keys...)
+}
+
+// Values returns the map's values in insertion order, the traversal map.values()
+// and a for...of over the values read. It copies the backing slice for the same
+// reason Keys does, so the two snapshots a for-of over entries pairs are consistent
+// and stable across a body that mutates the map.
+func (m *Map[K, V]) Values() []V {
+	return append([]V(nil), m.vals...)
+}

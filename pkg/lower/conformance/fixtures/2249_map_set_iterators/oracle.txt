@@ -1,0 +1,13 @@
+== stdout:
+abc
+15
+a 10
+b 2
+c 3
+a=10
+b=2
+c=3
+acb
+
+== exit:
+0

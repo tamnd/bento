@@ -215,6 +215,13 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if recv, method, ok := r.arrayIterForOfCall(kids[1]); ok {
 		return r.forOfArrayIterSingle(recv, dkids[0], name, method, kids[2])
 	}
+	// A Set used directly, or a Map/Set keys()/values() call, ranges the runtime's
+	// insertion-ordered snapshot rather than build and drive an iterator object. The
+	// pair-yielding forms hand back inside the helper, since a [key, value] tuple does
+	// not lower.
+	if stmt, handled, err := r.forOfMapSetSingle(kids[1], dkids[0], name, kids[2]); handled {
+		return stmt, err
+	}
 	// The iterable is an array (ranged over its Elems) or a string (ranged over its
 	// code points). A string yields one substring per Unicode code point, so it
 	// lowers to a range over CodePoints() the same way an array ranges over Elems();
@@ -407,6 +414,12 @@ func (r *Renderer) forOfDestructure(iterable, pattern, bodyNode frontend.Node) (
 		if strings.HasPrefix(strings.TrimSpace(r.prog.Text(pattern)), "[") {
 			return r.forOfEntriesDestructure(recv, pattern, bodyNode)
 		}
+	}
+	// `for (const [k, v] of map)`, its entries() spelling, and a Set's entries() range
+	// the runtime's insertion-ordered snapshot and bind the pattern's two names
+	// directly, since the [K, V] tuple a pair would otherwise take does not lower.
+	if stmt, handled, err := r.forOfMapSetDestructure(iterable, pattern, bodyNode); handled {
+		return stmt, err
 	}
 	if !isArrayElem(r, iterable) {
 		return nil, &NotYetLowerable{Reason: "a destructuring for...of over a non-array iterable is a later slice"}
