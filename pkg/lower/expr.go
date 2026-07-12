@@ -1736,22 +1736,24 @@ func (r *Renderer) referenceIdentityOp(opText string, left, right frontend.Node)
 	return goOp, true
 }
 
-// symbolEquality lowers an equality between two symbol-typed operands to the
+// symbolEquality lowers an equality between two symbol-valued operands to the
 // runtime's identity compare. Both operands render to a boxed value.Value, so ===
 // and !== go through value.StrictEquals, which compares two symbols by the pointer
 // their boxes hold, and == and != coincide with strict for two symbols since a
 // symbol never coerces against another symbol; loose equality reuses StrictEquals
 // rather than LooseEquals so the intent reads plainly. It reports handled=false for
 // a non-equality operator or when either operand is not a symbol, leaving those to
-// the dynamic path and the operator table. This is what lets `Symbol.for("k") ===
-// Symbol.for("k")` lower when the interned symbols are not on the dynamic path.
+// the dynamic path and the operator table. isSymbolKey admits both an annotated
+// symbol and a well-known symbol read, whose lib type is the flagless unique symbol,
+// so `Symbol.for("k") === Symbol.for("k")` and `Symbol.match === Symbol.match` both
+// lower when the operands are not on the dynamic path.
 func (r *Renderer) symbolEquality(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
 	switch opText {
 	case "===", "!==", "==", "!=":
 	default:
 		return nil, false, nil
 	}
-	if !r.isSymbol(left) || !r.isSymbol(right) {
+	if !r.isSymbolKey(left) || !r.isSymbolKey(right) {
 		return nil, false, nil
 	}
 	l, err := r.lowerExpr(left)
