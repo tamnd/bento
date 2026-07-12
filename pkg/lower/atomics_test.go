@@ -36,6 +36,33 @@ console.log(Atomics.exchange(ta, 0, 99));
 	}
 }
 
+// TestAtomicsCompareExchangeAndQueryLoweringShape pins the Go the compare-exchange,
+// lock-free query, wait, notify, and pause operations lower to: compareExchange over
+// the typed array with both operands, isLockFree over a bare size, wait and notify over
+// the Int32Array, and pause with no receiver.
+func TestAtomicsCompareExchangeAndQueryLoweringShape(t *testing.T) {
+	const src = `const ta = new Int32Array(new SharedArrayBuffer(16));
+console.log(Atomics.compareExchange(ta, 0, 0, 7));
+console.log(Atomics.isLockFree(4));
+const waited: string = Atomics.wait(ta, 0, 123, 0);
+console.log(waited);
+console.log(Atomics.notify(ta, 0));
+Atomics.pause();
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.AtomicCompareExchange(ta, 0, 0, 7)",
+		"value.AtomicIsLockFree(4)",
+		"value.AtomicWait(ta, 0, 123, 0)",
+		"value.AtomicNotify(ta, 0)",
+		"value.AtomicPause()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("Atomics lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
 // TestAtomicsHandsBackUnsupportedForms proves the Atomics lowering claims only the
 // subset it can emit soundly. A bigint typed array stores a *big.Int outside the float
 // AtomicView, and a non-number index is not the numeric operand the value functions
