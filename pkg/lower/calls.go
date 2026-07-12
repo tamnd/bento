@@ -1353,18 +1353,19 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 }
 
 // jsonCall lowers a static call on the global JSON namespace. stringify takes a
-// single value and returns the exact text V8 produces, which lowers to
-// value.JSONStringify with the argument boxed as any so the serializer's
-// reflection walk can dispatch on its concrete type. parse takes a single string
-// and returns a dynamic any value, which lowers to value.JSONParse and lands in
-// the boxed value world the checker already typed the result as. A replacer, a
-// space, or a reviver argument (the extra parameters) changes the behavior, so a
-// call that passes one hands back rather than ignoring it.
+// value and returns the exact text V8 produces, which lowers to value.JSONStringify
+// with the argument boxed as any so the serializer's reflection walk can dispatch
+// on its concrete type. A space argument switches to the indented form
+// value.JSONStringifyIndentNum or IndentStr. parse takes a single string and
+// returns a dynamic any value, which lowers to value.JSONParse and lands in the
+// boxed value world the checker already typed the result as. A replacer or a
+// reviver function still changes the behavior, so a call that passes one hands
+// back rather than ignoring it.
 func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "stringify":
-		if len(argNodes) != 1 {
-			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer or space argument is a later slice"}
+		if len(argNodes) == 0 || len(argNodes) > 3 {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify takes a value and an optional replacer and space"}
 		}
 		// A value statically typed as an extended class may hold a subclass at
 		// runtime, and JavaScript would serialize the subclass's own fields
@@ -1373,11 +1374,20 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		if info, ok := r.classOfNode(argNodes[0]); ok && info.extended {
 			return nil, &NotYetLowerable{Reason: "JSON.stringify of a value typed as class " + info.name + ", which another class extends, is a later slice"}
 		}
+		// The replacer slot only passes through when it is null or undefined, which
+		// the specification ignores; a replacer function or array whitelist is a
+		// later slice, so a present replacer of any other type hands back.
+		if len(argNodes) >= 2 && !r.isJSONNullish(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer function or array is a later slice"}
+		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
+		if len(argNodes) == 3 {
+			return r.jsonStringifySpace(arg, argNodes[2])
+		}
 		return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
 	case "parse":
 		if len(argNodes) != 1 {
@@ -1392,6 +1402,40 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 	default:
 		return nil, &NotYetLowerable{Reason: "JSON." + method + " is a later slice"}
 	}
+}
+
+// jsonStringifySpace lowers the space argument of a three-argument JSON.stringify
+// over an already-lowered value. A numeric space routes to
+// value.JSONStringifyIndentNum and a string space to value.JSONStringifyIndentStr,
+// each of which computes the indentation gap the specification prescribes (a
+// number of spaces clamped to ten, or the first ten characters of the string) and
+// falls back to the compact form when the gap is empty. A null or undefined space
+// is the compact form outright. Any other space type is a later slice.
+func (r *Renderer) jsonStringifySpace(arg ast.Expr, spaceNode frontend.Node) (ast.Expr, error) {
+	switch {
+	case r.isNumber(spaceNode):
+		space, err := r.lowerExpr(spaceNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyIndentNum"), Args: []ast.Expr{arg, space}}, nil
+	case r.isString(spaceNode):
+		space, err := r.lowerExpr(spaceNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyIndentStr"), Args: []ast.Expr{arg, space}}, nil
+	case r.isJSONNullish(spaceNode):
+		return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "JSON.stringify with a space that is not a number or string is a later slice"}
+	}
+}
+
+// isJSONNullish reports whether a node is the null keyword or the undefined
+// literal, the two values JSON.stringify treats as an absent replacer or space.
+func (r *Renderer) isJSONNullish(n frontend.Node) bool {
+	return n.Kind() == frontend.NodeNullKeyword || r.isUndefinedLiteral(n)
 }
 
 // objectCall lowers a static call on the global Object namespace. Only keys is
