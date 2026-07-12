@@ -27,6 +27,15 @@ var dataViewEndianGetters = map[string]string{
 	"getFloat64": "GetFloat64",
 }
 
+// dataViewBigIntGetters maps the 64-bit DataView getters to their runtime method.
+// Each takes a byte offset and an optional littleEndian flag like the numeric getters,
+// but its runtime method returns a *big.Int, since a 64-bit integer reads back as the
+// bigint a Number cannot hold without loss (25 §25.3.4).
+var dataViewBigIntGetters = map[string]string{
+	"getBigInt64":  "GetBigInt64",
+	"getBigUint64": "GetBigUint64",
+}
+
 // dataViewMethodCall lowers a method call whose receiver is a DataView to the
 // matching value.DataView getter or setter (25 §25.3). It runs after the typed-array
 // and buffer paths in methodCall, since a DataView is its own view kind, and covers
@@ -39,6 +48,9 @@ func (r *Renderer) dataViewMethodCall(recvNode frontend.Node, method string, arg
 		return r.dataViewGet(recvNode, runtimeName, argNodes, false)
 	}
 	if runtimeName, ok := dataViewEndianGetters[method]; ok {
+		return r.dataViewGet(recvNode, runtimeName, argNodes, true)
+	}
+	if runtimeName, ok := dataViewBigIntGetters[method]; ok {
 		return r.dataViewGet(recvNode, runtimeName, argNodes, true)
 	}
 	return nil, &NotYetLowerable{Reason: "DataView method ." + method + " is a later slice"}
