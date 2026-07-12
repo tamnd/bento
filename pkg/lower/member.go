@@ -864,6 +864,40 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	return unbox(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("At")}, Args: []ast.Expr{idx}}), nil
 }
 
+// typedArrayBoxedRead builds the boxed form of a typed-array element read a[i] whose
+// result flows into a dynamic slot: recv.GetIndex(i), which answers a Number for a
+// canonical in-range index and undefined for an out-of-range or non-canonical one,
+// the value.Value a dynamic consumer needs where the numeric At would box a stand-in
+// 0. It claims only a read on a numeric typed array by a Number index with a
+// side-effect-free identifier receiver, so re-evaluating the receiver here is free;
+// every other read returns ok=false and boxes through the numeric path.
+func (r *Renderer) typedArrayBoxedRead(src frontend.Node) (ast.Expr, bool, error) {
+	if src.Kind() != frontend.NodeElementAccessExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(src)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	obj, idxNode := kids[0], kids[1]
+	if obj.Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	if !r.numericTypedArray(obj) || !r.isNumber(idxNode) {
+		return nil, false, nil
+	}
+	recv, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, false, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{idx}}, true, nil
+}
+
 // dynamicArrayElemUnbox reports the accessor that unboxes an element read obj[i]
 // whose node is n, for the case where the array holds value.Value elements but
 // this read is narrowed to a static primitive. A TypeScript evolving array is

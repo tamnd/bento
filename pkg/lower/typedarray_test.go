@@ -183,6 +183,25 @@ func TestTypedArrayGeometryGetterLowering(t *testing.T) {
 	}
 }
 
+// TestTypedArrayBoxedReadLowering pins that a typed-array element read flowing into a
+// dynamic slot lowers through GetIndex rather than the numeric At. The numeric At
+// returns a float64 and cannot answer undefined for an out-of-range index, so a read
+// boxed into an any slot takes GetIndex, which returns a value.Value that is undefined
+// for a non-canonical or out-of-range index the way the spec requires.
+func TestTypedArrayBoxedReadLowering(t *testing.T) {
+	const src = `const ta = new Int32Array([10, 20]);
+const x: any = ta[5];
+console.log(x === undefined);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "ta.GetIndex(5)") {
+		t.Errorf("boxed typed-array read did not lower to GetIndex:\n%s", source)
+	}
+	if strings.Contains(source, "value.Number(ta.At(") {
+		t.Errorf("boxed read should not go through the numeric At:\n%s", source)
+	}
+}
+
 // TestTypedArrayIntIndexLowering pins the native-int index form. A typed-array read
 // and write driven by a bounded for-counter lower through AtI and SetAtI with the
 // index narrowed to a Go int, so the counter stays a native int32 and the float
