@@ -105,6 +105,49 @@ func TestRegExpSplitStr(t *testing.T) {
 	}
 }
 
+// A named group (?<name>...) exposes its capture on the result's groups object, keyed
+// by the name, and $<name> in a replacement substitutes the named group's text; a name
+// with no group substitutes the empty string, and $<...> is literal when the pattern
+// has no named groups at all.
+func TestRegExpNamedGroups(t *testing.T) {
+	re := NewRegExpLiteral("(?<year>\\d{4})-(?<month>\\d{2})", "")
+	m := re.Exec(FromGoString("2026-07"))
+	if m.IsNull() {
+		t.Fatal("named-group exec returned null on a matching input")
+	}
+	groups := m.Get(FromGoString("groups"))
+	if groups.IsUndefined() {
+		t.Fatal("named-group result has undefined groups")
+	}
+	if got := groups.Get(FromGoString("year")).AsString().ToGoString(); got != "2026" {
+		t.Errorf("groups.year = %q, want 2026", got)
+	}
+	if got := groups.Get(FromGoString("month")).AsString().ToGoString(); got != "07" {
+		t.Errorf("groups.month = %q, want 07", got)
+	}
+
+	// A pattern with no named groups has an undefined groups slot.
+	plain := NewRegExpLiteral("(\\d+)", "").Exec(FromGoString("42"))
+	if !plain.Get(FromGoString("groups")).IsUndefined() {
+		t.Error("a pattern with no named groups did not leave groups undefined")
+	}
+
+	swap := NewRegExpLiteral("(?<y>\\d{4})-(?<m>\\d{2})", "").ReplaceStr(FromGoString("2026-07"), FromGoString("$<m>/$<y>"))
+	if swap.ToGoString() != "07/2026" {
+		t.Errorf("named-group replace = %q, want 07/2026", swap.ToGoString())
+	}
+
+	unknown := NewRegExpLiteral("(?<y>\\d{4})", "").ReplaceStr(FromGoString("2026"), FromGoString("[$<x>]"))
+	if unknown.ToGoString() != "[]" {
+		t.Errorf("unknown named ref = %q, want []", unknown.ToGoString())
+	}
+
+	literal := NewRegExpLiteral("b", "").ReplaceStr(FromGoString("abc"), FromGoString("$<x>"))
+	if literal.ToGoString() != "a$<x>c" {
+		t.Errorf("$<x> with no named groups = %q, want a$<x>c", literal.ToGoString())
+	}
+}
+
 // arrayStrings reads a value array into a Go slice of its elements' string forms, so
 // a test can assert on the whole result at once.
 func arrayStrings(v Value) []string {

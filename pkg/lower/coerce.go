@@ -332,6 +332,20 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 			return true
 		}
 	}
+	// A property or element read off a dynamic receiver lowers to a Get on the box,
+	// which yields a box unless the read's own type is a clean primitive that
+	// unboxDynamicRead coerces down. So the read is itself dynamic when its type is not
+	// one of those primitives, which keeps a further member or element read off it, the
+	// m.groups.year chain off a boxed exec result being the motivating case, on the
+	// dynamic Get path rather than folding to a fixed-shape miss on an index-signature
+	// type the box does not actually carry as Go fields.
+	if n.Kind() == frontend.NodePropertyAccessExpression || n.Kind() == frontend.NodeElementAccessExpression {
+		if kids := r.prog.Children(n); len(kids) >= 1 && r.isDynamic(kids[0]) {
+			if r.prog.TypeAt(n).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+				return true
+			}
+		}
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 
@@ -874,13 +888,20 @@ func (r *Renderer) coerceDynamicToStaticFlags(expr ast.Expr, flags frontend.Type
 // non-primitive read type, an object or array, keeps the box, since there is no
 // single Go value to coerce it to here.
 func (r *Renderer) unboxDynamicRead(read ast.Expr, n frontend.Node) (ast.Expr, error) {
-	if r.isDynamic(n) {
-		return read, nil
-	}
 	flags := r.prog.TypeAt(n).Flags
-	if flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
+	// A read whose type is a clean primitive (number, string, or boolean with no any
+	// or unknown facet) has one Go value to coerce the box down to, so it coerces even
+	// when a shape query flagged the read dynamic. An index-signature read like
+	// m.groups.year resolves to string through the signature, but the fixed-shape query
+	// that backs missingPropertyRead sees no declared "year" field and reports the read
+	// dynamic, which would otherwise leave the box uncoerced where its string consumer
+	// expects a bstr. Keying off the precise type first coerces it correctly.
+	if flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 &&
+		flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
 		return r.coerceDynamicToStaticFlags(read, flags)
 	}
+	// A read the checker left any or unknown, or gave a non-primitive shape, keeps the
+	// box: there is no single Go value to coerce it to here.
 	return read, nil
 }
 

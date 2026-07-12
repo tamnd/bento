@@ -65,6 +65,7 @@ func (re *RegExp) MatchStr(s BStr) Value {
 func (re *RegExp) ReplaceStr(s, repl BStr) BStr {
 	str := s.ToGoString()
 	tmpl := repl.ToGoString()
+	names := re.re.SubexpNames()
 	if !re.global {
 		loc := re.re.FindStringSubmatchIndex(str)
 		if loc == nil || (re.sticky && loc[0] != 0) {
@@ -72,7 +73,7 @@ func (re *RegExp) ReplaceStr(s, repl BStr) BStr {
 		}
 		var b strings.Builder
 		b.WriteString(str[:loc[0]])
-		b.WriteString(expandReplacement(str, loc, tmpl))
+		b.WriteString(expandReplacement(str, loc, tmpl, names))
 		b.WriteString(str[loc[1]:])
 		return FromGoString(b.String())
 	}
@@ -85,7 +86,7 @@ func (re *RegExp) ReplaceStr(s, repl BStr) BStr {
 			break
 		}
 		b.WriteString(str[last:m[0]])
-		b.WriteString(expandReplacement(str, m, tmpl))
+		b.WriteString(expandReplacement(str, m, tmpl, names))
 		last = m[1]
 		if m[0] == m[1] {
 			re.lastIndex++
@@ -170,12 +171,14 @@ func (re *RegExp) SplitStr(s BStr, limited bool, limit float64) Value {
 // expandReplacement expands one match's replacement template into its result text,
 // applying the ECMAScript substitution patterns (22 §22.1.3.19.1 GetSubstitution):
 // $$ is a literal dollar, $& the whole match, $` and $' the text before and after
-// the match, and $n or $nn a capture group's text (or the empty string for a group
-// that did not participate). A $ that begins none of these, a $ before a group
-// number past the last group, is copied literally the way the specification leaves
-// it. Offsets are byte offsets into the UTF-8 subject, which slice the same text the
-// UTF-16 positions name for the code points RE2 hosts.
-func expandReplacement(str string, m []int, tmpl string) string {
+// the match, $n or $nn a numbered capture group's text, and $<name> a named group's
+// text (each the empty string for a group that did not participate). A $ that begins
+// none of these, a $ before a group number past the last group, is copied literally
+// the way the specification leaves it, and $<name> is literal when the pattern has no
+// named groups at all. names is the RE2 SubexpNames slice, empty at every index for a
+// pattern with no named groups. Offsets are byte offsets into the UTF-8 subject, which
+// slice the same text the UTF-16 positions name for the code points RE2 hosts.
+func expandReplacement(str string, m []int, tmpl string, names []string) string {
 	nGroups := len(m)/2 - 1
 	var b strings.Builder
 	for i := 0; i < len(tmpl); i++ {
@@ -196,6 +199,21 @@ func expandReplacement(str string, m []int, tmpl string) string {
 		case c == '\'':
 			b.WriteString(str[m[1]:])
 			i++
+		case c == '<' && hasNamedGroup(names):
+			// $<name>: substitute the named group's text, or the empty string for a name
+			// with no group or a group that did not participate. A $< with no closing > is
+			// copied literally, the case GetSubstitution leaves as text.
+			end := strings.IndexByte(tmpl[i+2:], '>')
+			if end < 0 {
+				b.WriteByte('$')
+				continue
+			}
+			if g := groupIndexByName(names, tmpl[i+2:i+2+end]); g >= 0 {
+				if lo, hi := m[2*g], m[2*g+1]; lo >= 0 {
+					b.WriteString(str[lo:hi])
+				}
+			}
+			i += 2 + end
 		case c >= '0' && c <= '9':
 			n, adv := groupRef(tmpl, i+1, nGroups)
 			if n < 0 {
@@ -212,6 +230,29 @@ func expandReplacement(str string, m []int, tmpl string) string {
 		}
 	}
 	return b.String()
+}
+
+// hasNamedGroup reports whether a SubexpNames slice names at least one group, the test
+// that decides whether $<name> is a named-group reference or literal text.
+func hasNamedGroup(names []string) bool {
+	for _, nm := range names {
+		if nm != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// groupIndexByName returns the group number a name refers to, or -1 when no group has
+// that name. A $<name> for an unknown name substitutes the empty string, so the caller
+// treats -1 as an empty substitution that still consumes the reference.
+func groupIndexByName(names []string, name string) int {
+	for i, nm := range names {
+		if nm != "" && nm == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // groupRef reads a capture-group reference at position i in the template, where

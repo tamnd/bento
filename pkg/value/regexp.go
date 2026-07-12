@@ -257,9 +257,9 @@ func (re *RegExp) match(s BStr) ([]int, bool) {
 // buildResult packs the match into the array RegExp.prototype.exec returns: element
 // zero is the whole match, each following element is a capture group's text or
 // undefined when the group did not participate, and the array carries the .index of
-// the match, the .input it ran against, and a .groups slot for named groups, which a
-// later slice fills. The indices arrive in bytes and .index is reported in the UTF-16
-// code units the language counts positions in.
+// the match, the .input it ran against, and the .groups object for named groups. The
+// indices arrive in bytes and .index is reported in the UTF-16 code units the language
+// counts positions in.
 func (re *RegExp) buildResult(s BStr, m []int) Value {
 	str := s.ToGoString()
 	n := len(m) / 2
@@ -275,8 +275,41 @@ func (re *RegExp) buildResult(s BStr, m []int) Value {
 	res := NewArrayValue(elems)
 	res.Set(FromGoString("index"), Number(float64(byteToUTF16Offset(str, m[0]))))
 	res.Set(FromGoString("input"), StringValue(s))
-	res.Set(FromGoString("groups"), Undefined)
+	res.Set(FromGoString("groups"), re.groupsObject(elems))
 	return res
+}
+
+// groupsObject builds the .groups property of a match result: undefined when the
+// pattern has no named groups, else a null-prototype object mapping each group name to
+// its captured text, or undefined for a name whose group did not participate. The keys
+// are inserted in group-number order, which is the left-to-right order the names appear
+// in the pattern, the order RegExpBuiltinExec creates them in. The null prototype is
+// what the specification gives the groups object, so a name like "toString" reads its
+// captured text and not an inherited method.
+func (re *RegExp) groupsObject(elems []Value) Value {
+	subNames := re.re.SubexpNames()
+	hasNamed := false
+	for _, nm := range subNames {
+		if nm != "" {
+			hasNamed = true
+			break
+		}
+	}
+	if !hasNamed {
+		return Undefined
+	}
+	groups := ObjectCreate(Null)
+	for i, nm := range subNames {
+		if nm == "" {
+			continue
+		}
+		val := Undefined
+		if i < len(elems) {
+			val = elems[i]
+		}
+		groups.Set(FromGoString(nm), val)
+	}
+	return groups
 }
 
 // lastIndexToLength coerces a lastIndex Number to the non-negative integer offset
@@ -394,6 +427,7 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 
 	var b strings.Builder
 	inClass := false
+	names := map[string]bool{}
 	rs := []rune(pattern)
 	for i := 0; i < len(rs); i++ {
 		c := rs[i]
@@ -428,9 +462,28 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 			inClass = true
 			b.WriteRune(c)
 		case c == '(':
+			// A named capture group (?<name>...) is ECMAScript's spelling of RE2's
+			// (?P<name>...), so it translates by rewriting the prefix and copying the body
+			// through, but only when RE2 can host the name: RE2 accepts [A-Za-z0-9_]+ and
+			// forbids a repeated name, the two cases regexp.Compile would reject, so a name
+			// outside that set or a duplicate hands back rather than emitting a pattern the
+			// runtime constructor could not build. Lookbehind and a malformed group fall to
+			// heldGroupPrefix below.
+			if name, consumed, ok := namedGroupPrefix(rs, i); ok {
+				if !validCaptureName(name) {
+					return "", false, "a named group whose name RE2 cannot host is a later slice"
+				}
+				if names[name] {
+					return "", false, "a duplicate named group in a regexp is a construct RE2 cannot host"
+				}
+				names[name] = true
+				b.WriteString("(?P<" + name + ">")
+				i += consumed - 1
+				continue
+			}
 			// A group prefix names a construct RE2 either cannot host (lookahead,
-			// lookbehind) or a later slice owns (a named group, an inline flag modifier).
-			// A plain capturing group and a non-capturing (?:...) group pass through.
+			// lookbehind) or a later slice owns (an inline flag modifier). A plain
+			// capturing group and a non-capturing (?:...) group pass through.
 			if kind, held, reason := heldGroupPrefix(rs, i); held {
 				return "", false, reason
 			} else if kind != "" {
@@ -547,10 +600,51 @@ func heldGroupPrefix(rs []rune, i int) (replacement string, held bool, reason st
 		if i+3 < len(rs) && (rs[i+3] == '=' || rs[i+3] == '!') {
 			return "", true, "a lookbehind in a regexp is a construct RE2 cannot host"
 		}
-		return "", true, "a named capture group in a regexp is a later slice"
+		// A well-formed named group is translated before heldGroupPrefix runs, so a
+		// (?< that reaches here has no closing >, an unterminated named group.
+		return "", true, "an unterminated named group in a regexp is a later slice"
 	default:
 		return "", true, "an inline flag modifier in a regexp is a later slice"
 	}
+}
+
+// namedGroupPrefix inspects a group opening at index i and, when it is a named
+// capture group (?<name>, returns the name and the number of runes the whole prefix
+// spans, from the ( through the >. It reports ok=false for a lookbehind (?<= or (?<!,
+// whose < is not a name, and for an unterminated (?<name with no closing >, both of
+// which fall through to heldGroupPrefix. The name is returned untranslated; the caller
+// validates it against RE2's accepted set before rewriting the prefix.
+func namedGroupPrefix(rs []rune, i int) (name string, consumed int, ok bool) {
+	if i+3 >= len(rs) || rs[i+1] != '?' || rs[i+2] != '<' {
+		return "", 0, false
+	}
+	if rs[i+3] == '=' || rs[i+3] == '!' {
+		return "", 0, false // a lookbehind, not a named group
+	}
+	j := i + 3
+	for j < len(rs) && rs[j] != '>' {
+		j++
+	}
+	if j >= len(rs) {
+		return "", 0, false // unterminated, heldGroupPrefix reports it
+	}
+	return string(rs[i+3 : j]), j - i + 1, true
+}
+
+// validCaptureName reports whether name is a capture name RE2 accepts, the
+// [A-Za-z0-9_]+ set Go's regexp/syntax enforces. ECMAScript admits a wider identifier
+// set (a leading $ or a Unicode letter), so a name outside RE2's set hands back rather
+// than compiling to a program the runtime constructor could not build.
+func validCaptureName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if c != '_' && !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 // stripEscapesAndClasses returns the pattern with its escaped characters and
