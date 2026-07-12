@@ -2664,6 +2664,12 @@ func (r *Renderer) globalFnCall(goName string, calleeNode frontend.Node, argNode
 // this slice does not coerce (an object, whose ToString runs user code), hands
 // back.
 func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
+	// String() with no argument is the empty string, the coercion-edge count the
+	// spec fixes: with no value to convert, the result is "" rather than "undefined".
+	if len(argNodes) == 0 {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: `""`}}}, nil
+	}
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "String() with this argument count is a later slice"}
 	}
