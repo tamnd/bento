@@ -100,7 +100,7 @@ func TestTypedArrayConstructionForms(t *testing.T) {
 func TestTypedArrayHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "const b = new Int32Array(3); b[0] += 1; console.log(b[0]);\n")
 	handsBack(t, "const b = new Int32Array(3); const c = b.subarray(1); console.log(c.length);\n")
-	handsBack(t, "const b = new BigInt64Array(3); console.log(b.length);\n")
+	handsBack(t, "const src = new BigInt64Array(2); const b = new BigInt64Array(src); console.log(b.length);\n")
 }
 
 // TestTypedArrayViewOverBufferLowering pins the ArrayBuffer overload of the
@@ -199,6 +199,39 @@ console.log(x === undefined);
 	}
 	if strings.Contains(source, "value.Number(ta.At(") {
 		t.Errorf("boxed read should not go through the numeric At:\n%s", source)
+	}
+}
+
+// TestBigIntTypedArrayLowering pins that the bigint pair lowers over the shared
+// value.BigIntArray view: construction from a length, from a bigint list, and over an
+// ArrayBuffer, a write through SetAt taking the *big.Int value, a read through At
+// returning a *big.Int, and the geometry getters off the view. A bigint element is
+// not a Number, so it rides its own read and write path rather than the numeric At.
+func TestBigIntTypedArrayLowering(t *testing.T) {
+	const src = `const a = new BigInt64Array(3);
+a[0] = 42n;
+console.log(a[0], a.length, a.BYTES_PER_ELEMENT, a.byteLength);
+const buf = new ArrayBuffer(16);
+const u = new BigUint64Array(buf);
+u[1] = 7n;
+const lit = new BigInt64Array([1n, 2n]);
+console.log(u[1], lit[0]);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.NewBigInt64Array(3)",
+		"a.SetAt(0, big.NewInt(42))",
+		"a.At(0)",
+		"a.Len()",
+		"a.BytesPerElement()",
+		"a.ByteLength()",
+		"value.BigUint64ArrayView(buf, 0)",
+		"u.SetAt(1, big.NewInt(7))",
+		"value.BigInt64ArrayOf(big.NewInt(1), big.NewInt(2))",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("bigint typed-array lowering missing %q:\n%s", want, source)
+		}
 	}
 }
 

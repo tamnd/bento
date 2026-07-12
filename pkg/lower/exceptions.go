@@ -92,6 +92,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if _, ok := typedArrayElemGo(r.prog.Text(kids[0])); ok {
 		return r.newTypedArray(r.prog.Text(kids[0]), kids[1:])
 	}
+	if _, ok := bigintTypedArrayElemGo(r.prog.Text(kids[0])); ok {
+		return r.newBigIntArray(r.prog.Text(kids[0]), kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "ArrayBuffer" {
 		return r.newArrayBuffer(kids[1:])
 	}
@@ -230,6 +233,51 @@ func (r *Renderer) newTypedArrayFrom(name string, src frontend.Node, read string
 		Args:     []ast.Expr{elems},
 		Ellipsis: token.Pos(1),
 	}, nil
+}
+
+// newBigIntArray lowers a bigint typed-array construction, the BigInt64Array and
+// BigUint64Array of section 6.3 whose element is a bigint rather than a Number. It
+// mirrors newTypedArray for the three covered forms: new BigInt64Array(n) lowers to
+// value.NewBigInt64Array(n), new BigInt64Array([1n, 2n]) to value.BigInt64ArrayOf(1,
+// 2) with each bigint element passed as the *big.Int it lowers to, and the view over
+// an ArrayBuffer to value.BigInt64ArrayView through the shared newTypedArrayOverBuffer.
+// The list form takes bigint elements rather than the numbers the numeric family
+// takes, so a non-bigint element hands back. A copy from another typed array is a
+// later slice.
+func (r *Renderer) newBigIntArray(name string, args []frontend.Node) (ast.Expr, error) {
+	if len(args) >= 1 && r.isArrayBuffer(args[0]) {
+		return r.newTypedArrayOverBuffer(name, args)
+	}
+	if len(args) != 1 {
+		return nil, &NotYetLowerable{Reason: "only new " + name + "(length) and new " + name + "([...]) are lowered yet"}
+	}
+	r.requireImport(valuePkg)
+	if args[0].Kind() == frontend.NodeArrayLiteralExpression {
+		elems := r.prog.Children(args[0])
+		lowered := make([]ast.Expr, 0, len(elems))
+		for _, e := range elems {
+			if e.Kind() == frontend.NodeSpreadElement {
+				return nil, &NotYetLowerable{Reason: "spread element in a " + name + " initializer is a later slice"}
+			}
+			if !r.isBigInt(e) {
+				return nil, &NotYetLowerable{Reason: "a " + name + " initialized from a non-bigint element is a later slice"}
+			}
+			v, err := r.lowerExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			lowered = append(lowered, v)
+		}
+		return &ast.CallExpr{Fun: sel("value", name+"Of"), Args: lowered}, nil
+	}
+	if !r.isNumber(args[0]) {
+		return nil, &NotYetLowerable{Reason: "a " + name + " length that is not a number is a later slice"}
+	}
+	length, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: sel("value", "New"+name), Args: []ast.Expr{length}}, nil
 }
 
 // isNumberArrayValue reports whether a node's type is an array whose element type is

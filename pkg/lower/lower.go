@@ -1038,13 +1038,16 @@ func (r *Renderer) typedArrayName(t frontend.Type) (string, bool) {
 }
 
 // renderTypedArray maps a typed-array name to its Go value type: Uint8Array to the
-// *value.Uint8Array byte buffer, and each numeric-family member to a
-// *value.TypedArray[T] over the element's Go type. A bigint-element array
-// (BigInt64Array, BigUint64Array) has no lowering yet and hands back.
+// *value.Uint8Array byte buffer, each numeric-family member to a
+// *value.TypedArray[T] over the element's Go type, and the bigint pair
+// (BigInt64Array, BigUint64Array) to a *value.BigIntArray[T] over int64 or uint64.
 func (r *Renderer) renderTypedArray(name string) (ast.Expr, error) {
 	r.requireImport(valuePkg)
 	if name == "Uint8Array" {
 		return star(sel("value", "Uint8Array")), nil
+	}
+	if elem, ok := bigintTypedArrayElemGo(name); ok {
+		return star(index(sel("value", "BigIntArray"), ident(elem))), nil
 	}
 	elem, ok := typedArrayElemGo(name)
 	if !ok {
@@ -1055,9 +1058,10 @@ func (r *Renderer) renderTypedArray(name string) (ast.Expr, error) {
 
 // typedArrayElemGo maps a numeric typed-array name to the Go element type of its
 // value.TypedArray representation, and ok=false for a name outside that family:
-// Uint8Array has its own []byte representation, and the bigint-element arrays are
-// a later slice. Uint8ClampedArray stores a uint8 like Uint8Array but through the
-// generic buffer with the clamp coercion, so the two are distinct Go types.
+// Uint8Array has its own []byte representation, and the bigint-element arrays take
+// bigintTypedArrayElemGo and a distinct value.BigIntArray. Uint8ClampedArray stores
+// a uint8 like Uint8Array but through the generic buffer with the clamp coercion, so
+// the two are distinct Go types.
 func typedArrayElemGo(name string) (string, bool) {
 	switch name {
 	case "Int8Array":
@@ -1079,6 +1083,36 @@ func typedArrayElemGo(name string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// bigintTypedArrayElemGo maps a bigint typed-array name to the Go element type of
+// its value.BigIntArray representation, int64 for BigInt64Array and uint64 for
+// BigUint64Array, and ok=false for any other name. The bigint pair reads and writes
+// through *big.Int rather than the float64 the numeric family rides, so it is a
+// distinct Go type with its own element mapping.
+func bigintTypedArrayElemGo(name string) (string, bool) {
+	switch name {
+	case "BigInt64Array":
+		return "int64", true
+	case "BigUint64Array":
+		return "uint64", true
+	default:
+		return "", false
+	}
+}
+
+// bigintTypedArray reports whether a node's type is one of the bigint typed arrays,
+// the receiver test the bigint index read, index write, geometry, and length
+// lowerings share. It is the bigint counterpart of numericTypedArray, kept separate
+// because a bigint element is a *big.Int, not the Number the numeric buffers hand
+// out.
+func (r *Renderer) bigintTypedArray(n frontend.Node) bool {
+	name, ok := r.typedArrayName(r.prog.TypeAt(n))
+	if !ok {
+		return false
+	}
+	_, ok = bigintTypedArrayElemGo(name)
+	return ok
 }
 
 // bytesPerElement maps a typed-array name to its element width in bytes, the
