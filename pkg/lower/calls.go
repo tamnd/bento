@@ -971,6 +971,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Symbol") {
 		return r.symbolStaticCall(method, argNodes)
 	}
+	// Reflect.get(o, k) and its siblings are static calls on the ambient Reflect
+	// global, the reflective layer over the object model, not methods on a value, so
+	// they lower to the value Reflect helpers before the receiver-value paths below.
+	if r.isGlobalRef(recvNode, "Reflect") {
+		return r.reflectCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.
@@ -1791,6 +1797,74 @@ func (r *Renderer) objectCall(method string, argNodes []frontend.Node) (ast.Expr
 	default:
 		return nil, &NotYetLowerable{Reason: "Object." + method + " is a later slice"}
 	}
+}
+
+// reflectCall lowers a static call on the ambient Reflect global to the value
+// Reflect helper of the same job. Each helper is a free function taking the boxed
+// target and the boxed remaining operands, so a dynamic reflective operation lowers
+// without knowing the target's static shape. A method not yet lowered, and the
+// receiver-carrying overloads of get and set, hand back with a named reason.
+func (r *Renderer) reflectCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "get":
+		return r.reflectFree("get", "ReflectGet", 2, argNodes)
+	case "set":
+		return r.reflectFree("set", "ReflectSet", 3, argNodes)
+	case "has":
+		return r.reflectFree("has", "ReflectHas", 2, argNodes)
+	case "deleteProperty":
+		return r.reflectFree("deleteProperty", "ReflectDeleteProperty", 2, argNodes)
+	case "ownKeys":
+		return r.reflectFree("ownKeys", "ReflectOwnKeys", 1, argNodes)
+	case "defineProperty":
+		return r.reflectFree("defineProperty", "ReflectDefineProperty", 3, argNodes)
+	case "getOwnPropertyDescriptor":
+		return r.reflectFree("getOwnPropertyDescriptor", "ReflectGetOwnPropertyDescriptor", 2, argNodes)
+	case "getPrototypeOf":
+		return r.reflectFree("getPrototypeOf", "ReflectGetPrototypeOf", 1, argNodes)
+	case "setPrototypeOf":
+		return r.reflectFree("setPrototypeOf", "ReflectSetPrototypeOf", 2, argNodes)
+	case "isExtensible":
+		return r.reflectFree("isExtensible", "ReflectIsExtensible", 1, argNodes)
+	case "preventExtensions":
+		return r.reflectFree("preventExtensions", "ReflectPreventExtensions", 1, argNodes)
+	case "apply":
+		return r.reflectFree("apply", "ReflectApply", 3, argNodes)
+	case "construct":
+		// Reflect.construct reaches into [[Construct]] over a runtime constructor and
+		// threads a newTarget that redirects which prototype the new object receives.
+		// bento has no runtime construct over a dynamic value and no newTarget slot on
+		// the class path, so there is nothing faithful to emit and it hands back.
+		return nil, &NotYetLowerable{Reason: "Reflect.construct needs a runtime [[Construct]] over a dynamic constructor with a newTarget, which is a later slice"}
+	default:
+		return nil, &NotYetLowerable{Reason: "Reflect." + method + " is a later slice"}
+	}
+}
+
+// reflectFree lowers a Reflect method to a call of the value free function goName,
+// boxing the target and every remaining operand into a dynamic value. The target
+// must be a dynamic value, since a fixed-shape Go struct has no runtime property bag
+// a reflective operation can read or write, so a non-dynamic target hands back. The
+// call arity must match exactly; an extra receiver argument on get or set routes to
+// the handback the switch names, since the receiver overload is a later slice. Every
+// operand is evaluated, so no read is dropped.
+func (r *Renderer) reflectFree(apiName, goName string, wantArgs int, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != wantArgs {
+		return nil, &NotYetLowerable{Reason: "Reflect." + apiName + " with other than " + strconv.Itoa(wantArgs) + " arguments is a later slice"}
+	}
+	if !r.isDynamic(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Reflect." + apiName + " on a fixed-shape target, which has no runtime property bag, is a later slice"}
+	}
+	args := make([]ast.Expr, len(argNodes))
+	for i, n := range argNodes {
+		a, err := r.boxOperand(n)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = a
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
 }
 
 // objectIntegrityUnary lowers a one-argument integrity static, the family that
