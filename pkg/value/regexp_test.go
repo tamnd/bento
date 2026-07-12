@@ -108,3 +108,29 @@ func TestNewRegExpLiteral(t *testing.T) {
 		t.Fatalf("empty source = %q, want (?:)", got)
 	}
 }
+
+// Source and Flags report the pattern text and the flag run in the specification's
+// canonical order d g i m s u v y regardless of the order the flags were written,
+// and each single-flag getter reports its own flag.
+func TestRegExpAccessors(t *testing.T) {
+	re := NewRegExpLiteral("ab+c", "yim")
+	if got := re.Source().ToGoString(); got != "ab+c" {
+		t.Fatalf("Source() = %q, want ab+c", got)
+	}
+	if got := re.Flags().ToGoString(); got != "imy" {
+		t.Fatalf("Flags() = %q, want imy (canonical order)", got)
+	}
+	if !re.IgnoreCase() || !re.Multiline() || !re.Sticky() {
+		t.Fatalf("single-flag getters wrong: i=%v m=%v y=%v", re.IgnoreCase(), re.Multiline(), re.Sticky())
+	}
+	if re.Global() || re.DotAll() || re.Unicode() || re.UnicodeSets() || re.HasIndices() {
+		t.Fatalf("an unset flag read true: %+v", re)
+	}
+	all := NewRegExpLiteral("x", "dgs")
+	if got := all.Flags().ToGoString(); got != "dgs" {
+		t.Fatalf("Flags() = %q, want dgs", got)
+	}
+	if !all.HasIndices() || !all.Global() || !all.DotAll() {
+		t.Fatalf("d/g/s getters wrong: %+v", all)
+	}
+}

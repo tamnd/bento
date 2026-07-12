@@ -125,6 +125,55 @@ func NewRegExpLiteral(pattern, flags string) *RegExp {
 	}
 }
 
+// Source returns the pattern text .source reports, the ECMAScript source the
+// program wrote (or "(?:)" for the empty pattern), not the RE2 text the match runs
+// on. It is a BStr so it flows into the string world unchanged.
+func (re *RegExp) Source() BStr { return re.source }
+
+// Flags returns the flag string .flags reports: the flags the regexp carries in the
+// canonical order the specification fixes, d g i m s u v y, so two regexps with the
+// same flags always report the same string regardless of how they were written.
+func (re *RegExp) Flags() BStr {
+	var b []byte
+	if re.hasIndices {
+		b = append(b, 'd')
+	}
+	if re.global {
+		b = append(b, 'g')
+	}
+	if re.ignoreCase {
+		b = append(b, 'i')
+	}
+	if re.multiline {
+		b = append(b, 'm')
+	}
+	if re.dotAll {
+		b = append(b, 's')
+	}
+	if re.unicode {
+		b = append(b, 'u')
+	}
+	if re.unicodeSet {
+		b = append(b, 'v')
+	}
+	if re.sticky {
+		b = append(b, 'y')
+	}
+	return FromGoString(string(b))
+}
+
+// The single-flag accessors report each flag as a boolean, the reads .global,
+// .ignoreCase, and the rest make. They mirror the flags string Flags builds, one
+// getter per flag, so a program can test one flag without parsing the string.
+func (re *RegExp) Global() bool      { return re.global }
+func (re *RegExp) IgnoreCase() bool  { return re.ignoreCase }
+func (re *RegExp) Multiline() bool   { return re.multiline }
+func (re *RegExp) DotAll() bool      { return re.dotAll }
+func (re *RegExp) Unicode() bool     { return re.unicode }
+func (re *RegExp) UnicodeSets() bool { return re.unicodeSet }
+func (re *RegExp) Sticky() bool      { return re.sticky }
+func (re *RegExp) HasIndices() bool  { return re.hasIndices }
+
 // canonicalSource returns the text .source reports for a pattern. An empty pattern
 // reads back as "(?:)", the specification's non-capturing empty group, so the
 // source is always a valid pattern that round-trips through the RegExp constructor;

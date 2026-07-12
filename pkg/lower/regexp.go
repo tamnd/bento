@@ -116,6 +116,37 @@ func (r *Renderer) newRegExp(args []frontend.Node) (ast.Expr, error) {
 	return r.buildRegExp(pattern, flags)
 }
 
+// regExpAccessor maps a RegExp accessor name to the value.RegExp method that reads
+// it, or reports ok=false for a name that is not a flag getter. The .source and
+// .flags getters read the pattern text and the canonical flag run; the rest are the
+// single-flag booleans, one per flag the specification defines, spelled with the
+// property name the source uses (.unicodeSets for the v flag, .hasIndices for d).
+func regExpAccessor(prop string) (method string, ok bool) {
+	switch prop {
+	case "source":
+		return "Source", true
+	case "flags":
+		return "Flags", true
+	case "global":
+		return "Global", true
+	case "ignoreCase":
+		return "IgnoreCase", true
+	case "multiline":
+		return "Multiline", true
+	case "dotAll":
+		return "DotAll", true
+	case "unicode":
+		return "Unicode", true
+	case "unicodeSets":
+		return "UnicodeSets", true
+	case "sticky":
+		return "Sticky", true
+	case "hasIndices":
+		return "HasIndices", true
+	}
+	return "", false
+}
+
 // buildRegExp validates a pattern and flag pair through the runtime translator and,
 // on success, emits value.NewRegExpLiteral(pattern, flags). The translator is the
 // single gate the runtime constructor also consults, so a pattern lowers exactly

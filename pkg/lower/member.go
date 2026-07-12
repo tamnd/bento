@@ -390,6 +390,19 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		method := map[string]string{"byteLength": "ByteLength", "maxByteLength": "MaxByteLength", "growable": "Growable"}[prop]
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}}, nil
 	}
+	// A RegExp's flag getters read off the compiled value: .source is the pattern
+	// text, .flags the flag run in canonical order, and .global, .ignoreCase,
+	// .multiline, .dotAll, .unicode, .unicodeSets, .sticky, and .hasIndices the
+	// single-flag booleans. Each is an accessor in the source but a method on
+	// value.RegExp, so it lowers to a call and routes before the struct-field path,
+	// which would otherwise intern the name as a field of a shape a RegExp is not.
+	if regMethod, ok := regExpAccessor(prop); ok && r.isRegExp(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(regMethod)}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)

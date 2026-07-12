@@ -1,0 +1,15 @@
+== stdout:
+ab+c
+gi
+true
+true
+false
+false
+false
+false
+dsy
+true
+true
+false
+== exit:
+0
