@@ -209,6 +209,9 @@ func (v Value) GetElem(key Value) Value {
 // coerces to a string, so it is looked up by identity in the symbol bag; a
 // primitive receiver carries no such property and reads undefined.
 func (v Value) getSymKey(key *Symbol) Value {
+	if p := v.asProxy(); p != nil {
+		return p.getSym(v, key)
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		return v.object().getSymChained(v, key)
@@ -259,6 +262,10 @@ func (v Value) SetKeyed(key, val Value) Value {
 // val so the write reads as JavaScript's assignment expression; a primitive
 // receiver has no writable symbol storage and drops the write, returning val.
 func (v Value) setSymKey(key *Symbol, val Value) Value {
+	if p := v.asProxy(); p != nil {
+		p.setSym(v, key, val)
+		return val
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		v.object().setSym(v, key, val)
@@ -296,6 +303,9 @@ func (v Value) DeleteElem(key Value) bool {
 // remove, both reporting true the way delete does for a configurable or absent
 // property.
 func (v Value) deleteSymKey(key *Symbol) bool {
+	if p := v.asProxy(); p != nil {
+		return p.deleteSym(key)
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		return v.object().deleteSym(key)
@@ -324,6 +334,9 @@ func MissingProperty(recv any) Value {
 // result for a missing property, so the caller never faults. The other kinds have
 // no own properties the dynamic path reads yet and return undefined too.
 func (v Value) Get(key BStr) Value {
+	if p := v.asProxy(); p != nil {
+		return p.get(v, key)
+	}
 	name := key.ToGoString()
 	switch v.kind {
 	case KindString:
@@ -382,6 +395,9 @@ func (v Value) Get(key BStr) Value {
 // its own keys. JavaScript throws a TypeError when the right operand of in is not an
 // object, so a primitive receiver raises rather than answering false.
 func (v Value) HasProperty(key BStr) bool {
+	if p := v.asProxy(); p != nil {
+		return p.has(key)
+	}
 	name := key.ToGoString()
 	switch v.kind {
 	case KindString:

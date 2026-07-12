@@ -977,6 +977,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Reflect") {
 		return r.reflectCall(method, argNodes)
 	}
+	// Proxy.revocable(target, handler) is a static call on the ambient Proxy global
+	// that pairs a proxy with a revoke function, not a method on a value, so it lowers
+	// to the value ProxyRevocable helper before the receiver-value paths below.
+	if r.isGlobalRef(recvNode, "Proxy") {
+		return r.proxyStaticCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.

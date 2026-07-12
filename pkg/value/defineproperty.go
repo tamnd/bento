@@ -118,6 +118,10 @@ func (in descriptorInput) toDescriptor(current descriptor, exists bool) descript
 // the spec forbids throws a TypeError rather than mutating the bag. A non-object
 // receiver throws a TypeError the way the spec rejects a primitive target.
 func (v Value) DefineProperty(key, descObj Value) Value {
+	if p := v.asProxy(); p != nil {
+		p.defineProperty(key, descObj)
+		return v
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 	default:
@@ -161,6 +165,9 @@ func (v Value) DefineProperty(key, descObj Value) Value {
 // every key, the value the spec gives once it coerces the target to an object with
 // no own properties of interest.
 func (v Value) GetOwnPropertyDescriptor(key Value) Value {
+	if p := v.asProxy(); p != nil {
+		return p.getOwnPropertyDescriptor(key)
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 	default:

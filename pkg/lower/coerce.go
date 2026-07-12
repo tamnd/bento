@@ -704,7 +704,32 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// the primitive box path has a constructor for, so recognizing the calls here is
 	// what lets const d: any = Object.getOwnPropertyDescriptor(o, k) store the box
 	// straight through.
-	return r.isDynamicDescriptorRead(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src)
+}
+
+// isProxyRevocableCall reports whether src is a Proxy.revocable(target, handler)
+// call, which lowers to value.ProxyRevocable and returns a value.Value: the
+// { proxy, revoke } object as a live box. The checker types the result a static
+// object shape, which the primitive box path has no constructor for, so recognizing
+// the call here is what lets const r: any = Proxy.revocable(t, h) store the box
+// straight through rather than hand back trying to box the static shape.
+func (r *Renderer) isProxyRevocableCall(src frontend.Node) bool {
+	if src.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(src)
+	if len(kids) < 1 {
+		return false
+	}
+	callee := kids[0]
+	if callee.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	ck := r.prog.Children(callee)
+	if len(ck) != 2 {
+		return false
+	}
+	return r.isGlobalRef(ck[0], "Proxy") && r.prog.Text(ck[1]) == "revocable"
 }
 
 // isDynamicDescriptorRead reports whether src is an Object.getOwnPropertyDescriptor

@@ -125,6 +125,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Object" {
 		return r.newObject(kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "Proxy" {
+		return r.newProxy(kids[1:])
+	}
 	// new Function("a", "return a") builds a function from source text at run time,
 	// parsing the argument strings as a parameter list and a body. That is eval work,
 	// phase 11, so it hands back with the reason that names where it belongs rather

@@ -1,0 +1,7 @@
+== stdout:
+a,b
+a
+a!
+define:z
+== exit:
+0

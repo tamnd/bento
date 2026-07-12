@@ -1,0 +1,7 @@
+== stdout:
+10
+missing:z
+2
+y=2
+== exit:
+0
