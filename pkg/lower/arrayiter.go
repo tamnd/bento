@@ -146,9 +146,27 @@ func (r *Renderer) arrayIterForOfCall(iterable frontend.Node) (frontend.Node, st
 		return nil, "", false
 	}
 	if _, ok := r.arrayElem(parts[0]); !ok {
-		return nil, "", false
+		// A numeric typed array's values, keys, and entries range the view the same
+		// way an array's do, only reading each element widened to a Number, so a typed
+		// array receiver takes this path too. The bigint arrays yield bigints, so they
+		// stay out and hand back.
+		if !r.numericTypedArray(parts[0]) {
+			return nil, "", false
+		}
 	}
 	return parts[0], method, true
+}
+
+// iterElemsMethod names the value method a for...of range reads the receiver's
+// elements through: Elems for an array, whose slice is the element type, and Floats
+// for a numeric typed array, whose view widens each element to the Number the loop
+// variable holds. It is the one point the array and typed-array iterator loops
+// differ, so the shared loop helpers call it rather than spell Elems directly.
+func (r *Renderer) iterElemsMethod(recvNode frontend.Node) string {
+	if r.numericTypedArray(recvNode) {
+		return "Floats"
+	}
+	return "Elems"
 }
 
 // forOfArrayIterSingle lowers `for (const x of a.values())` and `for (const i of
@@ -168,7 +186,7 @@ func (r *Renderer) forOfArrayIterSingle(recvNode, bindNode frontend.Node, name, 
 	if err != nil {
 		return nil, err
 	}
-	elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Elems")}}
+	elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(r.iterElemsMethod(recvNode))}}
 	used := r.bodyUsesName(bodyNode, r.prog.Text(bindNode))
 	rng := &ast.RangeStmt{X: elems, Body: body}
 	switch method {
@@ -231,7 +249,7 @@ func (r *Renderer) forOfEntriesDestructure(recvNode, pattern, bodyNode frontend.
 	if err != nil {
 		return nil, err
 	}
-	rng := &ast.RangeStmt{X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Elems")}}, Body: body}
+	rng := &ast.RangeStmt{X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(r.iterElemsMethod(recvNode))}}, Body: body}
 	if !used[0] && !used[1] {
 		return rng, nil
 	}
