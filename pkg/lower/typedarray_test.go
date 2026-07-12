@@ -93,13 +93,15 @@ func TestTypedArrayConstructionForms(t *testing.T) {
 // TestTypedArrayHandsBackUnsupportedForms proves the typed-array lowering claims
 // only the subset it can emit soundly and hands the rest back to the engine, the
 // same boundaries the byte buffer keeps. A compound element write reads and writes
-// the element, which the plain SetAt store does not model. A method that has no
-// lowering yet (subarray builds a view) is a later slice. A bigint-element array
-// (BigInt64Array) has no lowering, so its construction hands back rather than
-// emitting wrong Go.
+// the element, which the plain SetAt store does not model. A bigint-element array
+// (BigInt64Array) is a separate value type whose methods are not wired, so a method
+// call on one hands back rather than emitting a call the type does not have, and its
+// construction from another view hands back too. The numeric method surface itself
+// (subarray, slice, fill, and the rest) lowers and is covered by the conformance
+// fixtures rather than asserted as a hand-back here.
 func TestTypedArrayHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "const b = new Int32Array(3); b[0] += 1; console.log(b[0]);\n")
-	handsBack(t, "const b = new Int32Array(3); const c = b.subarray(1); console.log(c.length);\n")
+	handsBack(t, "const b = new BigInt64Array(3); const c = b.subarray(1); console.log(c.length);\n")
 	handsBack(t, "const src = new BigInt64Array(2); const b = new BigInt64Array(src); console.log(b.length);\n")
 }
 
