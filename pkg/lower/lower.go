@@ -900,6 +900,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "Instant")), nil
 		}
+		if r.zonedDateTimeType(t) {
+			// A Temporal.ZonedDateTime (Temporal §7) is the value model's exact time paired with
+			// a zone, spelled as a pointer to value.ZonedDateTime, routed here for the same reason
+			// as the other Temporal types: it is a host type, not a struct shape.
+			r.requireImport(valuePkg)
+			return star(sel("value", "ZonedDateTime")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:

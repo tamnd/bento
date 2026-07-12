@@ -7,26 +7,32 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
-// This file lowers the Temporal area (10_advanced group 6), one type per cut. Seven are
+// This file lowers the Temporal area (10_advanced group 6), one type per cut. Eight are
 // hosted so far: PlainDate, a calendar date with no time and no zone over the ISO 8601
 // calendar; PlainTime, a wall-clock time with no date and no zone; PlainDateTime, a date
 // paired with a wall-clock time; Duration, a span of time as ten signed component counts;
 // PlainYearMonth, a calendar year and month with no day; PlainMonthDay, a calendar month and
-// day with no year; and Instant, an exact point on the UTC time line as a nanosecond count.
-// For the plain types, construction, the static from over the same type (and, for the ordered
-// types, compare), the clean field getters, and the equals, toString, and toJSON methods lower
-// to the matching value runtime type. Duration hosts construction, the field getters plus sign
-// and blank, negated and abs, toString and toJSON, and from over a Duration. Instant hosts
-// construction and the two epoch factories, the epoch-milliseconds and epoch-nanoseconds
-// getters, compare, equals, toString and toJSON, and from over an Instant. Everything else, the
-// arithmetic, the balancing and rounding, the cross-type conversions, from over a string or a
-// property bag, and the getters the checker types number | undefined, hands back with a named
-// reason so the compiler reports the exact ceiling.
+// day with no year; Instant, an exact point on the UTC time line as a nanosecond count; and
+// ZonedDateTime, that same exact time paired with a time zone that gives it a wall-clock
+// reading and a calendar. For the plain types, construction, the static from over the same
+// type (and, for the ordered types, compare), the clean field getters, and the equals,
+// toString, and toJSON methods lower to the matching value runtime type. Duration hosts
+// construction, the field getters plus sign and blank, negated and abs, toString and toJSON,
+// and from over a Duration. Instant hosts construction and the two epoch factories, the
+// epoch-milliseconds and epoch-nanoseconds getters, compare, equals, toString and toJSON, and
+// from over an Instant. ZonedDateTime hosts construction from an epoch count and a zone, the
+// exact-time and wall-clock getters (the offset and the ISO date and time in the zone),
+// compare, equals, toString and toJSON, from over a ZonedDateTime, and the conversions to an
+// Instant and to the plain types. Everything else, the arithmetic, the balancing and rounding,
+// the reshaping with and withX, the time-zone transition queries, from over a string or a
+// property bag, and toLocaleString, hands back with a named reason so the compiler reports the
+// exact ceiling.
 //
 // Each Temporal type follows the host-type model RegExp and the collections use: it is a bare
 // pointer in the generated Go (*value.PlainDate, *value.PlainTime, *value.PlainDateTime,
-// *value.Duration, *value.PlainYearMonth, *value.PlainMonthDay, *value.Instant), recognized by
-// its declaring symbol name rather than a dedicated type flag.
+// *value.Duration, *value.PlainYearMonth, *value.PlainMonthDay, *value.Instant,
+// *value.ZonedDateTime), recognized by its declaring symbol name rather than a dedicated type
+// flag.
 // The Temporal namespace is a two-level access (Temporal.PlainDate.compare), which no other
 // built-in uses, so the call and new paths carry a small amount of namespace-chain recognition
 // this file drives.
@@ -160,6 +166,24 @@ func (r *Renderer) instantType(t frontend.Type) bool {
 // isInstant reports whether the node's static type is a Temporal.Instant.
 func (r *Renderer) isInstant(n frontend.Node) bool {
 	return r.instantType(r.prog.TypeAt(n))
+}
+
+// zonedDateTimeType reports whether a checker type is the Temporal.ZonedDateTime interface,
+// the same shape test as plainDateType over the symbol name ZonedDateTime.
+func (r *Renderer) zonedDateTimeType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "ZonedDateTime"
+}
+
+// isZonedDateTime reports whether the node's static type is a Temporal.ZonedDateTime.
+func (r *Renderer) isZonedDateTime(n frontend.Node) bool {
+	return r.zonedDateTimeType(r.prog.TypeAt(n))
 }
 
 // plainDateAccessor maps a PlainDate field getter to the value.PlainDate method that
@@ -462,6 +486,148 @@ func (r *Renderer) newInstant(argNodes []frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: sel("value", "NewInstant"), Args: []ast.Expr{arg}}, nil
 }
 
+// zonedDateTimeAccessor maps a ZonedDateTime field getter to the value.ZonedDateTime method
+// that reads it, or reports ok=false for a name this slice does not host. The exact-time
+// getters (epochMilliseconds a number, epochNanoseconds a bigint) and the zone getters
+// (timeZoneId, calendarId, offset strings, offsetNanoseconds a number) map straight to a
+// method, and the wall-clock getters are the union of the PlainDate and PlainTime getters,
+// answered off the local reading in the zone, so the calendar-dependent ones (era, eraYear,
+// weekOfYear, yearOfWeek) map to a method returning a value.Opt the member read boxes. The
+// day-length getter hoursInDay needs the day-boundary offset math this slice does not carry,
+// so it is absent and hands back.
+func zonedDateTimeAccessor(prop string) (method string, ok bool) {
+	switch prop {
+	case "epochMilliseconds":
+		return "EpochMilliseconds", true
+	case "epochNanoseconds":
+		return "EpochNanoseconds", true
+	case "timeZoneId":
+		return "TimeZoneId", true
+	case "offset":
+		return "Offset", true
+	case "offsetNanoseconds":
+		return "OffsetNanoseconds", true
+	}
+	return plainDateTimeAccessor(prop)
+}
+
+// zonedDateTimeMethodCall lowers a method call on a ZonedDateTime receiver, the mirror of
+// plainDateTimeMethodCall. equals(other) compares two zoned date-times, toString and toJSON
+// render the round-trippable string, and the conversions toInstant, toPlainDate, toPlainTime,
+// and toPlainDateTime drop the zone or narrow to a plain type; none takes options in this
+// slice, so a call with arguments beyond the ones handled hands back. The arithmetic and
+// rounding methods, the reshaping (with, withPlainTime, withTimeZone, withCalendar,
+// startOfDay), the transition queries, and toLocaleString hand back with a named reason.
+func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "equals":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.equals takes exactly one argument"}
+		}
+		if !r.isZonedDateTime(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.equals over a non-ZonedDateTime argument (a string or bag to coerce) is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Equals")}, Args: []ast.Expr{other}}, nil
+	case "toString", "toJSON", "toInstant", "toPlainDate", "toPlainTime", "toPlainDateTime":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " with options is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		names := map[string]string{
+			"toString":        "ToString",
+			"toJSON":          "ToJSON",
+			"toInstant":       "ToInstant",
+			"toPlainDate":     "ToPlainDate",
+			"toPlainTime":     "ToPlainTime",
+			"toPlainDateTime": "ToPlainDateTime",
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(names[method])}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " is a later slice"}
+	}
+}
+
+// zonedDateTimeStaticCall lowers a static call on Temporal.ZonedDateTime. compare lowers to
+// value.ZonedDateTimeCompare over two ZonedDateTime arguments, ordering on the exact time;
+// from lowers to value.ZonedDateTimeFrom for a ZonedDateTime argument (the copy the
+// specification makes) and hands back for a string or a property bag, which need the parser
+// and the disambiguation handling this slice does not carry.
+func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "compare":
+		if len(argNodes) != 2 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.compare takes exactly two arguments"}
+		}
+		if !r.isZonedDateTime(argNodes[0]) || !r.isZonedDateTime(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.compare over an argument that is not a ZonedDateTime (a string or bag to coerce) is a later slice"}
+		}
+		a, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		b, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeCompare"), Args: []ast.Expr{a, b}}, nil
+	case "from":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from takes exactly one argument"}
+		}
+		if !r.isZonedDateTime(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a string or a property bag is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFrom"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime." + method + " is a later slice"}
+	}
+}
+
+// newZonedDateTime lowers new Temporal.ZonedDateTime over its epoch-nanosecond bigint and its
+// time-zone identifier string. A third calendar argument selects a non-ISO calendar, which
+// this slice does not carry, so it hands back. The first argument must lower as a bigint and
+// the second as a string, so a non-conforming component hands back rather than coerce; the
+// runtime constructor runs IsValidEpochNanoseconds and resolves the zone, so an out-of-range
+// count or an unknown zone throws a RangeError at run time the way the specification requires.
+func (r *Renderer) newZonedDateTime(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.ZonedDateTime with a calendar argument or fewer than two components is a later slice"}
+	}
+	if !r.isBigInt(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "new Temporal.ZonedDateTime with a non-bigint epoch argument is a later slice"}
+	}
+	if !r.isString(argNodes[1]) {
+		return nil, &NotYetLowerable{Reason: "new Temporal.ZonedDateTime with a non-string time-zone argument is a later slice"}
+	}
+	ns, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	tz, err := r.lowerExpr(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewZonedDateTime"), Args: []ast.Expr{ns, tz}}, nil
+}
+
 // durationMethodCall lowers a method call on a Duration receiver. negated and abs return a
 // reshaped Duration, and toString and toJSON render the ISO 8601 duration string; each takes
 // no argument in this slice. The methods that balance or round across units (round, total,
@@ -751,6 +917,8 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 		return r.plainMonthDayStaticCall(method, argNodes)
 	case "Instant":
 		return r.instantStaticCall(method, argNodes)
+	case "ZonedDateTime":
+		return r.zonedDateTimeStaticCall(method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal." + typeName + " is a later slice"}
 	}
@@ -960,6 +1128,8 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 		return r.newPlainMonthDay(argNodes)
 	case "Instant":
 		return r.newInstant(argNodes)
+	case "ZonedDateTime":
+		return r.newZonedDateTime(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "new Temporal." + typeName + " is a later slice"}
 	}
