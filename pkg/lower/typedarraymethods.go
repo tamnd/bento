@@ -81,6 +81,28 @@ func (r *Renderer) typedArrayMethodCall(recvNode frontend.Node, method string, a
 		return r.typedArrayJoin(recvNode, argNodes)
 	case "set":
 		return r.typedArraySet(recvNode, argNodes)
+	case "forEach":
+		return r.typedArrayCallbackMethod(recvNode, "ForEach", argNodes)
+	case "map":
+		return r.typedArrayCallbackMethod(recvNode, "Map", argNodes)
+	case "filter":
+		return r.typedArrayCallbackMethod(recvNode, "Filter", argNodes)
+	case "some":
+		return r.typedArrayCallbackMethod(recvNode, "Some", argNodes)
+	case "every":
+		return r.typedArrayCallbackMethod(recvNode, "Every", argNodes)
+	case "find":
+		return r.typedArrayCallbackMethod(recvNode, "Find", argNodes)
+	case "findIndex":
+		return r.typedArrayCallbackMethod(recvNode, "FindIndex", argNodes)
+	case "findLast":
+		return r.typedArrayCallbackMethod(recvNode, "FindLast", argNodes)
+	case "findLastIndex":
+		return r.typedArrayCallbackMethod(recvNode, "FindLastIndex", argNodes)
+	case "reduce":
+		return r.typedArrayFold(recvNode, argNodes, "ReduceTypedArray", "ReduceNoInit")
+	case "reduceRight":
+		return r.typedArrayFold(recvNode, argNodes, "ReduceRightTypedArray", "ReduceRightNoInit")
 	default:
 		return nil, &NotYetLowerable{Reason: "typed array method ." + method + " is a later slice"}
 	}
@@ -236,4 +258,126 @@ func (r *Renderer) isNumberArray(n frontend.Node) bool {
 		return false
 	}
 	return elem.Flags&frontend.TypeNumber != 0
+}
+
+// typedArrayCallbackMethod lowers the single-callback higher-order methods over a
+// typed array: forEach, map, filter, some, every, find, findIndex, findLast, and
+// findLastIndex. It is the typed-array sibling of arrayCallbackMethod, differing
+// only in that a typed array's element widens to a Number, so the callback the
+// value method takes is func(float64) rather than the element-type closure the
+// Array methods take; the lowered arrow's parameter is already a float64 because
+// the checker types the element as number, so the shape lines up without any cast.
+// Only an inline one-parameter arrow is covered, keeping to the single-element
+// shape the value methods take; a named callback or one that also reads the index
+// or array parameter hands back.
+func (r *Renderer) typedArrayCallbackMethod(recvNode frontend.Node, goMethod string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "typed array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(argNodes[0]) != 1 {
+		return nil, &NotYetLowerable{Reason: "typed array ." + goMethod + " with a callback that reads the index or array parameter is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// typedArrayFold is the shared lowering for reduce and reduceRight over a typed
+// array, the sibling of arrayFold. The initial-value form lowers to the free
+// function named by freeFn because the accumulator type A may differ from the
+// Number the elements widen to, and a Go method cannot introduce the new type
+// parameter A; its two type arguments are the receiver's Go element type and the
+// accumulator type from the callback's result. Because the elements widen to a
+// Number, the free function's callback second parameter is a float64 rather than
+// the stored element type, so the element type argument only names the receiver's
+// storage. The no-init form delegates to typedArrayFoldNoInit. Only an inline
+// two-parameter arrow is covered; anything else hands back.
+func (r *Renderer) typedArrayFold(recvNode frontend.Node, argNodes []frontend.Node, freeFn, methodFn string) (ast.Expr, error) {
+	if len(argNodes) == 1 {
+		return r.typedArrayFoldNoInit(recvNode, argNodes[0], methodFn)
+	}
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "typed array reduce with more than an initial value is a later slice"}
+	}
+	arrow := argNodes[0]
+	if arrow.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "typed array reduce with a callback that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(arrow) != 2 {
+		return nil, &NotYetLowerable{Reason: "typed array reduce with a callback that reads the index or array parameter is a later slice"}
+	}
+	elemType, ok := r.typedArrayElemType(recvNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "typed array reduce on a receiver whose element type did not lower"}
+	}
+	accType, err := r.arrowResultType(arrow)
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(arrow)
+	if err != nil {
+		return nil, err
+	}
+	init, err := r.lowerExpr(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  &ast.IndexListExpr{X: sel("value", freeFn), Indices: []ast.Expr{elemType, accType}},
+		Args: []ast.Expr{recv, fn, init},
+	}, nil
+}
+
+// typedArrayFoldNoInit lowers a reduce or reduceRight call with no initial value
+// to the value.TypedArray method named by methodFn over a lowered arrow. With no
+// init the accumulator seeds from an end element, so its type is the element's
+// widened Number and the callback is func(float64, float64) float64, which is why
+// this is a plain method rather than the free function the initial-value form
+// needs for a differing accumulator type. An empty view throws at runtime, so no
+// compile-time handling is needed here. Only an inline two-parameter arrow is
+// covered, the same (accumulator, element) shape the initial-value form requires.
+func (r *Renderer) typedArrayFoldNoInit(recvNode frontend.Node, arrow frontend.Node, methodFn string) (ast.Expr, error) {
+	if arrow.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "typed array reduce with a callback that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(arrow) != 2 {
+		return nil, &NotYetLowerable{Reason: "typed array reduce with a callback that reads the index or array parameter is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(arrow)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(methodFn)}, Args: []ast.Expr{fn}}, nil
+}
+
+// typedArrayElemType returns the Go element type of a typed-array receiver as an
+// identifier, the storage type argument the reduce free functions name. It reuses
+// the same typedArrayName then typedArrayElemGo lookup genericTypedArray uses, so
+// it is defined exactly on the receivers the method surface here runs over and
+// returns false on Uint8Array and the bigint arrays the dispatch keeps out.
+func (r *Renderer) typedArrayElemType(n frontend.Node) (ast.Expr, bool) {
+	name, ok := r.typedArrayName(r.prog.TypeAt(n))
+	if !ok {
+		return nil, false
+	}
+	elem, ok := typedArrayElemGo(name)
+	if !ok {
+		return nil, false
+	}
+	return ident(elem), true
 }
