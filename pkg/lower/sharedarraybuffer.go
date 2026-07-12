@@ -36,6 +36,30 @@ func (r *Renderer) newSharedArrayBuffer(args []frontend.Node) (ast.Expr, error) 
 	return &ast.CallExpr{Fun: sel("value", "NewGrowableSharedArrayBuffer"), Args: []ast.Expr{length, max}}, nil
 }
 
+// isViewBuffer reports whether a node is a buffer a typed array or a DataView may
+// view: an ArrayBuffer or a SharedArrayBuffer. Both back a view the same way, since a
+// view aliases the underlying byte run either kind holds, so the view constructors
+// accept both and read the bytes through lowerViewBuffer.
+func (r *Renderer) isViewBuffer(n frontend.Node) bool {
+	return r.isArrayBuffer(n) || r.isSharedArrayBuffer(n)
+}
+
+// lowerViewBuffer lowers a buffer argument to the *value.ArrayBuffer a view
+// constructor takes. An ArrayBuffer lowers straight through; a SharedArrayBuffer lowers
+// to its .Buffer(), the underlying run its views share, so a typed array or a DataView
+// over a shared buffer aliases the same bytes and observes writes made through any
+// other view of it.
+func (r *Renderer) lowerViewBuffer(n frontend.Node) (ast.Expr, error) {
+	buf, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	if r.isSharedArrayBuffer(n) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: buf, Sel: ident("Buffer")}}, nil
+	}
+	return buf, nil
+}
+
 // sharedArrayBufferMethodCall lowers a method call whose receiver is a
 // SharedArrayBuffer to a value.SharedArrayBuffer method (25 §25.2.4). It covers grow,
 // which enlarges the shared run within its maximum, and slice, which copies a byte span
