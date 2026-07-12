@@ -435,6 +435,17 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(pdMethod)}}, nil
 	}
+	if r.isPlainTime(obj) {
+		ptMethod, ok := plainTimeAccessor(prop)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime." + prop + " is a later slice"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(ptMethod)}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)

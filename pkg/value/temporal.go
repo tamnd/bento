@@ -3,6 +3,7 @@ package value
 import (
 	"math"
 	"strconv"
+	"strings"
 )
 
 // PlainDate is bento's runtime representation of a Temporal.PlainDate (Temporal
@@ -256,6 +257,125 @@ func formatISOYear(year int) string {
 	}
 	return sign + zeroPad(year, 6)
 }
+
+// PlainTime is bento's runtime representation of a Temporal.PlainTime (Temporal §4):
+// a wall-clock time with no date and no zone, the hour, the minute, the second, and
+// the three sub-second fields. It carries no calendar and no zone, so unlike PlainDate
+// it needs no calendar model at all. The six fields are stored as the integers
+// RejectTime validated, so every accessor reads a field directly and toString
+// recomputes the fractional-second rendering from the sub-second three.
+type PlainTime struct {
+	hour        int // 0..23
+	minute      int // 0..59
+	second      int // 0..59
+	millisecond int // 0..999
+	microsecond int // 0..999
+	nanosecond  int // 0..999
+}
+
+// NewPlainTime builds a PlainTime from the constructor's up to six number arguments,
+// running ToIntegerWithTruncation on each and then RejectTime, so a fractional
+// argument truncates toward zero, a NaN or non-finite one throws a RangeError, and an
+// out-of-range field throws a RangeError, the order new Temporal.PlainTime(...) follows
+// in the specification. Every argument defaults to zero; the lowerer pads the missing
+// trailing components before the call, so this constructor always sees six numbers.
+func NewPlainTime(hour, minute, second, millisecond, microsecond, nanosecond float64) *PlainTime {
+	h := toIntegerWithTruncation(hour)
+	m := toIntegerWithTruncation(minute)
+	s := toIntegerWithTruncation(second)
+	ms := toIntegerWithTruncation(millisecond)
+	us := toIntegerWithTruncation(microsecond)
+	ns := toIntegerWithTruncation(nanosecond)
+	rejectTime(h, m, s, ms, us, ns)
+	return &PlainTime{int(h), int(m), int(s), int(ms), int(us), int(ns)}
+}
+
+// PlainTimeFrom implements Temporal.PlainTime.from for a PlainTime argument: it returns
+// a fresh PlainTime with the same fields, the copy the specification makes so the result
+// is a distinct object that compares equal to its source. from over a string or a
+// property bag hands back at lowering, so this is only reached with a PlainTime in hand.
+func PlainTimeFrom(pt *PlainTime) *PlainTime {
+	return &PlainTime{pt.hour, pt.minute, pt.second, pt.millisecond, pt.microsecond, pt.nanosecond}
+}
+
+// rejectTime throws a RangeError unless every field is in its ISO range: the hour in
+// 0..23, the minute and second in 0..59, and each of the three sub-second fields in
+// 0..999. The arguments are the truncated float64s from ToIntegerWithTruncation.
+func rejectTime(hour, minute, second, millisecond, microsecond, nanosecond float64) {
+	if hour < 0 || hour > 23 ||
+		minute < 0 || minute > 59 ||
+		second < 0 || second > 59 ||
+		millisecond < 0 || millisecond > 999 ||
+		microsecond < 0 || microsecond > 999 ||
+		nanosecond < 0 || nanosecond > 999 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainTime field is out of range")))
+	}
+}
+
+// Hour returns the hour, 0..23.
+func (pt *PlainTime) Hour() float64 { return float64(pt.hour) }
+
+// Minute returns the minute, 0..59.
+func (pt *PlainTime) Minute() float64 { return float64(pt.minute) }
+
+// Second returns the second, 0..59.
+func (pt *PlainTime) Second() float64 { return float64(pt.second) }
+
+// Millisecond returns the millisecond, 0..999.
+func (pt *PlainTime) Millisecond() float64 { return float64(pt.millisecond) }
+
+// Microsecond returns the microsecond, 0..999.
+func (pt *PlainTime) Microsecond() float64 { return float64(pt.microsecond) }
+
+// Nanosecond returns the nanosecond, 0..999.
+func (pt *PlainTime) Nanosecond() float64 { return float64(pt.nanosecond) }
+
+// Equals implements Temporal.PlainTime.prototype.equals: two times are equal when all
+// six fields match.
+func (pt *PlainTime) Equals(other *PlainTime) bool {
+	return pt.hour == other.hour && pt.minute == other.minute && pt.second == other.second &&
+		pt.millisecond == other.millisecond && pt.microsecond == other.microsecond &&
+		pt.nanosecond == other.nanosecond
+}
+
+// PlainTimeCompare implements Temporal.PlainTime.compare, the static comparator: -1 if
+// a precedes b, 1 if a follows b, 0 if they are the same time. It compares the fields
+// from the most significant down, stopping at the first that differs.
+func PlainTimeCompare(a, b *PlainTime) float64 {
+	for _, d := range [...]int{
+		a.hour - b.hour,
+		a.minute - b.minute,
+		a.second - b.second,
+		a.millisecond - b.millisecond,
+		a.microsecond - b.microsecond,
+		a.nanosecond - b.nanosecond,
+	} {
+		if d < 0 {
+			return -1
+		}
+		if d > 0 {
+			return 1
+		}
+	}
+	return 0
+}
+
+// ToString implements Temporal.PlainTime.prototype.toString for the default options:
+// HH:MM:SS, with a fractional-second part appended only when a sub-second field is set,
+// rendered to the fewest digits (the nine-digit nanosecond total with trailing zeros
+// trimmed). A time on the whole second renders without a fractional part at all.
+func (pt *PlainTime) ToString() BStr {
+	s := twoDigit(pt.hour) + ":" + twoDigit(pt.minute) + ":" + twoDigit(pt.second)
+	frac := pt.millisecond*1_000_000 + pt.microsecond*1_000 + pt.nanosecond
+	if frac > 0 {
+		s += "." + strings.TrimRight(zeroPad(frac, 9), "0")
+	}
+	return FromGoString(s)
+}
+
+// ToJSON implements Temporal.PlainTime.prototype.toJSON, the same ISO string toString
+// produces under default options.
+func (pt *PlainTime) ToJSON() BStr { return pt.ToString() }
 
 // twoDigit renders a month or day as exactly two digits.
 func twoDigit(n int) string { return zeroPad(n, 2) }
