@@ -336,3 +336,171 @@ func TestPlainTimeRejects(t *testing.T) {
 		t.Error("NewPlainTime at the valid maximum threw")
 	}
 }
+
+// mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
+func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
+	t.Helper()
+	var pdt *PlainDateTime
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("NewPlainDateTime(%v) threw: %v", a, r)
+			}
+		}()
+		pdt = NewPlainDateTime(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8])
+	}()
+	return pdt
+}
+
+// plainDateTimeThrows reports whether NewPlainDateTime throws a RangeError for the args.
+func plainDateTimeThrows(a [9]float64) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewPlainDateTime(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8])
+	return false
+}
+
+// TestPlainDateTimeFields checks the date and time getters against a date-time with every
+// field set, the values taken from @js-temporal/polyfill.
+func TestPlainDateTimeFields(t *testing.T) {
+	pdt := mustPlainDateTime(t, 1976, 11, 18, 15, 23, 30, 123, 456, 789)
+	fields := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"Year", pdt.Year(), 1976},
+		{"Month", pdt.Month(), 11},
+		{"Day", pdt.Day(), 18},
+		{"Hour", pdt.Hour(), 15},
+		{"Minute", pdt.Minute(), 23},
+		{"Second", pdt.Second(), 30},
+		{"Millisecond", pdt.Millisecond(), 123},
+		{"Microsecond", pdt.Microsecond(), 456},
+		{"Nanosecond", pdt.Nanosecond(), 789},
+		{"DayOfWeek", pdt.DayOfWeek(), 4},
+		{"DayOfYear", pdt.DayOfYear(), 323},
+		{"DaysInMonth", pdt.DaysInMonth(), 30},
+		{"DaysInYear", pdt.DaysInYear(), 366},
+		{"MonthsInYear", pdt.MonthsInYear(), 12},
+		{"DaysInWeek", pdt.DaysInWeek(), 7},
+	}
+	for _, f := range fields {
+		if f.got != f.want {
+			t.Errorf("%s = %v, want %v", f.name, f.got, f.want)
+		}
+	}
+	if got := pdt.MonthCode().ToGoString(); got != "M11" {
+		t.Errorf("MonthCode = %q, want M11", got)
+	}
+	if got := pdt.CalendarId().ToGoString(); got != "iso8601" {
+		t.Errorf("CalendarId = %q, want iso8601", got)
+	}
+	if !pdt.InLeapYear() {
+		t.Error("InLeapYear = false, want true")
+	}
+}
+
+// TestPlainDateTimeToString checks the ISO date-time string, the date and time joined by
+// "T", against the polyfill.
+func TestPlainDateTimeToString(t *testing.T) {
+	cases := []struct {
+		args [9]float64
+		want string
+	}{
+		{[9]float64{2020, 1, 1, 12, 30, 0, 0, 0, 0}, "2020-01-01T12:30:00"},
+		{[9]float64{1976, 11, 18, 15, 23, 30, 123, 456, 789}, "1976-11-18T15:23:30.123456789"},
+		{[9]float64{2020, 2, 29, 0, 0, 0, 0, 0, 0}, "2020-02-29T00:00:00"},
+		{[9]float64{2020, 1, 1, 1, 2, 3, 250, 0, 0}, "2020-01-01T01:02:03.25"},
+		{[9]float64{-1, 1, 1, 0, 0, 0, 0, 0, 0}, "-000001-01-01T00:00:00"},
+		{[9]float64{12345, 1, 1, 0, 0, 0, 0, 0, 0}, "+012345-01-01T00:00:00"},
+	}
+	for _, c := range cases {
+		pdt := mustPlainDateTime(t, c.args[:]...)
+		if got := pdt.ToString().ToGoString(); got != c.want {
+			t.Errorf("PlainDateTime%v.ToString() = %q, want %q", c.args, got, c.want)
+		}
+		if got := pdt.ToJSON().ToGoString(); got != c.want {
+			t.Errorf("PlainDateTime%v.ToJSON() = %q, want %q", c.args, got, c.want)
+		}
+	}
+}
+
+// TestPlainDateTimeCompareAndEquals checks the static comparator and equals, including a
+// difference that lives only in the time so the date-first fall-through is exercised.
+func TestPlainDateTimeCompareAndEquals(t *testing.T) {
+	a := mustPlainDateTime(t, 2020, 1, 1, 12, 30, 0, 0, 0, 0)
+	b := mustPlainDateTime(t, 1976, 11, 18, 15, 23, 30, 123, 456, 789)
+	c := mustPlainDateTime(t, 2020, 1, 1, 12, 30, 0, 0, 0, 0)
+	if got := PlainDateTimeCompare(a, b); got != 1 {
+		t.Errorf("compare(a,b) = %v, want 1", got)
+	}
+	if got := PlainDateTimeCompare(b, a); got != -1 {
+		t.Errorf("compare(b,a) = %v, want -1", got)
+	}
+	if got := PlainDateTimeCompare(a, c); got != 0 {
+		t.Errorf("compare(a,c) = %v, want 0", got)
+	}
+	// Same date, the time alone orders.
+	early := mustPlainDateTime(t, 2020, 6, 15, 8, 0, 0, 0, 0, 0)
+	late := mustPlainDateTime(t, 2020, 6, 15, 9, 0, 0, 0, 0, 0)
+	if got := PlainDateTimeCompare(early, late); got != -1 {
+		t.Errorf("compare over the time = %v, want -1", got)
+	}
+	if !a.Equals(c) {
+		t.Error("a.Equals(c) = false, want true")
+	}
+	if a.Equals(b) {
+		t.Error("a.Equals(b) = true, want false")
+	}
+}
+
+// TestPlainDateTimeFromCopies proves from returns a distinct object that compares equal to
+// its source.
+func TestPlainDateTimeFromCopies(t *testing.T) {
+	a := mustPlainDateTime(t, 2020, 1, 1, 12, 30, 0, 0, 0, 0)
+	b := PlainDateTimeFrom(a)
+	if a == b {
+		t.Error("PlainDateTimeFrom returned the same pointer, want a copy")
+	}
+	if !a.Equals(b) {
+		t.Error("from copy does not equal its source")
+	}
+}
+
+// TestPlainDateTimeTruncatesArguments proves a fractional argument truncates toward zero,
+// matching ToIntegerWithTruncation.
+func TestPlainDateTimeTruncatesArguments(t *testing.T) {
+	pdt := mustPlainDateTime(t, 2020.9, 1.9, 1.9, 12.9, 30.9, 0, 0, 0, 0)
+	if got := pdt.ToString().ToGoString(); got != "2020-01-01T12:30:00" {
+		t.Errorf("truncated PlainDateTime = %q, want 2020-01-01T12:30:00", got)
+	}
+}
+
+// TestPlainDateTimeRejects checks the RangeError cases against the polyfill: an out-of-range
+// date component, an out-of-range time component, and a NaN in either half.
+func TestPlainDateTimeRejects(t *testing.T) {
+	throwing := [][9]float64{
+		{2020, 13, 1, 0, 0, 0, 0, 0, 0},
+		{2021, 2, 30, 0, 0, 0, 0, 0, 0},
+		{2020, 1, 1, 24, 0, 0, 0, 0, 0},
+		{2020, 1, 1, 0, 60, 0, 0, 0, 0},
+		{2020, 1, 1, 0, 0, 0, 0, 0, 1000},
+		{nan(), 1, 1, 0, 0, 0, 0, 0, 0},
+		{2020, 1, 1, nan(), 0, 0, 0, 0, 0},
+	}
+	for _, c := range throwing {
+		if !plainDateTimeThrows(c) {
+			t.Errorf("NewPlainDateTime%v did not throw", c)
+		}
+	}
+	// The all-max valid boundary must not throw.
+	if plainDateTimeThrows([9]float64{2020, 12, 31, 23, 59, 59, 999, 999, 999}) {
+		t.Error("NewPlainDateTime at the valid maximum threw")
+	}
+}

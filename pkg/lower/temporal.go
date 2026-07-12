@@ -7,20 +7,21 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
-// This file lowers the Temporal area (10_advanced group 6), one type per cut. Two are
+// This file lowers the Temporal area (10_advanced group 6), one type per cut. Three are
 // hosted so far: PlainDate, a calendar date with no time and no zone over the ISO 8601
-// calendar, and PlainTime, a wall-clock time with no date and no zone. For each,
-// construction, the static from over the same type and compare, the clean field getters,
-// and the equals, toString, and toJSON methods lower to the matching value runtime type.
-// Everything else, the arithmetic, the reshaping, the cross-type conversions, from over
-// a string or a property bag, and the getters the checker types number | undefined,
-// hands back with a named reason so the compiler reports the exact ceiling.
+// calendar; PlainTime, a wall-clock time with no date and no zone; and PlainDateTime, a
+// date paired with a wall-clock time. For each, construction, the static from over the
+// same type and compare, the clean field getters, and the equals, toString, and toJSON
+// methods lower to the matching value runtime type. Everything else, the arithmetic, the
+// reshaping, the cross-type conversions, from over a string or a property bag, and the
+// getters the checker types number | undefined, hands back with a named reason so the
+// compiler reports the exact ceiling.
 //
 // Each Temporal type follows the host-type model RegExp and the collections use: it is a
-// bare pointer in the generated Go (*value.PlainDate, *value.PlainTime), recognized by
-// its declaring symbol name rather than a dedicated type flag. The Temporal namespace is
-// a two-level access (Temporal.PlainDate.compare), which no other built-in uses, so the
-// call and new paths carry a small amount of namespace-chain recognition this file drives.
+// bare pointer in the generated Go (*value.PlainDate, *value.PlainTime, *value.PlainDateTime),
+// recognized by its declaring symbol name rather than a dedicated type flag. The Temporal
+// namespace is a two-level access (Temporal.PlainDate.compare), which no other built-in uses,
+// so the call and new paths carry a small amount of namespace-chain recognition this file drives.
 
 // plainDateType reports whether a checker type is the Temporal.PlainDate interface.
 // Like the RegExp and DataView checks it is a shape test on the declaring symbol: an
@@ -61,6 +62,24 @@ func (r *Renderer) plainTimeType(t frontend.Type) bool {
 // isPlainTime reports whether the node's static type is a Temporal.PlainTime.
 func (r *Renderer) isPlainTime(n frontend.Node) bool {
 	return r.plainTimeType(r.prog.TypeAt(n))
+}
+
+// plainDateTimeType reports whether a checker type is the Temporal.PlainDateTime interface,
+// the same shape test as plainDateType over the symbol name PlainDateTime.
+func (r *Renderer) plainDateTimeType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "PlainDateTime"
+}
+
+// isPlainDateTime reports whether the node's static type is a Temporal.PlainDateTime.
+func (r *Renderer) isPlainDateTime(n frontend.Node) bool {
+	return r.plainDateTimeType(r.prog.TypeAt(n))
 }
 
 // plainDateAccessor maps a PlainDate field getter to the value.PlainDate method that
@@ -118,6 +137,19 @@ func plainTimeAccessor(prop string) (method string, ok bool) {
 		return "Nanosecond", true
 	}
 	return "", false
+}
+
+// plainDateTimeAccessor maps a PlainDateTime field getter to the value.PlainDateTime method
+// that reads it, or reports ok=false for a name this slice does not host. It is the union of
+// the clean PlainDate getters and the six PlainTime getters, since a date-time carries both.
+// The calendar-dependent getters the checker types number | undefined (era, eraYear,
+// weekOfYear, yearOfWeek) are absent, so they hand back rather than lower to a getter that
+// cannot answer the undefined case, the same as PlainDate.
+func plainDateTimeAccessor(prop string) (method string, ok bool) {
+	if m, ok := plainDateAccessor(prop); ok {
+		return m, true
+	}
+	return plainTimeAccessor(prop)
 }
 
 // plainDateMethodCall lowers a method call on a PlainDate receiver. equals(other)
@@ -203,6 +235,48 @@ func (r *Renderer) plainTimeMethodCall(recvNode frontend.Node, method string, ar
 	}
 }
 
+// plainDateTimeMethodCall lowers a method call on a PlainDateTime receiver, the mirror of
+// plainDateMethodCall and plainTimeMethodCall. equals(other) compares two date-times, and
+// toString and toJSON render the ISO 8601 string; each takes no options in this slice, so a
+// call with arguments beyond the ones handled hands back. The arithmetic, rounding,
+// reshaping, and conversion methods, which need Duration, options parsing, or the other
+// Temporal types, hand back with a named reason.
+func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "equals":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.equals takes exactly one argument"}
+		}
+		if !r.isPlainDateTime(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.equals over a non-PlainDateTime argument (a string or bag to coerce) is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Equals")}, Args: []ast.Expr{other}}, nil
+	case "toString", "toJSON":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " with options is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "ToString"
+		if method == "toJSON" {
+			name = "ToJSON"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " is a later slice"}
+	}
+}
+
 // temporalStaticCall lowers a static call on a Temporal namespace member, routing on the
 // type name to the per-type static handler. A Temporal type this file does not host yet
 // hands back with a named reason.
@@ -212,6 +286,8 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 		return r.plainDateStaticCall(method, argNodes)
 	case "PlainTime":
 		return r.plainTimeStaticCall(method, argNodes)
+	case "PlainDateTime":
+		return r.plainDateTimeStaticCall(method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal." + typeName + " is a later slice"}
 	}
@@ -298,6 +374,47 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 	}
 }
 
+// plainDateTimeStaticCall lowers Temporal.PlainDateTime.compare(a, b) or
+// Temporal.PlainDateTime.from(x), the mirror of the PlainDate and PlainTime statics. compare
+// lowers to value.PlainDateTimeCompare; from lowers to value.PlainDateTimeFrom for a
+// PlainDateTime argument and hands back for a string or a bag.
+func (r *Renderer) plainDateTimeStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "compare":
+		if len(argNodes) != 2 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.compare takes exactly two arguments"}
+		}
+		if !r.isPlainDateTime(argNodes[0]) || !r.isPlainDateTime(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.compare over an argument that is not a PlainDateTime (a string or bag to coerce) is a later slice"}
+		}
+		a, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		b, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeCompare"), Args: []ast.Expr{a, b}}, nil
+	case "from":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from with options is a later slice"}
+		}
+		if !r.isPlainDateTime(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from over a string or a property bag is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFrom"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime." + method + " is a later slice"}
+	}
+}
+
 // newTemporal lowers new Temporal.<Type>(...), routing on the type name to the per-type
 // constructor handler. A Temporal type this file does not host yet hands back.
 func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.Expr, error) {
@@ -306,6 +423,8 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 		return r.newPlainDate(argNodes)
 	case "PlainTime":
 		return r.newPlainTime(argNodes)
+	case "PlainDateTime":
+		return r.newPlainDateTime(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "new Temporal." + typeName + " is a later slice"}
 	}
@@ -363,4 +482,35 @@ func (r *Renderer) newPlainTime(argNodes []frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewPlainTime"), Args: args}, nil
+}
+
+// newPlainDateTime lowers new Temporal.PlainDateTime over its three required date components
+// (isoYear, isoMonth, isoDay) and up to six optional time components (hour, minute, second,
+// millisecond, microsecond, nanosecond), each time field defaulting to zero. Fewer than three
+// arguments, or a tenth calendar argument, hands back: this slice carries only the ISO
+// calendar. A missing trailing time component is padded with a float64 zero so the runtime
+// constructor always sees nine numbers. Each supplied argument must lower as a number, so a
+// non-number component hands back; the runtime runs ToIntegerWithTruncation then RejectISODate
+// and RejectTime, so an out-of-range date or time throws a RangeError at run time.
+func (r *Renderer) newPlainDateTime(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) < 3 || len(argNodes) > 9 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.PlainDateTime with a calendar argument or fewer than three components is a later slice"}
+	}
+	args := make([]ast.Expr, 9)
+	for i := range args {
+		if i >= len(argNodes) {
+			args[i] = &ast.BasicLit{Kind: token.FLOAT, Value: "0"}
+			continue
+		}
+		if !r.isNumber(argNodes[i]) {
+			return nil, &NotYetLowerable{Reason: "new Temporal.PlainDateTime with a non-number component is a later slice"}
+		}
+		lowered, err := r.lowerExpr(argNodes[i])
+		if err != nil {
+			return nil, err
+		}
+		args[i] = lowered
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewPlainDateTime"), Args: args}, nil
 }

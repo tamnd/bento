@@ -233,11 +233,18 @@ func PlainDateCompare(a, b *PlainDate) float64 {
 	}
 }
 
+// isoString renders the ISO 8601 date, YYYY-MM-DD, with the year expanded to a
+// signed six-digit form outside 0..9999. It is the Go string toString wraps, and
+// the piece PlainDateTime joins with the time across a "T".
+func (pd *PlainDate) isoString() string {
+	return formatISOYear(pd.year) + "-" + twoDigit(pd.month) + "-" + twoDigit(pd.day)
+}
+
 // ToString implements Temporal.PlainDate.prototype.toString for the default
 // options: the ISO 8601 date, YYYY-MM-DD, with the year expanded to a signed
 // six-digit form outside 0..9999.
 func (pd *PlainDate) ToString() BStr {
-	return FromGoString(formatISOYear(pd.year) + "-" + twoDigit(pd.month) + "-" + twoDigit(pd.day))
+	return FromGoString(pd.isoString())
 }
 
 // ToJSON implements Temporal.PlainDate.prototype.toJSON, the same ISO string
@@ -360,22 +367,159 @@ func PlainTimeCompare(a, b *PlainTime) float64 {
 	return 0
 }
 
-// ToString implements Temporal.PlainTime.prototype.toString for the default options:
-// HH:MM:SS, with a fractional-second part appended only when a sub-second field is set,
-// rendered to the fewest digits (the nine-digit nanosecond total with trailing zeros
-// trimmed). A time on the whole second renders without a fractional part at all.
-func (pt *PlainTime) ToString() BStr {
+// isoString renders the ISO 8601 time, HH:MM:SS, with a fractional-second part
+// appended only when a sub-second field is set, rendered to the fewest digits (the
+// nine-digit nanosecond total with trailing zeros trimmed). A time on the whole
+// second renders without a fractional part at all. It is the Go string toString
+// wraps, and the piece PlainDateTime joins with the date across a "T".
+func (pt *PlainTime) isoString() string {
 	s := twoDigit(pt.hour) + ":" + twoDigit(pt.minute) + ":" + twoDigit(pt.second)
 	frac := pt.millisecond*1_000_000 + pt.microsecond*1_000 + pt.nanosecond
 	if frac > 0 {
 		s += "." + strings.TrimRight(zeroPad(frac, 9), "0")
 	}
-	return FromGoString(s)
+	return s
+}
+
+// ToString implements Temporal.PlainTime.prototype.toString for the default options:
+// HH:MM:SS, with a fractional-second part appended only when a sub-second field is set,
+// rendered to the fewest digits (the nine-digit nanosecond total with trailing zeros
+// trimmed). A time on the whole second renders without a fractional part at all.
+func (pt *PlainTime) ToString() BStr {
+	return FromGoString(pt.isoString())
 }
 
 // ToJSON implements Temporal.PlainTime.prototype.toJSON, the same ISO string toString
 // produces under default options.
 func (pt *PlainTime) ToJSON() BStr { return pt.ToString() }
+
+// PlainDateTime is bento's runtime representation of a Temporal.PlainDateTime (Temporal
+// §5): a calendar date paired with a wall-clock time, no zone. It is exactly a PlainDate
+// and a PlainTime carried together, so it holds one of each and delegates every field,
+// every string rendering, and both comparisons to them rather than restating the ISO
+// calendar and the time math. Like PlainDate it hosts only the ISO 8601 calendar; a
+// non-ISO calendar hands back at lowering, so a PlainDateTime that reached the runtime is
+// always iso8601.
+type PlainDateTime struct {
+	date PlainDate
+	time PlainTime
+}
+
+// NewPlainDateTime builds a PlainDateTime from the constructor's three date arguments and
+// up to six time arguments (isoYear, isoMonth, isoDay, then hour, minute, second,
+// millisecond, microsecond, nanosecond). It runs ToIntegerWithTruncation on every argument
+// first, so a NaN or non-finite component throws a RangeError before any range check, then
+// RejectISODate and RejectTime, so an out-of-range date or time throws a RangeError, the
+// order new Temporal.PlainDateTime(...) follows in the specification. Every time argument
+// defaults to zero; the lowerer pads the missing trailing components before the call, so
+// this constructor always sees nine numbers.
+func NewPlainDateTime(isoYear, isoMonth, isoDay, hour, minute, second, millisecond, microsecond, nanosecond float64) *PlainDateTime {
+	y := toIntegerWithTruncation(isoYear)
+	mo := toIntegerWithTruncation(isoMonth)
+	d := toIntegerWithTruncation(isoDay)
+	h := toIntegerWithTruncation(hour)
+	mi := toIntegerWithTruncation(minute)
+	s := toIntegerWithTruncation(second)
+	ms := toIntegerWithTruncation(millisecond)
+	us := toIntegerWithTruncation(microsecond)
+	ns := toIntegerWithTruncation(nanosecond)
+	rejectISODate(y, mo, d)
+	rejectTime(h, mi, s, ms, us, ns)
+	return &PlainDateTime{
+		date: PlainDate{year: int(y), month: int(mo), day: int(d)},
+		time: PlainTime{int(h), int(mi), int(s), int(ms), int(us), int(ns)},
+	}
+}
+
+// PlainDateTimeFrom implements Temporal.PlainDateTime.from for a PlainDateTime argument: it
+// returns a fresh PlainDateTime with the same date and time, the copy the specification
+// makes so the result is a distinct object that compares equal to its source. from over a
+// string or a property bag hands back at lowering, so this is only reached with a
+// PlainDateTime in hand.
+func PlainDateTimeFrom(pdt *PlainDateTime) *PlainDateTime {
+	return &PlainDateTime{date: pdt.date, time: pdt.time}
+}
+
+// Year returns the ISO year.
+func (pdt *PlainDateTime) Year() float64 { return pdt.date.Year() }
+
+// Month returns the ISO month, 1..12.
+func (pdt *PlainDateTime) Month() float64 { return pdt.date.Month() }
+
+// Day returns the ISO day of the month.
+func (pdt *PlainDateTime) Day() float64 { return pdt.date.Day() }
+
+// Hour returns the hour, 0..23.
+func (pdt *PlainDateTime) Hour() float64 { return pdt.time.Hour() }
+
+// Minute returns the minute, 0..59.
+func (pdt *PlainDateTime) Minute() float64 { return pdt.time.Minute() }
+
+// Second returns the second, 0..59.
+func (pdt *PlainDateTime) Second() float64 { return pdt.time.Second() }
+
+// Millisecond returns the millisecond, 0..999.
+func (pdt *PlainDateTime) Millisecond() float64 { return pdt.time.Millisecond() }
+
+// Microsecond returns the microsecond, 0..999.
+func (pdt *PlainDateTime) Microsecond() float64 { return pdt.time.Microsecond() }
+
+// Nanosecond returns the nanosecond, 0..999.
+func (pdt *PlainDateTime) Nanosecond() float64 { return pdt.time.Nanosecond() }
+
+// CalendarId returns the calendar identifier, always "iso8601" for this slice.
+func (pdt *PlainDateTime) CalendarId() BStr { return pdt.date.CalendarId() }
+
+// MonthCode returns the ISO month code, "M" followed by the two-digit month.
+func (pdt *PlainDateTime) MonthCode() BStr { return pdt.date.MonthCode() }
+
+// DayOfWeek returns the ISO day of the week, Monday=1 through Sunday=7.
+func (pdt *PlainDateTime) DayOfWeek() float64 { return pdt.date.DayOfWeek() }
+
+// DayOfYear returns the 1-based ordinal day within the year.
+func (pdt *PlainDateTime) DayOfYear() float64 { return pdt.date.DayOfYear() }
+
+// DaysInWeek is always 7 in the ISO calendar.
+func (pdt *PlainDateTime) DaysInWeek() float64 { return pdt.date.DaysInWeek() }
+
+// DaysInMonth returns the number of days in this date's month.
+func (pdt *PlainDateTime) DaysInMonth() float64 { return pdt.date.DaysInMonth() }
+
+// DaysInYear returns 366 in a leap year and 365 otherwise.
+func (pdt *PlainDateTime) DaysInYear() float64 { return pdt.date.DaysInYear() }
+
+// MonthsInYear is always 12 in the ISO calendar.
+func (pdt *PlainDateTime) MonthsInYear() float64 { return pdt.date.MonthsInYear() }
+
+// InLeapYear reports whether this date's year is an ISO leap year.
+func (pdt *PlainDateTime) InLeapYear() bool { return pdt.date.InLeapYear() }
+
+// Equals implements Temporal.PlainDateTime.prototype.equals: two date-times are equal when
+// their dates and their times are each equal under the same (ISO) calendar.
+func (pdt *PlainDateTime) Equals(other *PlainDateTime) bool {
+	return pdt.date.Equals(&other.date) && pdt.time.Equals(&other.time)
+}
+
+// PlainDateTimeCompare implements Temporal.PlainDateTime.compare, the static comparator:
+// -1 if a precedes b, 1 if a follows b, 0 if they are the same instant on the wall clock.
+// It compares the dates first and falls to the times only when the dates are equal.
+func PlainDateTimeCompare(a, b *PlainDateTime) float64 {
+	if c := PlainDateCompare(&a.date, &b.date); c != 0 {
+		return c
+	}
+	return PlainTimeCompare(&a.time, &b.time)
+}
+
+// ToString implements Temporal.PlainDateTime.prototype.toString for the default options:
+// the ISO 8601 date and time joined by "T", each rendered as its own type renders it, so
+// the fractional-second part appears only when a sub-second field is set.
+func (pdt *PlainDateTime) ToString() BStr {
+	return FromGoString(pdt.date.isoString() + "T" + pdt.time.isoString())
+}
+
+// ToJSON implements Temporal.PlainDateTime.prototype.toJSON, the same ISO string toString
+// produces under default options.
+func (pdt *PlainDateTime) ToJSON() BStr { return pdt.ToString() }
 
 // twoDigit renders a month or day as exactly two digits.
 func twoDigit(n int) string { return zeroPad(n, 2) }

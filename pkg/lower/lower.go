@@ -865,6 +865,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "PlainTime")), nil
 		}
+		if r.plainDateTimeType(t) {
+			// A Temporal.PlainDateTime (Temporal §5) is the value model's date paired with
+			// a wall-clock time, spelled as a pointer to value.PlainDateTime, routed here for
+			// the same reason as PlainDate and PlainTime: it is a host type, not a struct shape.
+			r.requireImport(valuePkg)
+			return star(sel("value", "PlainDateTime")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
