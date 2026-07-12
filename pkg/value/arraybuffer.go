@@ -17,9 +17,18 @@ import "unsafe"
 // and writes its elements straight through an aliasing slice over these bytes with
 // no per-element packing, and the platform's little-endian layout is the byte order
 // the buffer exposes, which is the order the tests assume.
+// A resizable buffer carries the maximum byte length it may grow to and a flag that
+// marks it resizable, the pair new ArrayBuffer(n, { maxByteLength }) sets (25 §25.1.3).
+// A fixed-length buffer leaves both zero, so resizable reads false and the max-length
+// getter falls back to the current length the way the spec's getter does. resize
+// reallocates the backing run to the requested length, within the max, and every view
+// recomputes its span over the new run on its next access, so a shrink turns an
+// out-of-range view zero-length and a grow restores it.
 type ArrayBuffer struct {
-	data     []byte
-	detached bool
+	data          []byte
+	detached      bool
+	resizable     bool
+	maxByteLength int
 }
 
 // NewArrayBuffer builds a zeroed buffer of the given byte length, the lowering of
@@ -29,6 +38,44 @@ type ArrayBuffer struct {
 // buffer's constructor takes, with the RangeError a later slice.
 func NewArrayBuffer(byteLength float64) *ArrayBuffer {
 	return &ArrayBuffer{data: allocBytes(typedLen(byteLength))}
+}
+
+// NewResizableArrayBuffer builds a resizable buffer of the given byte length that may
+// later grow to maxByteLength, the lowering of new ArrayBuffer(n, { maxByteLength }).
+// Both arguments are Numbers truncated toward zero like ToIndex. A max below the
+// initial length is a RangeError, the same throw the spec raises for an initial length
+// past the maximum; the covered subset otherwise clamps a negative to zero. The
+// backing run is sized to the initial length, not the maximum, and resize reallocates
+// it, so an unused max costs no storage.
+func NewResizableArrayBuffer(byteLength float64, maxByteLength float64) *ArrayBuffer {
+	n := typedLen(byteLength)
+	max := typedLen(maxByteLength)
+	if n > max {
+		Throw(NewRangeError(FromGoString("ArrayBuffer byte length exceeds its maxByteLength")))
+	}
+	return &ArrayBuffer{data: allocBytes(n), resizable: true, maxByteLength: max}
+}
+
+// Resize grows or shrinks the backing run to newLength, the lowering of
+// ArrayBuffer.prototype.resize (25 §25.1.6). Resizing a detached buffer or one that is
+// not resizable is a TypeError, and a length past the maximum is a RangeError, the
+// throws the spec raises. The run is reallocated to the new length, the retained bytes
+// copied, and any growth left zeroed, so a view over the buffer sees the new size and,
+// where a shrink drops its range, reads zero-length until a later grow restores it.
+func (b *ArrayBuffer) Resize(newLength float64) {
+	if b.detached {
+		Throw(NewTypeError(FromGoString("Cannot resize a detached ArrayBuffer")))
+	}
+	if !b.resizable {
+		Throw(NewTypeError(FromGoString("Cannot resize a non-resizable ArrayBuffer")))
+	}
+	n := typedLen(newLength)
+	if n > b.maxByteLength {
+		Throw(NewRangeError(FromGoString("ArrayBuffer resize length exceeds its maxByteLength")))
+	}
+	next := allocBytes(n)
+	copy(next, b.data)
+	b.data = next
 }
 
 // ByteLength is the buffer's size in bytes, a Number to match the type the checker
