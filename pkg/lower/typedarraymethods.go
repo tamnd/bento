@@ -27,6 +27,15 @@ import (
 // abstract receiver, needs the first-class %TypedArray% constructor-dispatch model
 // that also gates the testTypedArray.js port, which is tracked on its own rather
 // than in this method surface.
+//
+// Ceiling: the constructor Symbol.species hook is not honored. The copying methods
+// (map, filter, slice, subarray, toSorted, toReversed, with) build a fresh view of
+// the receiver's own concrete element type, which this static model pins at the call
+// site, rather than consulting the receiver's constructor[Symbol.species] to derive
+// the result's type at run time. That matches the default species (each typed array
+// constructor returns itself), so ordinary code sees the spec result; only a program
+// that overrides Symbol.species to make a method build a different typed array would
+// observe the difference, which the AOT model cannot express and does not attempt.
 func (r *Renderer) typedArrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "fill":
