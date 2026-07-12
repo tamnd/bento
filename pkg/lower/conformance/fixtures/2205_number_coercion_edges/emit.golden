@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	value.ConsoleLog(value.BoolToString(0 == 0))
+	value.ConsoleLog(value.BoolToString(0.0 == 0))
 	value.ConsoleLog(value.NumberToString(value.BoolToNumber(true)))
 	value.ConsoleLog(value.NumberToString(value.BoolToNumber(false)))
 	value.ConsoleLog(value.NumberToString(value.StringToNumber(value.FromGoString("  42  "))))
