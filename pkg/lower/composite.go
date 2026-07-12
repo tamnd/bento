@@ -235,6 +235,15 @@ func (r *Renderer) arrayStaticCall(call, callee frontend.Node, argNodes []fronte
 	case "of":
 		expr, err := r.arrayOf(call, argNodes)
 		return expr, true, err
+	case "from":
+		expr, err := r.arrayFrom(call, argNodes)
+		return expr, true, err
+	case "fromAsync":
+		expr, err := r.arrayFromAsync(call, argNodes)
+		return expr, true, err
+	case "isArray":
+		expr, err := r.arrayIsArray(argNodes)
+		return expr, true, err
 	default:
 		return nil, true, &NotYetLowerable{Reason: "Array." + method + " is a later slice"}
 	}
@@ -267,6 +276,142 @@ func (r *Renderer) arrayOf(call frontend.Node, argNodes []frontend.Node) (ast.Ex
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType), Args: args}, nil
+}
+
+// arrayFrom lowers Array.from(source) where the source is iterable: a real
+// array, whose backing slice is copied so the result aliases nothing; a string,
+// whose code points become the elements; or a user iterable, drained through its
+// Symbol.iterator the same pull-until-done walk a spread of that iterable takes.
+// The result element type comes from the checker's type for the whole call and
+// must match the source's Go element type so the collected values need no
+// conversion. The array-like form (a plain object with a length and integer
+// keys) and the optional map callback and thisArg are their own later slice and
+// hand back.
+func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "Array.from with no source is a later slice"}
+	}
+	if len(argNodes) > 2 {
+		return nil, &NotYetLowerable{Reason: "Array.from with a thisArg is a later slice"}
+	}
+	// A dynamic source, or a map callback, walks the source as an array-like value
+	// at runtime, reading length and integer keys, and applies the optional map
+	// callback there. This is the general form, producing a boxed array;
+	// arrayFromBoxedResultCall keeps isDynamic in step so a read off the result
+	// stays on the dynamic path.
+	if r.arrayFromBoxedResultCall(call) {
+		return r.arrayFromDynamic(argNodes)
+	}
+	if len(argNodes) > 1 {
+		return nil, &NotYetLowerable{Reason: "Array.from with a map callback into a typed array is a later slice"}
+	}
+	elemType, ok := r.arrayElem(call)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Array.from whose element type does not lower yet"}
+	}
+	src := argNodes[0]
+	r.requireImport(valuePkg)
+	// A real array copies its backing slice into a fresh []T, the same splice a
+	// person writes with append, so the result shares storage with nothing.
+	if opElemType, ok := r.arrayElem(src); ok {
+		same, err := sameGoType(elemType, opElemType)
+		if err != nil {
+			return nil, err
+		}
+		if !same {
+			return nil, &NotYetLowerable{Reason: "Array.from over an array with a different element type is a later slice"}
+		}
+		srcExpr, err := r.lowerExpr(src)
+		if err != nil {
+			return nil, err
+		}
+		elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: srcExpr, Sel: ident("Elems")}}
+		copied := &ast.CallExpr{
+			Fun:      ident("append"),
+			Args:     []ast.Expr{&ast.CompositeLit{Type: &ast.ArrayType{Elt: elemType}}, elems},
+			Ellipsis: token.Pos(1),
+		}
+		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{copied}}, nil
+	}
+	// A user iterable is drained through its Symbol.iterator into a slice of its
+	// element type, then handed to ArrayFrom the same way a spread splices it.
+	if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(src)); ok {
+		iterElemType, err := r.typeExpr(shape.elem)
+		if err != nil {
+			return nil, err
+		}
+		same, err := sameGoType(elemType, iterElemType)
+		if err != nil {
+			return nil, err
+		}
+		if !same {
+			return nil, &NotYetLowerable{Reason: "Array.from over an iterable with a different element type is a later slice"}
+		}
+		srcExpr, err := r.lowerExpr(src)
+		if err != nil {
+			return nil, err
+		}
+		drained := r.iterableToSliceExpr(srcExpr, elemType, shape)
+		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{drained}}, nil
+	}
+	// A string's elements are its code points, one substring per code point, the
+	// same walk a for...of over a string takes.
+	if r.isString(src) {
+		srcExpr, err := r.lowerExpr(src)
+		if err != nil {
+			return nil, err
+		}
+		points := &ast.CallExpr{Fun: &ast.SelectorExpr{X: srcExpr, Sel: ident("CodePoints")}}
+		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{points}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "Array.from over an array-like object is a later slice"}
+}
+
+// arrayFromDynamic lowers Array.from into a boxed array by walking the source as
+// an array-like value at runtime: value.ArrayFromArrayLike reads its length and
+// integer keys and applies the optional map callback. The source and the callback
+// box the same way a dynamic call's arguments do, and an absent callback passes
+// value.Undefined so the runtime skips the map step. A thisArg is a later slice
+// and has already handed back before here.
+func (r *Renderer) arrayFromDynamic(argNodes []frontend.Node) (ast.Expr, error) {
+	src, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	mapFn := ast.Expr(sel("value", "Undefined"))
+	if len(argNodes) == 2 {
+		mapFn, err = r.boxOperand(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ArrayFromArrayLike"), Args: []ast.Expr{src, mapFn}}, nil
+}
+
+// arrayIsArray lowers Array.isArray(x), the runtime array-brand check. A dynamic
+// value carries its kind at runtime, so the check dispatches through
+// value.IsArray, which says false for an array-like object the way the spec's
+// brand check does. A statically typed value's brand is known at compile time: a
+// real array folds to true, and any other type, including an array-like object,
+// folds to false.
+func (r *Renderer) arrayIsArray(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Array.isArray takes exactly one argument"}
+	}
+	arg := argNodes[0]
+	if r.isDynamic(arg) {
+		boxed, err := r.boxOperand(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "IsArray"), Args: []ast.Expr{boxed}}, nil
+	}
+	if _, ok := r.arrayElem(arg); ok {
+		return ident("true"), nil
+	}
+	return ident("false"), nil
 }
 
 // objectLiteral lowers an object literal { k: v, ... } to a composite literal
@@ -803,6 +948,12 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 			args = append(args, lowered)
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Fill")}, Args: args}, nil
+	case "values":
+		return r.arrayIterConstructor(recvNode, "ArrayIterValues", argNodes)
+	case "keys":
+		return r.arrayIterConstructor(recvNode, "ArrayIterKeys", argNodes)
+	case "entries":
+		return r.arrayIterConstructor(recvNode, "ArrayIterEntries", argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "array method ." + method + " is a later slice"}
 	}

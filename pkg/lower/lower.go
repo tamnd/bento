@@ -697,6 +697,15 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// never re-derived structurally.
 			return star(ident(info.goName)), nil
 		}
+		// An ArrayIterator, the object arr.values(), arr.keys(), and arr.entries() hand
+		// back, is the *value.ArrayIter the runtime walks. It routes before the generator
+		// family and the structural object path, which would otherwise expand the
+		// iterator's next() result into the IteratorResult union and hand back. This is
+		// the slot a `const it = arr.values()` binding takes.
+		if r.isArrayIteratorType(t) {
+			r.requireImport(valuePkg)
+			return star(sel("value", "ArrayIter")), nil
+		}
 		// A Generator (or the wider iterator family) is the *value.Gen[Y] coroutine the
 		// runtime drives, its yielded element type read off the generic's first type
 		// argument. It routes before renderFuncType and the structural array and object
