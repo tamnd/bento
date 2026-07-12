@@ -134,6 +134,15 @@ func (s *Set[T]) ForEach(fn func(T)) {
 	}
 }
 
+// Members returns the set's members in insertion order, the traversal set.values(),
+// set.keys(), and a for...of over the set read (a Set's keys and values are its
+// members, so all three project to this). It copies the backing slice so a mutation
+// to the set during the loop does not disturb the range in progress; the live-view
+// an iterator has of concurrent mutation is a later slice.
+func (s *Set[T]) Members() []T {
+	return append([]T(nil), s.members...)
+}
+
 // newLike returns an empty set that shares this set's member equality, the base
 // every algebra result builds on so the new set compares members the way its
 // operands do. The members are left empty for the caller to fill in the order the
