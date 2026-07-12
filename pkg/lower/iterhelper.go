@@ -64,7 +64,9 @@ func (r *Renderer) iterHelperMethodCall(recvNode frontend.Node, method string, a
 	// ArrayIterator's next() stays on its own path (arrayIterMethodCall), so next is
 	// handled here only for the IteratorObject receiver and otherwise returns ok false.
 	if method == "next" {
-		if !r.isIterHelperType(r.prog.TypeAt(recvNode)) && !(recvNode.Kind() == frontend.NodeIdentifier && r.iterHelperSymbol(recvNode)) {
+		onHelper := r.isIterHelperType(r.prog.TypeAt(recvNode)) ||
+			(recvNode.Kind() == frontend.NodeIdentifier && r.iterHelperSymbol(recvNode))
+		if !onHelper {
 			return nil, false, nil
 		}
 		if len(argNodes) != 0 {
