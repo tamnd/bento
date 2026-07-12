@@ -194,6 +194,92 @@ func TestProxyHasInvariant(t *testing.T) {
 	p.HasProperty(FromGoString("fixed"))
 }
 
+// TestProxyOwnKeysTrap pins that an ownKeys trap supplies the key list, so
+// Reflect.ownKeys reports what the trap returns rather than the target's own keys.
+func TestProxyOwnKeysTrap(t *testing.T) {
+	target := NewObject()
+	target.Set(FromGoString("a"), Number(1))
+	handler := NewObject()
+	handler.Set(FromGoString("ownKeys"), NewFunc(func(args []Value) Value {
+		return NewArrayValue([]Value{StringValue(FromGoString("a")), StringValue(FromGoString("x"))})
+	}))
+	p := NewProxy(target, handler)
+	keys := ReflectOwnKeys(p).Elems()
+	if len(keys) != 2 || keys[1].str().ToGoString() != "x" {
+		t.Errorf("ownKeys trap did not drive the key list, got %v", keys)
+	}
+}
+
+// TestProxyOwnKeysInvariant pins that an ownKeys trap that drops a non-configurable
+// own key of the target throws a TypeError.
+func TestProxyOwnKeysInvariant(t *testing.T) {
+	target := NewObject()
+	desc := NewObject()
+	desc.Set(FromGoString("value"), Number(1))
+	desc.Set(FromGoString("configurable"), Bool(false))
+	target.DefineProperty(StringValue(FromGoString("fixed")), desc)
+	handler := NewObject()
+	handler.Set(FromGoString("ownKeys"), NewFunc(func(args []Value) Value {
+		return NewArrayValue(nil)
+	}))
+	p := NewProxy(target, handler)
+	defer func() {
+		if recover() == nil {
+			t.Error("ownKeys trap dropping a non-configurable key did not throw")
+		}
+	}()
+	ReflectOwnKeys(p)
+}
+
+// TestProxyGetOwnPropertyDescriptorTrap pins that a getOwnPropertyDescriptor trap
+// supplies the descriptor a property read of it returns.
+func TestProxyGetOwnPropertyDescriptorTrap(t *testing.T) {
+	target := NewObject()
+	handler := NewObject()
+	handler.Set(FromGoString("getOwnPropertyDescriptor"), NewFunc(func(args []Value) Value {
+		d := NewObject()
+		d.Set(FromGoString("value"), Number(7))
+		d.Set(FromGoString("writable"), Bool(true))
+		d.Set(FromGoString("enumerable"), Bool(true))
+		d.Set(FromGoString("configurable"), Bool(true))
+		return d
+	}))
+	p := NewProxy(target, handler)
+	d := p.GetOwnPropertyDescriptor(StringValue(FromGoString("any")))
+	if d.kind != KindObject || d.Get(FromGoString("value")).AsNumber() != 7 {
+		t.Errorf("getOwnPropertyDescriptor trap did not supply the descriptor, got %v", d)
+	}
+}
+
+// TestProxyDefinePropertyTrap pins that a defineProperty trap intercepts the
+// definition and that a falsy return throws the way a refused definition does.
+func TestProxyDefinePropertyTrap(t *testing.T) {
+	target := NewObject()
+	var sawKey Value
+	handler := NewObject()
+	handler.Set(FromGoString("defineProperty"), NewFunc(func(args []Value) Value {
+		sawKey = Arg(args, 1)
+		return Bool(false)
+	}))
+	p := NewProxy(target, handler)
+	desc := NewObject()
+	desc.Set(FromGoString("value"), Number(1))
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("defineProperty trap returning falsy did not throw")
+			}
+		}()
+		p.DefineProperty(StringValue(FromGoString("k")), desc)
+	}()
+	if sawKey.str().ToGoString() != "k" {
+		t.Errorf("defineProperty trap saw key %v", sawKey)
+	}
+	if target.HasProperty(FromGoString("k")) {
+		t.Error("defineProperty trap defined on the target despite a falsy return")
+	}
+}
+
 // TestProxyCallableForwards pins that a Proxy over a callable target is itself
 // callable and forwards the call to the target when the handler has no apply trap.
 func TestProxyCallableForwards(t *testing.T) {

@@ -225,14 +225,51 @@ func (p *proxyData) call(args []Value) Value {
 	return p.target.Call(args...)
 }
 
+// defineProperty runs the defineProperty trap, the [[DefineOwnProperty]](P, Desc)
+// internal method behind Object.defineProperty. With no trap the definition
+// forwards to the target. With a trap a falsy return is a refused definition, which
+// the Object.defineProperty layer turns into a TypeError the way a failed
+// [[DefineOwnProperty]] does.
 func (p *proxyData) defineProperty(key, descObj Value) {
 	p.checkRevoked("defineProperty")
-	p.target.DefineProperty(key, descObj)
+	trap := p.trap("defineProperty")
+	if trap.kind == KindUndefined {
+		p.target.DefineProperty(key, descObj)
+		return
+	}
+	if !ToBoolean(trap.Call(p.target, key, descObj)) {
+		Throw(NewTypeError(FromGoString("'defineProperty' on proxy: trap returned falsy for property")))
+	}
 }
 
+// getOwnPropertyDescriptor runs the getOwnPropertyDescriptor trap, the
+// [[GetOwnProperty]](P) internal method behind Object.getOwnPropertyDescriptor and
+// the per-key filter Object.keys applies. With no trap the descriptor forwards from
+// the target. With a trap the result must be an object or undefined, and reporting a
+// non-configurable own property of the target absent, or any own property of a
+// non-extensible target absent, throws the way the invariant forbids hiding a fixed
+// property.
 func (p *proxyData) getOwnPropertyDescriptor(key Value) Value {
 	p.checkRevoked("getOwnPropertyDescriptor")
-	return p.target.GetOwnPropertyDescriptor(key)
+	trap := p.trap("getOwnPropertyDescriptor")
+	if trap.kind == KindUndefined {
+		return p.target.GetOwnPropertyDescriptor(key)
+	}
+	res := trap.Call(p.target, key)
+	if res.kind != KindObject && res.kind != KindUndefined {
+		Throw(NewTypeError(FromGoString("'getOwnPropertyDescriptor' on proxy: trap must return an object or undefined")))
+	}
+	if res.kind == KindUndefined {
+		if d := p.target.GetOwnPropertyDescriptor(key); d.kind == KindObject {
+			if !ToBoolean(d.Get(FromGoString("configurable"))) {
+				Throw(NewTypeError(FromGoString("'getOwnPropertyDescriptor' on proxy: trap reported a non-configurable target property as non-existent")))
+			}
+			if !p.target.IsExtensible() {
+				Throw(NewTypeError(FromGoString("'getOwnPropertyDescriptor' on proxy: trap reported an existing property of a non-extensible target as non-existent")))
+			}
+		}
+	}
+	return res
 }
 
 func (p *proxyData) getPrototypeOf() Value {
@@ -255,9 +292,61 @@ func (p *proxyData) preventExtensions() {
 	p.target.PreventExtensions()
 }
 
+// ownKeys runs the ownKeys trap, the [[OwnPropertyKeys]]() internal method behind
+// Reflect.ownKeys, Object.keys, and the getOwnPropertyNames family. With no trap the
+// key list forwards from the target. With a trap the result must be a list of only
+// string and symbol keys with no duplicate, it must include every non-configurable
+// own key of the target, and when the target is not extensible it must be exactly
+// the target's own keys, the invariants that keep the trap from hiding or inventing
+// a fixed key.
 func (p *proxyData) ownKeys() []Value {
 	p.checkRevoked("ownKeys")
-	return ReflectOwnKeys(p.target).Elems()
+	trap := p.trap("ownKeys")
+	if trap.kind == KindUndefined {
+		return ReflectOwnKeys(p.target).Elems()
+	}
+	res := trap.Call(p.target)
+	if res.kind != KindArray {
+		Throw(NewTypeError(FromGoString("'ownKeys' on proxy: trap result must be an array-like object")))
+	}
+	trapKeys := res.object().elems
+	for i, k := range trapKeys {
+		if k.kind != KindString && k.kind != KindSymbol {
+			Throw(NewTypeError(FromGoString("'ownKeys' on proxy: trap result must only contain string and symbol keys")))
+		}
+		for _, seen := range trapKeys[:i] {
+			if sameValue(k, seen) {
+				Throw(NewTypeError(FromGoString("'ownKeys' on proxy: trap result must not contain duplicate keys")))
+			}
+		}
+	}
+	extensible := p.target.IsExtensible()
+	targetKeys := ReflectOwnKeys(p.target).Elems()
+	for _, tk := range targetKeys {
+		d := p.target.GetOwnPropertyDescriptor(tk)
+		configurable := d.kind == KindObject && ToBoolean(d.Get(FromGoString("configurable")))
+		if configurable && extensible {
+			continue
+		}
+		if !containsKey(trapKeys, tk) {
+			Throw(NewTypeError(FromGoString("'ownKeys' on proxy: trap result did not include a non-configurable or non-extensible target key")))
+		}
+	}
+	if !extensible && len(trapKeys) != len(targetKeys) {
+		Throw(NewTypeError(FromGoString("'ownKeys' on proxy: trap result must be exactly the target's own keys when the target is not extensible")))
+	}
+	return trapKeys
+}
+
+// containsKey reports whether keys holds a property key that is the same value as k,
+// the membership test the ownKeys invariants run over string and symbol keys.
+func containsKey(keys []Value, k Value) bool {
+	for _, key := range keys {
+		if sameValue(key, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // stringKeys projects the proxy's own keys down to the string keys the
