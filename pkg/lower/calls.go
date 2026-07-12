@@ -1374,17 +1374,18 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		if info, ok := r.classOfNode(argNodes[0]); ok && info.extended {
 			return nil, &NotYetLowerable{Reason: "JSON.stringify of a value typed as class " + info.name + ", which another class extends, is a later slice"}
 		}
-		// The replacer slot only passes through when it is null or undefined, which
-		// the specification ignores; a replacer function or array whitelist is a
-		// later slice, so a present replacer of any other type hands back.
-		if len(argNodes) >= 2 && !r.isJSONNullish(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer function or array is a later slice"}
-		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
+		// A replacer function or array whitelist changes which values are
+		// serialized and how, so a present replacer routes to the replacer walk;
+		// a null or undefined replacer the specification ignores falls through to
+		// the plain serializer.
+		if len(argNodes) >= 2 && !r.isJSONNullish(argNodes[1]) {
+			return r.jsonStringifyReplacer(arg, argNodes)
+		}
 		if len(argNodes) == 3 {
 			return r.jsonStringifySpace(arg, argNodes[2])
 		}
@@ -1436,6 +1437,88 @@ func (r *Renderer) jsonStringifySpace(arg ast.Expr, spaceNode frontend.Node) (as
 // literal, the two values JSON.stringify treats as an absent replacer or space.
 func (r *Renderer) isJSONNullish(n frontend.Node) bool {
 	return n.Kind() == frontend.NodeNullKeyword || r.isUndefinedLiteral(n)
+}
+
+// jsonStringifyReplacer lowers a three-argument JSON.stringify whose replacer is
+// present. An inline arrow replacer lowers to value.JSONStringifyReplacerFunc over
+// the lowered function, and an array-literal whitelist lowers to
+// value.JSONStringifyReplacerArray over the listed keys; each also takes the
+// indentation gap the optional space argument computes. A replacer that is neither
+// an inline arrow nor an array literal hands back, since only those two forms have
+// a static shape the walk can honor.
+func (r *Renderer) jsonStringifyReplacer(arg ast.Expr, argNodes []frontend.Node) (ast.Expr, error) {
+	gap, err := r.jsonGapExpr(argNodes)
+	if err != nil {
+		return nil, err
+	}
+	replacer := argNodes[1]
+	switch replacer.Kind() {
+	case frontend.NodeArrowFunction:
+		if r.arrowParamCount(replacer) != 2 {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer arrow that does not take the key and value parameters is a later slice"}
+		}
+		fn, err := r.lowerExpr(replacer)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyReplacerFunc"), Args: []ast.Expr{arg, fn, gap}}, nil
+	case frontend.NodeArrayLiteralExpression:
+		keys, err := r.jsonReplacerKeys(replacer)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyReplacerArray"), Args: []ast.Expr{arg, keys, gap}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer that is not an inline arrow function or array literal is a later slice"}
+	}
+}
+
+// jsonGapExpr builds the Go expression for the indentation gap a replacer walk
+// takes: the empty string when there is no space argument or it is null or
+// undefined, value.JSONGapNum over a numeric space, and value.JSONGapStr over a
+// string space. Any other space type hands back, matching the plain space path.
+func (r *Renderer) jsonGapExpr(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) < 3 || r.isJSONNullish(argNodes[2]) {
+		return &ast.BasicLit{Kind: token.STRING, Value: `""`}, nil
+	}
+	space := argNodes[2]
+	switch {
+	case r.isNumber(space):
+		lowered, err := r.lowerExpr(space)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONGapNum"), Args: []ast.Expr{lowered}}, nil
+	case r.isString(space):
+		lowered, err := r.lowerExpr(space)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONGapStr"), Args: []ast.Expr{lowered}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "JSON.stringify with a space that is not a number or string is a later slice"}
+	}
+}
+
+// jsonReplacerKeys builds the []value.BStr the array-whitelist form takes from an
+// array literal of string literals, lowering each element to the property name it
+// names through the same decoding a string-literal expression uses. An element
+// that is not a string literal hands back, since a computed or numeric entry has
+// no static string key this slice lists.
+func (r *Renderer) jsonReplacerKeys(arr frontend.Node) (ast.Expr, error) {
+	elems := r.prog.Children(arr)
+	items := make([]ast.Expr, 0, len(elems))
+	for _, el := range elems {
+		if el.Kind() != frontend.NodeStringLiteral {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer array of anything but string literals is a later slice"}
+		}
+		key, err := r.stringLiteral(el)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, key)
+	}
+	return &ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "BStr")}, Elts: items}, nil
 }
 
 // objectCall lowers a static call on the global Object namespace. Only keys is
