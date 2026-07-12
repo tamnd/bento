@@ -70,6 +70,27 @@ console.log(c.byteLength);
 	}
 }
 
+// TestSharedArrayBufferViewLoweringShape pins the Go a typed array and a DataView over
+// a SharedArrayBuffer lower to: each view constructor takes the shared buffer's
+// .Buffer(), the underlying run its views alias, so both see the same bytes.
+func TestSharedArrayBufferViewLoweringShape(t *testing.T) {
+	const src = `const sab = new SharedArrayBuffer(8);
+const ta = new Int32Array(sab);
+const dv = new DataView(sab);
+ta[0] = 5;
+console.log(dv.getInt32(0, true));
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.Int32ArrayView(sab.Buffer(), 0)",
+		"value.NewDataView(sab.Buffer(), 0)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("SharedArrayBuffer view lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
 // TestSharedArrayBufferHandsBackUnsupportedForms proves the SharedArrayBuffer lowering
 // claims the forms it covers and hands the rest back. A byte length that is not a
 // number, and a grow length that is not a number, both hand back rather than emitting
