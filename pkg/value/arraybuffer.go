@@ -78,6 +78,24 @@ func (b *ArrayBuffer) Resize(newLength float64) {
 	b.data = next
 }
 
+// MaxByteLength is the largest byte length the buffer may hold, the .maxByteLength
+// accessor. A resizable buffer reports the maximum it was built with; a fixed-length
+// one reports its current length, the value the spec's getter returns when the buffer
+// is not resizable. A detached buffer reports zero.
+func (b *ArrayBuffer) MaxByteLength() float64 {
+	if b.detached {
+		return 0
+	}
+	if b.resizable {
+		return float64(b.maxByteLength)
+	}
+	return float64(len(b.data))
+}
+
+// Resizable reports whether the buffer may be resized, the .resizable accessor, true
+// only for a buffer built with a maxByteLength.
+func (b *ArrayBuffer) Resizable() bool { return b.resizable }
+
 // ByteLength is the buffer's size in bytes, a Number to match the type the checker
 // gives the .byteLength property and to compose with the numeric path with no
 // conversion at the use site.
