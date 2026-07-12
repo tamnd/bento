@@ -49,6 +49,25 @@ console.log(b.byteLength);
 	}
 }
 
+// TestArrayBufferResizableGetterShape pins the Go the resizable-geometry reads lower
+// to: maxByteLength is a MaxByteLength call and resizable is a Resizable call, both on
+// the buffer, the same accessor-to-method shape byteLength and detached take.
+func TestArrayBufferResizableGetterShape(t *testing.T) {
+	const src = `const b = new ArrayBuffer(8, { maxByteLength: 16 });
+console.log(b.maxByteLength);
+console.log(b.resizable);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"b.MaxByteLength()",
+		"b.Resizable()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("resizable ArrayBuffer getter lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
 // TestArrayBufferHandsBackUnsupportedForms proves the ArrayBuffer lowering claims the
 // forms it covers and hands the rest back. A byte length that is not a number, and a
 // second argument that is not an object literal carrying maxByteLength, both hand back

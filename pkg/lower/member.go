@@ -303,6 +303,20 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Detached")}}, nil
 	}
+	// buffer.maxByteLength and buffer.resizable report the resizable geometry a
+	// buffer built with a maxByteLength option carries (25 §25.1.6). Like byteLength
+	// and detached they are accessors in the source but methods on value.ArrayBuffer,
+	// so they lower to MaxByteLength and Resizable calls, and route before the
+	// struct-field path. A fixed-length buffer reads resizable false and its current
+	// length as the maximum, the fallback the runtime getters apply.
+	if (prop == "maxByteLength" || prop == "resizable") && r.isArrayBuffer(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		method := map[string]string{"maxByteLength": "MaxByteLength", "resizable": "Resizable"}[prop]
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)
