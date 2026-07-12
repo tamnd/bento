@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PlainDate is bento's runtime representation of a Temporal.PlainDate (Temporal
@@ -1315,3 +1316,272 @@ func zeroPad(n, width int) string {
 	}
 	return s
 }
+
+// nsPerSecond is the third divisor the exact-time math leans on, alongside nsPerDay and
+// nsPerMilli: it splits an epoch-nanosecond count into whole seconds and a sub-second
+// remainder for the offset lookup, which the standard library keys on Unix seconds.
+var nsPerSecond = big.NewInt(1_000_000_000)
+
+// ZonedDateTime is bento's runtime representation of a Temporal.ZonedDateTime (Temporal
+// §7): an exact point on the time line, the same nanosecond count an Instant holds, paired
+// with a time zone that gives the count a wall-clock reading and a calendar. Like the plain
+// types this slice hosts only the ISO 8601 calendar; a non-ISO calendar hands back at
+// lowering, so calendarId always reports iso8601.
+//
+// The three fields are the epoch-nanosecond count, the resolved standard-library location
+// the offset lookup runs against, and the canonical time-zone identifier the getters and
+// toString report. The wall-clock getters do not cache a second copy of the date and time:
+// each derives the local reading by adding the zone's offset at this instant to the count
+// and splitting the result, so a getter always reflects the offset in force at its own
+// instant, which is what makes a reading across a daylight-saving transition come out right.
+type ZonedDateTime struct {
+	ns   *big.Int       // epoch nanoseconds, in [nsMinInstant, nsMaxInstant]
+	loc  *time.Location // resolved zone the offset lookup runs against
+	tzID BStr           // canonical time-zone identifier, reported by timeZoneId and toString
+}
+
+// resolveTimeZone turns a Temporal time-zone identifier into a standard-library location and
+// its canonical spelling, throwing a RangeError the way ToTemporalTimeZoneIdentifier does
+// when the identifier is neither UTC, a numeric offset, nor a named IANA zone the host knows.
+// UTC is answered directly, a numeric offset becomes a fixed zone, and any other identifier
+// is looked up in the IANA database.
+func resolveTimeZone(id string) (*time.Location, string) {
+	if id == "UTC" {
+		return time.UTC, "UTC"
+	}
+	if loc, canon, ok := parseOffsetZone(id); ok {
+		return loc, canon
+	}
+	loc, err := time.LoadLocation(id)
+	if err != nil {
+		Throw(NewRangeError(FromGoString("Temporal.ZonedDateTime time zone " + id + " is not recognized")))
+	}
+	return loc, id
+}
+
+// parseOffsetZone reads a numeric UTC-offset identifier, one of ±HH, ±HHMM, ±HH:MM, or
+// ±HH:MM:SS, into a fixed zone and its canonical ±HH:MM[:SS] spelling. It reports false for
+// anything that is not a well-formed offset, so resolveTimeZone falls through to the named
+// lookup.
+func parseOffsetZone(id string) (*time.Location, string, bool) {
+	if len(id) < 3 || (id[0] != '+' && id[0] != '-') {
+		return nil, "", false
+	}
+	sign := 1
+	if id[0] == '-' {
+		sign = -1
+	}
+	digits := strings.ReplaceAll(id[1:], ":", "")
+	if len(digits) != 2 && len(digits) != 4 && len(digits) != 6 {
+		return nil, "", false
+	}
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			return nil, "", false
+		}
+	}
+	hour, _ := strconv.Atoi(digits[0:2])
+	minute, second := 0, 0
+	if len(digits) >= 4 {
+		minute, _ = strconv.Atoi(digits[2:4])
+	}
+	if len(digits) == 6 {
+		second, _ = strconv.Atoi(digits[4:6])
+	}
+	if hour > 23 || minute > 59 || second > 59 {
+		return nil, "", false
+	}
+	total := sign * (hour*3600 + minute*60 + second)
+	canon := formatOffset(total)
+	return time.FixedZone(canon, total), canon, true
+}
+
+// formatOffset renders a signed offset in seconds as the ±HH:MM spelling, extended to
+// ±HH:MM:SS only when the offset carries a sub-minute part, the shape Temporal's offset
+// getter and toString both use.
+func formatOffset(seconds int) string {
+	sign := "+"
+	if seconds < 0 {
+		sign = "-"
+		seconds = -seconds
+	}
+	hour := seconds / 3600
+	minute := seconds / 60 % 60
+	second := seconds % 60
+	s := sign + twoDigit(hour) + ":" + twoDigit(minute)
+	if second != 0 {
+		s += ":" + twoDigit(second)
+	}
+	return s
+}
+
+// newZonedDateTime validates a nanosecond count, resolves the time zone, and stores a copy
+// of the count, the shared body of the constructor and the epoch factories. The count is
+// validated before the zone is resolved, the order the specification's constructor follows.
+func newZonedDateTime(ns *big.Int, tzID string) *ZonedDateTime {
+	validateEpochNanoseconds(ns)
+	loc, canon := resolveTimeZone(tzID)
+	return &ZonedDateTime{ns: new(big.Int).Set(ns), loc: loc, tzID: FromGoString(canon)}
+}
+
+// NewZonedDateTime builds a ZonedDateTime from the constructor's bigint epoch count and
+// time-zone identifier, running IsValidEpochNanoseconds and then ToTemporalTimeZoneIdentifier
+// the way new Temporal.ZonedDateTime(ns, tz) does. The optional calendar argument is not
+// accepted here; a non-ISO calendar hands back at lowering.
+func NewZonedDateTime(epochNanoseconds *big.Int, timeZone BStr) *ZonedDateTime {
+	return newZonedDateTime(epochNanoseconds, timeZone.ToGoString())
+}
+
+// ZonedDateTimeFrom implements Temporal.ZonedDateTime.from for a ZonedDateTime argument: it
+// returns a fresh ZonedDateTime with the same count, zone, and calendar, the copy the
+// specification makes. from over a string or a property bag needs the parser and the option
+// handling and hands back at lowering, so this body is only reached with a ZonedDateTime.
+func ZonedDateTimeFrom(z *ZonedDateTime) *ZonedDateTime {
+	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID}
+}
+
+// offsetSeconds returns the zone's UTC offset in seconds at this instant. The count splits
+// into Unix seconds and a sub-second remainder by Euclidean division, so a negative count
+// keys the standard-library lookup on the correct earlier second, and the location reports
+// the offset in force there, daylight-saving transitions included.
+func (z *ZonedDateTime) offsetSeconds() int {
+	sec := new(big.Int)
+	nsec := new(big.Int)
+	sec.DivMod(z.ns, nsPerSecond, nsec)
+	_, off := time.Unix(sec.Int64(), nsec.Int64()).In(z.loc).Zone()
+	return off
+}
+
+// localDateTime builds the wall-clock reading this instant has in its zone: the offset at the
+// instant is added to the count and the sum is split into an ISO date and a time of day. The
+// fields are placed directly rather than run through NewPlainDateTime, since the sum is
+// already a valid reading and the constructor's range check would reject the boundary
+// instants the offset legitimately pushes a day past the plain-type limits.
+func (z *ZonedDateTime) localDateTime() *PlainDateTime {
+	local := new(big.Int).Add(z.ns, big.NewInt(int64(z.offsetSeconds())*1_000_000_000))
+	q := new(big.Int)
+	m := new(big.Int)
+	q.DivMod(local, nsPerDay, m)
+	year, month, day := epochDaysToISO(int(q.Int64()))
+	rem := m.Int64()
+	hour := int(rem / 3_600_000_000_000)
+	rem %= 3_600_000_000_000
+	minute := int(rem / 60_000_000_000)
+	rem %= 60_000_000_000
+	second := int(rem / 1_000_000_000)
+	frac := rem % 1_000_000_000
+	return &PlainDateTime{
+		date: PlainDate{year: year, month: month, day: day},
+		time: PlainTime{
+			hour:        hour,
+			minute:      minute,
+			second:      second,
+			millisecond: int(frac / 1_000_000),
+			microsecond: int(frac / 1_000 % 1_000),
+			nanosecond:  int(frac % 1_000),
+		},
+	}
+}
+
+// The exact-time getters read the instant directly, independent of the zone.
+
+// EpochNanoseconds returns a fresh copy of the count, so a caller holds a bigint independent
+// of the ZonedDateTime's field.
+func (z *ZonedDateTime) EpochNanoseconds() *big.Int { return new(big.Int).Set(z.ns) }
+
+// EpochMilliseconds returns the count floored to whole milliseconds, the same Euclidean
+// division Instant uses.
+func (z *ZonedDateTime) EpochMilliseconds() float64 {
+	q := new(big.Int).Div(z.ns, nsPerMilli)
+	return float64(q.Int64())
+}
+
+// TimeZoneId reports the canonical time-zone identifier.
+func (z *ZonedDateTime) TimeZoneId() BStr { return z.tzID }
+
+// CalendarId reports iso8601, the only calendar this slice hosts.
+func (z *ZonedDateTime) CalendarId() BStr { return FromGoString("iso8601") }
+
+// OffsetNanoseconds reports the zone's UTC offset at this instant in nanoseconds. The offset
+// stays within ±14 hours, so the nanosecond product is exact in a float64.
+func (z *ZonedDateTime) OffsetNanoseconds() float64 {
+	return float64(int64(z.offsetSeconds()) * 1_000_000_000)
+}
+
+// Offset reports the zone's UTC offset at this instant in the ±HH:MM[:SS] spelling.
+func (z *ZonedDateTime) Offset() BStr { return FromGoString(formatOffset(z.offsetSeconds())) }
+
+// The wall-clock getters delegate to the local reading, which resolves the offset at this
+// instant and splits the adjusted count into an ISO date and time.
+
+func (z *ZonedDateTime) Year() float64        { return z.localDateTime().Year() }
+func (z *ZonedDateTime) Month() float64       { return z.localDateTime().Month() }
+func (z *ZonedDateTime) Day() float64         { return z.localDateTime().Day() }
+func (z *ZonedDateTime) Hour() float64        { return z.localDateTime().Hour() }
+func (z *ZonedDateTime) Minute() float64      { return z.localDateTime().Minute() }
+func (z *ZonedDateTime) Second() float64      { return z.localDateTime().Second() }
+func (z *ZonedDateTime) Millisecond() float64 { return z.localDateTime().Millisecond() }
+func (z *ZonedDateTime) Microsecond() float64 { return z.localDateTime().Microsecond() }
+func (z *ZonedDateTime) Nanosecond() float64  { return z.localDateTime().Nanosecond() }
+func (z *ZonedDateTime) MonthCode() BStr      { return z.localDateTime().MonthCode() }
+func (z *ZonedDateTime) DayOfWeek() float64   { return z.localDateTime().DayOfWeek() }
+func (z *ZonedDateTime) DayOfYear() float64   { return z.localDateTime().DayOfYear() }
+func (z *ZonedDateTime) DaysInWeek() float64  { return z.localDateTime().DaysInWeek() }
+func (z *ZonedDateTime) DaysInMonth() float64 { return z.localDateTime().DaysInMonth() }
+func (z *ZonedDateTime) DaysInYear() float64  { return z.localDateTime().DaysInYear() }
+func (z *ZonedDateTime) MonthsInYear() float64 {
+	return z.localDateTime().MonthsInYear()
+}
+func (z *ZonedDateTime) InLeapYear() bool         { return z.localDateTime().InLeapYear() }
+func (z *ZonedDateTime) Era() Opt[BStr]           { return z.localDateTime().Era() }
+func (z *ZonedDateTime) EraYear() Opt[float64]    { return z.localDateTime().EraYear() }
+func (z *ZonedDateTime) WeekOfYear() Opt[float64] { return z.localDateTime().WeekOfYear() }
+func (z *ZonedDateTime) YearOfWeek() Opt[float64] { return z.localDateTime().YearOfWeek() }
+
+// ToInstant implements Temporal.ZonedDateTime.prototype.toInstant: the exact time with the
+// zone dropped, the same nanosecond count as an Instant.
+func (z *ZonedDateTime) ToInstant() *Instant { return newInstant(z.ns) }
+
+// ToPlainDateTime implements Temporal.ZonedDateTime.prototype.toPlainDateTime: the wall-clock
+// reading with the zone dropped.
+func (z *ZonedDateTime) ToPlainDateTime() *PlainDateTime { return z.localDateTime() }
+
+// ToPlainDate implements Temporal.ZonedDateTime.prototype.toPlainDate: the calendar date of
+// the wall-clock reading.
+func (z *ZonedDateTime) ToPlainDate() *PlainDate {
+	d := z.localDateTime().date
+	return &d
+}
+
+// ToPlainTime implements Temporal.ZonedDateTime.prototype.toPlainTime: the time of day of the
+// wall-clock reading.
+func (z *ZonedDateTime) ToPlainTime() *PlainTime {
+	t := z.localDateTime().time
+	return &t
+}
+
+// Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two
+// zoned date-times are equal when they name the same instant in the same zone under the same
+// calendar. The calendar is iso8601 on both, so the check is the count and the canonical zone
+// identifier.
+func (z *ZonedDateTime) Equals(other *ZonedDateTime) bool {
+	return z.ns.Cmp(other.ns) == 0 && z.tzID.ToGoString() == other.tzID.ToGoString()
+}
+
+// ZonedDateTimeCompare implements Temporal.ZonedDateTime.compare: -1, 0, or 1 as the first
+// instant is before, at, or after the second. The comparison is on the exact time only; the
+// zone and calendar do not enter it.
+func ZonedDateTimeCompare(a, b *ZonedDateTime) float64 { return float64(a.ns.Cmp(b.ns)) }
+
+// ToString implements Temporal.ZonedDateTime.prototype.toString under the default options:
+// the local ISO 8601 date-time, the UTC offset at this instant, and the time-zone identifier
+// in brackets, the round-trippable form.
+func (z *ZonedDateTime) ToString() BStr {
+	dt := z.localDateTime()
+	return FromGoString(dt.date.isoString() + "T" + dt.time.isoString() +
+		formatOffset(z.offsetSeconds()) + "[" + z.tzID.ToGoString() + "]")
+}
+
+// ToJSON implements Temporal.ZonedDateTime.prototype.toJSON, the same string toString
+// produces under default options.
+func (z *ZonedDateTime) ToJSON() BStr { return z.ToString() }

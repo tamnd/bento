@@ -1076,3 +1076,195 @@ func TestInstantRangeThrows(t *testing.T) {
 		t.Errorf("fromEpochMilliseconds(1.5) did not throw")
 	}
 }
+
+// zdtThrows reports whether NewZonedDateTime throws for the count and zone.
+func zdtThrows(ns *big.Int, tz string) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewZonedDateTime(ns, FromGoString(tz))
+	return false
+}
+
+// TestZonedDateTimeExactTime checks the exact-time getters, which read the instant with the
+// zone dropped, against @js-temporal/polyfill.
+func TestZonedDateTimeExactTime(t *testing.T) {
+	z := NewZonedDateTime(bigInt(t, "1000000000"), FromGoString("UTC"))
+	if got := z.EpochNanoseconds(); got.Cmp(bigInt(t, "1000000000")) != 0 {
+		t.Errorf("EpochNanoseconds = %s, want 1000000000", got)
+	}
+	if got := z.EpochMilliseconds(); got != 1000 {
+		t.Errorf("EpochMilliseconds = %v, want 1000", got)
+	}
+	if got := z.TimeZoneId().ToGoString(); got != "UTC" {
+		t.Errorf("TimeZoneId = %q, want UTC", got)
+	}
+	if got := z.CalendarId().ToGoString(); got != "iso8601" {
+		t.Errorf("CalendarId = %q, want iso8601", got)
+	}
+	if got := z.ToInstant().ToString().ToGoString(); got != "1970-01-01T00:00:01Z" {
+		t.Errorf("ToInstant = %q, want 1970-01-01T00:00:01Z", got)
+	}
+}
+
+// TestZonedDateTimeLocalFields checks the wall-clock getters and the offset, in UTC, in a
+// fixed offset zone, and in a named zone across a daylight-saving boundary, against
+// @js-temporal/polyfill.
+func TestZonedDateTimeLocalFields(t *testing.T) {
+	// New York on the epoch is winter, five hours behind UTC.
+	ny := NewZonedDateTime(bigInt(t, "0"), FromGoString("America/New_York"))
+	if got := ny.Year(); got != 1969 {
+		t.Errorf("NY0 Year = %v, want 1969", got)
+	}
+	if got := ny.Month(); got != 12 {
+		t.Errorf("NY0 Month = %v, want 12", got)
+	}
+	if got := ny.Day(); got != 31 {
+		t.Errorf("NY0 Day = %v, want 31", got)
+	}
+	if got := ny.Hour(); got != 19 {
+		t.Errorf("NY0 Hour = %v, want 19", got)
+	}
+	if got := ny.OffsetNanoseconds(); got != -18000000000000 {
+		t.Errorf("NY0 OffsetNanoseconds = %v, want -18000000000000", got)
+	}
+	if got := ny.Offset().ToGoString(); got != "-05:00" {
+		t.Errorf("NY0 Offset = %q, want -05:00", got)
+	}
+
+	// The same zone in July is summer, four hours behind: the offset follows the transition.
+	summer := NewZonedDateTime(bigInt(t, "1719792000000000000"), FromGoString("America/New_York"))
+	if got := summer.Year(); got != 2024 {
+		t.Errorf("summer Year = %v, want 2024", got)
+	}
+	if got := summer.Hour(); got != 20 {
+		t.Errorf("summer Hour = %v, want 20", got)
+	}
+	if got := summer.DayOfWeek(); got != 7 {
+		t.Errorf("summer DayOfWeek = %v, want 7", got)
+	}
+	if got := summer.DayOfYear(); got != 182 {
+		t.Errorf("summer DayOfYear = %v, want 182", got)
+	}
+	if w := summer.WeekOfYear(); w.IsUndefined() || w.Get() != 26 {
+		t.Errorf("summer WeekOfYear = %v (undefined %v), want 26", w.Get(), w.IsUndefined())
+	}
+	if got := summer.InLeapYear(); !got {
+		t.Errorf("summer InLeapYear = %v, want true", got)
+	}
+	if got := summer.MonthCode().ToGoString(); got != "M06" {
+		t.Errorf("summer MonthCode = %q, want M06", got)
+	}
+	if got := summer.Offset().ToGoString(); got != "-04:00" {
+		t.Errorf("summer Offset = %q, want -04:00", got)
+	}
+
+	// A fixed numeric offset shifts the wall clock by a constant.
+	off := NewZonedDateTime(bigInt(t, "0"), FromGoString("+05:30"))
+	if got := off.Hour(); got != 5 {
+		t.Errorf("off Hour = %v, want 5", got)
+	}
+	if got := off.Minute(); got != 30 {
+		t.Errorf("off Minute = %v, want 30", got)
+	}
+	if got := off.OffsetNanoseconds(); got != 19800000000000 {
+		t.Errorf("off OffsetNanoseconds = %v, want 19800000000000", got)
+	}
+	if got := off.TimeZoneId().ToGoString(); got != "+05:30" {
+		t.Errorf("off TimeZoneId = %q, want +05:30", got)
+	}
+}
+
+// TestZonedDateTimeToString checks the round-trippable rendering, the local ISO date-time
+// with the offset and the bracketed zone, against @js-temporal/polyfill.
+func TestZonedDateTimeToString(t *testing.T) {
+	cases := []struct {
+		ns   string
+		tz   string
+		want string
+	}{
+		{"0", "UTC", "1970-01-01T00:00:00+00:00[UTC]"},
+		{"1000000000", "UTC", "1970-01-01T00:00:01+00:00[UTC]"},
+		{"-1", "UTC", "1969-12-31T23:59:59.999999999+00:00[UTC]"},
+		{"0", "America/New_York", "1969-12-31T19:00:00-05:00[America/New_York]"},
+		{"1719792000000000000", "America/New_York", "2024-06-30T20:00:00-04:00[America/New_York]"},
+		{"0", "+05:30", "1970-01-01T05:30:00+05:30[+05:30]"},
+	}
+	for _, c := range cases {
+		z := NewZonedDateTime(bigInt(t, c.ns), FromGoString(c.tz))
+		if got := z.ToString().ToGoString(); got != c.want {
+			t.Errorf("ZonedDateTime(%s, %s).ToString() = %q, want %q", c.ns, c.tz, got, c.want)
+		}
+		if got := z.ToJSON().ToGoString(); got != c.want {
+			t.Errorf("ZonedDateTime(%s, %s).ToJSON() = %q, want %q", c.ns, c.tz, got, c.want)
+		}
+	}
+}
+
+// TestZonedDateTimeCompareEquals checks the ordering static and the equals method, which
+// also weighs the zone identifier.
+func TestZonedDateTimeCompareEquals(t *testing.T) {
+	a := NewZonedDateTime(bigInt(t, "0"), FromGoString("UTC"))
+	b := NewZonedDateTime(bigInt(t, "1000000000"), FromGoString("UTC"))
+	c := NewZonedDateTime(bigInt(t, "0"), FromGoString("America/New_York"))
+	if got := ZonedDateTimeCompare(a, b); got != -1 {
+		t.Errorf("compare(a, b) = %v, want -1", got)
+	}
+	if got := ZonedDateTimeCompare(b, a); got != 1 {
+		t.Errorf("compare(b, a) = %v, want 1", got)
+	}
+	if !a.Equals(NewZonedDateTime(bigInt(t, "0"), FromGoString("UTC"))) {
+		t.Errorf("a.equals(same) = false, want true")
+	}
+	if a.Equals(b) {
+		t.Errorf("a.equals(b) = true, want false")
+	}
+	if a.Equals(c) {
+		t.Errorf("a.equals(c) = true, want false: same instant, different zone")
+	}
+}
+
+// TestZonedDateTimeConversions checks toPlainDate, toPlainTime, and toPlainDateTime carry
+// the wall-clock reading.
+func TestZonedDateTimeConversions(t *testing.T) {
+	z := NewZonedDateTime(bigInt(t, "1719792000000000000"), FromGoString("America/New_York"))
+	if got := z.ToPlainDateTime().ToString().ToGoString(); got != "2024-06-30T20:00:00" {
+		t.Errorf("ToPlainDateTime = %q, want 2024-06-30T20:00:00", got)
+	}
+	if got := z.ToPlainDate().ToString().ToGoString(); got != "2024-06-30" {
+		t.Errorf("ToPlainDate = %q, want 2024-06-30", got)
+	}
+	if got := z.ToPlainTime().ToString().ToGoString(); got != "20:00:00" {
+		t.Errorf("ToPlainTime = %q, want 20:00:00", got)
+	}
+}
+
+// TestZonedDateTimeFromCopies checks from over a ZonedDateTime returns an independent copy.
+func TestZonedDateTimeFromCopies(t *testing.T) {
+	a := NewZonedDateTime(bigInt(t, "0"), FromGoString("UTC"))
+	b := ZonedDateTimeFrom(a)
+	if !a.Equals(b) {
+		t.Errorf("from copy not equal to original")
+	}
+	if a == b {
+		t.Errorf("from returned the same pointer, want a copy")
+	}
+}
+
+// TestZonedDateTimeRejects checks the range guard and the unknown-zone guard both throw a
+// RangeError.
+func TestZonedDateTimeRejects(t *testing.T) {
+	if !zdtThrows(bigInt(t, "8640000000000000000001"), "UTC") {
+		t.Errorf("out-of-range count did not throw")
+	}
+	if !zdtThrows(bigInt(t, "0"), "Mars/Olympus_Mons") {
+		t.Errorf("unknown zone did not throw")
+	}
+	if !zdtThrows(bigInt(t, "0"), "+99:00") {
+		t.Errorf("out-of-range offset did not throw")
+	}
+}
