@@ -1,0 +1,11 @@
+== stdout:
+Infinity
+-Infinity
+true
+true
+true
+true
+true
+NaN
+== exit:
+0

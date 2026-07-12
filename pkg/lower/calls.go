@@ -1981,15 +1981,16 @@ func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
 // unchanged. Any other method on a primitive receiver is a later slice.
 func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	// number.toString(radix) is the one primitive method with an argument this
-	// slice covers. The radix must be a literal in 2..36 so no RangeError can fire
-	// (a bad radix throws, which waits on the exception machinery, and a dynamic
-	// radix cannot be range-checked at compile time). A radix of 10 is the same
-	// coercion String(x) runs, so it routes through stringify; any other radix
-	// lowers to value.NumberToStringRadix with the literal folded in.
+	// slice covers. A literal radix in 2..36 lowers straight to
+	// value.NumberToStringRadix with the literal folded in, and radix 10 is the same
+	// coercion String(x) runs so it routes through stringify. A radix the compiler
+	// cannot prove is in range, a non-literal or a literal outside 2..36, lowers to
+	// value.NumberToStringRadixDynamic, which applies ToInteger, throws the
+	// RangeError a bad radix raises, and renders the same way.
 	if method == "toString" && len(argNodes) == 1 && r.isNumber(recvNode) {
 		radix, ok := r.literalIntArg(argNodes[0], 2, 36)
 		if !ok {
-			return nil, &NotYetLowerable{Reason: "number toString with a non-literal or out-of-range radix is a later slice"}
+			return r.numberFormatDynamic("NumberToStringRadixDynamic", recvNode, argNodes[0])
 		}
 		if radix == 10 {
 			return r.stringify(recvNode)
@@ -2004,20 +2005,21 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(radix)}},
 		}, nil
 	}
-	// number.toFixed(digits) formats with a fixed number of fraction digits. The
-	// digit count must be a literal in 0..100 for the same reason the radix must:
-	// a count outside that range throws a RangeError, and a dynamic count cannot be
-	// range-checked at compile time. An omitted count means zero. It lowers to
-	// value.NumberToFixed, which rounds the exact double the way the specification
-	// does.
+	// number.toFixed(digits) formats with a fixed number of fraction digits. A
+	// literal count in 0..100 lowers straight to value.NumberToFixed, which rounds
+	// the exact double the way the specification does. An omitted count means zero.
+	// A count the compiler cannot prove is in range, a non-literal or a literal
+	// outside 0..100, lowers to value.NumberToFixedDynamic, which applies ToInteger,
+	// throws the RangeError on an out-of-range result, and formats the same way.
 	if method == "toFixed" && len(argNodes) <= 1 && r.isNumber(recvNode) {
+		if len(argNodes) == 1 {
+			if _, ok := r.literalIntArg(argNodes[0], 0, 100); !ok {
+				return r.numberFormatDynamic("NumberToFixedDynamic", recvNode, argNodes[0])
+			}
+		}
 		digits := 0
 		if len(argNodes) == 1 {
-			d, ok := r.literalIntArg(argNodes[0], 0, 100)
-			if !ok {
-				return nil, &NotYetLowerable{Reason: "number toFixed with a non-literal or out-of-range digit count is a later slice"}
-			}
-			digits = d
+			digits, _ = r.literalIntArg(argNodes[0], 0, 100)
 		}
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
@@ -2030,18 +2032,17 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 		}, nil
 	}
 	// number.toExponential(digits) formats in exponential notation with exactly
-	// digits fraction digits. The count must be a literal in 0..100 for the reason
-	// the toFixed count must: a value outside that range throws a RangeError, and a
-	// dynamic count cannot be range-checked at compile time. The omitted-count form
-	// uses as many digits as the value needs, a different rule, so it hands back
-	// rather than defaulting to zero the way toFixed's omitted count does. It lowers
-	// to value.NumberToExponential, which rounds the exact double the way the
-	// specification does.
+	// digits fraction digits. A literal count in 0..100 lowers straight to
+	// value.NumberToExponential. A count the compiler cannot prove is in range, a
+	// non-literal or a literal outside 0..100, lowers to
+	// value.NumberToExponentialDynamic, which range-checks at runtime and throws the
+	// RangeError. The omitted-count form uses as many digits as the value needs, a
+	// different rule, so it still hands back rather than defaulting to zero.
 	if method == "toExponential" && len(argNodes) == 1 && r.isNumber(recvNode) {
-		digits, ok := r.literalIntArg(argNodes[0], 0, 100)
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "number toExponential with a non-literal or out-of-range digit count is a later slice"}
+		if _, ok := r.literalIntArg(argNodes[0], 0, 100); !ok {
+			return r.numberFormatDynamic("NumberToExponentialDynamic", recvNode, argNodes[0])
 		}
+		digits, _ := r.literalIntArg(argNodes[0], 0, 100)
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
@@ -2054,17 +2055,18 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 	}
 	// number.toPrecision(precision) formats with a fixed number of significant
 	// digits, choosing fixed or exponential notation the way the specification does.
-	// The precision must be a literal in 1..100 (not 0..100 like the other two: zero
-	// significant digits is not a valid precision and throws), for the same reason
-	// the others take a literal in range: a value outside throws a RangeError and a
-	// dynamic count cannot be range-checked at compile time. The omitted form is
-	// Number::toString, a different rule, so it hands back rather than defaulting. It
-	// lowers to value.NumberToPrecision, which shares toExponential's exact rounding.
+	// A literal precision in 1..100 (not 0..100 like the other two: zero significant
+	// digits is not a valid precision and throws) lowers straight to
+	// value.NumberToPrecision. A precision the compiler cannot prove is in range, a
+	// non-literal or a literal outside 1..100, lowers to
+	// value.NumberToPrecisionDynamic, which range-checks at runtime and throws the
+	// RangeError. The omitted form is Number::toString, a different rule, so it still
+	// hands back rather than defaulting.
 	if method == "toPrecision" && len(argNodes) == 1 && r.isNumber(recvNode) {
-		precision, ok := r.literalIntArg(argNodes[0], 1, 100)
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "number toPrecision with a non-literal or out-of-range precision is a later slice"}
+		if _, ok := r.literalIntArg(argNodes[0], 1, 100); !ok {
+			return r.numberFormatDynamic("NumberToPrecisionDynamic", recvNode, argNodes[0])
 		}
+		precision, _ := r.literalIntArg(argNodes[0], 1, 100)
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
@@ -2086,6 +2088,33 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 	default:
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " is a later slice"}
 	}
+}
+
+// numberFormatDynamic lowers a number formatter, toFixed, toExponential, or
+// toPrecision, whose digit count the compiler cannot prove is in range: a
+// non-literal count or a literal outside the method's valid range. It emits the
+// named value.*Dynamic runtime, which applies ToInteger to the count, throws the
+// RangeError JavaScript raises for an out-of-range result, and formats the same
+// way as the exact formatter. The count must itself be a number; a count of any
+// other type hands back, since the ToInteger of an arbitrary value is a later
+// slice.
+func (r *Renderer) numberFormatDynamic(fn string, recvNode, countNode frontend.Node) (ast.Expr, error) {
+	if !r.isNumber(countNode) {
+		return nil, &NotYetLowerable{Reason: "number formatter with a non-number digit count is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	count, err := r.lowerExpr(countNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  sel("value", fn),
+		Args: []ast.Expr{recv, count},
+	}, nil
 }
 
 // literalIntArg reads a numeric-literal argument whose ToInteger value lands in
@@ -2720,12 +2749,18 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 }
 
 // numberCoercion lowers Number(x) called as a function over a primitive argument.
-// A string goes through value.StringToNumber (the exact ECMAScript ToNumber over
-// the StrNumericLiteral grammar, not strconv), a boolean through value.BoolToNumber
-// (true is 1, false is 0), and a number is already a float64 so it passes through
-// unchanged. It takes exactly one argument; a different arity, or an argument this
-// slice does not coerce (an object, whose valueOf runs user code), hands back.
+// Number() with no argument is +0, the coercion-edge count the spec fixes: with no
+// value to convert the result is zero, so it lowers to a float64 zero literal, the
+// mirror of String()'s empty-string default. A string goes through
+// value.StringToNumber (the exact ECMAScript ToNumber over the StrNumericLiteral
+// grammar, not strconv), a boolean through value.BoolToNumber (true is 1, false is
+// 0), and a number is already a float64 so it passes through unchanged. Any other
+// arity, or an argument this slice does not coerce (an object, whose valueOf runs
+// user code), hands back.
 func (r *Renderer) numberCoercion(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return &ast.BasicLit{Kind: token.FLOAT, Value: "0"}, nil
+	}
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "Number() with this argument count is a later slice"}
 	}

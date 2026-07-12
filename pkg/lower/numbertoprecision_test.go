@@ -18,12 +18,11 @@ func TestNumberToPrecisionEmits(t *testing.T) {
 	}
 }
 
-// TestNumberToPrecisionHandsBack pins the boundaries: a non-literal precision
-// cannot be range-checked at compile time, a literal zero is below the valid
-// 1..100 range (zero significant digits throws), and the omitted form is
-// Number::toString rather than a default, so all three hand back with named
-// reasons.
-func TestNumberToPrecisionHandsBack(t *testing.T) {
+// TestNumberToPrecisionDynamicEmits pins that a precision the compiler cannot
+// prove is in range lowers to value.NumberToPrecisionDynamic: a non-literal count,
+// and a literal zero that is below the valid 1..100 range so it range-checks and
+// throws at runtime rather than at a compile-time guard.
+func TestNumberToPrecisionDynamicEmits(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
@@ -32,12 +31,37 @@ func TestNumberToPrecisionHandsBack(t *testing.T) {
 		{
 			"dynamicPrecision",
 			"function f(x: number, p: number): string { return x.toPrecision(p); }\nconsole.log(f(1, 3));\n",
-			"non-literal or out-of-range",
+			"value.NumberToPrecisionDynamic(x, p)",
 		},
 		{
 			"zeroPrecision",
 			"function f(x: number): string { return x.toPrecision(0); }\nconsole.log(f(1));\n",
-			"non-literal or out-of-range",
+			"value.NumberToPrecisionDynamic(x, 0)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := renderProgram(t, tc.src)
+			if !strings.Contains(source, tc.want) {
+				t.Errorf("dynamic toPrecision did not emit %q:\n%s", tc.want, source)
+			}
+		})
+	}
+}
+
+// TestNumberToPrecisionHandsBack pins the remaining boundaries: a precision of a
+// non-number type is a ToInteger-of-anything slice, and the omitted form is
+// Number::toString rather than a default, so both hand back with named reasons.
+func TestNumberToPrecisionHandsBack(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"nonNumberPrecision",
+			"function f(x: number, p: string): string { return x.toPrecision(p as any); }\nconsole.log(f(1, \"3\"));\n",
+			"non-number digit count",
 		},
 		{
 			"omittedPrecision",
