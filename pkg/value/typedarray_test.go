@@ -29,6 +29,24 @@ func TestTypedArrayZeroedLength(t *testing.T) {
 	}
 }
 
+// TestTypedArrayViewsABuffer proves a typed array is a view over an ArrayBuffer:
+// its backing buffer is sized to hold the elements, and a write through the view
+// reaches the buffer's own bytes in little-endian order rather than a private copy.
+func TestTypedArrayViewsABuffer(t *testing.T) {
+	a := NewInt32Array(4)
+	if a.buffer == nil {
+		t.Fatal("Int32Array has no backing buffer")
+	}
+	if got := a.buffer.ByteLength(); got != 16 {
+		t.Errorf("Int32Array(4) buffer byte length = %v, want 16", got)
+	}
+	a.SetAt(0, 1)
+	bytes := a.buffer.Bytes()
+	if bytes[0] != 1 || bytes[1] != 0 || bytes[2] != 0 || bytes[3] != 0 {
+		t.Errorf("view write did not reach the buffer bytes little-endian: %v", bytes[:4])
+	}
+}
+
 // TestTypedArrayBadLengthClamps proves a negative or not-a-number length yields an
 // empty array rather than panicking, the same covered-subset rule the byte buffer
 // takes.
