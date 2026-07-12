@@ -336,13 +336,15 @@ func (r *Renderer) newTypedArrayOverBuffer(name string, args []frontend.Node) (a
 }
 
 // newArrayBuffer lowers an ArrayBuffer construction, the raw byte backing store of
-// section 6.2. Only new ArrayBuffer(byteLength) is covered: a single Number argument
-// lowers to value.NewArrayBuffer(n), which allocates a zeroed run of that many
-// bytes. The resizable form new ArrayBuffer(n, { maxByteLength }) is a later slice,
-// so more than one argument hands back, as does a length that is not a number.
+// section 6.2. new ArrayBuffer(byteLength) lowers to value.NewArrayBuffer(n), a zeroed
+// run of that many bytes. The resizable form new ArrayBuffer(n, { maxByteLength: m })
+// lowers to value.NewResizableArrayBuffer(n, m), which records the maximum the buffer
+// may grow to. Either way the byte length must be a Number; the options argument must
+// be an object literal carrying the maxByteLength property, so any other second
+// argument hands back.
 func (r *Renderer) newArrayBuffer(args []frontend.Node) (ast.Expr, error) {
-	if len(args) != 1 {
-		return nil, &NotYetLowerable{Reason: "only new ArrayBuffer(byteLength) is lowered yet"}
+	if len(args) == 0 || len(args) > 2 {
+		return nil, &NotYetLowerable{Reason: "only new ArrayBuffer(byteLength) and new ArrayBuffer(byteLength, { maxByteLength }) are lowered"}
 	}
 	if !r.isNumber(args[0]) {
 		return nil, &NotYetLowerable{Reason: "an ArrayBuffer byte length that is not a number is a later slice"}
@@ -352,7 +354,43 @@ func (r *Renderer) newArrayBuffer(args []frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "NewArrayBuffer"), Args: []ast.Expr{length}}, nil
+	if len(args) == 1 {
+		return &ast.CallExpr{Fun: sel("value", "NewArrayBuffer"), Args: []ast.Expr{length}}, nil
+	}
+	max, err := r.arrayBufferMaxByteLength(args[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewResizableArrayBuffer"), Args: []ast.Expr{length, max}}, nil
+}
+
+// arrayBufferMaxByteLength reads the maxByteLength option from an ArrayBuffer
+// constructor's second argument. The argument must be an object literal whose one
+// member is a plain maxByteLength property with a Number value, the shape a resizable
+// buffer is built with; the value is lowered and returned so the runtime truncates it
+// like ToIndex. A different shape (a spread, a computed key, a non-number value, an
+// unknown or missing key) hands back, since the maximum then depends on runtime data
+// this slice does not thread into the call.
+func (r *Renderer) arrayBufferMaxByteLength(n frontend.Node) (ast.Expr, error) {
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil, &NotYetLowerable{Reason: "ArrayBuffer options that are not an object literal are a later slice"}
+	}
+	members := r.prog.Children(n)
+	if len(members) != 1 {
+		return nil, &NotYetLowerable{Reason: "ArrayBuffer options other than a lone maxByteLength are a later slice"}
+	}
+	member := members[0]
+	if member.Kind() != frontend.NodeUnknown {
+		return nil, &NotYetLowerable{Reason: "an ArrayBuffer option that is not a simple property is a later slice"}
+	}
+	kids := r.prog.Children(member)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier || r.prog.Text(kids[0]) != "maxByteLength" {
+		return nil, &NotYetLowerable{Reason: "an ArrayBuffer option other than maxByteLength is a later slice"}
+	}
+	if !r.isNumber(kids[1]) {
+		return nil, &NotYetLowerable{Reason: "a maxByteLength that is not a number is a later slice"}
+	}
+	return r.lowerExpr(kids[1])
 }
 
 // newMap lowers a Map construction, the keyed collection of section 6.5. Only the

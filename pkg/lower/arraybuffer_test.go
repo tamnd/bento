@@ -30,11 +30,49 @@ console.log(size(b));
 	}
 }
 
-// TestArrayBufferHandsBackUnsupportedForms proves the ArrayBuffer lowering claims
-// only the byte-length constructor and hands the rest back. The resizable form new
-// ArrayBuffer(n, { maxByteLength }) is a later slice, and a byte length that is not
-// a number is a later slice too, so both hand back rather than emitting wrong Go.
+// TestArrayBufferResizableLoweringShape pins the Go the resizable constructor form
+// lowers to: new ArrayBuffer(n, { maxByteLength: m }) is value.NewResizableArrayBuffer
+// with the two lengths, and resize is a Resize call.
+func TestArrayBufferResizableLoweringShape(t *testing.T) {
+	const src = `const b = new ArrayBuffer(8, { maxByteLength: 16 });
+b.resize(12);
+console.log(b.byteLength);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.NewResizableArrayBuffer(8, 16)",
+		"b.Resize(12)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("resizable ArrayBuffer lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestArrayBufferResizableGetterShape pins the Go the resizable-geometry reads lower
+// to: maxByteLength is a MaxByteLength call and resizable is a Resizable call, both on
+// the buffer, the same accessor-to-method shape byteLength and detached take.
+func TestArrayBufferResizableGetterShape(t *testing.T) {
+	const src = `const b = new ArrayBuffer(8, { maxByteLength: 16 });
+console.log(b.maxByteLength);
+console.log(b.resizable);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"b.MaxByteLength()",
+		"b.Resizable()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("resizable ArrayBuffer getter lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestArrayBufferHandsBackUnsupportedForms proves the ArrayBuffer lowering claims the
+// forms it covers and hands the rest back. A byte length that is not a number, and a
+// second argument that is not an object literal carrying maxByteLength, both hand back
+// rather than emitting wrong Go.
 func TestArrayBufferHandsBackUnsupportedForms(t *testing.T) {
-	handsBack(t, "const b = new ArrayBuffer(8, { maxByteLength: 16 }); console.log(b.byteLength);\n")
 	handsBack(t, "const n: any = 8; const b = new ArrayBuffer(n); console.log(b.byteLength);\n")
+	handsBack(t, "const opts: any = { maxByteLength: 16 }; const b = new ArrayBuffer(8, opts); console.log(b.byteLength);\n")
 }

@@ -292,6 +292,31 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ByteLength")}}, nil
 	}
+	// buffer.detached reports whether the buffer has been detached by a transfer or
+	// an explicit detach (25 §25.1.6.3). Like byteLength it is an accessor in the
+	// source but a method on value.ArrayBuffer, so it lowers to a Detached() call, the
+	// boolean the checker gives the property, and routes before the struct-field path.
+	if prop == "detached" && r.isArrayBuffer(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Detached")}}, nil
+	}
+	// buffer.maxByteLength and buffer.resizable report the resizable geometry a
+	// buffer built with a maxByteLength option carries (25 §25.1.6). Like byteLength
+	// and detached they are accessors in the source but methods on value.ArrayBuffer,
+	// so they lower to MaxByteLength and Resizable calls, and route before the
+	// struct-field path. A fixed-length buffer reads resizable false and its current
+	// length as the maximum, the fallback the runtime getters apply.
+	if (prop == "maxByteLength" || prop == "resizable") && r.isArrayBuffer(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		method := map[string]string{"maxByteLength": "MaxByteLength", "resizable": "Resizable"}[prop]
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)

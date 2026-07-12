@@ -16,19 +16,22 @@ import (
 // reads and writes through *big.Int.
 //
 // Like every other family member a BigIntArray is a view, not the storage: it
-// records the ArrayBuffer it reads, the byte offset it starts at, and an element
-// slice that aliases the buffer's bytes at that offset. The data slice is formed
-// with unsafe.Slice over the buffer's bytes, so two views over one buffer observe
+// records the ArrayBuffer it reads, the byte offset it starts at, and its element
+// length. It does not cache an element slice; live forms one with unsafe.Slice over
+// the buffer's current bytes on each access, so two views over one buffer observe
 // each other's writes, and because both bigint elements are eight bytes wide a
 // bigint view aliases a Float64Array view of the same buffer byte for byte. The
-// store and load functions carry the per-kind truncation and widening so the
-// generic core stays one type.
+// length is consulted against the buffer's live state through liveLen, the same
+// clamp the numeric family takes, so a view over a detached buffer reads as
+// zero-length. The store and load functions carry the per-kind truncation and
+// widening so the generic core stays one type.
 type BigIntArray[T bigArrayElem] struct {
-	buffer     *ArrayBuffer
-	byteOffset int
-	data       []T
-	store      func(*big.Int) T
-	load       func(T) *big.Int
+	buffer         *ArrayBuffer
+	byteOffset     int
+	length         int
+	lengthTracking bool
+	store          func(*big.Int) T
+	load           func(T) *big.Int
 }
 
 // bigArrayElem is the set of Go element types a bigint typed array stores: the two
@@ -57,10 +60,38 @@ func newBigIntArrayView[T bigArrayElem](buf *ArrayBuffer, byteOffset, length int
 	return &BigIntArray[T]{
 		buffer:     buf,
 		byteOffset: byteOffset,
-		data:       bigViewSlice[T](buf, byteOffset, length),
+		length:     length,
 		store:      store,
 		load:       load,
 	}
+}
+
+// liveLen is the view's element count as of this access, clamped against the
+// buffer's current byte length so a view over a detached buffer, or once resizable
+// buffers land a shrunk one, reports zero, the bigint sibling of the numeric
+// family's liveLen. A bigint element is eight bytes wide.
+func (a *BigIntArray[T]) liveLen() int {
+	avail := len(a.buffer.data) - a.byteOffset
+	if avail < 0 {
+		return 0
+	}
+	// A length-tracking view over a resizable buffer spans from its offset to the
+	// buffer's current end, so a resize changes the element count it reports; a bigint
+	// element is eight bytes, so the count is the available bytes divided by eight.
+	if a.lengthTracking {
+		return avail / 8
+	}
+	if avail < a.length*8 {
+		return 0
+	}
+	return a.length
+}
+
+// live forms the element slice this view reads right now, an unsafe alias over the
+// buffer's current bytes for liveLen elements, recomputed on each access so a
+// detach or a resize shows through immediately.
+func (a *BigIntArray[T]) live() []T {
+	return bigViewSlice[T](a.buffer, a.byteOffset, a.liveLen())
 }
 
 // bigIntArrayOf builds a bigint typed array from a list of bigints with the store
@@ -69,8 +100,9 @@ func newBigIntArrayView[T bigArrayElem](buf *ArrayBuffer, byteOffset, length int
 // exactly as an assignment into an element would, so the array owns its storage.
 func bigIntArrayOf[T bigArrayElem](store func(*big.Int) T, load func(T) *big.Int, elems ...*big.Int) *BigIntArray[T] {
 	a := newBigIntArray(float64(len(elems)), store, load)
+	d := a.live()
 	for i, e := range elems {
-		a.data[i] = store(e)
+		d[i] = store(e)
 	}
 	return a
 }
@@ -98,7 +130,13 @@ func bigIntArrayView[T bigArrayElem](buf *ArrayBuffer, store func(*big.Int) T, l
 	if max := (len(buf.data) - off) / elem; n > max {
 		n = max
 	}
-	return newBigIntArrayView(buf, off, n, store, load)
+	v := newBigIntArrayView(buf, off, n, store, load)
+	// A view with no explicit length over a resizable buffer tracks the buffer's
+	// length, following a later resize rather than staying pinned at the count here.
+	if len(length) == 0 && buf.resizable {
+		v.lengthTracking = true
+	}
+	return v
 }
 
 // bigViewSlice forms the element slice a bigint typed array reads, an unsafe alias
@@ -116,7 +154,7 @@ func bigViewSlice[T bigArrayElem](buf *ArrayBuffer, byteOffset, length int) []T 
 
 // Len is the array's length in elements, a Number to match the type the checker
 // gives .length and to compose with the numeric path with no conversion.
-func (a *BigIntArray[T]) Len() float64 { return float64(len(a.data)) }
+func (a *BigIntArray[T]) Len() float64 { return float64(a.liveLen()) }
 
 // Buffer is the ArrayBuffer the view aliases, the .buffer getter, the same backing
 // store every other view of the buffer holds.
@@ -128,7 +166,7 @@ func (a *BigIntArray[T]) ByteOffset() float64 { return float64(a.byteOffset) }
 
 // ByteLength is the view's span in bytes, the .byteLength getter: the element count
 // times eight, the run of buffer bytes the view aliases.
-func (a *BigIntArray[T]) ByteLength() float64 { return float64(len(a.data) * 8) }
+func (a *BigIntArray[T]) ByteLength() float64 { return float64(a.liveLen() * 8) }
 
 // BytesPerElement is the element width in bytes, the instance BYTES_PER_ELEMENT
 // property, eight for a bigint element. It is a method so a read keeps the receiver
@@ -142,8 +180,9 @@ func (a *BigIntArray[T]) BytesPerElement() float64 { return 8 }
 // since At's result is a *big.Int. A read that flows into a dynamic slot takes
 // GetIndex instead, which does answer undefined for those indices.
 func (a *BigIntArray[T]) At(i float64) *big.Int {
-	if idx, ok := typedElemIndex(i, len(a.data)); ok {
-		return a.load(a.data[idx])
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		return a.load(d[idx])
 	}
 	return new(big.Int)
 }
@@ -154,8 +193,9 @@ func (a *BigIntArray[T]) At(i float64) *big.Int {
 // canonical integer index inside the array names an element; a write to an
 // out-of-range or non-canonical index is dropped, the no-op the spec requires.
 func (a *BigIntArray[T]) SetAt(i float64, v *big.Int) {
-	if idx, ok := typedElemIndex(i, len(a.data)); ok {
-		a.data[idx] = a.store(v)
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		d[idx] = a.store(v)
 	}
 }
 
@@ -165,9 +205,10 @@ func (a *BigIntArray[T]) SetAt(i float64, v *big.Int) {
 // out-of-range or non-canonical one, so a[100] and a[1.5] read as undefined the way
 // the spec requires, which the *big.Int At cannot express.
 func (a *BigIntArray[T]) GetIndex(i float64) Value {
-	if idx, ok := typedElemIndex(i, len(a.data)); ok {
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
 		b := &BigInt{}
-		b.i.Set(a.load(a.data[idx]))
+		b.i.Set(a.load(d[idx]))
 		return BigIntValue(b)
 	}
 	return Undefined
