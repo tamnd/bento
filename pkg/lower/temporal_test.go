@@ -101,16 +101,6 @@ func TestPlainDateHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "weekOfYear union getter",
-			src:  "const d = new Temporal.PlainDate(2020, 2, 29);\nconsole.log(d.weekOfYear);",
-			want: "Temporal.PlainDate.weekOfYear is a later slice",
-		},
-		{
-			name: "era union getter",
-			src:  "const d = new Temporal.PlainDate(2020, 2, 29);\nconsole.log(d.era);",
-			want: "Temporal.PlainDate.era is a later slice",
-		},
-		{
 			name: "add arithmetic",
 			src:  "const d = new Temporal.PlainDate(2020, 2, 29);\nconst e = d.add({ days: 1 });\nconsole.log(e.day);",
 			want: "Temporal.PlainDate.prototype.add is a later slice",
@@ -475,11 +465,6 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "weekOfYear union getter",
-			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconsole.log(dt.weekOfYear);",
-			want: "Temporal.PlainDateTime.weekOfYear is a later slice",
-		},
-		{
 			name: "add arithmetic",
 			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.add({ hours: 1 });\nconsole.log(e.hour);",
 			want: "Temporal.PlainDateTime.prototype.add is a later slice",
@@ -718,5 +703,47 @@ func TestPlainMonthDayHandBacks(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestPlainDateCalendarFieldsLower pins that the calendar-dependent getters lower to
+// their value.PlainDate methods, the optional era read and the week-date read the
+// dynamic boxing then renders.
+func TestPlainDateCalendarFieldsLower(t *testing.T) {
+	const src = `const d = new Temporal.PlainDate(2021, 1, 1);
+console.log(d.weekOfYear);
+console.log(d.yearOfWeek);
+console.log(d.era);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{".WeekOfYear()", ".YearOfWeek()", ".Era()"} {
+		if !strings.Contains(source, want) {
+			t.Errorf("calendar getter did not lower to %s:\n%s", want, source)
+		}
+	}
+}
+
+// TestPlainDateCalendarFieldsRun builds and runs the generated Go, proving the week
+// date renders across a year boundary, the undefined era prints as undefined, and a
+// narrowed week value reads as a plain number.
+func TestPlainDateCalendarFieldsRun(t *testing.T) {
+	skipIfShort(t)
+	const src = `const d = new Temporal.PlainDate(2021, 1, 1);
+console.log(d.weekOfYear);
+console.log(d.yearOfWeek);
+console.log(d.era);
+console.log(d.eraYear);
+const w = d.weekOfYear;
+if (w !== undefined) {
+  console.log(w + 100);
+}
+const dt = new Temporal.PlainDateTime(2020, 3, 15, 10, 30);
+console.log(dt.weekOfYear);
+console.log(dt.era);
+`
+	got := runProgramGo(t, src)
+	const want = "53\n2020\nundefined\nundefined\n153\n11\nundefined\n"
+	if got != want {
+		t.Fatalf("calendar fields printed %q, want %q", got, want)
 	}
 }

@@ -144,9 +144,11 @@ func (r *Renderer) isPlainMonthDay(n frontend.Node) bool {
 // plainDateAccessor maps a PlainDate field getter to the value.PlainDate method that
 // reads it, or reports ok=false for a name this slice does not host. The clean ISO
 // getters (year, month, day, and the derived weekday, day-of-year, leap flag, fixed
-// counts, month code, and calendar id) map to a method; the calendar-dependent getters
-// the checker types number | undefined (era, eraYear, weekOfYear, yearOfWeek) are absent
-// so they hand back rather than lower to a getter that cannot answer the undefined case.
+// counts, month code, and calendar id) map to a method returning the field's plain
+// type; the calendar-dependent getters the checker types as an optional (era,
+// eraYear, weekOfYear, yearOfWeek) map to a method returning a value.Opt, which the
+// member read boxes at any dynamic use, era and eraYear always undefined under the
+// ISO calendar and the two week fields always present.
 func plainDateAccessor(prop string) (method string, ok bool) {
 	switch prop {
 	case "year":
@@ -173,6 +175,14 @@ func plainDateAccessor(prop string) (method string, ok bool) {
 		return "MonthsInYear", true
 	case "inLeapYear":
 		return "InLeapYear", true
+	case "era":
+		return "Era", true
+	case "eraYear":
+		return "EraYear", true
+	case "weekOfYear":
+		return "WeekOfYear", true
+	case "yearOfWeek":
+		return "YearOfWeek", true
 	}
 	return "", false
 }
@@ -200,10 +210,9 @@ func plainTimeAccessor(prop string) (method string, ok bool) {
 
 // plainDateTimeAccessor maps a PlainDateTime field getter to the value.PlainDateTime method
 // that reads it, or reports ok=false for a name this slice does not host. It is the union of
-// the clean PlainDate getters and the six PlainTime getters, since a date-time carries both.
-// The calendar-dependent getters the checker types number | undefined (era, eraYear,
-// weekOfYear, yearOfWeek) are absent, so they hand back rather than lower to a getter that
-// cannot answer the undefined case, the same as PlainDate.
+// the PlainDate getters and the six PlainTime getters, since a date-time carries both, so it
+// answers the calendar-dependent getters (era, eraYear, weekOfYear, yearOfWeek) off the date
+// half exactly as PlainDate does.
 func plainDateTimeAccessor(prop string) (method string, ok bool) {
 	if m, ok := plainDateAccessor(prop); ok {
 		return m, true
