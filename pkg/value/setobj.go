@@ -53,6 +53,17 @@ func NewBoolSet() *Set[bool] {
 	return &Set[bool]{eq: func(a, b bool) bool { return a == b }}
 }
 
+// NewRefSet builds an empty Set whose members are objects compared by reference
+// identity, the lowering of new Set<T>() for an object member type T. As with
+// NewRefMap, an object member matches under SameValueZero by reference identity,
+// which is Go's == on the struct pointers objects lower to, so two members are the
+// same member exactly when they are the same object. T is constrained to comparable
+// because only a comparable member can back that ==; the lowerer only reaches this
+// constructor for a member type that renders to a pointer.
+func NewRefSet[T comparable]() *Set[T] {
+	return &Set[T]{eq: func(a, b T) bool { return a == b }}
+}
+
 // find returns the index of the member that matches v, or -1 when the set has no
 // such member. It is the linear scan every membership operation shares; the hashed
 // index that replaces it is a later performance slice.
@@ -103,13 +114,33 @@ func (s *Set[T]) Clear() {
 // the numeric path with no conversion at the use site.
 func (s *Set[T]) Size() float64 { return float64(len(s.members)) }
 
-// Range visits each member in insertion order, the iteration forEach lowers to and
-// the shape a later for...of over a set reads. It passes the member by value, so a
-// callback cannot alias the set's storage.
+// Range visits each member in insertion order, the shape a later for...of over a
+// set reads. It passes the member by value, so a callback cannot alias the set's
+// storage.
 func (s *Set[T]) Range(fn func(T)) {
 	for _, v := range s.members {
 		fn(v)
 	}
+}
+
+// ForEach visits each member in insertion order, the shape Set.prototype.forEach
+// hands its callback. The specification passes the member twice and then the set
+// (value, value, set); a callback that reads only the first parameter, the common
+// form, takes this one-argument shape. The member is passed by value, so a callback
+// cannot alias the set's storage.
+func (s *Set[T]) ForEach(fn func(T)) {
+	for _, v := range s.members {
+		fn(v)
+	}
+}
+
+// Members returns the set's members in insertion order, the traversal set.values(),
+// set.keys(), and a for...of over the set read (a Set's keys and values are its
+// members, so all three project to this). It copies the backing slice so a mutation
+// to the set during the loop does not disturb the range in progress; the live-view
+// an iterator has of concurrent mutation is a later slice.
+func (s *Set[T]) Members() []T {
+	return append([]T(nil), s.members...)
 }
 
 // newLike returns an empty set that shares this set's member equality, the base

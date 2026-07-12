@@ -1,0 +1,2 @@
+feature = "set"
+handback = "object literal with a method or accessor member is a later slice"

@@ -501,6 +501,6 @@ func toFloat64(v float64) float64 { return v }
 // caller's binding reads as a use; the name comes from the compiler rather than the
 // Go element type, since a single element width does not name one JS constructor (a
 // uint8 element backs both Uint8Array and Uint8ClampedArray).
-func TypedArrayClassTag(_ any, name string) BStr {
-	return FromGoString("[object " + name + "]")
+func TypedArrayClassTag(recv any, name string) BStr {
+	return NamedClassTag(recv, name)
 }
