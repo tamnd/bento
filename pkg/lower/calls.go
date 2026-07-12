@@ -2622,6 +2622,12 @@ func (r *Renderer) objectProtoToStringCall(method string, argNodes []frontend.No
 		tag = "Map"
 	case r.isSet(argNodes[0]):
 		tag = "Set"
+	case r.isRegExp(argNodes[0]):
+		// A RegExp carries a Symbol.toStringTag of "RegExp", so
+		// Object.prototype.toString.call(re) reads "[object RegExp]". Like a Map, it
+		// does not box into a value.Value the runtime ClassTag could read, so the tag
+		// comes from the compiler-known name.
+		tag = "RegExp"
 	}
 	if tag != "" {
 		recv, err := r.lowerExpr(argNodes[0])

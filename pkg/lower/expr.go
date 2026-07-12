@@ -268,6 +268,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isDeleteExpr(n) {
 			return r.deleteExpr(n)
 		}
+		// A regexp literal in a value position also surfaces as the catch-all node,
+		// told apart by its RegExp type and /body/flags source. It lowers to the
+		// *value.RegExp it constructs; a literal used as a replace or split pattern is
+		// intercepted earlier on the string-method path, so this fires only where the
+		// regexp itself is the value.
+		if _, _, ok := r.regExpLiteralParts(n); ok {
+			return r.lowerRegExpLiteral(n)
+		}
 		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
 
 	default:
