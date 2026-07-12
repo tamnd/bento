@@ -1,0 +1,2 @@
+feature = "symbol-toprimitive"
+handback = "boxing an object literal with a method or accessor member is a later slice"
