@@ -1040,3 +1040,62 @@ console.log(z.toPlainDate().toString());`
 		t.Fatalf("zoned date-time run printed %q, want %q", got, want)
 	}
 }
+
+// TestNowConstruction checks each Temporal.Now function lowers to its value.Now* constructor:
+// instant and timeZoneId with no argument, and the ISO functions with the default zone and with
+// a named zone.
+func TestNowConstruction(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"instant", "const i = Temporal.Now.instant();\nconsole.log(i.epochMilliseconds);", "value.NowInstant()"},
+		{"timeZoneId", "const z = Temporal.Now.timeZoneId();\nconsole.log(z);", "value.NowTimeZoneId()"},
+		{"zonedDateTimeISO default", "const z = Temporal.Now.zonedDateTimeISO();\nconsole.log(z.epochMilliseconds);", "value.NowZonedDateTimeISO()"},
+		{"zonedDateTimeISO in zone", "const z = Temporal.Now.zonedDateTimeISO(\"America/New_York\");\nconsole.log(z.epochMilliseconds);", "value.NowZonedDateTimeISOIn("},
+		{"plainDateTimeISO default", "const d = Temporal.Now.plainDateTimeISO();\nconsole.log(d.year);", "value.NowPlainDateTimeISO()"},
+		{"plainDateTimeISO in zone", "const d = Temporal.Now.plainDateTimeISO(\"UTC\");\nconsole.log(d.year);", "value.NowPlainDateTimeISOIn("},
+		{"plainDateISO default", "const d = Temporal.Now.plainDateISO();\nconsole.log(d.year);", "value.NowPlainDateISO()"},
+		{"plainTimeISO default", "const t2 = Temporal.Now.plainTimeISO();\nconsole.log(t2.hour);", "value.NowPlainTimeISO()"},
+		{"plainTimeISO in zone", "const t2 = Temporal.Now.plainTimeISO(\"UTC\");\nconsole.log(t2.hour);", "value.NowPlainTimeISOIn("},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("emitted Go = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestNowHandBacks checks the boundaries Temporal.Now does not carry: a non-string time-zone
+// argument (a ZonedDateTime is a valid TimeZoneLike the checker accepts but this slice does not
+// coerce), and a superfluous argument to a no-argument function.
+func TestNowHandBacks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "zoned time-zone argument",
+			src:  "const ref = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst z = Temporal.Now.zonedDateTimeISO(ref);\nconsole.log(z.epochMilliseconds);",
+			want: "Temporal.Now.zonedDateTimeISO over a non-string time-zone argument is a later slice",
+		},
+		{
+			name: "plainDateISO zoned argument",
+			src:  "const ref = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst d = Temporal.Now.plainDateISO(ref);\nconsole.log(d.year);",
+			want: "Temporal.Now.plainDateISO over a non-string time-zone argument is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}

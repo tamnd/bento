@@ -7,7 +7,7 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
-// This file lowers the Temporal area (10_advanced group 6), one type per cut. Eight are
+// This file lowers the Temporal area (10_advanced group 6), one type per cut. Eight types are
 // hosted so far: PlainDate, a calendar date with no time and no zone over the ISO 8601
 // calendar; PlainTime, a wall-clock time with no date and no zone; PlainDateTime, a date
 // paired with a wall-clock time; Duration, a span of time as ten signed component counts;
@@ -26,7 +26,9 @@ import (
 // Instant and to the plain types. Everything else, the arithmetic, the balancing and rounding,
 // the reshaping with and withX, the time-zone transition queries, from over a string or a
 // property bag, and toLocaleString, hands back with a named reason so the compiler reports the
-// exact ceiling.
+// exact ceiling. The Temporal.Now namespace reads the clock: instant, timeZoneId, and the four
+// ISO functions lower to value.Now* constructors that read the host wall clock, or the fixed
+// instant BENTO_NOW_NS pins so the differential harness runs against a clock it can reproduce.
 //
 // Each Temporal type follows the host-type model RegExp and the collections use: it is a bare
 // pointer in the generated Go (*value.PlainDate, *value.PlainTime, *value.PlainDateTime,
@@ -600,6 +602,60 @@ func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.No
 	}
 }
 
+// nowCall lowers a Temporal.Now function. Now reads the clock, so each function lowers to a
+// value.Now* constructor that reads the host wall clock, or, when BENTO_NOW_NS is set, the fixed
+// instant the differential harness pins. instant and timeZoneId take no argument. The four ISO
+// functions take an optional time-zone identifier: with none the host default zone is used, and
+// with a string argument that names a zone; a non-string zone argument, a TimeZoneLike object
+// this slice does not carry, hands back rather than coerce.
+func (r *Renderer) nowCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	// noArg wraps a Now function that takes no argument.
+	noArg := func(fn string) (ast.Expr, error) {
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Now." + method + " takes no argument"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", fn)}, nil
+	}
+	// zoned wraps a Now function that takes an optional time-zone identifier, routing to the
+	// default-zone constructor with no argument and the named-zone constructor with a string.
+	zoned := func(defaultFn, inFn string) (ast.Expr, error) {
+		switch len(argNodes) {
+		case 0:
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", defaultFn)}, nil
+		case 1:
+			if !r.isString(argNodes[0]) {
+				return nil, &NotYetLowerable{Reason: "Temporal.Now." + method + " over a non-string time-zone argument is a later slice"}
+			}
+			tz, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", inFn), Args: []ast.Expr{tz}}, nil
+		default:
+			return nil, &NotYetLowerable{Reason: "Temporal.Now." + method + " takes at most one argument"}
+		}
+	}
+	switch method {
+	case "instant":
+		return noArg("NowInstant")
+	case "timeZoneId":
+		return noArg("NowTimeZoneId")
+	case "zonedDateTimeISO":
+		return zoned("NowZonedDateTimeISO", "NowZonedDateTimeISOIn")
+	case "plainDateTimeISO":
+		return zoned("NowPlainDateTimeISO", "NowPlainDateTimeISOIn")
+	case "plainDateISO":
+		return zoned("NowPlainDateISO", "NowPlainDateISOIn")
+	case "plainTimeISO":
+		return zoned("NowPlainTimeISO", "NowPlainTimeISOIn")
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.Now." + method + " is a later slice"}
+	}
+}
+
 // newZonedDateTime lowers new Temporal.ZonedDateTime over its epoch-nanosecond bigint and its
 // time-zone identifier string. A third calendar argument selects a non-ISO calendar, which
 // this slice does not carry, so it hands back. The first argument must lower as a bigint and
@@ -919,6 +975,8 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 		return r.instantStaticCall(method, argNodes)
 	case "ZonedDateTime":
 		return r.zonedDateTimeStaticCall(method, argNodes)
+	case "Now":
+		return r.nowCall(method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal." + typeName + " is a later slice"}
 	}
