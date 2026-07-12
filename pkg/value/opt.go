@@ -85,3 +85,17 @@ func OptMap[T, U any](o Opt[T], f func(T) U) Opt[U] {
 	}
 	return None[U]()
 }
+
+// OptToValue boxes an optional into the dynamic Value the language sees when a
+// T | undefined result flows into an any slot, the lowering of an optional passed
+// where a boxed value is wanted (console.log of an array's at or pop, a member read
+// the checker types number | undefined). A present value boxes through the element's
+// own box constructor, which the caller supplies because the element type T is not
+// itself a Value and only the call site knows how to wrap it; an undefined optional
+// is the undefined singleton, the box the language already uses for a missing value.
+func OptToValue[T any](o Opt[T], box func(T) Value) Value {
+	if o.present {
+		return box(o.val)
+	}
+	return Undefined
+}

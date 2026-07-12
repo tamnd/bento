@@ -45,3 +45,26 @@ func TestSomeString(t *testing.T) {
 		t.Errorf("Some(\"hi\").Get() = %q, want \"hi\"", got)
 	}
 }
+
+// TestOptToValuePresent pins that a present optional boxes through the supplied
+// element constructor: a present number becomes a number Value the dynamic slot
+// can carry.
+func TestOptToValuePresent(t *testing.T) {
+	got := OptToValue(Some(53.0), Number)
+	if got.IsUndefined() {
+		t.Fatal("OptToValue(Some(53)) = undefined, want a number")
+	}
+	if s := ToString(got).ToGoString(); s != "53" {
+		t.Errorf("OptToValue(Some(53)) renders %q, want \"53\"", s)
+	}
+}
+
+// TestOptToValueUndefined pins that an undefined optional boxes to the undefined
+// singleton rather than the element's zero, so a missing value reads as undefined
+// in the dynamic slot.
+func TestOptToValueUndefined(t *testing.T) {
+	got := OptToValue(None[float64](), Number)
+	if !got.IsUndefined() {
+		t.Errorf("OptToValue(None) = %v, want undefined", got)
+	}
+}
