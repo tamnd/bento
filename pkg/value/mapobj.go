@@ -50,6 +50,18 @@ func NewBoolMap[V any]() *Map[bool, V] {
 	return &Map[bool, V]{eq: func(a, b bool) bool { return a == b }}
 }
 
+// NewRefMap builds an empty Map whose keys are objects compared by reference
+// identity, the lowering of new Map<K, V>() for an object key type K. A JavaScript
+// object key matches under SameValueZero, which for objects is reference identity:
+// two object keys are the same key exactly when they are the same object. Objects
+// lower to Go struct pointers, so Go's == on those pointers is that identity, and
+// there is no NaN case to fold in the way a number key has. K is constrained to
+// comparable because only a comparable key can back the == the equality uses; the
+// lowerer only reaches this constructor for a key type that renders to a pointer.
+func NewRefMap[K comparable, V any]() *Map[K, V] {
+	return &Map[K, V]{eq: func(a, b K) bool { return a == b }}
+}
+
 // find returns the index of the entry whose key matches k, or -1 when the map has
 // no such key. It is the linear scan every keyed operation shares; the hashed index
 // that replaces it is a later performance slice.
@@ -117,10 +129,57 @@ func (m *Map[K, V]) Clear() {
 func (m *Map[K, V]) Size() float64 { return float64(len(m.keys)) }
 
 // Range visits each entry in insertion order, the iteration the go: crossing reads
-// to marshal a bento map to a Go map and the target forEach lowers to. It passes
-// the key and value by value, so a callback cannot alias the map's storage.
+// to marshal a bento map to a Go map. It passes the key and value by value, so a
+// callback cannot alias the map's storage.
 func (m *Map[K, V]) Range(fn func(K, V)) {
 	for i, k := range m.keys {
 		fn(k, m.vals[i])
 	}
+}
+
+// ForEach visits each entry in insertion order, passing the value then the key, the
+// order Map.prototype.forEach hands its callback (value, key, map). It is the two-
+// argument shape a forEach callback that reads both takes; a callback that reads
+// only the value lowers to ForEachValue instead. The entries are passed by value,
+// so a callback cannot alias the map's storage.
+func (m *Map[K, V]) ForEach(fn func(V, K)) {
+	for i, k := range m.keys {
+		fn(m.vals[i], k)
+	}
+}
+
+// ForEachValue visits each entry's value in insertion order, the shape a forEach
+// callback that reads only its first parameter takes, so the common (value) => ...
+// form needs no unused key binding.
+func (m *Map[K, V]) ForEachValue(fn func(V)) {
+	for _, v := range m.vals {
+		fn(v)
+	}
+}
+
+// Keys returns the map's keys in insertion order, the traversal map.keys() and a
+// for...of over the keys read. It copies the backing slice so a mutation to the map
+// during the loop does not disturb the range in progress; the live-view an iterator
+// has of concurrent mutation is a later slice.
+func (m *Map[K, V]) Keys() []K {
+	return append([]K(nil), m.keys...)
+}
+
+// Values returns the map's values in insertion order, the traversal map.values()
+// and a for...of over the values read. It copies the backing slice for the same
+// reason Keys does, so the two snapshots a for-of over entries pairs are consistent
+// and stable across a body that mutates the map.
+func (m *Map[K, V]) Values() []V {
+	return append([]V(nil), m.vals...)
+}
+
+// KeySet returns a Set of the map's keys, the set-like view a Map presents when it is
+// passed as the argument to a Set-algebra method (union, intersection, and the rest).
+// A JavaScript Map is a set-like: it has a size, a has, and a keys iterator over its
+// keys, which is exactly the protocol those methods read, so a Map argument projects to
+// the Set of its keys. The keys are already unique and carry the map's key equality, so
+// the members copy needs no dedup and the new Set shares the same eq, giving it the same
+// SameValueZero identity the map keys had.
+func (m *Map[K, V]) KeySet() *Set[K] {
+	return &Set[K]{members: append([]K(nil), m.keys...), eq: m.eq}
 }

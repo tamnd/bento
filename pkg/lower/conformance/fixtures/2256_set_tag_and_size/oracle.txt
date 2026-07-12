@@ -1,0 +1,11 @@
+== stdout:
+0
+2
+2
+1
+[object Set]
+0
+[object Set]
+
+== exit:
+0

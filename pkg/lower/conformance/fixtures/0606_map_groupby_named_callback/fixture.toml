@@ -1,0 +1,2 @@
+feature = "map"
+handback = "Map.groupBy with a callback that is not an inline arrow function is a later slice"

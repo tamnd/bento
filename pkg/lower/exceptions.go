@@ -442,92 +442,408 @@ func (r *Renderer) arrayBufferMaxByteLength(n frontend.Node) (ast.Expr, error) {
 	return r.lowerExpr(kids[1])
 }
 
-// newMap lowers a Map construction, the keyed collection of section 6.5. Only the
-// empty new Map<K, V>() is covered: it picks the value constructor for the key kind
-// (a number, string, or boolean key each compares by its own SameValueZero) and
-// instantiates it at the value type, so new Map<string, number>() lowers to
+// newMap lowers a Map construction, the keyed collection of section 6.5. The empty
+// new Map<K, V>() picks the value constructor for the key kind (a number, string,
+// boolean, or object key each compares by its own SameValueZero) and instantiates
+// it at the value type, so new Map<string, number>() lowers to
 // value.NewStringMap[float64](). The key and value come from the map's own type at
 // this node, read off its set signature the same way renderMap reads them, so the
 // instantiation matches the type a binding of the map is declared with. The
-// entries-argument form (new Map([[k, v], ...])) and a non-primitive key are later
-// slices and hand back.
+// entries-argument form new Map([[k, v], ...]) fills the empty map from an array
+// literal of pairs; any other iterable of pairs is a later slice and hands back.
 func (r *Renderer) newMap(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
-	// The children of a new expression carry the written type arguments (new
-	// Map<string, number>()) ahead of the value arguments, and the frontend leaves a
-	// type node unnamed, so it reads as NodeUnknown. Only a real value argument (the
-	// entries list) has a named kind, so counting the named children is what tells the
-	// empty constructor from the entries form.
-	valueArgs := 0
-	for _, a := range args {
-		if a.Kind() != frontend.NodeUnknown {
-			valueArgs++
-		}
-	}
-	if valueArgs != 0 {
-		return nil, &NotYetLowerable{Reason: "only the empty new Map() is lowered yet, not the entries-argument form"}
+	valueArgs := r.namedArgs(args)
+	if len(valueArgs) > 1 {
+		return nil, &NotYetLowerable{Reason: "new Map() with more than one argument is a later slice"}
 	}
 	k, v, ok := r.mapKeyVal(r.prog.TypeAt(n))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new Map did not expose its key and value types"}
 	}
-	var ctor string
-	switch {
-	case k.Flags&frontend.TypeNumber != 0:
-		ctor = "NewNumberMap"
-	case k.Flags&frontend.TypeString != 0:
-		ctor = "NewStringMap"
-	case k.Flags&frontend.TypeBoolean != 0:
-		ctor = "NewBoolMap"
-	default:
-		return nil, &NotYetLowerable{Reason: "a Map with a key that is not a number, string, or boolean is a later slice"}
+	ctor, err := r.mapCtor(k, v)
+	if err != nil {
+		return nil, err
 	}
+	if len(valueArgs) == 0 {
+		return ctor, nil
+	}
+	return r.mapFromPairs(n, ctor, valueArgs[0])
+}
+
+// namedArgs returns the value-argument children of a new expression, dropping the
+// written type arguments. The children carry the type arguments (new Map<string,
+// number>()) ahead of the value arguments, and the frontend leaves a type node
+// unnamed so it reads as NodeUnknown; only a real value argument has a named kind,
+// so the named children are exactly the value arguments.
+func (r *Renderer) namedArgs(args []frontend.Node) []frontend.Node {
+	var out []frontend.Node
+	for _, a := range args {
+		if a.Kind() != frontend.NodeUnknown {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// mapCtor builds the empty-Map constructor call for a key and value type: the value
+// constructor for the key kind, instantiated at the value type. An object key
+// compares by reference identity, and objects lower to Go struct pointers, so
+// NewRefMap keys on the rendered pointer type; only a pointer render is comparable
+// in Go, which arrays (a slice) and functions (a func) are not, so a key whose
+// render is not a pointer hands back rather than emit a Go map keyed by an
+// incomparable type.
+func (r *Renderer) mapCtor(k, v frontend.Type) (ast.Expr, error) {
 	vExpr, err := r.typeExpr(v)
 	if err != nil {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", ctor), Index: vExpr}}, nil
+	switch {
+	case k.Flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewNumberMap"), Index: vExpr}}, nil
+	case k.Flags&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewStringMap"), Index: vExpr}}, nil
+	case k.Flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewBoolMap"), Index: vExpr}}, nil
+	case k.Flags&frontend.TypeObject != 0:
+		kExpr, err := r.typeExpr(k)
+		if err != nil {
+			return nil, err
+		}
+		if _, ptr := kExpr.(*ast.StarExpr); !ptr {
+			return nil, &NotYetLowerable{Reason: "a Map keyed by a reference type that is not a plain object is a later slice"}
+		}
+		return &ast.CallExpr{Fun: &ast.IndexListExpr{X: sel("value", "NewRefMap"), Indices: []ast.Expr{kExpr, vExpr}}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "a Map with a key that is not a number, string, boolean, or object is a later slice"}
+	}
+}
+
+// mapFromPairs lowers new Map([[k, v], ...]) by filling the empty map ctor from an
+// array literal of two-element array literals: each inner literal's two elements are
+// the key and value, lowered directly, which sidesteps a general tuple lowering the
+// frontend does not have yet. The fill runs inside a func literal so the whole
+// construction stands where a value is expected, the same shape a spread's drain
+// takes. A Map from any source other than an array literal of pairs hands back.
+func (r *Renderer) mapFromPairs(n frontend.Node, ctor ast.Expr, arg frontend.Node) (ast.Expr, error) {
+	if arg.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, &NotYetLowerable{Reason: "new Map from a source that is not an array literal of pairs is a later slice"}
+	}
+	collType, err := r.renderMap(r.prog.TypeAt(n))
+	if err != nil {
+		return nil, err
+	}
+	tmp := r.freshTemp()
+	stmts := []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{ctor}}}
+	for _, pair := range r.prog.Children(arg) {
+		if pair.Kind() != frontend.NodeArrayLiteralExpression {
+			return nil, &NotYetLowerable{Reason: "new Map from an entry that is not a literal pair is a later slice"}
+		}
+		kv := r.prog.Children(pair)
+		if len(kv) != 2 {
+			return nil, &NotYetLowerable{Reason: "new Map from an entry that is not a two-element pair is a later slice"}
+		}
+		kExpr, err := r.lowerExpr(kv[0])
+		if err != nil {
+			return nil, err
+		}
+		vExpr, err := r.lowerExpr(kv[1])
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, &ast.ExprStmt{X: &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("Set")},
+			Args: []ast.Expr{kExpr, vExpr},
+		}})
+	}
+	stmts = append(stmts, &ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}})
+	return r.collectionIIFE(collType, stmts), nil
+}
+
+// collectionIIFE wraps the build-and-fill statements for a collection in a
+// no-argument func literal returning collType and calls it, so a Map or Set built
+// from an argument stands in expression position the way an empty constructor does.
+func (r *Renderer) collectionIIFE(collType ast.Expr, body []ast.Stmt) ast.Expr {
+	fn := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: collType}}},
+		},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: fn}
+}
+
+// mapStaticCall lowers a call on the global Map namespace, Map.<method>(...). The
+// only static Map method the area tests reach is Map.groupBy, the ES2024 grouping
+// constructor; any other static Map surface is its own later slice.
+func (r *Renderer) mapStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "groupBy" {
+		return nil, &NotYetLowerable{Reason: "a static Map." + method + " call is a later slice"}
+	}
+	return r.mapGroupBy(argNodes)
+}
+
+// mapGroupBy lowers Map.groupBy(items, cb) to a Map<K, T[]> that groups the items
+// of an array by the key the callback returns, in first-seen key order. It builds
+// the map inline in a func literal: the callback lowers to a Go func value, the
+// source's elements range in order, and each item appends into the slice its key
+// already holds or starts a new one. The key type is the callback's result type, so
+// the empty-map constructor is chosen the same way new Map() chooses it, and the
+// value type is a slice of the source's element type.
+//
+// Only an array source and an inline arrow taking the item, or the item and its
+// index, are covered. A non-array iterable needs the general iterable drain, and a
+// callback passed as a named reference needs the reference resolved to a func value
+// first, so each hands back rather than mislower the grouping.
+func (r *Renderer) mapGroupBy(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with other than an items source and a callback is a later slice"}
+	}
+	itemsNode, cb := argNodes[0], argNodes[1]
+	itemsType := r.prog.TypeAt(itemsNode)
+	elemFT, ok := r.prog.ElementType(itemsType)
+	if itemsType.Flags&frontend.TypeObject == 0 || !ok {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy over a source that is not an array is a later slice"}
+	}
+	elemExpr, err := r.typeExpr(elemFT)
+	if err != nil {
+		return nil, err
+	}
+	if cb.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with a callback that is not an inline arrow function is a later slice"}
+	}
+	params := r.arrowParamCount(cb)
+	if params != 1 && params != 2 {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with a callback that reads more than the item and its index is a later slice"}
+	}
+	keyType, ok := r.arrowResultFrontendType(cb)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy callback with a block body has no key type"}
+	}
+	// A callback that returns a literal, or a union of literals, types the key as
+	// that literal type ("even" | "odd"), which carries no primitive-kind flag. The
+	// key of the built map is the primitive the literals belong to, so widening picks
+	// the map constructor and spells the key type the same way a string key would.
+	keyType = r.prog.Widen(keyType)
+	keyExpr, err := r.typeExpr(keyType)
+	if err != nil {
+		return nil, err
+	}
+	// The value type is T[], which lowers to *value.Array[T], so each group is a
+	// value array the same shape a T[] binding takes. arrType spells it freshly at
+	// each use so no AST node is shared across the emitted tree.
+	arrType := func() ast.Expr { return star(index(sel("value", "Array"), elemExpr)) }
+	ctor, err := r.groupCtor(keyType, keyExpr, arrType())
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(cb)
+	if err != nil {
+		return nil, err
+	}
+	items, err := r.lowerExpr(itemsNode)
+	if err != nil {
+		return nil, err
+	}
+	cbName, mName, itName := r.freshTemp(), r.freshTemp(), r.freshTemp()
+	keyName, groupName := r.freshTemp(), r.freshTemp()
+	// _cb(_it) for a one-parameter callback, _cb(_it, float64(_i)) when it also reads
+	// the index. The index binding names the range key only in that case, so a
+	// one-parameter loop ranges the value alone and drops the index to blank.
+	idxExpr := ident("_")
+	callArgs := []ast.Expr{ident(itName)}
+	if params == 2 {
+		iName := r.freshTemp()
+		idxExpr = ident(iName)
+		callArgs = append(callArgs, &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{ident(iName)}})
+	}
+	getCall := &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(mName), Sel: ident("Get")}, Args: []ast.Expr{ident(keyName)}}
+	loopBody := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(keyName)}, Tok: token.DEFINE, Rhs: []ast.Expr{
+			&ast.CallExpr{Fun: ident(cbName), Args: callArgs},
+		}},
+		// if _g := _m.Get(_k); !_g.IsUndefined() { _g.Get().Push(_it) } else {
+		// _m.Set(_k, value.NewArray[T](_it)) } appends into the key's existing group
+		// or starts a one-element group the first time the key is seen. The stored
+		// group is a *value.Array, so Push mutates the group the map already holds.
+		&ast.IfStmt{
+			Init: &ast.AssignStmt{Lhs: []ast.Expr{ident(groupName)}, Tok: token.DEFINE, Rhs: []ast.Expr{getCall}},
+			Cond: &ast.UnaryExpr{Op: token.NOT, X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(groupName), Sel: ident("IsUndefined")}}},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(groupName), Sel: ident("Get")}},
+					Sel: ident("Push"),
+				},
+				Args: []ast.Expr{ident(itName)},
+			}}}},
+			Else: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{X: ident(mName), Sel: ident("Set")},
+				Args: []ast.Expr{ident(keyName), &ast.CallExpr{
+					Fun:  index(sel("value", "NewArray"), elemExpr),
+					Args: []ast.Expr{ident(itName)},
+				}},
+			}}}},
+		},
+	}
+	body := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(cbName)}, Tok: token.DEFINE, Rhs: []ast.Expr{fn}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(mName)}, Tok: token.DEFINE, Rhs: []ast.Expr{ctor}},
+		&ast.RangeStmt{
+			Key:   idxExpr,
+			Value: ident(itName),
+			Tok:   token.DEFINE,
+			X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: items, Sel: ident("Elems")}},
+			Body:  &ast.BlockStmt{List: loopBody},
+		},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(mName)}},
+	}
+	collType := star(&ast.IndexListExpr{X: sel("value", "Map"), Indices: []ast.Expr{keyExpr, arrType()}})
+	return r.collectionIIFE(collType, body), nil
+}
+
+// groupCtor builds the empty Map<K, T[]> constructor for Map.groupBy: the value
+// constructor for the key kind, instantiated at the group value type. It mirrors
+// mapCtor's key-kind switch and reference-key pointer guard, but the value type is
+// an already-lowered array expression rather than a checker type, since groupBy
+// synthesizes it from the source's element type.
+func (r *Renderer) groupCtor(keyType frontend.Type, keyExpr, valExpr ast.Expr) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	switch {
+	case keyType.Flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewNumberMap"), Index: valExpr}}, nil
+	case keyType.Flags&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewStringMap"), Index: valExpr}}, nil
+	case keyType.Flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewBoolMap"), Index: valExpr}}, nil
+	case keyType.Flags&frontend.TypeObject != 0:
+		if _, ptr := keyExpr.(*ast.StarExpr); !ptr {
+			return nil, &NotYetLowerable{Reason: "Map.groupBy keyed by a reference type that is not a plain object is a later slice"}
+		}
+		return &ast.CallExpr{Fun: &ast.IndexListExpr{X: sel("value", "NewRefMap"), Indices: []ast.Expr{keyExpr, valExpr}}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with a key that is not a number, string, boolean, or object is a later slice"}
+	}
 }
 
 // newSet lowers a Set construction, the collection of unique members of section
-// 6.5. Only the empty new Set<T>() is covered: it picks the value constructor for
-// the member kind (a number, string, or boolean member each compares by its own
+// 6.5. The empty new Set<T>() picks the value constructor for the member kind (a
+// number, string, boolean, or object member each compares by its own
 // SameValueZero), so new Set<string>() lowers to value.NewStringSet(). Unlike a Map,
 // whose value type is free and so needs a type argument, the member type fully
-// determines the Set constructor, so the call carries no instantiation. The member
-// type comes from the set's own type at this node, read off its add signature the
-// same way renderSet reads it. The iterable-argument form (new Set([a, b, c])) and a
-// non-primitive member are later slices and hand back.
+// determines the primitive Set constructor, so the call carries no instantiation.
+// The member type comes from the set's own type at this node, read off its add
+// signature the same way renderSet reads it. The iterable-argument form new
+// Set(iterable) fills the empty set from an array or a user iterable; a source that
+// is neither hands back.
 func (r *Renderer) newSet(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
-	// As with new Map, the written type argument (new Set<string>()) reads as a
-	// NodeUnknown child ahead of any value argument, so counting the named children is
-	// what tells the empty constructor from the iterable form.
-	valueArgs := 0
-	for _, a := range args {
-		if a.Kind() != frontend.NodeUnknown {
-			valueArgs++
-		}
-	}
-	if valueArgs != 0 {
-		return nil, &NotYetLowerable{Reason: "only the empty new Set() is lowered yet, not the iterable-argument form"}
+	valueArgs := r.namedArgs(args)
+	if len(valueArgs) > 1 {
+		return nil, &NotYetLowerable{Reason: "new Set() with more than one argument is a later slice"}
 	}
 	elem, ok := r.setElem(r.prog.TypeAt(n))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new Set did not expose its member type"}
 	}
-	var ctor string
+	ctor, err := r.setCtor(elem)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueArgs) == 0 {
+		return ctor, nil
+	}
+	return r.setFromIterable(n, ctor, valueArgs[0])
+}
+
+// setCtor builds the empty-Set constructor call for a member type. An object member
+// compares by reference identity, and objects lower to Go struct pointers, so
+// NewRefSet keys on the rendered pointer type; only a pointer render is comparable
+// in Go, which arrays and functions are not, so a member whose render is not a
+// pointer hands back rather than emit a Set backed by an incomparable member type.
+func (r *Renderer) setCtor(elem frontend.Type) (ast.Expr, error) {
+	r.requireImport(valuePkg)
 	switch {
 	case elem.Flags&frontend.TypeNumber != 0:
-		ctor = "NewNumberSet"
+		return &ast.CallExpr{Fun: sel("value", "NewNumberSet")}, nil
 	case elem.Flags&frontend.TypeString != 0:
-		ctor = "NewStringSet"
+		return &ast.CallExpr{Fun: sel("value", "NewStringSet")}, nil
 	case elem.Flags&frontend.TypeBoolean != 0:
-		ctor = "NewBoolSet"
+		return &ast.CallExpr{Fun: sel("value", "NewBoolSet")}, nil
+	case elem.Flags&frontend.TypeObject != 0:
+		elemExpr, err := r.typeExpr(elem)
+		if err != nil {
+			return nil, err
+		}
+		if _, ptr := elemExpr.(*ast.StarExpr); !ptr {
+			return nil, &NotYetLowerable{Reason: "a Set of a reference type that is not a plain object is a later slice"}
+		}
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewRefSet"), Index: elemExpr}}, nil
 	default:
-		return nil, &NotYetLowerable{Reason: "a Set with a member that is not a number, string, or boolean is a later slice"}
+		return nil, &NotYetLowerable{Reason: "a Set with a member that is not a number, string, boolean, or object is a later slice"}
 	}
-	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", ctor)}, nil
+}
+
+// setFromIterable lowers new Set(iterable) by filling the empty set ctor from the
+// source's elements, ranged inside a func literal so the whole construction stands
+// where a value is expected. The elements come from iterableElems, which ranges an
+// array's backing slice or drains a user iterable through the iterator protocol; the
+// checker has typed the source as Iterable<T> for the set's member T, so each ranged
+// element adds with no conversion.
+func (r *Renderer) setFromIterable(n frontend.Node, ctor ast.Expr, arg frontend.Node) (ast.Expr, error) {
+	collType, err := r.renderSet(r.prog.TypeAt(n))
+	if err != nil {
+		return nil, err
+	}
+	elems, err := r.iterableElems(arg)
+	if err != nil {
+		return nil, err
+	}
+	tmp := r.freshTemp()
+	member := r.freshTemp()
+	add := &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("Add")},
+		Args: []ast.Expr{ident(member)},
+	}}
+	stmts := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{ctor}},
+		&ast.RangeStmt{
+			Key:   ident("_"),
+			Value: ident(member),
+			Tok:   token.DEFINE,
+			X:     elems,
+			Body:  &ast.BlockStmt{List: []ast.Stmt{add}},
+		},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}},
+	}
+	return r.collectionIIFE(collType, stmts), nil
+}
+
+// iterableElems returns a Go slice expression of a source's elements, for a
+// collection constructor to range and add. An array (or array literal) ranges its
+// backing slice through Elems; a user iterable that defines [Symbol.iterator] is
+// drained through the iterator protocol into a slice of its element type. A source
+// that is neither hands back, since a built-in Set, Map, or string iterable needs
+// its own walk a later slice brings.
+func (r *Renderer) iterableElems(arg frontend.Node) (ast.Expr, error) {
+	if isArrayElem(r, arg) {
+		src, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Elems")}}, nil
+	}
+	if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(arg)); ok {
+		elemType, err := r.typeExpr(shape.elem)
+		if err != nil {
+			return nil, err
+		}
+		src, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		return r.iterableToSliceExpr(src, elemType, shape), nil
+	}
+	return nil, &NotYetLowerable{Reason: "a collection from a source that is not an array or a user iterable is a later slice"}
 }
 
 // errorInstanceof lowers `e instanceof Error` on a caught error, the guard a

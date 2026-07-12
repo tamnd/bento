@@ -1,2 +1,0 @@
-feature = "set"
-handback = "only the empty new Set() is lowered yet, not the iterable-argument form"

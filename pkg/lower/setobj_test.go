@@ -51,10 +51,11 @@ func TestSetConstructorByMemberKind(t *testing.T) {
 }
 
 // TestSetHandsBackUnsupportedForms proves the set lowering claims only the subset it
-// can emit soundly and hands the rest back. The iterable-argument constructor builds
-// from a list bento does not lower yet, and forEach is a later slice, so each routes
-// to the interpreter rather than emitting wrong or partial Go.
+// can emit soundly and hands the rest back. The iterable-argument constructor drains
+// an array's backing slice or a user iterable, but a built-in Set or a string source
+// needs its own walk a later slice brings, so each routes to the interpreter rather
+// than emitting wrong or partial Go.
 func TestSetHandsBackUnsupportedForms(t *testing.T) {
-	handsBack(t, "const s = new Set<number>([1, 2, 3]); console.log(s.size);\n")
-	handsBack(t, "const s = new Set<number>(); s.forEach(v => console.log(v));\n")
+	handsBack(t, "const a = new Set<number>(); const s = new Set<number>(a); console.log(s.size);\n")
+	handsBack(t, "const s = new Set<string>(\"ab\"); console.log(s.size);\n")
 }
