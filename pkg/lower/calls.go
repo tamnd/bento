@@ -1824,6 +1824,10 @@ func (r *Renderer) reflectCall(method string, argNodes []frontend.Node) (ast.Exp
 		return r.reflectFree("getPrototypeOf", "ReflectGetPrototypeOf", 1, argNodes)
 	case "setPrototypeOf":
 		return r.reflectFree("setPrototypeOf", "ReflectSetPrototypeOf", 2, argNodes)
+	case "isExtensible":
+		return r.reflectFree("isExtensible", "ReflectIsExtensible", 1, argNodes)
+	case "preventExtensions":
+		return r.reflectFree("preventExtensions", "ReflectPreventExtensions", 1, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Reflect." + method + " is a later slice"}
 	}

@@ -280,6 +280,25 @@ func ReflectSetPrototypeOf(target, proto Value) bool {
 	return true
 }
 
+// ReflectIsExtensible implements Reflect.isExtensible(target): the [[IsExtensible]]
+// Object.isExtensible performs, reporting whether new own properties may be added. It
+// throws the TypeError every Reflect method raises on a non-object target rather than
+// coercing a primitive the way the Object form does.
+func ReflectIsExtensible(target Value) bool {
+	o := reflectObject(target, "isExtensible")
+	return o.isExtensible()
+}
+
+// ReflectPreventExtensions implements Reflect.preventExtensions(target): the
+// [[PreventExtensions]] Object.preventExtensions performs, marking the target closed
+// to new own properties and reporting success, which for an ordinary object is always
+// true. It throws the TypeError every Reflect method raises on a non-object target.
+func ReflectPreventExtensions(target Value) bool {
+	reflectObject(target, "preventExtensions")
+	target.PreventExtensions()
+	return true
+}
+
 // ordinarySetSym is the symbol mirror of ordinarySet, resolving a symbol-keyed
 // property by identity through the symbol bag and its prototype chain rather than
 // the named bag. It shares the same refusal rules: a non-writable data property, an

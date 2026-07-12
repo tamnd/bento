@@ -250,6 +250,21 @@ func TestReflectSetPrototypeOf(t *testing.T) {
 	}
 }
 
+// TestReflectExtensibility pins that a fresh object is extensible, preventExtensions
+// closes it and reports true, and isExtensible then reports false.
+func TestReflectExtensibility(t *testing.T) {
+	o := NewObject()
+	if !ReflectIsExtensible(o) {
+		t.Error("Reflect.isExtensible on a fresh object reported false")
+	}
+	if !ReflectPreventExtensions(o) {
+		t.Error("Reflect.preventExtensions reported failure")
+	}
+	if ReflectIsExtensible(o) {
+		t.Error("Reflect.isExtensible after preventExtensions reported true")
+	}
+}
+
 // nonConfigDesc builds a non-configurable data descriptor object, the shape the
 // deleteProperty refusal test defines onto an object.
 func nonConfigDesc(value Value) Value {
