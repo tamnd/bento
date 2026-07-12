@@ -51,6 +51,26 @@ func NewProxy(target, handler Value) Value {
 	return objectValue(&Object{kind: kind, proxy: &proxyData{target: target, handler: handler}})
 }
 
+// ProxyRevocable is the runtime behind Proxy.revocable(target, handler): it builds a
+// proxy the same way new Proxy does and pairs it with a revoke function, returned as
+// a { proxy, revoke } object. Calling revoke flips the proxy's revoked flag and drops
+// its target and handler, so every later operation throws through checkRevoked and
+// the target is no longer reachable through the dead proxy.
+func ProxyRevocable(target, handler Value) Value {
+	pv := NewProxy(target, handler)
+	p := pv.asProxy()
+	revoke := NewFunc(func(args []Value) Value {
+		p.revoked = true
+		p.target = Undefined
+		p.handler = Undefined
+		return Undefined
+	})
+	out := NewObject()
+	out.Set(FromGoString("proxy"), pv)
+	out.Set(FromGoString("revoke"), revoke)
+	return out
+}
+
 // asProxy returns the exotic state behind v, or nil when v is not a Proxy, the one
 // probe every routed Value method makes before it runs its ordinary path.
 func (v Value) asProxy() *proxyData {

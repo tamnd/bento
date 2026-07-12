@@ -401,6 +401,26 @@ func TestProxyConstructInvariant(t *testing.T) {
 	p.asProxy().construct(nil, p)
 }
 
+// TestProxyRevocable pins Proxy.revocable: it returns a { proxy, revoke } object, the
+// proxy works until revoke is called, and every operation on it throws afterward.
+func TestProxyRevocable(t *testing.T) {
+	target := NewObject()
+	target.Set(FromGoString("x"), Number(1))
+	r := ProxyRevocable(target, NewObject())
+	p := r.Get(FromGoString("proxy"))
+	revoke := r.Get(FromGoString("revoke"))
+	if got := p.Get(FromGoString("x")); got.AsNumber() != 1 {
+		t.Errorf("revocable proxy did not forward before revoke, got %v", got)
+	}
+	revoke.Call()
+	defer func() {
+		if recover() == nil {
+			t.Error("a read on a revoked proxy did not throw")
+		}
+	}()
+	p.Get(FromGoString("x"))
+}
+
 // TestProxyCallableForwards pins that a Proxy over a callable target is itself
 // callable and forwards the call to the target when the handler has no apply trap.
 func TestProxyCallableForwards(t *testing.T) {
