@@ -470,23 +470,35 @@ func (r *Renderer) newMap(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new Map did not expose its key and value types"}
 	}
-	var ctor string
-	switch {
-	case k.Flags&frontend.TypeNumber != 0:
-		ctor = "NewNumberMap"
-	case k.Flags&frontend.TypeString != 0:
-		ctor = "NewStringMap"
-	case k.Flags&frontend.TypeBoolean != 0:
-		ctor = "NewBoolMap"
-	default:
-		return nil, &NotYetLowerable{Reason: "a Map with a key that is not a number, string, or boolean is a later slice"}
-	}
 	vExpr, err := r.typeExpr(v)
 	if err != nil {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", ctor), Index: vExpr}}, nil
+	switch {
+	case k.Flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewNumberMap"), Index: vExpr}}, nil
+	case k.Flags&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewStringMap"), Index: vExpr}}, nil
+	case k.Flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewBoolMap"), Index: vExpr}}, nil
+	case k.Flags&frontend.TypeObject != 0:
+		// An object key compares by reference identity, and objects lower to Go
+		// struct pointers, so NewRefMap keys on the rendered pointer type. Only a
+		// type that renders to a pointer is comparable in Go, which arrays (a slice)
+		// and functions (a func) are not, so a key whose render is not a pointer
+		// hands back rather than emit a Go map keyed by an incomparable type.
+		kExpr, err := r.typeExpr(k)
+		if err != nil {
+			return nil, err
+		}
+		if _, ptr := kExpr.(*ast.StarExpr); !ptr {
+			return nil, &NotYetLowerable{Reason: "a Map keyed by a reference type that is not a plain object is a later slice"}
+		}
+		return &ast.CallExpr{Fun: &ast.IndexListExpr{X: sel("value", "NewRefMap"), Indices: []ast.Expr{kExpr, vExpr}}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "a Map with a key that is not a number, string, boolean, or object is a later slice"}
+	}
 }
 
 // newSet lowers a Set construction, the collection of unique members of section
@@ -515,19 +527,31 @@ func (r *Renderer) newSet(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new Set did not expose its member type"}
 	}
-	var ctor string
+	r.requireImport(valuePkg)
 	switch {
 	case elem.Flags&frontend.TypeNumber != 0:
-		ctor = "NewNumberSet"
+		return &ast.CallExpr{Fun: sel("value", "NewNumberSet")}, nil
 	case elem.Flags&frontend.TypeString != 0:
-		ctor = "NewStringSet"
+		return &ast.CallExpr{Fun: sel("value", "NewStringSet")}, nil
 	case elem.Flags&frontend.TypeBoolean != 0:
-		ctor = "NewBoolSet"
+		return &ast.CallExpr{Fun: sel("value", "NewBoolSet")}, nil
+	case elem.Flags&frontend.TypeObject != 0:
+		// An object member compares by reference identity, and objects lower to Go
+		// struct pointers, so NewRefSet keys on the rendered pointer type. Only a
+		// pointer render is comparable in Go, which arrays and functions are not, so
+		// a member whose render is not a pointer hands back rather than emit a Set
+		// backed by an incomparable member type.
+		elemExpr, err := r.typeExpr(elem)
+		if err != nil {
+			return nil, err
+		}
+		if _, ptr := elemExpr.(*ast.StarExpr); !ptr {
+			return nil, &NotYetLowerable{Reason: "a Set of a reference type that is not a plain object is a later slice"}
+		}
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewRefSet"), Index: elemExpr}}, nil
 	default:
-		return nil, &NotYetLowerable{Reason: "a Set with a member that is not a number, string, or boolean is a later slice"}
+		return nil, &NotYetLowerable{Reason: "a Set with a member that is not a number, string, boolean, or object is a later slice"}
 	}
-	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", ctor)}, nil
 }
 
 // errorInstanceof lowers `e instanceof Error` on a caught error, the guard a
