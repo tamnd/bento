@@ -522,6 +522,228 @@ func (pdt *PlainDateTime) ToString() BStr {
 // produces under default options.
 func (pdt *PlainDateTime) ToJSON() BStr { return pdt.ToString() }
 
+// PlainYearMonth is bento's runtime representation of a Temporal.PlainYearMonth (Temporal
+// §9): a calendar year and month with no day, no time, and no zone, the way a credit card
+// carries an expiry. Like PlainDate it hosts only the ISO 8601 calendar; a non-ISO calendar
+// hands back at lowering. The specification anchors a year-month to a reference ISO day so a
+// calendar can resolve calendar-dependent fields, but the ISO calendar needs no reference,
+// so this type stores only the year and the month and derives every getter from them.
+type PlainYearMonth struct {
+	year  int // proleptic Gregorian year, may be negative or above 9999
+	month int // 1..12
+}
+
+// NewPlainYearMonth builds a PlainYearMonth from the constructor's two number arguments,
+// running ToIntegerWithTruncation on each and then RejectISOYearMonth, so a fractional
+// argument truncates toward zero, a non-finite one throws a RangeError, and a month outside
+// 1..12 or a year-month outside the representable range throws a RangeError. A third calendar
+// argument and a fourth reference-day argument are not accepted here; both hand back at
+// lowering, so this constructor is only ever reached for the ISO calendar with the default
+// reference day.
+func NewPlainYearMonth(isoYear, isoMonth float64) *PlainYearMonth {
+	y := toIntegerWithTruncation(isoYear)
+	m := toIntegerWithTruncation(isoMonth)
+	rejectISOYearMonth(y, m)
+	return &PlainYearMonth{year: int(y), month: int(m)}
+}
+
+// PlainYearMonthFrom implements Temporal.PlainYearMonth.from for a PlainYearMonth argument:
+// it returns a fresh PlainYearMonth with the same fields, the copy the specification makes.
+// from over a string or a property bag hands back at lowering.
+func PlainYearMonthFrom(ym *PlainYearMonth) *PlainYearMonth {
+	return &PlainYearMonth{year: ym.year, month: ym.month}
+}
+
+// rejectISOYearMonth throws a RangeError unless (year, month) is a real ISO year-month
+// within Temporal's representable range: the month in 1..12 and the year-month between
+// -271821-04 and +275760-09 inclusive, the bounds ISOYearMonthWithinLimits fixes. The
+// arguments are the truncated float64s so the year bound is checked before the value is
+// narrowed to an int, which keeps a wildly out-of-range year from wrapping on the conversion.
+func rejectISOYearMonth(year, month float64) {
+	if month < 1 || month > 12 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth month must be between 1 and 12")))
+	}
+	if year < -271821 || year > 275760 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+	}
+	if !isoYearMonthWithinLimits(int(year), int(month)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+	}
+}
+
+// isoYearMonthWithinLimits reports whether a year-month falls in Temporal's representable
+// range, -271821-04 through +275760-09 inclusive. Unlike a full date it has no day to bound,
+// so the check turns only on the year and, at each end, the month.
+func isoYearMonthWithinLimits(year, month int) bool {
+	if year < -271821 || year > 275760 {
+		return false
+	}
+	if year == -271821 && month < 4 {
+		return false
+	}
+	if year == 275760 && month > 9 {
+		return false
+	}
+	return true
+}
+
+// Year returns the ISO year.
+func (ym *PlainYearMonth) Year() float64 { return float64(ym.year) }
+
+// Month returns the ISO month, 1..12.
+func (ym *PlainYearMonth) Month() float64 { return float64(ym.month) }
+
+// CalendarId returns the calendar identifier, always "iso8601" for this slice.
+func (ym *PlainYearMonth) CalendarId() BStr { return FromGoString("iso8601") }
+
+// MonthCode returns the ISO month code, "M" followed by the two-digit month. The ISO
+// calendar has no leap months, so the code never carries the trailing "L".
+func (ym *PlainYearMonth) MonthCode() BStr {
+	code := "M"
+	if ym.month < 10 {
+		code += "0"
+	}
+	return FromGoString(code + strconv.Itoa(ym.month))
+}
+
+// DaysInMonth returns the number of days in this year-month's month.
+func (ym *PlainYearMonth) DaysInMonth() float64 { return float64(isoDaysInMonth(ym.year, ym.month)) }
+
+// DaysInYear returns 366 in a leap year and 365 otherwise.
+func (ym *PlainYearMonth) DaysInYear() float64 {
+	if isLeapISO(ym.year) {
+		return 366
+	}
+	return 365
+}
+
+// MonthsInYear is always 12 in the ISO calendar.
+func (ym *PlainYearMonth) MonthsInYear() float64 { return 12 }
+
+// InLeapYear reports whether this year-month's year is an ISO leap year.
+func (ym *PlainYearMonth) InLeapYear() bool { return isLeapISO(ym.year) }
+
+// Equals implements Temporal.PlainYearMonth.prototype.equals: two year-months are equal
+// when their year and month match under the same (ISO) calendar.
+func (ym *PlainYearMonth) Equals(other *PlainYearMonth) bool {
+	return ym.year == other.year && ym.month == other.month
+}
+
+// PlainYearMonthCompare implements Temporal.PlainYearMonth.compare, the static comparator:
+// -1 if a precedes b, 1 if a follows b, 0 if they are the same year-month.
+func PlainYearMonthCompare(a, b *PlainYearMonth) float64 {
+	switch {
+	case a.year != b.year:
+		if a.year < b.year {
+			return -1
+		}
+		return 1
+	case a.month != b.month:
+		if a.month < b.month {
+			return -1
+		}
+		return 1
+	default:
+		return 0
+	}
+}
+
+// ToString implements Temporal.PlainYearMonth.prototype.toString for the default options:
+// the ISO 8601 year-month, YYYY-MM, with the year expanded to a signed six-digit form
+// outside 0..9999. The ISO calendar hides the reference day, so no day appears.
+func (ym *PlainYearMonth) ToString() BStr {
+	return FromGoString(formatISOYear(ym.year) + "-" + twoDigit(ym.month))
+}
+
+// ToJSON implements Temporal.PlainYearMonth.prototype.toJSON, the same ISO string toString
+// produces under default options.
+func (ym *PlainYearMonth) ToJSON() BStr { return ym.ToString() }
+
+// PlainMonthDay is bento's runtime representation of a Temporal.PlainMonthDay (Temporal §10):
+// a calendar month and day with no year, no time, and no zone, the way a birthday or a
+// holiday recurs every year. Like PlainDate it hosts only the ISO 8601 calendar; a non-ISO
+// calendar hands back at lowering. The specification anchors a month-day to a reference ISO
+// year so a calendar can resolve which day the pair falls on; the ISO calendar needs it only
+// to admit February 29, so this type stores the month and day and validates against the fixed
+// leap reference year without keeping it.
+type PlainMonthDay struct {
+	month int // 1..12
+	day   int // 1..isoDaysInMonth(monthDayReferenceYear, month)
+}
+
+// monthDayReferenceYear is the ISO year a PlainMonthDay is validated against, 1972, a leap
+// year so February 29 is a valid month-day. It is the reference the specification uses for
+// the ISO calendar.
+const monthDayReferenceYear = 1972
+
+// NewPlainMonthDay builds a PlainMonthDay from the constructor's two number arguments, the
+// month first and the day second, running ToIntegerWithTruncation on each and then
+// RejectISOMonthDay, so a fractional argument truncates toward zero, a non-finite one throws
+// a RangeError, and a month outside 1..12 or a day out of range for that month throws a
+// RangeError. A third calendar argument and a fourth reference-year argument are not accepted
+// here; both hand back at lowering, so this constructor is only ever reached for the ISO
+// calendar with the default reference year.
+func NewPlainMonthDay(isoMonth, isoDay float64) *PlainMonthDay {
+	m := toIntegerWithTruncation(isoMonth)
+	d := toIntegerWithTruncation(isoDay)
+	rejectISOMonthDay(m, d)
+	return &PlainMonthDay{month: int(m), day: int(d)}
+}
+
+// PlainMonthDayFrom implements Temporal.PlainMonthDay.from for a PlainMonthDay argument: it
+// returns a fresh PlainMonthDay with the same fields, the copy the specification makes. from
+// over a string or a property bag hands back at lowering.
+func PlainMonthDayFrom(md *PlainMonthDay) *PlainMonthDay {
+	return &PlainMonthDay{month: md.month, day: md.day}
+}
+
+// rejectISOMonthDay throws a RangeError unless (month, day) is a real ISO month-day: the
+// month in 1..12 and the day in 1..(days in that month) measured against the leap reference
+// year 1972, so February 29 is admitted and February 30 is rejected.
+func rejectISOMonthDay(month, day float64) {
+	if month < 1 || month > 12 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay month must be between 1 and 12")))
+	}
+	m := int(month)
+	if day < 1 || day > float64(isoDaysInMonth(monthDayReferenceYear, m)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay day is out of range for the month")))
+	}
+}
+
+// MonthCode returns the ISO month code, "M" followed by the two-digit month. The ISO
+// calendar has no leap months, so the code never carries the trailing "L". A month-day
+// exposes its month only through this code, not through a numeric month getter.
+func (md *PlainMonthDay) MonthCode() BStr {
+	code := "M"
+	if md.month < 10 {
+		code += "0"
+	}
+	return FromGoString(code + strconv.Itoa(md.month))
+}
+
+// Day returns the ISO day of the month.
+func (md *PlainMonthDay) Day() float64 { return float64(md.day) }
+
+// CalendarId returns the calendar identifier, always "iso8601" for this slice.
+func (md *PlainMonthDay) CalendarId() BStr { return FromGoString("iso8601") }
+
+// Equals implements Temporal.PlainMonthDay.prototype.equals: two month-days are equal when
+// their month and day match under the same (ISO) calendar.
+func (md *PlainMonthDay) Equals(other *PlainMonthDay) bool {
+	return md.month == other.month && md.day == other.day
+}
+
+// ToString implements Temporal.PlainMonthDay.prototype.toString for the default options:
+// the ISO 8601 month-day, MM-DD. The ISO calendar hides the reference year, so no year
+// appears.
+func (md *PlainMonthDay) ToString() BStr {
+	return FromGoString(twoDigit(md.month) + "-" + twoDigit(md.day))
+}
+
+// ToJSON implements Temporal.PlainMonthDay.prototype.toJSON, the same ISO string toString
+// produces under default options.
+func (md *PlainMonthDay) ToJSON() BStr { return md.ToString() }
+
 // Duration is bento's runtime representation of a Temporal.Duration (Temporal §7):
 // a span of time as ten independent components, from years down to nanoseconds, with
 // no anchor to a point on the timeline. It carries no calendar and no zone; it is a
