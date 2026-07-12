@@ -106,6 +106,25 @@ func TestTypedArrayGeometryGetters(t *testing.T) {
 	}
 }
 
+// TestSharedViewsObserveWrites proves the many-views-over-one-buffer contract
+// across element widths: an Int32Array and a Uint8Array over the same buffer alias
+// the same bytes, so a write through one shows through the other, little-endian. A
+// write of 513 through the int view is 0x0201, so the byte view reads 1 then 2, and
+// a byte write past the first element shows in the int view's second element.
+func TestSharedViewsObserveWrites(t *testing.T) {
+	buf := NewArrayBuffer(8)
+	ints := Int32ArrayView(buf, 0)
+	bytes := Uint8ArrayView(buf, 0)
+	ints.SetAt(0, 513)
+	if bytes.At(0) != 1 || bytes.At(1) != 2 || bytes.At(2) != 0 || bytes.At(3) != 0 {
+		t.Errorf("int write did not show through the byte view little-endian: %v %v %v %v", bytes.At(0), bytes.At(1), bytes.At(2), bytes.At(3))
+	}
+	bytes.SetAt(4, 255)
+	if got := ints.At(1); got != 255 {
+		t.Errorf("byte write did not show through the int view: %v, want 255", got)
+	}
+}
+
 // TestTypedArrayBadLengthClamps proves a negative or not-a-number length yields an
 // empty array rather than panicking, the same covered-subset rule the byte buffer
 // takes.
