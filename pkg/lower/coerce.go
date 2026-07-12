@@ -564,6 +564,17 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if calls, _ := r.prog.Signatures(r.prog.TypeAt(src)); len(calls) == 1 {
 		return r.boxFuncToDynamic(expr, calls[0])
 	}
+	// An optional (T | undefined) flowing into a dynamic slot boxes through
+	// value.OptToValue, which yields the element's box when present and the undefined
+	// singleton when not, the box an array's at or pop and a member the checker types
+	// number | undefined take when they reach console.log or another dynamic sink. It
+	// routes before the primitive switch, whose kind tests read the union member and
+	// would box the present case while dropping the undefined one.
+	if boxed, ok, err := r.boxOptionalToDynamic(expr, src); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	r.requireImport(valuePkg)
 	switch {
 	case r.isNumber(src):
@@ -598,6 +609,39 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		}, nil
 	}
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
+}
+
+// boxOptionalToDynamic boxes a T | undefined result into a dynamic value.Value. The
+// optional lowers to a value.Opt[T], so the box threads it through value.OptToValue
+// with the element's own box constructor as the present-case wrapper: value.Number
+// for a numeric optional, value.StringValue for a string one, value.Bool for a
+// boolean. Each constructor already has the func(T) value.Value shape OptToValue
+// wants, so it passes as the wrapper directly with no closure. It reports ok=false
+// when the source is not an optional, so a non-union type falls through to the
+// primitive path, and hands back for an optional of a shape with no dynamic box yet
+// rather than emit a call that would not compile.
+func (r *Renderer) boxOptionalToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, bool, error) {
+	t := r.prog.TypeAt(src)
+	if !r.isOptionalType(t) {
+		return nil, false, nil
+	}
+	inner, ok := r.optionalInner(r.prog.UnionMembers(t))
+	if !ok {
+		return nil, false, nil
+	}
+	var box ast.Expr
+	switch {
+	case inner.Flags&frontend.TypeNumber != 0:
+		box = sel("value", "Number")
+	case inner.Flags&frontend.TypeString != 0:
+		box = sel("value", "StringValue")
+	case inner.Flags&frontend.TypeBoolean != 0:
+		box = sel("value", "Bool")
+	default:
+		return nil, false, &NotYetLowerable{Reason: "boxing an optional of this type into a dynamic value is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "OptToValue"), Args: []ast.Expr{expr, box}}, true, nil
 }
 
 // boxFuncToDynamic wraps a lowered function value in a callable value.Value, the

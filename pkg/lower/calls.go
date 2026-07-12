@@ -3261,6 +3261,19 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 		// which dispatches on the runtime kind.
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
+	case r.isOptional(arg):
+		// A T | undefined optional stringifies through the value model: box it into a
+		// dynamic value (a present element through its own constructor, an undefined one
+		// the undefined singleton) and defer to value.ToString, which renders the present
+		// value the way String does and the missing one as "undefined", the same result
+		// String over a possibly-undefined value gives. An optional of a shape with no
+		// dynamic box yet hands back through boxStaticToDynamic.
+		boxed, err := r.boxStaticToDynamic(lowered, arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "coercing this type to a string is a later slice"}
 	}
