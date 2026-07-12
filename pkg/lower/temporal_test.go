@@ -121,9 +121,9 @@ func TestPlainDateHandBacks(t *testing.T) {
 			want: "Temporal.PlainDate.from over a string or a property bag is a later slice",
 		},
 		{
-			name: "PlainDateTime construction",
-			src:  "function makeDateTime(): void { new Temporal.PlainDateTime(2020, 2, 29); }",
-			want: "new Temporal.PlainDateTime is a later slice",
+			name: "Duration construction",
+			src:  "function makeDuration(): void { new Temporal.Duration(1); }",
+			want: "new Temporal.Duration is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -239,6 +239,134 @@ func TestPlainTimeHandBacks(t *testing.T) {
 			name: "round",
 			src:  "const t = new Temporal.PlainTime(12, 30, 45);\nconst r = t.round({ smallestUnit: \"minute\" });\nconsole.log(r.minute);",
 			want: "Temporal.PlainTime.prototype.round is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestPlainDateTimeConstruction pins the construction: a PlainDateTime is built by
+// value.NewPlainDateTime over its nine number components, the missing trailing time ones
+// padded with zero, and a field read lowers to a getter method.
+func TestPlainDateTimeConstruction(t *testing.T) {
+	const src = `const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);
+console.log(dt.hour);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		"value.NewPlainDateTime(2020, 1, 1, 12, 30, 0, 0, 0, 0)",
+		".Hour()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainDateTimeTypeSlot pins the type slot: a parameter typed Temporal.PlainDateTime
+// lowers to a pointer to value.PlainDateTime rather than an interned struct shape.
+func TestPlainDateTimeTypeSlot(t *testing.T) {
+	const src = `function hourOf(dt: Temporal.PlainDateTime): number { return dt.hour; }
+console.log(hourOf(new Temporal.PlainDateTime(2020, 1, 1, 12, 30)));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "*value.PlainDateTime") {
+		t.Errorf("rendered program missing %q:\n%s", "*value.PlainDateTime", got)
+	}
+}
+
+// TestPlainDateTimeGetters pins the union of the clean date getters and the six time
+// getters: each lowers to the matching method on the value.PlainDateTime receiver.
+func TestPlainDateTimeGetters(t *testing.T) {
+	cases := map[string]string{
+		"year":        ".Year()",
+		"month":       ".Month()",
+		"day":         ".Day()",
+		"hour":        ".Hour()",
+		"minute":      ".Minute()",
+		"second":      ".Second()",
+		"millisecond": ".Millisecond()",
+		"microsecond": ".Microsecond()",
+		"nanosecond":  ".Nanosecond()",
+		"monthCode":   ".MonthCode()",
+		"dayOfWeek":   ".DayOfWeek()",
+		"daysInMonth": ".DaysInMonth()",
+		"inLeapYear":  ".InLeapYear()",
+		"calendarId":  ".CalendarId()",
+	}
+	for prop, want := range cases {
+		src := "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30, 45);\nconsole.log(dt." + prop + ");"
+		got := renderProgram(t, src)
+		if !strings.Contains(got, want) {
+			t.Errorf("getter .%s missing %q:\n%s", prop, want, got)
+		}
+	}
+}
+
+// TestPlainDateTimeMethods pins equals, toString, and toJSON to their value.PlainDateTime
+// methods.
+func TestPlainDateTimeMethods(t *testing.T) {
+	const src = `const a = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);
+const b = new Temporal.PlainDateTime(2020, 3, 15, 8, 0);
+console.log(a.equals(b));
+console.log(a.toString());
+console.log(a.toJSON());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Equals(", ".ToString()", ".ToJSON()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainDateTimeStatics pins Temporal.PlainDateTime.compare and .from over the two-level
+// Temporal namespace access to their value package functions.
+func TestPlainDateTimeStatics(t *testing.T) {
+	const src = `const a = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);
+const b = new Temporal.PlainDateTime(2020, 3, 15, 8, 0);
+console.log(Temporal.PlainDateTime.compare(a, b));
+const c = Temporal.PlainDateTime.from(a);
+console.log(c.hour);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.PlainDateTimeCompare(", "value.PlainDateTimeFrom("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainDateTimeHandBacks pins the honest ceilings for PlainDateTime: the union getters,
+// the arithmetic, from over a string, and a conversion method each hand back with a reason
+// naming where the work belongs.
+func TestPlainDateTimeHandBacks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "weekOfYear union getter",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconsole.log(dt.weekOfYear);",
+			want: "Temporal.PlainDateTime.weekOfYear is a later slice",
+		},
+		{
+			name: "add arithmetic",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.add({ hours: 1 });\nconsole.log(e.hour);",
+			want: "Temporal.PlainDateTime.prototype.add is a later slice",
+		},
+		{
+			name: "from a string",
+			src:  "const dt = Temporal.PlainDateTime.from(\"2020-01-01T12:30:00\");\nconsole.log(dt.hour);",
+			want: "Temporal.PlainDateTime.from over a string or a property bag is a later slice",
+		},
+		{
+			name: "toPlainDate conversion",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst d = dt.toPlainDate();\nconsole.log(d.day);",
+			want: "Temporal.PlainDateTime.prototype.toPlainDate is a later slice",
 		},
 	}
 	for _, c := range cases {
