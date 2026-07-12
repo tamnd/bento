@@ -1830,6 +1830,12 @@ func (r *Renderer) reflectCall(method string, argNodes []frontend.Node) (ast.Exp
 		return r.reflectFree("preventExtensions", "ReflectPreventExtensions", 1, argNodes)
 	case "apply":
 		return r.reflectFree("apply", "ReflectApply", 3, argNodes)
+	case "construct":
+		// Reflect.construct reaches into [[Construct]] over a runtime constructor and
+		// threads a newTarget that redirects which prototype the new object receives.
+		// bento has no runtime construct over a dynamic value and no newTarget slot on
+		// the class path, so there is nothing faithful to emit and it hands back.
+		return nil, &NotYetLowerable{Reason: "Reflect.construct needs a runtime [[Construct]] over a dynamic constructor with a newTarget, which is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Reflect." + method + " is a later slice"}
 	}
