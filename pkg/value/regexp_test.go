@@ -38,7 +38,12 @@ func TestTranslateRegExp(t *testing.T) {
 		{"foo", "i"},
 		{"foo.bar", ""},
 		{"foo.bar", "s"},
-		{"abc", "m"}, // multiline without an anchor is fine
+		{"abc", "m"},            // multiline without an anchor is fine
+		{"a(?i:b)c", ""},        // inline case-insensitive modifier
+		{"a(?-i:b)c", "i"},      // inline modifier disabling the global i
+		{"a(?s:.)b", ""},        // inline dot-all modifier
+		{"a(?i:b(?-i:c))d", ""}, // nested inline modifiers
+		{`(?<name>x)`, ""},      // named group translates to RE2's (?P<name>)
 	}
 	for _, c := range ok {
 		fl, _ := parseRegExpFlags(c.flags)
@@ -53,15 +58,17 @@ func TestTranslateRegExp(t *testing.T) {
 	}
 
 	handback := []struct{ pattern, flags string }{
-		{`(a)\1`, ""},      // backreference
-		{`(?=foo)`, ""},    // lookahead
-		{`(?!foo)`, ""},    // negative lookahead
-		{`(?<=foo)`, ""},   // lookbehind
-		{`(?<name>x)`, ""}, // named group, a later slice
-		{`\p{L}`, ""},      // unicode property escape, a later slice
-		{`foo`, "u"},       // unicode mode, a later slice
-		{`foo`, "v"},       // unicode-sets mode, a later slice
-		{`^foo`, "m"},      // multiline anchor needs the ECMAScript terminator set
+		{`(a)\1`, ""},    // backreference
+		{`(?=foo)`, ""},  // lookahead
+		{`(?!foo)`, ""},  // negative lookahead
+		{`(?<=foo)`, ""}, // lookbehind
+		{`\p{L}`, ""},    // unicode property escape, a later slice
+		{`foo`, "u"},     // unicode mode, a later slice
+		{`foo`, "v"},     // unicode-sets mode, a later slice
+		{`^foo`, "m"},    // multiline anchor needs the ECMAScript terminator set
+		{`a(?m:b)c`, ""}, // inline multiline modifier, a later slice
+		{`a(?i)b`, ""},   // bare inline modifier, a later slice
+		{`a(?x:b)c`, ""}, // inline modifier with an unsupported flag
 	}
 	for _, c := range handback {
 		fl, _ := parseRegExpFlags(c.flags)
@@ -89,6 +96,37 @@ func TestTranslateDotLineTerminators(t *testing.T) {
 	}
 	if re.MatchString("\n") {
 		t.Error("the translated dot matched a newline")
+	}
+}
+
+// An inline flag modifier changes a flag for its group's scope: (?i:...) folds case,
+// (?-i:...) restores case sensitivity inside a case-insensitive regexp, and (?s:...)
+// makes the dot match a line terminator only within the group, the dot outside it
+// keeping the ECMAScript exclusion.
+func TestTranslateInlineModifiers(t *testing.T) {
+	caseOn := NewRegExpLiteral("a(?i:b)c", "")
+	if !caseOn.Test(FromGoString("aBc")) {
+		t.Error("(?i:b) did not fold case for its scope")
+	}
+	if caseOn.Test(FromGoString("Abc")) {
+		t.Error("(?i:b) folded case outside its scope")
+	}
+
+	caseOff := NewRegExpLiteral("a(?-i:b)c", "i")
+	if !caseOff.Test(FromGoString("AbC")) {
+		t.Error("the global i did not fold a and c around a case-sensitive b")
+	}
+	if caseOff.Test(FromGoString("ABC")) {
+		t.Error("(?-i:b) did not restore case sensitivity for b")
+	}
+
+	dotOn := NewRegExpLiteral("a(?s:.)b", "")
+	if !dotOn.Test(FromGoString("a\nb")) {
+		t.Error("(?s:.) did not match a newline in its scope")
+	}
+	dotOff := NewRegExpLiteral("a.b", "")
+	if dotOff.Test(FromGoString("a\nb")) {
+		t.Error("the dot outside a dot-all scope matched a newline")
 	}
 }
 

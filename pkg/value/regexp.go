@@ -412,11 +412,12 @@ func TranslateRegExpSource(pattern, flags string) (re2 string, ok bool, reason s
 // the rest: a mistranslation would run and silently disagree with JavaScript, which
 // the zero-fail invariant forbids, whereas a handback is safe. The constructs held
 // back here are the ones RE2 does not support at all (backreferences, lookahead,
-// lookbehind) or that later slices own (named groups, the u and v flags, unicode
-// property escapes, inline flag modifiers). What remains, the ordinary character,
-// class, quantifier, group, and alternation core, maps to RE2 unchanged except for
-// the dot, whose line-terminator set differs between the two and is rewritten to the
-// ECMAScript set here.
+// lookbehind) or that later slices own (the u and v flags, unicode property escapes).
+// A named capture group and an inline i or s flag modifier translate to RE2's own
+// spelling. What remains, the ordinary character, class, quantifier, group, and
+// alternation core, maps to RE2 unchanged except for the dot, whose line-terminator
+// set differs between the two and is rewritten to the ECMAScript set here, scoped by
+// the s flag an inline (?s:...) modifier turns on or off.
 func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	if fl.unicode {
 		return "", false, "a unicode-mode (u flag) regexp is a later slice"
@@ -428,6 +429,12 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	var b strings.Builder
 	inClass := false
 	names := map[string]bool{}
+	// dotAll tracks the effective s-flag state per group depth, so a dot is rewritten
+	// against the scope it sits in. The base frame is the whole-pattern s flag; each
+	// group open pushes a frame (inheriting the enclosing state, or the state an inline
+	// (?s:...) or (?-s:...) modifier sets), and each group close pops it. The top of the
+	// stack is the effective dot-all where the next dot is rewritten.
+	dotAll := []bool{fl.dotAll}
 	rs := []rune(pattern)
 	for i := 0; i < len(rs); i++ {
 		c := rs[i]
@@ -478,26 +485,49 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 				}
 				names[name] = true
 				b.WriteString("(?P<" + name + ">")
+				dotAll = append(dotAll, dotAll[len(dotAll)-1])
 				i += consumed - 1
 				continue
 			}
-			// A group prefix names a construct RE2 either cannot host (lookahead,
-			// lookbehind) or a later slice owns (an inline flag modifier). A plain
-			// capturing group and a non-capturing (?:...) group pass through.
+			// An inline flag modifier (?i:...) or (?s:...) is ECMAScript's spelling of a
+			// scoped flag change, which RE2 hosts with the same i and s letters, so it
+			// passes through and its s scope is tracked for the dot rewrite. An m modifier
+			// or the bare (?flags) form hands back.
+			if prefix, da, consumed, host, held, reason := parseInlineModifier(rs, i, dotAll[len(dotAll)-1]); host {
+				b.WriteString(prefix)
+				dotAll = append(dotAll, da)
+				i += consumed - 1
+				continue
+			} else if held {
+				return "", false, reason
+			}
+			// A group prefix names a construct RE2 cannot host (lookahead, lookbehind). A
+			// plain capturing group and a non-capturing (?:...) group pass through.
 			if kind, held, reason := heldGroupPrefix(rs, i); held {
 				return "", false, reason
 			} else if kind != "" {
 				b.WriteString(kind)
+				dotAll = append(dotAll, dotAll[len(dotAll)-1])
 				i += len(kind) - 1
 				continue
+			}
+			b.WriteRune(c)
+			dotAll = append(dotAll, dotAll[len(dotAll)-1])
+		case c == ')':
+			// Close the innermost group's scope. A stray ) with no open group leaves the
+			// base frame in place; regexp.Compile rejects the unbalanced pattern.
+			if len(dotAll) > 1 {
+				dotAll = dotAll[:len(dotAll)-1]
 			}
 			b.WriteRune(c)
 		case c == '.':
 			// ECMAScript's dot excludes the four line terminators \n \r    ;
 			// RE2's dot without the s flag excludes only \n, so a faithful dot is spelled
 			// as the explicit negated class. Under the s flag the dot matches every code
-			// point including the terminators, which RE2's (?s) dot does exactly.
-			if fl.dotAll {
+			// point including the terminators, which RE2's (?s) dot does exactly. The dot
+			// is rewritten against the effective s state of the group it sits in, the top
+			// of the scope stack, so an inline (?s:.) or (?-s:.) modifier is honored.
+			if dotAll[len(dotAll)-1] {
 				b.WriteString("(?s:.)")
 			} else {
 				b.WriteString(`[^\n\r\x{2028}\x{2029}]`)
@@ -582,8 +612,9 @@ func patternHasAnchor(pattern string) bool {
 // string and no hold for a group that translates (a non-capturing (?:...) passes
 // through unchanged, spelled by returning it), held=true with a reason for a group
 // RE2 cannot host or a later slice owns, and the empty replacement with held=false
-// for a plain capturing group the caller copies. Named groups, lookahead,
-// lookbehind, and inline flag modifiers are the held cases.
+// for a plain capturing group the caller copies. Named groups and hostable inline
+// flag modifiers are translated before this runs, so lookahead, lookbehind, and an
+// unrecognized group prefix are the held cases here.
 func heldGroupPrefix(rs []rune, i int) (replacement string, held bool, reason string) {
 	if i+1 >= len(rs) || rs[i+1] != '?' {
 		return "", false, "" // a plain capturing group
@@ -604,8 +635,62 @@ func heldGroupPrefix(rs []rune, i int) (replacement string, held bool, reason st
 		// (?< that reaches here has no closing >, an unterminated named group.
 		return "", true, "an unterminated named group in a regexp is a later slice"
 	default:
-		return "", true, "an inline flag modifier in a regexp is a later slice"
+		return "", true, "an unrecognized group prefix in a regexp is a later slice"
 	}
+}
+
+// parseInlineModifier inspects a group opening at index i and parses an inline flag
+// modifier group, (?flags:...) or (?flags-flags:...). ECMAScript's regexp-modifiers
+// admit the i, m, and s flags; RE2 shares the i and s spelling and their meaning, so a
+// modifier over those two passes through unchanged and its dot-all scope, which the s
+// flag sets, is returned for the dot rewrite. base is the enclosing scope's dot-all
+// state, which the group inherits before adjusting.
+//
+// It reports host=true with the RE2 prefix to emit, the group's dot-all state, and the
+// runes the prefix spans when the modifier is one RE2 can host. It reports held=true
+// with a reason for a modifier RE2 cannot host faithfully: one naming the m flag, whose
+// ECMAScript anchor line-terminator set RE2 does not share, or the bare (?flags) form
+// with no colon, which applies to the rest of the enclosing group rather than a clean
+// nested scope. It reports host=false and held=false when the opening is not a modifier
+// at all (a (?:, (?=, (?!, or (?< prefix), which the caller routes to heldGroupPrefix.
+func parseInlineModifier(rs []rune, i int, base bool) (prefix string, dotAll bool, consumed int, host, held bool, reason string) {
+	if i+2 >= len(rs) || rs[i+1] != '?' {
+		return "", false, 0, false, false, ""
+	}
+	if c := rs[i+2]; c != 'i' && c != 'm' && c != 's' && c != '-' {
+		return "", false, 0, false, false, "" // not a modifier opening
+	}
+	dotAll = base
+	sawFlag := false
+	neg := false
+	j := i + 2
+	for ; j < len(rs) && rs[j] != ':'; j++ {
+		switch rs[j] {
+		case ')':
+			return "", false, 0, false, true, "a bare inline flag modifier in a regexp is a later slice"
+		case '-':
+			if neg {
+				return "", false, 0, false, true, "a malformed inline flag modifier in a regexp is a later slice"
+			}
+			neg = true
+		case 'i':
+			sawFlag = true
+		case 's':
+			sawFlag = true
+			dotAll = !neg
+		case 'm':
+			return "", false, 0, false, true, "an inline multiline modifier in a regexp needs the ECMAScript line-terminator set, a later slice"
+		default:
+			return "", false, 0, false, true, "an inline flag modifier with an unsupported flag in a regexp is a later slice"
+		}
+	}
+	if j >= len(rs) {
+		return "", false, 0, false, true, "an unterminated inline flag modifier in a regexp is a later slice"
+	}
+	if !sawFlag {
+		return "", false, 0, false, true, "an empty inline flag modifier in a regexp is a later slice"
+	}
+	return string(rs[i : j+1]), dotAll, j - i + 1, true, false, ""
 }
 
 // namedGroupPrefix inspects a group opening at index i and, when it is a named
