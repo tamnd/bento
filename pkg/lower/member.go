@@ -271,7 +271,7 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	// or read .byteLength off a buffer the receiver is not. The .length getter shares
 	// the Len path above with a dense array, so only these three land here.
 	if prop == "buffer" || prop == "byteOffset" || prop == "byteLength" {
-		if r.numericTypedArray(obj) || r.bigintTypedArray(obj) {
+		if r.numericTypedArray(obj) || r.bigintTypedArray(obj) || r.isDataView(obj) {
 			recv, err := r.lowerExpr(obj)
 			if err != nil {
 				return nil, err
