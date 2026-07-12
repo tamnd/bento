@@ -432,3 +432,14 @@ func toFloat32(v float64) float32 { return float32(v) }
 // toFloat64 is the Float64Array store rule: a Float64Array holds the Number
 // itself, so the store is the identity.
 func toFloat64(v float64) float64 { return v }
+
+// TypedArrayClassTag returns the "[object <Name>]" tag
+// Object.prototype.toString.call reads off a typed array, built from the concrete
+// constructor name the compiler knows statically. The view is taken and discarded so
+// the borrowed toString evaluates its argument the way the language does and the
+// caller's binding reads as a use; the name comes from the compiler rather than the
+// Go element type, since a single element width does not name one JS constructor (a
+// uint8 element backs both Uint8Array and Uint8ClampedArray).
+func TypedArrayClassTag(_ any, name string) BStr {
+	return FromGoString("[object " + name + "]")
+}
