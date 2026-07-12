@@ -18,7 +18,8 @@ import "unsafe"
 // no per-element packing, and the platform's little-endian layout is the byte order
 // the buffer exposes, which is the order the tests assume.
 type ArrayBuffer struct {
-	data []byte
+	data     []byte
+	detached bool
 }
 
 // NewArrayBuffer builds a zeroed buffer of the given byte length, the lowering of
@@ -41,6 +42,56 @@ func (b *ArrayBuffer) ByteLength() float64 { return float64(len(b.data)) }
 // own storage, so a write through any view or through the returned slice shows
 // through every other view of the buffer.
 func (b *ArrayBuffer) Bytes() []byte { return b.data }
+
+// Transfer moves the buffer's bytes to a fresh buffer of the given byte length and
+// detaches the receiver, the lowering of ArrayBuffer.prototype.transfer (25 §25.1.6).
+// The new buffer keeps the first min(old, new) bytes and zero-fills any growth, and
+// the old buffer is detached so every view over it reads as zero-length from here on.
+// The new length defaults to the receiver's current byte length when the call gives
+// none. Transferring an already-detached buffer is a TypeError, the same throw the
+// spec raises. The resizable distinction transferToFixedLength carries has no effect
+// until the resizable buffer lands, so the two share this body today.
+func (b *ArrayBuffer) Transfer(newLength ...float64) *ArrayBuffer {
+	return b.transfer(newLength)
+}
+
+// TransferToFixedLength moves the bytes to a fresh fixed-length buffer and detaches
+// the receiver, the lowering of ArrayBuffer.prototype.transferToFixedLength. It
+// differs from Transfer only in that its result is never resizable; with the
+// resizable buffer still a later slice every buffer is already fixed-length, so it
+// shares Transfer's body and the distinction is a no-op until then.
+func (b *ArrayBuffer) TransferToFixedLength(newLength ...float64) *ArrayBuffer {
+	return b.transfer(newLength)
+}
+
+// transfer is the shared body of the two transfer methods: it allocates the new
+// buffer, copies the retained bytes, and detaches the receiver.
+func (b *ArrayBuffer) transfer(newLength []float64) *ArrayBuffer {
+	if b.detached {
+		Throw(NewTypeError(FromGoString("Cannot transfer a detached ArrayBuffer")))
+	}
+	n := len(b.data)
+	if len(newLength) > 0 {
+		n = typedLen(newLength[0])
+	}
+	out := &ArrayBuffer{data: allocBytes(n)}
+	copy(out.data, b.data)
+	b.Detach()
+	return out
+}
+
+// Detach empties the buffer and marks it detached, the state a transfer or an
+// explicit detach leaves it in. The bytes are dropped so ByteLength reads zero and,
+// once the view path consults the buffer's live state, every view over it reads as
+// zero-length with its indexed access a no-op.
+func (b *ArrayBuffer) Detach() {
+	b.data = nil
+	b.detached = true
+}
+
+// Detached reports whether the buffer has been detached, the ArrayBuffer.prototype
+// .detached accessor and the state the $DETACHBUFFER harness hook leaves behind.
+func (b *ArrayBuffer) Detached() bool { return b.detached }
 
 // allocBytes returns a byte slice of length n whose first byte is eight-byte
 // aligned, so a typed-array view of any element width up to eight bytes reads and
