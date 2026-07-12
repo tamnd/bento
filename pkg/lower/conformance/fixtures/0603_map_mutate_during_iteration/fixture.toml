@@ -1,0 +1,2 @@
+feature = "map"
+handback = "a for...of that mutates the map it iterates needs the iterator's live view of the change, a later slice"
