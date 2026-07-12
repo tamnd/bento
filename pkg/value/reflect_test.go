@@ -265,6 +265,42 @@ func TestReflectExtensibility(t *testing.T) {
 	}
 }
 
+// TestReflectApply pins that the array-like argument list spreads into the target in
+// order, an array-like object with a length is read the same way, and a non-callable
+// target throws.
+func TestReflectApply(t *testing.T) {
+	sum := NewFunc(func(args []Value) Value {
+		return Number(Arg(args, 0).AsNumber() + Arg(args, 1).AsNumber() + Arg(args, 2).AsNumber())
+	})
+	list := NewArrayValue([]Value{Number(1), Number(2), Number(3)})
+	if got := ReflectApply(sum, Undefined, list); got.AsNumber() != 6 {
+		t.Errorf("Reflect.apply over an array = %v, want 6", got)
+	}
+
+	// An array-like object with a length is read by CreateListFromArrayLike too.
+	like := NewObject()
+	like.Set(FromGoString("0"), Number(10))
+	like.Set(FromGoString("1"), Number(20))
+	like.Set(FromGoString("2"), Number(30))
+	like.Set(FromGoString("length"), Number(3))
+	if got := ReflectApply(sum, Undefined, like); got.AsNumber() != 60 {
+		t.Errorf("Reflect.apply over an array-like = %v, want 60", got)
+	}
+
+	threw := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				threw = true
+			}
+		}()
+		ReflectApply(NewObject(), Undefined, list)
+	}()
+	if !threw {
+		t.Error("Reflect.apply on a non-callable target did not throw")
+	}
+}
+
 // nonConfigDesc builds a non-configurable data descriptor object, the shape the
 // deleteProperty refusal test defines onto an object.
 func nonConfigDesc(value Value) Value {

@@ -299,6 +299,26 @@ func ReflectPreventExtensions(target Value) bool {
 	return true
 }
 
+// ReflectApply implements Reflect.apply(target, thisArgument, argumentsList): the
+// [[Call]] Function.prototype.apply performs, reading the array-like argumentsList
+// into a positional argument list the spec's CreateListFromArrayLike way and calling
+// the target with it. bento's callables never read this, so a body that would consult
+// thisArgument hands back at its declaration and the argument is threaded no further
+// here. A non-callable target throws the TypeError the spec raises.
+func ReflectApply(target, thisArg, argsList Value) Value {
+	if target.kind != KindFunc {
+		Throw(NewTypeError(FromGoString("Reflect.apply called on non-callable target")))
+		return Undefined
+	}
+	_ = thisArg
+	n := arrayLikeLen(argsList)
+	args := make([]Value, n)
+	for i := 0; i < n; i++ {
+		args[i] = arrayLikeGet(argsList, i)
+	}
+	return target.Call(args...)
+}
+
 // ordinarySetSym is the symbol mirror of ordinarySet, resolving a symbol-keyed
 // property by identity through the symbol bag and its prototype chain rather than
 // the named bag. It shares the same refusal rules: a non-writable data property, an
