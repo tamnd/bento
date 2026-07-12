@@ -881,3 +881,162 @@ console.log(a.equals(a));`
 		t.Fatalf("instant run printed %q, want %q", got, want)
 	}
 }
+
+// TestZonedDateTimeConstruction pins the constructor: an epoch bigint and a zone string
+// lower to value.NewZonedDateTime.
+func TestZonedDateTimeConstruction(t *testing.T) {
+	const src = `const z = new Temporal.ZonedDateTime(0n, "UTC");
+console.log(z.epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.NewZonedDateTime(", ".EpochMilliseconds()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestZonedDateTimeTypeSlot pins the type slot: a parameter typed Temporal.ZonedDateTime
+// lowers to a pointer to value.ZonedDateTime rather than an interned struct shape.
+func TestZonedDateTimeTypeSlot(t *testing.T) {
+	const src = `function yearOf(z: Temporal.ZonedDateTime): number { return z.year; }
+console.log(yearOf(new Temporal.ZonedDateTime(0n, "UTC")));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "*value.ZonedDateTime") {
+		t.Errorf("rendered program missing %q:\n%s", "*value.ZonedDateTime", got)
+	}
+}
+
+// TestZonedDateTimeGetters pins the exact-time, zone, and wall-clock getters, each to the
+// matching method on the value.ZonedDateTime receiver, including the bigint and optional
+// getters that route through the same method path.
+func TestZonedDateTimeGetters(t *testing.T) {
+	cases := map[string]string{
+		"epochMilliseconds": ".EpochMilliseconds()",
+		"epochNanoseconds":  ".EpochNanoseconds()",
+		"timeZoneId":        ".TimeZoneId()",
+		"calendarId":        ".CalendarId()",
+		"offset":            ".Offset()",
+		"offsetNanoseconds": ".OffsetNanoseconds()",
+		"year":              ".Year()",
+		"hour":              ".Hour()",
+		"monthCode":         ".MonthCode()",
+		"weekOfYear":        ".WeekOfYear()",
+	}
+	for prop, want := range cases {
+		src := "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconsole.log(z." + prop + ");"
+		got := renderProgram(t, src)
+		if !strings.Contains(got, want) {
+			t.Errorf("getter .%s missing %q:\n%s", prop, want, got)
+		}
+	}
+}
+
+// TestZonedDateTimeMethods pins equals, toString, toJSON, and the four conversions to their
+// value.ZonedDateTime methods.
+func TestZonedDateTimeMethods(t *testing.T) {
+	const src = `const a = new Temporal.ZonedDateTime(0n, "UTC");
+const b = new Temporal.ZonedDateTime(1n, "UTC");
+console.log(a.equals(b));
+console.log(a.toString());
+console.log(a.toJSON());
+console.log(a.toInstant().toString());
+console.log(a.toPlainDate().toString());
+console.log(a.toPlainTime().toString());
+console.log(a.toPlainDateTime().toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Equals(", ".ToString()", ".ToJSON()", ".ToInstant()", ".ToPlainDate()", ".ToPlainTime()", ".ToPlainDateTime()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestZonedDateTimeStatics pins compare and from over a ZonedDateTime, each to its value
+// function.
+func TestZonedDateTimeStatics(t *testing.T) {
+	const src = `const a = new Temporal.ZonedDateTime(0n, "UTC");
+const b = new Temporal.ZonedDateTime(1n, "UTC");
+console.log(Temporal.ZonedDateTime.compare(a, b));
+const c = Temporal.ZonedDateTime.from(a);
+console.log(c.epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.ZonedDateTimeCompare(", "value.ZonedDateTimeFrom("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestZonedDateTimeHandBacks pins the honest ceilings: the arithmetic and rounding methods,
+// the reshaping, the start-of-day and transition queries, from over a string, and a
+// constructor with a calendar argument each hand back with a reason naming where the work
+// belongs.
+func TestZonedDateTimeHandBacks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "add arithmetic",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.add({ hours: 1 });\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.add is a later slice",
+		},
+		{
+			name: "with reshape",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.with({ hour: 3 });\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.with is a later slice",
+		},
+		{
+			name: "startOfDay",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.startOfDay();\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.startOfDay is a later slice",
+		},
+		{
+			name: "from a string",
+			src:  "const z = Temporal.ZonedDateTime.from(\"1970-01-01T00:00:00+00:00[UTC]\");\nconsole.log(z.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.from over a string or a property bag is a later slice",
+		},
+		{
+			name: "constructor with a calendar",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\", \"iso8601\");\nconsole.log(z.epochMilliseconds);",
+			want: "new Temporal.ZonedDateTime with a calendar argument or fewer than two components is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestZonedDateTimeRun builds and runs the generated Go, proving the exact-time and
+// wall-clock getters read, the offset follows the zone, the round-trippable string renders,
+// and compare orders on the instant alone while equals also weighs the zone: the same instant
+// in UTC and in New York compares equal but is not equal.
+func TestZonedDateTimeRun(t *testing.T) {
+	skipIfShort(t)
+	const src = `const z = new Temporal.ZonedDateTime(0n, "UTC");
+console.log(z.epochMilliseconds);
+console.log(z.timeZoneId);
+console.log(z.year);
+console.log(z.offset);
+console.log(z.toString());
+const ny = new Temporal.ZonedDateTime(0n, "America/New_York");
+console.log(ny.hour);
+console.log(ny.day);
+console.log(ny.offset);
+console.log(ny.toString());
+console.log(Temporal.ZonedDateTime.compare(z, ny));
+console.log(z.equals(ny));
+console.log(z.toInstant().toString());
+console.log(z.toPlainDate().toString());`
+	got := runProgramGo(t, src)
+	const want = "0\nUTC\n1970\n+00:00\n1970-01-01T00:00:00+00:00[UTC]\n19\n31\n-05:00\n1969-12-31T19:00:00-05:00[America/New_York]\n0\nfalse\n1970-01-01T00:00:00Z\n1970-01-01\n"
+	if got != want {
+		t.Fatalf("zoned date-time run printed %q, want %q", got, want)
+	}
+}
