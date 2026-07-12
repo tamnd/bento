@@ -1268,3 +1268,62 @@ func TestZonedDateTimeRejects(t *testing.T) {
 		t.Errorf("out-of-range offset did not throw")
 	}
 }
+
+// TestNowFixedClock pins the clock with BENTO_NOW_NS and the default zone with TZ, the way the
+// differential harness does, and checks every Temporal.Now function reads that fixed instant.
+// 1700000000123456789 ns is 2023-11-14T22:13:20.123456789Z.
+func TestNowFixedClock(t *testing.T) {
+	t.Setenv("BENTO_NOW_NS", "1700000000123456789")
+	t.Setenv("TZ", "UTC")
+	if got := NowInstant().ToString().ToGoString(); got != "2023-11-14T22:13:20.123456789Z" {
+		t.Errorf("NowInstant = %q", got)
+	}
+	if got := NowTimeZoneId().ToGoString(); got != "UTC" {
+		t.Errorf("NowTimeZoneId = %q, want UTC", got)
+	}
+	if got := NowZonedDateTimeISO().ToString().ToGoString(); got != "2023-11-14T22:13:20.123456789+00:00[UTC]" {
+		t.Errorf("NowZonedDateTimeISO = %q", got)
+	}
+	if got := NowPlainDateTimeISO().ToString().ToGoString(); got != "2023-11-14T22:13:20.123456789" {
+		t.Errorf("NowPlainDateTimeISO = %q", got)
+	}
+	if got := NowPlainDateISO().ToString().ToGoString(); got != "2023-11-14" {
+		t.Errorf("NowPlainDateISO = %q", got)
+	}
+	if got := NowPlainTimeISO().ToString().ToGoString(); got != "22:13:20.123456789" {
+		t.Errorf("NowPlainTimeISO = %q", got)
+	}
+}
+
+// TestNowInZone checks the ISO functions that take an explicit zone read the fixed instant in
+// that zone: on 2023-11-14 New York is five hours behind UTC, so the wall clock reads 17:13.
+func TestNowInZone(t *testing.T) {
+	t.Setenv("BENTO_NOW_NS", "1700000000123456789")
+	t.Setenv("TZ", "UTC")
+	ny := FromGoString("America/New_York")
+	if got := NowZonedDateTimeISOIn(ny).ToString().ToGoString(); got != "2023-11-14T17:13:20.123456789-05:00[America/New_York]" {
+		t.Errorf("NowZonedDateTimeISOIn(NY) = %q", got)
+	}
+	if got := NowPlainDateTimeISOIn(ny).ToString().ToGoString(); got != "2023-11-14T17:13:20.123456789" {
+		t.Errorf("NowPlainDateTimeISOIn(NY) = %q", got)
+	}
+	if got := NowPlainDateISOIn(ny).ToString().ToGoString(); got != "2023-11-14" {
+		t.Errorf("NowPlainDateISOIn(NY) = %q", got)
+	}
+	if got := NowPlainTimeISOIn(ny).ToString().ToGoString(); got != "17:13:20.123456789" {
+		t.Errorf("NowPlainTimeISOIn(NY) = %q", got)
+	}
+}
+
+// TestNowDefaultZone checks that with TZ unset the default zone is UTC, so timeZoneId is a
+// deterministic identifier rather than the host-specific local zone.
+func TestNowDefaultZone(t *testing.T) {
+	t.Setenv("BENTO_NOW_NS", "0")
+	t.Setenv("TZ", "")
+	if got := NowTimeZoneId().ToGoString(); got != "UTC" {
+		t.Errorf("NowTimeZoneId with TZ unset = %q, want UTC", got)
+	}
+	if got := NowInstant().ToString().ToGoString(); got != "1970-01-01T00:00:00Z" {
+		t.Errorf("NowInstant at epoch = %q", got)
+	}
+}

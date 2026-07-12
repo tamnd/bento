@@ -3,6 +3,7 @@ package value
 import (
 	"math"
 	"math/big"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -1585,3 +1586,76 @@ func (z *ZonedDateTime) ToString() BStr {
 // ToJSON implements Temporal.ZonedDateTime.prototype.toJSON, the same string toString
 // produces under default options.
 func (z *ZonedDateTime) ToJSON() BStr { return z.ToString() }
+
+// nowNanoseconds returns the current instant as a nanosecond count since the Unix epoch, the
+// reading every Temporal.Now function is built on. It reads the host wall clock, except that a
+// BENTO_NOW_NS environment variable, a decimal nanosecond count, overrides it: the differential
+// harness sets that variable so a Temporal.Now fixture prints a value it can pin in an oracle,
+// while an unset variable leaves the real clock in place for a program run outside the harness.
+func nowNanoseconds() *big.Int {
+	if s := os.Getenv("BENTO_NOW_NS"); s != "" {
+		if n, ok := new(big.Int).SetString(s, 10); ok {
+			return n
+		}
+	}
+	return big.NewInt(time.Now().UnixNano())
+}
+
+// systemTimeZoneId returns the identifier Temporal.Now reports as the host's default time zone.
+// It reads the TZ environment variable, the same knob Go's time package and the differential
+// harness use to pin the zone, and defaults to UTC when TZ is unset so the default is always a
+// valid, deterministic identifier rather than the host-specific local zone Go cannot name.
+func systemTimeZoneId() string {
+	if tz := os.Getenv("TZ"); tz != "" {
+		return tz
+	}
+	return "UTC"
+}
+
+// NowInstant implements Temporal.Now.instant, the current instant as an exact point on the time
+// line with no zone.
+func NowInstant() *Instant { return newInstant(nowNanoseconds()) }
+
+// NowTimeZoneId implements Temporal.Now.timeZoneId, the host's default time-zone identifier.
+func NowTimeZoneId() BStr { return FromGoString(systemTimeZoneId()) }
+
+// NowZonedDateTimeISO implements Temporal.Now.zonedDateTimeISO, the current instant paired with a
+// zone under the ISO calendar. With no argument the zone is the host default; an explicit
+// identifier names another zone, which resolveTimeZone validates.
+func NowZonedDateTimeISO() *ZonedDateTime {
+	return newZonedDateTime(nowNanoseconds(), systemTimeZoneId())
+}
+
+// NowZonedDateTimeISOIn is Temporal.Now.zonedDateTimeISO(timeZone), the current instant in the
+// named zone.
+func NowZonedDateTimeISOIn(timeZone BStr) *ZonedDateTime {
+	return newZonedDateTime(nowNanoseconds(), timeZone.ToGoString())
+}
+
+// NowPlainDateTimeISO implements Temporal.Now.plainDateTimeISO, the wall-clock date and time the
+// host default zone reads at the current instant.
+func NowPlainDateTimeISO() *PlainDateTime { return NowZonedDateTimeISO().ToPlainDateTime() }
+
+// NowPlainDateTimeISOIn is Temporal.Now.plainDateTimeISO(timeZone), the wall-clock reading in the
+// named zone.
+func NowPlainDateTimeISOIn(timeZone BStr) *PlainDateTime {
+	return NowZonedDateTimeISOIn(timeZone).ToPlainDateTime()
+}
+
+// NowPlainDateISO implements Temporal.Now.plainDateISO, the calendar date the host default zone
+// reads at the current instant.
+func NowPlainDateISO() *PlainDate { return NowZonedDateTimeISO().ToPlainDate() }
+
+// NowPlainDateISOIn is Temporal.Now.plainDateISO(timeZone), the calendar date in the named zone.
+func NowPlainDateISOIn(timeZone BStr) *PlainDate {
+	return NowZonedDateTimeISOIn(timeZone).ToPlainDate()
+}
+
+// NowPlainTimeISO implements Temporal.Now.plainTimeISO, the wall-clock time the host default zone
+// reads at the current instant.
+func NowPlainTimeISO() *PlainTime { return NowZonedDateTimeISO().ToPlainTime() }
+
+// NowPlainTimeISOIn is Temporal.Now.plainTimeISO(timeZone), the wall-clock time in the named zone.
+func NowPlainTimeISOIn(timeZone BStr) *PlainTime {
+	return NowZonedDateTimeISOIn(timeZone).ToPlainTime()
+}
