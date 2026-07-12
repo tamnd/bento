@@ -1,0 +1,9 @@
+== stdout:
+1234
+23
+1
+false
+false
+
+== exit:
+0
