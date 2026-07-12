@@ -1391,14 +1391,20 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		}
 		return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
 	case "parse":
-		if len(argNodes) != 1 {
-			return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver argument is a later slice"}
+		if len(argNodes) == 0 || len(argNodes) > 2 {
+			return nil, &NotYetLowerable{Reason: "JSON.parse takes a text and an optional reviver"}
 		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
+		// A reviver function rewrites the parsed tree bottom-up, so a present
+		// reviver routes to the reviving parse; a null or undefined reviver the
+		// specification ignores falls through to the plain parse.
+		if len(argNodes) == 2 && !r.isJSONNullish(argNodes[1]) {
+			return r.jsonParseReviver(arg, argNodes[1])
+		}
 		return &ast.CallExpr{Fun: sel("value", "JSONParse"), Args: []ast.Expr{arg}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "JSON." + method + " is a later slice"}
@@ -1471,6 +1477,25 @@ func (r *Renderer) jsonStringifyReplacer(arg ast.Expr, argNodes []frontend.Node)
 	default:
 		return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer that is not an inline arrow function or array literal is a later slice"}
 	}
+}
+
+// jsonParseReviver lowers a two-argument JSON.parse whose reviver is present. An
+// inline arrow reviver taking the key and value lowers to value.JSONParseReviver
+// over the lowered function, which walks the parsed tree bottom-up. A reviver that
+// is not an inline arrow, or one that does not take the two parameters, hands
+// back, since only an inline arrow has a static shape the walk can call.
+func (r *Renderer) jsonParseReviver(arg ast.Expr, reviver frontend.Node) (ast.Expr, error) {
+	if reviver.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(reviver) != 2 {
+		return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver arrow that does not take the key and value parameters is a later slice"}
+	}
+	fn, err := r.lowerExpr(reviver)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: sel("value", "JSONParseReviver"), Args: []ast.Expr{arg, fn}}, nil
 }
 
 // jsonGapExpr builds the Go expression for the indentation gap a replacer walk
