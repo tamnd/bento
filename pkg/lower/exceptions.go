@@ -92,6 +92,12 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if _, ok := typedArrayElemGo(r.prog.Text(kids[0])); ok {
 		return r.newTypedArray(r.prog.Text(kids[0]), kids[1:])
 	}
+	if _, ok := bigintTypedArrayElemGo(r.prog.Text(kids[0])); ok {
+		return r.newBigIntArray(r.prog.Text(kids[0]), kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "ArrayBuffer" {
+		return r.newArrayBuffer(kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
 	}
@@ -160,10 +166,16 @@ func (r *Renderer) newObject(args []frontend.Node) (ast.Expr, error) {
 // apart by the argument's syntax, an array literal versus anything else, so a length
 // that happens to be a variable still takes the length form. The constructor names
 // follow the New<Name> and <Name>Of scheme every family member shares, so the name
-// alone selects them. The other overloads (a copy from another typed array, a view
-// over an ArrayBuffer with an offset and length) are later slices and hand back, as
-// does a call with no argument or more than one.
+// alone selects them. Two more sources build a fresh buffer and copy into it: a
+// number array value lowers to value.<Name>Of(src.Elems()...), and another typed
+// array lowers to value.<Name>Of(src.Floats()...), each spreading the source's
+// widened elements through the Of constructor's per-element coercion. The view over
+// an ArrayBuffer with an offset and length takes newTypedArrayOverBuffer. A call
+// with no argument or more than one non-buffer argument hands back.
 func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, error) {
+	if len(args) >= 1 && r.isArrayBuffer(args[0]) {
+		return r.newTypedArrayOverBuffer(name, args)
+	}
 	if len(args) != 1 {
 		return nil, &NotYetLowerable{Reason: "only new " + name + "(length) and new " + name + "([...]) are lowered yet"}
 	}
@@ -186,6 +198,15 @@ func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, e
 		}
 		return &ast.CallExpr{Fun: sel("value", name+"Of"), Args: lowered}, nil
 	}
+	// A number array value or another typed array copies into a fresh buffer,
+	// spreading the source's elements through the Of constructor. A number array
+	// reads its elements with Elems; a typed array widens each element with Floats.
+	if r.isNumberArrayValue(args[0]) {
+		return r.newTypedArrayFrom(name, args[0], "Elems")
+	}
+	if r.numericTypedArray(args[0]) {
+		return r.newTypedArrayFrom(name, args[0], "Floats")
+	}
 	if !r.isNumber(args[0]) {
 		return nil, &NotYetLowerable{Reason: "a " + name + " length that is not a number is a later slice"}
 	}
@@ -194,6 +215,144 @@ func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, e
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: sel("value", "New"+name), Args: []ast.Expr{length}}, nil
+}
+
+// newTypedArrayFrom lowers a typed array copied from a source value into a fresh
+// buffer: value.<Name>Of(src.<read>()...), where read is Elems for a number array
+// or Floats for another typed array, both returning the []float64 the Of
+// constructor spreads through its per-element coercion. The Of constructor allocates
+// its own buffer, so the copy does not alias the source.
+func (r *Renderer) newTypedArrayFrom(name string, src frontend.Node, read string) (ast.Expr, error) {
+	recv, err := r.lowerExpr(src)
+	if err != nil {
+		return nil, err
+	}
+	elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(read)}}
+	return &ast.CallExpr{
+		Fun:      sel("value", name+"Of"),
+		Args:     []ast.Expr{elems},
+		Ellipsis: token.Pos(1),
+	}, nil
+}
+
+// newBigIntArray lowers a bigint typed-array construction, the BigInt64Array and
+// BigUint64Array of section 6.3 whose element is a bigint rather than a Number. It
+// mirrors newTypedArray for the three covered forms: new BigInt64Array(n) lowers to
+// value.NewBigInt64Array(n), new BigInt64Array([1n, 2n]) to value.BigInt64ArrayOf(1,
+// 2) with each bigint element passed as the *big.Int it lowers to, and the view over
+// an ArrayBuffer to value.BigInt64ArrayView through the shared newTypedArrayOverBuffer.
+// The list form takes bigint elements rather than the numbers the numeric family
+// takes, so a non-bigint element hands back. A copy from another typed array is a
+// later slice.
+func (r *Renderer) newBigIntArray(name string, args []frontend.Node) (ast.Expr, error) {
+	if len(args) >= 1 && r.isArrayBuffer(args[0]) {
+		return r.newTypedArrayOverBuffer(name, args)
+	}
+	if len(args) != 1 {
+		return nil, &NotYetLowerable{Reason: "only new " + name + "(length) and new " + name + "([...]) are lowered yet"}
+	}
+	r.requireImport(valuePkg)
+	if args[0].Kind() == frontend.NodeArrayLiteralExpression {
+		elems := r.prog.Children(args[0])
+		lowered := make([]ast.Expr, 0, len(elems))
+		for _, e := range elems {
+			if e.Kind() == frontend.NodeSpreadElement {
+				return nil, &NotYetLowerable{Reason: "spread element in a " + name + " initializer is a later slice"}
+			}
+			if !r.isBigInt(e) {
+				return nil, &NotYetLowerable{Reason: "a " + name + " initialized from a non-bigint element is a later slice"}
+			}
+			v, err := r.lowerExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			lowered = append(lowered, v)
+		}
+		return &ast.CallExpr{Fun: sel("value", name+"Of"), Args: lowered}, nil
+	}
+	if !r.isNumber(args[0]) {
+		return nil, &NotYetLowerable{Reason: "a " + name + " length that is not a number is a later slice"}
+	}
+	length, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: sel("value", "New"+name), Args: []ast.Expr{length}}, nil
+}
+
+// isNumberArrayValue reports whether a node's type is an array whose element type is
+// a number, the from-an-array-like source a typed-array constructor copies. A typed
+// array is not an ElementType array, so it does not match here and takes the
+// typed-array-source path instead.
+func (r *Renderer) isNumberArrayValue(n frontend.Node) bool {
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(n))
+	if !ok {
+		return false
+	}
+	return r.primitiveFlagsOfType(elem)&frontend.TypeNumber != 0
+}
+
+// newTypedArrayOverBuffer lowers a typed array constructed as a view over an
+// existing ArrayBuffer, new Int32Array(buffer, byteOffset, length) and its shorter
+// forms. The buffer is required, the byte offset defaults to zero when omitted, and
+// the length runs to the end of the buffer when omitted, so the three overloads
+// lower to value.<Name>View(buf), value.<Name>View(buf, offset), and
+// value.<Name>View(buf, offset, length), the variadic length carrying the
+// optionality. A byte offset or length that is not a number is a later slice and
+// hands back, as does a call with more than three arguments.
+func (r *Renderer) newTypedArrayOverBuffer(name string, args []frontend.Node) (ast.Expr, error) {
+	if len(args) > 3 {
+		return nil, &NotYetLowerable{Reason: "new " + name + " over a buffer takes at most a byte offset and a length"}
+	}
+	buf, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	callArgs := []ast.Expr{buf}
+	if len(args) >= 2 {
+		if !r.isNumber(args[1]) {
+			return nil, &NotYetLowerable{Reason: "a " + name + " byte offset that is not a number is a later slice"}
+		}
+		offset, err := r.lowerExpr(args[1])
+		if err != nil {
+			return nil, err
+		}
+		callArgs = append(callArgs, offset)
+	} else {
+		callArgs = append(callArgs, &ast.BasicLit{Kind: token.FLOAT, Value: "0"})
+	}
+	if len(args) == 3 {
+		if !r.isNumber(args[2]) {
+			return nil, &NotYetLowerable{Reason: "a " + name + " view length that is not a number is a later slice"}
+		}
+		length, err := r.lowerExpr(args[2])
+		if err != nil {
+			return nil, err
+		}
+		callArgs = append(callArgs, length)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", name+"View"), Args: callArgs}, nil
+}
+
+// newArrayBuffer lowers an ArrayBuffer construction, the raw byte backing store of
+// section 6.2. Only new ArrayBuffer(byteLength) is covered: a single Number argument
+// lowers to value.NewArrayBuffer(n), which allocates a zeroed run of that many
+// bytes. The resizable form new ArrayBuffer(n, { maxByteLength }) is a later slice,
+// so more than one argument hands back, as does a length that is not a number.
+func (r *Renderer) newArrayBuffer(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 1 {
+		return nil, &NotYetLowerable{Reason: "only new ArrayBuffer(byteLength) is lowered yet"}
+	}
+	if !r.isNumber(args[0]) {
+		return nil, &NotYetLowerable{Reason: "an ArrayBuffer byte length that is not a number is a later slice"}
+	}
+	length, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewArrayBuffer"), Args: []ast.Expr{length}}, nil
 }
 
 // newMap lowers a Map construction, the keyed collection of section 6.5. Only the

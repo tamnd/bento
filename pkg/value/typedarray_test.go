@@ -29,6 +29,102 @@ func TestTypedArrayZeroedLength(t *testing.T) {
 	}
 }
 
+// TestTypedArrayViewsABuffer proves a typed array is a view over an ArrayBuffer:
+// its backing buffer is sized to hold the elements, and a write through the view
+// reaches the buffer's own bytes in little-endian order rather than a private copy.
+func TestTypedArrayViewsABuffer(t *testing.T) {
+	a := NewInt32Array(4)
+	if a.buffer == nil {
+		t.Fatal("Int32Array has no backing buffer")
+	}
+	if got := a.buffer.ByteLength(); got != 16 {
+		t.Errorf("Int32Array(4) buffer byte length = %v, want 16", got)
+	}
+	a.SetAt(0, 1)
+	bytes := a.buffer.Bytes()
+	if bytes[0] != 1 || bytes[1] != 0 || bytes[2] != 0 || bytes[3] != 0 {
+		t.Errorf("view write did not reach the buffer bytes little-endian: %v", bytes[:4])
+	}
+}
+
+// TestTypedArrayViewOverBuffer proves the ArrayBuffer overload: a view takes its
+// length from the buffer when omitted, honors a byte offset, and takes an explicit
+// length when given. Two views over one buffer observe each other's writes because
+// they alias the same bytes.
+func TestTypedArrayViewOverBuffer(t *testing.T) {
+	buf := NewArrayBuffer(16)
+	whole := Int32ArrayView(buf, 0)
+	if whole.Len() != 4 {
+		t.Errorf("Int32ArrayView(buf, 0).Len = %v, want 4", whole.Len())
+	}
+	offset := Int32ArrayView(buf, 8)
+	if offset.Len() != 2 {
+		t.Errorf("Int32ArrayView(buf, 8).Len = %v, want 2", offset.Len())
+	}
+	capped := Int32ArrayView(buf, 4, 2)
+	if capped.Len() != 2 {
+		t.Errorf("Int32ArrayView(buf, 4, 2).Len = %v, want 2", capped.Len())
+	}
+	// The offset view starts at byte 8, which is element 2 of the whole view.
+	whole.SetAt(2, 1234)
+	if got := offset.At(0); got != 1234 {
+		t.Errorf("offset view did not observe the whole view's write: %v, want 1234", got)
+	}
+}
+
+// TestTypedArrayGeometryGetters proves the instance getters read off the view:
+// Buffer is the aliased backing store, ByteOffset the byte the view starts at, and
+// ByteLength its span in bytes, the element count times the element width. A view
+// at a byte offset over a shared buffer reports that offset and its own span, not
+// the whole buffer's.
+func TestTypedArrayGeometryGetters(t *testing.T) {
+	buf := NewArrayBuffer(16)
+	view := Int32ArrayView(buf, 4, 2)
+	if view.Buffer() != buf {
+		t.Error("view.Buffer did not return the shared backing buffer")
+	}
+	if got := view.ByteOffset(); got != 4 {
+		t.Errorf("view.ByteOffset = %v, want 4", got)
+	}
+	if got := view.ByteLength(); got != 8 {
+		t.Errorf("view.ByteLength = %v, want 8", got)
+	}
+	if got := view.Buffer().ByteLength(); got != 16 {
+		t.Errorf("view.Buffer().ByteLength = %v, want 16", got)
+	}
+	if got := view.Len(); got != 2 {
+		t.Errorf("view.Len = %v, want 2", got)
+	}
+	if got := view.BytesPerElement(); got != 4 {
+		t.Errorf("Int32Array BytesPerElement = %v, want 4", got)
+	}
+	if got := NewFloat64Array(0).BytesPerElement(); got != 8 {
+		t.Errorf("Float64Array BytesPerElement = %v, want 8", got)
+	}
+	if got := NewInt8Array(0).BytesPerElement(); got != 1 {
+		t.Errorf("Int8Array BytesPerElement = %v, want 1", got)
+	}
+}
+
+// TestSharedViewsObserveWrites proves the many-views-over-one-buffer contract
+// across element widths: an Int32Array and a Uint8Array over the same buffer alias
+// the same bytes, so a write through one shows through the other, little-endian. A
+// write of 513 through the int view is 0x0201, so the byte view reads 1 then 2, and
+// a byte write past the first element shows in the int view's second element.
+func TestSharedViewsObserveWrites(t *testing.T) {
+	buf := NewArrayBuffer(8)
+	ints := Int32ArrayView(buf, 0)
+	bytes := Uint8ArrayView(buf, 0)
+	ints.SetAt(0, 513)
+	if bytes.At(0) != 1 || bytes.At(1) != 2 || bytes.At(2) != 0 || bytes.At(3) != 0 {
+		t.Errorf("int write did not show through the byte view little-endian: %v %v %v %v", bytes.At(0), bytes.At(1), bytes.At(2), bytes.At(3))
+	}
+	bytes.SetAt(4, 255)
+	if got := ints.At(1); got != 255 {
+		t.Errorf("byte write did not show through the int view: %v, want 255", got)
+	}
+}
+
 // TestTypedArrayBadLengthClamps proves a negative or not-a-number length yields an
 // empty array rather than panicking, the same covered-subset rule the byte buffer
 // takes.
@@ -115,6 +211,35 @@ func TestTypedArrayReadOutOfRange(t *testing.T) {
 	}
 	if got := a.At(-1); got != 0 {
 		t.Errorf("At(-1) = %v, want 0", got)
+	}
+}
+
+// TestTypedArrayNonCanonicalIndexIsNoOp proves a write to a fractional, negative, or
+// not-a-number index is dropped rather than writing a truncated neighbor, and a read
+// of one reads as 0 on the numeric path, the no-op the spec requires.
+func TestTypedArrayNonCanonicalIndexIsNoOp(t *testing.T) {
+	a := Int32ArrayOf(10, 20, 30)
+	a.SetAt(1.5, 99) // fractional: not a canonical index, dropped
+	a.SetAt(-1, 99)  // negative: dropped
+	a.SetAt(nanValue(), 99)
+	assertElems(t, a.Len(), a.At, []float64{10, 20, 30})
+	if got := a.At(1.5); got != 0 {
+		t.Errorf("At(1.5) = %v, want 0 (non-canonical reads as 0 on the numeric path)", got)
+	}
+}
+
+// TestTypedArrayGetIndexBoxesUndefined proves the boxed read answers a Number for a
+// canonical in-range index and undefined for an out-of-range or non-canonical one,
+// the value a dynamic consumer sees where the numeric At reads a stand-in 0.
+func TestTypedArrayGetIndexBoxesUndefined(t *testing.T) {
+	a := Int32ArrayOf(10, 20)
+	if got := a.GetIndex(0); got.Kind() != KindNumber || got.AsNumber() != 10 {
+		t.Errorf("GetIndex(0) = %v, want the Number 10", got)
+	}
+	for _, i := range []float64{2, -1, 1.5, nanValue()} {
+		if got := a.GetIndex(i); got.Kind() != KindUndefined {
+			t.Errorf("GetIndex(%v) = %v, want undefined", i, got)
+		}
 	}
 }
 

@@ -1,6 +1,9 @@
 package value
 
-import "math"
+import (
+	"math"
+	"unsafe"
+)
 
 // TypedArray is bento's runtime representation of a JavaScript numeric typed
 // array whose element width the compiler proved: Int8Array, Uint8ClampedArray,
@@ -22,9 +25,24 @@ import "math"
 // to single precision, and so on. The header carries that coercion as a function
 // so the generic core stays one type; a read always widens the stored element
 // back to a Number, which every member does the same way.
+//
+// A typed array is a view, not the storage: it records the ArrayBuffer it reads,
+// the byte offset it starts at, and an element slice that aliases the buffer's
+// bytes at that offset (section 6.2 and §6.3). The data slice is built with
+// unsafe.Slice over the buffer's bytes, so an element read and write go straight
+// through it with no per-element packing, and two views over one buffer, even of
+// different element widths, observe each other's writes because they alias the
+// same run of bytes. The buffer allocates eight-byte aligned and the byte offset
+// the spec requires to be a multiple of the element width keeps every element on a
+// naturally aligned address, and the platform's little-endian layout is the byte
+// order the buffer exposes. Keeping data as a live view is what lets every
+// element-access method below stay a plain slice operation while still aliasing
+// the shared buffer.
 type TypedArray[T typedElem] struct {
-	data   []T
-	coerce func(float64) T
+	buffer     *ArrayBuffer
+	byteOffset int
+	data       []T
+	coerce     func(float64) T
 }
 
 // typedElem is the set of Go element types a numeric typed array stores. Every
@@ -36,24 +54,93 @@ type typedElem interface {
 
 // newTypedArray builds a zeroed typed array of the given length with the store
 // coercion its element kind uses, the shared body of the per-kind New
-// constructors. The length is a Number, so it arrives as a float64 and is
-// truncated toward zero the way ToIndex does; a negative or not-a-number length
-// clamps to zero, matching the covered subset the byte buffer documents.
+// constructors. It allocates a fresh ArrayBuffer sized to hold the elements and
+// views it from byte offset zero, so the array owns its storage but reaches it
+// through the shared view path. The length is a Number, so it arrives as a float64
+// and is truncated toward zero the way ToIndex does; a negative or not-a-number
+// length clamps to zero, matching the covered subset the byte buffer documents.
 func newTypedArray[T typedElem](length float64, coerce func(float64) T) *TypedArray[T] {
-	return &TypedArray[T]{data: make([]T, typedLen(length)), coerce: coerce}
+	n := typedLen(length)
+	buf := NewArrayBuffer(float64(n * elemBytes[T]()))
+	return newTypedArrayView(buf, 0, n, coerce)
+}
+
+// newTypedArrayView builds a typed array that views an existing buffer from a byte
+// offset for a count of elements, the shared body of every typed-array
+// constructor. The data slice aliases the buffer's bytes, so a write through this
+// view shows through every other view of the same buffer. It is the one place the
+// unsafe aliasing is formed, so the byte offset and length the callers pass are the
+// only inputs that decide what the view sees.
+func newTypedArrayView[T typedElem](buf *ArrayBuffer, byteOffset, length int, coerce func(float64) T) *TypedArray[T] {
+	return &TypedArray[T]{
+		buffer:     buf,
+		byteOffset: byteOffset,
+		data:       viewSlice[T](buf, byteOffset, length),
+		coerce:     coerce,
+	}
 }
 
 // typedArrayOf builds a typed array from a list of JavaScript numbers with the
 // store coercion its element kind uses, the shared body of the per-kind Of
-// constructors. Each element is coerced on the way in exactly as an assignment
-// into an element would coerce it, and the values are copied into a fresh backing
-// slice so the array owns its storage.
+// constructors. It allocates a fresh buffer of the right size and coerces each
+// element into it exactly as an assignment into an element would, so the array owns
+// its storage.
 func typedArrayOf[T typedElem](coerce func(float64) T, elems ...float64) *TypedArray[T] {
-	data := make([]T, len(elems))
+	a := newTypedArray(float64(len(elems)), coerce)
 	for i, e := range elems {
-		data[i] = coerce(e)
+		a.data[i] = coerce(e)
 	}
-	return &TypedArray[T]{data: data, coerce: coerce}
+	return a
+}
+
+// typedArrayView builds a typed array that views an existing ArrayBuffer, the
+// shared body of the per-kind View constructors and the lowering of new
+// Int32Array(buffer, byteOffset, length). The byte offset defaults to zero and the
+// length, when omitted, runs from the offset to the end of the buffer in whole
+// elements, matching the ArrayBuffer overload of the constructor. The view aliases
+// the buffer's bytes, so it observes writes made through the buffer or through any
+// other view of it. A byte offset or length that would run past the buffer clamps
+// to what the buffer holds rather than throwing, the covered subset the RangeError
+// is a later slice of.
+func typedArrayView[T typedElem](buf *ArrayBuffer, coerce func(float64) T, byteOffset float64, length ...float64) *TypedArray[T] {
+	elem := elemBytes[T]()
+	off := typedLen(byteOffset)
+	if off > len(buf.data) {
+		off = len(buf.data)
+	}
+	var n int
+	if len(length) > 0 {
+		n = typedLen(length[0])
+	} else {
+		n = (len(buf.data) - off) / elem
+	}
+	if max := (len(buf.data) - off) / elem; n > max {
+		n = max
+	}
+	return newTypedArrayView(buf, off, n, coerce)
+}
+
+// elemBytes is the byte width of a typed array's element type, read from the Go
+// type so the buffer allocation and the byte-offset arithmetic agree with the
+// element slice the view aliases.
+func elemBytes[T typedElem]() int {
+	var zero T
+	return int(unsafe.Sizeof(zero))
+}
+
+// viewSlice forms the element slice a typed array reads, an unsafe alias over the
+// buffer's bytes starting at the byte offset for length elements. It is the aliasing
+// step that lets two views over one buffer observe each other's writes: the slice
+// header points into the buffer's own storage rather than a copy. A zero length
+// needs no storage and returns nil, which also avoids indexing a nil or too-short
+// buffer. The buffer keeps its bytes eight-byte aligned and the byte offset is a
+// multiple of the element width, so the first element lands on a naturally aligned
+// address.
+func viewSlice[T typedElem](buf *ArrayBuffer, byteOffset, length int) []T {
+	if length == 0 {
+		return nil
+	}
+	return unsafe.Slice((*T)(unsafe.Pointer(&buf.data[byteOffset])), length)
 }
 
 // Len is the array's length in elements, a Number to match the type the checker
@@ -61,28 +148,64 @@ func typedArrayOf[T typedElem](coerce func(float64) T, elems ...float64) *TypedA
 // conversion at the use site.
 func (a *TypedArray[T]) Len() float64 { return float64(len(a.data)) }
 
+// Buffer is the ArrayBuffer the view aliases, the .buffer getter. It hands back
+// the same backing store every other view of the buffer holds, so a comparison of
+// two views' buffers by identity holds and a read of view.buffer.byteLength
+// answers the whole buffer's span, not the view's.
+func (a *TypedArray[T]) Buffer() *ArrayBuffer { return a.buffer }
+
+// ByteOffset is the byte the view starts at within its buffer, the .byteOffset
+// getter, a Number to match the type the checker gives the property.
+func (a *TypedArray[T]) ByteOffset() float64 { return float64(a.byteOffset) }
+
+// ByteLength is the view's span in bytes, the .byteLength getter: the element
+// count times the element width, which is the run of buffer bytes the view aliases.
+// It is a Number, and it differs from Len, the element count, by the element width.
+func (a *TypedArray[T]) ByteLength() float64 { return float64(len(a.data) * elemBytes[T]()) }
+
+// BytesPerElement is the element width in bytes, the instance BYTES_PER_ELEMENT
+// property, a constant of the element kind. It is a method rather than a folded
+// literal at the use site so a read keeps the receiver referenced, and it reads the
+// width from the Go element type so it agrees with the buffer arithmetic.
+func (a *TypedArray[T]) BytesPerElement() float64 { return float64(elemBytes[T]()) }
+
 // At reads the element a JavaScript index expression a[i] selects, widened to the
-// Number a typed-array read hands out. The index is a Number, so it arrives as a
-// float64 and truncates toward zero. An index outside the array reads as 0 rather
-// than undefined, matching the covered subset the byte buffer's At documents.
+// Number a typed-array read hands out. Only a canonical integer index inside the
+// array names an element; an out-of-range or non-canonical index (a fractional
+// value, a negative, or NaN) reads as 0 here rather than the undefined the spec
+// gives, the covered subset for the numeric read path, since At's result type is a
+// Number. A read that flows into a dynamic slot takes GetIndex instead, which does
+// answer undefined for those indices.
 func (a *TypedArray[T]) At(i float64) float64 {
-	idx := typedIndex(i)
-	if idx >= 0 && idx < len(a.data) {
+	if idx, ok := typedElemIndex(i, len(a.data)); ok {
 		return float64(a.data[idx])
 	}
 	return 0
 }
 
 // SetAt writes the element a JavaScript assignment a[i] = v stores, coercing the
-// value with the element kind's store rule so a number outside the element's
-// range wraps or clamps exactly as JavaScript does. A write past the end of the
-// array is ignored, matching JavaScript, which silently drops an out-of-range
-// typed-array element assignment rather than growing the array.
+// value with the element kind's store rule so a number outside the element's range
+// wraps or clamps exactly as JavaScript does. Only a canonical integer index inside
+// the array names an element; a write to an out-of-range or non-canonical index is
+// dropped, the no-op the spec requires rather than growing the array or writing a
+// truncated neighbor.
 func (a *TypedArray[T]) SetAt(i float64, v float64) {
-	idx := typedIndex(i)
-	if idx >= 0 && idx < len(a.data) {
+	if idx, ok := typedElemIndex(i, len(a.data)); ok {
 		a.data[idx] = a.coerce(v)
 	}
+}
+
+// GetIndex reads the element a JavaScript index selects as a boxed Value, the form
+// a typed-array read takes when it flows into a dynamic slot. It answers the element
+// as a Number for a canonical in-range index and the undefined singleton for an
+// out-of-range or non-canonical one, so ta[100] and ta[1.5] read as undefined the
+// way the spec requires, which the numeric At cannot express because its result is a
+// Number.
+func (a *TypedArray[T]) GetIndex(i float64) Value {
+	if idx, ok := typedElemIndex(i, len(a.data)); ok {
+		return Number(float64(a.data[idx]))
+	}
+	return Undefined
 }
 
 // AtI reads the element at a Go int index, the integer-index form of At the
@@ -91,7 +214,7 @@ func (a *TypedArray[T]) SetAt(i float64, v float64) {
 // takes the index already narrowed. The bounds check and the out-of-range 0 are
 // the same as At, so the two reads agree on every index; only the index type
 // differs, which is what keeps a proven-integer index a native slice index rather
-// than a float that round trips through typedIndex on every access.
+// than a float that round trips through the canonical-index check on every access.
 func (a *TypedArray[T]) AtI(i int) float64 {
 	if i >= 0 && i < len(a.data) {
 		return float64(a.data[i])
@@ -107,6 +230,19 @@ func (a *TypedArray[T]) SetAtI(i int, v float64) {
 	if i >= 0 && i < len(a.data) {
 		a.data[i] = a.coerce(v)
 	}
+}
+
+// Floats widens every element to the Number a typed-array read hands out, the
+// source a fresh typed array copies when it is constructed from another typed
+// array. It allocates a new slice, so the copy the constructor makes reads the
+// source once and does not alias it: the two arrays own separate storage after the
+// copy, which is what the from-a-typed-array constructor requires.
+func (a *TypedArray[T]) Floats() []float64 {
+	out := make([]float64, len(a.data))
+	for i, e := range a.data {
+		out[i] = float64(e)
+	}
+	return out
 }
 
 // Data returns the backing slice, the storage a read and a write share. The
@@ -129,6 +265,9 @@ func (a *TypedArray[T]) Data() []T { return a.data }
 
 func NewInt8Array(length float64) *TypedArray[int8]  { return newTypedArray(length, toInt8) }
 func Int8ArrayOf(elems ...float64) *TypedArray[int8] { return typedArrayOf(toInt8, elems...) }
+func Int8ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[int8] {
+	return typedArrayView(buf, toInt8, byteOffset, length...)
+}
 
 func NewUint8ClampedArray(length float64) *TypedArray[uint8] {
 	return newTypedArray(length, toUint8Clamped)
@@ -136,24 +275,45 @@ func NewUint8ClampedArray(length float64) *TypedArray[uint8] {
 func Uint8ClampedArrayOf(elems ...float64) *TypedArray[uint8] {
 	return typedArrayOf(toUint8Clamped, elems...)
 }
+func Uint8ClampedArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[uint8] {
+	return typedArrayView(buf, toUint8Clamped, byteOffset, length...)
+}
 
 func NewInt16Array(length float64) *TypedArray[int16]  { return newTypedArray(length, toInt16) }
 func Int16ArrayOf(elems ...float64) *TypedArray[int16] { return typedArrayOf(toInt16, elems...) }
+func Int16ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[int16] {
+	return typedArrayView(buf, toInt16, byteOffset, length...)
+}
 
 func NewUint16Array(length float64) *TypedArray[uint16]  { return newTypedArray(length, toUint16) }
 func Uint16ArrayOf(elems ...float64) *TypedArray[uint16] { return typedArrayOf(toUint16, elems...) }
+func Uint16ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[uint16] {
+	return typedArrayView(buf, toUint16, byteOffset, length...)
+}
 
 func NewInt32Array(length float64) *TypedArray[int32]  { return newTypedArray(length, toInt32) }
 func Int32ArrayOf(elems ...float64) *TypedArray[int32] { return typedArrayOf(toInt32, elems...) }
+func Int32ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[int32] {
+	return typedArrayView(buf, toInt32, byteOffset, length...)
+}
 
 func NewUint32Array(length float64) *TypedArray[uint32]  { return newTypedArray(length, toUint32) }
 func Uint32ArrayOf(elems ...float64) *TypedArray[uint32] { return typedArrayOf(toUint32, elems...) }
+func Uint32ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[uint32] {
+	return typedArrayView(buf, toUint32, byteOffset, length...)
+}
 
 func NewFloat32Array(length float64) *TypedArray[float32]  { return newTypedArray(length, toFloat32) }
 func Float32ArrayOf(elems ...float64) *TypedArray[float32] { return typedArrayOf(toFloat32, elems...) }
+func Float32ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[float32] {
+	return typedArrayView(buf, toFloat32, byteOffset, length...)
+}
 
 func NewFloat64Array(length float64) *TypedArray[float64]  { return newTypedArray(length, toFloat64) }
 func Float64ArrayOf(elems ...float64) *TypedArray[float64] { return typedArrayOf(toFloat64, elems...) }
+func Float64ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[float64] {
+	return typedArrayView(buf, toFloat64, byteOffset, length...)
+}
 
 // typedLen truncates a JavaScript length Number to a Go element count, clamping a
 // negative or not-a-number length to zero. It is the length rule the per-kind New
@@ -166,14 +326,23 @@ func typedLen(length float64) int {
 	return n
 }
 
-// typedIndex truncates a JavaScript index Number to a Go slice index, sending NaN
-// to 0 the way ToIntegerOrInfinity does. The caller bounds-checks the result, so
-// an out-of-range index reads as 0 or drops a write rather than panic.
-func typedIndex(i float64) int {
-	if i != i {
-		return 0
+// typedElemIndex resolves a JavaScript Number index to a Go element index, and
+// reports ok only for a canonical integer index that lies inside the view. A
+// canonical index is a non-negative integer with no fractional part and neither NaN
+// nor an infinity; every other Number, a fractional value, a negative, an
+// out-of-range integer, or NaN, names no element, so a read of it is undefined and a
+// write to it is dropped, the no-op the spec requires. The negative-zero index
+// canonicalizes to 0 and is in range when the view is non-empty, matching
+// ToString(-0) === "0".
+func typedElemIndex(i float64, length int) (int, bool) {
+	if i != i || math.IsInf(i, 0) || i != math.Trunc(i) {
+		return 0, false
 	}
-	return int(i) // JavaScript ToInteger truncates toward zero.
+	idx := int(i)
+	if idx < 0 || idx >= length {
+		return 0, false
+	}
+	return idx, true
 }
 
 // wrapMod reduces a JavaScript number into the range [0, mod) with ECMAScript's
