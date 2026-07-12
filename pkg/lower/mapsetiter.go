@@ -67,6 +67,9 @@ func (r *Renderer) mapSetIterForOfCall(iterable frontend.Node) (recv frontend.No
 // the value model does not lower, so they hand back.
 func (r *Renderer) forOfMapSetSingle(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node) (ast.Stmt, bool, error) {
 	if recv, method, kind, ok := r.mapSetIterForOfCall(iterable); ok {
+		if hb := r.forOfCollMutationHandback(recv, kind, bodyNode); hb != nil {
+			return nil, true, hb
+		}
 		switch {
 		case kind == "set":
 			// A Set's keys() and values() both yield its members.
@@ -83,12 +86,65 @@ func (r *Renderer) forOfMapSetSingle(iterable, bindNode frontend.Node, name stri
 		}
 	}
 	if r.isSet(iterable) {
+		if hb := r.forOfCollMutationHandback(iterable, "set", bodyNode); hb != nil {
+			return nil, true, hb
+		}
 		return r.rangeCollSingle(iterable, bindNode, name, bodyNode, "Members")
 	}
 	if r.isMap(iterable) {
 		return nil, true, &NotYetLowerable{Reason: "a for...of over a Map with a single binding yields a [key, value] pair, which needs a tuple, a later slice"}
 	}
 	return nil, false, nil
+}
+
+// forOfCollMutationHandback returns a handback when the loop body mutates the very
+// Map or Set the for...of iterates. The lowering ranges an insertion-ordered snapshot
+// taken once at loop entry, which is faithful for a body that only reads the
+// collection, but a body that adds, deletes, or clears it would, in JavaScript, see
+// the iterator's live view of that change: a deleted entry not yet reached is skipped,
+// and an entry added ahead of the cursor is visited. The snapshot cannot show that, so
+// rather than emit a loop that silently diverges, a body that mutates the iterated
+// collection hands back. The live iterator that observes the mutation is a later slice.
+func (r *Renderer) forOfCollMutationHandback(collNode frontend.Node, kind string, bodyNode frontend.Node) *NotYetLowerable {
+	if !r.bodyMutatesColl(bodyNode, collNode) {
+		return nil
+	}
+	return &NotYetLowerable{Reason: "a for...of that mutates the " + kind + " it iterates needs the iterator's live view of the change, a later slice"}
+}
+
+// bodyMutatesColl reports whether n calls a mutating method, add, set, delete, or
+// clear, on the collection collNode iterates. When collNode is a plain identifier it
+// matches a call on that same identifier, so a loop that builds a second collection
+// while reading the first still lowers. When collNode is any other expression there is
+// no identifier to match against, so it takes the conservative reading: any mutating
+// call on a Map or Set in the body counts, which may hand back a loop that mutates an
+// unrelated collection but never lets a real mutation through.
+func (r *Renderer) bodyMutatesColl(n, collNode frontend.Node) bool {
+	if n.Kind() == frontend.NodeCallExpression {
+		kids := r.prog.Children(n)
+		if len(kids) >= 1 && kids[0].Kind() == frontend.NodePropertyAccessExpression {
+			parts := r.prog.Children(kids[0])
+			if len(parts) == 2 {
+				switch r.prog.Text(parts[1]) {
+				case "add", "set", "delete", "clear":
+					recv := parts[0]
+					if collNode.Kind() == frontend.NodeIdentifier {
+						if recv.Kind() == frontend.NodeIdentifier && r.prog.Text(recv) == r.prog.Text(collNode) {
+							return true
+						}
+					} else if r.isMap(recv) || r.isSet(recv) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	for _, k := range r.prog.Children(n) {
+		if r.bodyMutatesColl(k, collNode) {
+			return true
+		}
+	}
+	return false
 }
 
 // rangeCollSingle ranges the snapshot the named method returns, binding each value to
@@ -132,6 +188,9 @@ func (r *Renderer) forOfMapSetDestructure(iterable, pattern, bodyNode frontend.N
 		recvNode, kind = iterable, "map"
 	} else {
 		return nil, false, nil
+	}
+	if hb := r.forOfCollMutationHandback(recvNode, kind, bodyNode); hb != nil {
+		return nil, true, hb
 	}
 	names, used, ok := r.twoNamePattern(pattern, bodyNode)
 	if !ok {
