@@ -951,6 +951,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "BigInt") {
 		return r.bigIntStaticCall(method, argNodes)
 	}
+	// Map.groupBy(items, cb) is a static call on the global Map constructor, not a
+	// method on a map value, so it lowers to a map builder before the receiver-value
+	// paths below. new Map(...) as a construction is handled at the new-expression
+	// path; the namespace form routes here.
+	if r.isGlobalRef(recvNode, "Map") {
+		return r.mapStaticCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.
