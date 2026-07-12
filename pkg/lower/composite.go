@@ -1262,33 +1262,47 @@ func (r *Renderer) promiseThenChain(recvNode, cb frontend.Node, rt frontend.Type
 }
 
 // setAlgebraCall lowers the ES2025 set-algebra methods (union, intersection,
-// difference, symmetricDifference, isSubsetOf, isSupersetOf, isDisjointFrom) to
-// the matching value.Set method over a second set. JavaScript accepts any
-// set-like as the argument, but the runtime method takes another *value.Set of
-// the receiver's member type, so the argument must itself be a Set whose member
-// type lowers to the same Go type; a non-set argument or a set of a different
-// member type hands back. The combining methods return a new set and the
-// predicates a boolean, which the method's own signature carries, so the call
+// difference, symmetricDifference, isSubsetOf, isSupersetOf, isDisjointFrom) to the
+// matching value.Set method over a second set-like. JavaScript accepts any set-like
+// as the argument, an object with a size, a has, and a keys iterator, and the two
+// built-in set-likes are a Set and a Map (whose keys are its set-like members). The
+// runtime method takes another *value.Set of the receiver's member type, so a Set
+// argument passes straight through and a Map argument passes the Set of its keys,
+// value.Map.KeySet, provided its key type lowers to the same Go type as the receiver's
+// member. A set-like of a different member type, and the dynamic object-literal
+// set-like a program builds by hand, hand back, the latter needing the dynamic has and
+// keys protocol the typed path does not have. The combining methods return a new set
+// and the predicates a boolean, which the method's own signature carries, so the call
 // lowers to recv.Method(other) with no extra shaping.
 func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with other than one argument is a later slice"}
 	}
 	other := argNodes[0]
-	if !r.isSet(other) {
-		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with an argument that is not a Set is a later slice"}
-	}
 	recvElem, ok := r.setElem(r.prog.TypeAt(recvNode))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " on a receiver whose member type did not lower"}
 	}
-	otherElem, ok := r.setElem(r.prog.TypeAt(other))
-	if !ok {
-		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with an argument whose member type did not lower"}
-	}
 	recvElemT, err := r.typeExpr(recvElem)
 	if err != nil {
 		return nil, err
+	}
+	// The argument is another Set, which passes through, or a Map, whose set-like view
+	// is the Set of its keys. Its member (or key) Go type must match the receiver's
+	// member so the runtime method's single type parameter is satisfied.
+	var otherElem frontend.Type
+	asKeySet := false
+	switch {
+	case r.isSet(other):
+		otherElem, ok = r.setElem(r.prog.TypeAt(other))
+	case r.isMap(other):
+		otherElem, _, ok = r.mapKeyVal(r.prog.TypeAt(other))
+		asKeySet = true
+	default:
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with an arbitrary set-like other than a Set or a Map is a later slice"}
+	}
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " with an argument whose member type did not lower"}
 	}
 	otherElemT, err := r.typeExpr(otherElem)
 	if err != nil {
@@ -1299,7 +1313,7 @@ func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNode
 		return nil, err
 	}
 	if !same {
-		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " between sets of different member types is a later slice"}
+		return nil, &NotYetLowerable{Reason: "set algebra ." + goName + " between set-likes of different member types is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -1308,6 +1322,10 @@ func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNode
 	arg, err := r.lowerExpr(other)
 	if err != nil {
 		return nil, err
+	}
+	// A Map argument presents its keys as the set-like the method reads.
+	if asKeySet {
+		arg = &ast.CallExpr{Fun: &ast.SelectorExpr{X: arg, Sel: ident("KeySet")}}
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: []ast.Expr{arg}}, nil
 }

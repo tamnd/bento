@@ -172,3 +172,14 @@ func (m *Map[K, V]) Keys() []K {
 func (m *Map[K, V]) Values() []V {
 	return append([]V(nil), m.vals...)
 }
+
+// KeySet returns a Set of the map's keys, the set-like view a Map presents when it is
+// passed as the argument to a Set-algebra method (union, intersection, and the rest).
+// A JavaScript Map is a set-like: it has a size, a has, and a keys iterator over its
+// keys, which is exactly the protocol those methods read, so a Map argument projects to
+// the Set of its keys. The keys are already unique and carry the map's key equality, so
+// the members copy needs no dedup and the new Set shares the same eq, giving it the same
+// SameValueZero identity the map keys had.
+func (m *Map[K, V]) KeySet() *Set[K] {
+	return &Set[K]{members: append([]K(nil), m.keys...), eq: m.eq}
+}
