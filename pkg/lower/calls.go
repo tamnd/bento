@@ -2562,6 +2562,29 @@ func (r *Renderer) objectProtoToStringCall(method string, argNodes []frontend.No
 			Args: []ast.Expr{view, &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}},
 		}, nil
 	}
+	// A Map or Set carries the Symbol.toStringTag its prototype installs, "Map" and
+	// "Set", so Object.prototype.toString.call reads "[object Map]" and "[object
+	// Set]". Like a typed array, neither boxes into a value.Value the runtime ClassTag
+	// could read, so NamedClassTag takes the collection for its side effects and reads
+	// the tag from the compiler-known name.
+	tag := ""
+	switch {
+	case r.isMap(argNodes[0]):
+		tag = "Map"
+	case r.isSet(argNodes[0]):
+		tag = "Set"
+	}
+	if tag != "" {
+		recv, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "NamedClassTag"),
+			Args: []ast.Expr{recv, &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(tag)}},
+		}, nil
+	}
 	arg, err := r.boxOperand(argNodes[0])
 	if err != nil {
 		return nil, err

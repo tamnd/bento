@@ -566,6 +566,16 @@ func ClassTag(v Value) BStr {
 	}
 }
 
+// NamedClassTag returns the "[object <Name>]" tag Object.prototype.toString.call
+// reads off a receiver whose class name the compiler knows statically but whose Go
+// representation does not box into a Value the runtime ClassTag could read: a typed
+// array, a Map, or a Set. The receiver is taken and discarded so the borrowed
+// toString evaluates its argument the way the language does and the caller's binding
+// reads as a use, while the tag comes from the compiler-known name.
+func NamedClassTag(_ any, name string) BStr {
+	return FromGoString("[object " + name + "]")
+}
+
 // Add implements the JavaScript + operator over two dynamic values, the one
 // operator whose result kind depends on its operands: if either side becomes a
 // string after ToPrimitive, the result is the concatenation, and otherwise both
