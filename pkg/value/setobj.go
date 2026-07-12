@@ -114,10 +114,21 @@ func (s *Set[T]) Clear() {
 // the numeric path with no conversion at the use site.
 func (s *Set[T]) Size() float64 { return float64(len(s.members)) }
 
-// Range visits each member in insertion order, the iteration forEach lowers to and
-// the shape a later for...of over a set reads. It passes the member by value, so a
-// callback cannot alias the set's storage.
+// Range visits each member in insertion order, the shape a later for...of over a
+// set reads. It passes the member by value, so a callback cannot alias the set's
+// storage.
 func (s *Set[T]) Range(fn func(T)) {
+	for _, v := range s.members {
+		fn(v)
+	}
+}
+
+// ForEach visits each member in insertion order, the shape Set.prototype.forEach
+// hands its callback. The specification passes the member twice and then the set
+// (value, value, set); a callback that reads only the first parameter, the common
+// form, takes this one-argument shape. The member is passed by value, so a callback
+// cannot alias the set's storage.
+func (s *Set[T]) ForEach(fn func(T)) {
 	for _, v := range s.members {
 		fn(v)
 	}

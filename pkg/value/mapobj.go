@@ -129,10 +129,30 @@ func (m *Map[K, V]) Clear() {
 func (m *Map[K, V]) Size() float64 { return float64(len(m.keys)) }
 
 // Range visits each entry in insertion order, the iteration the go: crossing reads
-// to marshal a bento map to a Go map and the target forEach lowers to. It passes
-// the key and value by value, so a callback cannot alias the map's storage.
+// to marshal a bento map to a Go map. It passes the key and value by value, so a
+// callback cannot alias the map's storage.
 func (m *Map[K, V]) Range(fn func(K, V)) {
 	for i, k := range m.keys {
 		fn(k, m.vals[i])
+	}
+}
+
+// ForEach visits each entry in insertion order, passing the value then the key, the
+// order Map.prototype.forEach hands its callback (value, key, map). It is the two-
+// argument shape a forEach callback that reads both takes; a callback that reads
+// only the value lowers to ForEachValue instead. The entries are passed by value,
+// so a callback cannot alias the map's storage.
+func (m *Map[K, V]) ForEach(fn func(V, K)) {
+	for i, k := range m.keys {
+		fn(m.vals[i], k)
+	}
+}
+
+// ForEachValue visits each entry's value in insertion order, the shape a forEach
+// callback that reads only its first parameter takes, so the common (value) => ...
+// form needs no unused key binding.
+func (m *Map[K, V]) ForEachValue(fn func(V)) {
+	for _, v := range m.vals {
+		fn(v)
 	}
 }
