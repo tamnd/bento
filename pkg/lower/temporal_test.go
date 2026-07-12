@@ -110,11 +110,6 @@ func TestPlainDateHandBacks(t *testing.T) {
 			src:  "const d = Temporal.PlainDate.from(\"2020-02-29\");\nconsole.log(d.day);",
 			want: "Temporal.PlainDate.from over a string or a property bag is a later slice",
 		},
-		{
-			name: "Instant construction",
-			src:  "function makeInstant(): void { new Temporal.Instant(0n); }",
-			want: "new Temporal.Instant is a later slice",
-		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -745,5 +740,144 @@ console.log(dt.era);
 	const want = "53\n2020\nundefined\nundefined\n153\n11\nundefined\n"
 	if got != want {
 		t.Fatalf("calendar fields printed %q, want %q", got, want)
+	}
+}
+
+// TestInstantConstruction pins new Temporal.Instant over a bigint argument to
+// value.NewInstant and the epoch-milliseconds getter to its method.
+func TestInstantConstruction(t *testing.T) {
+	const src = `const i = new Temporal.Instant(1000000000n);
+console.log(i.epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.NewInstant(", ".EpochMilliseconds()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestInstantTypeSlot pins the type slot: a parameter typed Temporal.Instant lowers to a
+// pointer to value.Instant rather than an interned struct shape.
+func TestInstantTypeSlot(t *testing.T) {
+	const src = `function msOf(i: Temporal.Instant): number { return i.epochMilliseconds; }
+console.log(msOf(new Temporal.Instant(0n)));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "*value.Instant") {
+		t.Errorf("rendered program missing %q:\n%s", "*value.Instant", got)
+	}
+}
+
+// TestInstantGetters pins the two clean getters: epochMilliseconds and epochNanoseconds
+// each lower to the matching method on the value.Instant receiver.
+func TestInstantGetters(t *testing.T) {
+	cases := map[string]string{
+		"epochMilliseconds": ".EpochMilliseconds()",
+		"epochNanoseconds":  ".EpochNanoseconds()",
+	}
+	for prop, want := range cases {
+		src := "const i = new Temporal.Instant(1000000000n);\nconsole.log(i." + prop + ");"
+		got := renderProgram(t, src)
+		if !strings.Contains(got, want) {
+			t.Errorf("getter .%s missing %q:\n%s", prop, want, got)
+		}
+	}
+}
+
+// TestInstantMethods pins equals, toString, and toJSON to their value.Instant methods.
+func TestInstantMethods(t *testing.T) {
+	const src = `const a = new Temporal.Instant(1n);
+const b = new Temporal.Instant(2n);
+console.log(a.equals(b));
+console.log(a.toString());
+console.log(a.toJSON());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Equals(", ".ToString()", ".ToJSON()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestInstantStatics pins the four statics: compare, from over an Instant, and the two
+// epoch factories, each to its value function.
+func TestInstantStatics(t *testing.T) {
+	const src = `const a = new Temporal.Instant(1n);
+const b = new Temporal.Instant(2n);
+console.log(Temporal.Instant.compare(a, b));
+const c = Temporal.Instant.from(a);
+console.log(c.epochMilliseconds);
+const d = Temporal.Instant.fromEpochMilliseconds(1000);
+console.log(d.epochMilliseconds);
+const e = Temporal.Instant.fromEpochNanoseconds(5n);
+console.log(e.epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		"value.InstantCompare(",
+		"value.InstantFrom(",
+		"value.InstantFromEpochMilliseconds(",
+		"value.InstantFromEpochNanoseconds(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestInstantHandBacks pins the honest ceilings: the arithmetic and rounding methods, the
+// zoned conversion, and from over a string each hand back with a reason naming where the
+// work belongs.
+func TestInstantHandBacks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "add arithmetic",
+			src:  "const i = new Temporal.Instant(0n);\nconst j = i.add({ seconds: 1 });\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.Instant.prototype.add is a later slice",
+		},
+		{
+			name: "round",
+			src:  "const i = new Temporal.Instant(1500000000n);\nconst j = i.round(\"second\");\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.Instant.prototype.round is a later slice",
+		},
+		{
+			name: "from a string",
+			src:  "const i = Temporal.Instant.from(\"1970-01-01T00:00:00Z\");\nconsole.log(i.epochMilliseconds);",
+			want: "Temporal.Instant.from over a string is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestInstantRun builds and runs the generated Go, proving the epoch getters read, the UTC
+// ISO string renders including a fractional second and a negative instant borrowing into
+// the previous day, and compare and equals answer.
+func TestInstantRun(t *testing.T) {
+	skipIfShort(t)
+	const src = `const a = new Temporal.Instant(1000000000n);
+console.log(a.epochMilliseconds);
+console.log(a.epochNanoseconds.toString());
+console.log(a.toString());
+const neg = new Temporal.Instant(-1n);
+console.log(neg.toString());
+console.log(neg.epochMilliseconds);
+const frac = new Temporal.Instant(123456789n);
+console.log(frac.toString());
+const b = Temporal.Instant.fromEpochMilliseconds(2000);
+console.log(Temporal.Instant.compare(a, b));
+console.log(a.equals(a));`
+	got := runProgramGo(t, src)
+	const want = "1000\n1000000000\n1970-01-01T00:00:01Z\n1969-12-31T23:59:59.999999999Z\n-1\n1970-01-01T00:00:00.123456789Z\n-1\ntrue\n"
+	if got != want {
+		t.Fatalf("instant run printed %q, want %q", got, want)
 	}
 }
