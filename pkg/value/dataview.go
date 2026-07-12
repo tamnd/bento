@@ -1,6 +1,9 @@
 package value
 
-import "math"
+import (
+	"encoding/binary"
+	"math"
+)
 
 // DataView is bento's runtime representation of a JavaScript DataView, the view
 // that reads and writes an ArrayBuffer at arbitrary byte offsets with an explicit
@@ -105,6 +108,79 @@ func (d *DataView) ByteLength() float64 {
 		return 0
 	}
 	return float64(n)
+}
+
+// access resolves a get or set to the buffer index it reads or writes, running the
+// three checks the spec's GetViewValue and SetViewValue share (25 §25.3.1.1 and
+// §25.3.1.2). The request index is a ToIndex value, so a negative or too-large one is
+// a RangeError. A detached buffer, or a resize that has left the view out of bounds,
+// is a TypeError. An access whose element would run past the view's live end is a
+// RangeError. On success it returns the byte index within the buffer, the view's
+// offset plus the request index, at which the element's bytes lie.
+func (d *DataView) access(requestIndex float64, elementSize int) int {
+	getIndex := toDataViewIndex(requestIndex)
+	length, oob := d.liveByteLength()
+	if oob {
+		Throw(NewTypeError(FromGoString("Cannot access a DataView whose buffer is detached or out of bounds")))
+	}
+	if getIndex+elementSize > length {
+		Throw(NewRangeError(FromGoString("DataView access is out of bounds")))
+	}
+	return d.byteOffset + getIndex
+}
+
+// dataViewOrder maps the optional littleEndian flag a get or set carries to the byte
+// order it reads or writes with. The flag defaults to false, so an omitted argument
+// reads big-endian, the network byte order the spec makes the default; a true flag
+// reads little-endian. The single-byte accessors take no flag and never call this.
+func dataViewOrder(littleEndian []bool) binary.ByteOrder {
+	if len(littleEndian) > 0 && littleEndian[0] {
+		return binary.LittleEndian
+	}
+	return binary.BigEndian
+}
+
+// GetInt8 reads the signed byte at the offset, DataView.prototype.getInt8. It is a
+// single byte, so it carries no endianness, and it widens the stored int8 to the
+// Number the read hands out.
+func (d *DataView) GetInt8(byteOffset float64) float64 {
+	bi := d.access(byteOffset, 1)
+	return float64(int8(d.buffer.data[bi]))
+}
+
+// GetUint8 reads the unsigned byte at the offset, DataView.prototype.getUint8, the
+// unsigned sibling of GetInt8.
+func (d *DataView) GetUint8(byteOffset float64) float64 {
+	bi := d.access(byteOffset, 1)
+	return float64(d.buffer.data[bi])
+}
+
+// GetInt16 reads the signed 16-bit integer at the offset with the given endianness,
+// DataView.prototype.getInt16, widening the result to a Number.
+func (d *DataView) GetInt16(byteOffset float64, littleEndian ...bool) float64 {
+	bi := d.access(byteOffset, 2)
+	return float64(int16(dataViewOrder(littleEndian).Uint16(d.buffer.data[bi:])))
+}
+
+// GetUint16 reads the unsigned 16-bit integer at the offset with the given
+// endianness, DataView.prototype.getUint16.
+func (d *DataView) GetUint16(byteOffset float64, littleEndian ...bool) float64 {
+	bi := d.access(byteOffset, 2)
+	return float64(dataViewOrder(littleEndian).Uint16(d.buffer.data[bi:]))
+}
+
+// GetInt32 reads the signed 32-bit integer at the offset with the given endianness,
+// DataView.prototype.getInt32, widening the result to a Number.
+func (d *DataView) GetInt32(byteOffset float64, littleEndian ...bool) float64 {
+	bi := d.access(byteOffset, 4)
+	return float64(int32(dataViewOrder(littleEndian).Uint32(d.buffer.data[bi:])))
+}
+
+// GetUint32 reads the unsigned 32-bit integer at the offset with the given
+// endianness, DataView.prototype.getUint32.
+func (d *DataView) GetUint32(byteOffset float64, littleEndian ...bool) float64 {
+	bi := d.access(byteOffset, 4)
+	return float64(dataViewOrder(littleEndian).Uint32(d.buffer.data[bi:]))
 }
 
 // toDataViewIndex is ECMAScript ToIndex applied to a DataView byte offset or length

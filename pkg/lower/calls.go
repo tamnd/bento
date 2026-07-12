@@ -1013,6 +1013,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isArrayBuffer(recvNode) {
 		return r.arrayBufferMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a DataView receiver lowers to a value.DataView getter or setter (25
+	// §25.3). It routes here alongside the other view paths, after the typed-array and
+	// buffer checks and before the Map, Set, and primitive paths, which expect a
+	// receiver a DataView is not.
+	if r.isDataView(recvNode) {
+		return r.dataViewMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
 	// routes before the primitive and string paths, which expect a number, boolean,
 	// or string receiver a map is not.
