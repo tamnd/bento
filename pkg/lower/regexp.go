@@ -143,8 +143,57 @@ func regExpAccessor(prop string) (method string, ok bool) {
 		return "Sticky", true
 	case "hasIndices":
 		return "HasIndices", true
+	case "lastIndex":
+		return "LastIndex", true
 	}
 	return "", false
+}
+
+// regExpMethodCall lowers a method call on a RegExp receiver. exec runs the match and
+// returns the result array or null, and test reports whether the pattern matches;
+// both take the subject string. The subject must lower as a string, which stringArgsN
+// enforces, so a non-string argument hands back rather than matching against a
+// coerced value a later slice will own. Any other method is a later slice.
+func (r *Renderer) regExpMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "exec", "test":
+		args, err := r.stringArgsN("RegExp.prototype."+method, argNodes, 1)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "Exec"
+		if method == "test" {
+			name = "Test"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "RegExp.prototype." + method + " is a later slice"}
+	}
+}
+
+// regExpExecResultCall reports whether n is a re.exec(s) call, whose runtime result
+// is the boxed value.Value the match returns, an array on success or null on failure.
+// The checker types exec as RegExpExecArray | null, a union bento has no static Go
+// shape for, so isDynamic and the binding path recognize the call by shape here to
+// keep the box on the dynamic path, where the null compare and the element and
+// property reads off the match dispatch through the value model.
+func (r *Renderer) regExpExecResultCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 {
+		return false
+	}
+	return r.prog.Text(parts[1]) == "exec" && r.isRegExp(parts[0])
 }
 
 // buildRegExp validates a pattern and flag pair through the runtime translator and,

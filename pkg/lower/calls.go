@@ -1048,6 +1048,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isDataView(recvNode) {
 		return r.dataViewMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a RegExp receiver, re.exec(s) or re.test(s), lowers to a value.RegExp
+	// method (22 §22.2.7). It routes here alongside the other exotic-type paths, before
+	// the Map, Set, and primitive paths, which expect a receiver a RegExp is not.
+	if r.isRegExp(recvNode) {
+		return r.regExpMethodCall(recvNode, method, argNodes)
+	}
 	// A register or unregister call on a FinalizationRegistry receiver lowers to the
 	// value.FinalizationRegistry surface (25 §26.2). It routes alongside the other weak
 	// paths, before the primitive and string paths a registry receiver is not.

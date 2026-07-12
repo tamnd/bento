@@ -134,3 +134,100 @@ func TestRegExpAccessors(t *testing.T) {
 		t.Fatalf("d/g/s getters wrong: %+v", all)
 	}
 }
+
+// A non-global exec returns the match array with the whole match at index 0, the
+// captures after it, the .index of the match, and the .input it ran against, and
+// returns null with no match. A non-global regexp never reads or writes lastIndex.
+func TestRegExpExec(t *testing.T) {
+	re := NewRegExpLiteral("a(b+)c", "")
+	got := re.Exec(FromGoString("xxabbbcyy"))
+	if got.IsNull() {
+		t.Fatal("exec returned null on a matching input")
+	}
+	if s := got.GetIndex(0).AsString().ToGoString(); s != "abbbc" {
+		t.Errorf("match[0] = %q, want abbbc", s)
+	}
+	if s := got.GetIndex(1).AsString().ToGoString(); s != "bbb" {
+		t.Errorf("match[1] = %q, want bbb", s)
+	}
+	if idx := got.Get(FromGoString("index")).AsNumber(); idx != 2 {
+		t.Errorf("match.index = %v, want 2", idx)
+	}
+	if in := got.Get(FromGoString("input")).AsString().ToGoString(); in != "xxabbbcyy" {
+		t.Errorf("match.input = %q, want xxabbbcyy", in)
+	}
+	if re.LastIndex() != 0 {
+		t.Errorf("a non-global exec wrote lastIndex = %v", re.LastIndex())
+	}
+	if !re.Exec(FromGoString("nope")).IsNull() {
+		t.Error("exec returned a result on a non-matching input")
+	}
+}
+
+// A non-participating capture group reports undefined at its slot, not the empty
+// string, the distinction the match array preserves.
+func TestRegExpExecOptionalGroup(t *testing.T) {
+	re := NewRegExpLiteral("a(x)?b", "")
+	got := re.Exec(FromGoString("ab"))
+	if got.IsNull() {
+		t.Fatal("exec returned null on a matching input")
+	}
+	if !got.GetIndex(1).IsUndefined() {
+		t.Errorf("an absent group reported %v, want undefined", got.GetIndex(1))
+	}
+}
+
+// A global exec resumes from lastIndex and advances it past each match, so successive
+// calls walk the string and the call after the last match returns null and resets
+// lastIndex to zero.
+func TestRegExpGlobalLastIndex(t *testing.T) {
+	re := NewRegExpLiteral("a", "g")
+	starts := []float64{}
+	for {
+		m := re.Exec(FromGoString("aXaXa"))
+		if m.IsNull() {
+			break
+		}
+		starts = append(starts, m.Get(FromGoString("index")).AsNumber())
+	}
+	if len(starts) != 3 || starts[0] != 0 || starts[1] != 2 || starts[2] != 4 {
+		t.Fatalf("global match indices = %v, want [0 2 4]", starts)
+	}
+	if re.LastIndex() != 0 {
+		t.Errorf("lastIndex after the exhausting call = %v, want 0", re.LastIndex())
+	}
+}
+
+// A sticky regexp matches only at lastIndex: it succeeds when the match begins there
+// and fails, resetting lastIndex, when it does not, even though a plain search would
+// find the pattern later in the string.
+func TestRegExpSticky(t *testing.T) {
+	re := NewRegExpLiteral("a", "y")
+	re.SetLastIndex(1)
+	if !re.Test(FromGoString("babab")) {
+		t.Error("a sticky match at 1 missed the 'a' at position 1")
+	}
+	if re.LastIndex() != 2 {
+		t.Errorf("a sticky match advanced lastIndex to %v, want 2", re.LastIndex())
+	}
+	re2 := NewRegExpLiteral("a", "y")
+	re2.SetLastIndex(0)
+	if re2.Test(FromGoString("babab")) {
+		t.Error("a sticky match at 0 succeeded though position 0 is 'b'")
+	}
+	if re2.LastIndex() != 0 {
+		t.Errorf("a failed sticky match left lastIndex = %v, want 0", re2.LastIndex())
+	}
+}
+
+// test reports a boolean and shares exec's stateful advance, so a global test walks
+// the string across calls the same way exec does.
+func TestRegExpTest(t *testing.T) {
+	re := NewRegExpLiteral("\\d+", "")
+	if !re.Test(FromGoString("abc123")) {
+		t.Error("test missed a matching input")
+	}
+	if re.Test(FromGoString("abc")) {
+		t.Error("test matched a non-matching input")
+	}
+}

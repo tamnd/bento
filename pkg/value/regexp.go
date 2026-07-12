@@ -1,8 +1,11 @@
 package value
 
 import (
+	"math"
 	"regexp"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // RegExp is bento's runtime representation of a JavaScript RegExp (22 §22.2). A
@@ -26,8 +29,10 @@ type RegExp struct {
 
 	// lastIndex is the index exec and test resume from under the global or sticky
 	// flag, and reset to zero on a failed match; it is observable and writable, so it
-	// is stored rather than derived.
-	lastIndex int
+	// is stored rather than derived. It is a UTF-16 code-unit offset, the same unit
+	// .index and String.prototype.length count in, and a Number because a program may
+	// assign it any value, which exec then coerces with ToLength on use.
+	lastIndex float64
 
 	// The flag set, each flag broken out so a match path reads a bool rather than
 	// re-scanning the flags string. The canonical flags string is rebuilt from these
@@ -174,6 +179,171 @@ func (re *RegExp) UnicodeSets() bool { return re.unicodeSet }
 func (re *RegExp) Sticky() bool      { return re.sticky }
 func (re *RegExp) HasIndices() bool  { return re.hasIndices }
 
+// LastIndex reports the lastIndex property, the offset a global or sticky match
+// resumes from. It is a Number read back exactly as it was last written or last
+// advanced, so a program that sets it and reads it sees its own value.
+func (re *RegExp) LastIndex() float64 { return re.lastIndex }
+
+// SetLastIndex writes the lastIndex property, the re.lastIndex = n assignment. The
+// value is stored as given and only coerced with ToLength when a match reads it, so
+// the property read reports the raw assignment the way the specification's data
+// property does.
+func (re *RegExp) SetLastIndex(v float64) { re.lastIndex = v }
+
+// Exec runs RegExp.prototype.exec (22 §22.2.7.2): it matches the pattern against s
+// and returns the match result array on success or null on failure. Under the global
+// or sticky flag it starts from lastIndex and advances lastIndex past the match, and
+// resets lastIndex to zero on a failed match; a plain regexp ignores lastIndex, never
+// writes it, and always searches from the start. The result is a value.Value because
+// exec returns an array or null, the RegExpExecArray | null union the checker gives it.
+func (re *RegExp) Exec(s BStr) Value {
+	m, ok := re.match(s)
+	if !ok {
+		return Null
+	}
+	return re.buildResult(s, m)
+}
+
+// Test runs RegExp.prototype.test (22 §22.2.7.10), reporting whether the pattern
+// matches s. It shares exec's stateful search, so the global and sticky flags advance
+// and reset lastIndex the same way; only the return differs, a boolean rather than the
+// match array, and no result object is built.
+func (re *RegExp) Test(s BStr) bool {
+	_, ok := re.match(s)
+	return ok
+}
+
+// match is the stateful search exec and test share. For a global or sticky regexp it
+// reads lastIndex, converts that UTF-16 offset to the byte offset RE2 works in, and
+// searches the subject from there; a sticky regexp additionally requires the match to
+// begin exactly at that offset. It returns the submatch byte-index pairs in absolute
+// coordinates, and updates lastIndex to the UTF-16 offset past the match on success or
+// to zero on failure, but only when the global or sticky flag makes lastIndex live.
+func (re *RegExp) match(s BStr) ([]int, bool) {
+	str := s.ToGoString()
+	stateful := re.global || re.sticky
+	startByte := 0
+	if stateful {
+		off, ok := utf16OffsetToByte(str, lastIndexToLength(re.lastIndex))
+		if !ok {
+			re.lastIndex = 0
+			return nil, false
+		}
+		startByte = off
+	}
+	loc := re.re.FindStringSubmatchIndex(str[startByte:])
+	if loc == nil || (re.sticky && loc[0] != 0) {
+		if stateful {
+			re.lastIndex = 0
+		}
+		return nil, false
+	}
+	// Shift the slice-relative byte indices back into absolute coordinates so the
+	// result and lastIndex are computed against the whole subject, not the tail.
+	abs := make([]int, len(loc))
+	for i, v := range loc {
+		if v < 0 {
+			abs[i] = -1
+		} else {
+			abs[i] = v + startByte
+		}
+	}
+	if stateful {
+		re.lastIndex = float64(byteToUTF16Offset(str, abs[1]))
+	}
+	return abs, true
+}
+
+// buildResult packs the match into the array RegExp.prototype.exec returns: element
+// zero is the whole match, each following element is a capture group's text or
+// undefined when the group did not participate, and the array carries the .index of
+// the match, the .input it ran against, and a .groups slot for named groups, which a
+// later slice fills. The indices arrive in bytes and .index is reported in the UTF-16
+// code units the language counts positions in.
+func (re *RegExp) buildResult(s BStr, m []int) Value {
+	str := s.ToGoString()
+	n := len(m) / 2
+	elems := make([]Value, n)
+	for i := 0; i < n; i++ {
+		lo, hi := m[2*i], m[2*i+1]
+		if lo < 0 {
+			elems[i] = Undefined
+		} else {
+			elems[i] = StringValue(FromGoString(str[lo:hi]))
+		}
+	}
+	res := NewArrayValue(elems)
+	res.Set(FromGoString("index"), Number(float64(byteToUTF16Offset(str, m[0]))))
+	res.Set(FromGoString("input"), StringValue(s))
+	res.Set(FromGoString("groups"), Undefined)
+	return res
+}
+
+// lastIndexToLength coerces a lastIndex Number to the non-negative integer offset
+// ToLength yields: a NaN or non-positive value becomes zero, and a fractional value
+// truncates toward zero. A value past the subject's length is capped at the array
+// length ceiling and then rejected by the offset conversion, the failed-match path
+// the specification takes for it. It mirrors toLength but takes a raw float64, since
+// lastIndex is already a Number the RegExp stores unboxed.
+func lastIndexToLength(v float64) int {
+	if math.IsNaN(v) || v <= 0 {
+		return 0
+	}
+	if v >= maxArrayLength {
+		return maxArrayLength
+	}
+	return int(v)
+}
+
+// utf16OffsetToByte converts a UTF-16 code-unit offset into the byte offset of the
+// same position in the UTF-8 string, the translation between the unit the language
+// counts positions in and the unit RE2 searches in. It reports ok=false when the
+// offset is past the end of the string or lands inside a surrogate pair, both of
+// which the stateful match treats as a position with no match.
+func utf16OffsetToByte(s string, u16 int) (int, bool) {
+	if u16 == 0 {
+		return 0, true
+	}
+	count := 0
+	for i, r := range s {
+		if count == u16 {
+			return i, true
+		}
+		w := utf16.RuneLen(r)
+		if w < 0 {
+			w = 1
+		}
+		count += w
+	}
+	if count == u16 {
+		return len(s), true
+	}
+	return 0, false
+}
+
+// byteToUTF16Offset counts the UTF-16 code units in the prefix of s up to the byte
+// offset b, the reverse of utf16OffsetToByte, used to report .index and lastIndex in
+// the units the language counts.
+func byteToUTF16Offset(s string, b int) int {
+	if b <= 0 {
+		return 0
+	}
+	if b > len(s) {
+		b = len(s)
+	}
+	count := 0
+	for i := 0; i < b; {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := utf16.RuneLen(r)
+		if w < 0 {
+			w = 1
+		}
+		count += w
+		i += size
+	}
+	return count
+}
+
 // canonicalSource returns the text .source reports for a pattern. An empty pattern
 // reads back as "(?:)", the specification's non-capturing empty group, so the
 // source is always a valid pattern that round-trips through the RegExp constructor;
@@ -304,7 +474,47 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	if prefix != "" {
 		src = "(?" + prefix + ")" + src
 	}
+	// A global or sticky regexp resumes its match from lastIndex, which the runtime
+	// reaches by slicing the subject at that offset before handing it to RE2. Slicing
+	// severs the left context an anchor or a word boundary reads, so ^, $, \b, and \B
+	// would mean the wrong thing at a nonzero offset: ^ would match at the slice start
+	// rather than only at the string start, and \b would test against a character the
+	// slice dropped. A non-global non-sticky regexp always searches from the start, so
+	// no slice happens and these assertions stay faithful; only the stateful case hands
+	// back, and only when the pattern actually carries one of them.
+	if (fl.global || fl.sticky) && patternHasAnchor(pattern) {
+		return "", false, "a global or sticky regexp with an anchor or word boundary resumes from a sliced offset RE2 cannot host faithfully, a later slice"
+	}
 	return src, true, ""
+}
+
+// patternHasAnchor reports whether the pattern uses a position assertion whose
+// meaning depends on the surrounding text: a bare ^ or $ anchor, or a \b or \B word
+// boundary. It respects escapes and character classes, so a \^ escape, a [$] class
+// member, or a \b inside a class (which is a backspace, not a boundary) does not
+// count. It is the offset-safety test the stateful match paths gate on.
+func patternHasAnchor(pattern string) bool {
+	rs := []rune(pattern)
+	inClass := false
+	for i := 0; i < len(rs); i++ {
+		c := rs[i]
+		switch {
+		case c == '\\':
+			if !inClass && i+1 < len(rs) && (rs[i+1] == 'b' || rs[i+1] == 'B') {
+				return true
+			}
+			i++ // skip the escaped character
+		case inClass:
+			if c == ']' {
+				inClass = false
+			}
+		case c == '[':
+			inClass = true
+		case c == '^' || c == '$':
+			return true
+		}
+	}
+	return false
 }
 
 // heldGroupPrefix inspects a group opening at index i. It returns a replacement

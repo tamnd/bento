@@ -305,6 +305,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.arrayFromBoxedResultCall(n) {
 		return true
 	}
+	// A re.exec(s) call returns the boxed value.Value the match yields, an array or
+	// null, whichever the run produces. The checker types exec as RegExpExecArray |
+	// null, a union bento renders no static Go for, so isDynamic recognizes the call
+	// by shape to keep the box on the dynamic path, where the null compare and the
+	// element and property reads off the match dispatch through the value model.
+	if r.regExpExecResultCall(n) {
+		return true
+	}
 	// A .value read off an IteratorResult whose type is not a clean primitive, the
 	// array iterator's `number | undefined` value being the first, stays the boxed
 	// value.Value the IterResult carries: there is no single Go type to coerce it to,
@@ -853,6 +861,26 @@ func (r *Renderer) coerceDynamicToStaticFlags(expr ast.Expr, flags frontend.Type
 	default:
 		return nil, &NotYetLowerable{Reason: "coercing a dynamic value into this static type is a later slice"}
 	}
+}
+
+// unboxDynamicRead adapts a read off a boxed receiver, a value.Value the runtime
+// Get or GetIndex yields, to the type the checker gave the read. A receiver typed
+// any yields an any-typed read, so the box passes through untouched, the common
+// case. A receiver the compiler boxed while the checker kept a concrete type, a
+// RegExp exec result's string element or number .index being the first, gives the
+// read a primitive type its consumer expects unboxed, so the box coerces down
+// through the ToNumber family the same way an IteratorResult .value does. A
+// non-primitive read type, an object or array, keeps the box, since there is no
+// single Go value to coerce it to here.
+func (r *Renderer) unboxDynamicRead(read ast.Expr, n frontend.Node) (ast.Expr, error) {
+	if r.isDynamic(n) {
+		return read, nil
+	}
+	flags := r.prog.TypeAt(n).Flags
+	if flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
+		return r.coerceDynamicToStaticFlags(read, flags)
+	}
+	return read, nil
 }
 
 // coerceReturn bridges a return value from its expression's type to the function's

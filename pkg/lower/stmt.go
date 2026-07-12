@@ -1111,6 +1111,26 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			})
 			continue
 		}
+		// A binding initialized by re.exec(s) holds the boxed value.Value the match
+		// returns, an array on success or null on failure. The checker types it
+		// RegExpExecArray | null, a union bento renders no static Go for, so the
+		// binding lands in a value.Value slot and is marked dynamic, which routes the
+		// later null compare and the element and property reads off the match through
+		// the value model rather than a static shape the union has no name for.
+		if r.regExpExecResultCall(kids[initIdx]) {
+			execInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{execInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err
@@ -2650,6 +2670,30 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 		return nil, false, nil
 	}
 	obj := tParts[0]
+	// A write re.lastIndex = v sets the offset a global or sticky match resumes from
+	// (22 §22.2.7). lastIndex is a property on value.RegExp reached through a method,
+	// not a struct field, so it lowers to a SetLastIndex call. It routes before the
+	// dynamic and fixed-shape gates below, which would box the receiver or fail to find
+	// a field of that name on a shape a RegExp is not. The value coerces to the number
+	// the property holds, the same float64 a read reports.
+	if r.prog.Text(tParts[1]) == "lastIndex" && r.isRegExp(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, false, err
+		}
+		rhs, err := r.lowerExpr(parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		rhs, err = r.coerceToTarget(rhs, parts[2], target)
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.ExprStmt{X: &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetLastIndex")},
+			Args: []ast.Expr{rhs},
+		}}, true, nil
+	}
 	// A write o.k = v on a dynamic receiver (one typed any or unknown, new Object()
 	// being the first source) has no static field to assign, so it dispatches at
 	// runtime through the boxed value's Set, the mirror of the dynamic Get a read
