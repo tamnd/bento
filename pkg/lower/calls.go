@@ -64,6 +64,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if expr, handled, err := r.promiseStaticCall(n, kids[0], kids[1:]); handled || err != nil {
 			return expr, err
 		}
+		// A static call on a concrete typed-array constructor (Int32Array.of,
+		// Int32Array.from) is a constructor-level factory, not a method on a view, so
+		// it routes here before methodCall, which expects a value receiver. It needs
+		// the whole call node n to read the constructed array's element type.
+		if expr, handled, err := r.typedArrayStaticCall(n, kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
 		return r.methodCall(kids[0], kids[1:])
 	}
 	// A method call spelled with a bracket key, C["m"](...) or c["m"](...), is the
