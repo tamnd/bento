@@ -442,34 +442,57 @@ func (r *Renderer) arrayBufferMaxByteLength(n frontend.Node) (ast.Expr, error) {
 	return r.lowerExpr(kids[1])
 }
 
-// newMap lowers a Map construction, the keyed collection of section 6.5. Only the
-// empty new Map<K, V>() is covered: it picks the value constructor for the key kind
-// (a number, string, or boolean key each compares by its own SameValueZero) and
-// instantiates it at the value type, so new Map<string, number>() lowers to
+// newMap lowers a Map construction, the keyed collection of section 6.5. The empty
+// new Map<K, V>() picks the value constructor for the key kind (a number, string,
+// boolean, or object key each compares by its own SameValueZero) and instantiates
+// it at the value type, so new Map<string, number>() lowers to
 // value.NewStringMap[float64](). The key and value come from the map's own type at
 // this node, read off its set signature the same way renderMap reads them, so the
 // instantiation matches the type a binding of the map is declared with. The
-// entries-argument form (new Map([[k, v], ...])) and a non-primitive key are later
-// slices and hand back.
+// entries-argument form new Map([[k, v], ...]) fills the empty map from an array
+// literal of pairs; any other iterable of pairs is a later slice and hands back.
 func (r *Renderer) newMap(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
-	// The children of a new expression carry the written type arguments (new
-	// Map<string, number>()) ahead of the value arguments, and the frontend leaves a
-	// type node unnamed, so it reads as NodeUnknown. Only a real value argument (the
-	// entries list) has a named kind, so counting the named children is what tells the
-	// empty constructor from the entries form.
-	valueArgs := 0
-	for _, a := range args {
-		if a.Kind() != frontend.NodeUnknown {
-			valueArgs++
-		}
-	}
-	if valueArgs != 0 {
-		return nil, &NotYetLowerable{Reason: "only the empty new Map() is lowered yet, not the entries-argument form"}
+	valueArgs := r.namedArgs(args)
+	if len(valueArgs) > 1 {
+		return nil, &NotYetLowerable{Reason: "new Map() with more than one argument is a later slice"}
 	}
 	k, v, ok := r.mapKeyVal(r.prog.TypeAt(n))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new Map did not expose its key and value types"}
 	}
+	ctor, err := r.mapCtor(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueArgs) == 0 {
+		return ctor, nil
+	}
+	return r.mapFromPairs(n, ctor, valueArgs[0])
+}
+
+// namedArgs returns the value-argument children of a new expression, dropping the
+// written type arguments. The children carry the type arguments (new Map<string,
+// number>()) ahead of the value arguments, and the frontend leaves a type node
+// unnamed so it reads as NodeUnknown; only a real value argument has a named kind,
+// so the named children are exactly the value arguments.
+func (r *Renderer) namedArgs(args []frontend.Node) []frontend.Node {
+	var out []frontend.Node
+	for _, a := range args {
+		if a.Kind() != frontend.NodeUnknown {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// mapCtor builds the empty-Map constructor call for a key and value type: the value
+// constructor for the key kind, instantiated at the value type. An object key
+// compares by reference identity, and objects lower to Go struct pointers, so
+// NewRefMap keys on the rendered pointer type; only a pointer render is comparable
+// in Go, which arrays (a slice) and functions (a func) are not, so a key whose
+// render is not a pointer hands back rather than emit a Go map keyed by an
+// incomparable type.
+func (r *Renderer) mapCtor(k, v frontend.Type) (ast.Expr, error) {
 	vExpr, err := r.typeExpr(v)
 	if err != nil {
 		return nil, err
@@ -483,11 +506,6 @@ func (r *Renderer) newMap(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 	case k.Flags&frontend.TypeBoolean != 0:
 		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewBoolMap"), Index: vExpr}}, nil
 	case k.Flags&frontend.TypeObject != 0:
-		// An object key compares by reference identity, and objects lower to Go
-		// struct pointers, so NewRefMap keys on the rendered pointer type. Only a
-		// type that renders to a pointer is comparable in Go, which arrays (a slice)
-		// and functions (a func) are not, so a key whose render is not a pointer
-		// hands back rather than emit a Go map keyed by an incomparable type.
 		kExpr, err := r.typeExpr(k)
 		if err != nil {
 			return nil, err
@@ -501,32 +519,96 @@ func (r *Renderer) newMap(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 	}
 }
 
+// mapFromPairs lowers new Map([[k, v], ...]) by filling the empty map ctor from an
+// array literal of two-element array literals: each inner literal's two elements are
+// the key and value, lowered directly, which sidesteps a general tuple lowering the
+// frontend does not have yet. The fill runs inside a func literal so the whole
+// construction stands where a value is expected, the same shape a spread's drain
+// takes. A Map from any source other than an array literal of pairs hands back.
+func (r *Renderer) mapFromPairs(n frontend.Node, ctor ast.Expr, arg frontend.Node) (ast.Expr, error) {
+	if arg.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, &NotYetLowerable{Reason: "new Map from a source that is not an array literal of pairs is a later slice"}
+	}
+	collType, err := r.renderMap(r.prog.TypeAt(n))
+	if err != nil {
+		return nil, err
+	}
+	tmp := r.freshTemp()
+	stmts := []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{ctor}}}
+	for _, pair := range r.prog.Children(arg) {
+		if pair.Kind() != frontend.NodeArrayLiteralExpression {
+			return nil, &NotYetLowerable{Reason: "new Map from an entry that is not a literal pair is a later slice"}
+		}
+		kv := r.prog.Children(pair)
+		if len(kv) != 2 {
+			return nil, &NotYetLowerable{Reason: "new Map from an entry that is not a two-element pair is a later slice"}
+		}
+		kExpr, err := r.lowerExpr(kv[0])
+		if err != nil {
+			return nil, err
+		}
+		vExpr, err := r.lowerExpr(kv[1])
+		if err != nil {
+			return nil, err
+		}
+		stmts = append(stmts, &ast.ExprStmt{X: &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("Set")},
+			Args: []ast.Expr{kExpr, vExpr},
+		}})
+	}
+	stmts = append(stmts, &ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}})
+	return r.collectionIIFE(collType, stmts), nil
+}
+
+// collectionIIFE wraps the build-and-fill statements for a collection in a
+// no-argument func literal returning collType and calls it, so a Map or Set built
+// from an argument stands in expression position the way an empty constructor does.
+func (r *Renderer) collectionIIFE(collType ast.Expr, body []ast.Stmt) ast.Expr {
+	fn := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: collType}}},
+		},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: fn}
+}
+
 // newSet lowers a Set construction, the collection of unique members of section
-// 6.5. Only the empty new Set<T>() is covered: it picks the value constructor for
-// the member kind (a number, string, or boolean member each compares by its own
+// 6.5. The empty new Set<T>() picks the value constructor for the member kind (a
+// number, string, boolean, or object member each compares by its own
 // SameValueZero), so new Set<string>() lowers to value.NewStringSet(). Unlike a Map,
 // whose value type is free and so needs a type argument, the member type fully
-// determines the Set constructor, so the call carries no instantiation. The member
-// type comes from the set's own type at this node, read off its add signature the
-// same way renderSet reads it. The iterable-argument form (new Set([a, b, c])) and a
-// non-primitive member are later slices and hand back.
+// determines the primitive Set constructor, so the call carries no instantiation.
+// The member type comes from the set's own type at this node, read off its add
+// signature the same way renderSet reads it. The iterable-argument form new
+// Set(iterable) fills the empty set from an array or a user iterable; a source that
+// is neither hands back.
 func (r *Renderer) newSet(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
-	// As with new Map, the written type argument (new Set<string>()) reads as a
-	// NodeUnknown child ahead of any value argument, so counting the named children is
-	// what tells the empty constructor from the iterable form.
-	valueArgs := 0
-	for _, a := range args {
-		if a.Kind() != frontend.NodeUnknown {
-			valueArgs++
-		}
-	}
-	if valueArgs != 0 {
-		return nil, &NotYetLowerable{Reason: "only the empty new Set() is lowered yet, not the iterable-argument form"}
+	valueArgs := r.namedArgs(args)
+	if len(valueArgs) > 1 {
+		return nil, &NotYetLowerable{Reason: "new Set() with more than one argument is a later slice"}
 	}
 	elem, ok := r.setElem(r.prog.TypeAt(n))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new Set did not expose its member type"}
 	}
+	ctor, err := r.setCtor(elem)
+	if err != nil {
+		return nil, err
+	}
+	if len(valueArgs) == 0 {
+		return ctor, nil
+	}
+	return r.setFromIterable(n, ctor, valueArgs[0])
+}
+
+// setCtor builds the empty-Set constructor call for a member type. An object member
+// compares by reference identity, and objects lower to Go struct pointers, so
+// NewRefSet keys on the rendered pointer type; only a pointer render is comparable
+// in Go, which arrays and functions are not, so a member whose render is not a
+// pointer hands back rather than emit a Set backed by an incomparable member type.
+func (r *Renderer) setCtor(elem frontend.Type) (ast.Expr, error) {
 	r.requireImport(valuePkg)
 	switch {
 	case elem.Flags&frontend.TypeNumber != 0:
@@ -536,11 +618,6 @@ func (r *Renderer) newSet(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 	case elem.Flags&frontend.TypeBoolean != 0:
 		return &ast.CallExpr{Fun: sel("value", "NewBoolSet")}, nil
 	case elem.Flags&frontend.TypeObject != 0:
-		// An object member compares by reference identity, and objects lower to Go
-		// struct pointers, so NewRefSet keys on the rendered pointer type. Only a
-		// pointer render is comparable in Go, which arrays and functions are not, so
-		// a member whose render is not a pointer hands back rather than emit a Set
-		// backed by an incomparable member type.
 		elemExpr, err := r.typeExpr(elem)
 		if err != nil {
 			return nil, err
@@ -552,6 +629,69 @@ func (r *Renderer) newSet(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 	default:
 		return nil, &NotYetLowerable{Reason: "a Set with a member that is not a number, string, boolean, or object is a later slice"}
 	}
+}
+
+// setFromIterable lowers new Set(iterable) by filling the empty set ctor from the
+// source's elements, ranged inside a func literal so the whole construction stands
+// where a value is expected. The elements come from iterableElems, which ranges an
+// array's backing slice or drains a user iterable through the iterator protocol; the
+// checker has typed the source as Iterable<T> for the set's member T, so each ranged
+// element adds with no conversion.
+func (r *Renderer) setFromIterable(n frontend.Node, ctor ast.Expr, arg frontend.Node) (ast.Expr, error) {
+	collType, err := r.renderSet(r.prog.TypeAt(n))
+	if err != nil {
+		return nil, err
+	}
+	elems, err := r.iterableElems(arg)
+	if err != nil {
+		return nil, err
+	}
+	tmp := r.freshTemp()
+	member := r.freshTemp()
+	add := &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("Add")},
+		Args: []ast.Expr{ident(member)},
+	}}
+	stmts := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{ctor}},
+		&ast.RangeStmt{
+			Key:   ident("_"),
+			Value: ident(member),
+			Tok:   token.DEFINE,
+			X:     elems,
+			Body:  &ast.BlockStmt{List: []ast.Stmt{add}},
+		},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}},
+	}
+	return r.collectionIIFE(collType, stmts), nil
+}
+
+// iterableElems returns a Go slice expression of a source's elements, for a
+// collection constructor to range and add. An array (or array literal) ranges its
+// backing slice through Elems; a user iterable that defines [Symbol.iterator] is
+// drained through the iterator protocol into a slice of its element type. A source
+// that is neither hands back, since a built-in Set, Map, or string iterable needs
+// its own walk a later slice brings.
+func (r *Renderer) iterableElems(arg frontend.Node) (ast.Expr, error) {
+	if isArrayElem(r, arg) {
+		src, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Elems")}}, nil
+	}
+	if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(arg)); ok {
+		elemType, err := r.typeExpr(shape.elem)
+		if err != nil {
+			return nil, err
+		}
+		src, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		return r.iterableToSliceExpr(src, elemType, shape), nil
+	}
+	return nil, &NotYetLowerable{Reason: "a collection from a source that is not an array or a user iterable is a later slice"}
 }
 
 // errorInstanceof lowers `e instanceof Error` on a caught error, the guard a
