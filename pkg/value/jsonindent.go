@@ -87,6 +87,10 @@ func (e jsonIndenter) encode(b *strings.Builder, v any, indent string) {
 		if jsonUndefinedGo(v) {
 			return
 		}
+		if r, ok := jsonToJSONGo(v); ok {
+			e.encode(b, r, indent)
+			return
+		}
 		e.encodeObject(b, reflect.ValueOf(v), indent)
 	}
 }
