@@ -250,3 +250,187 @@ func (a *TypedArray[T]) Join(sep BStr) BStr {
 	}
 	return BStr{utf16: units, lengthU16: len(units)}
 }
+
+// The callback methods run a function over the view with every element widened to
+// the Number a typed-array read hands out, so each callback takes a float64 rather
+// than the stored element type. Map and Filter build a fresh typed array of the
+// same element kind, coercing a produced value through the element's store rule the
+// same way an indexed write would; the predicate and effect methods return a
+// Number, a boolean, or an Opt just as the Array methods do. The callback here
+// takes only the element, the common shape; the index and array parameters
+// JavaScript also passes are a later slice the lowerer keeps out by handing back a
+// callback that reads them.
+
+// ForEach runs the callback for each element in order for its side effect, the
+// lowering of TypedArray.prototype.forEach. It returns nothing, matching the
+// method's undefined result, and cannot be stopped early, matching JavaScript.
+func (a *TypedArray[T]) ForEach(f func(float64)) {
+	for _, e := range a.data {
+		f(float64(e))
+	}
+}
+
+// Map returns a fresh typed array of the same element kind holding the callback's
+// result for each element, the lowering of TypedArray.prototype.map. A typed
+// array's map always yields the same element type, so unlike the Array map there is
+// no type-changing free-function form: the callback returns a Number, which the new
+// array stores through its element's store coercion exactly as an indexed write
+// would. The receiver is unchanged.
+func (a *TypedArray[T]) Map(f func(float64) float64) *TypedArray[T] {
+	out := newTypedArray(float64(len(a.data)), a.coerce)
+	for i, e := range a.data {
+		out.data[i] = a.coerce(f(float64(e)))
+	}
+	return out
+}
+
+// Filter returns a fresh typed array of the elements for which the callback
+// returns true, in order, the lowering of TypedArray.prototype.filter. The kept
+// elements are gathered as widened Numbers and rebuilt into a new array through the
+// element's store coercion, so the result owns its storage and the receiver is
+// unchanged.
+func (a *TypedArray[T]) Filter(f func(float64) bool) *TypedArray[T] {
+	kept := make([]float64, 0, len(a.data))
+	for _, e := range a.data {
+		v := float64(e)
+		if f(v) {
+			kept = append(kept, v)
+		}
+	}
+	return typedArrayOf(a.coerce, kept...)
+}
+
+// Some reports whether at least one element satisfies the predicate, the lowering
+// of TypedArray.prototype.some. It short-circuits on the first accepted element,
+// and an empty view is false.
+func (a *TypedArray[T]) Some(f func(float64) bool) bool {
+	for _, e := range a.data {
+		if f(float64(e)) {
+			return true
+		}
+	}
+	return false
+}
+
+// Every reports whether all elements satisfy the predicate, the lowering of
+// TypedArray.prototype.every. It short-circuits on the first rejected element, and
+// an empty view is true, the vacuous case JavaScript also returns true for.
+func (a *TypedArray[T]) Every(f func(float64) bool) bool {
+	for _, e := range a.data {
+		if !f(float64(e)) {
+			return false
+		}
+	}
+	return true
+}
+
+// Find returns the first element the callback accepts, the lowering of
+// TypedArray.prototype.find. Its declared type is Number | undefined, so it returns
+// an Opt[float64], present with the matching element or the undefined optional when
+// none passes. It short-circuits on the first match.
+func (a *TypedArray[T]) Find(f func(float64) bool) Opt[float64] {
+	for _, e := range a.data {
+		v := float64(e)
+		if f(v) {
+			return Some(v)
+		}
+	}
+	return None[float64]()
+}
+
+// FindIndex returns the index of the first element the callback accepts, or -1 when
+// none does, the lowering of TypedArray.prototype.findIndex. The result is a
+// Number, so -1 is the not-found sentinel and no optional is needed.
+func (a *TypedArray[T]) FindIndex(f func(float64) bool) float64 {
+	for i, e := range a.data {
+		if f(float64(e)) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// FindLast returns the last element the callback accepts, the lowering of
+// TypedArray.prototype.findLast. Like find it returns an Opt[float64], and it walks
+// from the end, short-circuiting on the first match in descending index order.
+func (a *TypedArray[T]) FindLast(f func(float64) bool) Opt[float64] {
+	for i := len(a.data) - 1; i >= 0; i-- {
+		v := float64(a.data[i])
+		if f(v) {
+			return Some(v)
+		}
+	}
+	return None[float64]()
+}
+
+// FindLastIndex returns the index of the last element the callback accepts, or -1
+// when none does, the lowering of TypedArray.prototype.findLastIndex. Like
+// findIndex the result is a Number with -1 as the not-found sentinel, and it walks
+// from the end in descending index order.
+func (a *TypedArray[T]) FindLastIndex(f func(float64) bool) float64 {
+	for i := len(a.data) - 1; i >= 0; i-- {
+		if f(float64(a.data[i])) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// ReduceNoInit folds the view left to right with no initial value, the lowering of
+// TypedArray.prototype.reduce called with only a callback. With no init the
+// accumulator seeds from the first element, so the accumulator is a Number and the
+// callback is func(float64, float64) float64, which is why this is a method rather
+// than the free function the initial-value form needs for a differing accumulator
+// type. An empty view has no seed, so it throws a TypeError the way JavaScript does.
+func (a *TypedArray[T]) ReduceNoInit(f func(float64, float64) float64) float64 {
+	if len(a.data) == 0 {
+		Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+	}
+	acc := float64(a.data[0])
+	for _, x := range a.data[1:] {
+		acc = f(acc, float64(x))
+	}
+	return acc
+}
+
+// ReduceRightNoInit folds the view right to left with no initial value, the
+// lowering of TypedArray.prototype.reduceRight called with only a callback. The
+// accumulator seeds from the last element and the fold runs toward the first. An
+// empty view throws a TypeError.
+func (a *TypedArray[T]) ReduceRightNoInit(f func(float64, float64) float64) float64 {
+	if len(a.data) == 0 {
+		Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+	}
+	acc := float64(a.data[len(a.data)-1])
+	for i := len(a.data) - 2; i >= 0; i-- {
+		acc = f(acc, float64(a.data[i]))
+	}
+	return acc
+}
+
+// ReduceTypedArray folds the view left to right into a single accumulator, the
+// lowering of TypedArray.prototype.reduce called with an initial value. It is a
+// free function rather than a method because the accumulator type A may differ from
+// the Number the elements widen to, and a Go method cannot introduce the new type
+// parameter A. Starting from init, each element updates the accumulator in order,
+// and an empty view returns init unchanged.
+func ReduceTypedArray[T typedElem, A any](a *TypedArray[T], f func(A, float64) A, init A) A {
+	acc := init
+	for _, x := range a.data {
+		acc = f(acc, float64(x))
+	}
+	return acc
+}
+
+// ReduceRightTypedArray folds the view right to left into a single accumulator, the
+// lowering of TypedArray.prototype.reduceRight called with an initial value. Like
+// ReduceTypedArray it is a free function so the accumulator type A can differ from
+// the element Number. Starting from init, each element from the last to the first
+// updates the accumulator, and an empty view returns init unchanged.
+func ReduceRightTypedArray[T typedElem, A any](a *TypedArray[T], f func(A, float64) A, init A) A {
+	acc := init
+	for i := len(a.data) - 1; i >= 0; i-- {
+		acc = f(acc, float64(a.data[i]))
+	}
+	return acc
+}
