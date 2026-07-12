@@ -118,6 +118,120 @@ func (r *Renderer) typedArrayMethodCall(recvNode frontend.Node, method string, a
 	}
 }
 
+// typedArrayStaticCall lowers a static call on a concrete typed-array constructor,
+// Int32Array.of and Int32Array.from. It is the typed-array sibling of
+// arrayStaticCall: it reports handled=false when the callee is not a typed-array
+// constructor name, so the caller falls through to ordinary dispatch, and
+// handled=true with a hand-back for a name that is a typed-array constructor but a
+// static this slice does not cover, so it does not reach a misleading receiver
+// error. Only the numeric family is covered: Uint8Array and the bigint arrays
+// build a different Go type through their own constructors, and the generic
+// %TypedArray%.of and %TypedArray%.from called off the abstract base need the
+// runtime constructor dispatch that is its own later slice.
+func (r *Renderer) typedArrayStaticCall(call, callee frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	recvNode, method := kids[0], r.prog.Text(kids[1])
+	if recvNode.Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	name := r.prog.Text(recvNode)
+	if _, ok := bytesPerElement(name); !ok {
+		return nil, false, nil
+	}
+	// A local class shadowing the name constructs as the class, so a static call on
+	// it is not this built-in and falls through to ordinary dispatch.
+	if _, ok := r.classNameRef(recvNode); ok {
+		return nil, false, nil
+	}
+	if method != "of" && method != "from" {
+		return nil, true, &NotYetLowerable{Reason: "the " + name + "." + method + " static is a later slice"}
+	}
+	if _, ok := typedArrayElemGo(name); !ok {
+		return nil, true, &NotYetLowerable{Reason: "the " + name + "." + method + " static builds a different value type and is a later slice"}
+	}
+	// The result type confirms the call really builds this typed array rather than
+	// something the checker widened elsewhere, the same instance test the method
+	// surface uses through genericTypedArray.
+	if _, ok := r.typedArrayName(r.prog.TypeAt(call)); !ok {
+		return nil, true, &NotYetLowerable{Reason: "the " + name + "." + method + " static whose result type did not lower is a later slice"}
+	}
+	switch method {
+	case "of":
+		expr, err := r.typedArrayOf(name, argNodes)
+		return expr, true, err
+	default:
+		expr, err := r.typedArrayFromStatic(name, argNodes)
+		return expr, true, err
+	}
+}
+
+// typedArrayOf lowers Int32Array.of(e0, e1, ...) to value.<Name>Of, the same
+// constructor new Int32Array([e0, e1, ...]) takes: of builds an array from its
+// arguments as elements, one to one, each coerced by the element kind's store
+// rule. Every argument is a Number, so a non-number argument hands back.
+func (r *Renderer) typedArrayOf(name string, argNodes []frontend.Node) (ast.Expr, error) {
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		if !r.isNumber(a) {
+			return nil, &NotYetLowerable{Reason: "typed array of with a non-number argument is a later slice"}
+		}
+		e, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, e)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", name+"Of"), Args: args}, nil
+}
+
+// typedArrayFromStatic lowers Int32Array.from(source) to value.<Name>Of over the
+// source's elements, building a fresh array of this element kind. It covers the
+// same sources new Int32Array(source) copies from: a number-array literal spreads
+// its elements straight through Of, a number-array value reads them with Elems,
+// and another numeric typed array widens each element with Floats, all coerced by
+// Of's per-element store rule. The map-callback form does not pre-coerce the
+// source, so it needs a distinct path and hands back, as do an iterable source and
+// the thisArg argument.
+func (r *Renderer) typedArrayFromStatic(name string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "typed array from with no source is a later slice"}
+	}
+	if len(argNodes) > 1 {
+		return nil, &NotYetLowerable{Reason: "typed array from with a map callback is a later slice"}
+	}
+	src := argNodes[0]
+	r.requireImport(valuePkg)
+	if src.Kind() == frontend.NodeArrayLiteralExpression {
+		elems := r.prog.Children(src)
+		lowered := make([]ast.Expr, 0, len(elems))
+		for _, e := range elems {
+			if e.Kind() == frontend.NodeSpreadElement {
+				return nil, &NotYetLowerable{Reason: "spread element in a typed array from source is a later slice"}
+			}
+			if !r.isNumber(e) {
+				return nil, &NotYetLowerable{Reason: "typed array from a source with a non-number element is a later slice"}
+			}
+			v, err := r.lowerExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			lowered = append(lowered, v)
+		}
+		return &ast.CallExpr{Fun: sel("value", name+"Of"), Args: lowered}, nil
+	}
+	if r.isNumberArrayValue(src) {
+		return r.newTypedArrayFrom(name, src, "Elems")
+	}
+	if r.numericTypedArray(src) {
+		return r.newTypedArrayFrom(name, src, "Floats")
+	}
+	return nil, &NotYetLowerable{Reason: "typed array from over a source that is not a number array, a numeric typed array, or a number-array literal is a later slice"}
+}
+
 // typedArrayRangeMethod lowers slice, subarray, and copyWithin, which share the
 // bound shape: zero to three Number bounds that go straight through to the value
 // method once each is a number. slice and subarray both take zero to two bounds
