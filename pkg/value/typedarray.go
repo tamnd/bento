@@ -27,22 +27,29 @@ import (
 // back to a Number, which every member does the same way.
 //
 // A typed array is a view, not the storage: it records the ArrayBuffer it reads,
-// the byte offset it starts at, and an element slice that aliases the buffer's
-// bytes at that offset (section 6.2 and §6.3). The data slice is built with
-// unsafe.Slice over the buffer's bytes, so an element read and write go straight
+// the byte offset it starts at, and its element length (section 6.2 and §6.3). It
+// does not cache an element slice; live forms one with unsafe.Slice over the
+// buffer's current bytes on each access, so an element read and write go straight
 // through it with no per-element packing, and two views over one buffer, even of
-// different element widths, observe each other's writes because they alias the
-// same run of bytes. The buffer allocates eight-byte aligned and the byte offset
-// the spec requires to be a multiple of the element width keeps every element on a
+// different element widths, observe each other's writes because they alias the same
+// run of bytes. The buffer allocates eight-byte aligned and the byte offset the
+// spec requires to be a multiple of the element width keeps every element on a
 // naturally aligned address, and the platform's little-endian layout is the byte
-// order the buffer exposes. Keeping data as a live view is what lets every
-// element-access method below stay a plain slice operation while still aliasing
-// the shared buffer.
+// order the buffer exposes.
+//
+// The length is consulted against the buffer's live state rather than frozen at
+// construction, because the buffer can go away or change size while the view points
+// at it: a detached buffer turns every view over it into a zero-length view whose
+// indexed access is a no-op, and a shrink that puts the view's range out of bounds
+// does the same (25 §10.4.5). liveLen is the one place that clamp lives, so every
+// element-access method below reaches storage through it and reacts to a detach
+// with no per-method check.
 type TypedArray[T typedElem] struct {
-	buffer     *ArrayBuffer
-	byteOffset int
-	data       []T
-	coerce     func(float64) T
+	buffer         *ArrayBuffer
+	byteOffset     int
+	length         int
+	lengthTracking bool
+	coerce         func(float64) T
 }
 
 // typedElem is the set of Go element types a numeric typed array stores. Every
@@ -75,9 +82,45 @@ func newTypedArrayView[T typedElem](buf *ArrayBuffer, byteOffset, length int, co
 	return &TypedArray[T]{
 		buffer:     buf,
 		byteOffset: byteOffset,
-		data:       viewSlice[T](buf, byteOffset, length),
+		length:     length,
 		coerce:     coerce,
 	}
+}
+
+// liveLen is the view's element count as of this access, clamped against the
+// buffer's current byte length so a view whose bytes have gone away reports zero.
+// The buffer is detached (its bytes dropped) or, once resizable buffers land,
+// shrunk below the view's range, and either leaves fewer bytes at the view's offset
+// than its element count needs; when that happens the whole view is out of bounds
+// and reads as length zero, matching the spec's IsTypedArrayOutOfBounds gate (25
+// §10.4.5.9). Otherwise it reports the fixed length the constructor pinned.
+func (a *TypedArray[T]) liveLen() int {
+	elem := elemBytes[T]()
+	avail := len(a.buffer.data) - a.byteOffset
+	if avail < 0 {
+		return 0
+	}
+	// A length-tracking view (constructed over a resizable buffer with no explicit
+	// length) has no fixed count: it spans from its offset to the buffer's current
+	// end, so a resize grows or shrinks what it reports rather than putting it out of
+	// bounds (25 §10.4.5.11, IsTypedArrayOutOfBounds returns false for it).
+	if a.lengthTracking {
+		return avail / elem
+	}
+	if avail < a.length*elem {
+		return 0
+	}
+	return a.length
+}
+
+// live forms the element slice this view reads right now, an unsafe alias over the
+// buffer's current bytes for liveLen elements. It is recomputed on each access
+// rather than cached at construction so a detach or a resize of the underlying
+// buffer shows through immediately: the previous design froze the slice, which
+// would keep reading the old bytes after the buffer moved. Every element-access
+// method reaches storage through here, so the clamp is applied uniformly.
+func (a *TypedArray[T]) live() []T {
+	return viewSlice[T](a.buffer, a.byteOffset, a.liveLen())
 }
 
 // typedArrayOf builds a typed array from a list of JavaScript numbers with the
@@ -87,8 +130,9 @@ func newTypedArrayView[T typedElem](buf *ArrayBuffer, byteOffset, length int, co
 // its storage.
 func typedArrayOf[T typedElem](coerce func(float64) T, elems ...float64) *TypedArray[T] {
 	a := newTypedArray(float64(len(elems)), coerce)
+	d := a.live()
 	for i, e := range elems {
-		a.data[i] = coerce(e)
+		d[i] = coerce(e)
 	}
 	return a
 }
@@ -117,7 +161,15 @@ func typedArrayView[T typedElem](buf *ArrayBuffer, coerce func(float64) T, byteO
 	if max := (len(buf.data) - off) / elem; n > max {
 		n = max
 	}
-	return newTypedArrayView(buf, off, n, coerce)
+	v := newTypedArrayView(buf, off, n, coerce)
+	// An ArrayBuffer-overload view with no explicit length over a resizable buffer
+	// tracks the buffer's length: its own length follows a later resize rather than
+	// staying pinned at the count computed here. A view with an explicit length, or one
+	// over a fixed-length buffer, keeps that fixed count.
+	if len(length) == 0 && buf.resizable {
+		v.lengthTracking = true
+	}
+	return v
 }
 
 // elemBytes is the byte width of a typed array's element type, read from the Go
@@ -146,7 +198,7 @@ func viewSlice[T typedElem](buf *ArrayBuffer, byteOffset, length int) []T {
 // Len is the array's length in elements, a Number to match the type the checker
 // gives the .length property and to compose with the numeric path with no
 // conversion at the use site.
-func (a *TypedArray[T]) Len() float64 { return float64(len(a.data)) }
+func (a *TypedArray[T]) Len() float64 { return float64(a.liveLen()) }
 
 // Buffer is the ArrayBuffer the view aliases, the .buffer getter. It hands back
 // the same backing store every other view of the buffer holds, so a comparison of
@@ -161,7 +213,7 @@ func (a *TypedArray[T]) ByteOffset() float64 { return float64(a.byteOffset) }
 // ByteLength is the view's span in bytes, the .byteLength getter: the element
 // count times the element width, which is the run of buffer bytes the view aliases.
 // It is a Number, and it differs from Len, the element count, by the element width.
-func (a *TypedArray[T]) ByteLength() float64 { return float64(len(a.data) * elemBytes[T]()) }
+func (a *TypedArray[T]) ByteLength() float64 { return float64(a.liveLen() * elemBytes[T]()) }
 
 // BytesPerElement is the element width in bytes, the instance BYTES_PER_ELEMENT
 // property, a constant of the element kind. It is a method rather than a folded
@@ -177,8 +229,9 @@ func (a *TypedArray[T]) BytesPerElement() float64 { return float64(elemBytes[T](
 // Number. A read that flows into a dynamic slot takes GetIndex instead, which does
 // answer undefined for those indices.
 func (a *TypedArray[T]) At(i float64) float64 {
-	if idx, ok := typedElemIndex(i, len(a.data)); ok {
-		return float64(a.data[idx])
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		return float64(d[idx])
 	}
 	return 0
 }
@@ -190,8 +243,9 @@ func (a *TypedArray[T]) At(i float64) float64 {
 // dropped, the no-op the spec requires rather than growing the array or writing a
 // truncated neighbor.
 func (a *TypedArray[T]) SetAt(i float64, v float64) {
-	if idx, ok := typedElemIndex(i, len(a.data)); ok {
-		a.data[idx] = a.coerce(v)
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		d[idx] = a.coerce(v)
 	}
 }
 
@@ -202,8 +256,9 @@ func (a *TypedArray[T]) SetAt(i float64, v float64) {
 // way the spec requires, which the numeric At cannot express because its result is a
 // Number.
 func (a *TypedArray[T]) GetIndex(i float64) Value {
-	if idx, ok := typedElemIndex(i, len(a.data)); ok {
-		return Number(float64(a.data[idx]))
+	d := a.live()
+	if idx, ok := typedElemIndex(i, len(d)); ok {
+		return Number(float64(d[idx]))
 	}
 	return Undefined
 }
@@ -216,8 +271,9 @@ func (a *TypedArray[T]) GetIndex(i float64) Value {
 // differs, which is what keeps a proven-integer index a native slice index rather
 // than a float that round trips through the canonical-index check on every access.
 func (a *TypedArray[T]) AtI(i int) float64 {
-	if i >= 0 && i < len(a.data) {
-		return float64(a.data[i])
+	d := a.live()
+	if i >= 0 && i < len(d) {
+		return float64(d[i])
 	}
 	return 0
 }
@@ -227,8 +283,9 @@ func (a *TypedArray[T]) AtI(i int) float64 {
 // exactly as SetAt does, so the only difference is that the index arrives already
 // narrowed to an int rather than truncated from a Number here.
 func (a *TypedArray[T]) SetAtI(i int, v float64) {
-	if i >= 0 && i < len(a.data) {
-		a.data[i] = a.coerce(v)
+	d := a.live()
+	if i >= 0 && i < len(d) {
+		d[i] = a.coerce(v)
 	}
 }
 
@@ -238,8 +295,9 @@ func (a *TypedArray[T]) SetAtI(i int, v float64) {
 // source once and does not alias it: the two arrays own separate storage after the
 // copy, which is what the from-a-typed-array constructor requires.
 func (a *TypedArray[T]) Floats() []float64 {
-	out := make([]float64, len(a.data))
-	for i, e := range a.data {
+	d := a.live()
+	out := make([]float64, len(d))
+	for i, e := range d {
 		out[i] = float64(e)
 	}
 	return out
@@ -253,10 +311,13 @@ func (a *TypedArray[T]) Floats() []float64 {
 // width exactly as the store coercion does. The slice header aliases the array's
 // own storage, so a write through the returned slice shows through the array and
 // through any other reference to it, the same as a write through SetAt. A typed
-// array never grows or reallocates its backing, so the header stays valid for the
-// life of the array; the caller only takes this path when it proved the index in
-// range, so the Go slice bounds check it still carries never trips.
-func (a *TypedArray[T]) Data() []T { return a.data }
+// array's length never grows, so a loop that reads Data once and indexes it holds a
+// valid header for the length of that loop; the caller only takes this path when it
+// proved the index in range, so the Go slice bounds check it still carries never
+// trips. The header is formed from the buffer's live bytes at the call, so a detach
+// before the call yields an empty slice and the proven-in-range loop runs zero
+// iterations rather than reading freed storage.
+func (a *TypedArray[T]) Data() []T { return a.live() }
 
 // The per-kind constructors wire the element type and its store coercion. Each is
 // a one-liner over the shared bodies so generated code names a plain

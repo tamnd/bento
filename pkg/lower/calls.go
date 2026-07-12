@@ -1005,6 +1005,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.genericTypedArray(recvNode) {
 		return r.typedArrayMethodCall(recvNode, method, argNodes)
 	}
+	// A method on an ArrayBuffer receiver lowers to a value.ArrayBuffer method: the
+	// transfer pair that moves the bytes to a fresh buffer and detaches this one, and
+	// the resize surface. It routes here after the view paths, since a buffer is the
+	// backing store a view aliases rather than a view itself, and before the Map, Set,
+	// and primitive paths, which expect a receiver a buffer is not.
+	if r.isArrayBuffer(recvNode) {
+		return r.arrayBufferMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
 	// routes before the primitive and string paths, which expect a number, boolean,
 	// or string receiver a map is not.
