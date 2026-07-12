@@ -986,6 +986,18 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if _, ok := r.arrayElem(recvNode); ok {
 		return r.arrayMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a numeric typed-array receiver lowers to a value.TypedArray
+	// method. It routes right after the array path, since a typed array shares the
+	// copy and search shapes but runs over a view that clamps to its length, and
+	// before the Map, Set, and primitive paths, which expect a receiver a typed
+	// array is not. Only the generic *value.TypedArray[T] family routes here:
+	// Uint8Array has its own []byte representation without these view methods, and
+	// the bigint typed arrays are a separate value type whose methods are not wired,
+	// so both fall through to the hand-back below rather than emit a call to a method
+	// they do not have.
+	if r.genericTypedArray(recvNode) {
+		return r.typedArrayMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
 	// routes before the primitive and string paths, which expect a number, boolean,
 	// or string receiver a map is not.
