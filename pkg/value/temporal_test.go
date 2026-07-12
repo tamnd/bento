@@ -2,6 +2,7 @@ package value
 
 import (
 	"math"
+	"math/big"
 	"testing"
 )
 
@@ -926,5 +927,152 @@ func TestPlainDateTimeCalendarFields(t *testing.T) {
 	}
 	if wy := dt.YearOfWeek(); wy.IsUndefined() || wy.Get() != 2020 {
 		t.Errorf("date-time YearOfWeek() = %v, want 2020", wy)
+	}
+}
+
+// bigInt parses a decimal string into a big.Int for the Instant tests, failing the test
+// on a malformed literal.
+func bigInt(t *testing.T, s string) *big.Int {
+	t.Helper()
+	b, ok := new(big.Int).SetString(s, 10)
+	if !ok {
+		t.Fatalf("bad big.Int literal %q", s)
+	}
+	return b
+}
+
+// instantThrows reports whether NewInstant throws a RangeError for the count.
+func instantThrows(ns *big.Int) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewInstant(ns)
+	return false
+}
+
+// TestInstantEpochGetters checks epochNanoseconds and epochMilliseconds, including the
+// floor toward minus infinity a negative instant takes, against @js-temporal/polyfill.
+func TestInstantEpochGetters(t *testing.T) {
+	cases := []struct {
+		ns string
+		ms float64
+	}{
+		{"0", 0},
+		{"123456789", 123},
+		{"1000000000", 1000},
+		{"-1", -1},
+		{"1500000000000000000", 1500000000000},
+		{"8640000000000000000000", 8640000000000000},
+		{"-8640000000000000000000", -8640000000000000},
+	}
+	for _, c := range cases {
+		i := NewInstant(bigInt(t, c.ns))
+		if got := i.EpochNanoseconds(); got.Cmp(bigInt(t, c.ns)) != 0 {
+			t.Errorf("EpochNanoseconds(%s) = %s, want %s", c.ns, got, c.ns)
+		}
+		if got := i.EpochMilliseconds(); got != c.ms {
+			t.Errorf("EpochMilliseconds(%s) = %v, want %v", c.ns, got, c.ms)
+		}
+	}
+}
+
+// TestInstantToString checks the default UTC ISO rendering, including a fractional
+// second, a negative instant borrowing into the previous day, and the expanded-year
+// form at each range bound, against @js-temporal/polyfill.
+func TestInstantToString(t *testing.T) {
+	cases := []struct {
+		ns   string
+		want string
+	}{
+		{"0", "1970-01-01T00:00:00Z"},
+		{"123456789", "1970-01-01T00:00:00.123456789Z"},
+		{"1000000000", "1970-01-01T00:00:01Z"},
+		{"-1", "1969-12-31T23:59:59.999999999Z"},
+		{"1500000000000000000", "2017-07-14T02:40:00Z"},
+		{"-62135596800000000000", "0001-01-01T00:00:00Z"},
+		{"8640000000000000000000", "+275760-09-13T00:00:00Z"},
+		{"-8640000000000000000000", "-271821-04-20T00:00:00Z"},
+	}
+	for _, c := range cases {
+		i := NewInstant(bigInt(t, c.ns))
+		if got := i.ToString().ToGoString(); got != c.want {
+			t.Errorf("Instant(%s).ToString() = %q, want %q", c.ns, got, c.want)
+		}
+		if got := i.ToJSON().ToGoString(); got != c.want {
+			t.Errorf("Instant(%s).ToJSON() = %q, want %q", c.ns, got, c.want)
+		}
+	}
+}
+
+// TestInstantCompareEquals checks the ordering static and the equals method.
+func TestInstantCompareEquals(t *testing.T) {
+	a := NewInstant(bigInt(t, "1"))
+	b := NewInstant(bigInt(t, "2"))
+	c := NewInstant(bigInt(t, "1"))
+	if got := InstantCompare(a, b); got != -1 {
+		t.Errorf("compare(1, 2) = %v, want -1", got)
+	}
+	if got := InstantCompare(b, a); got != 1 {
+		t.Errorf("compare(2, 1) = %v, want 1", got)
+	}
+	if got := InstantCompare(a, c); got != 0 {
+		t.Errorf("compare(1, 1) = %v, want 0", got)
+	}
+	if !a.Equals(c) {
+		t.Errorf("Instant(1).equals(Instant(1)) = false, want true")
+	}
+	if a.Equals(b) {
+		t.Errorf("Instant(1).equals(Instant(2)) = true, want false")
+	}
+}
+
+// TestInstantFactories checks fromEpochMilliseconds, fromEpochNanoseconds, and from over
+// an Instant, plus that from returns a distinct copy.
+func TestInstantFactories(t *testing.T) {
+	if got := InstantFromEpochMilliseconds(1000).ToString().ToGoString(); got != "1970-01-01T00:00:01Z" {
+		t.Errorf("fromEpochMilliseconds(1000) = %q, want 1970-01-01T00:00:01Z", got)
+	}
+	if got := InstantFromEpochNanoseconds(bigInt(t, "1000000000")).ToString().ToGoString(); got != "1970-01-01T00:00:01Z" {
+		t.Errorf("fromEpochNanoseconds(1e9) = %q, want 1970-01-01T00:00:01Z", got)
+	}
+	src := NewInstant(bigInt(t, "42"))
+	cp := InstantFrom(src)
+	if cp == src {
+		t.Errorf("InstantFrom returned the same pointer, want a copy")
+	}
+	if !cp.Equals(src) {
+		t.Errorf("InstantFrom copy does not equal its source")
+	}
+}
+
+// TestInstantRangeThrows checks that a count past either range bound throws a RangeError
+// while the bound itself is accepted, and that a fractional millisecond throws.
+func TestInstantRangeThrows(t *testing.T) {
+	if instantThrows(bigInt(t, "8640000000000000000000")) {
+		t.Errorf("NewInstant at the upper bound threw, want accepted")
+	}
+	if !instantThrows(bigInt(t, "8640000000000000000001")) {
+		t.Errorf("NewInstant past the upper bound did not throw")
+	}
+	if !instantThrows(bigInt(t, "-8640000000000000000001")) {
+		t.Errorf("NewInstant past the lower bound did not throw")
+	}
+	fracThrew := func() (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		InstantFromEpochMilliseconds(1.5)
+		return false
+	}()
+	if !fracThrew {
+		t.Errorf("fromEpochMilliseconds(1.5) did not throw")
 	}
 }
