@@ -58,11 +58,12 @@ func TestUint8ArrayConstructionForms(t *testing.T) {
 // only the subset it can emit soundly and hands the rest back to the engine. A
 // compound element write reads and writes the element, which the plain SetAt store
 // does not model, so it must not be mistaken for a simple write. A method that has
-// no lowering yet (subarray builds a view) and the view-over-a-buffer constructor
-// overload are later slices, so each routes to the interpreter rather than emitting
-// wrong or partial Go.
+// no lowering yet (subarray builds a view, fill writes a run) is a later slice, so it
+// routes to the interpreter rather than emitting wrong or partial Go. The
+// view-over-a-buffer constructor overload does lower, so it is covered by
+// TestTypedArrayViewOverBufferLowering rather than asserted here.
 func TestUint8ArrayHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "const b = new Uint8Array(3); b[0] += 1; console.log(b[0]);\n")
 	handsBack(t, "const b = new Uint8Array(3); const c = b.subarray(1); console.log(c.length);\n")
-	handsBack(t, "const buf = new ArrayBuffer(8); const b = new Uint8Array(buf); console.log(b.length);\n")
+	handsBack(t, "const b = new Uint8Array(3); b.fill(0); console.log(b[0]);\n")
 }

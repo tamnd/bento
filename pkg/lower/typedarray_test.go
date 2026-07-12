@@ -94,14 +94,145 @@ func TestTypedArrayConstructionForms(t *testing.T) {
 // only the subset it can emit soundly and hands the rest back to the engine, the
 // same boundaries the byte buffer keeps. A compound element write reads and writes
 // the element, which the plain SetAt store does not model. A method that has no
-// lowering yet (subarray builds a view) and the view-over-a-buffer constructor
-// overload are later slices. A bigint-element array (BigInt64Array) has no
-// lowering, so its construction hands back rather than emitting wrong Go.
+// lowering yet (subarray builds a view) is a later slice. A bigint-element array
+// (BigInt64Array) has no lowering, so its construction hands back rather than
+// emitting wrong Go.
 func TestTypedArrayHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "const b = new Int32Array(3); b[0] += 1; console.log(b[0]);\n")
 	handsBack(t, "const b = new Int32Array(3); const c = b.subarray(1); console.log(c.length);\n")
-	handsBack(t, "const buf = new ArrayBuffer(8); const b = new Int32Array(buf); console.log(b.length);\n")
-	handsBack(t, "const b = new BigInt64Array(3); console.log(b.length);\n")
+	handsBack(t, "const src = new BigInt64Array(2); const b = new BigInt64Array(src); console.log(b.length);\n")
+}
+
+// TestTypedArrayViewOverBufferLowering pins the ArrayBuffer overload of the
+// constructor: a view over a buffer lowers to value.<Name>View, with the byte
+// offset defaulting to a literal 0 when omitted and the length passed through when
+// given. A Uint8Array view takes the same form over its own view constructor.
+func TestTypedArrayViewOverBufferLowering(t *testing.T) {
+	cases := map[string]string{
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf); console.log(b.length);`:       "value.Int32ArrayView(buf, 0)",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4); console.log(b.length);`:    "value.Int32ArrayView(buf, 4)",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.length);`: "value.Int32ArrayView(buf, 4, 2)",
+		`const buf = new ArrayBuffer(8); const b = new Uint8Array(buf, 1, 4); console.log(b.length);`:  "value.Uint8ArrayView(buf, 1, 4)",
+		`const buf = new ArrayBuffer(8); const b = new Float64Array(buf); console.log(b.length);`:      "value.Float64ArrayView(buf, 0)",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
+}
+
+// TestTypedArrayFromSourceLowering pins the two copy sources: a number array value
+// lowers to value.<Name>Of over the source's Elems spread, and another typed array
+// lowers to value.<Name>Of over the source's Floats spread, each building a fresh
+// buffer through the Of constructor. A plain array literal still lowers to the
+// direct Of form rather than through a source read.
+func TestTypedArrayFromSourceLowering(t *testing.T) {
+	cases := map[string]string{
+		`const src = [1, 2, 3]; const b = new Int32Array(src); console.log(b.length);`:                 "value.Int32ArrayOf(src.Elems()...)",
+		`const src = new Int32Array([1, 2, 3]); const b = new Uint8Array(src); console.log(b.length);`: "value.Uint8ArrayOf(src.Floats()...)",
+		`const src = new Uint8Array([1, 2]); const b = new Float64Array(src); console.log(b.length);`:  "value.Float64ArrayOf(src.Floats()...)",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
+}
+
+// TestBytesPerElementLowering pins BYTES_PER_ELEMENT. The static read off the
+// constructor folds to the element-width literal, since it has no receiver value.
+// The instance read lowers to the view's BytesPerElement method instead, which keeps
+// the receiver referenced so a binding read only through this stays used.
+func TestBytesPerElementLowering(t *testing.T) {
+	cases := map[string]string{
+		`console.log(Int8Array.BYTES_PER_ELEMENT);`:                       "value.NumberToString(1)",
+		`console.log(Int32Array.BYTES_PER_ELEMENT);`:                      "value.NumberToString(4)",
+		`console.log(Float64Array.BYTES_PER_ELEMENT);`:                    "value.NumberToString(8)",
+		`const b = new Uint16Array(2); console.log(b.BYTES_PER_ELEMENT);`: "b.BytesPerElement()",
+		`const b = new Uint8Array(2); console.log(b.BYTES_PER_ELEMENT);`:  "b.BytesPerElement()",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
+}
+
+// TestTypedArrayGeometryGetterLowering pins the instance geometry getters off the
+// view: .buffer to Buffer, .byteOffset to ByteOffset, and .byteLength to
+// ByteLength, each a method on the value.TypedArray or value.Uint8Array. A read of
+// view.buffer.byteLength chains the two, the buffer getter then the ArrayBuffer's
+// own ByteLength. The numeric family and Uint8Array share the shape.
+func TestTypedArrayGeometryGetterLowering(t *testing.T) {
+	cases := map[string]string{
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.byteOffset);`:        "b.ByteOffset()",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.byteLength);`:        "b.ByteLength()",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.buffer.byteLength);`: "b.Buffer().ByteLength()",
+		`const b = new Uint8Array(8); console.log(b.byteOffset);`:                                                 "b.ByteOffset()",
+		`const b = new Uint8Array(8); console.log(b.byteLength);`:                                                 "b.ByteLength()",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
+}
+
+// TestTypedArrayBoxedReadLowering pins that a typed-array element read flowing into a
+// dynamic slot lowers through GetIndex rather than the numeric At. The numeric At
+// returns a float64 and cannot answer undefined for an out-of-range index, so a read
+// boxed into an any slot takes GetIndex, which returns a value.Value that is undefined
+// for a non-canonical or out-of-range index the way the spec requires.
+func TestTypedArrayBoxedReadLowering(t *testing.T) {
+	const src = `const ta = new Int32Array([10, 20]);
+const x: any = ta[5];
+console.log(x === undefined);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "ta.GetIndex(5)") {
+		t.Errorf("boxed typed-array read did not lower to GetIndex:\n%s", source)
+	}
+	if strings.Contains(source, "value.Number(ta.At(") {
+		t.Errorf("boxed read should not go through the numeric At:\n%s", source)
+	}
+}
+
+// TestBigIntTypedArrayLowering pins that the bigint pair lowers over the shared
+// value.BigIntArray view: construction from a length, from a bigint list, and over an
+// ArrayBuffer, a write through SetAt taking the *big.Int value, a read through At
+// returning a *big.Int, and the geometry getters off the view. A bigint element is
+// not a Number, so it rides its own read and write path rather than the numeric At.
+func TestBigIntTypedArrayLowering(t *testing.T) {
+	const src = `const a = new BigInt64Array(3);
+a[0] = 42n;
+console.log(a[0], a.length, a.BYTES_PER_ELEMENT, a.byteLength);
+const buf = new ArrayBuffer(16);
+const u = new BigUint64Array(buf);
+u[1] = 7n;
+const lit = new BigInt64Array([1n, 2n]);
+console.log(u[1], lit[0]);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.NewBigInt64Array(3)",
+		"a.SetAt(0, big.NewInt(42))",
+		"a.At(0)",
+		"a.Len()",
+		"a.BytesPerElement()",
+		"a.ByteLength()",
+		"value.BigUint64ArrayView(buf, 0)",
+		"u.SetAt(1, big.NewInt(7))",
+		"value.BigInt64ArrayOf(big.NewInt(1), big.NewInt(2))",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("bigint typed-array lowering missing %q:\n%s", want, source)
+		}
+	}
 }
 
 // TestTypedArrayIntIndexLowering pins the native-int index form. A typed-array read

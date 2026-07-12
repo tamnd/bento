@@ -2464,6 +2464,35 @@ func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 		return nil, false, nil
 	}
 	recvNode, idxNode := idxParts[0], idxParts[1]
+	// A bigint typed-array write a[i] = v stores through the view's SetAt, which
+	// truncates the bigint to the element's 64-bit width and drops an out-of-range or
+	// non-canonical index. The value is a bigint (a *big.Int), not the Number the
+	// numeric family stores, so this claims the write before the numeric path and
+	// hands back a non-bigint value.
+	if r.bigintTypedArray(recvNode) {
+		if !r.isNumber(idxNode) {
+			return nil, false, &NotYetLowerable{Reason: "a bigint typed-array write with a non-number index is a later slice"}
+		}
+		if !r.isBigInt(parts[2]) {
+			return nil, false, &NotYetLowerable{Reason: "a bigint typed-array write of a non-bigint value is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, false, err
+		}
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, false, err
+		}
+		val, err := r.lowerExpr(parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.ExprStmt{X: &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetAt")},
+			Args: []ast.Expr{idx, val},
+		}}, true, nil
+	}
 	if !r.numericTypedArray(recvNode) {
 		return nil, false, nil
 	}
