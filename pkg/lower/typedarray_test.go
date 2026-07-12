@@ -142,6 +142,27 @@ func TestTypedArrayFromSourceLowering(t *testing.T) {
 	}
 }
 
+// TestTypedArrayGeometryGetterLowering pins the instance geometry getters off the
+// view: .buffer to Buffer, .byteOffset to ByteOffset, and .byteLength to
+// ByteLength, each a method on the value.TypedArray or value.Uint8Array. A read of
+// view.buffer.byteLength chains the two, the buffer getter then the ArrayBuffer's
+// own ByteLength. The numeric family and Uint8Array share the shape.
+func TestTypedArrayGeometryGetterLowering(t *testing.T) {
+	cases := map[string]string{
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.byteOffset);`:        "b.ByteOffset()",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.byteLength);`:        "b.ByteLength()",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.buffer.byteLength);`: "b.Buffer().ByteLength()",
+		`const b = new Uint8Array(8); console.log(b.byteOffset);`:                                                 "b.ByteOffset()",
+		`const b = new Uint8Array(8); console.log(b.byteLength);`:                                                 "b.ByteLength()",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
+}
+
 // TestTypedArrayIntIndexLowering pins the native-int index form. A typed-array read
 // and write driven by a bounded for-counter lower through AtI and SetAtI with the
 // index narrowed to a Go int, so the counter stays a native int32 and the float

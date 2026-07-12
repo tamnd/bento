@@ -95,6 +95,20 @@ func Uint8ArrayFromGo(b []byte) *Uint8Array {
 // with the numeric path with no conversion at the use site.
 func (a *Uint8Array) Len() float64 { return float64(len(a.bytes)) }
 
+// Buffer is the ArrayBuffer the view aliases, the .buffer getter, the same backing
+// store every other view of the buffer holds so an identity comparison of two
+// views' buffers holds.
+func (a *Uint8Array) Buffer() *ArrayBuffer { return a.buffer }
+
+// ByteOffset is the byte the view starts at within its buffer, the .byteOffset
+// getter, a Number to match the property's type.
+func (a *Uint8Array) ByteOffset() float64 { return float64(a.byteOffset) }
+
+// ByteLength is the view's span in bytes, the .byteLength getter. A byte is the
+// element, so the span equals the element count and Len reports the same Number,
+// but both getters exist because the numeric family separates the two.
+func (a *Uint8Array) ByteLength() float64 { return float64(len(a.bytes)) }
+
 // Bytes returns the live backing slice, the storage the bridge passes to a Go
 // function taking []byte (16 §7.3). It is not a copy: while a Go call runs it may
 // read these bytes, and the caller in the bridge decides whether a copy is needed

@@ -72,6 +72,31 @@ func TestTypedArrayViewOverBuffer(t *testing.T) {
 	}
 }
 
+// TestTypedArrayGeometryGetters proves the instance getters read off the view:
+// Buffer is the aliased backing store, ByteOffset the byte the view starts at, and
+// ByteLength its span in bytes, the element count times the element width. A view
+// at a byte offset over a shared buffer reports that offset and its own span, not
+// the whole buffer's.
+func TestTypedArrayGeometryGetters(t *testing.T) {
+	buf := NewArrayBuffer(16)
+	view := Int32ArrayView(buf, 4, 2)
+	if view.Buffer() != buf {
+		t.Error("view.Buffer did not return the shared backing buffer")
+	}
+	if got := view.ByteOffset(); got != 4 {
+		t.Errorf("view.ByteOffset = %v, want 4", got)
+	}
+	if got := view.ByteLength(); got != 8 {
+		t.Errorf("view.ByteLength = %v, want 8", got)
+	}
+	if got := view.Buffer().ByteLength(); got != 16 {
+		t.Errorf("view.Buffer().ByteLength = %v, want 16", got)
+	}
+	if got := view.Len(); got != 2 {
+		t.Errorf("view.Len = %v, want 2", got)
+	}
+}
+
 // TestTypedArrayBadLengthClamps proves a negative or not-a-number length yields an
 // empty array rather than panicking, the same covered-subset rule the byte buffer
 // takes.

@@ -148,6 +148,21 @@ func viewSlice[T typedElem](buf *ArrayBuffer, byteOffset, length int) []T {
 // conversion at the use site.
 func (a *TypedArray[T]) Len() float64 { return float64(len(a.data)) }
 
+// Buffer is the ArrayBuffer the view aliases, the .buffer getter. It hands back
+// the same backing store every other view of the buffer holds, so a comparison of
+// two views' buffers by identity holds and a read of view.buffer.byteLength
+// answers the whole buffer's span, not the view's.
+func (a *TypedArray[T]) Buffer() *ArrayBuffer { return a.buffer }
+
+// ByteOffset is the byte the view starts at within its buffer, the .byteOffset
+// getter, a Number to match the type the checker gives the property.
+func (a *TypedArray[T]) ByteOffset() float64 { return float64(a.byteOffset) }
+
+// ByteLength is the view's span in bytes, the .byteLength getter: the element
+// count times the element width, which is the run of buffer bytes the view aliases.
+// It is a Number, and it differs from Len, the element count, by the element width.
+func (a *TypedArray[T]) ByteLength() float64 { return float64(len(a.data) * elemBytes[T]()) }
+
 // At reads the element a JavaScript index expression a[i] selects, widened to the
 // Number a typed-array read hands out. The index is a Number, so it arrives as a
 // float64 and truncates toward zero. An index outside the array reads as 0 rather
