@@ -57,6 +57,42 @@ func (v Value) SymbolDescription() Value {
 	return StringValue(s.desc)
 }
 
+// symbolRegistry backs the global symbol registry Symbol.for and Symbol.keyFor
+// share. It maps a string key to the one symbol that key names, so every
+// Symbol.for("k") returns the same reference, the cross-realm identity the
+// registry guarantees. symbolRegistryKeys is the reverse map Symbol.keyFor
+// reads, recording the key each registered symbol was interned under so a symbol
+// can report the string that owns it. A program compiled by bento runs one
+// agent with no shared-memory concurrency, so a plain map needs no lock.
+var symbolRegistry = map[string]*Symbol{}
+var symbolRegistryKeys = map[*Symbol]BStr{}
+
+// SymbolFor returns the registered symbol for key, creating and interning one
+// when the key is new, the value Symbol.for(key) produces. A registered symbol's
+// description is its key, matching the specification, and every call with an
+// equal key returns the same reference so Symbol.for("k") === Symbol.for("k").
+func SymbolFor(key BStr) Value {
+	k := key.ToGoString()
+	if s, ok := symbolRegistry[k]; ok {
+		return symbolValue(s)
+	}
+	s := &Symbol{desc: key, hasDesc: true}
+	symbolRegistry[k] = s
+	symbolRegistryKeys[s] = key
+	return symbolValue(s)
+}
+
+// SymbolKeyFor returns the registry key a symbol was interned under as a string
+// value, or undefined when the symbol never entered the registry, the read
+// Symbol.keyFor(sym) makes. It is only valid on a KindSymbol value, the shape the
+// lowerer guarantees at the call site.
+func SymbolKeyFor(v Value) Value {
+	if key, ok := symbolRegistryKeys[v.symbol()]; ok {
+		return StringValue(key)
+	}
+	return Undefined
+}
+
 // SymbolDescriptiveString renders a symbol as "Symbol(desc)", the SymbolDescriptiveString
 // abstract operation Symbol.prototype.toString returns. A symbol with no description
 // reads as "Symbol()", since a missing description contributes the empty string
