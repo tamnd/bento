@@ -361,6 +361,15 @@ func (v Value) Get(key BStr) Value {
 		// make. A function box with no own properties still climbs its prototype chain
 		// and answers undefined for a miss at the end of it.
 		return v.object().getChained(v, key)
+	case KindSymbol:
+		// A symbol's only own readable property is its description; every other named
+		// read reaches Symbol.prototype and answers undefined here. A dynamic symbol
+		// binding routes s.description through this path, matching the dedicated
+		// SymbolDescription the statically-typed symbol path emits.
+		if name == "description" {
+			return v.SymbolDescription()
+		}
+		return Undefined
 	default:
 		return Undefined
 	}
@@ -524,6 +533,11 @@ func (v Value) ToStringMethod() Value {
 		Throw(NewTypeError(FromGoString("Cannot read properties of null (reading 'toString')")))
 	case KindString:
 		return v
+	case KindSymbol:
+		// A symbol has no abstract ToString (that throws), but Symbol.prototype.toString
+		// renders "Symbol(desc)", so the method form answers that descriptive string
+		// rather than routing through ToString the way the other kinds do.
+		return StringValue(v.SymbolDescriptiveString())
 	}
 	return StringValue(ToString(v))
 }

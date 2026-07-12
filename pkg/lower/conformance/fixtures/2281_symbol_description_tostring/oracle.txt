@@ -1,0 +1,7 @@
+== stdout:
+Symbol(hello)
+Symbol()
+false
+true
+== exit:
+0
