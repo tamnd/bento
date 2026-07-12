@@ -17,6 +17,16 @@ import (
 // analogue and never reach here, since the checker rejects them on a typed array.
 // A method outside the covered set hands back so the engine runs it rather than
 // emitting a call to a method the view does not have.
+//
+// Ceiling: the %TypedArray% abstract operations the spec routes through the shared
+// abstract-base prototype are reached here only on a concrete receiver, whose
+// element type the checker proved, so a method call on a known Int32Array or
+// Float64Array lowers directly to the value method for every concrete element type.
+// A test that drives those same operations through the abstract %TypedArray% base
+// itself, iterating a list of constructors or borrowing a prototype method with an
+// abstract receiver, needs the first-class %TypedArray% constructor-dispatch model
+// that also gates the testTypedArray.js port, which is tracked on its own rather
+// than in this method surface.
 func (r *Renderer) typedArrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "fill":
