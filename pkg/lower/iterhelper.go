@@ -77,7 +77,7 @@ func (r *Renderer) iterHelperMethodCall(recvNode frontend.Node, method string, a
 		return &ast.CallExpr{Fun: next}, true, nil
 	}
 	switch method {
-	case "map", "filter":
+	case "map", "filter", "flatMap":
 		if len(argNodes) != 1 {
 			return nil, false, &NotYetLowerable{Reason: "an iterator helper's ." + method + "() takes exactly a callback"}
 		}
@@ -90,7 +90,14 @@ func (r *Renderer) iterHelperMethodCall(recvNode frontend.Node, method string, a
 			return nil, false, err
 		}
 		r.requireImport(valuePkg)
-		goName := map[string]string{"map": "IterMap", "filter": "IterFilter"}[method]
+		// flatMap flattens whatever iterable its mapper returns, and the runtime does
+		// this correctly for a boxed array (see value.IterFlatMap). The lowerer can only
+		// feed it a mapper whose return already boxes into a value.Value, so a mapper that
+		// returns a statically typed array (number[], string[]) hands back here through
+		// boxOperand: boxing a typed array into a dynamic value is a general gap this slice
+		// does not close. A mapper returning a non-iterable still throws the spec's
+		// reject-primitives TypeError at runtime.
+		goName := map[string]string{"map": "IterMap", "filter": "IterFilter", "flatMap": "IterFlatMap"}[method]
 		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{next, fn}}, true, nil
 	case "take", "drop":
 		if len(argNodes) != 1 {

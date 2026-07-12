@@ -31,6 +31,11 @@ func TestIterHelperEmits(t *testing.T) {
 			"value.IterFilter(value.IterMap(",
 		},
 		{
+			"flatmap",
+			"export function f(a: number[]): void { a.values().flatMap((n: any): any => n); }\n",
+			"value.IterFlatMap(",
+		},
+		{
 			"take",
 			"export function f(a: number[]): void { a.values().take(3); }\n",
 			"value.IterTake(",

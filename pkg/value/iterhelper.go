@@ -132,36 +132,89 @@ func IterDrop(next func() IterResult, limit Value) *IterHelper {
 	}}
 }
 
-// IterFrom wraps an iterable value as an IterHelper, the runtime behind
-// Iterator.from and the flatten step flatMap takes over each mapped value. An array
-// walks its indices live and a string walks its code points, the same two sources
-// for...of ranges directly; both yield boxed values. A value that is neither, and is
-// not already a helper, is not an iterable this path drives, so it throws a
-// TypeError the way the spec does for a non-iterable argument.
-func IterFrom(src Value) *IterHelper {
+// iterSource builds the next closure that walks an iterable value, the shared
+// machinery behind Iterator.from and flatMap's flatten step. An array walks its
+// indices live and a string, when allowString is set, walks its code points, the
+// same two sources for...of ranges directly; both yield boxed values. It returns
+// false for any other value, which the two callers turn into the TypeError each
+// wants: Iterator.from allows strings (iterate-string-primitives) and flatMap does
+// not (reject-primitives).
+func iterSource(src Value, allowString bool) (func() IterResult, bool) {
 	switch src.kind {
 	case KindArray:
 		i := 0
-		return &IterHelper{next: func() IterResult {
+		return func() IterResult {
 			if i >= arrayLikeLen(src) {
 				return IterResult{Value: Undefined, Done: true}
 			}
 			v := arrayLikeGet(src, i)
 			i++
 			return IterResult{Value: v}
-		}}
+		}, true
 	case KindString:
+		if !allowString {
+			return nil, false
+		}
 		cps := src.str().CodePoints()
 		i := 0
-		return &IterHelper{next: func() IterResult {
+		return func() IterResult {
 			if i >= len(cps) {
 				return IterResult{Value: Undefined, Done: true}
 			}
 			v := StringValue(cps[i])
 			i++
 			return IterResult{Value: v}
-		}}
+		}, true
 	}
-	Throw(NewTypeError(FromGoString("Iterator.from called on a non-iterable value")))
-	return nil
+	return nil, false
+}
+
+// IterFrom wraps an iterable value as an IterHelper, the runtime behind
+// Iterator.from. It drives an array over its indices and a string over its code
+// points, the iterate-string-primitives handling Iterator.from asks for. A value
+// that is neither is not an iterable this path drives, so it throws a TypeError the
+// way the spec does for a non-iterable argument.
+func IterFrom(src Value) *IterHelper {
+	next, ok := iterSource(src, true)
+	if !ok {
+		Throw(NewTypeError(FromGoString("Iterator.from called on a non-iterable value")))
+		return nil
+	}
+	return &IterHelper{next: next}
+}
+
+// IterFlatMap maps each value through fn and flattens the results, the lazy flatMap.
+// It drives the outer source one value at a time and, for each, drives the iterable
+// fn returns to exhaustion before pulling the next outer value, so the yields
+// interleave in the order the spec lays out. The mapped value flattens under
+// reject-primitives handling: an array flattens over its elements and anything else,
+// a string or any other primitive included, throws a TypeError, matching flatMap's
+// GetIteratorFlattenable(reject-primitives). The index passed to fn counts the outer
+// values seen.
+func IterFlatMap(next func() IterResult, fn Value) *IterHelper {
+	i := 0
+	var inner func() IterResult
+	return &IterHelper{next: func() IterResult {
+		for {
+			if inner != nil {
+				r := inner()
+				if !r.Done {
+					return r
+				}
+				inner = nil
+			}
+			outer := next()
+			if outer.Done {
+				return outer
+			}
+			mapped := fn.Call(outer.Value, Number(float64(i)))
+			i++
+			src, ok := iterSource(mapped, false)
+			if !ok {
+				Throw(NewTypeError(FromGoString("Iterator.prototype.flatMap mapper must return an iterable")))
+				return IterResult{Value: Undefined, Done: true}
+			}
+			inner = src
+		}
+	}}
 }
