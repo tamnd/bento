@@ -9,6 +9,8 @@
 
 package value
 
+import "sort"
+
 // reflectObject coerces a Reflect method's target to its backing object, throwing
 // the TypeError every Reflect method raises when the target is not an object. The
 // method name is threaded through only to name the error the way the runtime does.
@@ -150,6 +152,53 @@ func ordinarySet(target Value, o *Object, name BStr, val Value) bool {
 	o.keys = append(o.keys, name)
 	o.descs = append(o.descs, defaultDataProperty(val))
 	return true
+}
+
+// ReflectDeleteProperty implements Reflect.deleteProperty(target, key): the
+// [[Delete]] the delete operator performs, returning whether the removal succeeded.
+// A configurable or absent property removes and reports true; a non-configurable
+// property survives and reports false.
+func ReflectDeleteProperty(target, key Value) bool {
+	reflectObject(target, "deleteProperty")
+	return target.DeleteElem(key)
+}
+
+// ReflectOwnKeys implements Reflect.ownKeys(target): every own property key, string
+// and symbol alike, in the spec's [[OwnPropertyKeys]] order. Integer-index keys come
+// first in ascending numeric order, then the remaining string keys in insertion
+// order, then the symbol keys in insertion order. An array contributes its element
+// indices and then its length as a string key, ahead of any other string key.
+func ReflectOwnKeys(target Value) *Array[Value] {
+	o := reflectObject(target, "ownKeys")
+	var idxKeys []int
+	var strKeys []BStr
+	for i := range o.elems {
+		if !isHole(o.elems[i]) {
+			idxKeys = append(idxKeys, i)
+		}
+	}
+	for _, k := range o.keys {
+		if n, ok := arrayIndex(k.ToGoString()); ok {
+			idxKeys = append(idxKeys, n)
+		} else {
+			strKeys = append(strKeys, k)
+		}
+	}
+	sort.Ints(idxKeys)
+	out := make([]Value, 0, len(idxKeys)+len(strKeys)+len(o.symKeys)+1)
+	for _, n := range idxKeys {
+		out = append(out, StringValue(NumberToString(float64(n))))
+	}
+	if target.kind == KindArray {
+		out = append(out, StringValue(FromGoString("length")))
+	}
+	for _, k := range strKeys {
+		out = append(out, StringValue(k))
+	}
+	for _, s := range o.symKeys {
+		out = append(out, symbolValue(s))
+	}
+	return NewArray(out...)
 }
 
 // ordinarySetSym is the symbol mirror of ordinarySet, resolving a symbol-keyed

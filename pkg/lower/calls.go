@@ -1812,6 +1812,10 @@ func (r *Renderer) reflectCall(method string, argNodes []frontend.Node) (ast.Exp
 		return r.reflectFree("set", "ReflectSet", 3, argNodes)
 	case "has":
 		return r.reflectFree("has", "ReflectHas", 2, argNodes)
+	case "deleteProperty":
+		return r.reflectFree("deleteProperty", "ReflectDeleteProperty", 2, argNodes)
+	case "ownKeys":
+		return r.reflectFree("ownKeys", "ReflectOwnKeys", 1, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Reflect." + method + " is a later slice"}
 	}

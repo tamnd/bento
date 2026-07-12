@@ -78,6 +78,101 @@ func TestReflectSetInheritedAccessor(t *testing.T) {
 	}
 }
 
+// TestReflectDeleteProperty pins that a configurable property removes and reports
+// true, an absent property reports true, and a non-configurable property survives
+// and reports false, the boolean the delete operator gives for each.
+func TestReflectDeleteProperty(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("a"), Number(1))
+	if !ReflectDeleteProperty(o, StringValue(FromGoString("a"))) {
+		t.Error("Reflect.deleteProperty on a configurable property reported failure")
+	}
+	if ReflectHas(o, StringValue(FromGoString("a"))) {
+		t.Error("the deleted property is still present")
+	}
+	if !ReflectDeleteProperty(o, StringValue(FromGoString("missing"))) {
+		t.Error("Reflect.deleteProperty on an absent property reported failure")
+	}
+
+	locked := NewObject()
+	locked.DefineProperty(StringValue(FromGoString("x")), nonConfigDesc(Number(1)))
+	if ReflectDeleteProperty(locked, StringValue(FromGoString("x"))) {
+		t.Error("Reflect.deleteProperty on a non-configurable property reported success")
+	}
+	if !ReflectHas(locked, StringValue(FromGoString("x"))) {
+		t.Error("a non-configurable property was removed by a refused delete")
+	}
+}
+
+// TestReflectOwnKeys pins the [[OwnPropertyKeys]] order: integer-index keys first in
+// ascending numeric order, then the remaining string keys in insertion order, then
+// the symbol keys in insertion order, with a non-enumerable key included.
+func TestReflectOwnKeys(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("b"), Number(1))
+	o.Set(FromGoString("2"), Number(2))
+	o.Set(FromGoString("a"), Number(3))
+	o.Set(FromGoString("1"), Number(4))
+	o.DefineProperty(StringValue(FromGoString("hidden")), nonEnumDesc(Number(5)))
+	sym := NewSymbol(FromGoString("s"))
+	o.SetElem(sym, Number(6))
+
+	keys := ReflectOwnKeys(o).Elems()
+	wantStr := []string{"1", "2", "b", "a", "hidden"}
+	if len(keys) != len(wantStr)+1 {
+		t.Fatalf("Reflect.ownKeys returned %d keys, want %d", len(keys), len(wantStr)+1)
+	}
+	for i, want := range wantStr {
+		if keys[i].kind != KindString || keys[i].str().ToGoString() != want {
+			t.Errorf("key %d = %v, want %q", i, keys[i], want)
+		}
+	}
+	last := keys[len(keys)-1]
+	if last.kind != KindSymbol || last.symbol() != sym.symbol() {
+		t.Errorf("last key = %v, want the own symbol", last)
+	}
+}
+
+// TestReflectOwnKeysArray pins that an array reports its element indices in ascending
+// order, then its length as a string key, then any extra string key.
+func TestReflectOwnKeysArray(t *testing.T) {
+	arr := NewArrayValue([]Value{Number(10), Number(20), Number(30)})
+	arr.Set(FromGoString("extra"), StringValue(FromGoString("e")))
+
+	keys := ReflectOwnKeys(arr).Elems()
+	want := []string{"0", "1", "2", "length", "extra"}
+	if len(keys) != len(want) {
+		t.Fatalf("Reflect.ownKeys on an array returned %d keys, want %d", len(keys), len(want))
+	}
+	for i, w := range want {
+		if keys[i].kind != KindString || keys[i].str().ToGoString() != w {
+			t.Errorf("array key %d = %v, want %q", i, keys[i], w)
+		}
+	}
+}
+
+// nonConfigDesc builds a non-configurable data descriptor object, the shape the
+// deleteProperty refusal test defines onto an object.
+func nonConfigDesc(value Value) Value {
+	d := NewObject()
+	d.Set(FromGoString("value"), value)
+	d.Set(FromGoString("writable"), Bool(true))
+	d.Set(FromGoString("enumerable"), Bool(true))
+	d.Set(FromGoString("configurable"), Bool(false))
+	return d
+}
+
+// nonEnumDesc builds a non-enumerable data descriptor object, the shape the ownKeys
+// test uses to prove a non-enumerable key is still listed.
+func nonEnumDesc(value Value) Value {
+	d := NewObject()
+	d.Set(FromGoString("value"), value)
+	d.Set(FromGoString("writable"), Bool(true))
+	d.Set(FromGoString("enumerable"), Bool(false))
+	d.Set(FromGoString("configurable"), Bool(true))
+	return d
+}
+
 // dataDesc builds a data descriptor object with an explicit writable flag, the
 // descriptor shape a Reflect.set refusal test hands to DefineProperty.
 func dataDesc(value Value, writable bool) Value {
