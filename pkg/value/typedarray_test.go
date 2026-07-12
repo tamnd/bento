@@ -47,6 +47,31 @@ func TestTypedArrayViewsABuffer(t *testing.T) {
 	}
 }
 
+// TestTypedArrayViewOverBuffer proves the ArrayBuffer overload: a view takes its
+// length from the buffer when omitted, honors a byte offset, and takes an explicit
+// length when given. Two views over one buffer observe each other's writes because
+// they alias the same bytes.
+func TestTypedArrayViewOverBuffer(t *testing.T) {
+	buf := NewArrayBuffer(16)
+	whole := Int32ArrayView(buf, 0)
+	if whole.Len() != 4 {
+		t.Errorf("Int32ArrayView(buf, 0).Len = %v, want 4", whole.Len())
+	}
+	offset := Int32ArrayView(buf, 8)
+	if offset.Len() != 2 {
+		t.Errorf("Int32ArrayView(buf, 8).Len = %v, want 2", offset.Len())
+	}
+	capped := Int32ArrayView(buf, 4, 2)
+	if capped.Len() != 2 {
+		t.Errorf("Int32ArrayView(buf, 4, 2).Len = %v, want 2", capped.Len())
+	}
+	// The offset view starts at byte 8, which is element 2 of the whole view.
+	whole.SetAt(2, 1234)
+	if got := offset.At(0); got != 1234 {
+		t.Errorf("offset view did not observe the whole view's write: %v, want 1234", got)
+	}
+}
+
 // TestTypedArrayBadLengthClamps proves a negative or not-a-number length yields an
 // empty array rather than panicking, the same covered-subset rule the byte buffer
 // takes.

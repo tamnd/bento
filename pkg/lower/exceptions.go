@@ -167,6 +167,9 @@ func (r *Renderer) newObject(args []frontend.Node) (ast.Expr, error) {
 // over an ArrayBuffer with an offset and length) are later slices and hand back, as
 // does a call with no argument or more than one.
 func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, error) {
+	if len(args) >= 1 && r.isArrayBuffer(args[0]) {
+		return r.newTypedArrayOverBuffer(name, args)
+	}
 	if len(args) != 1 {
 		return nil, &NotYetLowerable{Reason: "only new " + name + "(length) and new " + name + "([...]) are lowered yet"}
 	}
@@ -197,6 +200,49 @@ func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, e
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: sel("value", "New"+name), Args: []ast.Expr{length}}, nil
+}
+
+// newTypedArrayOverBuffer lowers a typed array constructed as a view over an
+// existing ArrayBuffer, new Int32Array(buffer, byteOffset, length) and its shorter
+// forms. The buffer is required, the byte offset defaults to zero when omitted, and
+// the length runs to the end of the buffer when omitted, so the three overloads
+// lower to value.<Name>View(buf), value.<Name>View(buf, offset), and
+// value.<Name>View(buf, offset, length), the variadic length carrying the
+// optionality. A byte offset or length that is not a number is a later slice and
+// hands back, as does a call with more than three arguments.
+func (r *Renderer) newTypedArrayOverBuffer(name string, args []frontend.Node) (ast.Expr, error) {
+	if len(args) > 3 {
+		return nil, &NotYetLowerable{Reason: "new " + name + " over a buffer takes at most a byte offset and a length"}
+	}
+	buf, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	callArgs := []ast.Expr{buf}
+	if len(args) >= 2 {
+		if !r.isNumber(args[1]) {
+			return nil, &NotYetLowerable{Reason: "a " + name + " byte offset that is not a number is a later slice"}
+		}
+		offset, err := r.lowerExpr(args[1])
+		if err != nil {
+			return nil, err
+		}
+		callArgs = append(callArgs, offset)
+	} else {
+		callArgs = append(callArgs, &ast.BasicLit{Kind: token.FLOAT, Value: "0"})
+	}
+	if len(args) == 3 {
+		if !r.isNumber(args[2]) {
+			return nil, &NotYetLowerable{Reason: "a " + name + " view length that is not a number is a later slice"}
+		}
+		length, err := r.lowerExpr(args[2])
+		if err != nil {
+			return nil, err
+		}
+		callArgs = append(callArgs, length)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", name+"View"), Args: callArgs}, nil
 }
 
 // newArrayBuffer lowers an ArrayBuffer construction, the raw byte backing store of

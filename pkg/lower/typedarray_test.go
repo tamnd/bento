@@ -94,14 +94,33 @@ func TestTypedArrayConstructionForms(t *testing.T) {
 // only the subset it can emit soundly and hands the rest back to the engine, the
 // same boundaries the byte buffer keeps. A compound element write reads and writes
 // the element, which the plain SetAt store does not model. A method that has no
-// lowering yet (subarray builds a view) and the view-over-a-buffer constructor
-// overload are later slices. A bigint-element array (BigInt64Array) has no
-// lowering, so its construction hands back rather than emitting wrong Go.
+// lowering yet (subarray builds a view) is a later slice. A bigint-element array
+// (BigInt64Array) has no lowering, so its construction hands back rather than
+// emitting wrong Go.
 func TestTypedArrayHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "const b = new Int32Array(3); b[0] += 1; console.log(b[0]);\n")
 	handsBack(t, "const b = new Int32Array(3); const c = b.subarray(1); console.log(c.length);\n")
-	handsBack(t, "const buf = new ArrayBuffer(8); const b = new Int32Array(buf); console.log(b.length);\n")
 	handsBack(t, "const b = new BigInt64Array(3); console.log(b.length);\n")
+}
+
+// TestTypedArrayViewOverBufferLowering pins the ArrayBuffer overload of the
+// constructor: a view over a buffer lowers to value.<Name>View, with the byte
+// offset defaulting to a literal 0 when omitted and the length passed through when
+// given. A Uint8Array view takes the same form over its own view constructor.
+func TestTypedArrayViewOverBufferLowering(t *testing.T) {
+	cases := map[string]string{
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf); console.log(b.length);`:       "value.Int32ArrayView(buf, 0)",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4); console.log(b.length);`:    "value.Int32ArrayView(buf, 4)",
+		`const buf = new ArrayBuffer(16); const b = new Int32Array(buf, 4, 2); console.log(b.length);`: "value.Int32ArrayView(buf, 4, 2)",
+		`const buf = new ArrayBuffer(8); const b = new Uint8Array(buf, 1, 4); console.log(b.length);`:  "value.Uint8ArrayView(buf, 1, 4)",
+		`const buf = new ArrayBuffer(8); const b = new Float64Array(buf); console.log(b.length);`:      "value.Float64ArrayView(buf, 0)",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
 }
 
 // TestTypedArrayIntIndexLowering pins the native-int index form. A typed-array read
