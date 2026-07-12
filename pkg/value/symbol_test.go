@@ -36,6 +36,37 @@ func TestSymbolDescription(t *testing.T) {
 	}
 }
 
+// The global registry interns one symbol per key: Symbol.for returns the same
+// reference for an equal key, a different key yields a distinct symbol, a fresh
+// Symbol never joins the registry, and the registered symbol's description is its
+// key. Symbol.keyFor reads the key back for a registered symbol and reports
+// undefined for one that never entered the registry.
+func TestSymbolRegistry(t *testing.T) {
+	a := SymbolFor(FromGoString("shared"))
+	b := SymbolFor(FromGoString("shared"))
+	if !StrictEquals(a, b) {
+		t.Fatal("Symbol.for returned distinct symbols for the same key")
+	}
+	other := SymbolFor(FromGoString("other"))
+	if StrictEquals(a, other) {
+		t.Fatal("Symbol.for shared a symbol across different keys")
+	}
+	fresh := NewSymbol(FromGoString("shared"))
+	if StrictEquals(a, fresh) {
+		t.Fatal("a fresh Symbol compared equal to a registered one")
+	}
+	if got := a.SymbolDescription(); got.kind != KindString || got.str().ToGoString() != "shared" {
+		t.Fatalf("registered symbol description = %v, want \"shared\"", got)
+	}
+
+	if got := SymbolKeyFor(a); got.kind != KindString || got.str().ToGoString() != "shared" {
+		t.Fatalf("Symbol.keyFor(a) = %v, want \"shared\"", got)
+	}
+	if got := SymbolKeyFor(fresh); !got.IsUndefined() {
+		t.Fatalf("Symbol.keyFor(fresh) = %v, want undefined", got)
+	}
+}
+
 // The property bag keys by symbol identity: a symbol write reads back through the
 // same symbol, a different symbol of the same description misses, and a symbol key
 // never collides with a string key.

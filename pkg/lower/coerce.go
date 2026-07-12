@@ -215,6 +215,38 @@ func (r *Renderer) isSymbol(n frontend.Node) bool {
 	return r.prog.TypeAt(n).Flags&frontend.TypeSymbol != 0
 }
 
+// isSymbolKey reports whether a computed key lowers to a symbol value, the guard
+// the dynamic element store and load use to route a key through SetElem and GetElem
+// where the boxed symbol keys the bag by identity. A key annotated symbol carries
+// the flag isSymbol reads; a well-known symbol read off the ambient Symbol global,
+// whose lib type is the flagless unique symbol, carries no flag, so it is
+// recognized structurally instead. That is what lets o[Symbol.toStringTag] land in
+// the symbol bag rather than hand back as a non-number, non-string index.
+func (r *Renderer) isSymbolKey(n frontend.Node) bool {
+	return r.isSymbol(n) || r.isWellKnownSymbolRef(n)
+}
+
+// isWellKnownSymbolRef reports whether n reads a well-known symbol off the ambient
+// Symbol global, the Symbol.toStringTag and Symbol.match forms member.go lowers to
+// the interned identity in the value model. The checker types those reads the
+// flagless unique symbol, so isSymbol misses them; this recovers them by shape so a
+// computed key or an identity compare over a well-known symbol still routes as a
+// symbol.
+func (r *Renderer) isWellKnownSymbolRef(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return false
+	}
+	if !r.isGlobalRef(kids[0], "Symbol") {
+		return false
+	}
+	_, ok := wellKnownSymbolAccessor(r.prog.Text(kids[1]))
+	return ok
+}
+
 // isBigInt reports whether the checker types n as bigint, the guard that routes the
 // operators and coercions to the *big.Int method forms rather than the float64
 // operator forms. It sees through a branded alias the same way isNumber does, so a

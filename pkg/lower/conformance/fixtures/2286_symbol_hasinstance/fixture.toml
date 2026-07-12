@@ -1,0 +1,2 @@
+feature = "symbol-hasinstance"
+handback = "a computed member name that is not a constant string is a later slice"
