@@ -98,6 +98,102 @@ func (r *Renderer) weakKeyPointee(k frontend.Type) (ast.Expr, error) {
 	return star.X, nil
 }
 
+// isWeakSetType reports whether an object type is a JavaScript WeakSet. The standard
+// library types a WeakSet with add, has, and delete but no size and no get: add
+// separates it from a WeakMap (which has get, not add), and the absent size separates
+// it from a Set, whose fingerprint requires size. The three method names together
+// with no size are the fingerprint.
+func (r *Renderer) isWeakSetType(t frontend.Type) bool {
+	var hasAdd, hasHas, hasDelete, hasSize bool
+	for _, p := range r.prog.Properties(t) {
+		switch p.Name {
+		case "add":
+			hasAdd = true
+		case "has":
+			hasHas = true
+		case "delete":
+			hasDelete = true
+		case "size":
+			hasSize = true
+		}
+	}
+	return hasAdd && hasHas && hasDelete && !hasSize
+}
+
+// isWeakSet reports whether the checker types a node as a WeakSet, the receiver test
+// the WeakSet lowerings share. It is the node-level companion to isWeakSetType, first
+// ruling out an array so an array is never mistaken for a weak set.
+func (r *Renderer) isWeakSet(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isWeakSetType(t)
+}
+
+// renderWeakSet lowers a WeakSet<E> type to a pointer to the generic value.WeakSet
+// header. The runtime holds the object pointee, so it is generic over T where the
+// member renders to *T. It reads E off the add signature the same way renderSet does,
+// then strips the star from the member render to name the pointee. A member whose
+// render is not a pointer is not a weak-collection member, so it hands back.
+func (r *Renderer) renderWeakSet(t frontend.Type) (ast.Expr, error) {
+	elem, ok := r.setElem(t)
+	if !ok {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "WeakSet type did not expose its member through an add signature"}
+	}
+	pointee, err := r.weakKeyPointee(elem)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return star(index(sel("value", "WeakSet"), pointee)), nil
+}
+
+// newWeakSet lowers a WeakSet construction. The empty new WeakSet<E>() picks the value
+// constructor over the member pointee, so new WeakSet<Foo>() lowers to
+// value.NewWeakSet[Foo](). The iterable-argument form new WeakSet([a, b]) needs each
+// member built as an object first, which the iterable-drain slice brings, so it hands
+// back for now rather than mislower it.
+func (r *Renderer) newWeakSet(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
+	valueArgs := r.namedArgs(args)
+	if len(valueArgs) > 0 {
+		return nil, &NotYetLowerable{Reason: "new WeakSet from an iterable of members is a later slice"}
+	}
+	elem, ok := r.setElem(r.prog.TypeAt(n))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "new WeakSet did not expose its member type"}
+	}
+	pointee, err := r.weakKeyPointee(elem)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewWeakSet"), Index: pointee}}, nil
+}
+
+// weakSetMethodCall lowers a method call on a WeakSet receiver to the matching
+// value.WeakSet method. Each maps to its Go name with an exact argument count: add(k)
+// inserts and returns the set, has(k) and delete(k) report membership. A WeakSet has
+// no clear, no size, and no iteration, so only these three are covered.
+func (r *Renderer) weakSetMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	var goName string
+	var want int
+	switch method {
+	case "add":
+		goName, want = "Add", 1
+	case "has":
+		goName, want = "Has", 1
+	case "delete":
+		goName, want = "Delete", 1
+	default:
+		return nil, &NotYetLowerable{Reason: "WeakSet method ." + method + " is a later slice"}
+	}
+	return r.weakCall(recvNode, goName, want, argNodes, "WeakSet")
+}
+
 // newWeakMap lowers a WeakMap construction. The empty new WeakMap<K, V>() picks the
 // value constructor over the key pointee and the value type, so new WeakMap<Foo,
 // number>() lowers to value.NewWeakMap[Foo, float64](). The entries-argument form
