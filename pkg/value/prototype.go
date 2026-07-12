@@ -36,6 +36,10 @@ func ObjectCreate(proto Value) Value {
 // the value it already holds is allowed and leaves the object untouched. A
 // non-object receiver has no slot to write, so it is returned unchanged.
 func (v Value) SetPrototype(proto Value) Value {
+	if p := v.asProxy(); p != nil {
+		p.setPrototypeOf(proto)
+		return v
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 	default:
@@ -84,6 +88,9 @@ func (v Value) SetProtoAssign(proto Value) Value {
 // left nil, whether never set or set to null through Object.create(null), reports
 // null. A non-object receiver has no slot this model tracks, so it reports null too.
 func (v Value) GetPrototype() Value {
+	if p := v.asProxy(); p != nil {
+		return p.getPrototypeOf()
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		if o := v.object(); o.proto != nil {

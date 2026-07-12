@@ -28,6 +28,7 @@ type Object struct {
 	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
 	elemsSealed   bool         // set once Object.seal marks an array's elements non-configurable, so a delete fails
 	elemsFrozen   bool         // set once Object.freeze marks an array's elements non-writable, so a write drops
+	proxy         *proxyData   // non-nil marks this Object a Proxy exotic object; every internal method routes through its handler
 }
 
 // isExtensible reports whether new properties may still be added, the state
@@ -99,6 +100,10 @@ func NewArrayValue(elems []Value) Value {
 // produces. It returns the receiver value so JSON.parse can build an object in an
 // expression.
 func (v Value) Set(key BStr, val Value) Value {
+	if p := v.asProxy(); p != nil {
+		p.setKey(v, key, val)
+		return v
+	}
 	o := v.object()
 	// An array's length is not a stored named property but a view over the backing
 	// store, so a named write of it resizes the array rather than adding a key that a
@@ -134,6 +139,10 @@ func (v Value) Set(key BStr, val Value) Value {
 // kind with no writable storage drops the write and returns val, the value the
 // language still hands back.
 func (v Value) SetKey(key BStr, val Value) Value {
+	if p := v.asProxy(); p != nil {
+		p.setKey(v, key, val)
+		return val
+	}
 	switch v.kind {
 	case KindArray:
 		o := v.object()
@@ -200,6 +209,9 @@ func setArrayLength(o *Object, val Value) {
 // TypeError the way JavaScript does when a call target turns out not to be a
 // function.
 func (v Value) Call(args ...Value) Value {
+	if p := v.asProxy(); p != nil {
+		return p.call(args)
+	}
 	if v.kind == KindFunc {
 		if o := v.object(); o.call != nil {
 			return o.call(args)
@@ -220,6 +232,9 @@ func (v Value) Call(args ...Value) Value {
 // or from Object.seal, refuses removal and reports false, the value delete gives
 // when the property survives.
 func (v Value) Delete(key BStr) bool {
+	if p := v.asProxy(); p != nil {
+		return p.deleteKey(key)
+	}
 	switch v.kind {
 	case KindArray:
 		o := v.object()
@@ -474,6 +489,9 @@ func (v Value) ObjectRest(omit ...BStr) Value {
 // only at runtime. Symbol keys never appear, which matches the string-side static.
 // A receiver with no object storage yields an empty array.
 func (v Value) OwnKeys() *Array[BStr] {
+	if p := v.asProxy(); p != nil {
+		return NewArray(p.stringKeys(false)...)
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		return NewArray(v.object().orderedStringKeysFiltered(false)...)
@@ -488,6 +506,9 @@ func (v Value) OwnKeys() *Array[BStr] {
 // through Object.defineProperty is left out. A receiver with no object storage
 // yields an empty array.
 func (v Value) OwnEnumerableKeys() *Array[BStr] {
+	if p := v.asProxy(); p != nil {
+		return NewArray(p.stringKeys(true)...)
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		return NewArray(v.object().orderedStringKeysFiltered(true)...)
@@ -501,6 +522,14 @@ func (v Value) OwnEnumerableKeys() *Array[BStr] {
 // builds for a dynamic receiver. A non-enumerable property contributes no value,
 // matching Object.keys. A receiver with no object storage yields an empty array.
 func (v Value) OwnValues() *Array[Value] {
+	if p := v.asProxy(); p != nil {
+		keys := p.stringKeys(true)
+		vals := make([]Value, len(keys))
+		for i, k := range keys {
+			vals[i] = v.Get(k)
+		}
+		return NewArray(vals...)
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		keys := v.object().orderedStringKeysFiltered(true)

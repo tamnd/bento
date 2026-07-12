@@ -14,6 +14,10 @@ package value
 // Set and element-write paths honor. A non-object receiver has no flag to clear and
 // is returned unchanged, the no-op Object.preventExtensions performs on a primitive.
 func (v Value) PreventExtensions() Value {
+	if p := v.asProxy(); p != nil {
+		p.preventExtensions()
+		return v
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		v.object().nonExtensible = true
@@ -85,6 +89,9 @@ func (v Value) Freeze() Value {
 // the runtime behind Object.isExtensible(o). A non-object is never extensible, the
 // answer the spec gives for a primitive, which has no properties to add.
 func (v Value) IsExtensible() bool {
+	if p := v.asProxy(); p != nil {
+		return p.isExtensible()
+	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
 		return v.object().isExtensible()

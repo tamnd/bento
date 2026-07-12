@@ -169,6 +169,9 @@ func ReflectDeleteProperty(target, key Value) bool {
 // order, then the symbol keys in insertion order. An array contributes its element
 // indices and then its length as a string key, ahead of any other string key.
 func ReflectOwnKeys(target Value) *Array[Value] {
+	if p := target.asProxy(); p != nil {
+		return NewArray(p.ownKeys()...)
+	}
 	o := reflectObject(target, "ownKeys")
 	var idxKeys []int
 	var strKeys []BStr
