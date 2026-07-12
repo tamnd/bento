@@ -214,7 +214,7 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	if prop == "length" {
 		_, isArray := r.arrayElem(obj)
-		if isArray || r.numericTypedArray(obj) {
+		if isArray || r.numericTypedArray(obj) || r.bigintTypedArray(obj) {
 			recv, err := r.lowerExpr(obj)
 			if err != nil {
 				return nil, err
@@ -255,7 +255,7 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		if width, ok := bytesPerElement(r.prog.Text(obj)); ok && r.isAmbientGlobal(obj) {
 			return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(width)}, nil
 		}
-		if r.numericTypedArray(obj) {
+		if r.numericTypedArray(obj) || r.bigintTypedArray(obj) {
 			recv, err := r.lowerExpr(obj)
 			if err != nil {
 				return nil, err
@@ -271,7 +271,7 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	// or read .byteLength off a buffer the receiver is not. The .length getter shares
 	// the Len path above with a dense array, so only these three land here.
 	if prop == "buffer" || prop == "byteOffset" || prop == "byteLength" {
-		if r.numericTypedArray(obj) {
+		if r.numericTypedArray(obj) || r.bigintTypedArray(obj) {
 			recv, err := r.lowerExpr(obj)
 			if err != nil {
 				return nil, err
@@ -807,6 +807,26 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return nil, &NotYetLowerable{Reason: "a Symbol.asyncIterator reference on a non-user-async-iterable receiver is a later slice"}
 	}
+	// A bigint typed-array read a[i] returns its element as a *big.Int through the
+	// view's At, the bigint counterpart of the numeric read. A bigint element is not a
+	// Number, so it takes neither the range-proof native-slice path nor the integer-
+	// index AtI the numeric family rides; the plain At handles every index, truncating
+	// a Number index and reading 0n out of range, and a read flowing into a dynamic
+	// slot boxes through GetIndex in boxStaticToDynamic.
+	if r.bigintTypedArray(obj) {
+		if !r.isNumber(idxNode) {
+			return nil, &NotYetLowerable{Reason: "a bigint typed-array read with a non-number index is a later slice"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
+	}
 	// A typed-array read a[i] returns its element as a Number through the buffer's own
 	// At, the same method name a typed Array indexes through, so the receivers share
 	// this shape and differ only in which value type carries At. A typed array is not
@@ -865,12 +885,13 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 }
 
 // typedArrayBoxedRead builds the boxed form of a typed-array element read a[i] whose
-// result flows into a dynamic slot: recv.GetIndex(i), which answers a Number for a
+// result flows into a dynamic slot: recv.GetIndex(i), which answers the element
+// boxed (a Number for the numeric family, a bigint for the bigint pair) for a
 // canonical in-range index and undefined for an out-of-range or non-canonical one,
-// the value.Value a dynamic consumer needs where the numeric At would box a stand-in
-// 0. It claims only a read on a numeric typed array by a Number index with a
+// the value.Value a dynamic consumer needs where the plain At would box a stand-in 0
+// or 0n. It claims a read on any indexable typed array by a Number index with a
 // side-effect-free identifier receiver, so re-evaluating the receiver here is free;
-// every other read returns ok=false and boxes through the numeric path.
+// every other read returns ok=false and boxes through the primitive path.
 func (r *Renderer) typedArrayBoxedRead(src frontend.Node) (ast.Expr, bool, error) {
 	if src.Kind() != frontend.NodeElementAccessExpression {
 		return nil, false, nil
@@ -883,7 +904,10 @@ func (r *Renderer) typedArrayBoxedRead(src frontend.Node) (ast.Expr, bool, error
 	if obj.Kind() != frontend.NodeIdentifier {
 		return nil, false, nil
 	}
-	if !r.numericTypedArray(obj) || !r.isNumber(idxNode) {
+	if !r.numericTypedArray(obj) && !r.bigintTypedArray(obj) {
+		return nil, false, nil
+	}
+	if !r.isNumber(idxNode) {
 		return nil, false, nil
 	}
 	recv, err := r.lowerExpr(obj)
