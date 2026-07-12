@@ -574,6 +574,158 @@ func (r *Renderer) collectionIIFE(collType ast.Expr, body []ast.Stmt) ast.Expr {
 	return &ast.CallExpr{Fun: fn}
 }
 
+// mapStaticCall lowers a call on the global Map namespace, Map.<method>(...). The
+// only static Map method the area tests reach is Map.groupBy, the ES2024 grouping
+// constructor; any other static Map surface is its own later slice.
+func (r *Renderer) mapStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "groupBy" {
+		return nil, &NotYetLowerable{Reason: "a static Map." + method + " call is a later slice"}
+	}
+	return r.mapGroupBy(argNodes)
+}
+
+// mapGroupBy lowers Map.groupBy(items, cb) to a Map<K, T[]> that groups the items
+// of an array by the key the callback returns, in first-seen key order. It builds
+// the map inline in a func literal: the callback lowers to a Go func value, the
+// source's elements range in order, and each item appends into the slice its key
+// already holds or starts a new one. The key type is the callback's result type, so
+// the empty-map constructor is chosen the same way new Map() chooses it, and the
+// value type is a slice of the source's element type.
+//
+// Only an array source and an inline arrow taking the item, or the item and its
+// index, are covered. A non-array iterable needs the general iterable drain, and a
+// callback passed as a named reference needs the reference resolved to a func value
+// first, so each hands back rather than mislower the grouping.
+func (r *Renderer) mapGroupBy(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with other than an items source and a callback is a later slice"}
+	}
+	itemsNode, cb := argNodes[0], argNodes[1]
+	itemsType := r.prog.TypeAt(itemsNode)
+	elemFT, ok := r.prog.ElementType(itemsType)
+	if itemsType.Flags&frontend.TypeObject == 0 || !ok {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy over a source that is not an array is a later slice"}
+	}
+	elemExpr, err := r.typeExpr(elemFT)
+	if err != nil {
+		return nil, err
+	}
+	if cb.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with a callback that is not an inline arrow function is a later slice"}
+	}
+	params := r.arrowParamCount(cb)
+	if params != 1 && params != 2 {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with a callback that reads more than the item and its index is a later slice"}
+	}
+	keyType, ok := r.arrowResultFrontendType(cb)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "Map.groupBy callback with a block body has no key type"}
+	}
+	// A callback that returns a literal, or a union of literals, types the key as
+	// that literal type ("even" | "odd"), which carries no primitive-kind flag. The
+	// key of the built map is the primitive the literals belong to, so widening picks
+	// the map constructor and spells the key type the same way a string key would.
+	keyType = r.prog.Widen(keyType)
+	keyExpr, err := r.typeExpr(keyType)
+	if err != nil {
+		return nil, err
+	}
+	// The value type is T[], which lowers to *value.Array[T], so each group is a
+	// value array the same shape a T[] binding takes. arrType spells it freshly at
+	// each use so no AST node is shared across the emitted tree.
+	arrType := func() ast.Expr { return star(index(sel("value", "Array"), elemExpr)) }
+	ctor, err := r.groupCtor(keyType, keyExpr, arrType())
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(cb)
+	if err != nil {
+		return nil, err
+	}
+	items, err := r.lowerExpr(itemsNode)
+	if err != nil {
+		return nil, err
+	}
+	cbName, mName, itName := r.freshTemp(), r.freshTemp(), r.freshTemp()
+	keyName, groupName := r.freshTemp(), r.freshTemp()
+	// _cb(_it) for a one-parameter callback, _cb(_it, float64(_i)) when it also reads
+	// the index. The index binding names the range key only in that case, so a
+	// one-parameter loop ranges the value alone and drops the index to blank.
+	idxExpr := ident("_")
+	callArgs := []ast.Expr{ident(itName)}
+	if params == 2 {
+		iName := r.freshTemp()
+		idxExpr = ident(iName)
+		callArgs = append(callArgs, &ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{ident(iName)}})
+	}
+	getCall := &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(mName), Sel: ident("Get")}, Args: []ast.Expr{ident(keyName)}}
+	loopBody := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(keyName)}, Tok: token.DEFINE, Rhs: []ast.Expr{
+			&ast.CallExpr{Fun: ident(cbName), Args: callArgs},
+		}},
+		// if _g := _m.Get(_k); !_g.IsUndefined() { _g.Get().Push(_it) } else {
+		// _m.Set(_k, value.NewArray[T](_it)) } appends into the key's existing group
+		// or starts a one-element group the first time the key is seen. The stored
+		// group is a *value.Array, so Push mutates the group the map already holds.
+		&ast.IfStmt{
+			Init: &ast.AssignStmt{Lhs: []ast.Expr{ident(groupName)}, Tok: token.DEFINE, Rhs: []ast.Expr{getCall}},
+			Cond: &ast.UnaryExpr{Op: token.NOT, X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(groupName), Sel: ident("IsUndefined")}}},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{
+					X:   &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(groupName), Sel: ident("Get")}},
+					Sel: ident("Push"),
+				},
+				Args: []ast.Expr{ident(itName)},
+			}}}},
+			Else: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+				Fun: &ast.SelectorExpr{X: ident(mName), Sel: ident("Set")},
+				Args: []ast.Expr{ident(keyName), &ast.CallExpr{
+					Fun:  index(sel("value", "NewArray"), elemExpr),
+					Args: []ast.Expr{ident(itName)},
+				}},
+			}}}},
+		},
+	}
+	body := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(cbName)}, Tok: token.DEFINE, Rhs: []ast.Expr{fn}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(mName)}, Tok: token.DEFINE, Rhs: []ast.Expr{ctor}},
+		&ast.RangeStmt{
+			Key:   idxExpr,
+			Value: ident(itName),
+			Tok:   token.DEFINE,
+			X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: items, Sel: ident("Elems")}},
+			Body:  &ast.BlockStmt{List: loopBody},
+		},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(mName)}},
+	}
+	collType := star(&ast.IndexListExpr{X: sel("value", "Map"), Indices: []ast.Expr{keyExpr, arrType()}})
+	return r.collectionIIFE(collType, body), nil
+}
+
+// groupCtor builds the empty Map<K, T[]> constructor for Map.groupBy: the value
+// constructor for the key kind, instantiated at the group value type. It mirrors
+// mapCtor's key-kind switch and reference-key pointer guard, but the value type is
+// an already-lowered array expression rather than a checker type, since groupBy
+// synthesizes it from the source's element type.
+func (r *Renderer) groupCtor(keyType frontend.Type, keyExpr, valExpr ast.Expr) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	switch {
+	case keyType.Flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewNumberMap"), Index: valExpr}}, nil
+	case keyType.Flags&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewStringMap"), Index: valExpr}}, nil
+	case keyType.Flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewBoolMap"), Index: valExpr}}, nil
+	case keyType.Flags&frontend.TypeObject != 0:
+		if _, ptr := keyExpr.(*ast.StarExpr); !ptr {
+			return nil, &NotYetLowerable{Reason: "Map.groupBy keyed by a reference type that is not a plain object is a later slice"}
+		}
+		return &ast.CallExpr{Fun: &ast.IndexListExpr{X: sel("value", "NewRefMap"), Indices: []ast.Expr{keyExpr, valExpr}}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Map.groupBy with a key that is not a number, string, boolean, or object is a later slice"}
+	}
+}
+
 // newSet lowers a Set construction, the collection of unique members of section
 // 6.5. The empty new Set<T>() picks the value constructor for the member kind (a
 // number, string, boolean, or object member each compares by its own
