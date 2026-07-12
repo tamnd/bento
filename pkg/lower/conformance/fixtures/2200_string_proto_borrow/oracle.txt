@@ -1,0 +1,7 @@
+== stdout:
+23
+9
+BENTO
+6
+== exit:
+0

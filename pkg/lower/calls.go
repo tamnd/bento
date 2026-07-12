@@ -1067,6 +1067,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if name, ok := r.arrayProtoMethodName(recvNode); ok {
 		return r.arrayProtoBorrowedCall(name, method, argNodes)
 	}
+	// String.prototype.<m>.call(recv, ...) borrows a string method onto a generic
+	// receiver, coercing the receiver to a string first the way the spec's ToString
+	// does. The receiver is the function String.prototype.<m>, not a value, so it
+	// routes here before the non-string gate below, which would reject a function
+	// receiver as a later slice.
+	if name, ok := r.stringProtoMethodName(recvNode); ok {
+		return r.stringProtoBorrowedCall(name, method, argNodes)
+	}
 	// A method on a fixed-shape object receiver whose property is itself a function
 	// (assert.sameValue(...) on a callable object, or a plain object that holds a
 	// closure in a field) calls through the Go struct field: recv.SameValue(args).
@@ -2890,6 +2898,89 @@ func (r *Renderer) argHasKind(n frontend.Node, k argKind) bool {
 	default:
 		return r.isNumber(n)
 	}
+}
+
+// stringProtoMethodName reports whether n is the member chain String.prototype.<name>
+// and returns the borrowed method's name. It matches a property access whose object
+// is a property access .prototype whose object is the ambient global String, so a
+// user value that carries a like-named method does not match and stays on the
+// value-method path.
+func (r *Renderer) stringProtoMethodName(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return "", false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return "", false
+	}
+	proto := kids[0]
+	if proto.Kind() != frontend.NodePropertyAccessExpression {
+		return "", false
+	}
+	pkids := r.prog.Children(proto)
+	if len(pkids) != 2 || r.prog.Text(pkids[1]) != "prototype" {
+		return "", false
+	}
+	if !r.isGlobalRef(pkids[0], "String") {
+		return "", false
+	}
+	return r.prog.Text(kids[1]), true
+}
+
+// stringProtoBorrowedCall lowers String.prototype.<name>.call(recv, ...) to the
+// matching value.BStr method run on the receiver coerced to a string, the way the
+// spec's ToString coerces the this value before the method runs. The receiver boxes
+// to a value.Value and value.ToString reduces it to a BStr whatever its kind, so a
+// number or boolean receiver stringifies exactly as the engine does. Only .call
+// with an inline argument list is the borrow form the tests use; .apply and a method
+// the string table does not cover hand back so a borrow is never mislowered. Each
+// method argument is checked against the method's declared kinds, the same guard the
+// direct string-method path applies.
+func (r *Renderer) stringProtoBorrowedCall(name, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "call" {
+		return nil, &NotYetLowerable{Reason: "String.prototype." + name + " borrowed with ." + method + " is a later slice"}
+	}
+	if len(argNodes) == 0 {
+		return nil, &NotYetLowerable{Reason: "String.prototype." + name + " borrowed with no receiver is a later slice"}
+	}
+	recv, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	str := &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{recv}}
+	methodArgs := argNodes[1:]
+	// toString and valueOf on the coerced string are identity, so they read as the
+	// coerced BStr with no further call, the same shortcut the direct path takes.
+	if name == "toString" || name == "valueOf" {
+		if len(methodArgs) != 0 {
+			return nil, &NotYetLowerable{Reason: "borrowed string ." + name + " with an argument is a later slice"}
+		}
+		return str, nil
+	}
+	goName, params, minArgs, variadic, ok := stringMethod(name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "borrowed string method ." + name + " is a later slice"}
+	}
+	if len(methodArgs) < minArgs || (!variadic && len(methodArgs) > len(params)) {
+		return nil, &NotYetLowerable{Reason: "borrowed string method ." + name + " with this argument count is a later slice"}
+	}
+	args := make([]ast.Expr, 0, len(methodArgs))
+	for i, a := range methodArgs {
+		idx := i
+		if idx >= len(params) {
+			idx = len(params) - 1
+		}
+		if !r.argHasKind(a, params[idx]) {
+			return nil, &NotYetLowerable{Reason: "borrowed string method ." + name + " with an argument of the wrong type is a later slice"}
+		}
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: str, Sel: ident(goName)}, Args: args}, nil
 }
 
 // stringMethod maps a JavaScript string method to the value.BStr method that
