@@ -656,14 +656,53 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
 		}
-		val, err := r.lowerExpr(valNode)
+		sp, hasProp := r.shapeProp(shape, srcName)
+		// The field's declared shape is the type the member must build at, unwrapping
+		// an optional T | undefined to T so a nested literal and a present optional
+		// both target the concrete field type.
+		fieldShape := frontend.Type{}
+		haveFieldShape := false
+		if hasProp {
+			fieldShape = sp.Type
+			if inner, isOpt := r.optionalInner(r.prog.UnionMembers(sp.Type)); isOpt {
+				fieldShape = inner
+			}
+			haveFieldShape = true
+		}
+		// An explicit undefined filling an optional field is the empty optional,
+		// value.None, the same value an omitted optional field takes; someWrap over
+		// the lowered undefined would store the boxed Undefined in a typed slot,
+		// which does not compile, so this case is handled before the general path.
+		if hasProp && sp.Optional && r.prog.TypeAt(valNode).Flags == frontend.TypeUndefined {
+			inner, ok := r.optionalInner(r.prog.UnionMembers(sp.Type))
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}
+			}
+			none, err := r.noneOf(inner)
+			if err != nil {
+				return nil, err
+			}
+			elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: none})
+			seen[field] = true
+			continue
+		}
+		var val ast.Expr
+		if valNode.Kind() == frontend.NodeObjectLiteralExpression && haveFieldShape && r.isPlainShape(fieldShape) {
+			// A nested object literal builds at the field's declared shape, not its own
+			// fresh required shape, so an inner optional property interns the same
+			// struct the field type does and the value lands in the field without a
+			// shape mismatch.
+			val, err = r.objectLiteralContextual(valNode, fieldShape)
+		} else {
+			val, err = r.lowerExpr(valNode)
+		}
 		if err != nil {
 			return nil, err
 		}
 		// A member filling an optional field is wrapped in value.Some so it lands in
 		// the value.Opt slot the field became, unless the member is already an optional
 		// of that type, which passes through as the Opt it is.
-		if sp, ok := r.shapeProp(shape, srcName); ok && sp.Optional && !r.isOptional(valNode) {
+		if hasProp && sp.Optional && !r.isOptional(valNode) {
 			inner, ok := r.optionalInner(r.prog.UnionMembers(sp.Type))
 			if !ok {
 				return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}

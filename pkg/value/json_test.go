@@ -108,6 +108,31 @@ func TestJSONStringifyEmbeddedStruct(t *testing.T) {
 	}
 }
 
+// TestJSONStringifyOptionalField checks the reflection walk over an optional
+// property, the value.Opt[T] a shape's optional field lowers to: a present
+// optional serializes the value it wraps, and an absent optional (the same empty
+// Opt an explicit undefined lowers to) omits its key the way JSON.stringify drops
+// a property whose value is undefined.
+func TestJSONStringifyOptionalField(t *testing.T) {
+	type Rec struct {
+		A float64      `json:"a"`
+		B Opt[float64] `json:"b"`
+		C Opt[BStr]    `json:"c"`
+	}
+	present := Rec{A: 1, B: Some(float64(2)), C: Some(FromGoString("x"))}
+	if got := JSONStringify(present).ToGoString(); got != `{"a":1,"b":2,"c":"x"}` {
+		t.Fatalf("present optionals = %q", got)
+	}
+	absent := Rec{A: 1, B: None[float64](), C: None[BStr]()}
+	if got := JSONStringify(absent).ToGoString(); got != `{"a":1}` {
+		t.Fatalf("absent optionals = %q", got)
+	}
+	mixed := Rec{A: 1, B: Some(float64(0)), C: None[BStr]()}
+	if got := JSONStringify(mixed).ToGoString(); got != `{"a":1,"b":0}` {
+		t.Fatalf("mixed optionals = %q", got)
+	}
+}
+
 func nan() float64 { z := float64(0); return z / z }
 
 func inf(s int) float64 {

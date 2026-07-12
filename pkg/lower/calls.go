@@ -1353,18 +1353,19 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 }
 
 // jsonCall lowers a static call on the global JSON namespace. stringify takes a
-// single value and returns the exact text V8 produces, which lowers to
-// value.JSONStringify with the argument boxed as any so the serializer's
-// reflection walk can dispatch on its concrete type. parse takes a single string
-// and returns a dynamic any value, which lowers to value.JSONParse and lands in
-// the boxed value world the checker already typed the result as. A replacer, a
-// space, or a reviver argument (the extra parameters) changes the behavior, so a
-// call that passes one hands back rather than ignoring it.
+// value and returns the exact text V8 produces, which lowers to value.JSONStringify
+// with the argument boxed as any so the serializer's reflection walk can dispatch
+// on its concrete type. A space argument switches to the indented form
+// value.JSONStringifyIndentNum or IndentStr. parse takes a single string and
+// returns a dynamic any value, which lowers to value.JSONParse and lands in the
+// boxed value world the checker already typed the result as. A replacer or a
+// reviver function still changes the behavior, so a call that passes one hands
+// back rather than ignoring it.
 func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "stringify":
-		if len(argNodes) != 1 {
-			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer or space argument is a later slice"}
+		if len(argNodes) == 0 || len(argNodes) > 3 {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify takes a value and an optional replacer and space"}
 		}
 		// A value statically typed as an extended class may hold a subclass at
 		// runtime, and JavaScript would serialize the subclass's own fields
@@ -1373,32 +1374,176 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		if info, ok := r.classOfNode(argNodes[0]); ok && info.extended {
 			return nil, &NotYetLowerable{Reason: "JSON.stringify of a value typed as class " + info.name + ", which another class extends, is a later slice"}
 		}
-		// A shape with an optional property lowers to a struct with a value.Opt field,
-		// which the serializer's reflection walk has no case for yet: it would print
-		// the empty optional as a nested object rather than omit the key. Until that
-		// walk learns the Opt field, an optional-shape argument hands back.
-		if r.shapeHasOptional(r.prog.TypeAt(argNodes[0])) {
-			return nil, &NotYetLowerable{Reason: "JSON.stringify of a shape with an optional property is a later slice"}
-		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
+		// A replacer function or array whitelist changes which values are
+		// serialized and how, so a present replacer routes to the replacer walk;
+		// a null or undefined replacer the specification ignores falls through to
+		// the plain serializer.
+		if len(argNodes) >= 2 && !r.isJSONNullish(argNodes[1]) {
+			return r.jsonStringifyReplacer(arg, argNodes)
+		}
+		if len(argNodes) == 3 {
+			return r.jsonStringifySpace(arg, argNodes[2])
+		}
 		return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
 	case "parse":
-		if len(argNodes) != 1 {
-			return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver argument is a later slice"}
+		if len(argNodes) == 0 || len(argNodes) > 2 {
+			return nil, &NotYetLowerable{Reason: "JSON.parse takes a text and an optional reviver"}
 		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
+		// A reviver function rewrites the parsed tree bottom-up, so a present
+		// reviver routes to the reviving parse; a null or undefined reviver the
+		// specification ignores falls through to the plain parse.
+		if len(argNodes) == 2 && !r.isJSONNullish(argNodes[1]) {
+			return r.jsonParseReviver(arg, argNodes[1])
+		}
 		return &ast.CallExpr{Fun: sel("value", "JSONParse"), Args: []ast.Expr{arg}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "JSON." + method + " is a later slice"}
 	}
+}
+
+// jsonStringifySpace lowers the space argument of a three-argument JSON.stringify
+// over an already-lowered value. A numeric space routes to
+// value.JSONStringifyIndentNum and a string space to value.JSONStringifyIndentStr,
+// each of which computes the indentation gap the specification prescribes (a
+// number of spaces clamped to ten, or the first ten characters of the string) and
+// falls back to the compact form when the gap is empty. A null or undefined space
+// is the compact form outright. Any other space type is a later slice.
+func (r *Renderer) jsonStringifySpace(arg ast.Expr, spaceNode frontend.Node) (ast.Expr, error) {
+	switch {
+	case r.isNumber(spaceNode):
+		space, err := r.lowerExpr(spaceNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyIndentNum"), Args: []ast.Expr{arg, space}}, nil
+	case r.isString(spaceNode):
+		space, err := r.lowerExpr(spaceNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyIndentStr"), Args: []ast.Expr{arg, space}}, nil
+	case r.isJSONNullish(spaceNode):
+		return &ast.CallExpr{Fun: sel("value", "JSONStringify"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "JSON.stringify with a space that is not a number or string is a later slice"}
+	}
+}
+
+// isJSONNullish reports whether a node is the null keyword or the undefined
+// literal, the two values JSON.stringify treats as an absent replacer or space.
+func (r *Renderer) isJSONNullish(n frontend.Node) bool {
+	return n.Kind() == frontend.NodeNullKeyword || r.isUndefinedLiteral(n)
+}
+
+// jsonStringifyReplacer lowers a three-argument JSON.stringify whose replacer is
+// present. An inline arrow replacer lowers to value.JSONStringifyReplacerFunc over
+// the lowered function, and an array-literal whitelist lowers to
+// value.JSONStringifyReplacerArray over the listed keys; each also takes the
+// indentation gap the optional space argument computes. A replacer that is neither
+// an inline arrow nor an array literal hands back, since only those two forms have
+// a static shape the walk can honor.
+func (r *Renderer) jsonStringifyReplacer(arg ast.Expr, argNodes []frontend.Node) (ast.Expr, error) {
+	gap, err := r.jsonGapExpr(argNodes)
+	if err != nil {
+		return nil, err
+	}
+	replacer := argNodes[1]
+	switch replacer.Kind() {
+	case frontend.NodeArrowFunction:
+		if r.arrowParamCount(replacer) != 2 {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer arrow that does not take the key and value parameters is a later slice"}
+		}
+		fn, err := r.lowerExpr(replacer)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyReplacerFunc"), Args: []ast.Expr{arg, fn, gap}}, nil
+	case frontend.NodeArrayLiteralExpression:
+		keys, err := r.jsonReplacerKeys(replacer)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONStringifyReplacerArray"), Args: []ast.Expr{arg, keys, gap}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer that is not an inline arrow function or array literal is a later slice"}
+	}
+}
+
+// jsonParseReviver lowers a two-argument JSON.parse whose reviver is present. An
+// inline arrow reviver taking the key and value lowers to value.JSONParseReviver
+// over the lowered function, which walks the parsed tree bottom-up. A reviver that
+// is not an inline arrow, or one that does not take the two parameters, hands
+// back, since only an inline arrow has a static shape the walk can call.
+func (r *Renderer) jsonParseReviver(arg ast.Expr, reviver frontend.Node) (ast.Expr, error) {
+	if reviver.Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(reviver) != 2 {
+		return nil, &NotYetLowerable{Reason: "JSON.parse with a reviver arrow that does not take the key and value parameters is a later slice"}
+	}
+	fn, err := r.lowerExpr(reviver)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: sel("value", "JSONParseReviver"), Args: []ast.Expr{arg, fn}}, nil
+}
+
+// jsonGapExpr builds the Go expression for the indentation gap a replacer walk
+// takes: the empty string when there is no space argument or it is null or
+// undefined, value.JSONGapNum over a numeric space, and value.JSONGapStr over a
+// string space. Any other space type hands back, matching the plain space path.
+func (r *Renderer) jsonGapExpr(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) < 3 || r.isJSONNullish(argNodes[2]) {
+		return &ast.BasicLit{Kind: token.STRING, Value: `""`}, nil
+	}
+	space := argNodes[2]
+	switch {
+	case r.isNumber(space):
+		lowered, err := r.lowerExpr(space)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONGapNum"), Args: []ast.Expr{lowered}}, nil
+	case r.isString(space):
+		lowered, err := r.lowerExpr(space)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "JSONGapStr"), Args: []ast.Expr{lowered}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "JSON.stringify with a space that is not a number or string is a later slice"}
+	}
+}
+
+// jsonReplacerKeys builds the []value.BStr the array-whitelist form takes from an
+// array literal of string literals, lowering each element to the property name it
+// names through the same decoding a string-literal expression uses. An element
+// that is not a string literal hands back, since a computed or numeric entry has
+// no static string key this slice lists.
+func (r *Renderer) jsonReplacerKeys(arr frontend.Node) (ast.Expr, error) {
+	elems := r.prog.Children(arr)
+	items := make([]ast.Expr, 0, len(elems))
+	for _, el := range elems {
+		if el.Kind() != frontend.NodeStringLiteral {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify with a replacer array of anything but string literals is a later slice"}
+		}
+		key, err := r.stringLiteral(el)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, key)
+	}
+	return &ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "BStr")}, Elts: items}, nil
 }
 
 // objectCall lowers a static call on the global Object namespace. Only keys is
