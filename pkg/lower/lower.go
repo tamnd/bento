@@ -1081,6 +1081,25 @@ func typedArrayElemGo(name string) (string, bool) {
 	}
 }
 
+// bytesPerElement maps a typed-array name to its element width in bytes, the
+// BYTES_PER_ELEMENT constant, and ok=false for any other name. It spans the whole
+// family, the bigint pair included, because the constant is a pure property of the
+// element kind and reads the same whether or not that member's construction lowers.
+func bytesPerElement(name string) (int, bool) {
+	switch name {
+	case "Int8Array", "Uint8Array", "Uint8ClampedArray":
+		return 1, true
+	case "Int16Array", "Uint16Array":
+		return 2, true
+	case "Int32Array", "Uint32Array", "Float32Array":
+		return 4, true
+	case "Float64Array", "BigInt64Array", "BigUint64Array":
+		return 8, true
+	default:
+		return 0, false
+	}
+}
+
 // numericTypedArray reports whether a node's type is a typed array bento lowers to
 // an indexable numeric buffer, Uint8Array or a numeric-family member, the receiver
 // test the index read, index write, and .length lowerings share. A bigint-element

@@ -142,6 +142,26 @@ func TestTypedArrayFromSourceLowering(t *testing.T) {
 	}
 }
 
+// TestBytesPerElementLowering pins BYTES_PER_ELEMENT. The static read off the
+// constructor folds to the element-width literal, since it has no receiver value.
+// The instance read lowers to the view's BytesPerElement method instead, which keeps
+// the receiver referenced so a binding read only through this stays used.
+func TestBytesPerElementLowering(t *testing.T) {
+	cases := map[string]string{
+		`console.log(Int8Array.BYTES_PER_ELEMENT);`:                       "value.NumberToString(1)",
+		`console.log(Int32Array.BYTES_PER_ELEMENT);`:                      "value.NumberToString(4)",
+		`console.log(Float64Array.BYTES_PER_ELEMENT);`:                    "value.NumberToString(8)",
+		`const b = new Uint16Array(2); console.log(b.BYTES_PER_ELEMENT);`: "b.BytesPerElement()",
+		`const b = new Uint8Array(2); console.log(b.BYTES_PER_ELEMENT);`:  "b.BytesPerElement()",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
+}
+
 // TestTypedArrayGeometryGetterLowering pins the instance geometry getters off the
 // view: .buffer to Buffer, .byteOffset to ByteOffset, and .byteLength to
 // ByteLength, each a method on the value.TypedArray or value.Uint8Array. A read of

@@ -243,6 +243,26 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Size")}}, nil
 	}
+	// BYTES_PER_ELEMENT is the element width in bytes, a constant of the element kind
+	// read the same off the constructor (Int32Array.BYTES_PER_ELEMENT) and off an
+	// instance (b.BYTES_PER_ELEMENT), typed a Number in both. The static form fires on
+	// the constructor global by name and folds to the width literal, since it has no
+	// receiver value. The instance form lowers to the view's BytesPerElement method
+	// rather than a literal: folding it to a constant would drop the receiver, and a
+	// binding whose only use is this read would then be left declared and unused, which
+	// Go rejects, so the method call keeps the receiver referenced and stays correct.
+	if prop == "BYTES_PER_ELEMENT" {
+		if width, ok := bytesPerElement(r.prog.Text(obj)); ok && r.isAmbientGlobal(obj) {
+			return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(width)}, nil
+		}
+		if r.numericTypedArray(obj) {
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("BytesPerElement")}}, nil
+		}
+	}
 	// A typed array's geometry getters read off the view: .buffer is the ArrayBuffer
 	// it aliases, .byteOffset the byte it starts at within that buffer, and
 	// .byteLength its own span in bytes, each a method on the value.TypedArray or

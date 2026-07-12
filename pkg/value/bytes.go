@@ -109,6 +109,11 @@ func (a *Uint8Array) ByteOffset() float64 { return float64(a.byteOffset) }
 // but both getters exist because the numeric family separates the two.
 func (a *Uint8Array) ByteLength() float64 { return float64(len(a.bytes)) }
 
+// BytesPerElement is the element width in bytes, the instance BYTES_PER_ELEMENT
+// property, one for a byte array. It is a method so a read keeps the receiver
+// referenced rather than folding to a literal that would orphan the binding.
+func (a *Uint8Array) BytesPerElement() float64 { return 1 }
+
 // Bytes returns the live backing slice, the storage the bridge passes to a Go
 // function taking []byte (16 §7.3). It is not a copy: while a Go call runs it may
 // read these bytes, and the caller in the bridge decides whether a copy is needed
