@@ -230,6 +230,12 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 		iter = ident(r.argsObjName)
 	case isArrayElem(r, kids[1]):
 		elemsMethod = "Elems"
+	case r.numericTypedArray(kids[1]):
+		// A numeric typed array is its own iterable, yielding each element as the
+		// Number a read hands out, so for...of ranges its widened elements the same
+		// way an array ranges its Elems. The bigint arrays yield bigints, a different
+		// element, so they are excluded here and hand back.
+		elemsMethod = "Floats"
 	case r.isString(kids[1]):
 		elemsMethod = "CodePoints"
 	default:
