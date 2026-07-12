@@ -104,6 +104,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "WeakMap" {
 		return r.newWeakMap(n, kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "WeakRef" {
+		return r.newWeakRef(n, kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
 	}

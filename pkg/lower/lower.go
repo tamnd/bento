@@ -812,6 +812,12 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// interface as fields.
 			return r.renderPromise(t)
 		}
+		if r.isWeakRefType(t) {
+			// A WeakRef<T> (25 §26.1) is the value model's single weak reference, spelled as
+			// a pointer to the generic value.WeakRef header. It is not a struct shape, so it
+			// routes here before renderObject would intern its deref interface as a field.
+			return r.renderWeakRef(t)
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:

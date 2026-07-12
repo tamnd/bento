@@ -1027,6 +1027,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isDataView(recvNode) {
 		return r.dataViewMethodCall(recvNode, method, argNodes)
 	}
+	// A weakRef.deref() call lowers to a value.WeakRef method (25 §26.1). It routes
+	// alongside the other weak-collection paths, before the primitive and string paths,
+	// which expect a number, boolean, or string receiver a WeakRef is not.
+	if r.isWeakRef(recvNode) {
+		return r.weakRefMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a WeakMap receiver lowers to a value.WeakMap method (25 §24.3). It
 	// routes before the Map path: a WeakMap's fingerprint has no size, so isMap never
 	// matches it, but routing it first keeps the two collection dispatches adjacent and
