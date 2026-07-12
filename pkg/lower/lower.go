@@ -706,6 +706,16 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "ArrayIter")), nil
 		}
+		// An IteratorObject, the result of Iterator.from and of every lazy helper
+		// (map, filter, take, drop, flatMap), is the *value.IterHelper the runtime
+		// pulls. It routes before the generator family, which shares the wider iterator
+		// type names but drives a *value.Gen[Y] whose Next takes a sent value the
+		// helper's no-argument Next does not, so it must be recognized first. This is
+		// the slot a `const m = it.map(f)` binding takes.
+		if r.isIterHelperType(t) {
+			r.requireImport(valuePkg)
+			return star(sel("value", "IterHelper")), nil
+		}
 		// A Generator (or the wider iterator family) is the *value.Gen[Y] coroutine the
 		// runtime drives, its yielded element type read off the generic's first type
 		// argument. It routes before renderFuncType and the structural array and object

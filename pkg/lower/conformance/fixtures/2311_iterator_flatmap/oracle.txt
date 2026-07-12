@@ -1,0 +1,4 @@
+== stdout:
+TypeError
+== exit:
+0

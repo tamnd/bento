@@ -204,6 +204,13 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "for...of loop variable is not a Go identifier"}
 	}
+	// An iterator helper result (IteratorObject, a *value.IterHelper) is pulled with a
+	// no-argument Next() until done, distinct from a generator whose Next takes a sent
+	// value, so it routes before the generator path which shares the wider iterator type
+	// names.
+	if r.isIterHelperType(r.prog.TypeAt(kids[1])) {
+		return r.forOfIterHelper(kids[1], dkids[0], name, kids[2])
+	}
 	// A generator iterable is our state-machine closure: for...of pulls it until
 	// done rather than ranging a backing slice, so it takes its own path.
 	if r.isGeneratorIterable(kids[1]) {
@@ -368,6 +375,73 @@ func (r *Renderer) forOfGenerator(iterable, bindNode frontend.Node, name string,
 		})
 	}
 	return &ast.BlockStmt{List: block}, nil
+}
+
+// forOfIterHelper lowers a for...of over an iterator helper result (an IteratorObject,
+// a *value.IterHelper) to the plain pull loop the runtime drives: obtain the helper
+// once so its state is shared across the loop, then each turn pull a step with Next()
+// and stop when the step is done. A helper's Next takes no sent value, unlike a
+// generator's, so this path is distinct from forOfGenerator; and a helper has no goroutine
+// to abandon, so an early break needs no close and the drain machinery forOfGenerator
+// carries is left out.
+//
+// A step yields a boxed value.Value in its Value field, so the loop variable coerces the
+// box down to its element type: a clean primitive runs the ToNumber family, an any binding
+// keeps the box, and any other element type hands back rather than land a box in a slot
+// that cannot hold it. A binding the body never reads drops entirely, since Go rejects an
+// unused variable, and the loop still pulls to drive the iteration.
+func (r *Renderer) forOfIterHelper(iterable, bindNode frontend.Node, name string, bodyNode frontend.Node) (ast.Stmt, error) {
+	iter, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	itName := r.freshTemp()
+	stepName := r.freshTemp()
+	pull := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(stepName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(itName), Sel: ident("Next")}}},
+	}
+	brk := &ast.IfStmt{
+		Cond: &ast.SelectorExpr{X: ident(stepName), Sel: ident("Done")},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.BranchStmt{Tok: token.BREAK}}},
+	}
+	loopStmts := []ast.Stmt{pull, brk}
+	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
+		bound, err := r.bindIterHelperValue(&ast.SelectorExpr{X: ident(stepName), Sel: ident("Value")}, bindNode)
+		if err != nil {
+			return nil, err
+		}
+		loopStmts = append(loopStmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{bound}})
+	}
+	loopStmts = append(loopStmts, body.List...)
+	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}}
+	block := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(itName)}, Tok: token.DEFINE, Rhs: []ast.Expr{iter}},
+		loop,
+	}
+	return &ast.BlockStmt{List: block}, nil
+}
+
+// bindIterHelperValue coerces a helper step's boxed Value into the loop variable's
+// element type, the same three-way choice unboxDynamicRead makes: a clean primitive
+// coerces through the ToNumber family, an any or unknown binding keeps the box, and any
+// other element type hands back rather than force a box into a slot that cannot hold it.
+func (r *Renderer) bindIterHelperValue(valExpr ast.Expr, bindNode frontend.Node) (ast.Expr, error) {
+	flags := r.prog.TypeAt(bindNode).Flags
+	if flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 &&
+		flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
+		return r.coerceDynamicToStaticFlags(valExpr, flags)
+	}
+	if flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return valExpr, nil
+	}
+	return nil, &NotYetLowerable{Reason: "for...of over an iterator helper binding a non-primitive element is a later slice"}
 }
 
 // forOfBodyMayBreak reports whether a for...of body can leave the loop through an

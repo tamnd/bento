@@ -983,6 +983,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Proxy") {
 		return r.proxyStaticCall(method, argNodes)
 	}
+	// Iterator.from(x) is a static call on the ambient Iterator global that wraps an
+	// iterable as an iterator helper, not a method on a value, so it lowers to the value
+	// IterFrom helper before the receiver-value paths below.
+	if r.isGlobalRef(recvNode, "Iterator") {
+		return r.iteratorStaticCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.
@@ -1117,6 +1123,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// not.
 	if r.isPromise(recvNode) {
 		return r.promiseMethodCall(recvNode, method, argNodes)
+	}
+	// An iterator helper, arr.values().map(f) or Iterator.from(x).filter(g), lowers to
+	// the value.Iter* free function over the receiver's Next. It routes before the
+	// generator drive because a helper result is typed IteratorObject, one of the wider
+	// iterator names generatorMethodCall also claims, and before the array iterator drive
+	// so a helper method on an ArrayIterator receiver is caught here rather than handed
+	// back as an unknown array-iterator method. A receiver that is neither an
+	// IteratorObject nor an ArrayIterator returns ok false and falls through, so a real
+	// generator (typed Generator) still reaches generatorMethodCall below.
+	if e, ok, err := r.iterHelperMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
 	}
 	// A manual drive of a generator, it.next(v), lowers to the runtime helper that packs
 	// the { value, done } result. Like Map, Set, and Promise it routes before the
@@ -3185,6 +3202,15 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	switch {
+	case r.producesBoxedValue(arg):
+		// A call that already lowers to a value.Value box (a terminal iterator helper,
+		// a descriptor read) defers the whole ToString to the value model, which
+		// dispatches on the runtime kind, the same as any dynamic argument. This routes
+		// before the primitive cases because the checker types the call by its result
+		// (a number for reduce, an array for toArray) while the lowered expr is a box, so
+		// the primitive stringifiers would be handed a value.Value they cannot take.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
 	case r.isString(arg):
 		return lowered, nil // already a string, the identity
 	case r.isNumber(arg):
