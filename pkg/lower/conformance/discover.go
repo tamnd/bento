@@ -53,6 +53,13 @@ type Meta struct {
 	Feature  string
 	Handback string
 	Skip     string
+	// Env holds environment variables the oracle run sets before running the golden,
+	// written in fixture.toml as `env.NAME = "value"`. It exists for the handful of
+	// fixtures whose output depends on the process environment, Temporal.Now against a
+	// fixed clock being the first: the harness sets BENTO_NOW_NS and TZ so the program
+	// prints a value the checked-in oracle can pin. An ordinary fixture leaves it empty
+	// and runs under the inherited environment.
+	Env map[string]string
 }
 
 // Discover walks root and returns every fixture it finds, sorted by id so the
@@ -131,13 +138,22 @@ func readMeta(path string) (Meta, error) {
 		if err != nil {
 			return Meta{}, fmt.Errorf("line %d: %w", i+1, err)
 		}
-		switch key {
-		case "feature":
+		switch {
+		case key == "feature":
 			m.Feature = val
-		case "handback":
+		case key == "handback":
 			m.Handback = val
-		case "skip":
+		case key == "skip":
 			m.Skip = val
+		case strings.HasPrefix(key, "env."):
+			name := strings.TrimPrefix(key, "env.")
+			if name == "" {
+				return Meta{}, fmt.Errorf("line %d: env key has no variable name", i+1)
+			}
+			if m.Env == nil {
+				m.Env = map[string]string{}
+			}
+			m.Env[name] = val
 		default:
 			return Meta{}, fmt.Errorf("line %d: unknown key %q", i+1, key)
 		}

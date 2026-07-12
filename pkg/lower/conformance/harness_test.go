@@ -227,7 +227,7 @@ func TestOracle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse oracle: %v", err)
 			}
-			stdout, exit := runGolden(t, root, golden)
+			stdout, exit := runGolden(t, root, golden, f.Meta.Env)
 			if normalizeOut(stdout) != normalizeOut(want.Stdout) {
 				t.Errorf("%s stdout mismatch\n--- got ---\n%s\n--- want ---\n%s", f.Slug, stdout, want.Stdout)
 			}
@@ -243,7 +243,7 @@ func TestOracle(t *testing.T) {
 // under the module tree so the golden's import of bento's value package resolves
 // from this module's requirements with no separate go.mod, the same way bento's own
 // build compiles a program inside its module tree.
-func runGolden(t *testing.T, root string, golden []byte) (string, int) {
+func runGolden(t *testing.T, root string, golden []byte, env map[string]string) (string, int) {
 	t.Helper()
 	dir, err := os.MkdirTemp(root, "goldenrun-")
 	if err != nil {
@@ -258,6 +258,15 @@ func runGolden(t *testing.T, root string, golden []byte) (string, int) {
 	// golden binary never accumulates in the cache everyday builds rely on.
 	cmd := exec.Command("go", "run", ".")
 	cmd.Dir = dir
+	// A fixture that pins the environment, Temporal.Now against a fixed clock, adds its
+	// variables on top of the inherited set so the golden runs against the clock and zone
+	// its oracle was written for; a fixture with no env leaves the inherited set in place.
+	if len(env) > 0 {
+		cmd.Env = os.Environ()
+		for name, val := range env {
+			cmd.Env = append(cmd.Env, name+"="+val)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
