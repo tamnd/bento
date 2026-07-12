@@ -26,11 +26,12 @@ import (
 // zero-length. The store and load functions carry the per-kind truncation and
 // widening so the generic core stays one type.
 type BigIntArray[T bigArrayElem] struct {
-	buffer     *ArrayBuffer
-	byteOffset int
-	length     int
-	store      func(*big.Int) T
-	load       func(T) *big.Int
+	buffer         *ArrayBuffer
+	byteOffset     int
+	length         int
+	lengthTracking bool
+	store          func(*big.Int) T
+	load           func(T) *big.Int
 }
 
 // bigArrayElem is the set of Go element types a bigint typed array stores: the two
@@ -70,7 +71,17 @@ func newBigIntArrayView[T bigArrayElem](buf *ArrayBuffer, byteOffset, length int
 // buffers land a shrunk one, reports zero, the bigint sibling of the numeric
 // family's liveLen. A bigint element is eight bytes wide.
 func (a *BigIntArray[T]) liveLen() int {
-	if avail := len(a.buffer.data) - a.byteOffset; avail < a.length*8 {
+	avail := len(a.buffer.data) - a.byteOffset
+	if avail < 0 {
+		return 0
+	}
+	// A length-tracking view over a resizable buffer spans from its offset to the
+	// buffer's current end, so a resize changes the element count it reports; a bigint
+	// element is eight bytes, so the count is the available bytes divided by eight.
+	if a.lengthTracking {
+		return avail / 8
+	}
+	if avail < a.length*8 {
 		return 0
 	}
 	return a.length
@@ -119,7 +130,13 @@ func bigIntArrayView[T bigArrayElem](buf *ArrayBuffer, store func(*big.Int) T, l
 	if max := (len(buf.data) - off) / elem; n > max {
 		n = max
 	}
-	return newBigIntArrayView(buf, off, n, store, load)
+	v := newBigIntArrayView(buf, off, n, store, load)
+	// A view with no explicit length over a resizable buffer tracks the buffer's
+	// length, following a later resize rather than staying pinned at the count here.
+	if len(length) == 0 && buf.resizable {
+		v.lengthTracking = true
+	}
+	return v
 }
 
 // bigViewSlice forms the element slice a bigint typed array reads, an unsafe alias

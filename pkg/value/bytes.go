@@ -25,16 +25,27 @@ import "math"
 // methods (subarray, DataView) and the copying methods (set, slice, fill) land in
 // later slices; the type carries the buffer now so those grow it in place.
 type Uint8Array struct {
-	buffer     *ArrayBuffer
-	byteOffset int
-	length     int
+	buffer         *ArrayBuffer
+	byteOffset     int
+	length         int
+	lengthTracking bool
 }
 
 // liveLen is the view's byte length as of this access, clamped against the buffer's
 // current length so a view over a detached buffer, or once resizable buffers land a
 // shrunk one, reports zero. A byte is one element wide, so the count is the span.
 func (a *Uint8Array) liveLen() int {
-	if avail := len(a.buffer.data) - a.byteOffset; avail < a.length {
+	avail := len(a.buffer.data) - a.byteOffset
+	if avail < 0 {
+		return 0
+	}
+	// A length-tracking view over a resizable buffer spans from its offset to the
+	// buffer's current end, so a resize changes what it reports; a byte is one element
+	// wide, so the span is the byte count directly.
+	if a.lengthTracking {
+		return avail
+	}
+	if avail < a.length {
 		return 0
 	}
 	return a.length
@@ -100,7 +111,9 @@ func Uint8ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *Ui
 	if max := len(buf.data) - off; n > max {
 		n = max
 	}
-	return &Uint8Array{buffer: buf, byteOffset: off, length: n}
+	// A view with no explicit length over a resizable buffer tracks the buffer's
+	// length, following a later resize rather than staying pinned at the count here.
+	return &Uint8Array{buffer: buf, byteOffset: off, length: n, lengthTracking: len(length) == 0 && buf.resizable}
 }
 
 // Uint8ArrayFromGo wraps a Go []byte as a Uint8Array, the Go-to-bento crossing of
