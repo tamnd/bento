@@ -713,8 +713,10 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 // value.IterToArray). The checker types reduce as the accumulator type and toArray as
 // an array, neither of which the primitive box path has a constructor for, so
 // recognizing the calls here is what lets const x: any = it.reduce(...) and a
-// console.log(it.toArray()) store or print the box straight through. The forEach, some,
-// every, and find terminals are a later slice and are not claimed here.
+// console.log(it.toArray()) store or print the box straight through. find joins them:
+// it returns the first passing value or undefined as a box. some and every return a Go
+// bool, not a box, and forEach returns undefined for its side effect, so none of those
+// are claimed here.
 func (r *Renderer) isIterTerminalBoxedCall(src frontend.Node) bool {
 	if src.Kind() != frontend.NodeCallExpression {
 		return false
@@ -732,7 +734,7 @@ func (r *Renderer) isIterTerminalBoxedCall(src frontend.Node) bool {
 		return false
 	}
 	method := r.prog.Text(ck[1])
-	if method != "reduce" && method != "toArray" {
+	if method != "reduce" && method != "toArray" && method != "find" {
 		return false
 	}
 	return r.isIterHelperReceiver(ck[0])

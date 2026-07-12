@@ -70,6 +70,26 @@ func TestIterHelperEmits(t *testing.T) {
 			"export function f(a: number[]): void { console.log(a.values().map((n: number): number => n * 2).toArray()); }\n",
 			"value.IterToArray(",
 		},
+		{
+			"foreach",
+			"export function f(a: number[]): void { a.values().forEach((n: number): void => { console.log(n); }); }\n",
+			"value.IterForEach(",
+		},
+		{
+			"some",
+			"export function f(a: number[]): boolean { return a.values().some((n: number): boolean => n > 0); }\n",
+			"value.IterSome(",
+		},
+		{
+			"every",
+			"export function f(a: number[]): boolean { return a.values().every((n: number): boolean => n > 0); }\n",
+			"value.IterEvery(",
+		},
+		{
+			"find",
+			"export function f(a: number[]): void { console.log(a.values().find((n: number): boolean => n > 2)); }\n",
+			"value.IterFind(",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -240,6 +240,71 @@ func TestIterToArrayEmpty(t *testing.T) {
 	}
 }
 
+// TestIterForEach visits every value with the callback and passes the zero-based index,
+// returning undefined.
+func TestIterForEach(t *testing.T) {
+	src := NewArrayIter(NewArrayValue([]Value{Number(10), Number(20), Number(30)}), ArrayIterValues)
+	var seen []float64
+	fn := NewFunc(func(args []Value) Value {
+		seen = append(seen, Arg(args, 0).AsNumber()+Arg(args, 1).AsNumber())
+		return Undefined
+	})
+	if got := IterForEach(src.Next, fn); !got.IsUndefined() {
+		t.Errorf("forEach returned %+v, want undefined", got)
+	}
+	want := []float64{10, 21, 32}
+	if len(seen) != len(want) || seen[0] != want[0] || seen[2] != want[2] {
+		t.Errorf("forEach visited %v, want %v", seen, want)
+	}
+}
+
+// TestIterSome returns true as soon as a value passes and false over a source with none
+// passing, and an empty source is false.
+func TestIterSome(t *testing.T) {
+	vals := []Value{Number(1), Number(2), Number(3)}
+	gt2 := NewFunc(func(args []Value) Value { return Bool(Arg(args, 0).AsNumber() > 2) })
+	gt9 := NewFunc(func(args []Value) Value { return Bool(Arg(args, 0).AsNumber() > 9) })
+	if !IterSome(NewArrayIter(NewArrayValue(vals), ArrayIterValues).Next, gt2) {
+		t.Errorf("some(>2) = false, want true")
+	}
+	if IterSome(NewArrayIter(NewArrayValue(vals), ArrayIterValues).Next, gt9) {
+		t.Errorf("some(>9) = true, want false")
+	}
+	if IterSome(NewArrayIter(NewArrayValue(nil), ArrayIterValues).Next, gt2) {
+		t.Errorf("some over empty = true, want false")
+	}
+}
+
+// TestIterEvery returns false as soon as a value fails and true over a source with all
+// passing, and an empty source is true.
+func TestIterEvery(t *testing.T) {
+	vals := []Value{Number(1), Number(2), Number(3)}
+	gt0 := NewFunc(func(args []Value) Value { return Bool(Arg(args, 0).AsNumber() > 0) })
+	gt2 := NewFunc(func(args []Value) Value { return Bool(Arg(args, 0).AsNumber() > 2) })
+	if !IterEvery(NewArrayIter(NewArrayValue(vals), ArrayIterValues).Next, gt0) {
+		t.Errorf("every(>0) = false, want true")
+	}
+	if IterEvery(NewArrayIter(NewArrayValue(vals), ArrayIterValues).Next, gt2) {
+		t.Errorf("every(>2) = true, want false")
+	}
+	if !IterEvery(NewArrayIter(NewArrayValue(nil), ArrayIterValues).Next, gt2) {
+		t.Errorf("every over empty = false, want true")
+	}
+}
+
+// TestIterFind returns the first passing value and undefined when none passes.
+func TestIterFind(t *testing.T) {
+	vals := []Value{Number(1), Number(2), Number(3), Number(4)}
+	even := NewFunc(func(args []Value) Value { return Bool(int(Arg(args, 0).AsNumber())%2 == 0) })
+	gt9 := NewFunc(func(args []Value) Value { return Bool(Arg(args, 0).AsNumber() > 9) })
+	if got := IterFind(NewArrayIter(NewArrayValue(vals), ArrayIterValues).Next, even); got.AsNumber() != 2 {
+		t.Errorf("find(even) = %v, want 2", got.AsNumber())
+	}
+	if got := IterFind(NewArrayIter(NewArrayValue(vals), ArrayIterValues).Next, gt9); !got.IsUndefined() {
+		t.Errorf("find(>9) = %+v, want undefined", got)
+	}
+}
+
 // TestIterHelperNilNext reports done forever when the closure is nil, so a helper over
 // an empty or exhausted source is safe to pull past its end.
 func TestIterHelperNilNext(t *testing.T) {

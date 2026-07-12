@@ -156,6 +156,26 @@ func (r *Renderer) iterHelperMethodCall(recvNode frontend.Node, method string, a
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "IterReduce"), Args: []ast.Expr{next, fn, boolLit(hasInit), init}}, true, nil
+	case "forEach", "some", "every", "find":
+		// The remaining terminals drive the source with a callback: forEach visits every
+		// value for its side effect and returns undefined, some and every short-circuit to a
+		// Go bool, and find returns the first passing value as a value.Value box (recorded in
+		// producesBoxedValue so it flows into a dynamic slot). some and every returning a Go
+		// bool land in a boolean slot or an if condition directly.
+		if len(argNodes) != 1 {
+			return nil, false, &NotYetLowerable{Reason: "an iterator helper's ." + method + "() takes exactly a callback"}
+		}
+		next, err := r.iterReceiverNext(recvNode)
+		if err != nil {
+			return nil, false, err
+		}
+		fn, err := r.boxOperand(argNodes[0])
+		if err != nil {
+			return nil, false, err
+		}
+		r.requireImport(valuePkg)
+		goName := map[string]string{"forEach": "IterForEach", "some": "IterSome", "every": "IterEvery", "find": "IterFind"}[method]
+		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{next, fn}}, true, nil
 	default:
 		return nil, false, &NotYetLowerable{Reason: "an iterator helper's ." + method + "() is a later slice"}
 	}

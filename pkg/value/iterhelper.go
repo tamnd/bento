@@ -209,6 +209,73 @@ func IterToArray(next func() IterResult) Value {
 	}
 }
 
+// IterForEach drives the source to exhaustion and calls fn(value, index) for each, the
+// terminal forEach. It returns undefined the way the method does, running fn only for
+// its side effect and passing the zero-based index of every value it visits.
+func IterForEach(next func() IterResult, fn Value) Value {
+	i := 0
+	for {
+		r := next()
+		if r.Done {
+			return Undefined
+		}
+		fn.Call(r.Value, Number(float64(i)))
+		i++
+	}
+}
+
+// IterSome drives the source until fn(value, index) is truthy, the terminal some. It
+// returns true as soon as a value passes, pulling no further, and false only once the
+// source is exhausted with none passing, so an empty source is false.
+func IterSome(next func() IterResult, fn Value) bool {
+	i := 0
+	for {
+		r := next()
+		if r.Done {
+			return false
+		}
+		if ToBoolean(fn.Call(r.Value, Number(float64(i)))) {
+			return true
+		}
+		i++
+	}
+}
+
+// IterEvery drives the source until fn(value, index) is falsy, the terminal every. It
+// returns false as soon as a value fails, pulling no further, and true only once the
+// source is exhausted with all passing, so an empty source is true.
+func IterEvery(next func() IterResult, fn Value) bool {
+	i := 0
+	for {
+		r := next()
+		if r.Done {
+			return true
+		}
+		if !ToBoolean(fn.Call(r.Value, Number(float64(i)))) {
+			return false
+		}
+		i++
+	}
+}
+
+// IterFind drives the source until fn(value, index) is truthy and returns that value,
+// the terminal find. It returns the first passing value, pulling no further, and
+// undefined once the source is exhausted with none passing, so an empty source is
+// undefined.
+func IterFind(next func() IterResult, fn Value) Value {
+	i := 0
+	for {
+		r := next()
+		if r.Done {
+			return Undefined
+		}
+		if ToBoolean(fn.Call(r.Value, Number(float64(i)))) {
+			return r.Value
+		}
+		i++
+	}
+}
+
 // IterFrom wraps an iterable value as an IterHelper, the runtime behind
 // Iterator.from. It drives an array over its indices and a string over its code
 // points, the iterate-string-primitives handling Iterator.from asks for. A value
