@@ -50,16 +50,15 @@ func PlainDateFrom(pd *PlainDate) *PlainDate {
 }
 
 // toIntegerWithTruncation implements the abstract operation of the same name
-// (Temporal): NaN becomes zero, a non-finite value throws a RangeError, and any
-// other value truncates toward zero to a mathematical integer. It returns a float64
-// so the range checks in rejectISODate run before the value is narrowed to an int,
-// which keeps a wildly out-of-range year (1e300) from wrapping on the conversion.
+// (Temporal): a NaN or non-finite value throws a RangeError, and any other value
+// truncates toward zero to a mathematical integer. It returns a float64 so the range
+// checks in rejectISODate run before the value is narrowed to an int, which keeps a
+// wildly out-of-range year (1e300) from wrapping on the conversion. NaN throwing here
+// matters: new Temporal.PlainDate(NaN, 1, 1) must raise a RangeError, not settle on
+// year zero, since 0000-01-01 is itself a valid date.
 func toIntegerWithTruncation(x float64) float64 {
-	if math.IsNaN(x) {
-		return 0
-	}
-	if math.IsInf(x, 0) {
-		Throw(NewRangeError(FromGoString("Temporal.PlainDate requires finite integer components")))
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		Throw(NewRangeError(FromGoString("Temporal component must be a finite integer")))
 	}
 	return math.Trunc(x)
 }
