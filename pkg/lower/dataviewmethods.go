@@ -18,10 +18,13 @@ var dataViewByteGetters = map[string]string{
 // Each takes a byte offset and an optional littleEndian flag that selects the byte
 // order the read uses (25 §25.3.4).
 var dataViewEndianGetters = map[string]string{
-	"getInt16":  "GetInt16",
-	"getUint16": "GetUint16",
-	"getInt32":  "GetInt32",
-	"getUint32": "GetUint32",
+	"getInt16":   "GetInt16",
+	"getUint16":  "GetUint16",
+	"getInt32":   "GetInt32",
+	"getUint32":  "GetUint32",
+	"getFloat16": "GetFloat16",
+	"getFloat32": "GetFloat32",
+	"getFloat64": "GetFloat64",
 }
 
 // dataViewMethodCall lowers a method call whose receiver is a DataView to the

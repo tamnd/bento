@@ -183,6 +183,55 @@ func (d *DataView) GetUint32(byteOffset float64, littleEndian ...bool) float64 {
 	return float64(dataViewOrder(littleEndian).Uint32(d.buffer.data[bi:]))
 }
 
+// GetFloat16 reads the half-precision float at the offset with the given endianness,
+// DataView.prototype.getFloat16 (25 §25.3.4), decoding the two stored bytes to the
+// Number the read hands out.
+func (d *DataView) GetFloat16(byteOffset float64, littleEndian ...bool) float64 {
+	bi := d.access(byteOffset, 2)
+	return float16ToFloat64(dataViewOrder(littleEndian).Uint16(d.buffer.data[bi:]))
+}
+
+// GetFloat32 reads the single-precision float at the offset with the given
+// endianness, DataView.prototype.getFloat32, widening the stored float32 to a Number.
+func (d *DataView) GetFloat32(byteOffset float64, littleEndian ...bool) float64 {
+	bi := d.access(byteOffset, 4)
+	return float64(math.Float32frombits(dataViewOrder(littleEndian).Uint32(d.buffer.data[bi:])))
+}
+
+// GetFloat64 reads the double-precision float at the offset with the given
+// endianness, DataView.prototype.getFloat64. A Number is a float64, so the read is
+// the stored value with no widening.
+func (d *DataView) GetFloat64(byteOffset float64, littleEndian ...bool) float64 {
+	bi := d.access(byteOffset, 8)
+	return math.Float64frombits(dataViewOrder(littleEndian).Uint64(d.buffer.data[bi:]))
+}
+
+// float16ToFloat64 decodes an IEEE 754 half-precision bit pattern to the Number a
+// getFloat16 read hands out. A zero-exponent pattern is a signed zero or a subnormal
+// whose value is mant times 2^-24; an all-ones exponent is an infinity when the
+// mantissa is zero and a NaN otherwise; every other pattern is a normal value,
+// (1024+mant) times 2^(exp-25), the hidden leading one folded into the mantissa. It
+// is computed through Ldexp rather than bit surgery so the exponent shift stays exact.
+func float16ToFloat64(h uint16) float64 {
+	sign := 1.0
+	if h&0x8000 != 0 {
+		sign = -1.0
+	}
+	exp := int(h>>10) & 0x1f
+	mant := int(h) & 0x3ff
+	switch exp {
+	case 0:
+		return sign * math.Ldexp(float64(mant), -24)
+	case 0x1f:
+		if mant == 0 {
+			return math.Inf(int(sign))
+		}
+		return math.NaN()
+	default:
+		return sign * math.Ldexp(float64(1024+mant), exp-25)
+	}
+}
+
 // toDataViewIndex is ECMAScript ToIndex applied to a DataView byte offset or length
 // (7.1.22): a not-a-number value becomes zero, and a negative or above-2^53-1 value
 // is a RangeError, the throw the spec raises for an invalid index. The value arrives
