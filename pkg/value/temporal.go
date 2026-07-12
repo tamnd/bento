@@ -1145,6 +1145,168 @@ func durationSecondsString(d *Duration) (string, bool) {
 // twoDigit renders a month or day as exactly two digits.
 func twoDigit(n int) string { return zeroPad(n, 2) }
 
+// Instant is bento's runtime representation of a Temporal.Instant (Temporal §8): an
+// exact point on the UTC time line, counted as a whole number of nanoseconds since the
+// epoch 1970-01-01T00:00:00Z. It carries no calendar and no zone, only the count, so a
+// single arbitrary-precision integer captures it; the nanosecond total runs to ±8.64e21,
+// past a float64's exact-integer range, so it is a big.Int rather than a double.
+//
+// The stored count is validated against the representable range at construction, so an
+// Instant that reached a getter or a comparison is always in range. The value is copied
+// in and copied out, so a caller cannot mutate the shared big.Int and reach through to
+// the Instant's field.
+type Instant struct {
+	ns *big.Int // nanoseconds since the epoch, in [nsMinInstant, nsMaxInstant]
+}
+
+// The Instant range bounds and the two divisors the field math leans on. The maximum is
+// 8.64e21 nanoseconds, 10^8 days of nanoseconds each side of the epoch, the range
+// Temporal fixes for an exact time; nsPerDay and nsPerMilli split the count into a day
+// index and a within-day remainder, and into whole milliseconds, for the getters and the
+// string rendering.
+var (
+	nsMaxInstant, _ = new(big.Int).SetString("8640000000000000000000", 10)
+	nsMinInstant    = new(big.Int).Neg(nsMaxInstant)
+	nsPerDay        = big.NewInt(86_400_000_000_000)
+	nsPerMilli      = big.NewInt(1_000_000)
+)
+
+// validateEpochNanoseconds throws a RangeError unless ns is within the Instant range, the
+// IsValidEpochNanoseconds gate the constructor and both epoch factories run before they
+// build an Instant.
+func validateEpochNanoseconds(ns *big.Int) {
+	if ns.Cmp(nsMinInstant) < 0 || ns.Cmp(nsMaxInstant) > 0 {
+		Throw(NewRangeError(FromGoString("Temporal.Instant is outside the representable range")))
+	}
+}
+
+// newInstant validates a nanosecond count and stores a copy, the shared body of the
+// constructor and the epoch factories. The copy means the big.Int a caller passes in
+// stays independent of the Instant's field, so a later mutation of the argument cannot
+// change the Instant.
+func newInstant(ns *big.Int) *Instant {
+	validateEpochNanoseconds(ns)
+	return &Instant{ns: new(big.Int).Set(ns)}
+}
+
+// NewInstant builds an Instant from the constructor's single bigint argument, the
+// nanoseconds since the epoch, running IsValidEpochNanoseconds so an out-of-range count
+// throws a RangeError the way new Temporal.Instant(ns) does.
+func NewInstant(epochNanoseconds *big.Int) *Instant {
+	return newInstant(epochNanoseconds)
+}
+
+// InstantFromEpochNanoseconds implements Temporal.Instant.fromEpochNanoseconds: it is the
+// constructor under another name, a bigint nanosecond count validated and stored.
+func InstantFromEpochNanoseconds(epochNanoseconds *big.Int) *Instant {
+	return newInstant(epochNanoseconds)
+}
+
+// InstantFromEpochMilliseconds implements Temporal.Instant.fromEpochMilliseconds: the
+// number of milliseconds must be an integer, so a NaN, non-finite, or fractional value
+// throws a RangeError (the NumberToBigInt step the specification runs), then the count is
+// scaled to nanoseconds and validated against the Instant range. A whole millisecond
+// count up to the range bound stays inside a float64's exact-integer range, so the int64
+// narrowing is lossless.
+func InstantFromEpochMilliseconds(epochMilliseconds float64) *Instant {
+	if math.IsNaN(epochMilliseconds) || math.IsInf(epochMilliseconds, 0) || epochMilliseconds != math.Trunc(epochMilliseconds) {
+		Throw(NewRangeError(FromGoString("Temporal.Instant epoch milliseconds must be an integer")))
+	}
+	ns := new(big.Int).SetInt64(int64(epochMilliseconds))
+	ns.Mul(ns, nsPerMilli)
+	return newInstant(ns)
+}
+
+// InstantFrom implements Temporal.Instant.from for an Instant argument: it returns a fresh
+// Instant with the same count, the copy the specification makes. from over a string needs
+// the ISO parser this slice does not carry, so it hands back at lowering and this is only
+// reached with an Instant in hand.
+func InstantFrom(inst *Instant) *Instant {
+	return newInstant(inst.ns)
+}
+
+// EpochNanoseconds returns the nanoseconds since the epoch as a fresh big.Int, so the
+// caller holds a bigint independent of the Instant's field.
+func (i *Instant) EpochNanoseconds() *big.Int { return new(big.Int).Set(i.ns) }
+
+// EpochMilliseconds returns the whole milliseconds since the epoch, floor(ns / 10^6). The
+// floor runs through big.Int Euclidean division, so a negative instant rounds toward minus
+// infinity the way the specification's mathematical floor does; the result is within a
+// float64's exact-integer range across the whole Instant range.
+func (i *Instant) EpochMilliseconds() float64 {
+	q := new(big.Int).Div(i.ns, nsPerMilli)
+	return float64(q.Int64())
+}
+
+// Equals implements Temporal.Instant.prototype.equals for an Instant argument: two
+// instants are equal exactly when their nanosecond counts match.
+func (i *Instant) Equals(other *Instant) bool { return i.ns.Cmp(other.ns) == 0 }
+
+// InstantCompare implements Temporal.Instant.compare: -1, 0, or 1 as the first instant is
+// earlier than, equal to, or later than the second, the sign of the big.Int comparison.
+func InstantCompare(a, b *Instant) float64 { return float64(a.ns.Cmp(b.ns)) }
+
+// ToString implements Temporal.Instant.prototype.toString under the default options: the
+// ISO 8601 date-time in UTC with a Z designator, a fractional-second part appended only
+// when a sub-second field is set. The count is split into a day index and a within-day
+// nanosecond remainder by Euclidean division, so a negative instant lands on the correct
+// earlier day with a positive time of day, then the day index becomes an ISO date and the
+// remainder the wall-clock time.
+func (i *Instant) ToString() BStr {
+	return FromGoString(i.isoString())
+}
+
+// ToJSON implements Temporal.Instant.prototype.toJSON, the same UTC ISO string toString
+// produces under default options.
+func (i *Instant) ToJSON() BStr { return i.ToString() }
+
+func (i *Instant) isoString() string {
+	q := new(big.Int)
+	m := new(big.Int)
+	q.DivMod(i.ns, nsPerDay, m)
+	year, month, day := epochDaysToISO(int(q.Int64()))
+	rem := m.Int64()
+	hour := int(rem / 3_600_000_000_000)
+	rem %= 3_600_000_000_000
+	minute := int(rem / 60_000_000_000)
+	rem %= 60_000_000_000
+	second := int(rem / 1_000_000_000)
+	frac := int(rem % 1_000_000_000)
+	s := formatISOYear(year) + "-" + twoDigit(month) + "-" + twoDigit(day) +
+		"T" + twoDigit(hour) + ":" + twoDigit(minute) + ":" + twoDigit(second)
+	if frac > 0 {
+		s += "." + strings.TrimRight(zeroPad(frac, 9), "0")
+	}
+	return s + "Z"
+}
+
+// epochDaysToISO is the inverse of isoToEpochDays: it turns a count of days since the
+// epoch into the proleptic Gregorian year, month, and day, the civil-from-days algorithm
+// that pairs with the days-from-civil count isoToEpochDays runs. It is exact across the
+// whole Instant range, where the day index reaches ±10^8.
+func epochDaysToISO(z int) (year, month, day int) {
+	z += 719468
+	era := z
+	if z < 0 {
+		era = z - 146096
+	}
+	era /= 146097
+	doe := z - era*146097
+	yoe := (doe - doe/1460 + doe/36524 - doe/146096) / 365
+	y := yoe + era*400
+	doy := doe - (365*yoe + yoe/4 - yoe/100)
+	mp := (5*doy + 2) / 153
+	day = doy - (153*mp+2)/5 + 1
+	month = mp + 3
+	if mp >= 10 {
+		month = mp - 9
+	}
+	if month <= 2 {
+		y++
+	}
+	return y, month, day
+}
+
 // zeroPad renders n as a decimal left-padded with zeros to at least width digits.
 func zeroPad(n, width int) string {
 	s := strconv.Itoa(n)

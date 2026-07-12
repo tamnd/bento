@@ -7,23 +7,26 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
-// This file lowers the Temporal area (10_advanced group 6), one type per cut. Six are
+// This file lowers the Temporal area (10_advanced group 6), one type per cut. Seven are
 // hosted so far: PlainDate, a calendar date with no time and no zone over the ISO 8601
 // calendar; PlainTime, a wall-clock time with no date and no zone; PlainDateTime, a date
 // paired with a wall-clock time; Duration, a span of time as ten signed component counts;
-// PlainYearMonth, a calendar year and month with no day; and PlainMonthDay, a calendar month
-// and day with no year. For the plain types, construction, the static from over the same type
-// (and, for the ordered types, compare), the clean field getters, and the equals, toString,
-// and toJSON methods lower to the matching value runtime type. Duration hosts construction,
-// the field getters plus sign and blank, negated and abs, toString and toJSON, and from over a
-// Duration. Everything else, the arithmetic, the balancing and rounding, the cross-type
-// conversions, from over a string or a property bag, and the getters the checker types number |
-// undefined, hands back with a named reason so the compiler reports the exact ceiling.
+// PlainYearMonth, a calendar year and month with no day; PlainMonthDay, a calendar month and
+// day with no year; and Instant, an exact point on the UTC time line as a nanosecond count.
+// For the plain types, construction, the static from over the same type (and, for the ordered
+// types, compare), the clean field getters, and the equals, toString, and toJSON methods lower
+// to the matching value runtime type. Duration hosts construction, the field getters plus sign
+// and blank, negated and abs, toString and toJSON, and from over a Duration. Instant hosts
+// construction and the two epoch factories, the epoch-milliseconds and epoch-nanoseconds
+// getters, compare, equals, toString and toJSON, and from over an Instant. Everything else, the
+// arithmetic, the balancing and rounding, the cross-type conversions, from over a string or a
+// property bag, and the getters the checker types number | undefined, hands back with a named
+// reason so the compiler reports the exact ceiling.
 //
 // Each Temporal type follows the host-type model RegExp and the collections use: it is a bare
 // pointer in the generated Go (*value.PlainDate, *value.PlainTime, *value.PlainDateTime,
-// *value.Duration, *value.PlainYearMonth, *value.PlainMonthDay), recognized by its declaring
-// symbol name rather than a dedicated type flag.
+// *value.Duration, *value.PlainYearMonth, *value.PlainMonthDay, *value.Instant), recognized by
+// its declaring symbol name rather than a dedicated type flag.
 // The Temporal namespace is a two-level access (Temporal.PlainDate.compare), which no other
 // built-in uses, so the call and new paths carry a small amount of namespace-chain recognition
 // this file drives.
@@ -139,6 +142,24 @@ func (r *Renderer) plainMonthDayType(t frontend.Type) bool {
 // isPlainMonthDay reports whether the node's static type is a Temporal.PlainMonthDay.
 func (r *Renderer) isPlainMonthDay(n frontend.Node) bool {
 	return r.plainMonthDayType(r.prog.TypeAt(n))
+}
+
+// instantType reports whether a checker type is the Temporal.Instant interface, the same
+// shape test as plainDateType over the symbol name Instant.
+func (r *Renderer) instantType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "Instant"
+}
+
+// isInstant reports whether the node's static type is a Temporal.Instant.
+func (r *Renderer) isInstant(n frontend.Node) bool {
+	return r.instantType(r.prog.TypeAt(n))
 }
 
 // plainDateAccessor maps a PlainDate field getter to the value.PlainDate method that
@@ -296,6 +317,149 @@ func plainMonthDayAccessor(prop string) (method string, ok bool) {
 		return "CalendarId", true
 	}
 	return "", false
+}
+
+// instantAccessor maps an Instant field getter to the value.Instant method that reads it,
+// or reports ok=false for a name this slice does not host. Both getters are clean: epoch
+// milliseconds reads as a number and epoch nanoseconds as a bigint, the types the checker
+// gives them, neither with an undefined case, so each maps to a method.
+func instantAccessor(prop string) (method string, ok bool) {
+	switch prop {
+	case "epochMilliseconds":
+		return "EpochMilliseconds", true
+	case "epochNanoseconds":
+		return "EpochNanoseconds", true
+	}
+	return "", false
+}
+
+// instantMethodCall lowers a method call on an Instant receiver, the mirror of
+// plainDateMethodCall. equals(other) compares two instants, and toString and toJSON render
+// the UTC ISO 8601 string; each takes no options in this slice, so a call with arguments
+// beyond the ones handled hands back. The arithmetic and rounding methods (add, subtract,
+// until, since, round), which need Duration and options parsing, and the conversions
+// (toZonedDateTimeISO, toLocaleString) hand back with a named reason.
+func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "equals":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype.equals takes exactly one argument"}
+		}
+		if !r.isInstant(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype.equals over a non-Instant argument (a string to coerce) is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Equals")}, Args: []ast.Expr{other}}, nil
+	case "toString", "toJSON":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype." + method + " with options is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "ToString"
+		if method == "toJSON" {
+			name = "ToJSON"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype." + method + " is a later slice"}
+	}
+}
+
+// instantStaticCall lowers a static call on Temporal.Instant. compare lowers to
+// value.InstantCompare; fromEpochMilliseconds and fromEpochNanoseconds lower to the
+// matching value factory over a number or a bigint; from lowers to value.InstantFrom for
+// an Instant argument (the copy the specification makes) and hands back for a string,
+// which needs the ISO parser this slice does not carry.
+func (r *Renderer) instantStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "compare":
+		if len(argNodes) != 2 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.compare takes exactly two arguments"}
+		}
+		if !r.isInstant(argNodes[0]) || !r.isInstant(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.compare over an argument that is not an Instant (a string to coerce) is a later slice"}
+		}
+		a, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		b, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "InstantCompare"), Args: []ast.Expr{a, b}}, nil
+	case "fromEpochMilliseconds":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.fromEpochMilliseconds takes exactly one argument"}
+		}
+		if !r.isNumber(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.fromEpochMilliseconds over a non-number argument is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "InstantFromEpochMilliseconds"), Args: []ast.Expr{arg}}, nil
+	case "fromEpochNanoseconds":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.fromEpochNanoseconds takes exactly one argument"}
+		}
+		if !r.isBigInt(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.fromEpochNanoseconds over a non-bigint argument is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "InstantFromEpochNanoseconds"), Args: []ast.Expr{arg}}, nil
+	case "from":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.from takes exactly one argument"}
+		}
+		if !r.isInstant(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Instant.from over a string is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "InstantFrom"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.Instant." + method + " is a later slice"}
+	}
+}
+
+// newInstant lowers new Temporal.Instant over its single bigint argument, the nanoseconds
+// since the epoch. The argument must lower as a bigint, so a non-bigint component hands
+// back rather than coerce; the runtime runs IsValidEpochNanoseconds, so an out-of-range
+// count throws a RangeError at run time the way the specification requires.
+func (r *Renderer) newInstant(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.Instant takes exactly one argument"}
+	}
+	if !r.isBigInt(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "new Temporal.Instant with a non-bigint argument is a later slice"}
+	}
+	arg, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewInstant"), Args: []ast.Expr{arg}}, nil
 }
 
 // durationMethodCall lowers a method call on a Duration receiver. negated and abs return a
@@ -585,6 +749,8 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 		return r.plainYearMonthStaticCall(method, argNodes)
 	case "PlainMonthDay":
 		return r.plainMonthDayStaticCall(method, argNodes)
+	case "Instant":
+		return r.instantStaticCall(method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal." + typeName + " is a later slice"}
 	}
@@ -792,6 +958,8 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 		return r.newPlainYearMonth(argNodes)
 	case "PlainMonthDay":
 		return r.newPlainMonthDay(argNodes)
+	case "Instant":
+		return r.newInstant(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "new Temporal." + typeName + " is a later slice"}
 	}

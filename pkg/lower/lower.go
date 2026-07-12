@@ -893,6 +893,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "PlainMonthDay")), nil
 		}
+		if r.instantType(t) {
+			// A Temporal.Instant (Temporal §8) is the value model's exact time as a nanosecond
+			// count, spelled as a pointer to value.Instant, routed here for the same reason as
+			// the other Temporal types: it is a host type, not a struct shape.
+			r.requireImport(valuePkg)
+			return star(sel("value", "Instant")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
