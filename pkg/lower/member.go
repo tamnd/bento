@@ -292,6 +292,17 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ByteLength")}}, nil
 	}
+	// buffer.detached reports whether the buffer has been detached by a transfer or
+	// an explicit detach (25 §25.1.6.3). Like byteLength it is an accessor in the
+	// source but a method on value.ArrayBuffer, so it lowers to a Detached() call, the
+	// boolean the checker gives the property, and routes before the struct-field path.
+	if prop == "detached" && r.isArrayBuffer(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Detached")}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)

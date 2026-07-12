@@ -1,0 +1,11 @@
+== stdout:
+false
+8
+true
+0
+false
+true
+0
+
+== exit:
+0
