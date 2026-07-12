@@ -184,3 +184,155 @@ func TestPlainDateRejects(t *testing.T) {
 		}
 	}
 }
+
+// mustPlainTime builds a PlainTime and fails the test if construction threw.
+func mustPlainTime(t *testing.T, h, m, s, ms, us, ns float64) *PlainTime {
+	t.Helper()
+	var pt *PlainTime
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("NewPlainTime(%v,%v,%v,%v,%v,%v) threw: %v", h, m, s, ms, us, ns, r)
+			}
+		}()
+		pt = NewPlainTime(h, m, s, ms, us, ns)
+	}()
+	return pt
+}
+
+// plainTimeThrows reports whether NewPlainTime throws a RangeError for the args.
+func plainTimeThrows(h, m, s, ms, us, ns float64) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewPlainTime(h, m, s, ms, us, ns)
+	return false
+}
+
+// TestPlainTimeFields checks the six clean field getters against a time with every
+// field set, the values taken from @js-temporal/polyfill.
+func TestPlainTimeFields(t *testing.T) {
+	pt := mustPlainTime(t, 1, 2, 3, 4, 5, 6)
+	if got := pt.Hour(); got != 1 {
+		t.Errorf("Hour = %v, want 1", got)
+	}
+	if got := pt.Minute(); got != 2 {
+		t.Errorf("Minute = %v, want 2", got)
+	}
+	if got := pt.Second(); got != 3 {
+		t.Errorf("Second = %v, want 3", got)
+	}
+	if got := pt.Millisecond(); got != 4 {
+		t.Errorf("Millisecond = %v, want 4", got)
+	}
+	if got := pt.Microsecond(); got != 5 {
+		t.Errorf("Microsecond = %v, want 5", got)
+	}
+	if got := pt.Nanosecond(); got != 6 {
+		t.Errorf("Nanosecond = %v, want 6", got)
+	}
+}
+
+// TestPlainTimeToString checks the ISO time string, including the trimmed fractional
+// second, against the polyfill.
+func TestPlainTimeToString(t *testing.T) {
+	cases := []struct {
+		h, m, s, ms, us, ns float64
+		want                string
+	}{
+		{12, 30, 0, 0, 0, 0, "12:30:00"},
+		{12, 30, 0, 250, 0, 0, "12:30:00.25"},
+		{1, 2, 3, 4, 5, 6, "01:02:03.004005006"},
+		{0, 0, 0, 0, 0, 0, "00:00:00"},
+		{23, 59, 59, 999, 999, 999, "23:59:59.999999999"},
+	}
+	for _, c := range cases {
+		pt := mustPlainTime(t, c.h, c.m, c.s, c.ms, c.us, c.ns)
+		if got := pt.ToString().ToGoString(); got != c.want {
+			t.Errorf("PlainTime(%v,%v,%v,%v,%v,%v).ToString() = %q, want %q", c.h, c.m, c.s, c.ms, c.us, c.ns, got, c.want)
+		}
+		if got := pt.ToJSON().ToGoString(); got != c.want {
+			t.Errorf("PlainTime(%v,%v,%v,%v,%v,%v).ToJSON() = %q, want %q", c.h, c.m, c.s, c.ms, c.us, c.ns, got, c.want)
+		}
+	}
+}
+
+// TestPlainTimeCompareAndEquals checks the static comparator and equals.
+func TestPlainTimeCompareAndEquals(t *testing.T) {
+	a := mustPlainTime(t, 1, 0, 0, 0, 0, 0)
+	b := mustPlainTime(t, 2, 0, 0, 0, 0, 0)
+	c := mustPlainTime(t, 1, 0, 0, 0, 0, 0)
+	if got := PlainTimeCompare(a, b); got != -1 {
+		t.Errorf("compare(a,b) = %v, want -1", got)
+	}
+	if got := PlainTimeCompare(b, a); got != 1 {
+		t.Errorf("compare(b,a) = %v, want 1", got)
+	}
+	if got := PlainTimeCompare(a, c); got != 0 {
+		t.Errorf("compare(a,c) = %v, want 0", got)
+	}
+	// A difference only in the least significant field still orders.
+	lo := mustPlainTime(t, 3, 15, 30, 0, 0, 1)
+	hi := mustPlainTime(t, 3, 15, 30, 0, 0, 2)
+	if got := PlainTimeCompare(lo, hi); got != -1 {
+		t.Errorf("compare over the nanosecond = %v, want -1", got)
+	}
+	if !a.Equals(c) {
+		t.Error("a.Equals(c) = false, want true")
+	}
+	if a.Equals(b) {
+		t.Error("a.Equals(b) = true, want false")
+	}
+}
+
+// TestPlainTimeFromCopies proves from returns a distinct object that compares equal to
+// its source, the copy the specification makes.
+func TestPlainTimeFromCopies(t *testing.T) {
+	a := mustPlainTime(t, 5, 6, 7, 0, 0, 0)
+	b := PlainTimeFrom(a)
+	if a == b {
+		t.Error("PlainTimeFrom returned the same pointer, want a copy")
+	}
+	if !a.Equals(b) {
+		t.Error("from copy does not equal its source")
+	}
+}
+
+// TestPlainTimeTruncatesArguments proves a fractional argument truncates toward zero,
+// matching ToIntegerWithTruncation.
+func TestPlainTimeTruncatesArguments(t *testing.T) {
+	pt := mustPlainTime(t, 12.9, 30.9, 0.9, 0, 0, 0)
+	if pt.ToString().ToGoString() != "12:30:00" {
+		t.Errorf("truncated PlainTime = %q, want 12:30:00", pt.ToString().ToGoString())
+	}
+}
+
+// TestPlainTimeRejects checks the RangeError cases against the polyfill: each field past
+// its range, a NaN component (which throws in ToIntegerWithTruncation), and a non-finite
+// component.
+func TestPlainTimeRejects(t *testing.T) {
+	throwing := [][6]float64{
+		{24, 0, 0, 0, 0, 0},
+		{-1, 0, 0, 0, 0, 0},
+		{0, 60, 0, 0, 0, 0},
+		{0, 0, 60, 0, 0, 0},
+		{0, 0, 0, 1000, 0, 0},
+		{0, 0, 0, 0, 1000, 0},
+		{0, 0, 0, 0, 0, 1000},
+		{nan(), 0, 0, 0, 0, 0},
+		{inf(1), 0, 0, 0, 0, 0},
+	}
+	for _, c := range throwing {
+		if !plainTimeThrows(c[0], c[1], c[2], c[3], c[4], c[5]) {
+			t.Errorf("NewPlainTime%v did not throw", c)
+		}
+	}
+	// The all-max valid boundary must not throw.
+	if plainTimeThrows(23, 59, 59, 999, 999, 999) {
+		t.Error("NewPlainTime at the valid maximum threw")
+	}
+}
