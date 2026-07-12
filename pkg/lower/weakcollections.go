@@ -299,6 +299,160 @@ func (r *Renderer) weakRefMethodCall(recvNode frontend.Node, method string, argN
 	return r.weakCall(recvNode, "Deref", 0, argNodes, "WeakRef")
 }
 
+// isFinalizationRegistryType reports whether an object type is a JavaScript
+// FinalizationRegistry. Its register and unregister methods together are unique to it
+// among the collections, so their presence is the fingerprint.
+func (r *Renderer) isFinalizationRegistryType(t frontend.Type) bool {
+	var hasRegister, hasUnregister bool
+	for _, p := range r.prog.Properties(t) {
+		switch p.Name {
+		case "register":
+			hasRegister = true
+		case "unregister":
+			hasUnregister = true
+		}
+	}
+	return hasRegister && hasUnregister
+}
+
+// isFinalizationRegistry reports whether the checker types a node as a
+// FinalizationRegistry, the receiver test the register and unregister lowerings share.
+func (r *Renderer) isFinalizationRegistry(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isFinalizationRegistryType(t)
+}
+
+// finalizationHeldType returns the held-value type T of a FinalizationRegistry, read
+// off register's second parameter (target, heldValue: T, token?). It reports false for
+// a type with no such register signature.
+func (r *Renderer) finalizationHeldType(t frontend.Type) (frontend.Type, bool) {
+	var regType frontend.Type
+	found := false
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "register" {
+			regType, found = p.Type, true
+			break
+		}
+	}
+	if !found {
+		return frontend.Type{}, false
+	}
+	call, _ := r.prog.Signatures(regType)
+	if len(call) == 0 || len(call[0].Params) < 2 {
+		return frontend.Type{}, false
+	}
+	return call[0].Params[1].Type, true
+}
+
+// renderFinalizationRegistry lowers a FinalizationRegistry<T> type to a pointer to the
+// generic value.FinalizationRegistry header over the held-value type T.
+func (r *Renderer) renderFinalizationRegistry(t frontend.Type) (ast.Expr, error) {
+	held, ok := r.finalizationHeldType(t)
+	if !ok {
+		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "FinalizationRegistry type did not expose its held value through a register signature"}
+	}
+	hExpr, err := r.typeExpr(held)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return star(index(sel("value", "FinalizationRegistry"), hExpr)), nil
+}
+
+// newFinalizationRegistry lowers new FinalizationRegistry(cb) to
+// value.NewFinalizationRegistry[T](cb): it reads the held type off the registry type at
+// this node and lowers the single cleanup-callback argument straight through as the
+// func(T) it renders to.
+func (r *Renderer) newFinalizationRegistry(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
+	valueArgs := r.namedArgs(args)
+	if len(valueArgs) != 1 {
+		return nil, &NotYetLowerable{Reason: "new FinalizationRegistry takes exactly one cleanup-callback argument"}
+	}
+	held, ok := r.finalizationHeldType(r.prog.TypeAt(n))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "new FinalizationRegistry did not expose its held value type"}
+	}
+	hExpr, err := r.typeExpr(held)
+	if err != nil {
+		return nil, err
+	}
+	cb, err := r.lowerExpr(valueArgs[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewFinalizationRegistry"), Index: hExpr}, Args: []ast.Expr{cb}}, nil
+}
+
+// finalizationRegistryMethodCall lowers register and unregister on a
+// FinalizationRegistry receiver. unregister(token) is a plain method returning a
+// boolean. register(target, held, token?) lowers to the free function
+// value.FinalizationRegister[Target, T], because the call is generic over the target's
+// own type, which the registry type alone does not carry: the target pointee and the
+// held type T are the type arguments, and a missing unregister token passes nil.
+func (r *Renderer) finalizationRegistryMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "unregister":
+		return r.weakCall(recvNode, "Unregister", 1, argNodes, "FinalizationRegistry")
+	case "register":
+		return r.finalizationRegister(recvNode, argNodes)
+	default:
+		return nil, &NotYetLowerable{Reason: "FinalizationRegistry method ." + method + " is a later slice"}
+	}
+}
+
+// finalizationRegister lowers registry.register(target, held, token?) to the free
+// function value.FinalizationRegister[Target, T](registry, target, held, token). The
+// target's pointee is its rendered object type, T is the registry's held type, and a
+// two-argument register with no token passes a nil token that no unregister matches.
+func (r *Renderer) finalizationRegister(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 && len(argNodes) != 3 {
+		return nil, &NotYetLowerable{Reason: "FinalizationRegistry register takes a target, a held value, and an optional token"}
+	}
+	held, ok := r.finalizationHeldType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "FinalizationRegistry register did not expose its held value type"}
+	}
+	hExpr, err := r.typeExpr(held)
+	if err != nil {
+		return nil, err
+	}
+	targetPointee, err := r.weakKeyPointee(r.prog.TypeAt(argNodes[0]))
+	if err != nil {
+		return nil, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	target, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	heldExpr, err := r.lowerExpr(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	var tokenExpr ast.Expr = ident("nil")
+	if len(argNodes) == 3 {
+		tokenExpr, err = r.lowerExpr(argNodes[2])
+		if err != nil {
+			return nil, err
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  &ast.IndexListExpr{X: sel("value", "FinalizationRegister"), Indices: []ast.Expr{targetPointee, hExpr}},
+		Args: []ast.Expr{recv, target, heldExpr, tokenExpr},
+	}, nil
+}
+
 // newWeakMap lowers a WeakMap construction. The empty new WeakMap<K, V>() picks the
 // value constructor over the key pointee and the value type, so new WeakMap<Foo,
 // number>() lowers to value.NewWeakMap[Foo, float64](). The entries-argument form

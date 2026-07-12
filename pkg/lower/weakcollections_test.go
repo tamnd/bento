@@ -92,6 +92,30 @@ if (o !== undefined) {
 	}
 }
 
+// TestFinalizationRegistryLoweringShape pins the Go a FinalizationRegistry program
+// lowers to: construction picks NewFinalizationRegistry over the held type with the
+// cleanup callback, register lowers to the free FinalizationRegister function generic
+// over the target pointee and the held type with a nil token when none is passed, and
+// unregister maps to the Unregister method.
+func TestFinalizationRegistryLoweringShape(t *testing.T) {
+	const src = `interface Box { id: number }
+const reg = new FinalizationRegistry<string>((held: string) => { console.log(held); });
+const a: Box = { id: 1 };
+reg.register(a, "a");
+console.log(reg.unregister(a));
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.NewFinalizationRegistry[value.BStr](",
+		"value.FinalizationRegister[ObjId, value.BStr](reg, a, value.FromGoString(\"a\"), nil)",
+		"reg.Unregister(a)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("FinalizationRegistry lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
 // TestWeakMapHandsBackUnsupportedForms proves the WeakMap lowering claims only the
 // subset it can emit soundly and hands the rest back. Construction from an iterable of
 // entry pairs needs each key built as an object first, which the iterable-drain slice
