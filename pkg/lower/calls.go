@@ -1108,6 +1108,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isDuration(recvNode) {
 		return r.durationMethodCall(recvNode, method, argNodes)
 	}
+	if r.isPlainYearMonth(recvNode) {
+		return r.plainYearMonthMethodCall(recvNode, method, argNodes)
+	}
+	if r.isPlainMonthDay(recvNode) {
+		return r.plainMonthDayMethodCall(recvNode, method, argNodes)
+	}
 	// A register or unregister call on a FinalizationRegistry receiver lowers to the
 	// value.FinalizationRegistry surface (25 §26.2). It routes alongside the other weak
 	// paths, before the primitive and string paths a registry receiver is not.

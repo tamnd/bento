@@ -7,21 +7,23 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
-// This file lowers the Temporal area (10_advanced group 6), one type per cut. Four are
+// This file lowers the Temporal area (10_advanced group 6), one type per cut. Six are
 // hosted so far: PlainDate, a calendar date with no time and no zone over the ISO 8601
 // calendar; PlainTime, a wall-clock time with no date and no zone; PlainDateTime, a date
-// paired with a wall-clock time; and Duration, a span of time as ten signed component
-// counts. For the three plain types, construction, the static from over the same type and
-// compare, the clean field getters, and the equals, toString, and toJSON methods lower to
-// the matching value runtime type. Duration hosts construction, the field getters plus sign
-// and blank, negated and abs, toString and toJSON, and from over a Duration. Everything
-// else, the arithmetic, the balancing and rounding, the cross-type conversions, from over a
-// string or a property bag, and the getters the checker types number | undefined, hands back
-// with a named reason so the compiler reports the exact ceiling.
+// paired with a wall-clock time; Duration, a span of time as ten signed component counts;
+// PlainYearMonth, a calendar year and month with no day; and PlainMonthDay, a calendar month
+// and day with no year. For the plain types, construction, the static from over the same type
+// (and, for the ordered types, compare), the clean field getters, and the equals, toString,
+// and toJSON methods lower to the matching value runtime type. Duration hosts construction,
+// the field getters plus sign and blank, negated and abs, toString and toJSON, and from over a
+// Duration. Everything else, the arithmetic, the balancing and rounding, the cross-type
+// conversions, from over a string or a property bag, and the getters the checker types number |
+// undefined, hands back with a named reason so the compiler reports the exact ceiling.
 //
 // Each Temporal type follows the host-type model RegExp and the collections use: it is a bare
 // pointer in the generated Go (*value.PlainDate, *value.PlainTime, *value.PlainDateTime,
-// *value.Duration), recognized by its declaring symbol name rather than a dedicated type flag.
+// *value.Duration, *value.PlainYearMonth, *value.PlainMonthDay), recognized by its declaring
+// symbol name rather than a dedicated type flag.
 // The Temporal namespace is a two-level access (Temporal.PlainDate.compare), which no other
 // built-in uses, so the call and new paths carry a small amount of namespace-chain recognition
 // this file drives.
@@ -101,6 +103,42 @@ func (r *Renderer) durationType(t frontend.Type) bool {
 // isDuration reports whether the node's static type is a Temporal.Duration.
 func (r *Renderer) isDuration(n frontend.Node) bool {
 	return r.durationType(r.prog.TypeAt(n))
+}
+
+// plainYearMonthType reports whether a checker type is the Temporal.PlainYearMonth interface,
+// the same shape test as plainDateType over the symbol name PlainYearMonth.
+func (r *Renderer) plainYearMonthType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "PlainYearMonth"
+}
+
+// isPlainYearMonth reports whether the node's static type is a Temporal.PlainYearMonth.
+func (r *Renderer) isPlainYearMonth(n frontend.Node) bool {
+	return r.plainYearMonthType(r.prog.TypeAt(n))
+}
+
+// plainMonthDayType reports whether a checker type is the Temporal.PlainMonthDay interface,
+// the same shape test as plainDateType over the symbol name PlainMonthDay.
+func (r *Renderer) plainMonthDayType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "PlainMonthDay"
+}
+
+// isPlainMonthDay reports whether the node's static type is a Temporal.PlainMonthDay.
+func (r *Renderer) isPlainMonthDay(n frontend.Node) bool {
+	return r.plainMonthDayType(r.prog.TypeAt(n))
 }
 
 // plainDateAccessor maps a PlainDate field getter to the value.PlainDate method that
@@ -203,6 +241,50 @@ func durationAccessor(prop string) (method string, ok bool) {
 		return "Sign", true
 	case "blank":
 		return "Blank", true
+	}
+	return "", false
+}
+
+// plainYearMonthAccessor maps a PlainYearMonth field getter to the value.PlainYearMonth method
+// that reads it, or reports ok=false for a name this slice does not host. The clean ISO getters
+// (year, month, month code, calendar id, and the derived counts and leap flag) map to a method;
+// a year-month has no day, and the calendar-dependent getters the checker types number |
+// undefined (era, eraYear) are absent so they hand back rather than lower to a getter that
+// cannot answer the undefined case.
+func plainYearMonthAccessor(prop string) (method string, ok bool) {
+	switch prop {
+	case "year":
+		return "Year", true
+	case "month":
+		return "Month", true
+	case "calendarId":
+		return "CalendarId", true
+	case "monthCode":
+		return "MonthCode", true
+	case "daysInMonth":
+		return "DaysInMonth", true
+	case "daysInYear":
+		return "DaysInYear", true
+	case "monthsInYear":
+		return "MonthsInYear", true
+	case "inLeapYear":
+		return "InLeapYear", true
+	}
+	return "", false
+}
+
+// plainMonthDayAccessor maps a PlainMonthDay field getter to the value.PlainMonthDay method
+// that reads it, or reports ok=false for a name this slice does not host. A month-day exposes
+// only its month code, its day, and its calendar id; it has no numeric month or year getter,
+// so those names are absent and hand back.
+func plainMonthDayAccessor(prop string) (method string, ok bool) {
+	switch prop {
+	case "monthCode":
+		return "MonthCode", true
+	case "day":
+		return "Day", true
+	case "calendarId":
+		return "CalendarId", true
 	}
 	return "", false
 }
@@ -394,6 +476,89 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 	}
 }
 
+// plainYearMonthMethodCall lowers a method call on a PlainYearMonth receiver, the mirror of
+// plainDateMethodCall. equals(other) compares two year-months, and toString and toJSON render
+// the ISO 8601 string; each takes no options in this slice, so a call with arguments beyond the
+// ones handled hands back. The arithmetic, reshaping, and conversion methods (add, subtract,
+// until, since, with, toPlainDate), which need Duration, options parsing, or the calendar model,
+// hand back with a named reason.
+func (r *Renderer) plainYearMonthMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "equals":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype.equals takes exactly one argument"}
+		}
+		if !r.isPlainYearMonth(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype.equals over a non-PlainYearMonth argument (a string or bag to coerce) is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Equals")}, Args: []ast.Expr{other}}, nil
+	case "toString", "toJSON":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype." + method + " with options is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "ToString"
+		if method == "toJSON" {
+			name = "ToJSON"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype." + method + " is a later slice"}
+	}
+}
+
+// plainMonthDayMethodCall lowers a method call on a PlainMonthDay receiver, the mirror of
+// plainDateMethodCall. equals(other) compares two month-days, and toString and toJSON render
+// the ISO 8601 string; each takes no options in this slice, so a call with arguments beyond the
+// ones handled hands back. The reshaping and conversion methods (with, toPlainDate), which need
+// options parsing or a year the month-day does not carry, hand back with a named reason.
+func (r *Renderer) plainMonthDayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "equals":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.prototype.equals takes exactly one argument"}
+		}
+		if !r.isPlainMonthDay(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.prototype.equals over a non-PlainMonthDay argument (a string or bag to coerce) is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Equals")}, Args: []ast.Expr{other}}, nil
+	case "toString", "toJSON":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.prototype." + method + " with options is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "ToString"
+		if method == "toJSON" {
+			name = "ToJSON"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.prototype." + method + " is a later slice"}
+	}
+}
+
 // temporalStaticCall lowers a static call on a Temporal namespace member, routing on the
 // type name to the per-type static handler. A Temporal type this file does not host yet
 // hands back with a named reason.
@@ -407,8 +572,76 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 		return r.plainDateTimeStaticCall(method, argNodes)
 	case "Duration":
 		return r.durationStaticCall(method, argNodes)
+	case "PlainYearMonth":
+		return r.plainYearMonthStaticCall(method, argNodes)
+	case "PlainMonthDay":
+		return r.plainMonthDayStaticCall(method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal." + typeName + " is a later slice"}
+	}
+}
+
+// plainYearMonthStaticCall lowers Temporal.PlainYearMonth.compare(a, b) or
+// Temporal.PlainYearMonth.from(x), the mirror of the PlainDate statics. compare lowers to
+// value.PlainYearMonthCompare; from lowers to value.PlainYearMonthFrom for a PlainYearMonth
+// argument and hands back for a string or a bag.
+func (r *Renderer) plainYearMonthStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "compare":
+		if len(argNodes) != 2 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.compare takes exactly two arguments"}
+		}
+		if !r.isPlainYearMonth(argNodes[0]) || !r.isPlainYearMonth(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.compare over an argument that is not a PlainYearMonth (a string or bag to coerce) is a later slice"}
+		}
+		a, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		b, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainYearMonthCompare"), Args: []ast.Expr{a, b}}, nil
+	case "from":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.from with options is a later slice"}
+		}
+		if !r.isPlainYearMonth(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.from over a string or a property bag is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainYearMonthFrom"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth." + method + " is a later slice"}
+	}
+}
+
+// plainMonthDayStaticCall lowers Temporal.PlainMonthDay.from(x). A month-day has no compare
+// static (month-days are not ordered), so only from is handled: it lowers to
+// value.PlainMonthDayFrom for a PlainMonthDay argument and hands back for a string or a bag.
+func (r *Renderer) plainMonthDayStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "from":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.from with options is a later slice"}
+		}
+		if !r.isPlainMonthDay(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.from over a string or a property bag is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainMonthDayFrom"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay." + method + " is a later slice"}
 	}
 }
 
@@ -546,6 +779,10 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 		return r.newPlainDateTime(argNodes)
 	case "Duration":
 		return r.newDuration(argNodes)
+	case "PlainYearMonth":
+		return r.newPlainYearMonth(argNodes)
+	case "PlainMonthDay":
+		return r.newPlainMonthDay(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "new Temporal." + typeName + " is a later slice"}
 	}
@@ -664,4 +901,55 @@ func (r *Renderer) newDuration(argNodes []frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewDuration"), Args: args}, nil
+}
+
+// newPlainYearMonth lowers new Temporal.PlainYearMonth over its two number arguments (isoYear,
+// isoMonth); a third calendar argument selects a non-ISO calendar and a fourth reference-day
+// argument overrides the default, neither of which this slice carries, so more than two
+// arguments hand back. Each argument must lower as a number, so a non-number component hands
+// back rather than coerce; the runtime runs ToIntegerWithTruncation and RejectISOYearMonth, so
+// an out-of-range year-month throws a RangeError at run time the way the specification requires.
+func (r *Renderer) newPlainYearMonth(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.PlainYearMonth with a calendar or reference-day argument or fewer than two components is a later slice"}
+	}
+	args := make([]ast.Expr, 2)
+	for i, node := range argNodes {
+		if !r.isNumber(node) {
+			return nil, &NotYetLowerable{Reason: "new Temporal.PlainYearMonth with a non-number component is a later slice"}
+		}
+		lowered, err := r.lowerExpr(node)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = lowered
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewPlainYearMonth"), Args: args}, nil
+}
+
+// newPlainMonthDay lowers new Temporal.PlainMonthDay over its two number arguments (isoMonth,
+// isoDay, the month first); a third calendar argument selects a non-ISO calendar and a fourth
+// reference-year argument overrides the default leap year, neither of which this slice carries,
+// so more than two arguments hand back. Each argument must lower as a number, so a non-number
+// component hands back rather than coerce; the runtime runs ToIntegerWithTruncation and
+// RejectISOMonthDay against the leap reference year, so an out-of-range month-day throws a
+// RangeError at run time the way the specification requires.
+func (r *Renderer) newPlainMonthDay(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.PlainMonthDay with a calendar or reference-year argument or fewer than two components is a later slice"}
+	}
+	args := make([]ast.Expr, 2)
+	for i, node := range argNodes {
+		if !r.isNumber(node) {
+			return nil, &NotYetLowerable{Reason: "new Temporal.PlainMonthDay with a non-number component is a later slice"}
+		}
+		lowered, err := r.lowerExpr(node)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = lowered
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewPlainMonthDay"), Args: args}, nil
 }
