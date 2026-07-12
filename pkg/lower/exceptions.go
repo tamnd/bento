@@ -92,6 +92,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if _, ok := typedArrayElemGo(r.prog.Text(kids[0])); ok {
 		return r.newTypedArray(r.prog.Text(kids[0]), kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "ArrayBuffer" {
+		return r.newArrayBuffer(kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
 	}
@@ -194,6 +197,26 @@ func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, e
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: sel("value", "New"+name), Args: []ast.Expr{length}}, nil
+}
+
+// newArrayBuffer lowers an ArrayBuffer construction, the raw byte backing store of
+// section 6.2. Only new ArrayBuffer(byteLength) is covered: a single Number argument
+// lowers to value.NewArrayBuffer(n), which allocates a zeroed run of that many
+// bytes. The resizable form new ArrayBuffer(n, { maxByteLength }) is a later slice,
+// so more than one argument hands back, as does a length that is not a number.
+func (r *Renderer) newArrayBuffer(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 1 {
+		return nil, &NotYetLowerable{Reason: "only new ArrayBuffer(byteLength) is lowered yet"}
+	}
+	if !r.isNumber(args[0]) {
+		return nil, &NotYetLowerable{Reason: "an ArrayBuffer byte length that is not a number is a later slice"}
+	}
+	length, err := r.lowerExpr(args[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewArrayBuffer"), Args: []ast.Expr{length}}, nil
 }
 
 // newMap lowers a Map construction, the keyed collection of section 6.5. Only the

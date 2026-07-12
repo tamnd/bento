@@ -243,6 +243,18 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Size")}}, nil
 	}
+	// buffer.byteLength reads the byte size of an ArrayBuffer (section 6.2). It is an
+	// accessor in the source but a method on value.ArrayBuffer, so it lowers to a
+	// ByteLength() call, the same float64 the checker gives the property. This routes
+	// before the struct-field path, which would otherwise try to intern byteLength as
+	// a field of a shape a buffer is not.
+	if prop == "byteLength" && r.isArrayBuffer(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ByteLength")}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)
