@@ -24,9 +24,35 @@ func (r *Renderer) arrayBufferMethodCall(recvNode frontend.Node, method string, 
 		return r.arrayBufferTransfer(recvNode, "Transfer", argNodes)
 	case "transferToFixedLength":
 		return r.arrayBufferTransfer(recvNode, "TransferToFixedLength", argNodes)
+	case "resize":
+		return r.arrayBufferResize(recvNode, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "ArrayBuffer method ." + method + " is a later slice"}
 	}
+}
+
+// arrayBufferResize lowers ArrayBuffer.prototype.resize to the runtime Resize, which
+// grows or shrinks the backing run to the new byte length within the buffer's maximum.
+// The new length is a required Number, so exactly one number argument is covered; a
+// different count or a non-number length hands back rather than emit a call the runtime
+// method does not take. Resize returns nothing, matching the undefined the method
+// yields, so the call stands as the statement it appears as.
+func (r *Renderer) arrayBufferResize(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "ArrayBuffer resize takes exactly one length argument"}
+	}
+	if !r.isNumber(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "ArrayBuffer resize with a non-number length is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	arg, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Resize")}, Args: []ast.Expr{arg}}, nil
 }
 
 // arrayBufferTransfer lowers ArrayBuffer.prototype.transfer and its fixed-length
