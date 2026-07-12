@@ -1,0 +1,14 @@
+== stdout:
+5
+20
+20
+20
+true
+false
+not-equal
+timed-out
+0
+done
+
+== exit:
+0

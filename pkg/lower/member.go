@@ -317,6 +317,20 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		method := map[string]string{"maxByteLength": "MaxByteLength", "resizable": "Resizable"}[prop]
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}}, nil
 	}
+	// A SharedArrayBuffer's geometry getters mirror the ArrayBuffer ones on the
+	// value.SharedArrayBuffer wrapper: .byteLength its size, .maxByteLength the largest
+	// it may grow to, and .growable whether it may grow (the shared-buffer spelling of
+	// resizable, 25 §25.2.4). They are accessors in the source but methods on the
+	// wrapper, so they lower to calls and route before the struct-field path, which
+	// would otherwise intern the name as a field of a shape a shared buffer is not.
+	if (prop == "byteLength" || prop == "maxByteLength" || prop == "growable") && r.isSharedArrayBuffer(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		method := map[string]string{"byteLength": "ByteLength", "maxByteLength": "MaxByteLength", "growable": "Growable"}[prop]
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)
