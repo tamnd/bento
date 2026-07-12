@@ -93,6 +93,33 @@ func typedArrayOf[T typedElem](coerce func(float64) T, elems ...float64) *TypedA
 	return a
 }
 
+// typedArrayView builds a typed array that views an existing ArrayBuffer, the
+// shared body of the per-kind View constructors and the lowering of new
+// Int32Array(buffer, byteOffset, length). The byte offset defaults to zero and the
+// length, when omitted, runs from the offset to the end of the buffer in whole
+// elements, matching the ArrayBuffer overload of the constructor. The view aliases
+// the buffer's bytes, so it observes writes made through the buffer or through any
+// other view of it. A byte offset or length that would run past the buffer clamps
+// to what the buffer holds rather than throwing, the covered subset the RangeError
+// is a later slice of.
+func typedArrayView[T typedElem](buf *ArrayBuffer, coerce func(float64) T, byteOffset float64, length ...float64) *TypedArray[T] {
+	elem := elemBytes[T]()
+	off := typedLen(byteOffset)
+	if off > len(buf.data) {
+		off = len(buf.data)
+	}
+	var n int
+	if len(length) > 0 {
+		n = typedLen(length[0])
+	} else {
+		n = (len(buf.data) - off) / elem
+	}
+	if max := (len(buf.data) - off) / elem; n > max {
+		n = max
+	}
+	return newTypedArrayView(buf, off, n, coerce)
+}
+
 // elemBytes is the byte width of a typed array's element type, read from the Go
 // type so the buffer allocation and the byte-offset arithmetic agree with the
 // element slice the view aliases.
@@ -189,6 +216,9 @@ func (a *TypedArray[T]) Data() []T { return a.data }
 
 func NewInt8Array(length float64) *TypedArray[int8]  { return newTypedArray(length, toInt8) }
 func Int8ArrayOf(elems ...float64) *TypedArray[int8] { return typedArrayOf(toInt8, elems...) }
+func Int8ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[int8] {
+	return typedArrayView(buf, toInt8, byteOffset, length...)
+}
 
 func NewUint8ClampedArray(length float64) *TypedArray[uint8] {
 	return newTypedArray(length, toUint8Clamped)
@@ -196,24 +226,45 @@ func NewUint8ClampedArray(length float64) *TypedArray[uint8] {
 func Uint8ClampedArrayOf(elems ...float64) *TypedArray[uint8] {
 	return typedArrayOf(toUint8Clamped, elems...)
 }
+func Uint8ClampedArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[uint8] {
+	return typedArrayView(buf, toUint8Clamped, byteOffset, length...)
+}
 
 func NewInt16Array(length float64) *TypedArray[int16]  { return newTypedArray(length, toInt16) }
 func Int16ArrayOf(elems ...float64) *TypedArray[int16] { return typedArrayOf(toInt16, elems...) }
+func Int16ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[int16] {
+	return typedArrayView(buf, toInt16, byteOffset, length...)
+}
 
 func NewUint16Array(length float64) *TypedArray[uint16]  { return newTypedArray(length, toUint16) }
 func Uint16ArrayOf(elems ...float64) *TypedArray[uint16] { return typedArrayOf(toUint16, elems...) }
+func Uint16ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[uint16] {
+	return typedArrayView(buf, toUint16, byteOffset, length...)
+}
 
 func NewInt32Array(length float64) *TypedArray[int32]  { return newTypedArray(length, toInt32) }
 func Int32ArrayOf(elems ...float64) *TypedArray[int32] { return typedArrayOf(toInt32, elems...) }
+func Int32ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[int32] {
+	return typedArrayView(buf, toInt32, byteOffset, length...)
+}
 
 func NewUint32Array(length float64) *TypedArray[uint32]  { return newTypedArray(length, toUint32) }
 func Uint32ArrayOf(elems ...float64) *TypedArray[uint32] { return typedArrayOf(toUint32, elems...) }
+func Uint32ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[uint32] {
+	return typedArrayView(buf, toUint32, byteOffset, length...)
+}
 
 func NewFloat32Array(length float64) *TypedArray[float32]  { return newTypedArray(length, toFloat32) }
 func Float32ArrayOf(elems ...float64) *TypedArray[float32] { return typedArrayOf(toFloat32, elems...) }
+func Float32ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[float32] {
+	return typedArrayView(buf, toFloat32, byteOffset, length...)
+}
 
 func NewFloat64Array(length float64) *TypedArray[float64]  { return newTypedArray(length, toFloat64) }
 func Float64ArrayOf(elems ...float64) *TypedArray[float64] { return typedArrayOf(toFloat64, elems...) }
+func Float64ArrayView(buf *ArrayBuffer, byteOffset float64, length ...float64) *TypedArray[float64] {
+	return typedArrayView(buf, toFloat64, byteOffset, length...)
+}
 
 // typedLen truncates a JavaScript length Number to a Go element count, clamping a
 // negative or not-a-number length to zero. It is the length rule the per-kind New
