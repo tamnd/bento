@@ -1,0 +1,2 @@
+feature = "Temporal"
+handback = "Temporal.Duration.prototype.add is a later slice"
