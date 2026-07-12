@@ -921,6 +921,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Math") {
 		return r.mathCall(method, argNodes)
 	}
+	// Atomics.load(ta, i) and friends are calls on the global Atomics namespace, not a
+	// value receiver, so they lower to the value atomic helpers over the typed array
+	// they take rather than a method on Atomics.
+	if r.isGlobalRef(recvNode, "Atomics") {
+		return r.atomicsCall(method, argNodes)
+	}
 	// Number.isInteger(x) and friends are static calls on the global Number, which
 	// lower to value package predicates.
 	if r.isGlobalRef(recvNode, "Number") {
@@ -1020,6 +1026,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isArrayBuffer(recvNode) {
 		return r.arrayBufferMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a SharedArrayBuffer receiver lowers to a value.SharedArrayBuffer
+	// method: the grow that only enlarges the shared run and the slice that copies a
+	// span into a fresh shared buffer. It routes alongside the ArrayBuffer path, after
+	// the view paths and before the Map, Set, and primitive paths, which expect a
+	// receiver a shared buffer is not.
+	if r.isSharedArrayBuffer(recvNode) {
+		return r.sharedArrayBufferMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a DataView receiver lowers to a value.DataView getter or setter (25
 	// §25.3). It routes here alongside the other view paths, after the typed-array and
 	// buffer checks and before the Map, Set, and primitive paths, which expect a
@@ -1027,11 +1041,36 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isDataView(recvNode) {
 		return r.dataViewMethodCall(recvNode, method, argNodes)
 	}
+	// A register or unregister call on a FinalizationRegistry receiver lowers to the
+	// value.FinalizationRegistry surface (25 §26.2). It routes alongside the other weak
+	// paths, before the primitive and string paths a registry receiver is not.
+	if r.isFinalizationRegistry(recvNode) {
+		return r.finalizationRegistryMethodCall(recvNode, method, argNodes)
+	}
+	// A weakRef.deref() call lowers to a value.WeakRef method (25 §26.1). It routes
+	// alongside the other weak-collection paths, before the primitive and string paths,
+	// which expect a number, boolean, or string receiver a WeakRef is not.
+	if r.isWeakRef(recvNode) {
+		return r.weakRefMethodCall(recvNode, method, argNodes)
+	}
+	// A method on a WeakMap receiver lowers to a value.WeakMap method (25 §24.3). It
+	// routes before the Map path: a WeakMap's fingerprint has no size, so isMap never
+	// matches it, but routing it first keeps the two collection dispatches adjacent and
+	// makes the intent plain.
+	if r.isWeakMap(recvNode) {
+		return r.weakMapMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
 	// routes before the primitive and string paths, which expect a number, boolean,
 	// or string receiver a map is not.
 	if r.isMap(recvNode) {
 		return r.mapMethodCall(recvNode, method, argNodes)
+	}
+	// A method on a WeakSet receiver lowers to a value.WeakSet method (25 §24.4). Like
+	// the WeakMap path it routes before the Set path, whose fingerprint requires a size
+	// a WeakSet has not, keeping the two collection dispatches adjacent.
+	if r.isWeakSet(recvNode) {
+		return r.weakSetMethodCall(recvNode, method, argNodes)
 	}
 	// A method on a Set receiver lowers to a value.Set method (section 6.5). Like the
 	// Map path it routes before the primitive and string paths, which expect a number,

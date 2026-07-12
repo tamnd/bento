@@ -98,11 +98,26 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "ArrayBuffer" {
 		return r.newArrayBuffer(kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "SharedArrayBuffer" {
+		return r.newSharedArrayBuffer(kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "DataView" {
 		return r.newDataView(kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "WeakMap" {
+		return r.newWeakMap(n, kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "WeakRef" {
+		return r.newWeakRef(n, kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "FinalizationRegistry" {
+		return r.newFinalizationRegistry(n, kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "WeakSet" {
+		return r.newWeakSet(n, kids[1:])
 	}
 	if r.prog.Text(kids[0]) == "Set" {
 		return r.newSet(n, kids[1:])
@@ -176,7 +191,7 @@ func (r *Renderer) newObject(args []frontend.Node) (ast.Expr, error) {
 // an ArrayBuffer with an offset and length takes newTypedArrayOverBuffer. A call
 // with no argument or more than one non-buffer argument hands back.
 func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, error) {
-	if len(args) >= 1 && r.isArrayBuffer(args[0]) {
+	if len(args) >= 1 && r.isViewBuffer(args[0]) {
 		return r.newTypedArrayOverBuffer(name, args)
 	}
 	if len(args) != 1 {
@@ -248,7 +263,7 @@ func (r *Renderer) newTypedArrayFrom(name string, src frontend.Node, read string
 // takes, so a non-bigint element hands back. A copy from another typed array is a
 // later slice.
 func (r *Renderer) newBigIntArray(name string, args []frontend.Node) (ast.Expr, error) {
-	if len(args) >= 1 && r.isArrayBuffer(args[0]) {
+	if len(args) >= 1 && r.isViewBuffer(args[0]) {
 		return r.newTypedArrayOverBuffer(name, args)
 	}
 	if len(args) != 1 {
@@ -307,7 +322,7 @@ func (r *Renderer) newTypedArrayOverBuffer(name string, args []frontend.Node) (a
 	if len(args) > 3 {
 		return nil, &NotYetLowerable{Reason: "new " + name + " over a buffer takes at most a byte offset and a length"}
 	}
-	buf, err := r.lowerExpr(args[0])
+	buf, err := r.lowerViewBuffer(args[0])
 	if err != nil {
 		return nil, err
 	}
@@ -343,17 +358,19 @@ func (r *Renderer) newTypedArrayOverBuffer(name string, args []frontend.Node) (a
 // and new DataView(buffer, byteOffset, byteLength) lower to value.NewDataView(buf),
 // value.NewDataView(buf, offset), and value.NewDataView(buf, offset, length), the
 // variadic length carrying the optionality the way the typed-array view path does.
-// The first argument must be an ArrayBuffer, since a DataView has no from-a-length or
-// from-an-array form; a byte offset or length that is not a number is a later slice
-// and hands back, as does a call with more than three arguments.
+// The first argument must be an ArrayBuffer or a SharedArrayBuffer, since a DataView
+// has no from-a-length or from-an-array form; a SharedArrayBuffer is unwrapped to its
+// underlying run so the view aliases the shared bytes. A byte offset or length that is
+// not a number is a later slice and hands back, as does a call with more than three
+// arguments.
 func (r *Renderer) newDataView(args []frontend.Node) (ast.Expr, error) {
-	if len(args) == 0 || !r.isArrayBuffer(args[0]) {
-		return nil, &NotYetLowerable{Reason: "new DataView takes an ArrayBuffer as its first argument"}
+	if len(args) == 0 || !r.isViewBuffer(args[0]) {
+		return nil, &NotYetLowerable{Reason: "new DataView takes an ArrayBuffer or a SharedArrayBuffer as its first argument"}
 	}
 	if len(args) > 3 {
 		return nil, &NotYetLowerable{Reason: "new DataView takes at most a byte offset and a length"}
 	}
-	buf, err := r.lowerExpr(args[0])
+	buf, err := r.lowerViewBuffer(args[0])
 	if err != nil {
 		return nil, err
 	}
