@@ -1,0 +1,3 @@
+feature = "Temporal"
+env.BENTO_NOW_NS = "1700000000123456789"
+env.TZ = "UTC"
