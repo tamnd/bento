@@ -983,6 +983,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Proxy") {
 		return r.proxyStaticCall(method, argNodes)
 	}
+	// Iterator.from(x) is a static call on the ambient Iterator global that wraps an
+	// iterable as an iterator helper, not a method on a value, so it lowers to the value
+	// IterFrom helper before the receiver-value paths below.
+	if r.isGlobalRef(recvNode, "Iterator") {
+		return r.iteratorStaticCall(method, argNodes)
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.

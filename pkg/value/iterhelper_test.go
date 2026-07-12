@@ -305,6 +305,30 @@ func TestIterFind(t *testing.T) {
 	}
 }
 
+// TestIterFrom drives an array over its indices and a string over its code points, the
+// two iterables Iterator.from wraps.
+func TestIterFrom(t *testing.T) {
+	got := drain(IterFrom(NewArrayValue([]Value{Number(7), Number(8), Number(9)})))
+	if len(got) != 3 || got[0] != 7 || got[2] != 9 {
+		t.Errorf("IterFrom over an array = %v, want [7 8 9]", got)
+	}
+	h := IterFrom(StringValue(FromGoString("ab")))
+	if r := h.Next(); r.Done || r.Value.str().ToGoString() != "a" {
+		t.Errorf("IterFrom over a string first step = %+v, want a", r)
+	}
+}
+
+// TestIterFromNonIterable throws a TypeError when the value is neither an array nor a
+// string, the non-iterable handling Iterator.from takes.
+func TestIterFromNonIterable(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("IterFrom over a number did not throw")
+		}
+	}()
+	IterFrom(Number(42))
+}
+
 // TestIterHelperNilNext reports done forever when the closure is nil, so a helper over
 // an empty or exhausted source is safe to pull past its end.
 func TestIterHelperNilNext(t *testing.T) {

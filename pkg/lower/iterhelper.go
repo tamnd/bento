@@ -181,6 +181,34 @@ func (r *Renderer) iterHelperMethodCall(recvNode frontend.Node, method string, a
 	}
 }
 
+// iteratorStaticCall lowers a static call on the ambient Iterator global. Only
+// Iterator.from(x) is covered: it lowers to value.IterFrom over the boxed argument,
+// which drives an array over its indices and a string over its code points as an
+// iterator helper (iterate-string-primitives). The argument is restricted to a static
+// array or string here because those are the two iterables value.IterFrom drives; a
+// foreign iterable (a Set, a Map, a generator, a user object with a [Symbol.iterator])
+// would box into a value the runtime cannot walk and would throw where the spec yields,
+// so it hands back rather than emit a wrong drive. A typed array binding also hands back
+// through boxOperand, the same boxing gap flatMap's flatten step meets.
+func (r *Renderer) iteratorStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "from" {
+		return nil, &NotYetLowerable{Reason: "Iterator." + method + " is a later slice"}
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "Iterator.from takes exactly an iterable"}
+	}
+	arg := argNodes[0]
+	if _, isArray := r.arrayElem(arg); !isArray && !r.isString(arg) {
+		return nil, &NotYetLowerable{Reason: "Iterator.from over an iterable that is not a static array or string is a later slice"}
+	}
+	src, err := r.boxOperand(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "IterFrom"), Args: []ast.Expr{src}}, nil
+}
+
 // iterHelperSymbol reports whether a plain-identifier receiver's declared symbol type
 // is an IteratorObject, the second half of the helper-receiver test for a next() call
 // so a narrowed binding still resolves to the helper path.

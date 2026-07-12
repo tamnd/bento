@@ -90,6 +90,16 @@ func TestIterHelperEmits(t *testing.T) {
 			"export function f(a: number[]): void { console.log(a.values().find((n: number): boolean => n > 2)); }\n",
 			"value.IterFind(",
 		},
+		{
+			"from_array",
+			"export function f(): void { Iterator.from([1, 2, 3]).map((n: number): number => n * 2).toArray(); }\n",
+			"value.IterFrom(",
+		},
+		{
+			"from_string",
+			"export function f(): void { Iterator.from(\"abc\").toArray(); }\n",
+			"value.IterFrom(",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
