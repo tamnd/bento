@@ -725,7 +725,12 @@ func validCaptureName(name string) bool {
 		return false
 	}
 	for _, c := range name {
-		if c != '_' && !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') {
+		switch {
+		case c == '_':
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		default:
 			return false
 		}
 	}
