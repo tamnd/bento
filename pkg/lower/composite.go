@@ -1043,6 +1043,8 @@ func (r *Renderer) mapMethodCall(recvNode frontend.Node, method string, argNodes
 		goName, want = "Delete", 1
 	case "clear":
 		goName, want = "Clear", 0
+	case "forEach":
+		return r.mapForEach(recvNode, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "map method ." + method + " is a later slice"}
 	}
@@ -1083,6 +1085,8 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 		goName, want = "Delete", 1
 	case "clear":
 		goName, want = "Clear", 0
+	case "forEach":
+		return r.setForEach(recvNode, argNodes)
 	case "union":
 		return r.setAlgebraCall(recvNode, "Union", argNodes)
 	case "intersection":
@@ -1116,6 +1120,61 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+}
+
+// mapForEach lowers map.forEach(cb), the insertion-order traversal (section 6.5).
+// Only an inline arrow is covered, the same restriction the array callback methods
+// take: a one-parameter arrow reads the value and lowers to ForEachValue, and a
+// two-parameter arrow reads the value then the key, the order forEach passes them,
+// and lowers to ForEach. A callback passed by name, or one that also reads the map
+// parameter, is a later slice. A thisArg is inert for an arrow's lexical this, so
+// the two-argument forEach hands back rather than drop the argument's evaluation.
+func (r *Renderer) mapForEach(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "map forEach with a callback that is not a single inline arrow function is a later slice"}
+	}
+	var goName string
+	switch r.arrowParamCount(argNodes[0]) {
+	case 1:
+		goName = "ForEachValue"
+	case 2:
+		goName = "ForEach"
+	default:
+		return nil, &NotYetLowerable{Reason: "map forEach with a callback that also reads the map parameter is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: []ast.Expr{fn}}, nil
+}
+
+// setForEach lowers set.forEach(cb), the insertion-order traversal (section 6.5).
+// Only a single inline one-parameter arrow is covered: the specification passes the
+// member twice and then the set (value, value, set), and the common callback reads
+// only the first parameter, which lowers to ForEach. A callback passed by name, one
+// that reads the second value or the set parameter, or a thisArg argument (inert for
+// an arrow's lexical this) is a later slice and hands back.
+func (r *Renderer) setForEach(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "set forEach with a callback that is not a single inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(argNodes[0]) != 1 {
+		return nil, &NotYetLowerable{Reason: "set forEach with a callback that reads the second value or set parameter is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ForEach")}, Args: []ast.Expr{fn}}, nil
 }
 
 // promiseMethodCall lowers a method on a Promise receiver to a value.Promise
