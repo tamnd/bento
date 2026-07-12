@@ -45,10 +45,11 @@ import (
 // element-access method below reaches storage through it and reacts to a detach
 // with no per-method check.
 type TypedArray[T typedElem] struct {
-	buffer     *ArrayBuffer
-	byteOffset int
-	length     int
-	coerce     func(float64) T
+	buffer         *ArrayBuffer
+	byteOffset     int
+	length         int
+	lengthTracking bool
+	coerce         func(float64) T
 }
 
 // typedElem is the set of Go element types a numeric typed array stores. Every
@@ -94,7 +95,19 @@ func newTypedArrayView[T typedElem](buf *ArrayBuffer, byteOffset, length int, co
 // and reads as length zero, matching the spec's IsTypedArrayOutOfBounds gate (25
 // §10.4.5.9). Otherwise it reports the fixed length the constructor pinned.
 func (a *TypedArray[T]) liveLen() int {
-	if avail := len(a.buffer.data) - a.byteOffset; avail < a.length*elemBytes[T]() {
+	elem := elemBytes[T]()
+	avail := len(a.buffer.data) - a.byteOffset
+	if avail < 0 {
+		return 0
+	}
+	// A length-tracking view (constructed over a resizable buffer with no explicit
+	// length) has no fixed count: it spans from its offset to the buffer's current
+	// end, so a resize grows or shrinks what it reports rather than putting it out of
+	// bounds (25 §10.4.5.11, IsTypedArrayOutOfBounds returns false for it).
+	if a.lengthTracking {
+		return avail / elem
+	}
+	if avail < a.length*elem {
 		return 0
 	}
 	return a.length
@@ -148,7 +161,15 @@ func typedArrayView[T typedElem](buf *ArrayBuffer, coerce func(float64) T, byteO
 	if max := (len(buf.data) - off) / elem; n > max {
 		n = max
 	}
-	return newTypedArrayView(buf, off, n, coerce)
+	v := newTypedArrayView(buf, off, n, coerce)
+	// An ArrayBuffer-overload view with no explicit length over a resizable buffer
+	// tracks the buffer's length: its own length follows a later resize rather than
+	// staying pinned at the count computed here. A view with an explicit length, or one
+	// over a fixed-length buffer, keeps that fixed count.
+	if len(length) == 0 && buf.resizable {
+		v.lengthTracking = true
+	}
+	return v
 }
 
 // elemBytes is the byte width of a typed array's element type, read from the Go
