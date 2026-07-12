@@ -34,6 +34,21 @@ func TestArrayIterEmits(t *testing.T) {
 			"export function f(a: number[]): number { const it = a.values(); const r = it.next(); return r.done ? 0 : 1; }\n",
 			"it.Next()",
 		},
+		{
+			"forof-values",
+			"export function f(a: number[]): number { let s = 0; for (const v of a.values()) { s += v; } return s; }\n",
+			"for _, v := range a.Elems()",
+		},
+		{
+			"forof-keys",
+			"export function f(a: number[]): number { let s = 0; for (const i of a.keys()) { s += i; } return s; }\n",
+			"float64(",
+		},
+		{
+			"forof-entries",
+			"export function f(a: number[]): number { let s = 0; for (const [i, v] of a.entries()) { s += i + v; } return s; }\n",
+			"range a.Elems()",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -209,6 +209,12 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if r.isGeneratorIterable(kids[1]) {
 		return r.forOfGenerator(kids[1], dkids[0], name, kids[2])
 	}
+	// a.values() and a.keys() used directly as the iterable range the receiver rather
+	// than build and drive an array iterator object: values binds each element, keys
+	// the index as a number. entries with a single binding hands back inside the helper.
+	if recv, method, ok := r.arrayIterForOfCall(kids[1]); ok {
+		return r.forOfArrayIterSingle(recv, dkids[0], name, method, kids[2])
+	}
 	// The iterable is an array (ranged over its Elems) or a string (ranged over its
 	// code points). A string yields one substring per Unicode code point, so it
 	// lowers to a range over CodePoints() the same way an array ranges over Elems();
@@ -388,6 +394,14 @@ func (r *Renderer) forOfBodyMayBreak(n frontend.Node) bool {
 // a Set, a Map, or a user iterator is a later slice, since destructuring one needs the
 // iterator protocol the single-variable loop walks, not a backing slice.
 func (r *Renderer) forOfDestructure(iterable, pattern, bodyNode frontend.Node) (ast.Stmt, error) {
+	// `for (const [i, v] of a.entries())` ranges the receiver array directly, its
+	// index and element binding the two pattern names, rather than build entry pairs
+	// an array iterator would only hand back one at a time.
+	if recv, method, ok := r.arrayIterForOfCall(iterable); ok && method == "entries" {
+		if strings.HasPrefix(strings.TrimSpace(r.prog.Text(pattern)), "[") {
+			return r.forOfEntriesDestructure(recv, pattern, bodyNode)
+		}
+	}
 	if !isArrayElem(r, iterable) {
 		return nil, &NotYetLowerable{Reason: "a destructuring for...of over a non-array iterable is a later slice"}
 	}
