@@ -55,6 +55,21 @@ func TestIterHelperEmits(t *testing.T) {
 			"export function f(a: number[]): number { let s = 0; for (const v of a.values().map((n: number): number => n * 2)) { s += v; } return s; }\n",
 			".Next()",
 		},
+		{
+			"reduce",
+			"export function f(a: number[]): void { console.log(a.values().reduce((acc: number, n: number): number => acc + n, 0)); }\n",
+			"value.IterReduce(",
+		},
+		{
+			"reduce_no_init",
+			"export function f(a: number[]): void { console.log(a.values().reduce((acc: number, n: number): number => acc + n)); }\n",
+			"value.Undefined",
+		},
+		{
+			"toarray",
+			"export function f(a: number[]): void { console.log(a.values().map((n: number): number => n * 2).toArray()); }\n",
+			"value.IterToArray(",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

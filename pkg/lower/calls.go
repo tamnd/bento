@@ -3196,6 +3196,15 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	switch {
+	case r.producesBoxedValue(arg):
+		// A call that already lowers to a value.Value box (a terminal iterator helper,
+		// a descriptor read) defers the whole ToString to the value model, which
+		// dispatches on the runtime kind, the same as any dynamic argument. This routes
+		// before the primitive cases because the checker types the call by its result
+		// (a number for reduce, an array for toArray) while the lowered expr is a box, so
+		// the primitive stringifiers would be handed a value.Value they cannot take.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
 	case r.isString(arg):
 		return lowered, nil // already a string, the identity
 	case r.isNumber(arg):

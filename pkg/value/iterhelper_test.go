@@ -182,6 +182,64 @@ func TestIterFlatMapRejectsPrimitive(t *testing.T) {
 	IterFlatMap(src.Next, fn).Next()
 }
 
+// TestIterReduce folds the source with its callback, seeding from the initial value and
+// counting the index from zero, the terminal reduce with a seed.
+func TestIterReduce(t *testing.T) {
+	src := NewArrayIter(NewArrayValue([]Value{Number(1), Number(2), Number(3), Number(4)}), ArrayIterValues)
+	fn := NewFunc(func(args []Value) Value { return Number(Arg(args, 0).AsNumber() + Arg(args, 1).AsNumber()) })
+	got := IterReduce(src.Next, fn, true, Number(100)).AsNumber()
+	if got != 110 {
+		t.Errorf("reduce(sum, 100) = %v, want 110", got)
+	}
+}
+
+// TestIterReduceNoInit seeds the accumulator from the first value and counts the index
+// from one, the terminal reduce without a seed.
+func TestIterReduceNoInit(t *testing.T) {
+	src := NewArrayIter(NewArrayValue([]Value{Number(2), Number(3), Number(4)}), ArrayIterValues)
+	fn := NewFunc(func(args []Value) Value { return Number(Arg(args, 0).AsNumber() * Arg(args, 1).AsNumber()) })
+	got := IterReduce(src.Next, fn, false, Undefined).AsNumber()
+	if got != 24 {
+		t.Errorf("reduce(product) = %v, want 24", got)
+	}
+}
+
+// TestIterReduceEmptyNoInit throws a TypeError when the source is empty and no seed is
+// given, the way the spec rejects a reduce with nothing to fold.
+func TestIterReduceEmptyNoInit(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("reduce over an empty source with no seed did not throw")
+		}
+	}()
+	src := NewArrayIter(NewArrayValue(nil), ArrayIterValues)
+	fn := NewFunc(func(args []Value) Value { return Arg(args, 0) })
+	IterReduce(src.Next, fn, false, Undefined)
+}
+
+// TestIterToArray collects the source into a new array, the terminal toArray.
+func TestIterToArray(t *testing.T) {
+	src := NewArrayIter(NewArrayValue([]Value{Number(5), Number(6), Number(7)}), ArrayIterValues)
+	arr := IterToArray(src.Next)
+	if arr.kind != KindArray || arrayLikeLen(arr) != 3 {
+		t.Fatalf("toArray = %+v, want an array of three", arr)
+	}
+	for i, want := range []float64{5, 6, 7} {
+		if got := arrayLikeGet(arr, i).AsNumber(); got != want {
+			t.Errorf("toArray[%d] = %v, want %v", i, got, want)
+		}
+	}
+}
+
+// TestIterToArrayEmpty collects an empty source into an empty array.
+func TestIterToArrayEmpty(t *testing.T) {
+	src := NewArrayIter(NewArrayValue(nil), ArrayIterValues)
+	arr := IterToArray(src.Next)
+	if arr.kind != KindArray || arrayLikeLen(arr) != 0 {
+		t.Errorf("toArray over an empty source = %+v, want an empty array", arr)
+	}
+}
+
 // TestIterHelperNilNext reports done forever when the closure is nil, so a helper over
 // an empty or exhausted source is safe to pull past its end.
 func TestIterHelperNilNext(t *testing.T) {

@@ -117,6 +117,45 @@ func (r *Renderer) iterHelperMethodCall(recvNode frontend.Node, method string, a
 		r.requireImport(valuePkg)
 		goName := map[string]string{"take": "IterTake", "drop": "IterDrop"}[method]
 		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{next, limit}}, true, nil
+	case "toArray":
+		// toArray drives the source and returns a new array as a value.Value, so it is a
+		// terminal helper. producesBoxedValue records this call shape so the result flows
+		// into a dynamic slot (a console.log argument, an any binding) as the box it is.
+		if len(argNodes) != 0 {
+			return nil, false, &NotYetLowerable{Reason: "an iterator helper's .toArray() takes no arguments"}
+		}
+		next, err := r.iterReceiverNext(recvNode)
+		if err != nil {
+			return nil, false, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "IterToArray"), Args: []ast.Expr{next}}, true, nil
+	case "reduce":
+		// reduce folds the source and returns the accumulator as a value.Value, so it is a
+		// terminal helper the same way toArray is. It takes the reducer and an optional
+		// seed; with no seed the runtime seeds from the first value and throws on an empty
+		// source. The seed boxes so the fold runs over boxed values throughout.
+		if len(argNodes) < 1 || len(argNodes) > 2 {
+			return nil, false, &NotYetLowerable{Reason: "an iterator helper's .reduce() takes a reducer and an optional initial value"}
+		}
+		next, err := r.iterReceiverNext(recvNode)
+		if err != nil {
+			return nil, false, err
+		}
+		fn, err := r.boxOperand(argNodes[0])
+		if err != nil {
+			return nil, false, err
+		}
+		hasInit := len(argNodes) == 2
+		var init ast.Expr = sel("value", "Undefined")
+		if hasInit {
+			init, err = r.boxOperand(argNodes[1])
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "IterReduce"), Args: []ast.Expr{next, fn, boolLit(hasInit), init}}, true, nil
 	default:
 		return nil, false, &NotYetLowerable{Reason: "an iterator helper's ." + method + "() is a later slice"}
 	}

@@ -169,6 +169,46 @@ func iterSource(src Value, allowString bool) (func() IterResult, bool) {
 	return nil, false
 }
 
+// IterReduce drives the source to exhaustion and folds it with fn, the terminal
+// reduce. With an initial value the fold seeds from it and the index counts from zero;
+// without one the first value seeds the accumulator, the index counts from one, and an
+// empty source throws a TypeError the way the spec does for a reduce with no seed. fn
+// receives the running accumulator, the value, and the index.
+func IterReduce(next func() IterResult, fn Value, hasInit bool, init Value) Value {
+	acc := init
+	i := 0
+	if !hasInit {
+		r := next()
+		if r.Done {
+			Throw(NewTypeError(FromGoString("Reduce of an empty iterator with no initial value")))
+		}
+		acc = r.Value
+		i = 1
+	}
+	for {
+		r := next()
+		if r.Done {
+			return acc
+		}
+		acc = fn.Call(acc, r.Value, Number(float64(i)))
+		i++
+	}
+}
+
+// IterToArray drives the source to exhaustion and collects its values into a new
+// array, the terminal toArray. The values ride into the array as the boxed values the
+// source yields, so the result is a dense array a caller can index or spread.
+func IterToArray(next func() IterResult) Value {
+	var elems []Value
+	for {
+		r := next()
+		if r.Done {
+			return NewArrayValue(elems)
+		}
+		elems = append(elems, r.Value)
+	}
+}
+
 // IterFrom wraps an iterable value as an IterHelper, the runtime behind
 // Iterator.from. It drives an array over its indices and a string over its code
 // points, the iterate-string-primitives handling Iterator.from asks for. A value
