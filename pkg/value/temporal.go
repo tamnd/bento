@@ -2,6 +2,7 @@ package value
 
 import (
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -520,6 +521,327 @@ func (pdt *PlainDateTime) ToString() BStr {
 // ToJSON implements Temporal.PlainDateTime.prototype.toJSON, the same ISO string toString
 // produces under default options.
 func (pdt *PlainDateTime) ToJSON() BStr { return pdt.ToString() }
+
+// Duration is bento's runtime representation of a Temporal.Duration (Temporal §7):
+// a span of time as ten independent components, from years down to nanoseconds, with
+// no anchor to a point on the timeline. It carries no calendar and no zone; it is a
+// bag of signed integer counts that all share one sign. The fields are stored as the
+// float64s ToIntegerIfIntegral validated, which is exactly what the JS getters return,
+// and every rendering recomputes from them.
+//
+// This slice hosts the shape of a Duration and the arithmetic that needs no reference
+// point: construction with the sign and range rules, the ten field getters, sign and
+// blank, negated and abs, toString and toJSON, and from over a Duration. The methods
+// that balance or round across units (round, total, add, subtract, with, compare over
+// mixed calendar units, and from over a string or a property bag) each need a
+// relativeTo reference and the calendar model, so they hand back at lowering and are a
+// later slice.
+type Duration struct {
+	years        float64
+	months       float64
+	weeks        float64
+	days         float64
+	hours        float64
+	minutes      float64
+	seconds      float64
+	milliseconds float64
+	microseconds float64
+	nanoseconds  float64
+}
+
+// durationUnitLimit is the exclusive bound on the absolute value of the years, months,
+// and weeks fields: each must be strictly less than 2^32, the limit IsValidDuration
+// fixes for the calendar units.
+const durationUnitLimit = 1 << 32
+
+// NewDuration builds a Duration from the constructor's ten optional number arguments,
+// every one defaulting to zero. It runs ToIntegerIfIntegral on each, so a fractional,
+// NaN, or non-finite component throws a RangeError (unlike PlainDate and PlainTime, a
+// Duration does not truncate a fractional argument, it rejects it), then RejectDuration,
+// so a mixed-sign set or an out-of-range magnitude throws a RangeError, the order
+// new Temporal.Duration(...) follows in the specification. The lowerer pads the missing
+// trailing components with zero before the call, so this constructor always sees ten
+// numbers.
+func NewDuration(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds float64) *Duration {
+	y := toIntegerIfIntegral(years)
+	mo := toIntegerIfIntegral(months)
+	w := toIntegerIfIntegral(weeks)
+	d := toIntegerIfIntegral(days)
+	h := toIntegerIfIntegral(hours)
+	mi := toIntegerIfIntegral(minutes)
+	s := toIntegerIfIntegral(seconds)
+	ms := toIntegerIfIntegral(milliseconds)
+	us := toIntegerIfIntegral(microseconds)
+	ns := toIntegerIfIntegral(nanoseconds)
+	rejectDuration(y, mo, w, d, h, mi, s, ms, us, ns)
+	return &Duration{y, mo, w, d, h, mi, s, ms, us, ns}
+}
+
+// DurationFrom implements Temporal.Duration.from for a Duration argument: it returns a
+// fresh Duration with the same fields, the copy the specification makes so the result is
+// a distinct object equal to its source. from over a string or a property bag hands back
+// at lowering, so this is only reached with a Duration in hand.
+func DurationFrom(d *Duration) *Duration {
+	c := *d
+	return &c
+}
+
+// toIntegerIfIntegral implements the abstract operation ToIntegerIfIntegral (Temporal):
+// a NaN, non-finite, or non-integral value throws a RangeError, and an integral value is
+// returned unchanged. It is the gate Temporal.Duration uses on every field, and it
+// differs from ToIntegerWithTruncation in that it rejects a fractional argument rather
+// than truncating it: new Temporal.Duration(1.5) raises a RangeError. A negative zero is
+// normalized to positive zero so it counts as zero in the sign rules and never renders
+// with a stray minus.
+func toIntegerIfIntegral(x float64) float64 {
+	if math.IsNaN(x) || math.IsInf(x, 0) || math.Trunc(x) != x {
+		Throw(NewRangeError(FromGoString("Temporal.Duration component must be an integer")))
+	}
+	if x == 0 {
+		return 0
+	}
+	return x
+}
+
+// rejectDuration throws a RangeError unless the ten fields form a valid Duration under
+// IsValidDuration: every non-zero field shares one sign, the years, months, and weeks
+// each have absolute value below 2^32, and the day-and-below fields together stay within
+// the representable range, a total-seconds magnitude below 2^53. The arguments are the
+// integral float64s ToIntegerIfIntegral returned.
+func rejectDuration(y, mo, w, d, h, mi, s, ms, us, ns float64) {
+	if !durationSignsConsistent(y, mo, w, d, h, mi, s, ms, us, ns) {
+		Throw(NewRangeError(FromGoString("Temporal.Duration fields must all share one sign")))
+	}
+	if math.Abs(y) >= durationUnitLimit || math.Abs(mo) >= durationUnitLimit || math.Abs(w) >= durationUnitLimit {
+		Throw(NewRangeError(FromGoString("Temporal.Duration years, months, or weeks is out of range")))
+	}
+	if durationSecondsOverflow(d, h, mi, s, ms, us, ns) {
+		Throw(NewRangeError(FromGoString("Temporal.Duration is out of range")))
+	}
+}
+
+// durationSignsConsistent reports whether every non-zero field carries the same sign, the
+// rule a valid Duration obeys. A field of zero (including a normalized negative zero)
+// belongs to either sign and is skipped.
+func durationSignsConsistent(fields ...float64) bool {
+	sign := 0
+	for _, v := range fields {
+		switch {
+		case v < 0:
+			if sign > 0 {
+				return false
+			}
+			sign = -1
+		case v > 0:
+			if sign < 0 {
+				return false
+			}
+			sign = 1
+		}
+	}
+	return true
+}
+
+// durationSecondsOverflow reports whether the day-and-below fields exceed the
+// representable range: their normalized total seconds, days times 86,400 plus the hours,
+// minutes, and seconds plus the floored whole-second part of each sub-second field, must
+// have absolute value below 2^53. It works in big.Int so no intermediate product loses
+// precision at the boundary, the one place a float64 sum could round across it.
+func durationSecondsOverflow(d, h, mi, s, ms, us, ns float64) bool {
+	total := new(big.Int)
+	total.Add(total, bigMulInt(d, 86400))
+	total.Add(total, bigMulInt(h, 3600))
+	total.Add(total, bigMulInt(mi, 60))
+	total.Add(total, big.NewInt(int64(s)))
+	total.Add(total, bigFloorDiv(ms, 1000))
+	total.Add(total, bigFloorDiv(us, 1_000_000))
+	total.Add(total, bigFloorDiv(ns, 1_000_000_000))
+	total.Abs(total)
+	limit := new(big.Int).Lsh(big.NewInt(1), 53)
+	return total.Cmp(limit) >= 0
+}
+
+// bigMulInt returns the exact product of an integral float64 and an int64 multiplier as
+// a big.Int. The float64 is below 2^53 in magnitude, so int64(x) is exact.
+func bigMulInt(x float64, m int64) *big.Int {
+	n := big.NewInt(int64(x))
+	return n.Mul(n, big.NewInt(m))
+}
+
+// bigFloorDiv returns floor(x / div) for an integral float64 and a positive int64
+// divisor. big.Int.Div is Euclidean division, which equals the floor for a positive
+// divisor, so this matches the specification's floor over signed inputs.
+func bigFloorDiv(x float64, div int64) *big.Int {
+	n := big.NewInt(int64(x))
+	return n.Div(n, big.NewInt(div))
+}
+
+// durationSign returns the sign of the whole Duration: 1 if the first non-zero field is
+// positive, -1 if it is negative, 0 if every field is zero. Because the fields share one
+// sign, the first non-zero field decides it.
+func durationSign(d *Duration) int {
+	for _, v := range []float64{d.years, d.months, d.weeks, d.days, d.hours, d.minutes, d.seconds, d.milliseconds, d.microseconds, d.nanoseconds} {
+		if v > 0 {
+			return 1
+		}
+		if v < 0 {
+			return -1
+		}
+	}
+	return 0
+}
+
+// Years returns the years field.
+func (d *Duration) Years() float64 { return d.years }
+
+// Months returns the months field.
+func (d *Duration) Months() float64 { return d.months }
+
+// Weeks returns the weeks field.
+func (d *Duration) Weeks() float64 { return d.weeks }
+
+// Days returns the days field.
+func (d *Duration) Days() float64 { return d.days }
+
+// Hours returns the hours field.
+func (d *Duration) Hours() float64 { return d.hours }
+
+// Minutes returns the minutes field.
+func (d *Duration) Minutes() float64 { return d.minutes }
+
+// Seconds returns the seconds field.
+func (d *Duration) Seconds() float64 { return d.seconds }
+
+// Milliseconds returns the milliseconds field.
+func (d *Duration) Milliseconds() float64 { return d.milliseconds }
+
+// Microseconds returns the microseconds field.
+func (d *Duration) Microseconds() float64 { return d.microseconds }
+
+// Nanoseconds returns the nanoseconds field.
+func (d *Duration) Nanoseconds() float64 { return d.nanoseconds }
+
+// Sign returns the sign of the whole Duration, 1, -1, or 0.
+func (d *Duration) Sign() float64 { return float64(durationSign(d)) }
+
+// Blank reports whether the Duration is all zeros, the case where sign is 0.
+func (d *Duration) Blank() bool { return durationSign(d) == 0 }
+
+// Negated implements Temporal.Duration.prototype.negated: a Duration with every field's
+// sign flipped. A zero field stays a positive zero.
+func (d *Duration) Negated() *Duration {
+	return &Duration{
+		negateField(d.years), negateField(d.months), negateField(d.weeks), negateField(d.days),
+		negateField(d.hours), negateField(d.minutes), negateField(d.seconds),
+		negateField(d.milliseconds), negateField(d.microseconds), negateField(d.nanoseconds),
+	}
+}
+
+// Abs implements Temporal.Duration.prototype.abs: a Duration with every field made
+// non-negative.
+func (d *Duration) Abs() *Duration {
+	return &Duration{
+		math.Abs(d.years), math.Abs(d.months), math.Abs(d.weeks), math.Abs(d.days),
+		math.Abs(d.hours), math.Abs(d.minutes), math.Abs(d.seconds),
+		math.Abs(d.milliseconds), math.Abs(d.microseconds), math.Abs(d.nanoseconds),
+	}
+}
+
+// negateField flips the sign of a field, mapping a zero to a positive zero so a negated
+// empty component never renders with a stray minus.
+func negateField(x float64) float64 {
+	if x == 0 {
+		return 0
+	}
+	return -x
+}
+
+// ToString implements Temporal.Duration.prototype.toString for the default options: the
+// ISO 8601 duration form, an optional leading minus for a negative Duration, then P, the
+// non-zero date components (years, months, weeks, days), then T and the non-zero time
+// components (hours, minutes, and a combined seconds field). The seconds field folds the
+// seconds, milliseconds, microseconds, and nanoseconds into one decimal with the
+// fraction trimmed of trailing zeros. An all-zero Duration renders as "PT0S".
+func (d *Duration) ToString() BStr {
+	var b strings.Builder
+	if durationSign(d) < 0 {
+		b.WriteByte('-')
+	}
+	b.WriteByte('P')
+	appendDurationField(&b, d.years, 'Y')
+	appendDurationField(&b, d.months, 'M')
+	appendDurationField(&b, d.weeks, 'W')
+	appendDurationField(&b, d.days, 'D')
+	hasHours := d.hours != 0
+	hasMinutes := d.minutes != 0
+	secStr, hasSeconds := durationSecondsString(d)
+	if hasHours || hasMinutes || hasSeconds {
+		b.WriteByte('T')
+		if hasHours {
+			b.WriteString(durationAbsInt(d.hours))
+			b.WriteByte('H')
+		}
+		if hasMinutes {
+			b.WriteString(durationAbsInt(d.minutes))
+			b.WriteByte('M')
+		}
+		if hasSeconds {
+			b.WriteString(secStr)
+			b.WriteByte('S')
+		}
+	}
+	return FromGoString(b.String())
+}
+
+// ToJSON implements Temporal.Duration.prototype.toJSON, the same ISO string toString
+// produces under default options.
+func (d *Duration) ToJSON() BStr { return d.ToString() }
+
+// appendDurationField writes a non-zero date component as its absolute value followed by
+// the unit letter, and writes nothing for a zero component.
+func appendDurationField(b *strings.Builder, v float64, unit byte) {
+	if v == 0 {
+		return
+	}
+	b.WriteString(durationAbsInt(v))
+	b.WriteByte(unit)
+}
+
+// durationAbsInt renders the absolute value of an integral float64 as a decimal. Every
+// field is below 2^53 in magnitude, so int64 holds it exactly.
+func durationAbsInt(v float64) string {
+	n := int64(v)
+	if n < 0 {
+		n = -n
+	}
+	return strconv.FormatInt(n, 10)
+}
+
+// durationSecondsString folds the seconds, milliseconds, microseconds, and nanoseconds
+// into a single decimal seconds value with the fractional part trimmed of trailing
+// zeros, and reports whether the seconds component should appear at all. It appears when
+// any of the four fields is non-zero, and also for an all-zero Duration so the rendering
+// is "PT0S". The fold runs in big.Int because seconds times a billion can exceed both
+// int64 and the exact float64 range.
+func durationSecondsString(d *Duration) (string, bool) {
+	if d.seconds == 0 && d.milliseconds == 0 && d.microseconds == 0 && d.nanoseconds == 0 && durationSign(d) != 0 {
+		return "", false
+	}
+	total := new(big.Int)
+	total.Add(total, bigMulInt(d.seconds, 1_000_000_000))
+	total.Add(total, bigMulInt(d.milliseconds, 1_000_000))
+	total.Add(total, bigMulInt(d.microseconds, 1_000))
+	total.Add(total, big.NewInt(int64(d.nanoseconds)))
+	total.Abs(total)
+	whole := new(big.Int)
+	frac := new(big.Int)
+	whole.QuoRem(total, big.NewInt(1_000_000_000), frac)
+	s := whole.String()
+	if frac.Sign() != 0 {
+		s += "." + strings.TrimRight(zeroPad(int(frac.Int64()), 9), "0")
+	}
+	return s, true
+}
 
 // twoDigit renders a month or day as exactly two digits.
 func twoDigit(n int) string { return zeroPad(n, 2) }
