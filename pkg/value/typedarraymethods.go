@@ -1,6 +1,10 @@
 package value
 
-import "strings"
+import (
+	"math"
+	"sort"
+	"strings"
+)
 
 // The copy and search methods over a typed array run against the view's element
 // slice and clamp to its length, the same shape the Array methods take but with
@@ -433,4 +437,135 @@ func ReduceRightTypedArray[T typedElem, A any](a *TypedArray[T], f func(A, float
 		acc = f(acc, float64(a.data[i]))
 	}
 	return acc
+}
+
+// The ordering methods reorder the view or a copy of it. reverse and sort mutate
+// the view in place and return the receiver, so the new order shows through every
+// view of the same buffer; toReversed, toSorted, and with leave the receiver
+// untouched and return a fresh typed array of the same element kind, coercing each
+// value back through the element's store rule the way an indexed write would. A
+// typed array's default sort is numeric ascending, unlike the Array default that
+// compares elements as strings, so the no-comparator forms here run the numeric
+// order rather than handing back the way the Array lowering does.
+
+// typedNumericLess is the default typed-array sort order, ascending by numeric
+// value. It follows the same total order the specification's default SortCompare
+// gives: a NaN sorts after every number, and a negative zero sorts before a
+// positive zero, so the order is stable and total even over the float families.
+func typedNumericLess(x, y float64) bool {
+	if x != x { // NaN sorts last, so it is never before another element.
+		return false
+	}
+	if y != y {
+		return true
+	}
+	if x < y {
+		return true
+	}
+	if x > y {
+		return false
+	}
+	return math.Signbit(x) && !math.Signbit(y) // -0 before +0.
+}
+
+// Reverse reverses the view in place and returns the receiver, the lowering of
+// TypedArray.prototype.reverse. It swaps from both ends toward the middle, so the
+// new order is visible through every view of the same buffer, and the returned
+// value is the same array rather than a copy.
+func (a *TypedArray[T]) Reverse() *TypedArray[T] {
+	for i, j := 0, len(a.data)-1; i < j; i, j = i+1, j-1 {
+		a.data[i], a.data[j] = a.data[j], a.data[i]
+	}
+	return a
+}
+
+// ToReversed returns a fresh typed array with the elements in reverse order, the
+// lowering of TypedArray.prototype.toReversed. It is the copying sibling of
+// reverse: the receiver keeps its order and the result owns its storage, so
+// a.toReversed() is a different array over a different buffer.
+func (a *TypedArray[T]) ToReversed() *TypedArray[T] {
+	n := len(a.data)
+	floats := make([]float64, n)
+	for i, e := range a.data {
+		floats[n-1-i] = float64(e)
+	}
+	return typedArrayOf(a.coerce, floats...)
+}
+
+// Sort orders the view in place by ascending numeric value and returns the
+// receiver, the lowering of TypedArray.prototype.sort called with no comparator.
+// The order is the numeric default typed arrays use rather than the string order
+// the Array default uses, so it needs no element-to-string step. The sort is
+// stable, so equal elements keep their relative order, and the new order shows
+// through every view of the same buffer.
+func (a *TypedArray[T]) Sort() *TypedArray[T] {
+	sort.SliceStable(a.data, func(i, j int) bool {
+		return typedNumericLess(float64(a.data[i]), float64(a.data[j]))
+	})
+	return a
+}
+
+// SortFunc orders the view in place by the comparator and returns the receiver,
+// the lowering of TypedArray.prototype.sort called with a compare function. The
+// comparator takes the two elements widened to Numbers and returns a Number that
+// is negative to place its first argument first, matching the Array sort
+// comparator. A comparator that returns NaN, which JavaScript treats as zero,
+// reads as not-before here, so those elements keep their order. The sort is stable
+// and the new order shows through every view of the same buffer.
+func (a *TypedArray[T]) SortFunc(cmp func(float64, float64) float64) *TypedArray[T] {
+	sort.SliceStable(a.data, func(i, j int) bool {
+		return cmp(float64(a.data[i]), float64(a.data[j])) < 0
+	})
+	return a
+}
+
+// ToSorted returns a fresh typed array sorted by ascending numeric value, the
+// lowering of TypedArray.prototype.toSorted called with no comparator. It is the
+// copying sibling of Sort: it orders a snapshot of the elements and leaves the
+// receiver in its original order, and the result owns its storage.
+func (a *TypedArray[T]) ToSorted() *TypedArray[T] {
+	floats := a.Floats()
+	sort.SliceStable(floats, func(i, j int) bool {
+		return typedNumericLess(floats[i], floats[j])
+	})
+	return typedArrayOf(a.coerce, floats...)
+}
+
+// ToSortedFunc returns a fresh typed array sorted by the comparator, the lowering
+// of TypedArray.prototype.toSorted called with a compare function. It is the
+// copying sibling of SortFunc: the comparator has the same meaning, the sort is
+// stable, and the receiver keeps its original order while the result owns its
+// storage.
+func (a *TypedArray[T]) ToSortedFunc(cmp func(float64, float64) float64) *TypedArray[T] {
+	floats := a.Floats()
+	sort.SliceStable(floats, func(i, j int) bool {
+		return cmp(floats[i], floats[j]) < 0
+	})
+	return typedArrayOf(a.coerce, floats...)
+}
+
+// With returns a fresh typed array equal to the receiver with one element
+// replaced, the lowering of TypedArray.prototype.with. The index counts from the
+// end when negative and truncates toward zero, and an index outside the view
+// throws a RangeError the way JavaScript does. The replacement value is coerced
+// into the element kind through the same store rule an indexed write uses, and the
+// receiver is unchanged since the result is built over a fresh snapshot.
+func (a *TypedArray[T]) With(index float64, v float64) *TypedArray[T] {
+	n := len(a.data)
+	rel := index
+	if rel != rel { // NaN becomes zero.
+		rel = 0
+	} else {
+		rel = math.Trunc(rel)
+	}
+	actual := rel
+	if actual < 0 {
+		actual += float64(n)
+	}
+	if actual < 0 || actual >= float64(n) {
+		Throw(NewRangeError(FromGoString("Invalid index : ").ConcatN(NumberToString(index))))
+	}
+	floats := a.Floats()
+	floats[int(actual)] = v
+	return typedArrayOf(a.coerce, floats...)
 }

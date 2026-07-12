@@ -103,6 +103,16 @@ func (r *Renderer) typedArrayMethodCall(recvNode frontend.Node, method string, a
 		return r.typedArrayFold(recvNode, argNodes, "ReduceTypedArray", "ReduceNoInit")
 	case "reduceRight":
 		return r.typedArrayFold(recvNode, argNodes, "ReduceRightTypedArray", "ReduceRightNoInit")
+	case "reverse":
+		return r.typedArrayNoArgMethod(recvNode, "Reverse", argNodes)
+	case "toReversed":
+		return r.typedArrayNoArgMethod(recvNode, "ToReversed", argNodes)
+	case "sort":
+		return r.typedArraySort(recvNode, "Sort", "SortFunc", argNodes)
+	case "toSorted":
+		return r.typedArraySort(recvNode, "ToSorted", "ToSortedFunc", argNodes)
+	case "with":
+		return r.typedArrayWith(recvNode, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "typed array method ." + method + " is a later slice"}
 	}
@@ -363,6 +373,84 @@ func (r *Renderer) typedArrayFoldNoInit(recvNode frontend.Node, arrow frontend.N
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(methodFn)}, Args: []ast.Expr{fn}}, nil
+}
+
+// typedArrayNoArgMethod lowers reverse and toReversed, which take no arguments and
+// lower to a method of the same name on the view. reverse reorders in place and
+// returns the receiver; toReversed returns a fresh array. Both carry no bounds or
+// callback, so this only checks the empty argument list before emitting the call.
+func (r *Renderer) typedArrayNoArgMethod(recvNode frontend.Node, goMethod string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 0 {
+		return nil, &NotYetLowerable{Reason: "typed array " + goMethod + " takes no arguments"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}}, nil
+}
+
+// typedArraySort lowers sort and its copying sibling toSorted. Unlike the Array
+// lowering, the no-comparator form is covered: a typed array sorts by ascending
+// numeric value by default, so a zero-argument call lowers to the default method
+// named by defaultMethod rather than handing back for a string-order sort. The
+// comparator form lowers to the method named by funcMethod, whose comparator is
+// func(float64, float64) float64 since a typed array's elements widen to Numbers,
+// so only an inline two-parameter arrow fits; a comparator that is not one, or
+// more than one argument, hands back.
+func (r *Renderer) typedArraySort(recvNode frontend.Node, defaultMethod, funcMethod string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(defaultMethod)}}, nil
+	}
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "typed array " + funcMethod + " with a comparator that is not an inline arrow function is a later slice"}
+	}
+	if r.arrowParamCount(argNodes[0]) != 2 {
+		return nil, &NotYetLowerable{Reason: "typed array " + funcMethod + " comparator that does not take exactly two parameters is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	cmp, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(funcMethod)}, Args: []ast.Expr{cmp}}, nil
+}
+
+// typedArrayWith lowers a with call to the value.TypedArray With method, which
+// returns a fresh array with one element replaced. Both the index and the value
+// are Numbers, the index selecting the slot and the value coerced into the element
+// kind by the method. A non-number index or value, or the wrong argument count,
+// hands back.
+func (r *Renderer) typedArrayWith(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "typed array with takes an index and a value"}
+	}
+	if !r.isNumber(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "typed array with a non-number index is a later slice"}
+	}
+	if !r.isNumber(argNodes[1]) {
+		return nil, &NotYetLowerable{Reason: "typed array with a non-number value is a later slice"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	idx, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	val, err := r.lowerExpr(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: []ast.Expr{idx, val}}, nil
 }
 
 // typedArrayElemType returns the Go element type of a typed-array receiver as an
