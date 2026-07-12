@@ -1981,15 +1981,16 @@ func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
 // unchanged. Any other method on a primitive receiver is a later slice.
 func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	// number.toString(radix) is the one primitive method with an argument this
-	// slice covers. The radix must be a literal in 2..36 so no RangeError can fire
-	// (a bad radix throws, which waits on the exception machinery, and a dynamic
-	// radix cannot be range-checked at compile time). A radix of 10 is the same
-	// coercion String(x) runs, so it routes through stringify; any other radix
-	// lowers to value.NumberToStringRadix with the literal folded in.
+	// slice covers. A literal radix in 2..36 lowers straight to
+	// value.NumberToStringRadix with the literal folded in, and radix 10 is the same
+	// coercion String(x) runs so it routes through stringify. A radix the compiler
+	// cannot prove is in range, a non-literal or a literal outside 2..36, lowers to
+	// value.NumberToStringRadixDynamic, which applies ToInteger, throws the
+	// RangeError a bad radix raises, and renders the same way.
 	if method == "toString" && len(argNodes) == 1 && r.isNumber(recvNode) {
 		radix, ok := r.literalIntArg(argNodes[0], 2, 36)
 		if !ok {
-			return nil, &NotYetLowerable{Reason: "number toString with a non-literal or out-of-range radix is a later slice"}
+			return r.numberFormatDynamic("NumberToStringRadixDynamic", recvNode, argNodes[0])
 		}
 		if radix == 10 {
 			return r.stringify(recvNode)

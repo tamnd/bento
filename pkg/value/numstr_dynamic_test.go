@@ -21,6 +21,8 @@ func TestNumberFormatDynamicInRange(t *testing.T) {
 		{"expTrunc", NumberToExponentialDynamic(1234.5, 2.9), NumberToExponential(1234.5, 2)},
 		{"precision", NumberToPrecisionDynamic(123.456, 3), NumberToPrecision(123.456, 3)},
 		{"precisionTrunc", NumberToPrecisionDynamic(123.456, 3.9), NumberToPrecision(123.456, 3)},
+		{"radix", NumberToStringRadixDynamic(255, 16), NumberToStringRadix(255, 16)},
+		{"radixTrunc", NumberToStringRadixDynamic(255, 16.9), NumberToStringRadix(255, 16)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,6 +48,8 @@ func TestNumberFormatDynamicThrows(t *testing.T) {
 		{"expHigh", func() { NumberToExponentialDynamic(1, 101) }, "toExponential"},
 		{"precisionZero", func() { NumberToPrecisionDynamic(1, 0) }, "toPrecision"},
 		{"precisionHigh", func() { NumberToPrecisionDynamic(1, 101) }, "toPrecision"},
+		{"radixLow", func() { NumberToStringRadixDynamic(1, 1) }, "toString"},
+		{"radixHigh", func() { NumberToStringRadixDynamic(1, 37) }, "toString"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

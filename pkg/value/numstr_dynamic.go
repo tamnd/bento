@@ -39,3 +39,10 @@ func NumberToExponentialDynamic(x, digits float64) BStr {
 func NumberToPrecisionDynamic(x, precision float64) BStr {
 	return NumberToPrecision(x, formatDigits(precision, 1, 100, "toPrecision() argument must be between 1 and 100"))
 }
+
+// NumberToStringRadixDynamic is n.toString(radix) with a runtime radix: it applies
+// ToInteger to the radix, range-checks it against 2..36, throwing the RangeError
+// JavaScript raises otherwise, and renders through NumberToStringRadix.
+func NumberToStringRadixDynamic(x, radix float64) BStr {
+	return NumberToStringRadix(x, formatDigits(radix, 2, 36, "toString() radix must be between 2 and 36"))
+}
