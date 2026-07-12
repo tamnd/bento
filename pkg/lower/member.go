@@ -122,6 +122,19 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
+	// A read of any member off the ambient Iterator constructor (Iterator.prototype, its
+	// name, its length) reaches for the constructor's reflective identity: the shared
+	// %Iterator.prototype% the helper results inherit and the constructor's own metadata.
+	// The static model hosts the helper results as concrete runtime iterators
+	// (value.IterHelper) and Iterator.from as a call, but it does not host Iterator itself
+	// as a first-class reflective object, so a bare member read hands back with the ceiling
+	// named rather than the generic constructable-callable reason the receiver lowering
+	// would give. Iterator.from(...) as a call is intercepted on the call path before here,
+	// so only a bare read reaches this. The abstract-instantiation semantics (new Iterator()
+	// throwing) are enforced by the checker, which rejects constructing an abstract class.
+	if r.isGlobalRef(obj, "Iterator") {
+		return nil, &NotYetLowerable{Reason: "the Iterator constructor and its prototype identity are a reflective surface the static model does not host"}
+	}
 	// arguments.length reads the count of arguments the call supplied. The current
 	// body materialized a *value.Array[value.Value] store from its parameters, and
 	// the parameter count is the call arity for the all-required signatures that reach

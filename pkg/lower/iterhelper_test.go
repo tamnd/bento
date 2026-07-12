@@ -110,3 +110,22 @@ func TestIterHelperEmits(t *testing.T) {
 		})
 	}
 }
+
+// TestIteratorConstructorIdentityHandsBack pins that a bare read off the ambient Iterator
+// constructor hands back naming the reflective ceiling, rather than emitting a wrong
+// reference or a generic reason. The static model hosts the helper results and
+// Iterator.from as a call, but not Iterator itself as a first-class reflective object, so
+// Iterator.prototype and its metadata stay a handback.
+func TestIteratorConstructorIdentityHandsBack(t *testing.T) {
+	cases := []string{
+		"export function f(): void { const p: any = Iterator.prototype; }\n",
+		"export function f(): void { const n: any = Iterator.name; }\n",
+	}
+	const want = "the Iterator constructor and its prototype identity are a reflective surface the static model does not host"
+	for _, src := range cases {
+		reason := renderProgramHandBack(t, src)
+		if reason != want {
+			t.Errorf("Iterator identity read handback = %q, want %q", reason, want)
+		}
+	}
+}
