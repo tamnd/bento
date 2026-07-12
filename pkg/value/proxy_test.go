@@ -72,6 +72,70 @@ func TestProxyForwardsOwnKeysAndDescriptors(t *testing.T) {
 	}
 }
 
+// TestProxyGetTrap pins that a get trap intercepts a property read, receiving the
+// target, the key, and the proxy as the receiver, and that its result is what the
+// read returns rather than the target's own value.
+func TestProxyGetTrap(t *testing.T) {
+	target := NewObject()
+	target.Set(FromGoString("x"), Number(1))
+	handler := NewObject()
+	handler.Set(FromGoString("get"), NewFunc(func(args []Value) Value {
+		key := Arg(args, 1)
+		return StringValue(FromGoString("trapped:").ConcatN(key.str()))
+	}))
+	p := NewProxy(target, handler)
+	if got := p.Get(FromGoString("x")).str().ToGoString(); got != "trapped:x" {
+		t.Errorf("get trap did not intercept, got %q", got)
+	}
+	if got := p.Get(FromGoString("y")).str().ToGoString(); got != "trapped:y" {
+		t.Errorf("get trap did not see the missing key, got %q", got)
+	}
+}
+
+// TestProxySetTrap pins that a set trap intercepts a property write and that the
+// target is left untouched when the trap does not write through to it.
+func TestProxySetTrap(t *testing.T) {
+	target := NewObject()
+	var wroteKey, wroteVal Value
+	handler := NewObject()
+	handler.Set(FromGoString("set"), NewFunc(func(args []Value) Value {
+		wroteKey = Arg(args, 1)
+		wroteVal = Arg(args, 2)
+		return Bool(true)
+	}))
+	p := NewProxy(target, handler)
+	p.SetKey(FromGoString("k"), Number(9))
+	if wroteKey.str().ToGoString() != "k" || wroteVal.AsNumber() != 9 {
+		t.Errorf("set trap saw key %v value %v", wroteKey, wroteVal)
+	}
+	if target.HasProperty(FromGoString("k")) {
+		t.Error("set trap wrote through to the target when it should not have")
+	}
+}
+
+// TestProxyGetInvariant pins the one get invariant a static target enforces: a
+// non-configurable, non-writable own data property forces the trap to report the
+// stored value, so a trap that returns anything else throws a TypeError.
+func TestProxyGetInvariant(t *testing.T) {
+	target := NewObject()
+	desc := NewObject()
+	desc.Set(FromGoString("value"), Number(42))
+	desc.Set(FromGoString("writable"), Bool(false))
+	desc.Set(FromGoString("configurable"), Bool(false))
+	target.DefineProperty(StringValue(FromGoString("fixed")), desc)
+	handler := NewObject()
+	handler.Set(FromGoString("get"), NewFunc(func(args []Value) Value {
+		return Number(0)
+	}))
+	p := NewProxy(target, handler)
+	defer func() {
+		if recover() == nil {
+			t.Error("get trap violating the non-writable invariant did not throw")
+		}
+	}()
+	p.Get(FromGoString("fixed"))
+}
+
 // TestProxyCallableForwards pins that a Proxy over a callable target is itself
 // callable and forwards the call to the target when the handler has no apply trap.
 func TestProxyCallableForwards(t *testing.T) {

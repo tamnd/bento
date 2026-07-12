@@ -91,23 +91,72 @@ func (p *proxyData) trap(name string) Value {
 // slice replaces each forward with the handler-trap call and its invariant checks.
 
 func (p *proxyData) get(recv Value, key BStr) Value {
-	p.checkRevoked("get")
-	return p.target.Get(key)
+	return p.getWith(recv, StringValue(key))
 }
 
 func (p *proxyData) getSym(recv Value, key *Symbol) Value {
+	return p.getWith(recv, symbolValue(key))
+}
+
+// getWith runs the get trap for a boxed key, the [[Get]](P, Receiver) internal
+// method. With no trap the read forwards to the target. With a trap the result is
+// what handler.get(target, key, receiver) returns, checked against the one
+// invariant a static target can enforce: a non-configurable, non-writable own data
+// property must report its stored value, and a non-configurable accessor with no
+// getter must report undefined, so the trap cannot lie about a fixed property.
+func (p *proxyData) getWith(recv, keyVal Value) Value {
 	p.checkRevoked("get")
-	return p.target.getSymKey(key)
+	trap := p.trap("get")
+	if trap.kind == KindUndefined {
+		return p.target.GetElem(keyVal)
+	}
+	res := trap.Call(p.target, keyVal, recv)
+	if d := p.target.GetOwnPropertyDescriptor(keyVal); d.kind == KindObject && !ToBoolean(d.Get(FromGoString("configurable"))) {
+		if d.HasOwnElem(StringValue(FromGoString("value"))) {
+			if !ToBoolean(d.Get(FromGoString("writable"))) && !sameValue(res, d.Get(FromGoString("value"))) {
+				Throw(NewTypeError(FromGoString("'get' on proxy: property is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value")))
+			}
+		} else if d.Get(FromGoString("get")).kind == KindUndefined && res.kind != KindUndefined {
+			Throw(NewTypeError(FromGoString("'get' on proxy: property is a non-configurable accessor property on the proxy target and does not have a getter function, but the trap did not return undefined")))
+		}
+	}
+	return res
 }
 
 func (p *proxyData) setKey(recv Value, key BStr, val Value) {
-	p.checkRevoked("set")
-	p.target.SetKey(key, val)
+	p.setWith(recv, StringValue(key), val)
 }
 
 func (p *proxyData) setSym(recv Value, key *Symbol, val Value) {
+	p.setWith(recv, symbolValue(key), val)
+}
+
+// setWith runs the set trap for a boxed key, the [[Set]](P, V, Receiver) internal
+// method. With no trap the write forwards to the target. With a trap the write is
+// whatever handler.set(target, key, value, receiver) performs; a falsy return is a
+// refused write, dropped the way this model drops a write to a non-writable
+// property rather than throwing. A truthy return is checked against the target: a
+// non-configurable, non-writable own data property may only be set to its stored
+// value, and a non-configurable accessor with no setter may not be set at all.
+func (p *proxyData) setWith(recv, keyVal, val Value) {
 	p.checkRevoked("set")
-	p.target.setSymKey(key, val)
+	trap := p.trap("set")
+	if trap.kind == KindUndefined {
+		p.target.SetElem(keyVal, val)
+		return
+	}
+	if !ToBoolean(trap.Call(p.target, keyVal, val, recv)) {
+		return
+	}
+	if d := p.target.GetOwnPropertyDescriptor(keyVal); d.kind == KindObject && !ToBoolean(d.Get(FromGoString("configurable"))) {
+		if d.HasOwnElem(StringValue(FromGoString("value"))) {
+			if !ToBoolean(d.Get(FromGoString("writable"))) && !sameValue(val, d.Get(FromGoString("value"))) {
+				Throw(NewTypeError(FromGoString("'set' on proxy: trap returned truthy for property which exists in the proxy target as a non-configurable and non-writable data property with a different value")))
+			}
+		} else if d.Get(FromGoString("set")).kind == KindUndefined {
+			Throw(NewTypeError(FromGoString("'set' on proxy: trap returned truthy for property which exists in the proxy target as a non-configurable and non-writable accessor property without a setter")))
+		}
+	}
 }
 
 func (p *proxyData) has(key BStr) bool {
