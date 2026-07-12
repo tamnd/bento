@@ -18,10 +18,21 @@ func TestNumberToExponentialEmits(t *testing.T) {
 	}
 }
 
-// TestNumberToExponentialHandsBack pins the two boundaries: a non-literal digit
-// count cannot be range-checked at compile time, and the omitted count is a
-// different rule than toFixed's zero default, so both hand back with named
-// reasons.
+// TestNumberToExponentialDynamicEmits pins that a non-literal number count lowers
+// to value.NumberToExponentialDynamic, which applies ToInteger and range-checks at
+// runtime, rather than handing back the way a literal-in-range count folds to the
+// exact formatter.
+func TestNumberToExponentialDynamicEmits(t *testing.T) {
+	const src = "function f(x: number, d: number): string { return x.toExponential(d); }\nconsole.log(f(1, 2));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.NumberToExponentialDynamic(x, d)") {
+		t.Errorf("dynamic toExponential did not lower to value.NumberToExponentialDynamic(x, d):\n%s", source)
+	}
+}
+
+// TestNumberToExponentialHandsBack pins the two remaining boundaries: a count of a
+// non-number type is a ToInteger-of-anything slice, and the omitted count is a
+// different rule than toFixed's zero default, so both hand back with named reasons.
 func TestNumberToExponentialHandsBack(t *testing.T) {
 	cases := []struct {
 		name string
@@ -29,9 +40,9 @@ func TestNumberToExponentialHandsBack(t *testing.T) {
 		want string
 	}{
 		{
-			"dynamicCount",
-			"function f(x: number, d: number): string { return x.toExponential(d); }\nconsole.log(f(1, 2));\n",
-			"non-literal or out-of-range",
+			"nonNumberCount",
+			"function f(x: number, d: string): string { return x.toExponential(d as any); }\nconsole.log(f(1, \"2\"));\n",
+			"non-number digit count",
 		},
 		{
 			"omittedCount",
