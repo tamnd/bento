@@ -95,6 +95,15 @@ func TestTypedArrayGeometryGetters(t *testing.T) {
 	if got := view.Len(); got != 2 {
 		t.Errorf("view.Len = %v, want 2", got)
 	}
+	if got := view.BytesPerElement(); got != 4 {
+		t.Errorf("Int32Array BytesPerElement = %v, want 4", got)
+	}
+	if got := NewFloat64Array(0).BytesPerElement(); got != 8 {
+		t.Errorf("Float64Array BytesPerElement = %v, want 8", got)
+	}
+	if got := NewInt8Array(0).BytesPerElement(); got != 1 {
+		t.Errorf("Int8Array BytesPerElement = %v, want 1", got)
+	}
 }
 
 // TestTypedArrayBadLengthClamps proves a negative or not-a-number length yields an

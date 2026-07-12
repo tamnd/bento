@@ -163,6 +163,12 @@ func (a *TypedArray[T]) ByteOffset() float64 { return float64(a.byteOffset) }
 // It is a Number, and it differs from Len, the element count, by the element width.
 func (a *TypedArray[T]) ByteLength() float64 { return float64(len(a.data) * elemBytes[T]()) }
 
+// BytesPerElement is the element width in bytes, the instance BYTES_PER_ELEMENT
+// property, a constant of the element kind. It is a method rather than a folded
+// literal at the use site so a read keeps the receiver referenced, and it reads the
+// width from the Go element type so it agrees with the buffer arithmetic.
+func (a *TypedArray[T]) BytesPerElement() float64 { return float64(elemBytes[T]()) }
+
 // At reads the element a JavaScript index expression a[i] selects, widened to the
 // Number a typed-array read hands out. The index is a Number, so it arrives as a
 // float64 and truncates toward zero. An index outside the array reads as 0 rather
