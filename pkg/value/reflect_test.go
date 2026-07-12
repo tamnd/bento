@@ -151,6 +151,105 @@ func TestReflectOwnKeysArray(t *testing.T) {
 	}
 }
 
+// TestReflectDefineProperty pins that a fresh define on an extensible object
+// succeeds, a define on a non-extensible object is refused, and a redefine the
+// invariants forbid reports false instead of throwing.
+func TestReflectDefineProperty(t *testing.T) {
+	o := NewObject()
+	if !ReflectDefineProperty(o, StringValue(FromGoString("x")), dataDesc(Number(5), true)) {
+		t.Error("Reflect.defineProperty on an extensible object reported failure")
+	}
+	if got := ReflectGet(o, StringValue(FromGoString("x"))); got.AsNumber() != 5 {
+		t.Errorf("the defined property holds %v, want 5", got)
+	}
+
+	// A non-configurable property refuses a value change and keeps its value.
+	o.DefineProperty(StringValue(FromGoString("y")), nonConfigDesc(Number(1)))
+	if ReflectDefineProperty(o, StringValue(FromGoString("y")), dataDesc(Number(2), true)) {
+		t.Error("Reflect.defineProperty redefining a non-configurable property reported success")
+	}
+	if got := ReflectGet(o, StringValue(FromGoString("y"))); got.AsNumber() != 1 {
+		t.Errorf("a refused redefine changed the value to %v, want 1", got)
+	}
+
+	sealed := NewObject()
+	sealed.PreventExtensions()
+	if ReflectDefineProperty(sealed, StringValue(FromGoString("z")), dataDesc(Number(3), true)) {
+		t.Error("Reflect.defineProperty on a non-extensible object reported success")
+	}
+}
+
+// TestReflectGetOwnPropertyDescriptor pins that a present key reports a descriptor
+// object carrying the stored attributes and an absent key reports undefined.
+func TestReflectGetOwnPropertyDescriptor(t *testing.T) {
+	o := NewObject()
+	o.DefineProperty(StringValue(FromGoString("x")), dataDesc(Number(5), true))
+
+	d := ReflectGetOwnPropertyDescriptor(o, StringValue(FromGoString("x")))
+	if d.kind != KindObject {
+		t.Fatalf("descriptor is %v, want an object", d)
+	}
+	if got := d.Get(FromGoString("value")); got.AsNumber() != 5 {
+		t.Errorf("descriptor value = %v, want 5", got)
+	}
+	if !ToBoolean(d.Get(FromGoString("writable"))) {
+		t.Error("descriptor writable = false, want true")
+	}
+	if got := ReflectGetOwnPropertyDescriptor(o, StringValue(FromGoString("missing"))); got.kind != KindUndefined {
+		t.Errorf("descriptor for an absent key = %v, want undefined", got)
+	}
+}
+
+// TestReflectGetPrototypeOf pins that the prototype installed by setPrototypeOf reads
+// back by identity and a prototype-less object reports null.
+func TestReflectGetPrototypeOf(t *testing.T) {
+	proto := NewObject()
+	child := ObjectCreate(proto)
+	if got := ReflectGetPrototypeOf(child); got.kind != KindObject || got.object() != proto.object() {
+		t.Errorf("Reflect.getPrototypeOf did not return the installed prototype, got %v", got)
+	}
+	bare := ObjectCreate(Null)
+	if got := ReflectGetPrototypeOf(bare); got.kind != KindNull {
+		t.Errorf("Reflect.getPrototypeOf on a null-prototype object = %v, want null", got)
+	}
+}
+
+// TestReflectSetPrototypeOf pins that a slot write succeeds, resetting the same
+// prototype succeeds, a change on a non-extensible object is refused, and an invalid
+// prototype value throws.
+func TestReflectSetPrototypeOf(t *testing.T) {
+	proto := NewObject()
+	child := NewObject()
+	if !ReflectSetPrototypeOf(child, proto) {
+		t.Error("Reflect.setPrototypeOf reported failure on an extensible object")
+	}
+	if got := ReflectGetPrototypeOf(child); got.object() != proto.object() {
+		t.Error("Reflect.setPrototypeOf did not install the prototype")
+	}
+	if !ReflectSetPrototypeOf(child, proto) {
+		t.Error("Reflect.setPrototypeOf reported failure resetting the same prototype")
+	}
+
+	sealed := NewObject()
+	sealed.PreventExtensions()
+	if ReflectSetPrototypeOf(sealed, proto) {
+		t.Error("Reflect.setPrototypeOf changing a non-extensible object's prototype reported success")
+	}
+
+	threw := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				threw = true
+			}
+		}()
+		ReflectSetPrototypeOf(NewObject(), Number(1))
+	}()
+	if !threw {
+		t.Error("Reflect.setPrototypeOf with a primitive prototype did not throw")
+	}
+}
+
 // nonConfigDesc builds a non-configurable data descriptor object, the shape the
 // deleteProperty refusal test defines onto an object.
 func nonConfigDesc(value Value) Value {

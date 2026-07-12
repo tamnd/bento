@@ -201,6 +201,85 @@ func ReflectOwnKeys(target Value) *Array[Value] {
 	return NewArray(out...)
 }
 
+// ReflectDefineProperty implements Reflect.defineProperty(target, key, descriptor):
+// the [[DefineOwnProperty]] Object.defineProperty performs, returning whether the
+// define succeeded instead of throwing on a define the invariants forbid. It reads
+// the descriptor object, validates the change against the target's extensibility and
+// the existing property's configurability, and applies it, reporting false for the
+// same rejection Object.defineProperty turns into a TypeError.
+func ReflectDefineProperty(target, key, descObj Value) bool {
+	o := reflectObject(target, "defineProperty")
+	in := readDescriptorInput(descObj)
+	if key.kind == KindSymbol {
+		sym := key.symbol()
+		current, exists := o.getSymDesc(sym)
+		if !validateDefine(current, exists, in, o.isExtensible()) {
+			return false
+		}
+		o.defineSym(sym, in.toDescriptor(current, exists))
+		return true
+	}
+	var name BStr
+	if key.kind == KindString {
+		name = key.str()
+	} else {
+		name = ToString(key)
+	}
+	current, exists := o.getOwnDesc(name)
+	if !validateDefine(current, exists, in, o.isExtensible()) {
+		return false
+	}
+	o.defineOwn(name, in.toDescriptor(current, exists))
+	return true
+}
+
+// ReflectGetOwnPropertyDescriptor implements Reflect.getOwnPropertyDescriptor(target,
+// key): the [[GetOwnProperty]] Object.getOwnPropertyDescriptor performs, returning the
+// descriptor object for an own property or undefined when the key is absent. Unlike
+// the Object form, which coerces a primitive target to an object, it throws the
+// TypeError every Reflect method raises on a non-object target.
+func ReflectGetOwnPropertyDescriptor(target, key Value) Value {
+	reflectObject(target, "getOwnPropertyDescriptor")
+	return target.GetOwnPropertyDescriptor(key)
+}
+
+// ReflectGetPrototypeOf implements Reflect.getPrototypeOf(target): the
+// [[GetPrototypeOf]] Object.getPrototypeOf performs, reporting the target's prototype
+// object or null. Unlike the Object form it throws the TypeError every Reflect method
+// raises on a non-object target rather than coercing it.
+func ReflectGetPrototypeOf(target Value) Value {
+	reflectObject(target, "getPrototypeOf")
+	return target.GetPrototype()
+}
+
+// ReflectSetPrototypeOf implements Reflect.setPrototypeOf(target, proto): the
+// [[SetPrototypeOf]] Object.setPrototypeOf performs, returning whether the write
+// succeeded instead of throwing on a refused change. A non-object, non-null prototype
+// throws a TypeError, as does a non-object target. Setting the prototype a
+// non-extensible object already holds succeeds, while changing it to a different one
+// is refused and reports false.
+func ReflectSetPrototypeOf(target, proto Value) bool {
+	o := reflectObject(target, "setPrototypeOf")
+	var np *Object
+	switch proto.kind {
+	case KindObject, KindArray, KindFunc:
+		np = proto.object()
+	case KindNull:
+		np = nil
+	default:
+		Throw(NewTypeError(FromGoString("Reflect.setPrototypeOf called with an invalid prototype")))
+		return false
+	}
+	if np == o.proto {
+		return true
+	}
+	if !o.isExtensible() {
+		return false
+	}
+	o.proto = np
+	return true
+}
+
 // ordinarySetSym is the symbol mirror of ordinarySet, resolving a symbol-keyed
 // property by identity through the symbol bag and its prototype chain rather than
 // the named bag. It shares the same refusal rules: a non-writable data property, an
