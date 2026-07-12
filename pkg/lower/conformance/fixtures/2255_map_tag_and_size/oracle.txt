@@ -1,0 +1,11 @@
+== stdout:
+0
+2
+2
+1
+[object Map]
+0
+[object Map]
+
+== exit:
+0
