@@ -834,6 +834,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// its register interface as fields.
 			return r.renderFinalizationRegistry(t)
 		}
+		if r.regExpType(t) {
+			// A RegExp (22 §22.2) is the value model's compiled pattern, spelled as a
+			// pointer to value.RegExp. It is not a struct shape, so it routes here before
+			// renderObject would intern its exec and test interface as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "RegExp")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:

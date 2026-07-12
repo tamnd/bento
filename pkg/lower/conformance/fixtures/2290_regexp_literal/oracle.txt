@@ -1,0 +1,7 @@
+== stdout:
+true
+[object RegExp]
+true
+[object RegExp]
+== exit:
+0

@@ -305,6 +305,15 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.arrayFromBoxedResultCall(n) {
 		return true
 	}
+	// A re.exec(s), str.match(re), or str.split(re) call returns the boxed value.Value
+	// the match yields, an array or null. The checker types each with a concrete Go
+	// shape the box does not have (RegExpExecArray | null, RegExpMatchArray | null, and
+	// string[]), so isDynamic recognizes the call by shape to keep the box on the
+	// dynamic path, where the null compare and the element and property reads off the
+	// result dispatch through the value model.
+	if r.regExpBoxedResultCall(n) {
+		return true
+	}
 	// A .value read off an IteratorResult whose type is not a clean primitive, the
 	// array iterator's `number | undefined` value being the first, stays the boxed
 	// value.Value the IterResult carries: there is no single Go type to coerce it to,
@@ -321,6 +330,20 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if n.Kind() == frontend.NodeIdentifier {
 		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
 			return true
+		}
+	}
+	// A property or element read off a dynamic receiver lowers to a Get on the box,
+	// which yields a box unless the read's own type is a clean primitive that
+	// unboxDynamicRead coerces down. So the read is itself dynamic when its type is not
+	// one of those primitives, which keeps a further member or element read off it, the
+	// m.groups.year chain off a boxed exec result being the motivating case, on the
+	// dynamic Get path rather than folding to a fixed-shape miss on an index-signature
+	// type the box does not actually carry as Go fields.
+	if n.Kind() == frontend.NodePropertyAccessExpression || n.Kind() == frontend.NodeElementAccessExpression {
+		if kids := r.prog.Children(n); len(kids) >= 1 && r.isDynamic(kids[0]) {
+			if r.prog.TypeAt(n).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+				return true
+			}
 		}
 	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
@@ -853,6 +876,33 @@ func (r *Renderer) coerceDynamicToStaticFlags(expr ast.Expr, flags frontend.Type
 	default:
 		return nil, &NotYetLowerable{Reason: "coercing a dynamic value into this static type is a later slice"}
 	}
+}
+
+// unboxDynamicRead adapts a read off a boxed receiver, a value.Value the runtime
+// Get or GetIndex yields, to the type the checker gave the read. A receiver typed
+// any yields an any-typed read, so the box passes through untouched, the common
+// case. A receiver the compiler boxed while the checker kept a concrete type, a
+// RegExp exec result's string element or number .index being the first, gives the
+// read a primitive type its consumer expects unboxed, so the box coerces down
+// through the ToNumber family the same way an IteratorResult .value does. A
+// non-primitive read type, an object or array, keeps the box, since there is no
+// single Go value to coerce it to here.
+func (r *Renderer) unboxDynamicRead(read ast.Expr, n frontend.Node) (ast.Expr, error) {
+	flags := r.prog.TypeAt(n).Flags
+	// A read whose type is a clean primitive (number, string, or boolean with no any
+	// or unknown facet) has one Go value to coerce the box down to, so it coerces even
+	// when a shape query flagged the read dynamic. An index-signature read like
+	// m.groups.year resolves to string through the signature, but the fixed-shape query
+	// that backs missingPropertyRead sees no declared "year" field and reports the read
+	// dynamic, which would otherwise leave the box uncoerced where its string consumer
+	// expects a bstr. Keying off the precise type first coerces it correctly.
+	if flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 &&
+		flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
+		return r.coerceDynamicToStaticFlags(read, flags)
+	}
+	// A read the checker left any or unknown, or gave a non-primitive shape, keeps the
+	// box: there is no single Go value to coerce it to here.
+	return read, nil
 }
 
 // coerceReturn bridges a return value from its expression's type to the function's

@@ -1,0 +1,9 @@
+== stdout:
+abc
+ABC
+XYZ
+
+U+000061
+U+01F600
+== exit:
+0

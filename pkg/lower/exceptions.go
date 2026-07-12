@@ -135,6 +135,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Promise" {
 		return r.newPromise(n, kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "RegExp" {
+		return r.newRegExp(kids[1:])
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}

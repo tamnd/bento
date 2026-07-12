@@ -226,7 +226,7 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetPrototype")}}, nil
 		}
 		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, nil
+		return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, n)
 	}
 	// A read of .value or .done on an IteratorResult, the { value, done } object a
 	// generator's next/return/throw hand back, lowers to the field on the
@@ -389,6 +389,19 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		method := map[string]string{"byteLength": "ByteLength", "maxByteLength": "MaxByteLength", "growable": "Growable"}[prop]
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}}, nil
+	}
+	// A RegExp's flag getters read off the compiled value: .source is the pattern
+	// text, .flags the flag run in canonical order, and .global, .ignoreCase,
+	// .multiline, .dotAll, .unicode, .unicodeSets, .sticky, and .hasIndices the
+	// single-flag booleans. Each is an accessor in the source but a method on
+	// value.RegExp, so it lowers to a call and routes before the struct-field path,
+	// which would otherwise intern the name as a field of a shape a RegExp is not.
+	if regMethod, ok := regExpAccessor(prop); ok && r.isRegExp(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(regMethod)}}, nil
 	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
@@ -849,19 +862,19 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{idx}}, nil
+			return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{idx}}, n)
 		case r.isDynamic(idxNode):
 			idx, err := r.lowerExpr(idxNode)
 			if err != nil {
 				return nil, err
 			}
-			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, nil
+			return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, n)
 		case r.isString(idxNode):
 			idx, err := r.lowerExpr(idxNode)
 			if err != nil {
 				return nil, err
 			}
-			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{idx}}, nil
+			return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{idx}}, n)
 		case r.isSymbol(idxNode):
 			// A symbol key reads through GetElem, which looks the boxed symbol up in the
 			// property bag by identity rather than coercing it to a string the way a
