@@ -1020,6 +1020,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isArrayBuffer(recvNode) {
 		return r.arrayBufferMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a SharedArrayBuffer receiver lowers to a value.SharedArrayBuffer
+	// method: the grow that only enlarges the shared run and the slice that copies a
+	// span into a fresh shared buffer. It routes alongside the ArrayBuffer path, after
+	// the view paths and before the Map, Set, and primitive paths, which expect a
+	// receiver a shared buffer is not.
+	if r.isSharedArrayBuffer(recvNode) {
+		return r.sharedArrayBufferMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a DataView receiver lowers to a value.DataView getter or setter (25
 	// §25.3). It routes here alongside the other view paths, after the typed-array and
 	// buffer checks and before the Map, Set, and primitive paths, which expect a

@@ -759,6 +759,15 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "ArrayBuffer")), nil
 		}
+		if r.sharedArrayBufferType(t) {
+			// A SharedArrayBuffer (25 §25.2) is the value model's shared backing store,
+			// spelled as a pointer to value.SharedArrayBuffer. It carries the same bytes an
+			// ArrayBuffer does but a distinct grow-and-slice surface, so it is its own type. It
+			// is not a struct shape, so it routes here before renderObject would intern its
+			// interface as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "SharedArrayBuffer")), nil
+		}
 		if r.dataViewType(t) {
 			// A DataView (section 25.3) is the value model's arbitrary-offset view over an
 			// ArrayBuffer, spelled as a pointer to value.DataView. Like the buffer it is not a
@@ -1046,6 +1055,30 @@ func (r *Renderer) arrayBufferType(t frontend.Type) bool {
 // the .byteLength read shares with the constructor lowering.
 func (r *Renderer) isArrayBuffer(n frontend.Node) bool {
 	return r.arrayBufferType(r.prog.TypeAt(n))
+}
+
+// sharedArrayBufferType reports whether an object type is a JavaScript
+// SharedArrayBuffer, the shared backing store bento maps to value.SharedArrayBuffer
+// (25 §25.2). Like ArrayBuffer it carries no BYTES_PER_ELEMENT and is named by its
+// type symbol; the distinct symbol name is what tells it from an ArrayBuffer, which
+// otherwise shares the byteLength and slice surface. A caller reaching this has
+// already ruled the type out as an array.
+func (r *Renderer) sharedArrayBufferType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "SharedArrayBuffer"
+}
+
+// isSharedArrayBuffer reports whether a node's type is a SharedArrayBuffer, the
+// receiver test the byteLength, grow, and slice lowerings share with the constructor
+// lowering.
+func (r *Renderer) isSharedArrayBuffer(n frontend.Node) bool {
+	return r.sharedArrayBufferType(r.prog.TypeAt(n))
 }
 
 // dataViewType reports whether a type is a DataView, the arbitrary-offset view over
