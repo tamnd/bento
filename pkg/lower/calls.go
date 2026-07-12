@@ -979,6 +979,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 			return r.staticMethodCall(info, method, argNodes)
 		}
 	}
+	// String.fromCharCode and String.fromCodePoint invoked through .call or .apply are
+	// static builtins reached indirectly, not a method on a value, so they lower to the
+	// same variadic value constructor the direct static call takes, an .apply over a
+	// runtime array spreading it into the call. It routes before the receiver-value
+	// paths below, which would reject the String.<static> receiver as a non-string.
+	if e, ok, err := r.stringStaticMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
+	}
 	// call on a plain function value invokes it with an explicit this and the
 	// remaining positional arguments. bento's plain functions take no this (a body
 	// that reads this hands back at its declaration), so f.call(thisArg, a, b) is the
@@ -1454,6 +1462,79 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
+}
+
+// stringStaticMethodCall lowers String.fromCharCode and String.fromCodePoint invoked
+// through .call or .apply, reporting ok=false when the receiver is not one of those two
+// statics so the caller falls through to the general method paths. Both statics are
+// variadic, so .call spells the arguments after the dropped this inline exactly as a
+// direct String.<static>(...) call would, and .apply gathers them: a plain array literal
+// reuses the direct-call path over its elements, and a runtime number array spreads into
+// the Go variadic call, the form a spread literal cannot express. This is the shape
+// regExpUtils.js's buildString reaches for, String.fromCodePoint.apply(null, codePoints),
+// to turn a code-point array of unknown length into a string. The this argument only sets
+// a receiver these statics never read, so it drops when evaluating it is pure.
+func (r *Renderer) stringStaticMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	if method != "call" && method != "apply" {
+		return nil, false, nil
+	}
+	if recvNode.Kind() != frontend.NodePropertyAccessExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(recvNode)
+	if len(kids) != 2 || !r.isGlobalRef(kids[0], "String") {
+		return nil, false, nil
+	}
+	static := r.prog.Text(kids[1])
+	if static != "fromCharCode" && static != "fromCodePoint" {
+		return nil, false, nil
+	}
+	if len(argNodes) > 0 && !r.droppableThisArg(argNodes[0]) {
+		return nil, false, &NotYetLowerable{Reason: "String." + static + " through " + method + " with a this argument that is not a plain value is a later slice"}
+	}
+	if method == "call" {
+		var rest []frontend.Node
+		if len(argNodes) > 1 {
+			rest = argNodes[1:]
+		}
+		e, err := r.stringStaticCall(static, rest)
+		return e, err == nil, err
+	}
+	// apply gathers the arguments in a single array. A missing array behaves as no
+	// arguments; a literal reuses the direct-call path over its elements.
+	if len(argNodes) < 2 {
+		e, err := r.stringStaticCall(static, nil)
+		return e, err == nil, err
+	}
+	arr := argNodes[1]
+	if arr.Kind() == frontend.NodeArrayLiteralExpression {
+		elems := r.prog.Children(arr)
+		for _, el := range elems {
+			if el.Kind() == frontend.NodeSpreadElement {
+				return nil, false, &NotYetLowerable{Reason: "String." + static + " through apply over an array literal with a spread element is a later slice"}
+			}
+		}
+		e, err := r.stringStaticCall(static, elems)
+		return e, err == nil, err
+	}
+	// A runtime array must be a number array so its Go form is a *value.Array[float64]
+	// whose Elems slice the variadic value constructor accepts when spread; any other
+	// element type hands back rather than emit a spread of the wrong type.
+	elemT, ok := r.prog.ElementType(r.prog.TypeAt(arr))
+	if !ok || elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || elemT.Flags&frontend.TypeNumber == 0 {
+		return nil, false, &NotYetLowerable{Reason: "String." + static + " through apply over a non-number array is a later slice"}
+	}
+	lowered, err := r.lowerExpr(arr)
+	if err != nil {
+		return nil, false, err
+	}
+	goName := "FromCharCode"
+	if static == "fromCodePoint" {
+		goName = "FromCodePoint"
+	}
+	r.requireImport(valuePkg)
+	elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("Elems")}}
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{elems}, Ellipsis: token.Pos(1)}, true, nil
 }
 
 // jsonCall lowers a static call on the global JSON namespace. stringify takes a
