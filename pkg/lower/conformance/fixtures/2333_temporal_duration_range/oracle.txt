@@ -1,0 +1,9 @@
+== stdout:
+RangeError
+RangeError
+RangeError
+RangeError
+RangeError
+no throw
+== exit:
+0

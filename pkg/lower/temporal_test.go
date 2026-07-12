@@ -121,9 +121,135 @@ func TestPlainDateHandBacks(t *testing.T) {
 			want: "Temporal.PlainDate.from over a string or a property bag is a later slice",
 		},
 		{
-			name: "Duration construction",
-			src:  "function makeDuration(): void { new Temporal.Duration(1); }",
-			want: "new Temporal.Duration is a later slice",
+			name: "PlainYearMonth construction",
+			src:  "function makeYearMonth(): void { new Temporal.PlainYearMonth(2020, 1); }",
+			want: "new Temporal.PlainYearMonth is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestDurationConstruction pins the construction: a Duration is built by value.NewDuration
+// over its ten number components, the missing trailing ones padded with zero, and a field
+// read lowers to a getter method.
+func TestDurationConstruction(t *testing.T) {
+	const src = `const d = new Temporal.Duration(1, 2, 3);
+console.log(d.days);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		"value.NewDuration(1, 2, 3, 0, 0, 0, 0, 0, 0, 0)",
+		".Days()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationTypeSlot pins the type slot: a parameter typed Temporal.Duration lowers to a
+// pointer to value.Duration rather than an interned struct shape.
+func TestDurationTypeSlot(t *testing.T) {
+	const src = `function daysOf(d: Temporal.Duration): number { return d.days; }
+console.log(daysOf(new Temporal.Duration(1, 2, 3)));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "*value.Duration") {
+		t.Errorf("rendered program missing %q:\n%s", "*value.Duration", got)
+	}
+}
+
+// TestDurationGetters pins the ten field getters plus sign and blank: each lowers to the
+// matching method on the value.Duration receiver.
+func TestDurationGetters(t *testing.T) {
+	cases := map[string]string{
+		"years":        ".Years()",
+		"months":       ".Months()",
+		"weeks":        ".Weeks()",
+		"days":         ".Days()",
+		"hours":        ".Hours()",
+		"minutes":      ".Minutes()",
+		"seconds":      ".Seconds()",
+		"milliseconds": ".Milliseconds()",
+		"microseconds": ".Microseconds()",
+		"nanoseconds":  ".Nanoseconds()",
+		"sign":         ".Sign()",
+		"blank":        ".Blank()",
+	}
+	for prop, want := range cases {
+		src := "const d = new Temporal.Duration(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);\nconsole.log(d." + prop + ");"
+		got := renderProgram(t, src)
+		if !strings.Contains(got, want) {
+			t.Errorf("getter .%s missing %q:\n%s", prop, want, got)
+		}
+	}
+}
+
+// TestDurationMethods pins negated, abs, toString, and toJSON to their value.Duration
+// methods.
+func TestDurationMethods(t *testing.T) {
+	const src = `const d = new Temporal.Duration(1, 2, 3);
+console.log(d.negated().days);
+console.log(d.abs().days);
+console.log(d.toString());
+console.log(d.toJSON());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Negated()", ".Abs()", ".ToString()", ".ToJSON()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationStatics pins Temporal.Duration.from over a Duration to value.DurationFrom.
+func TestDurationStatics(t *testing.T) {
+	const src = `const a = new Temporal.Duration(1, 2, 3);
+const b = Temporal.Duration.from(a);
+console.log(b.days);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "value.DurationFrom(") {
+		t.Errorf("rendered program missing %q:\n%s", "value.DurationFrom(", got)
+	}
+}
+
+// TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
+// methods, from over a string, and compare each hand back with a reason naming where the
+// work belongs, waiting on the relativeTo reference and the calendar model.
+func TestDurationHandBacks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "add arithmetic",
+			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst e = d.add(new Temporal.Duration(0, 0, 0, 1));\nconsole.log(e.days);",
+			want: "Temporal.Duration.prototype.add is a later slice",
+		},
+		{
+			name: "round",
+			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst r = d.round({ largestUnit: \"hours\" });\nconsole.log(r.hours);",
+			want: "Temporal.Duration.prototype.round is a later slice",
+		},
+		{
+			name: "total",
+			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconsole.log(d.total({ unit: \"hours\" }));",
+			want: "Temporal.Duration.prototype.total is a later slice",
+		},
+		{
+			name: "from a string",
+			src:  "const d = Temporal.Duration.from(\"P1Y\");\nconsole.log(d.years);",
+			want: "Temporal.Duration.from over a string or a property bag is a later slice",
+		},
+		{
+			name: "compare",
+			src:  "const a = new Temporal.Duration(0, 0, 0, 1);\nconst b = new Temporal.Duration(0, 0, 0, 2);\nconsole.log(Temporal.Duration.compare(a, b));",
+			want: "Temporal.Duration.compare is a later slice",
 		},
 	}
 	for _, c := range cases {

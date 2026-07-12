@@ -7,21 +7,24 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
-// This file lowers the Temporal area (10_advanced group 6), one type per cut. Three are
+// This file lowers the Temporal area (10_advanced group 6), one type per cut. Four are
 // hosted so far: PlainDate, a calendar date with no time and no zone over the ISO 8601
-// calendar; PlainTime, a wall-clock time with no date and no zone; and PlainDateTime, a
-// date paired with a wall-clock time. For each, construction, the static from over the
-// same type and compare, the clean field getters, and the equals, toString, and toJSON
-// methods lower to the matching value runtime type. Everything else, the arithmetic, the
-// reshaping, the cross-type conversions, from over a string or a property bag, and the
-// getters the checker types number | undefined, hands back with a named reason so the
-// compiler reports the exact ceiling.
+// calendar; PlainTime, a wall-clock time with no date and no zone; PlainDateTime, a date
+// paired with a wall-clock time; and Duration, a span of time as ten signed component
+// counts. For the three plain types, construction, the static from over the same type and
+// compare, the clean field getters, and the equals, toString, and toJSON methods lower to
+// the matching value runtime type. Duration hosts construction, the field getters plus sign
+// and blank, negated and abs, toString and toJSON, and from over a Duration. Everything
+// else, the arithmetic, the balancing and rounding, the cross-type conversions, from over a
+// string or a property bag, and the getters the checker types number | undefined, hands back
+// with a named reason so the compiler reports the exact ceiling.
 //
-// Each Temporal type follows the host-type model RegExp and the collections use: it is a
-// bare pointer in the generated Go (*value.PlainDate, *value.PlainTime, *value.PlainDateTime),
-// recognized by its declaring symbol name rather than a dedicated type flag. The Temporal
-// namespace is a two-level access (Temporal.PlainDate.compare), which no other built-in uses,
-// so the call and new paths carry a small amount of namespace-chain recognition this file drives.
+// Each Temporal type follows the host-type model RegExp and the collections use: it is a bare
+// pointer in the generated Go (*value.PlainDate, *value.PlainTime, *value.PlainDateTime,
+// *value.Duration), recognized by its declaring symbol name rather than a dedicated type flag.
+// The Temporal namespace is a two-level access (Temporal.PlainDate.compare), which no other
+// built-in uses, so the call and new paths carry a small amount of namespace-chain recognition
+// this file drives.
 
 // plainDateType reports whether a checker type is the Temporal.PlainDate interface.
 // Like the RegExp and DataView checks it is a shape test on the declaring symbol: an
@@ -80,6 +83,24 @@ func (r *Renderer) plainDateTimeType(t frontend.Type) bool {
 // isPlainDateTime reports whether the node's static type is a Temporal.PlainDateTime.
 func (r *Renderer) isPlainDateTime(n frontend.Node) bool {
 	return r.plainDateTimeType(r.prog.TypeAt(n))
+}
+
+// durationType reports whether a checker type is the Temporal.Duration interface, the
+// same shape test as plainDateType over the symbol name Duration.
+func (r *Renderer) durationType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && sym.Name == "Duration"
+}
+
+// isDuration reports whether the node's static type is a Temporal.Duration.
+func (r *Renderer) isDuration(n frontend.Node) bool {
+	return r.durationType(r.prog.TypeAt(n))
 }
 
 // plainDateAccessor maps a PlainDate field getter to the value.PlainDate method that
@@ -150,6 +171,102 @@ func plainDateTimeAccessor(prop string) (method string, ok bool) {
 		return m, true
 	}
 	return plainTimeAccessor(prop)
+}
+
+// durationAccessor maps a Duration field getter to the value.Duration method that reads
+// it, or reports ok=false for a name this slice does not host. The ten count fields plus
+// the derived sign and blank are all clean, so every getter maps to a method. sign reads
+// as a number and blank as a boolean, the types the checker gives them.
+func durationAccessor(prop string) (method string, ok bool) {
+	switch prop {
+	case "years":
+		return "Years", true
+	case "months":
+		return "Months", true
+	case "weeks":
+		return "Weeks", true
+	case "days":
+		return "Days", true
+	case "hours":
+		return "Hours", true
+	case "minutes":
+		return "Minutes", true
+	case "seconds":
+		return "Seconds", true
+	case "milliseconds":
+		return "Milliseconds", true
+	case "microseconds":
+		return "Microseconds", true
+	case "nanoseconds":
+		return "Nanoseconds", true
+	case "sign":
+		return "Sign", true
+	case "blank":
+		return "Blank", true
+	}
+	return "", false
+}
+
+// durationMethodCall lowers a method call on a Duration receiver. negated and abs return a
+// reshaped Duration, and toString and toJSON render the ISO 8601 duration string; each takes
+// no argument in this slice. The methods that balance or round across units (round, total,
+// add, subtract, with) need a relativeTo reference and the calendar model, so they hand back
+// with a named reason.
+func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "negated", "abs":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " takes no argument"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "Negated"
+		if method == "abs" {
+			name = "Abs"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "toString", "toJSON":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " with options is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "ToString"
+		if method == "toJSON" {
+			name = "ToJSON"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " is a later slice"}
+	}
+}
+
+// durationStaticCall lowers a static call on Temporal.Duration. from over a Duration lowers
+// to value.DurationFrom (the copy the specification makes); from over a string or a property
+// bag needs parsing this slice does not carry, and compare needs a relativeTo reference to
+// balance the calendar units, so both hand back.
+func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	switch method {
+	case "from":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.from takes exactly one argument"}
+		}
+		if !r.isDuration(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a string or a property bag is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "DurationFrom"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "Temporal.Duration." + method + " is a later slice"}
+	}
 }
 
 // plainDateMethodCall lowers a method call on a PlainDate receiver. equals(other)
@@ -288,6 +405,8 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 		return r.plainTimeStaticCall(method, argNodes)
 	case "PlainDateTime":
 		return r.plainDateTimeStaticCall(method, argNodes)
+	case "Duration":
+		return r.durationStaticCall(method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal." + typeName + " is a later slice"}
 	}
@@ -425,6 +544,8 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 		return r.newPlainTime(argNodes)
 	case "PlainDateTime":
 		return r.newPlainDateTime(argNodes)
+	case "Duration":
+		return r.newDuration(argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "new Temporal." + typeName + " is a later slice"}
 	}
@@ -513,4 +634,34 @@ func (r *Renderer) newPlainDateTime(argNodes []frontend.Node) (ast.Expr, error) 
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewPlainDateTime"), Args: args}, nil
+}
+
+// newDuration lowers new Temporal.Duration over its up-to-ten number components (years,
+// months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds),
+// every one optional and defaulting to zero. A missing trailing component is padded with a
+// float64 zero here so the runtime constructor always sees ten numbers. Each supplied
+// argument must lower as a number, so a non-number component hands back; the runtime runs
+// ToIntegerIfIntegral and RejectDuration, so a fractional, non-finite, mixed-sign, or
+// out-of-range component throws a RangeError at run time the way the specification requires.
+func (r *Renderer) newDuration(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) > 10 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.Duration takes at most ten components"}
+	}
+	args := make([]ast.Expr, 10)
+	for i := range args {
+		if i >= len(argNodes) {
+			args[i] = &ast.BasicLit{Kind: token.FLOAT, Value: "0"}
+			continue
+		}
+		if !r.isNumber(argNodes[i]) {
+			return nil, &NotYetLowerable{Reason: "new Temporal.Duration with a non-number component is a later slice"}
+		}
+		lowered, err := r.lowerExpr(argNodes[i])
+		if err != nil {
+			return nil, err
+		}
+		args[i] = lowered
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewDuration"), Args: args}, nil
 }

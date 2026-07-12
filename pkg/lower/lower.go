@@ -872,6 +872,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "PlainDateTime")), nil
 		}
+		if r.durationType(t) {
+			// A Temporal.Duration (Temporal §7) is the value model's span of time, spelled as
+			// a pointer to value.Duration, routed here for the same reason as the plain types:
+			// it is a host type, not a struct shape.
+			r.requireImport(valuePkg)
+			return star(sel("value", "Duration")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:

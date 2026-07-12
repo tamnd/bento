@@ -1,6 +1,9 @@
 package value
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // mustPlainDate builds a PlainDate and fails the test if construction threw.
 func mustPlainDate(t *testing.T, y, m, d float64) *PlainDate {
@@ -502,5 +505,180 @@ func TestPlainDateTimeRejects(t *testing.T) {
 	// The all-max valid boundary must not throw.
 	if plainDateTimeThrows([9]float64{2020, 12, 31, 23, 59, 59, 999, 999, 999}) {
 		t.Error("NewPlainDateTime at the valid maximum threw")
+	}
+}
+
+// mustDuration builds a Duration and fails the test if construction threw.
+func mustDuration(t *testing.T, a ...float64) *Duration {
+	t.Helper()
+	f := [10]float64{}
+	copy(f[:], a)
+	var d *Duration
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("NewDuration(%v) threw: %v", a, r)
+			}
+		}()
+		d = NewDuration(f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9])
+	}()
+	return d
+}
+
+// durationThrows reports whether NewDuration throws a RangeError for the args.
+func durationThrows(a [10]float64) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewDuration(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9])
+	return false
+}
+
+// TestDurationFields checks the ten field getters against a duration with every field set,
+// the values taken from @js-temporal/polyfill.
+func TestDurationFields(t *testing.T) {
+	d := mustDuration(t, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	fields := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"Years", d.Years(), 1},
+		{"Months", d.Months(), 2},
+		{"Weeks", d.Weeks(), 3},
+		{"Days", d.Days(), 4},
+		{"Hours", d.Hours(), 5},
+		{"Minutes", d.Minutes(), 6},
+		{"Seconds", d.Seconds(), 7},
+		{"Milliseconds", d.Milliseconds(), 8},
+		{"Microseconds", d.Microseconds(), 9},
+		{"Nanoseconds", d.Nanoseconds(), 10},
+		{"Sign", d.Sign(), 1},
+	}
+	for _, f := range fields {
+		if f.got != f.want {
+			t.Errorf("%s = %v, want %v", f.name, f.got, f.want)
+		}
+	}
+	if d.Blank() {
+		t.Error("Blank = true, want false")
+	}
+}
+
+// TestDurationSignAndBlank checks sign and blank across a positive, a negative, and an
+// empty duration, and that the sign follows the first non-zero field.
+func TestDurationSignAndBlank(t *testing.T) {
+	empty := mustDuration(t)
+	if empty.Sign() != 0 || !empty.Blank() {
+		t.Errorf("empty: sign = %v, blank = %v, want 0 and true", empty.Sign(), empty.Blank())
+	}
+	pos := mustDuration(t, 0, 0, 1)
+	if pos.Sign() != 1 || pos.Blank() {
+		t.Errorf("positive: sign = %v, blank = %v, want 1 and false", pos.Sign(), pos.Blank())
+	}
+	neg := mustDuration(t, 0, 0, 0, -4)
+	if neg.Sign() != -1 || neg.Blank() {
+		t.Errorf("negative: sign = %v, blank = %v, want -1 and false", neg.Sign(), neg.Blank())
+	}
+	// A negative-zero component counts as zero, so a duration of only -0 is blank.
+	negZero := mustDuration(t, 0, 0, 0, math.Copysign(0, -1))
+	if negZero.Sign() != 0 || !negZero.Blank() {
+		t.Errorf("negative zero: sign = %v, blank = %v, want 0 and true", negZero.Sign(), negZero.Blank())
+	}
+}
+
+// TestDurationToString checks the ISO 8601 duration string, including the combined
+// fractional seconds and the empty "PT0S", against the polyfill.
+func TestDurationToString(t *testing.T) {
+	cases := []struct {
+		args []float64
+		want string
+	}{
+		{[]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, "P1Y2M3W4DT5H6M7.00800901S"},
+		{[]float64{5}, "P5Y"},
+		{[]float64{0, 0, 3}, "P3W"},
+		{[]float64{0, 0, 0, 4, 0, 0, 0, 500}, "P4DT0.5S"},
+		{[]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 500}, "PT0.0000005S"},
+		{[]float64{0, 0, 0, 0, 0, 90}, "PT90M"},
+		{[]float64{0, 0, 0, 0, 0, 0, -1, -500}, "-PT1.5S"},
+		{[]float64{0, 0, 0, 0, 0, 0, 0, 0, 7}, "PT0.000007S"},
+		{[]float64{0, 0, 0, 0, 0, 0, 0, 7}, "PT0.007S"},
+		{[]float64{0, 0, 0, 0, 0, 0, 0, 1500}, "PT1.5S"},
+		{nil, "PT0S"},
+	}
+	for _, c := range cases {
+		d := mustDuration(t, c.args...)
+		if got := d.ToString().ToGoString(); got != c.want {
+			t.Errorf("Duration(%v).ToString() = %q, want %q", c.args, got, c.want)
+		}
+		if got := d.ToJSON().ToGoString(); got != c.want {
+			t.Errorf("Duration(%v).ToJSON() = %q, want %q", c.args, got, c.want)
+		}
+	}
+}
+
+// TestDurationNegatedAndAbs checks that negated flips every sign and abs makes every field
+// non-negative, and that neither mutates the receiver.
+func TestDurationNegatedAndAbs(t *testing.T) {
+	d := mustDuration(t, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	neg := d.Negated()
+	if got := neg.ToString().ToGoString(); got != "-P1Y2M3W4DT5H6M7.00800901S" {
+		t.Errorf("negated = %q, want -P1Y2M3W4DT5H6M7.00800901S", got)
+	}
+	if neg.Sign() != -1 {
+		t.Errorf("negated sign = %v, want -1", neg.Sign())
+	}
+	back := neg.Abs()
+	if got := back.ToString().ToGoString(); got != "P1Y2M3W4DT5H6M7.00800901S" {
+		t.Errorf("abs of negated = %q, want the positive form", got)
+	}
+	if d.Sign() != 1 {
+		t.Error("negated or abs mutated the receiver's sign")
+	}
+}
+
+// TestDurationFromCopies proves from returns a distinct object equal to its source.
+func TestDurationFromCopies(t *testing.T) {
+	a := mustDuration(t, 1, 2, 3)
+	b := DurationFrom(a)
+	if a == b {
+		t.Error("DurationFrom returned the same pointer, want a copy")
+	}
+	if a.ToString().ToGoString() != b.ToString().ToGoString() {
+		t.Error("from copy does not equal its source")
+	}
+}
+
+// TestDurationRejects checks the RangeError cases against the polyfill: a non-integral
+// component (Duration rejects rather than truncates), a NaN or non-finite component, a
+// mixed-sign set, a years field at 2^32, and a seconds field at 2^53.
+func TestDurationRejects(t *testing.T) {
+	throwing := [][10]float64{
+		{1.5},                       // non-integral
+		{nan()},                     // NaN
+		{inf(1)},                    // non-finite
+		{1, -2},                     // mixed sign
+		{1 << 32},                   // years at the 2^32 bound
+		{0, 0, 0, 0, 0, 0, 1 << 53}, // seconds at the 2^53 bound
+	}
+	for _, c := range throwing {
+		if !durationThrows(c) {
+			t.Errorf("NewDuration%v did not throw", c)
+		}
+	}
+	valid := [][10]float64{
+		{(1 << 32) - 1},                     // just under the years bound
+		{0, 0, 0, 0, 0, 0, (1 << 53) - 1},   // just under the seconds bound
+		{0, 0, 0, 0, 0, 0, 0, 1 << 53},      // milliseconds far above 2^53 still normalizes in range
+		{0, 0, 0, math.Copysign(0, -1), -4}, // a negative-zero field does not clash with a negative field
+	}
+	for _, c := range valid {
+		if durationThrows(c) {
+			t.Errorf("NewDuration%v threw at a valid value", c)
+		}
 	}
 }
