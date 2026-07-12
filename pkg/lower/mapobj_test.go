@@ -56,11 +56,12 @@ func TestMapConstructorByKeyKind(t *testing.T) {
 }
 
 // TestMapHandsBackUnsupportedForms proves the map lowering claims only the subset it
-// can emit soundly and hands the rest back. The entries-argument constructor builds
-// from a list bento does not lower yet, a non-primitive key has no value constructor,
-// and clear plus a method with no mapping are later slices, so each routes to the
-// interpreter rather than emitting wrong or partial Go.
+// can emit soundly and hands the rest back. The entries-argument constructor lowers
+// only an inline array literal of literal pairs: a built-in Map source drains through
+// an iterator walk a later slice brings, and an entry passed as a binding rather than
+// a literal pair carries its key and value in a form the fill loop cannot read yet,
+// so each routes to the interpreter rather than emitting wrong or partial Go.
 func TestMapHandsBackUnsupportedForms(t *testing.T) {
-	handsBack(t, "const m = new Map<number, number>([[1, 2]]); console.log(m.size);\n")
-	handsBack(t, "const m = new Map<number, number>(); m.forEach(v => console.log(v));\n")
+	handsBack(t, "const a = new Map<number, number>(); const m = new Map<number, number>(a); console.log(m.size);\n")
+	handsBack(t, "const p: [number, number] = [1, 2]; const m = new Map<number, number>([p]); console.log(m.size);\n")
 }
