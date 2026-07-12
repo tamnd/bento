@@ -1,5 +1,7 @@
 package value
 
+import "math"
+
 // The iterator helpers are the lazy iterator methods ES2024 hangs off
 // Iterator.prototype: map, filter, take, drop, and flatMap return a new iterator
 // that pulls from the source on demand, and reduce, toArray, forEach, some, every,
@@ -71,6 +73,62 @@ func IterFilter(next func() IterResult, fn Value) *IterHelper {
 				return IterResult{Value: r.Value}
 			}
 		}
+	}}
+}
+
+// iterLimit validates a take or drop count the way the spec does before either helper
+// runs: coerce to a number, reject NaN with a RangeError, truncate toward zero the way
+// ToIntegerOrInfinity does, and reject a negative count with a RangeError. A count of
+// positive infinity passes through, so take(Infinity) keeps every value and
+// drop(Infinity) skips every value.
+func iterLimit(limit Value) float64 {
+	n := ToNumber(limit)
+	if math.IsNaN(n) {
+		Throw(NewRangeError(FromGoString("Iterator limit must not be NaN")))
+	}
+	n = toInteger(n)
+	if n < 0 {
+		Throw(NewRangeError(FromGoString("Iterator limit must not be negative")))
+	}
+	return n
+}
+
+// IterTake yields at most limit values from the source and then reports done, the lazy
+// take. It counts down as values are pulled, so a source shorter than the limit is
+// yielded whole and a source longer is cut off once the count runs out, without pulling
+// the values past the cut. A limit of positive infinity never runs out, so the whole
+// source is yielded.
+func IterTake(next func() IterResult, limit Value) *IterHelper {
+	remaining := iterLimit(limit)
+	return &IterHelper{next: func() IterResult {
+		if remaining <= 0 {
+			return IterResult{Value: Undefined, Done: true}
+		}
+		remaining--
+		return next()
+	}}
+}
+
+// IterDrop skips the first limit values from the source and then yields the rest, the
+// lazy drop. It pulls and discards up to the count on the first advance, stopping early
+// if the source runs out inside the skip, and yields every value after, so dropping more
+// than the source holds yields nothing. A limit of positive infinity skips the whole
+// source.
+func IterDrop(next func() IterResult, limit Value) *IterHelper {
+	toDrop := iterLimit(limit)
+	skipped := false
+	return &IterHelper{next: func() IterResult {
+		if !skipped {
+			skipped = true
+			for toDrop > 0 {
+				r := next()
+				if r.Done {
+					return r
+				}
+				toDrop--
+			}
+		}
+		return next()
 	}}
 }
 

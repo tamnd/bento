@@ -1,6 +1,9 @@
 package value
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // drain pulls a helper to exhaustion and returns the numbers it yielded, the shape
 // most helper tests check against.
@@ -71,6 +74,60 @@ func TestIterMapFilterChain(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("chain[%d] = %v, want %v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestIterTake yields at most the count and then reports done, and a count larger than
+// the source yields the whole source.
+func TestIterTake(t *testing.T) {
+	newSrc := func() func() IterResult {
+		return NewArrayIter(NewArrayValue([]Value{Number(1), Number(2), Number(3), Number(4)}), ArrayIterValues).Next
+	}
+	if got := drain(IterTake(newSrc(), Number(2))); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Errorf("take(2) = %v, want [1 2]", got)
+	}
+	if got := drain(IterTake(newSrc(), Number(10))); len(got) != 4 {
+		t.Errorf("take(10) over four values = %v, want all four", got)
+	}
+	if got := drain(IterTake(newSrc(), Number(0))); len(got) != 0 {
+		t.Errorf("take(0) = %v, want nothing", got)
+	}
+}
+
+// TestIterDrop skips the count and yields the rest, and dropping more than the source
+// holds yields nothing.
+func TestIterDrop(t *testing.T) {
+	newSrc := func() func() IterResult {
+		return NewArrayIter(NewArrayValue([]Value{Number(1), Number(2), Number(3), Number(4)}), ArrayIterValues).Next
+	}
+	if got := drain(IterDrop(newSrc(), Number(2))); len(got) != 2 || got[0] != 3 || got[1] != 4 {
+		t.Errorf("drop(2) = %v, want [3 4]", got)
+	}
+	if got := drain(IterDrop(newSrc(), Number(10))); len(got) != 0 {
+		t.Errorf("drop(10) over four values = %v, want nothing", got)
+	}
+}
+
+// TestIterLimitRangeError rejects a NaN or negative count with a RangeError before the
+// helper yields anything, the validation take and drop share.
+func TestIterLimitRangeError(t *testing.T) {
+	cases := []struct {
+		name  string
+		limit Value
+	}{
+		{"nan", Number(math.NaN())},
+		{"negative", Number(-1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("iterLimit(%s) did not throw", tc.name)
+				}
+			}()
+			iterLimit(tc.limit)
+		})
 	}
 }
 

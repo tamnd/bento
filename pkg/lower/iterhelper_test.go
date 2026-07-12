@@ -31,6 +31,16 @@ func TestIterHelperEmits(t *testing.T) {
 			"value.IterFilter(value.IterMap(",
 		},
 		{
+			"take",
+			"export function f(a: number[]): void { a.values().take(3); }\n",
+			"value.IterTake(",
+		},
+		{
+			"drop",
+			"export function f(a: number[]): void { a.values().drop(3); }\n",
+			"value.IterDrop(",
+		},
+		{
 			"next",
 			"export function f(a: number[]): number { const it = a.values().map((n: number): number => n * 2); const r = it.next(); return r.done ? 0 : 1; }\n",
 			"it.Next()",

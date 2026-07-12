@@ -92,6 +92,24 @@ func (r *Renderer) iterHelperMethodCall(recvNode frontend.Node, method string, a
 		r.requireImport(valuePkg)
 		goName := map[string]string{"map": "IterMap", "filter": "IterFilter"}[method]
 		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{next, fn}}, true, nil
+	case "take", "drop":
+		if len(argNodes) != 1 {
+			return nil, false, &NotYetLowerable{Reason: "an iterator helper's ." + method + "() takes exactly a count"}
+		}
+		next, err := r.iterReceiverNext(recvNode)
+		if err != nil {
+			return nil, false, err
+		}
+		// The count boxes into a value.Value so the runtime runs the spec's ToNumber on
+		// it and throws a RangeError for a NaN or negative count, the same validation
+		// whatever the static type of the argument is.
+		limit, err := r.boxOperand(argNodes[0])
+		if err != nil {
+			return nil, false, err
+		}
+		r.requireImport(valuePkg)
+		goName := map[string]string{"take": "IterTake", "drop": "IterDrop"}[method]
+		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{next, limit}}, true, nil
 	default:
 		return nil, false, &NotYetLowerable{Reason: "an iterator helper's ." + method + "() is a later slice"}
 	}
