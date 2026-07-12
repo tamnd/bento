@@ -214,6 +214,35 @@ func TestTypedArrayReadOutOfRange(t *testing.T) {
 	}
 }
 
+// TestTypedArrayNonCanonicalIndexIsNoOp proves a write to a fractional, negative, or
+// not-a-number index is dropped rather than writing a truncated neighbor, and a read
+// of one reads as 0 on the numeric path, the no-op the spec requires.
+func TestTypedArrayNonCanonicalIndexIsNoOp(t *testing.T) {
+	a := Int32ArrayOf(10, 20, 30)
+	a.SetAt(1.5, 99) // fractional: not a canonical index, dropped
+	a.SetAt(-1, 99)  // negative: dropped
+	a.SetAt(nanValue(), 99)
+	assertElems(t, a.Len(), a.At, []float64{10, 20, 30})
+	if got := a.At(1.5); got != 0 {
+		t.Errorf("At(1.5) = %v, want 0 (non-canonical reads as 0 on the numeric path)", got)
+	}
+}
+
+// TestTypedArrayGetIndexBoxesUndefined proves the boxed read answers a Number for a
+// canonical in-range index and undefined for an out-of-range or non-canonical one,
+// the value a dynamic consumer sees where the numeric At reads a stand-in 0.
+func TestTypedArrayGetIndexBoxesUndefined(t *testing.T) {
+	a := Int32ArrayOf(10, 20)
+	if got := a.GetIndex(0); got.Kind() != KindNumber || got.AsNumber() != 10 {
+		t.Errorf("GetIndex(0) = %v, want the Number 10", got)
+	}
+	for _, i := range []float64{2, -1, 1.5, nanValue()} {
+		if got := a.GetIndex(i); got.Kind() != KindUndefined {
+			t.Errorf("GetIndex(%v) = %v, want undefined", i, got)
+		}
+	}
+}
+
 // assertElems checks a typed array's length and every element against a want list
 // read back through At, the shared body of the family's element assertions.
 func assertElems(t *testing.T, gotLen float64, at func(float64) float64, want []float64) {

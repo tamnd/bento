@@ -170,27 +170,42 @@ func (a *TypedArray[T]) ByteLength() float64 { return float64(len(a.data) * elem
 func (a *TypedArray[T]) BytesPerElement() float64 { return float64(elemBytes[T]()) }
 
 // At reads the element a JavaScript index expression a[i] selects, widened to the
-// Number a typed-array read hands out. The index is a Number, so it arrives as a
-// float64 and truncates toward zero. An index outside the array reads as 0 rather
-// than undefined, matching the covered subset the byte buffer's At documents.
+// Number a typed-array read hands out. Only a canonical integer index inside the
+// array names an element; an out-of-range or non-canonical index (a fractional
+// value, a negative, or NaN) reads as 0 here rather than the undefined the spec
+// gives, the covered subset for the numeric read path, since At's result type is a
+// Number. A read that flows into a dynamic slot takes GetIndex instead, which does
+// answer undefined for those indices.
 func (a *TypedArray[T]) At(i float64) float64 {
-	idx := typedIndex(i)
-	if idx >= 0 && idx < len(a.data) {
+	if idx, ok := typedElemIndex(i, len(a.data)); ok {
 		return float64(a.data[idx])
 	}
 	return 0
 }
 
 // SetAt writes the element a JavaScript assignment a[i] = v stores, coercing the
-// value with the element kind's store rule so a number outside the element's
-// range wraps or clamps exactly as JavaScript does. A write past the end of the
-// array is ignored, matching JavaScript, which silently drops an out-of-range
-// typed-array element assignment rather than growing the array.
+// value with the element kind's store rule so a number outside the element's range
+// wraps or clamps exactly as JavaScript does. Only a canonical integer index inside
+// the array names an element; a write to an out-of-range or non-canonical index is
+// dropped, the no-op the spec requires rather than growing the array or writing a
+// truncated neighbor.
 func (a *TypedArray[T]) SetAt(i float64, v float64) {
-	idx := typedIndex(i)
-	if idx >= 0 && idx < len(a.data) {
+	if idx, ok := typedElemIndex(i, len(a.data)); ok {
 		a.data[idx] = a.coerce(v)
 	}
+}
+
+// GetIndex reads the element a JavaScript index selects as a boxed Value, the form
+// a typed-array read takes when it flows into a dynamic slot. It answers the element
+// as a Number for a canonical in-range index and the undefined singleton for an
+// out-of-range or non-canonical one, so ta[100] and ta[1.5] read as undefined the
+// way the spec requires, which the numeric At cannot express because its result is a
+// Number.
+func (a *TypedArray[T]) GetIndex(i float64) Value {
+	if idx, ok := typedElemIndex(i, len(a.data)); ok {
+		return Number(float64(a.data[idx]))
+	}
+	return Undefined
 }
 
 // AtI reads the element at a Go int index, the integer-index form of At the
@@ -199,7 +214,7 @@ func (a *TypedArray[T]) SetAt(i float64, v float64) {
 // takes the index already narrowed. The bounds check and the out-of-range 0 are
 // the same as At, so the two reads agree on every index; only the index type
 // differs, which is what keeps a proven-integer index a native slice index rather
-// than a float that round trips through typedIndex on every access.
+// than a float that round trips through the canonical-index check on every access.
 func (a *TypedArray[T]) AtI(i int) float64 {
 	if i >= 0 && i < len(a.data) {
 		return float64(a.data[i])
@@ -311,14 +326,23 @@ func typedLen(length float64) int {
 	return n
 }
 
-// typedIndex truncates a JavaScript index Number to a Go slice index, sending NaN
-// to 0 the way ToIntegerOrInfinity does. The caller bounds-checks the result, so
-// an out-of-range index reads as 0 or drops a write rather than panic.
-func typedIndex(i float64) int {
-	if i != i {
-		return 0
+// typedElemIndex resolves a JavaScript Number index to a Go element index, and
+// reports ok only for a canonical integer index that lies inside the view. A
+// canonical index is a non-negative integer with no fractional part and neither NaN
+// nor an infinity; every other Number, a fractional value, a negative, an
+// out-of-range integer, or NaN, names no element, so a read of it is undefined and a
+// write to it is dropped, the no-op the spec requires. The negative-zero index
+// canonicalizes to 0 and is in range when the view is non-empty, matching
+// ToString(-0) === "0".
+func typedElemIndex(i float64, length int) (int, bool) {
+	if i != i || math.IsInf(i, 0) || i != math.Trunc(i) {
+		return 0, false
 	}
-	return int(i) // JavaScript ToInteger truncates toward zero.
+	idx := int(i)
+	if idx < 0 || idx >= length {
+		return 0, false
+	}
+	return idx, true
 }
 
 // wrapMod reduces a JavaScript number into the range [0, mod) with ECMAScript's

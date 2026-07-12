@@ -134,18 +134,13 @@ func (a *Uint8Array) Floats() []float64 {
 }
 
 // At reads the byte a JavaScript index expression a[i] selects, as a Number in the
-// range 0 to 255. The index is a Number, so it arrives as a float64 and truncates
-// toward zero the way a JavaScript index does. An index outside the buffer reads
-// as 0 rather than undefined, matching the covered subset the typed Array.At
-// documents: the programs that index a buffer do so within its bounds, and the
-// noUncheckedIndexedAccess shape that types the read as number | undefined is a
-// later slice.
+// range 0 to 255. Only a canonical integer index inside the buffer names a byte; an
+// out-of-range or non-canonical index reads as 0 here rather than the undefined the
+// spec gives, the covered subset for the numeric read path, since At's result is a
+// Number. A read that flows into a dynamic slot takes GetIndex, which answers
+// undefined for those indices.
 func (a *Uint8Array) At(i float64) float64 {
-	idx := int(i) // JavaScript ToInteger truncates toward zero.
-	if i != i {   // NaN truncates to 0, matching ToIntegerOrInfinity.
-		idx = 0
-	}
-	if idx >= 0 && idx < len(a.bytes) {
+	if idx, ok := typedElemIndex(i, len(a.bytes)); ok {
 		return float64(a.bytes[idx])
 	}
 	return 0
@@ -153,17 +148,25 @@ func (a *Uint8Array) At(i float64) float64 {
 
 // SetAt writes the byte a JavaScript assignment a[i] = v stores. The value is
 // coerced to a byte with ToUint8, so a number outside 0 to 255 wraps modulo 256
-// exactly as JavaScript does for a Uint8Array element. A write past the end of the
-// buffer is ignored, matching JavaScript, which silently drops an out-of-range
-// typed-array element assignment rather than growing the buffer.
+// exactly as JavaScript does for a Uint8Array element. Only a canonical integer
+// index inside the buffer names a byte; a write to an out-of-range or non-canonical
+// index is dropped, the no-op the spec requires rather than growing the buffer.
 func (a *Uint8Array) SetAt(i float64, v float64) {
-	idx := int(i)
-	if i != i {
-		idx = 0
-	}
-	if idx >= 0 && idx < len(a.bytes) {
+	if idx, ok := typedElemIndex(i, len(a.bytes)); ok {
 		a.bytes[idx] = toUint8(v)
 	}
+}
+
+// GetIndex reads the byte a JavaScript index selects as a boxed Value, the form a
+// Uint8Array read takes when it flows into a dynamic slot. It answers the byte as a
+// Number for a canonical in-range index and the undefined singleton for an
+// out-of-range or non-canonical one, so a[100] and a[1.5] read as undefined the way
+// the spec requires, which the numeric At cannot express.
+func (a *Uint8Array) GetIndex(i float64) Value {
+	if idx, ok := typedElemIndex(i, len(a.bytes)); ok {
+		return Number(float64(a.bytes[idx]))
+	}
+	return Undefined
 }
 
 // toUint8 is ECMAScript ToUint8 (7.1.10): a not-a-number or infinite value becomes

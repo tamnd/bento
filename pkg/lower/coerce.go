@@ -491,6 +491,17 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if r.producesBoxedValue(src) {
 		return expr, nil
 	}
+	// A typed-array element read flowing into a dynamic slot boxes through GetIndex,
+	// the read that answers the undefined an out-of-range or non-canonical index
+	// gives, rather than value.Number over the numeric At, which would box a stand-in
+	// 0 where the spec reads undefined. It routes before the primitive number case,
+	// which would otherwise wrap the numeric read; the lowered expr from that path is
+	// dropped for the GetIndex form.
+	if boxed, ok, err := r.typedArrayBoxedRead(src); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	// A function value flowing into a dynamic slot boxes into a callable value.Value,
 	// so a dynamic call site can invoke it without knowing its static signature. It
 	// routes before the primitive switch, whose kind tests a function type would
