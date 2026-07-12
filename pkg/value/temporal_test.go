@@ -872,3 +872,59 @@ func TestPlainMonthDayTruncatesAndRejects(t *testing.T) {
 		t.Error("NewPlainMonthDay(2, 29) threw, but the leap reference year admits it")
 	}
 }
+
+// TestPlainDateEra pins that the ISO calendar has no era: era and eraYear read as
+// undefined optionals, the value every ISO date gives for the era-based fields.
+func TestPlainDateEra(t *testing.T) {
+	pd := NewPlainDate(2020, 3, 15)
+	if !pd.Era().IsUndefined() {
+		t.Errorf("Era() = %v, want undefined", pd.Era())
+	}
+	if !pd.EraYear().IsUndefined() {
+		t.Errorf("EraYear() = %v, want undefined", pd.EraYear())
+	}
+}
+
+// TestPlainDateWeekOfYear pins the ISO 8601 week date across the boundaries where a
+// week belongs to the neighbouring year, checked against @js-temporal/polyfill.
+func TestPlainDateWeekOfYear(t *testing.T) {
+	cases := []struct {
+		y, m, d        int
+		week, weekYear float64
+	}{
+		{2020, 1, 1, 1, 2020},    // first week of its own year
+		{2020, 6, 15, 25, 2020},  // mid-year
+		{2020, 3, 15, 11, 2020},  // last day of a week
+		{2020, 12, 31, 53, 2020}, // a 53-week year's last week
+		{2021, 1, 1, 53, 2020},   // early January in the previous year's week 53
+		{2019, 12, 30, 1, 2020},  // late December in the next year's week 1
+		{2018, 12, 31, 1, 2019},  // late December, week 1 of the next year
+		{2023, 1, 1, 52, 2022},   // early January in the previous year's week 52
+	}
+	for _, c := range cases {
+		pd := NewPlainDate(float64(c.y), float64(c.m), float64(c.d))
+		w := pd.WeekOfYear()
+		if w.IsUndefined() || w.Get() != c.week {
+			t.Errorf("%d-%02d-%02d WeekOfYear() = %v, want %v", c.y, c.m, c.d, w, c.week)
+		}
+		wy := pd.YearOfWeek()
+		if wy.IsUndefined() || wy.Get() != c.weekYear {
+			t.Errorf("%d-%02d-%02d YearOfWeek() = %v, want %v", c.y, c.m, c.d, wy, c.weekYear)
+		}
+	}
+}
+
+// TestPlainDateTimeCalendarFields pins that a date-time answers the calendar-dependent
+// getters off its date half, so it reads the same as the PlainDate it carries.
+func TestPlainDateTimeCalendarFields(t *testing.T) {
+	dt := NewPlainDateTime(2020, 3, 15, 10, 30, 0, 0, 0, 0)
+	if !dt.Era().IsUndefined() || !dt.EraYear().IsUndefined() {
+		t.Errorf("date-time era/eraYear = %v/%v, want undefined", dt.Era(), dt.EraYear())
+	}
+	if w := dt.WeekOfYear(); w.IsUndefined() || w.Get() != 11 {
+		t.Errorf("date-time WeekOfYear() = %v, want 11", w)
+	}
+	if wy := dt.YearOfWeek(); wy.IsUndefined() || wy.Get() != 2020 {
+		t.Errorf("date-time YearOfWeek() = %v, want 2020", wy)
+	}
+}
