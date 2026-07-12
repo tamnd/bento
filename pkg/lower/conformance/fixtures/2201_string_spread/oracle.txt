@@ -1,0 +1,7 @@
+== stdout:
+3
+abc
+x-y-z-w
+3
+== exit:
+0
