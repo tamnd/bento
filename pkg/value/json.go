@@ -131,7 +131,44 @@ func encodeJSON(b *strings.Builder, v any) {
 			// value does not reach NumField and panic.
 			return
 		}
+		if r, ok := jsonToJSONGo(v); ok {
+			// A value whose class declares a toJSON method serializes that method's
+			// return in its place, so the walk re-dispatches on the returned value.
+			encodeJSON(b, r)
+			return
+		}
 		encodeJSONObject(b, reflect.ValueOf(v))
+	}
+}
+
+// jsonToJSONGo applies a value's toJSON hook, the first step of
+// SerializeJSONProperty: a value with a toJSON method serializes what the method
+// returns rather than the value itself. A lowered class method named toJSON
+// becomes an exported Go method ToJSON, which this finds by reflection so the
+// serializer need not know each class's type. It reports the method's result and
+// true when the value has such a method taking no arguments or a single string
+// key (passed the empty string, the key of the value the caller is serializing at
+// the point a hook is consulted), and false when it does not, so the caller falls
+// back to the reflection walk over the value's fields.
+func jsonToJSONGo(v any) (any, bool) {
+	m := reflect.ValueOf(v).MethodByName("ToJSON")
+	if !m.IsValid() {
+		return nil, false
+	}
+	mt := m.Type()
+	if mt.NumOut() != 1 {
+		return nil, false
+	}
+	switch mt.NumIn() {
+	case 0:
+		return m.Call(nil)[0].Interface(), true
+	case 1:
+		if mt.In(0) != reflect.TypeOf(BStr{}) {
+			return nil, false
+		}
+		return m.Call([]reflect.Value{reflect.ValueOf(BStr{})})[0].Interface(), true
+	default:
+		return nil, false
 	}
 }
 

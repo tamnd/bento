@@ -254,6 +254,9 @@ func jsonToValue(v any) Value {
 		if jsonUndefinedGo(v) {
 			return Undefined
 		}
+		if r, ok := jsonToJSONGo(v); ok {
+			return jsonToValue(r)
+		}
 		return jsonStructToValue(reflect.ValueOf(v))
 	}
 }
