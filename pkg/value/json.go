@@ -26,6 +26,21 @@ type jsonArray interface {
 	jsonElements() []any
 }
 
+// jsonOptional is the hook a value.Opt[T] field exposes so the encoder can tell an
+// absent optional property from a present one without reaching through the Opt's
+// unexported present flag by reflection. An optional property lowers to an Opt[T]
+// field, and JSON.stringify omits a property whose value is undefined, which for
+// an Opt is the not-present case; jsonOptField reports the wrapped value and
+// whether it is present, so the walk omits the key when it is not and serializes
+// the wrapped value when it is.
+type jsonOptional interface {
+	jsonOptField() (any, bool)
+}
+
+// jsonOptField reports the wrapped value boxed as any and whether the optional
+// holds it, the hook encodeJSONFields reads to omit an absent optional property.
+func (o Opt[T]) jsonOptField() (any, bool) { return o.val, o.present }
+
 // jsonArmer is the hook a generated tagged-sum union exposes so the encoder reads
 // its active member rather than reflecting the struct's unexported arm fields into
 // an empty object. The method is exported because the generated union type lives in
@@ -245,6 +260,18 @@ func encodeJSONFields(b *strings.Builder, rv reflect.Value, first *bool) {
 			continue
 		}
 		val := rv.Field(i).Interface()
+		// An optional property lowers to a value.Opt[T]. JSON.stringify omits a
+		// property whose value is undefined, which for an Opt is the not-present
+		// case, so an absent optional (and an explicit undefined, which lowers to
+		// the same empty Opt) omits its key; a present optional serializes the
+		// value it wraps.
+		if opt, ok := val.(jsonOptional); ok {
+			inner, present := opt.jsonOptField()
+			if !present {
+				continue
+			}
+			val = inner
+		}
 		if jsonUndefinedGo(val) {
 			// A function-valued property has no JSON form, so the object omits the
 			// key rather than reflecting the func and faulting on NumField.

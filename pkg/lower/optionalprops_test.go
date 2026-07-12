@@ -61,11 +61,6 @@ func TestOptionalPropertyHandsBack(t *testing.T) {
 			"type Point = { x: number; y?: number };\nconst a: Point = { x: 3 };\nconsole.log(Object.keys(a).length);\n",
 			"optional property",
 		},
-		{
-			"jsonStringifyOfOptionalShape",
-			"type Point = { x: number; y?: number };\nconst a: Point = { x: 3 };\nconsole.log(JSON.stringify(a));\n",
-			"optional property",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,6 +75,18 @@ func TestOptionalPropertyHandsBack(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", nyl.Reason, tc.want)
 			}
 		})
+	}
+}
+
+// TestJSONStringifyOptionalShapeEmits pins that JSON.stringify of a shape with an
+// optional property now lowers rather than handing back: the serializer's
+// reflection walk learned the value.Opt field, so the call emits value.JSONStringify
+// over the built struct.
+func TestJSONStringifyOptionalShapeEmits(t *testing.T) {
+	const src = "type Point = { x: number; y?: number };\nconst a: Point = { x: 3 };\nconsole.log(JSON.stringify(a));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.JSONStringify(a)") {
+		t.Errorf("JSON.stringify of an optional shape did not lower to value.JSONStringify(a):\n%s", source)
 	}
 }
 

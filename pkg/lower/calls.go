@@ -1373,13 +1373,6 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		if info, ok := r.classOfNode(argNodes[0]); ok && info.extended {
 			return nil, &NotYetLowerable{Reason: "JSON.stringify of a value typed as class " + info.name + ", which another class extends, is a later slice"}
 		}
-		// A shape with an optional property lowers to a struct with a value.Opt field,
-		// which the serializer's reflection walk has no case for yet: it would print
-		// the empty optional as a nested object rather than omit the key. Until that
-		// walk learns the Opt field, an optional-shape argument hands back.
-		if r.shapeHasOptional(r.prog.TypeAt(argNodes[0])) {
-			return nil, &NotYetLowerable{Reason: "JSON.stringify of a shape with an optional property is a later slice"}
-		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
