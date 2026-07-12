@@ -56,3 +56,16 @@ func (v Value) SymbolDescription() Value {
 	}
 	return StringValue(s.desc)
 }
+
+// SymbolDescriptiveString renders a symbol as "Symbol(desc)", the SymbolDescriptiveString
+// abstract operation Symbol.prototype.toString returns. A symbol with no description
+// reads as "Symbol()", since a missing description contributes the empty string
+// between the parentheses. It is only valid on a KindSymbol value.
+func (v Value) SymbolDescriptiveString() BStr {
+	s := v.symbol()
+	desc := s.desc
+	if !s.hasDesc {
+		desc = FromGoString("")
+	}
+	return FromGoString("Symbol(").ConcatN(desc, FromGoString(")"))
+}

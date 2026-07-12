@@ -1182,10 +1182,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		r.requireImport(valuePkg)
 		call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToStringMethod")}}
 		// A receiver typed any keeps the boxed result: any.toString() is itself any,
-		// so the call node stays a value the consumer takes. A receiver narrowed to a
-		// concrete kind types the call string, so the boxed result unboxes to its BStr
-		// to match the string the checker promised the consumer.
-		if r.isDynamic(recvNode) {
+		// so the call node stays a value the consumer takes. A receiver whose kind the
+		// checker knows types the call string, so the boxed result unboxes to its BStr
+		// to match the string the checker promised the consumer. The gate is the
+		// receiver's declared type, not its storage: a symbol binding is a boxed value
+		// yet the checker types it symbol, so its toString() unboxes like any other
+		// known kind, only a genuinely any or unknown receiver stays boxed.
+		if r.prog.TypeAt(recvNode).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
 			return call, nil
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: call, Sel: ident("AsString")}}, nil

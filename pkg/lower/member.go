@@ -146,6 +146,18 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	} else if ok {
 		return expr, nil
 	}
+	// A read of .description on a statically-typed symbol lowers to the symbol's
+	// description, a string or undefined. A dynamic symbol binding takes the Get path
+	// below, which answers the same read off the boxed KindSymbol; this branch covers
+	// the receiver the checker pinned down to symbol, which is not on the dynamic path.
+	if prop == "description" && r.isSymbol(obj) {
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("SymbolDescription")}}, nil
+	}
 	// A read o.k on a dynamic receiver (one typed any or unknown) has no static
 	// shape to intern to a Go field, so it dispatches at runtime through the boxed
 	// value's Get, which reports a string's length, an array's length and indices,
