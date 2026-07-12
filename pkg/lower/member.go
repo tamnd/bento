@@ -243,6 +243,23 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Size")}}, nil
 	}
+	// A typed array's geometry getters read off the view: .buffer is the ArrayBuffer
+	// it aliases, .byteOffset the byte it starts at within that buffer, and
+	// .byteLength its own span in bytes, each a method on the value.TypedArray or
+	// value.Uint8Array. They route before the struct-field and ArrayBuffer paths,
+	// which would try to intern the name as a field of a shape a typed array is not,
+	// or read .byteLength off a buffer the receiver is not. The .length getter shares
+	// the Len path above with a dense array, so only these three land here.
+	if prop == "buffer" || prop == "byteOffset" || prop == "byteLength" {
+		if r.numericTypedArray(obj) {
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			method := map[string]string{"buffer": "Buffer", "byteOffset": "ByteOffset", "byteLength": "ByteLength"}[prop]
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}}, nil
+		}
+	}
 	// buffer.byteLength reads the byte size of an ArrayBuffer (section 6.2). It is an
 	// accessor in the source but a method on value.ArrayBuffer, so it lowers to a
 	// ByteLength() call, the same float64 the checker gives the property. This routes
