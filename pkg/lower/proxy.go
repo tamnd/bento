@@ -6,6 +6,36 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
+// The Proxy ceiling, stated plainly (10_advanced group 4, item 8).
+//
+// Every trap that routes through an operation the value model already performs
+// lowers: get, set, has, deleteProperty, ownKeys, getOwnPropertyDescriptor,
+// defineProperty, getPrototypeOf, setPrototypeOf, isExtensible, preventExtensions,
+// and apply. Each forwards to the target through the same runtime path the
+// equivalent operator drives and enforces its non-configurable and
+// non-extensible invariants against the target's own descriptors, so the proxy
+// inherits those semantics rather than growing a second copy.
+//
+// Two corners stay a handback because they need live reflection the static model
+// does not carry, and phase 11 owns them:
+//
+//   - The construct trap is unreachable from lowered code. new over a proxy is a
+//     new expression, and bento's class path models neither the [[Construct]]
+//     slot nor the newTarget it threads to the base of a chain, so new of a
+//     non-builtin constructor hands back exactly as Reflect.construct does. The
+//     runtime construct method exists and is unit-tested, but nothing lowered
+//     reaches it yet.
+//   - The apply trap sees an undefined thisArg. bento's plain functions ignore
+//     the receiver at their declaration, so a lowerable target provably does not
+//     read thisArg and dropping it is correct rather than lossy; a target that
+//     did observe its receiver is the same later slice the call protocol defers.
+//
+// The invariant checks themselves lower, but they compare against the target's
+// descriptor model, so a proxy whose target is an exotic object whose internals
+// bento does not fully carry inherits that gap. That is a value-model ceiling on
+// exotic internals, not a Proxy gap, and it is recorded so the coverage claim
+// stays exact.
+
 // newProxy lowers new Proxy(target, handler) to value.NewProxy over the two boxed
 // operands, the exotic object whose internal methods route through the handler
 // before they reach the target (10_advanced group 4). Both operands box into
