@@ -402,6 +402,13 @@ func (r *Renderer) finalizationRegistryMethodCall(recvNode frontend.Node, method
 		return r.weakCall(recvNode, "Unregister", 1, argNodes, "FinalizationRegistry")
 	case "register":
 		return r.finalizationRegister(recvNode, argNodes)
+	case "cleanupSome":
+		// cleanupSome drives the pending cleanup callbacks synchronously, so a program
+		// that calls it is pinning exactly when a finalizer runs. The AOT model runs
+		// cleanups on Go's own cleanup goroutine after a collection, whose turn it cannot
+		// force, so this is the collection-timing ceiling and hands back rather than
+		// pretend a synchronous drive.
+		return nil, &NotYetLowerable{Reason: "FinalizationRegistry cleanupSome pins when a finalizer runs, which the AOT model's collection timing cannot promise"}
 	default:
 		return nil, &NotYetLowerable{Reason: "FinalizationRegistry method ." + method + " is a later slice"}
 	}
