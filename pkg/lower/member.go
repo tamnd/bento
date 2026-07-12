@@ -416,6 +416,25 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(regMethod)}}, nil
 	}
+	// A Temporal.PlainDate's field getters read off the ISO calendar date: .year,
+	// .month, .day, and the derived .monthCode, .dayOfWeek, .dayOfYear, .daysInWeek,
+	// .daysInMonth, .daysInYear, .monthsInYear, .inLeapYear, and .calendarId. Each is
+	// an accessor in the source but a method on value.PlainDate, so it lowers to a
+	// call and routes before the struct-field path, which would otherwise intern the
+	// name as a field of a shape a PlainDate is not. The calendar-dependent getters
+	// the checker types number | undefined (era, eraYear, weekOfYear, yearOfWeek) are
+	// not in this map, so they hand back through plainDateAccessor rather than answer.
+	if r.isPlainDate(obj) {
+		pdMethod, ok := plainDateAccessor(prop)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate." + prop + " is a later slice"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(pdMethod)}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)
