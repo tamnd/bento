@@ -153,8 +153,10 @@ func TestPlainDateTruncatesArguments(t *testing.T) {
 }
 
 // TestPlainDateRejects checks the RangeError cases against the polyfill: an
-// out-of-range month or day, a non-finite component, a NaN month (truncates to zero
-// then fails the month range), and the two representable-range boundaries.
+// out-of-range month or day, a non-finite component, a NaN component (which throws in
+// ToIntegerWithTruncation rather than settling on zero, so even a NaN year that would
+// otherwise land on the valid 0000-01-01 raises), and the two representable-range
+// boundaries.
 func TestPlainDateRejects(t *testing.T) {
 	throwing := [][3]float64{
 		{2020, 0, 1},
@@ -162,6 +164,7 @@ func TestPlainDateRejects(t *testing.T) {
 		{2020, 1, 0},
 		{2020, 2, 30},
 		{2020, nan(), 1},
+		{nan(), 1, 1}, // NaN year must throw, not settle on the valid 0000-01-01
 		{inf(1), 1, 1},
 		{-271821, 4, 18}, // one day before the minimum
 		{275760, 9, 14},  // one day after the maximum

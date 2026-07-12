@@ -4,6 +4,7 @@ package main
 
 import (
 	"github.com/tamnd/bento/pkg/value"
+	"math"
 )
 
 func CtorName(build func()) value.BStr {
@@ -32,6 +33,9 @@ func main() {
 	}))
 	value.ConsoleLog(CtorName(func() {
 		_ = value.NewPlainDate(275760, 9, 14)
+	}))
+	value.ConsoleLog(CtorName(func() {
+		_ = value.NewPlainDate(math.NaN(), 1, 1)
 	}))
 	value.ConsoleLog(CtorName(func() {
 		_ = value.NewPlainDate(2020, 1, 1)
