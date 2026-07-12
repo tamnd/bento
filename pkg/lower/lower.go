@@ -851,6 +851,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "RegExp")), nil
 		}
+		if r.plainDateType(t) {
+			// A Temporal.PlainDate (Temporal §3) is the value model's ISO calendar date,
+			// spelled as a pointer to value.PlainDate. It is not a struct shape, so it
+			// routes here before renderObject would intern its getter interface as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "PlainDate")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:

@@ -141,6 +141,15 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "RegExp" {
 		return r.newRegExp(kids[1:])
 	}
+	// new Temporal.PlainDate(y, m, d) constructs through a two-level access whose
+	// object is the Temporal namespace, so the constructor node is a property access
+	// rather than a plain identifier. newTemporal dispatches on the type name and
+	// hands back any Temporal type this slice does not host.
+	if kids[0].Kind() == frontend.NodePropertyAccessExpression {
+		if parts := r.prog.Children(kids[0]); len(parts) == 2 && r.isGlobalRef(parts[0], "Temporal") {
+			return r.newTemporal(r.prog.Text(parts[1]), kids[1:])
+		}
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}

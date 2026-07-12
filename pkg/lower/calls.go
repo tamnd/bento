@@ -989,6 +989,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Iterator") {
 		return r.iteratorStaticCall(method, argNodes)
 	}
+	// A static call on a Temporal namespace member, Temporal.PlainDate.compare(a, b)
+	// or Temporal.PlainDate.from(x), reads as a two-level access whose object is
+	// itself Temporal.<Type>: the receiver here is the property access Temporal.PlainDate,
+	// not a plain identifier, so it routes before the identifier-only class-name path
+	// below. temporalStaticCall dispatches on the type name and hands back any Temporal
+	// type this slice does not host.
+	if recvNode.Kind() == frontend.NodePropertyAccessExpression {
+		if parts := r.prog.Children(recvNode); len(parts) == 2 && r.isGlobalRef(parts[0], "Temporal") {
+			return r.temporalStaticCall(r.prog.Text(parts[1]), method, argNodes)
+		}
+	}
 	// A static call A.m(...) lowers to the package function the static method
 	// became. The class name's type shares the class symbol an instance walks
 	// to, so this routes before the instance path below.
@@ -1079,6 +1090,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// the Map, Set, and primitive paths, which expect a receiver a RegExp is not.
 	if r.isRegExp(recvNode) {
 		return r.regExpMethodCall(recvNode, method, argNodes)
+	}
+	// A method on a Temporal.PlainDate receiver lowers to a value.PlainDate method
+	// (Temporal §3): equals, toString, and toJSON over the ISO calendar. It routes
+	// here alongside the other exotic-type paths, before the Map, Set, and primitive
+	// paths, which expect a receiver a PlainDate is not. The arithmetic and conversion
+	// methods hand back with a named reason.
+	if r.isPlainDate(recvNode) {
+		return r.plainDateMethodCall(recvNode, method, argNodes)
 	}
 	// A register or unregister call on a FinalizationRegistry receiver lowers to the
 	// value.FinalizationRegistry surface (25 §26.2). It routes alongside the other weak
