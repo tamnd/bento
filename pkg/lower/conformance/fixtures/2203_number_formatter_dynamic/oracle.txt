@@ -1,0 +1,9 @@
+== stdout:
+123.46
+123.46
+1.23e+3
+123
+RangeError
+RangeError
+== exit:
+0
