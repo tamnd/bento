@@ -1040,6 +1040,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isMap(recvNode) {
 		return r.mapMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a WeakSet receiver lowers to a value.WeakSet method (25 §24.4). Like
+	// the WeakMap path it routes before the Set path, whose fingerprint requires a size
+	// a WeakSet has not, keeping the two collection dispatches adjacent.
+	if r.isWeakSet(recvNode) {
+		return r.weakSetMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a Set receiver lowers to a value.Set method (section 6.5). Like the
 	// Map path it routes before the primitive and string paths, which expect a number,
 	// boolean, or string receiver a set is not.

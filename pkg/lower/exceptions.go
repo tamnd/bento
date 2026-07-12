@@ -107,6 +107,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Map" {
 		return r.newMap(n, kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "WeakSet" {
+		return r.newWeakSet(n, kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "Set" {
 		return r.newSet(n, kids[1:])
 	}

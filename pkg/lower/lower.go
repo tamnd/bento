@@ -789,6 +789,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// renderObject would intern its method interface as fields.
 			return r.renderMap(t)
 		}
+		if r.isWeakSetType(t) {
+			// A WeakSet<E> (25 §24.4) is the value model's weakly held collection of
+			// objects, spelled as a pointer to the generic value.WeakSet header. Its
+			// fingerprint has no size, so it routes before the Set check, whose fingerprint
+			// requires size, and before renderObject would intern its method interface.
+			return r.renderWeakSet(t)
+		}
 		if r.isSetType(t) {
 			// A Set<T> (section 6.5) is the value model's collection of unique members,
 			// spelled as a pointer to the generic value.Set header. Like Map it is not a
