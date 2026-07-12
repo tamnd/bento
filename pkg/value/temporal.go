@@ -18,9 +18,10 @@ import (
 // day in 1..(days in that month). They are stored as the integers RejectISODate
 // validated, so every derived accessor (the weekday, the day of the year, the leap
 // flag) recomputes from them over the ISO calendar rather than caching a second
-// copy. The calendar-dependent getters the checker types as number | undefined
-// (era, eraYear, weekOfYear, yearOfWeek) hand back at lowering rather than lower to
-// a getter here, so this type carries only the fields every ISO date defines.
+// copy. The calendar-dependent getters the checker types as an optional read as the
+// value the ISO calendar gives them: era and eraYear are undefined, since ISO has no
+// era, and weekOfYear and yearOfWeek are the ISO 8601 week date computed from the
+// ordinal day and the weekday.
 type PlainDate struct {
 	year  int // proleptic Gregorian year, may be negative or above 9999
 	month int // 1..12
@@ -203,6 +204,73 @@ func (pd *PlainDate) MonthsInYear() float64 { return 12 }
 
 // InLeapYear reports whether this date's year is an ISO leap year.
 func (pd *PlainDate) InLeapYear() bool { return isLeapISO(pd.year) }
+
+// Era implements Temporal.PlainDate.prototype.era. The ISO 8601 calendar has no
+// era, so the getter the checker types string | undefined is always undefined, the
+// empty optional the lowerer boxes to undefined at any dynamic read.
+func (pd *PlainDate) Era() Opt[BStr] { return None[BStr]() }
+
+// EraYear implements Temporal.PlainDate.prototype.eraYear. Like era it is undefined
+// under the ISO calendar, which has no era to count a year within.
+func (pd *PlainDate) EraYear() Opt[float64] { return None[float64]() }
+
+// WeekOfYear implements Temporal.PlainDate.prototype.weekOfYear, the ISO 8601 week
+// number 1..53. The ISO calendar always defines it, so the optional the checker
+// types number | undefined is always present; a calendar without weeks would read
+// undefined, which is why the field is optional at all.
+func (pd *PlainDate) WeekOfYear() Opt[float64] {
+	week, _ := isoWeekOfYear(pd.year, int(pd.DayOfYear()), int(pd.DayOfWeek()))
+	return Some(float64(week))
+}
+
+// YearOfWeek implements Temporal.PlainDate.prototype.yearOfWeek, the ISO 8601
+// week-numbering year that pairs with weekOfYear. It differs from the calendar year
+// at a January or December boundary, where a week belongs to the neighbouring year.
+func (pd *PlainDate) YearOfWeek() Opt[float64] {
+	_, weekYear := isoWeekOfYear(pd.year, int(pd.DayOfYear()), int(pd.DayOfWeek()))
+	return Some(float64(weekYear))
+}
+
+// isoWeekOfYear computes the ISO 8601 week number and its week-numbering year from a
+// date's year, ordinal day, and weekday (Monday=1), the ISOWeekOfYear abstract
+// operation. The naive week counts Thursdays from the year's start; it is corrected
+// at the two boundaries, where an early-January date can fall in the last week of
+// the previous year and a late-December date in the first week of the next.
+func isoWeekOfYear(year, dayOfYear, dayOfWeek int) (week int, weekYear int) {
+	// dayOfYear is at least 1 and dayOfWeek at most 7, so the numerator is always
+	// positive and Go's truncating division agrees with the floor the operation wants.
+	week = (dayOfYear - dayOfWeek + 10) / 7
+	if week < 1 {
+		// A day before the year's first Thursday belongs to the last week of the
+		// previous year, which is week 53 when the previous year ends on a Thursday
+		// (its Jan 1 is a Friday) or on a Friday of a leap year, and week 52 otherwise.
+		jan1 := isoDayOfWeek(year, 1, 1)
+		if jan1 == 5 || (jan1 == 6 && isLeapISO(year-1)) {
+			return 53, year - 1
+		}
+		return 52, year - 1
+	}
+	if week == 53 {
+		// Week 53 exists only when the year's last Thursday falls on or after this day;
+		// otherwise the day is already in week 1 of the next year.
+		daysInYear := 365
+		if isLeapISO(year) {
+			daysInYear = 366
+		}
+		if daysInYear-dayOfYear < 4-dayOfWeek {
+			return 1, year + 1
+		}
+	}
+	return week, year
+}
+
+// isoDayOfWeek returns the ISO weekday, Monday=1 through Sunday=7, for a date given
+// by its components, the same computation PlainDate.DayOfWeek runs on its own fields
+// and the form isoWeekOfYear needs for a year's January 1.
+func isoDayOfWeek(year, month, day int) int {
+	e := isoToEpochDays(year, month, day)
+	return (((e+3)%7)+7)%7 + 1
+}
 
 // Equals implements Temporal.PlainDate.prototype.equals: two dates are equal when
 // their year, month, and day match under the same (ISO) calendar.
@@ -494,6 +562,15 @@ func (pdt *PlainDateTime) MonthsInYear() float64 { return pdt.date.MonthsInYear(
 
 // InLeapYear reports whether this date's year is an ISO leap year.
 func (pdt *PlainDateTime) InLeapYear() bool { return pdt.date.InLeapYear() }
+
+// Era, EraYear, WeekOfYear, and YearOfWeek read the calendar-dependent fields off
+// the date half, so a date-time answers them the same as the date it carries: era
+// and eraYear undefined under the ISO calendar, weekOfYear and yearOfWeek the ISO
+// 8601 week date.
+func (pdt *PlainDateTime) Era() Opt[BStr]           { return pdt.date.Era() }
+func (pdt *PlainDateTime) EraYear() Opt[float64]    { return pdt.date.EraYear() }
+func (pdt *PlainDateTime) WeekOfYear() Opt[float64] { return pdt.date.WeekOfYear() }
+func (pdt *PlainDateTime) YearOfWeek() Opt[float64] { return pdt.date.YearOfWeek() }
 
 // Equals implements Temporal.PlainDateTime.prototype.equals: two date-times are equal when
 // their dates and their times are each equal under the same (ISO) calendar.
