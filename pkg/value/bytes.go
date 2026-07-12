@@ -102,6 +102,18 @@ func (a *Uint8Array) Len() float64 { return float64(len(a.bytes)) }
 // bento's buffer by surprise.
 func (a *Uint8Array) Bytes() []byte { return a.bytes }
 
+// Floats widens every byte to the Number a read hands out, the source a fresh
+// typed array copies when it is constructed from a Uint8Array. It allocates a new
+// slice so the copy does not alias the source, matching the from-a-typed-array
+// constructor's fresh-buffer rule.
+func (a *Uint8Array) Floats() []float64 {
+	out := make([]float64, len(a.bytes))
+	for i, b := range a.bytes {
+		out[i] = float64(b)
+	}
+	return out
+}
+
 // At reads the byte a JavaScript index expression a[i] selects, as a Number in the
 // range 0 to 255. The index is a Number, so it arrives as a float64 and truncates
 // toward zero the way a JavaScript index does. An index outside the buffer reads

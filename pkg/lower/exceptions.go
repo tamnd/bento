@@ -163,9 +163,12 @@ func (r *Renderer) newObject(args []frontend.Node) (ast.Expr, error) {
 // apart by the argument's syntax, an array literal versus anything else, so a length
 // that happens to be a variable still takes the length form. The constructor names
 // follow the New<Name> and <Name>Of scheme every family member shares, so the name
-// alone selects them. The other overloads (a copy from another typed array, a view
-// over an ArrayBuffer with an offset and length) are later slices and hand back, as
-// does a call with no argument or more than one.
+// alone selects them. Two more sources build a fresh buffer and copy into it: a
+// number array value lowers to value.<Name>Of(src.Elems()...), and another typed
+// array lowers to value.<Name>Of(src.Floats()...), each spreading the source's
+// widened elements through the Of constructor's per-element coercion. The view over
+// an ArrayBuffer with an offset and length takes newTypedArrayOverBuffer. A call
+// with no argument or more than one non-buffer argument hands back.
 func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, error) {
 	if len(args) >= 1 && r.isArrayBuffer(args[0]) {
 		return r.newTypedArrayOverBuffer(name, args)
@@ -192,6 +195,15 @@ func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, e
 		}
 		return &ast.CallExpr{Fun: sel("value", name+"Of"), Args: lowered}, nil
 	}
+	// A number array value or another typed array copies into a fresh buffer,
+	// spreading the source's elements through the Of constructor. A number array
+	// reads its elements with Elems; a typed array widens each element with Floats.
+	if r.isNumberArrayValue(args[0]) {
+		return r.newTypedArrayFrom(name, args[0], "Elems")
+	}
+	if r.numericTypedArray(args[0]) {
+		return r.newTypedArrayFrom(name, args[0], "Floats")
+	}
 	if !r.isNumber(args[0]) {
 		return nil, &NotYetLowerable{Reason: "a " + name + " length that is not a number is a later slice"}
 	}
@@ -200,6 +212,36 @@ func (r *Renderer) newTypedArray(name string, args []frontend.Node) (ast.Expr, e
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: sel("value", "New"+name), Args: []ast.Expr{length}}, nil
+}
+
+// newTypedArrayFrom lowers a typed array copied from a source value into a fresh
+// buffer: value.<Name>Of(src.<read>()...), where read is Elems for a number array
+// or Floats for another typed array, both returning the []float64 the Of
+// constructor spreads through its per-element coercion. The Of constructor allocates
+// its own buffer, so the copy does not alias the source.
+func (r *Renderer) newTypedArrayFrom(name string, src frontend.Node, read string) (ast.Expr, error) {
+	recv, err := r.lowerExpr(src)
+	if err != nil {
+		return nil, err
+	}
+	elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(read)}}
+	return &ast.CallExpr{
+		Fun:      sel("value", name+"Of"),
+		Args:     []ast.Expr{elems},
+		Ellipsis: token.Pos(1),
+	}, nil
+}
+
+// isNumberArrayValue reports whether a node's type is an array whose element type is
+// a number, the from-an-array-like source a typed-array constructor copies. A typed
+// array is not an ElementType array, so it does not match here and takes the
+// typed-array-source path instead.
+func (r *Renderer) isNumberArrayValue(n frontend.Node) bool {
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(n))
+	if !ok {
+		return false
+	}
+	return r.primitiveFlagsOfType(elem)&frontend.TypeNumber != 0
 }
 
 // newTypedArrayOverBuffer lowers a typed array constructed as a view over an

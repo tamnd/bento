@@ -196,6 +196,19 @@ func (a *TypedArray[T]) SetAtI(i int, v float64) {
 	}
 }
 
+// Floats widens every element to the Number a typed-array read hands out, the
+// source a fresh typed array copies when it is constructed from another typed
+// array. It allocates a new slice, so the copy the constructor makes reads the
+// source once and does not alias it: the two arrays own separate storage after the
+// copy, which is what the from-a-typed-array constructor requires.
+func (a *TypedArray[T]) Floats() []float64 {
+	out := make([]float64, len(a.data))
+	for i, e := range a.data {
+		out[i] = float64(e)
+	}
+	return out
+}
+
 // Data returns the backing slice, the storage a read and a write share. The
 // lowerer indexes it directly, bData[i], at an access it proved stays inside the
 // array, so the read skips the At bounds branch and the Number round trip and an

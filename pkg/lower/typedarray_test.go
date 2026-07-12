@@ -123,6 +123,25 @@ func TestTypedArrayViewOverBufferLowering(t *testing.T) {
 	}
 }
 
+// TestTypedArrayFromSourceLowering pins the two copy sources: a number array value
+// lowers to value.<Name>Of over the source's Elems spread, and another typed array
+// lowers to value.<Name>Of over the source's Floats spread, each building a fresh
+// buffer through the Of constructor. A plain array literal still lowers to the
+// direct Of form rather than through a source read.
+func TestTypedArrayFromSourceLowering(t *testing.T) {
+	cases := map[string]string{
+		`const src = [1, 2, 3]; const b = new Int32Array(src); console.log(b.length);`:                 "value.Int32ArrayOf(src.Elems()...)",
+		`const src = new Int32Array([1, 2, 3]); const b = new Uint8Array(src); console.log(b.length);`: "value.Uint8ArrayOf(src.Floats()...)",
+		`const src = new Uint8Array([1, 2]); const b = new Float64Array(src); console.log(b.length);`:  "value.Float64ArrayOf(src.Floats()...)",
+	}
+	for src, want := range cases {
+		source := renderProgram(t, src+"\n")
+		if !strings.Contains(source, want) {
+			t.Errorf("%q did not lower to %q:\n%s", src, want, source)
+		}
+	}
+}
+
 // TestTypedArrayIntIndexLowering pins the native-int index form. A typed-array read
 // and write driven by a bounded for-counter lower through AtI and SetAtI with the
 // index narrowed to a Go int, so the counter stays a native int32 and the float
