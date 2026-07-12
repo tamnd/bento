@@ -55,6 +55,12 @@ func NewDataView(buffer *ArrayBuffer, byteOffset float64, byteLength ...float64)
 		d.byteLength = n
 	} else {
 		d.byteLength = bufLen - off
+		// A view with no explicit length over a resizable buffer tracks the buffer's
+		// length, so a later resize changes the span it reports (25 §25.3.2). Over a
+		// fixed buffer the length is frozen at the offset-to-end span computed above.
+		if buffer.resizable {
+			d.lengthTracking = true
+		}
 	}
 	return d
 }
