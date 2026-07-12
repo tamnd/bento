@@ -921,6 +921,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Math") {
 		return r.mathCall(method, argNodes)
 	}
+	// Atomics.load(ta, i) and friends are calls on the global Atomics namespace, not a
+	// value receiver, so they lower to the value atomic helpers over the typed array
+	// they take rather than a method on Atomics.
+	if r.isGlobalRef(recvNode, "Atomics") {
+		return r.atomicsCall(method, argNodes)
+	}
 	// Number.isInteger(x) and friends are static calls on the global Number, which
 	// lower to value package predicates.
 	if r.isGlobalRef(recvNode, "Number") {
