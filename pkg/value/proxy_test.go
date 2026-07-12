@@ -136,6 +136,64 @@ func TestProxyGetInvariant(t *testing.T) {
 	p.Get(FromGoString("fixed"))
 }
 
+// TestProxyHasTrap pins that a has trap answers the in operator, receiving the
+// target and the key, and that its boolean drives the result regardless of what the
+// target actually holds.
+func TestProxyHasTrap(t *testing.T) {
+	target := NewObject()
+	target.Set(FromGoString("real"), Number(1))
+	handler := NewObject()
+	handler.Set(FromGoString("has"), NewFunc(func(args []Value) Value {
+		return Bool(Arg(args, 1).str().ToGoString() == "virtual")
+	}))
+	p := NewProxy(target, handler)
+	if !p.HasProperty(FromGoString("virtual")) {
+		t.Error("has trap did not report a virtual property present")
+	}
+	if p.HasProperty(FromGoString("real")) {
+		t.Error("has trap did not override the target's own property")
+	}
+}
+
+// TestProxyDeleteTrap pins that a deleteProperty trap intercepts delete and that a
+// falsy return reports the delete as refused without touching the target.
+func TestProxyDeleteTrap(t *testing.T) {
+	target := NewObject()
+	target.Set(FromGoString("k"), Number(1))
+	handler := NewObject()
+	handler.Set(FromGoString("deleteProperty"), NewFunc(func(args []Value) Value {
+		return Bool(false)
+	}))
+	p := NewProxy(target, handler)
+	if p.Delete(FromGoString("k")) {
+		t.Error("delete trap returning falsy did not report a refused delete")
+	}
+	if !target.HasProperty(FromGoString("k")) {
+		t.Error("delete trap returning falsy still removed the target's property")
+	}
+}
+
+// TestProxyHasInvariant pins that a has trap cannot hide a non-configurable own
+// property of the target: reporting it absent throws a TypeError.
+func TestProxyHasInvariant(t *testing.T) {
+	target := NewObject()
+	desc := NewObject()
+	desc.Set(FromGoString("value"), Number(1))
+	desc.Set(FromGoString("configurable"), Bool(false))
+	target.DefineProperty(StringValue(FromGoString("fixed")), desc)
+	handler := NewObject()
+	handler.Set(FromGoString("has"), NewFunc(func(args []Value) Value {
+		return Bool(false)
+	}))
+	p := NewProxy(target, handler)
+	defer func() {
+		if recover() == nil {
+			t.Error("has trap hiding a non-configurable property did not throw")
+		}
+	}()
+	p.HasProperty(FromGoString("fixed"))
+}
+
 // TestProxyCallableForwards pins that a Proxy over a callable target is itself
 // callable and forwards the call to the target when the handler has no apply trap.
 func TestProxyCallableForwards(t *testing.T) {

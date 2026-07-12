@@ -159,19 +159,65 @@ func (p *proxyData) setWith(recv, keyVal, val Value) {
 	}
 }
 
+// has runs the has trap for the in operator, the [[HasProperty]](P) internal
+// method. With no trap the probe forwards to the target and walks its prototype
+// chain. With a trap the answer is handler.has(target, key), checked so the trap
+// cannot hide a fixed property: a non-configurable own property may not be reported
+// absent, and neither may any own property of a non-extensible target.
 func (p *proxyData) has(key BStr) bool {
 	p.checkRevoked("has")
-	return p.target.HasProperty(key)
+	trap := p.trap("has")
+	if trap.kind == KindUndefined {
+		return p.target.HasProperty(key)
+	}
+	if ToBoolean(trap.Call(p.target, StringValue(key))) {
+		return true
+	}
+	if d := p.target.GetOwnPropertyDescriptor(StringValue(key)); d.kind == KindObject {
+		if !ToBoolean(d.Get(FromGoString("configurable"))) {
+			Throw(NewTypeError(FromGoString("'has' on proxy: trap returned falsy for property which exists in the proxy target as a non-configurable property")))
+		}
+		if !p.target.IsExtensible() {
+			Throw(NewTypeError(FromGoString("'has' on proxy: trap returned falsy for property but the proxy target is not extensible")))
+		}
+	}
+	return false
 }
 
 func (p *proxyData) deleteKey(key BStr) bool {
-	p.checkRevoked("deleteProperty")
-	return p.target.Delete(key)
+	return p.deleteWith(StringValue(key))
 }
 
 func (p *proxyData) deleteSym(key *Symbol) bool {
+	return p.deleteWith(symbolValue(key))
+}
+
+// deleteWith runs the deleteProperty trap for a boxed key, the [[Delete]](P)
+// internal method behind delete o[k]. With no trap the removal forwards to the
+// target. With a trap a falsy return is a refused delete reported as false, and a
+// truthy return is checked so the trap cannot claim to remove a property the target
+// still holds fixed: a non-configurable own property, or any own property of a
+// non-extensible target, cannot be reported deleted.
+func (p *proxyData) deleteWith(keyVal Value) bool {
 	p.checkRevoked("deleteProperty")
-	return p.target.deleteSymKey(key)
+	trap := p.trap("deleteProperty")
+	if trap.kind == KindUndefined {
+		return p.target.DeleteElem(keyVal)
+	}
+	if !ToBoolean(trap.Call(p.target, keyVal)) {
+		return false
+	}
+	d := p.target.GetOwnPropertyDescriptor(keyVal)
+	if d.kind != KindObject {
+		return true
+	}
+	if !ToBoolean(d.Get(FromGoString("configurable"))) {
+		Throw(NewTypeError(FromGoString("'deleteProperty' on proxy: trap returned truthy for property which is non-configurable in the proxy target")))
+	}
+	if !p.target.IsExtensible() {
+		Throw(NewTypeError(FromGoString("'deleteProperty' on proxy: trap returned truthy for property but the proxy target is non-extensible")))
+	}
+	return true
 }
 
 func (p *proxyData) call(args []Value) Value {
