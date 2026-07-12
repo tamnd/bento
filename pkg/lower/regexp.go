@@ -196,6 +196,137 @@ func (r *Renderer) regExpExecResultCall(n frontend.Node) bool {
 	return r.prog.Text(parts[1]) == "exec" && r.isRegExp(parts[0])
 }
 
+// regExpBoxedResultCall reports whether n is a call whose runtime result is a boxed
+// value.Value the checker types with a concrete Go shape the box does not have:
+// re.exec(s) and str.match(re), typed RegExpExecArray | null and RegExpMatchArray |
+// null, and str.split(re), typed string[]. Each returns a value array or null at
+// runtime, not the []BStr or struct the concrete type would render, so isDynamic and
+// the binding path recognize the shape here to keep the box on the dynamic path, where
+// the null compare and the element and property reads dispatch through the value model.
+func (r *Renderer) regExpBoxedResultCall(n frontend.Node) bool {
+	if r.regExpExecResultCall(n) {
+		return true
+	}
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 {
+		return false
+	}
+	method := r.prog.Text(parts[1])
+	if method != "match" && method != "split" {
+		return false
+	}
+	args := kids[1:]
+	return r.isString(parts[0]) && len(args) >= 1 && r.isRegExpArg(args[0])
+}
+
+// isRegExpArg reports whether a node is a regexp the string-method path can bridge to
+// the engine: a regexp literal, whose pattern the compiler can validate, or a value
+// the checker already types RegExp, which the runtime built through the same gate and
+// so is known to translate. It is the test the match, search, replace, and split
+// paths use to route a regexp separator or pattern to value.RegExp rather than the
+// string search a string argument would take.
+func (r *Renderer) isRegExpArg(n frontend.Node) bool {
+	if _, _, ok := r.regexLiteralArg(n); ok {
+		return true
+	}
+	return r.isRegExp(n)
+}
+
+// regexpOperand lowers a regexp argument to the value.RegExp expression the string
+// methods run against. A literal is built and validated through the same translator
+// the constructor uses, so an unfaithful pattern hands back here; a RegExp value is
+// lowered as itself, reusing the object the program already holds. A node that is
+// neither hands back, which lets a string argument fall through to the string search.
+func (r *Renderer) regexpOperand(n frontend.Node) (ast.Expr, error) {
+	if pattern, flags, ok := r.regexLiteralArg(n); ok {
+		return r.buildRegExp(pattern, flags)
+	}
+	if r.isRegExp(n) {
+		return r.lowerExpr(n)
+	}
+	return nil, &NotYetLowerable{Reason: "a string regexp method with a non-regexp argument is a later slice"}
+}
+
+// stringRegExpMethodCall lowers String.prototype.match, search, replace, replaceAll,
+// and split when the pattern or separator is a regexp. Each is the string-side
+// spelling of a RegExp method the specification delegates to, so it lowers to the
+// matching value.RegExp method with the subject string as the argument: str.match(re)
+// becomes re.MatchStr(str), and so on. Only a string replacement is handled for
+// replace and replaceAll; a function replacement runs user code per match and hands
+// back. split admits a regexp literal without an anchor or word boundary, since its
+// anchored per-offset match cannot host one faithfully, and a RegExp value whose
+// pattern the compiler cannot inspect.
+func (r *Renderer) stringRegExpMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	reExpr, err := r.regexpOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	subj, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	call := func(name string, args ...ast.Expr) ast.Expr {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: reExpr, Sel: ident(name)}, Args: append([]ast.Expr{subj}, args...)}
+	}
+	switch method {
+	case "search":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "string .search with this argument count is a later slice"}
+		}
+		return call("Search"), nil
+	case "match":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "string .match with this argument count is a later slice"}
+		}
+		return call("MatchStr"), nil
+	case "replace", "replaceAll":
+		if len(argNodes) != 2 {
+			return nil, &NotYetLowerable{Reason: "string ." + method + " with a regexp and this argument count is a later slice"}
+		}
+		if !r.isString(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "string ." + method + " with a regexp and a non-string replacement is a later slice"}
+		}
+		repl, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		name := "ReplaceStr"
+		if method == "replaceAll" {
+			name = "ReplaceAllStr"
+		}
+		return call(name, repl), nil
+	case "split":
+		if len(argNodes) < 1 || len(argNodes) > 2 {
+			return nil, &NotYetLowerable{Reason: "string .split with this argument count is a later slice"}
+		}
+		if pattern, _, ok := r.regexLiteralArg(argNodes[0]); ok && value.RegExpSourceHasAnchor(pattern) {
+			return nil, &NotYetLowerable{Reason: "string .split with an anchored regexp separator is a later slice"}
+		}
+		limited := ident("false")
+		var limit ast.Expr = &ast.BasicLit{Kind: token.FLOAT, Value: "0"}
+		if len(argNodes) == 2 {
+			if !r.isNumber(argNodes[1]) {
+				return nil, &NotYetLowerable{Reason: "string .split with a non-number limit is a later slice"}
+			}
+			limited = ident("true")
+			limit, err = r.lowerExpr(argNodes[1])
+			if err != nil {
+				return nil, err
+			}
+		}
+		return call("SplitStr", limited, limit), nil
+	default:
+		return nil, &NotYetLowerable{Reason: "string ." + method + " with a regexp is a later slice"}
+	}
+}
+
 // buildRegExp validates a pattern and flag pair through the runtime translator and,
 // on success, emits value.NewRegExpLiteral(pattern, flags). The translator is the
 // single gate the runtime constructor also consults, so a pattern lowers exactly

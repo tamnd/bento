@@ -1219,16 +1219,24 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		}
 		return r.lowerExpr(recvNode)
 	}
-	// replace and replaceAll with a regexp literal first argument are their own
-	// path: a plain-literal pattern (no metacharacters) is exactly the string
-	// search the value replace methods do, so it lowers when the pattern is plain
-	// and the flags are a subset bento models, and hands back otherwise so a real
-	// pattern routes to the engine rather than compiling a wrong search.
-	if method == "replace" || method == "replaceAll" {
-		if len(argNodes) >= 1 {
-			if pattern, flags, isRe := r.regexLiteralArg(argNodes[0]); isRe {
-				return r.regexReplaceCall(recvNode, method, pattern, flags, argNodes)
+	// match, search, replace, replaceAll, and split with a regexp pattern or
+	// separator route to the value.RegExp engine. replace and replaceAll keep the
+	// plain-literal fast path first: a metacharacter-free pattern is exactly the byte
+	// search the value replace methods do, so it stays that direct call, and only a
+	// pattern that is not plain, or a flag the fast path does not model, falls through
+	// to the engine. A string argument is not a regexp here, so it drops through to
+	// the ordinary string-method dispatch below.
+	switch method {
+	case "match", "search", "replace", "replaceAll", "split":
+		if len(argNodes) >= 1 && r.isRegExpArg(argNodes[0]) {
+			if method == "replace" || method == "replaceAll" {
+				if pattern, flags, ok := r.regexLiteralArg(argNodes[0]); ok && isPlainRegexPattern(pattern) {
+					if expr, err := r.regexReplaceCall(recvNode, method, pattern, flags, argNodes); err == nil {
+						return expr, nil
+					}
+				}
 			}
+			return r.stringRegExpMethodCall(recvNode, method, argNodes)
 		}
 	}
 	goName, params, minArgs, variadic, ok := stringMethod(method)

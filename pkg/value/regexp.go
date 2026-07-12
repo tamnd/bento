@@ -488,6 +488,14 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	return src, true, ""
 }
 
+// RegExpSourceHasAnchor reports whether a pattern uses a ^ or $ anchor or a \b or \B
+// word boundary, the position assertions whose meaning depends on surrounding text.
+// The lowerer consults it to keep String.prototype.split off a separator RE2 cannot
+// host faithfully: split matches the separator anchored at each offset the way a
+// sticky clone does, and slicing the subject at that offset would sever the left
+// context such an assertion reads.
+func RegExpSourceHasAnchor(pattern string) bool { return patternHasAnchor(pattern) }
+
 // patternHasAnchor reports whether the pattern uses a position assertion whose
 // meaning depends on the surrounding text: a bare ^ or $ anchor, or a \b or \B word
 // boundary. It respects escapes and character classes, so a \^ escape, a [$] class

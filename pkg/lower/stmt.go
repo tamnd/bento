@@ -1111,13 +1111,14 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			})
 			continue
 		}
-		// A binding initialized by re.exec(s) holds the boxed value.Value the match
-		// returns, an array on success or null on failure. The checker types it
-		// RegExpExecArray | null, a union bento renders no static Go for, so the
-		// binding lands in a value.Value slot and is marked dynamic, which routes the
-		// later null compare and the element and property reads off the match through
-		// the value model rather than a static shape the union has no name for.
-		if r.regExpExecResultCall(kids[initIdx]) {
+		// A binding initialized by re.exec(s), str.match(re), or str.split(re) holds the
+		// boxed value.Value the match returns, an array or null. The checker types each
+		// with a concrete Go shape the box does not have (RegExpExecArray | null,
+		// RegExpMatchArray | null, or string[]), so the binding lands in a value.Value
+		// slot and is marked dynamic, which routes the later null compare and the element
+		// and property reads off the result through the value model rather than the
+		// static shape the concrete type would otherwise name.
+		if r.regExpBoxedResultCall(kids[initIdx]) {
 			execInit, err := r.lowerExpr(kids[initIdx])
 			if err != nil {
 				return nil, err

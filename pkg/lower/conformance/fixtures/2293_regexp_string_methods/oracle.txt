@@ -1,0 +1,22 @@
+== stdout:
+2
+-1
+abbb
+bbb
+2
+ax
+ay
+bXnana
+ba
+a[bbb]c
+1a2b
+3
+a
+c
+5
+1
+2
+2
+b
+== exit:
+0

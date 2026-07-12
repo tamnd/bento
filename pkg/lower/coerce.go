@@ -305,12 +305,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.arrayFromBoxedResultCall(n) {
 		return true
 	}
-	// A re.exec(s) call returns the boxed value.Value the match yields, an array or
-	// null, whichever the run produces. The checker types exec as RegExpExecArray |
-	// null, a union bento renders no static Go for, so isDynamic recognizes the call
-	// by shape to keep the box on the dynamic path, where the null compare and the
-	// element and property reads off the match dispatch through the value model.
-	if r.regExpExecResultCall(n) {
+	// A re.exec(s), str.match(re), or str.split(re) call returns the boxed value.Value
+	// the match yields, an array or null. The checker types each with a concrete Go
+	// shape the box does not have (RegExpExecArray | null, RegExpMatchArray | null, and
+	// string[]), so isDynamic recognizes the call by shape to keep the box on the
+	// dynamic path, where the null compare and the element and property reads off the
+	// result dispatch through the value model.
+	if r.regExpBoxedResultCall(n) {
 		return true
 	}
 	// A .value read off an IteratorResult whose type is not a clean primitive, the
