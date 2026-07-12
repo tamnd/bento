@@ -1027,6 +1027,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isDataView(recvNode) {
 		return r.dataViewMethodCall(recvNode, method, argNodes)
 	}
+	// A register or unregister call on a FinalizationRegistry receiver lowers to the
+	// value.FinalizationRegistry surface (25 §26.2). It routes alongside the other weak
+	// paths, before the primitive and string paths a registry receiver is not.
+	if r.isFinalizationRegistry(recvNode) {
+		return r.finalizationRegistryMethodCall(recvNode, method, argNodes)
+	}
 	// A weakRef.deref() call lowers to a value.WeakRef method (25 §26.1). It routes
 	// alongside the other weak-collection paths, before the primitive and string paths,
 	// which expect a number, boolean, or string receiver a WeakRef is not.

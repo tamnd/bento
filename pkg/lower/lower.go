@@ -818,6 +818,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// routes here before renderObject would intern its deref interface as a field.
 			return r.renderWeakRef(t)
 		}
+		if r.isFinalizationRegistryType(t) {
+			// A FinalizationRegistry<T> (25 §26.2) is the value model's post-collection
+			// callback registry, spelled as a pointer to the generic value.FinalizationRegistry
+			// header. It is not a struct shape, so it routes before renderObject would intern
+			// its register interface as fields.
+			return r.renderFinalizationRegistry(t)
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
