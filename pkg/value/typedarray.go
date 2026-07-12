@@ -1,6 +1,9 @@
 package value
 
-import "math"
+import (
+	"math"
+	"unsafe"
+)
 
 // TypedArray is bento's runtime representation of a JavaScript numeric typed
 // array whose element width the compiler proved: Int8Array, Uint8ClampedArray,
@@ -22,9 +25,24 @@ import "math"
 // to single precision, and so on. The header carries that coercion as a function
 // so the generic core stays one type; a read always widens the stored element
 // back to a Number, which every member does the same way.
+//
+// A typed array is a view, not the storage: it records the ArrayBuffer it reads,
+// the byte offset it starts at, and an element slice that aliases the buffer's
+// bytes at that offset (section 6.2 and §6.3). The data slice is built with
+// unsafe.Slice over the buffer's bytes, so an element read and write go straight
+// through it with no per-element packing, and two views over one buffer, even of
+// different element widths, observe each other's writes because they alias the
+// same run of bytes. The buffer allocates eight-byte aligned and the byte offset
+// the spec requires to be a multiple of the element width keeps every element on a
+// naturally aligned address, and the platform's little-endian layout is the byte
+// order the buffer exposes. Keeping data as a live view is what lets every
+// element-access method below stay a plain slice operation while still aliasing
+// the shared buffer.
 type TypedArray[T typedElem] struct {
-	data   []T
-	coerce func(float64) T
+	buffer     *ArrayBuffer
+	byteOffset int
+	data       []T
+	coerce     func(float64) T
 }
 
 // typedElem is the set of Go element types a numeric typed array stores. Every
@@ -36,24 +54,66 @@ type typedElem interface {
 
 // newTypedArray builds a zeroed typed array of the given length with the store
 // coercion its element kind uses, the shared body of the per-kind New
-// constructors. The length is a Number, so it arrives as a float64 and is
-// truncated toward zero the way ToIndex does; a negative or not-a-number length
-// clamps to zero, matching the covered subset the byte buffer documents.
+// constructors. It allocates a fresh ArrayBuffer sized to hold the elements and
+// views it from byte offset zero, so the array owns its storage but reaches it
+// through the shared view path. The length is a Number, so it arrives as a float64
+// and is truncated toward zero the way ToIndex does; a negative or not-a-number
+// length clamps to zero, matching the covered subset the byte buffer documents.
 func newTypedArray[T typedElem](length float64, coerce func(float64) T) *TypedArray[T] {
-	return &TypedArray[T]{data: make([]T, typedLen(length)), coerce: coerce}
+	n := typedLen(length)
+	buf := NewArrayBuffer(float64(n * elemBytes[T]()))
+	return newTypedArrayView(buf, 0, n, coerce)
+}
+
+// newTypedArrayView builds a typed array that views an existing buffer from a byte
+// offset for a count of elements, the shared body of every typed-array
+// constructor. The data slice aliases the buffer's bytes, so a write through this
+// view shows through every other view of the same buffer. It is the one place the
+// unsafe aliasing is formed, so the byte offset and length the callers pass are the
+// only inputs that decide what the view sees.
+func newTypedArrayView[T typedElem](buf *ArrayBuffer, byteOffset, length int, coerce func(float64) T) *TypedArray[T] {
+	return &TypedArray[T]{
+		buffer:     buf,
+		byteOffset: byteOffset,
+		data:       viewSlice[T](buf, byteOffset, length),
+		coerce:     coerce,
+	}
 }
 
 // typedArrayOf builds a typed array from a list of JavaScript numbers with the
 // store coercion its element kind uses, the shared body of the per-kind Of
-// constructors. Each element is coerced on the way in exactly as an assignment
-// into an element would coerce it, and the values are copied into a fresh backing
-// slice so the array owns its storage.
+// constructors. It allocates a fresh buffer of the right size and coerces each
+// element into it exactly as an assignment into an element would, so the array owns
+// its storage.
 func typedArrayOf[T typedElem](coerce func(float64) T, elems ...float64) *TypedArray[T] {
-	data := make([]T, len(elems))
+	a := newTypedArray(float64(len(elems)), coerce)
 	for i, e := range elems {
-		data[i] = coerce(e)
+		a.data[i] = coerce(e)
 	}
-	return &TypedArray[T]{data: data, coerce: coerce}
+	return a
+}
+
+// elemBytes is the byte width of a typed array's element type, read from the Go
+// type so the buffer allocation and the byte-offset arithmetic agree with the
+// element slice the view aliases.
+func elemBytes[T typedElem]() int {
+	var zero T
+	return int(unsafe.Sizeof(zero))
+}
+
+// viewSlice forms the element slice a typed array reads, an unsafe alias over the
+// buffer's bytes starting at the byte offset for length elements. It is the aliasing
+// step that lets two views over one buffer observe each other's writes: the slice
+// header points into the buffer's own storage rather than a copy. A zero length
+// needs no storage and returns nil, which also avoids indexing a nil or too-short
+// buffer. The buffer keeps its bytes eight-byte aligned and the byte offset is a
+// multiple of the element width, so the first element lands on a naturally aligned
+// address.
+func viewSlice[T typedElem](buf *ArrayBuffer, byteOffset, length int) []T {
+	if length == 0 {
+		return nil
+	}
+	return unsafe.Slice((*T)(unsafe.Pointer(&buf.data[byteOffset])), length)
 }
 
 // Len is the array's length in elements, a Number to match the type the checker
