@@ -227,6 +227,142 @@ func (d *DataView) GetBigUint64(byteOffset float64, littleEndian ...bool) *big.I
 	return new(big.Int).SetUint64(u)
 }
 
+// SetInt8 writes v as a signed byte at the offset, DataView.prototype.setInt8. The
+// value is a Number the store reduces with ECMAScript ToInt8, the same modulo wrap a
+// write into an Int8Array element applies, so 256 stores 0 and -1 stores -1. One byte
+// carries no endianness.
+func (d *DataView) SetInt8(byteOffset float64, v float64) {
+	bi := d.access(byteOffset, 1)
+	d.buffer.data[bi] = byte(toInt8(v))
+}
+
+// SetUint8 writes v as an unsigned byte at the offset, DataView.prototype.setUint8,
+// reducing the Number with ToUint8, the unsigned sibling of SetInt8.
+func (d *DataView) SetUint8(byteOffset float64, v float64) {
+	bi := d.access(byteOffset, 1)
+	d.buffer.data[bi] = toUint8(v)
+}
+
+// SetInt16 writes v as a signed 16-bit integer at the offset with the given
+// endianness, DataView.prototype.setInt16, reducing the Number with ToInt16 before it
+// lays the two bytes down in the chosen byte order.
+func (d *DataView) SetInt16(byteOffset float64, v float64, littleEndian ...bool) {
+	bi := d.access(byteOffset, 2)
+	dataViewOrder(littleEndian).PutUint16(d.buffer.data[bi:], uint16(toInt16(v)))
+}
+
+// SetUint16 writes v as an unsigned 16-bit integer at the offset with the given
+// endianness, DataView.prototype.setUint16, reducing the Number with ToUint16.
+func (d *DataView) SetUint16(byteOffset float64, v float64, littleEndian ...bool) {
+	bi := d.access(byteOffset, 2)
+	dataViewOrder(littleEndian).PutUint16(d.buffer.data[bi:], toUint16(v))
+}
+
+// SetInt32 writes v as a signed 32-bit integer at the offset with the given
+// endianness, DataView.prototype.setInt32, reducing the Number with ToInt32.
+func (d *DataView) SetInt32(byteOffset float64, v float64, littleEndian ...bool) {
+	bi := d.access(byteOffset, 4)
+	dataViewOrder(littleEndian).PutUint32(d.buffer.data[bi:], uint32(toInt32(v)))
+}
+
+// SetUint32 writes v as an unsigned 32-bit integer at the offset with the given
+// endianness, DataView.prototype.setUint32, reducing the Number with ToUint32.
+func (d *DataView) SetUint32(byteOffset float64, v float64, littleEndian ...bool) {
+	bi := d.access(byteOffset, 4)
+	dataViewOrder(littleEndian).PutUint32(d.buffer.data[bi:], toUint32(v))
+}
+
+// SetFloat16 writes v as a half-precision float at the offset with the given
+// endianness, DataView.prototype.setFloat16 (25 §25.3.4), encoding the Number to the
+// two stored bytes.
+func (d *DataView) SetFloat16(byteOffset float64, v float64, littleEndian ...bool) {
+	bi := d.access(byteOffset, 2)
+	dataViewOrder(littleEndian).PutUint16(d.buffer.data[bi:], float64ToFloat16(v))
+}
+
+// SetFloat32 writes v as a single-precision float at the offset with the given
+// endianness, DataView.prototype.setFloat32, narrowing the Number to a float32 before
+// it stores the four bytes.
+func (d *DataView) SetFloat32(byteOffset float64, v float64, littleEndian ...bool) {
+	bi := d.access(byteOffset, 4)
+	dataViewOrder(littleEndian).PutUint32(d.buffer.data[bi:], math.Float32bits(float32(v)))
+}
+
+// SetFloat64 writes v as a double-precision float at the offset with the given
+// endianness, DataView.prototype.setFloat64. A Number is a float64, so the store lays
+// down the value's bits with no narrowing.
+func (d *DataView) SetFloat64(byteOffset float64, v float64, littleEndian ...bool) {
+	bi := d.access(byteOffset, 8)
+	dataViewOrder(littleEndian).PutUint64(d.buffer.data[bi:], math.Float64bits(v))
+}
+
+// SetBigInt64 writes v as a signed 64-bit integer at the offset with the given
+// endianness, DataView.prototype.setBigInt64 (25 §25.3.4). The value is a bigint,
+// which lowers to a *big.Int; the store reduces it modulo 2^64 and lays down the low
+// 64 bits, the same bytes a setBigUint64 of the congruent unsigned value would.
+func (d *DataView) SetBigInt64(byteOffset float64, v *big.Int, littleEndian ...bool) {
+	bi := d.access(byteOffset, 8)
+	dataViewOrder(littleEndian).PutUint64(d.buffer.data[bi:], bigIntLow64(v))
+}
+
+// SetBigUint64 writes v as an unsigned 64-bit integer at the offset with the given
+// endianness, DataView.prototype.setBigUint64, the unsigned sibling of SetBigInt64.
+// The stored bytes are the low 64 bits of the value, so it and SetBigInt64 write the
+// same bytes for congruent inputs.
+func (d *DataView) SetBigUint64(byteOffset float64, v *big.Int, littleEndian ...bool) {
+	bi := d.access(byteOffset, 8)
+	dataViewOrder(littleEndian).PutUint64(d.buffer.data[bi:], bigIntLow64(v))
+}
+
+// bigIntLow64 reduces a bigint to the low 64 bits a 64-bit store writes, ECMAScript's
+// wrap of a BigInt into a 64-bit range (the modulo step in SetValueInBuffer). The
+// Euclidean modulo lands in [0, 2^64), so a negative value folds up into its
+// two's-complement bit pattern, the bytes a signed 64-bit read hands back.
+func bigIntLow64(x *big.Int) uint64 {
+	var mod, m big.Int
+	mod.Lsh(big.NewInt(1), 64)
+	m.Mod(x, &mod)
+	return m.Uint64()
+}
+
+// float64ToFloat16 encodes a Number as an IEEE 754 half-precision bit pattern for a
+// setFloat16 store, rounding the mantissa to nearest with ties to even. The value is
+// narrowed through a float32 first, then its sign, exponent, and mantissa are rebiased
+// to the half's five-bit exponent: an infinity or NaN keeps its class, a magnitude
+// past the half's range overflows to infinity, a magnitude below the smallest normal
+// stores a subnormal or a signed zero, and every other value takes the top ten
+// mantissa bits with the round bias, whose carry folds into the exponent through the
+// add.
+func float64ToFloat16(v float64) uint16 {
+	b := math.Float32bits(float32(v))
+	sign := uint16(b>>16) & 0x8000
+	exp := int32(b>>23) & 0xff
+	mant := b & 0x007fffff
+	if exp == 0xff { // infinity or NaN keeps its class.
+		if mant != 0 {
+			return sign | 0x7e00 // quiet NaN
+		}
+		return sign | 0x7c00 // infinity
+	}
+	e := exp - 127 + 15 // rebias the exponent for the half's five bits.
+	if e >= 0x1f {      // overflow rounds to infinity.
+		return sign | 0x7c00
+	}
+	if e <= 0 { // subnormal, or underflow to a signed zero.
+		if e < -10 {
+			return sign
+		}
+		m := mant | 0x00800000 // restore the hidden leading one.
+		shift := uint32(14 - e)
+		half := uint32(1) << (shift - 1)
+		rounded := (m + half + ((m >> shift) & 1) - 1) >> shift
+		return sign | uint16(rounded)
+	}
+	half := uint32(0x00001000) // round the 13 dropped bits to nearest, ties to even.
+	m := mant + half + ((mant >> 13) & 1) - 1
+	return sign | (uint16(e<<10) + uint16(m>>13))
+}
+
 // float16ToFloat64 decodes an IEEE 754 half-precision bit pattern to the Number a
 // getFloat16 read hands out. A zero-exponent pattern is a signed zero or a subnormal
 // whose value is mant times 2^-24; an all-ones exponent is an infinity when the
