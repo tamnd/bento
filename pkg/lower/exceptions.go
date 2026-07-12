@@ -98,6 +98,9 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "ArrayBuffer" {
 		return r.newArrayBuffer(kids[1:])
 	}
+	if r.prog.Text(kids[0]) == "SharedArrayBuffer" {
+		return r.newSharedArrayBuffer(kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "DataView" {
 		return r.newDataView(kids[1:])
 	}
