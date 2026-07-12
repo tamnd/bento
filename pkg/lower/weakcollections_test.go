@@ -68,6 +68,30 @@ func TestWeakSetHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "interface Box { id: number }\nconst k: Box = { id: 1 };\nconst s = new WeakSet<Box>([k]);\nconsole.log(s.has(k));\n")
 }
 
+// TestWeakRefLoweringShape pins the Go a WeakRef program lowers to: construction picks
+// NewWeakRef over the target pointee with the target passed as the object pointer, a
+// local that holds one is typed *value.WeakRef[T], and deref maps to Deref returning an
+// Opt read past an undefined guard.
+func TestWeakRefLoweringShape(t *testing.T) {
+	const src = `interface Box { id: number }
+const a: Box = { id: 1 };
+const wr = new WeakRef(a);
+const o = wr.deref();
+if (o !== undefined) {
+  console.log(o.id);
+}
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"value.NewWeakRef[ObjId](a)",
+		"wr.Deref()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("WeakRef lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
 // TestWeakMapHandsBackUnsupportedForms proves the WeakMap lowering claims only the
 // subset it can emit soundly and hands the rest back. Construction from an iterable of
 // entry pairs needs each key built as an object first, which the iterable-drain slice

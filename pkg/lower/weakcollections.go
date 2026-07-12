@@ -194,6 +194,111 @@ func (r *Renderer) weakSetMethodCall(recvNode frontend.Node, method string, argN
 	return r.weakCall(recvNode, goName, want, argNodes, "WeakSet")
 }
 
+// isWeakRefType reports whether an object type is a JavaScript WeakRef. Its deref
+// method is unique to WeakRef among the collections, so the presence of deref with no
+// get, set, or add is the fingerprint.
+func (r *Renderer) isWeakRefType(t frontend.Type) bool {
+	var hasDeref, hasGet, hasSet, hasAdd bool
+	for _, p := range r.prog.Properties(t) {
+		switch p.Name {
+		case "deref":
+			hasDeref = true
+		case "get":
+			hasGet = true
+		case "set":
+			hasSet = true
+		case "add":
+			hasAdd = true
+		}
+	}
+	return hasDeref && !hasGet && !hasSet && !hasAdd
+}
+
+// isWeakRef reports whether the checker types a node as a WeakRef, the receiver test
+// the WeakRef deref lowering uses.
+func (r *Renderer) isWeakRef(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return false
+	}
+	return r.isWeakRefType(t)
+}
+
+// weakRefTarget returns the pointee of a WeakRef type's target, the T in the *T the
+// target renders to. It reads T off the deref signature, whose result is T | undefined:
+// the object member of that union is the target type, which strips to its pointee the
+// same way a weak key does. A WeakRef whose target render is not a pointer hands back.
+func (r *Renderer) weakRefTarget(t frontend.Type) (ast.Expr, error) {
+	var derefType frontend.Type
+	found := false
+	for _, p := range r.prog.Properties(t) {
+		if p.Name == "deref" {
+			derefType, found = p.Type, true
+			break
+		}
+	}
+	if !found {
+		return nil, &NotYetLowerable{Reason: "WeakRef type did not expose its target through a deref signature"}
+	}
+	call, _ := r.prog.Signatures(derefType)
+	if len(call) == 0 {
+		return nil, &NotYetLowerable{Reason: "WeakRef deref did not expose a signature"}
+	}
+	members := r.prog.UnionMembers(call[0].Return)
+	if len(members) == 0 {
+		members = []frontend.Type{call[0].Return}
+	}
+	for _, m := range members {
+		if m.Flags&frontend.TypeObject != 0 {
+			return r.weakKeyPointee(m)
+		}
+	}
+	return nil, &NotYetLowerable{Reason: "WeakRef over a target that is not an object is a later slice"}
+}
+
+// renderWeakRef lowers a WeakRef<T> type to a pointer to the generic value.WeakRef
+// header over the target pointee.
+func (r *Renderer) renderWeakRef(t frontend.Type) (ast.Expr, error) {
+	pointee, err := r.weakRefTarget(t)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return star(index(sel("value", "WeakRef"), pointee)), nil
+}
+
+// newWeakRef lowers new WeakRef(target) to value.NewWeakRef[Pointee](target). The
+// pointee comes from the WeakRef type at this node, and the single target argument
+// lowers straight through as the object pointer it renders to.
+func (r *Renderer) newWeakRef(n frontend.Node, args []frontend.Node) (ast.Expr, error) {
+	valueArgs := r.namedArgs(args)
+	if len(valueArgs) != 1 {
+		return nil, &NotYetLowerable{Reason: "new WeakRef takes exactly one target argument"}
+	}
+	pointee, err := r.weakRefTarget(r.prog.TypeAt(n))
+	if err != nil {
+		return nil, err
+	}
+	target, err := r.lowerExpr(valueArgs[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewWeakRef"), Index: pointee}, Args: []ast.Expr{target}}, nil
+}
+
+// weakRefMethodCall lowers weakRef.deref() to recv.Deref(), the only method a WeakRef
+// carries. It returns an Opt the same narrowing and nullish paths any optional takes.
+func (r *Renderer) weakRefMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "deref" {
+		return nil, &NotYetLowerable{Reason: "WeakRef method ." + method + " is a later slice"}
+	}
+	return r.weakCall(recvNode, "Deref", 0, argNodes, "WeakRef")
+}
+
 // newWeakMap lowers a WeakMap construction. The empty new WeakMap<K, V>() picks the
 // value constructor over the key pointee and the value type, so new WeakMap<Foo,
 // number>() lowers to value.NewWeakMap[Foo, float64](). The entries-argument form
