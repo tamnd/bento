@@ -57,6 +57,49 @@ func (v Value) SymbolDescription() Value {
 	return StringValue(s.desc)
 }
 
+// The well-known symbols are the shared hooks the language's protocols hang on,
+// each a single interned identity a program reads as Symbol.iterator,
+// Symbol.toStringTag and the rest. They are created once at package load so every
+// read of Symbol.match returns the same reference and Symbol.match === Symbol.match
+// holds, the identity the well-known symbols guarantee. Their description is the
+// "Symbol.name" text the specification records, which is what toString renders and
+// what a test that only reads the description checks. They are not registered in the
+// global registry, so Symbol.keyFor reports undefined for each.
+var (
+	symbolIterator           = &Symbol{desc: FromGoString("Symbol.iterator"), hasDesc: true}
+	symbolAsyncIterator      = &Symbol{desc: FromGoString("Symbol.asyncIterator"), hasDesc: true}
+	symbolHasInstance        = &Symbol{desc: FromGoString("Symbol.hasInstance"), hasDesc: true}
+	symbolIsConcatSpreadable = &Symbol{desc: FromGoString("Symbol.isConcatSpreadable"), hasDesc: true}
+	symbolMatch              = &Symbol{desc: FromGoString("Symbol.match"), hasDesc: true}
+	symbolMatchAll           = &Symbol{desc: FromGoString("Symbol.matchAll"), hasDesc: true}
+	symbolReplace            = &Symbol{desc: FromGoString("Symbol.replace"), hasDesc: true}
+	symbolSearch             = &Symbol{desc: FromGoString("Symbol.search"), hasDesc: true}
+	symbolSpecies            = &Symbol{desc: FromGoString("Symbol.species"), hasDesc: true}
+	symbolSplit              = &Symbol{desc: FromGoString("Symbol.split"), hasDesc: true}
+	symbolToPrimitive        = &Symbol{desc: FromGoString("Symbol.toPrimitive"), hasDesc: true}
+	symbolToStringTag        = &Symbol{desc: FromGoString("Symbol.toStringTag"), hasDesc: true}
+	symbolUnscopables        = &Symbol{desc: FromGoString("Symbol.unscopables"), hasDesc: true}
+)
+
+// SymbolIterator and the accessors beside it return the one interned well-known
+// symbol each names, the value Symbol.iterator and its siblings read. Every call
+// returns the same reference, so a program comparing two reads of the same
+// well-known symbol sees identity, and a symbol used as a property key lands in the
+// same slot each time it is read.
+func SymbolIterator() Value           { return symbolValue(symbolIterator) }
+func SymbolAsyncIterator() Value      { return symbolValue(symbolAsyncIterator) }
+func SymbolHasInstance() Value        { return symbolValue(symbolHasInstance) }
+func SymbolIsConcatSpreadable() Value { return symbolValue(symbolIsConcatSpreadable) }
+func SymbolMatch() Value              { return symbolValue(symbolMatch) }
+func SymbolMatchAll() Value           { return symbolValue(symbolMatchAll) }
+func SymbolReplace() Value            { return symbolValue(symbolReplace) }
+func SymbolSearch() Value             { return symbolValue(symbolSearch) }
+func SymbolSpecies() Value            { return symbolValue(symbolSpecies) }
+func SymbolSplit() Value              { return symbolValue(symbolSplit) }
+func SymbolToPrimitive() Value        { return symbolValue(symbolToPrimitive) }
+func SymbolToStringTag() Value        { return symbolValue(symbolToStringTag) }
+func SymbolUnscopables() Value        { return symbolValue(symbolUnscopables) }
+
 // symbolRegistry backs the global symbol registry Symbol.for and Symbol.keyFor
 // share. It maps a string key to the one symbol that key names, so every
 // Symbol.for("k") returns the same reference, the cross-realm identity the
