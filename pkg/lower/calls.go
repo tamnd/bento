@@ -2950,7 +2950,11 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 // user code), hands back.
 func (r *Renderer) numberCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) == 0 {
-		return &ast.BasicLit{Kind: token.FLOAT, Value: "0"}, nil
+		// Number() with no argument is +0 (21.1.1.1). The literal carries a fractional
+		// part so it prints as a float64 constant: a bare 0 is an untyped constant that
+		// infers to int in `n := Number()`, which then fails to type-check against the
+		// float64 a Number is everywhere else.
+		return &ast.BasicLit{Kind: token.FLOAT, Value: "0.0"}, nil
 	}
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "Number() with this argument count is a later slice"}
