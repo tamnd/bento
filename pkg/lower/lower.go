@@ -775,6 +775,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// so it routes here before renderObject would intern its interface as fields.
 			return r.renderTypedArray(name)
 		}
+		if r.isWeakMapType(t) {
+			// A WeakMap<K, V> (25 §24.3) is the value model's weakly keyed collection,
+			// spelled as a pointer to the generic value.WeakMap header. Its fingerprint has
+			// no size, so it routes before the Map check, whose fingerprint requires size,
+			// and before renderObject would intern its method interface as fields.
+			return r.renderWeakMap(t)
+		}
 		if r.isMapType(t) {
 			// A Map<K, V> (section 6.5) is the value model's keyed collection, spelled as a
 			// pointer to the generic value.Map header, and the type a Go map[K]V projects to

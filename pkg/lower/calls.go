@@ -1027,6 +1027,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isDataView(recvNode) {
 		return r.dataViewMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a WeakMap receiver lowers to a value.WeakMap method (25 §24.3). It
+	// routes before the Map path: a WeakMap's fingerprint has no size, so isMap never
+	// matches it, but routing it first keeps the two collection dispatches adjacent and
+	// makes the intent plain.
+	if r.isWeakMap(recvNode) {
+		return r.weakMapMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
 	// routes before the primitive and string paths, which expect a number, boolean,
 	// or string receiver a map is not.
