@@ -1,0 +1,8 @@
+== stdout:
+-1
+1
+true
+false
+2020-03
+== exit:
+0

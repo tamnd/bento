@@ -879,6 +879,20 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "Duration")), nil
 		}
+		if r.plainYearMonthType(t) {
+			// A Temporal.PlainYearMonth (Temporal §9) is the value model's year-and-month,
+			// spelled as a pointer to value.PlainYearMonth, routed here for the same reason as
+			// the other plain types: it is a host type, not a struct shape.
+			r.requireImport(valuePkg)
+			return star(sel("value", "PlainYearMonth")), nil
+		}
+		if r.plainMonthDayType(t) {
+			// A Temporal.PlainMonthDay (Temporal §10) is the value model's month-and-day,
+			// spelled as a pointer to value.PlainMonthDay, routed here for the same reason as
+			// the other plain types: it is a host type, not a struct shape.
+			r.requireImport(valuePkg)
+			return star(sel("value", "PlainMonthDay")), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:

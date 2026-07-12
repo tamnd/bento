@@ -121,9 +121,9 @@ func TestPlainDateHandBacks(t *testing.T) {
 			want: "Temporal.PlainDate.from over a string or a property bag is a later slice",
 		},
 		{
-			name: "PlainYearMonth construction",
-			src:  "function makeYearMonth(): void { new Temporal.PlainYearMonth(2020, 1); }",
-			want: "new Temporal.PlainYearMonth is a later slice",
+			name: "Instant construction",
+			src:  "function makeInstant(): void { new Temporal.Instant(0n); }",
+			want: "new Temporal.Instant is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -493,6 +493,222 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 			name: "toPlainDate conversion",
 			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst d = dt.toPlainDate();\nconsole.log(d.day);",
 			want: "Temporal.PlainDateTime.prototype.toPlainDate is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestPlainYearMonthConstruction pins the construction: a PlainYearMonth is built by
+// value.NewPlainYearMonth over its two number components, and a field read lowers to a getter.
+func TestPlainYearMonthConstruction(t *testing.T) {
+	const src = `const ym = new Temporal.PlainYearMonth(2020, 3);
+console.log(ym.month);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.NewPlainYearMonth(2020, 3)", ".Month()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainYearMonthTypeSlot pins the type slot: a parameter typed Temporal.PlainYearMonth
+// lowers to a pointer to value.PlainYearMonth rather than an interned struct shape.
+func TestPlainYearMonthTypeSlot(t *testing.T) {
+	const src = `function monthOf(ym: Temporal.PlainYearMonth): number { return ym.month; }
+console.log(monthOf(new Temporal.PlainYearMonth(2020, 3)));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "*value.PlainYearMonth") {
+		t.Errorf("rendered program missing %q:\n%s", "*value.PlainYearMonth", got)
+	}
+}
+
+// TestPlainYearMonthGetters pins the clean field getters: each lowers to the matching method
+// on the value.PlainYearMonth receiver.
+func TestPlainYearMonthGetters(t *testing.T) {
+	cases := map[string]string{
+		"year":         ".Year()",
+		"month":        ".Month()",
+		"calendarId":   ".CalendarId()",
+		"monthCode":    ".MonthCode()",
+		"daysInMonth":  ".DaysInMonth()",
+		"daysInYear":   ".DaysInYear()",
+		"monthsInYear": ".MonthsInYear()",
+		"inLeapYear":   ".InLeapYear()",
+	}
+	for prop, want := range cases {
+		src := "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym." + prop + ");"
+		got := renderProgram(t, src)
+		if !strings.Contains(got, want) {
+			t.Errorf("getter .%s missing %q:\n%s", prop, want, got)
+		}
+	}
+}
+
+// TestPlainYearMonthMethods pins equals, toString, and toJSON to their value.PlainYearMonth
+// methods.
+func TestPlainYearMonthMethods(t *testing.T) {
+	const src = `const a = new Temporal.PlainYearMonth(2020, 3);
+const b = new Temporal.PlainYearMonth(2020, 4);
+console.log(a.equals(b));
+console.log(a.toString());
+console.log(a.toJSON());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Equals(", ".ToString()", ".ToJSON()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainYearMonthStatics pins Temporal.PlainYearMonth.compare and .from to their value
+// package functions.
+func TestPlainYearMonthStatics(t *testing.T) {
+	const src = `const a = new Temporal.PlainYearMonth(2020, 3);
+const b = new Temporal.PlainYearMonth(2020, 4);
+console.log(Temporal.PlainYearMonth.compare(a, b));
+const c = Temporal.PlainYearMonth.from(a);
+console.log(c.month);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.PlainYearMonthCompare(", "value.PlainYearMonthFrom("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainYearMonthHandBacks pins the honest ceilings: the arithmetic and conversion methods,
+// from over a string, and the union getters each hand back with a reason naming where the work
+// belongs.
+func TestPlainYearMonthHandBacks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "era union getter",
+			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym.era);",
+			want: "Temporal.PlainYearMonth.era is a later slice",
+		},
+		{
+			name: "add arithmetic",
+			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconst e = ym.add({ months: 1 });\nconsole.log(e.month);",
+			want: "Temporal.PlainYearMonth.prototype.add is a later slice",
+		},
+		{
+			name: "from a string",
+			src:  "const ym = Temporal.PlainYearMonth.from(\"2020-03\");\nconsole.log(ym.month);",
+			want: "Temporal.PlainYearMonth.from over a string or a property bag is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestPlainMonthDayConstruction pins the construction: a PlainMonthDay is built by
+// value.NewPlainMonthDay over its month-then-day components, and a field read lowers to a getter.
+func TestPlainMonthDayConstruction(t *testing.T) {
+	const src = `const md = new Temporal.PlainMonthDay(3, 15);
+console.log(md.day);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.NewPlainMonthDay(3, 15)", ".Day()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainMonthDayTypeSlot pins the type slot: a parameter typed Temporal.PlainMonthDay
+// lowers to a pointer to value.PlainMonthDay rather than an interned struct shape.
+func TestPlainMonthDayTypeSlot(t *testing.T) {
+	const src = `function dayOf(md: Temporal.PlainMonthDay): number { return md.day; }
+console.log(dayOf(new Temporal.PlainMonthDay(3, 15)));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "*value.PlainMonthDay") {
+		t.Errorf("rendered program missing %q:\n%s", "*value.PlainMonthDay", got)
+	}
+}
+
+// TestPlainMonthDayGetters pins the clean field getters: monthCode, day, and calendarId each
+// lower to the matching method on the value.PlainMonthDay receiver.
+func TestPlainMonthDayGetters(t *testing.T) {
+	cases := map[string]string{
+		"monthCode":  ".MonthCode()",
+		"day":        ".Day()",
+		"calendarId": ".CalendarId()",
+	}
+	for prop, want := range cases {
+		src := "const md = new Temporal.PlainMonthDay(3, 15);\nconsole.log(md." + prop + ");"
+		got := renderProgram(t, src)
+		if !strings.Contains(got, want) {
+			t.Errorf("getter .%s missing %q:\n%s", prop, want, got)
+		}
+	}
+}
+
+// TestPlainMonthDayMethods pins equals, toString, and toJSON to their value.PlainMonthDay
+// methods.
+func TestPlainMonthDayMethods(t *testing.T) {
+	const src = `const a = new Temporal.PlainMonthDay(3, 15);
+const b = new Temporal.PlainMonthDay(3, 16);
+console.log(a.equals(b));
+console.log(a.toString());
+console.log(a.toJSON());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Equals(", ".ToString()", ".ToJSON()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainMonthDayStatics pins Temporal.PlainMonthDay.from to value.PlainMonthDayFrom. A
+// month-day has no compare static, so from is the only static this type carries.
+func TestPlainMonthDayStatics(t *testing.T) {
+	const src = `const a = new Temporal.PlainMonthDay(3, 15);
+const c = Temporal.PlainMonthDay.from(a);
+console.log(c.day);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "value.PlainMonthDayFrom(") {
+		t.Errorf("rendered program missing %q:\n%s", "value.PlainMonthDayFrom(", got)
+	}
+}
+
+// TestPlainMonthDayHandBacks pins the honest ceilings: the reshaping and conversion methods and
+// from over a string each hand back with a reason naming where the work belongs.
+func TestPlainMonthDayHandBacks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "with reshaping",
+			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst e = md.with({ day: 16 });\nconsole.log(e.day);",
+			want: "Temporal.PlainMonthDay.prototype.with is a later slice",
+		},
+		{
+			name: "toPlainDate conversion",
+			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst d = md.toPlainDate({ year: 2020 });\nconsole.log(d.day);",
+			want: "Temporal.PlainMonthDay.prototype.toPlainDate is a later slice",
+		},
+		{
+			name: "from a string",
+			src:  "const md = Temporal.PlainMonthDay.from(\"03-15\");\nconsole.log(md.day);",
+			want: "Temporal.PlainMonthDay.from over a string or a property bag is a later slice",
 		},
 	}
 	for _, c := range cases {

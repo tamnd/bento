@@ -468,6 +468,28 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(durMethod)}}, nil
 	}
+	if r.isPlainYearMonth(obj) {
+		ymMethod, ok := plainYearMonthAccessor(prop)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth." + prop + " is a later slice"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(ymMethod)}}, nil
+	}
+	if r.isPlainMonthDay(obj) {
+		mdMethod, ok := plainMonthDayAccessor(prop)
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay." + prop + " is a later slice"}
+		}
+		recv, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(mdMethod)}}, nil
+	}
 	if r.isGlobalRef(obj, "Math") {
 		if e, ok := mathConstant(prop); ok {
 			r.requireImport(valuePkg)

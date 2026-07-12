@@ -682,3 +682,193 @@ func TestDurationRejects(t *testing.T) {
 		}
 	}
 }
+
+// yearMonthThrows reports whether NewPlainYearMonth throws a RangeError for the args.
+func yearMonthThrows(y, m float64) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewPlainYearMonth(y, m)
+	return false
+}
+
+// TestPlainYearMonthFields checks the clean getters against the leap year-month 2020-02,
+// the values taken from @js-temporal/polyfill.
+func TestPlainYearMonthFields(t *testing.T) {
+	ym := NewPlainYearMonth(2020, 2)
+	if ym.Year() != 2020 || ym.Month() != 2 {
+		t.Errorf("year/month = %v/%v, want 2020/2", ym.Year(), ym.Month())
+	}
+	if got := ym.MonthCode().ToGoString(); got != "M02" {
+		t.Errorf("monthCode = %q, want M02", got)
+	}
+	if got := ym.CalendarId().ToGoString(); got != "iso8601" {
+		t.Errorf("calendarId = %q, want iso8601", got)
+	}
+	if ym.DaysInMonth() != 29 || ym.DaysInYear() != 366 || ym.MonthsInYear() != 12 || !ym.InLeapYear() {
+		t.Errorf("derived fields = %v/%v/%v/%v, want 29/366/12/true", ym.DaysInMonth(), ym.DaysInYear(), ym.MonthsInYear(), ym.InLeapYear())
+	}
+	nonLeap := NewPlainYearMonth(2021, 2)
+	if nonLeap.DaysInMonth() != 28 || nonLeap.DaysInYear() != 365 || nonLeap.InLeapYear() {
+		t.Errorf("non-leap 2021-02 = %v/%v/%v, want 28/365/false", nonLeap.DaysInMonth(), nonLeap.DaysInYear(), nonLeap.InLeapYear())
+	}
+}
+
+// TestPlainYearMonthToString checks the ISO 8601 rendering, including the expanded-year form
+// beyond 0..9999, against @js-temporal/polyfill.
+func TestPlainYearMonthToString(t *testing.T) {
+	cases := []struct {
+		y, m float64
+		want string
+	}{
+		{2020, 3, "2020-03"},
+		{-1, 5, "-000001-05"},
+		{10000, 5, "+010000-05"},
+	}
+	for _, c := range cases {
+		ym := NewPlainYearMonth(c.y, c.m)
+		if got := ym.ToString().ToGoString(); got != c.want {
+			t.Errorf("PlainYearMonth(%v,%v).ToString() = %q, want %q", c.y, c.m, got, c.want)
+		}
+		if got := ym.ToJSON().ToGoString(); got != c.want {
+			t.Errorf("PlainYearMonth(%v,%v).ToJSON() = %q, want %q", c.y, c.m, got, c.want)
+		}
+	}
+}
+
+// TestPlainYearMonthCompareAndEquals checks the static comparator and equals.
+func TestPlainYearMonthCompareAndEquals(t *testing.T) {
+	a := NewPlainYearMonth(2020, 3)
+	if got := PlainYearMonthCompare(a, NewPlainYearMonth(2020, 4)); got != -1 {
+		t.Errorf("compare(2020-03, 2020-04) = %v, want -1", got)
+	}
+	if got := PlainYearMonthCompare(a, NewPlainYearMonth(2019, 12)); got != 1 {
+		t.Errorf("compare(2020-03, 2019-12) = %v, want 1", got)
+	}
+	if got := PlainYearMonthCompare(a, NewPlainYearMonth(2020, 3)); got != 0 {
+		t.Errorf("compare(2020-03, 2020-03) = %v, want 0", got)
+	}
+	if !a.Equals(NewPlainYearMonth(2020, 3)) || a.Equals(NewPlainYearMonth(2020, 4)) {
+		t.Error("equals mismatch")
+	}
+}
+
+// TestPlainYearMonthFromCopies checks that from returns a distinct equal object.
+func TestPlainYearMonthFromCopies(t *testing.T) {
+	a := NewPlainYearMonth(2020, 3)
+	b := PlainYearMonthFrom(a)
+	if a == b {
+		t.Error("PlainYearMonthFrom returned the same pointer")
+	}
+	if !a.Equals(b) {
+		t.Error("copy does not equal its source")
+	}
+}
+
+// TestPlainYearMonthTruncatesAndRejects checks that a fractional argument truncates and that
+// the out-of-range and out-of-limit cases throw, the bounds taken from @js-temporal/polyfill.
+func TestPlainYearMonthTruncatesAndRejects(t *testing.T) {
+	if got := NewPlainYearMonth(2020, 1.5).Month(); got != 1 {
+		t.Errorf("month 1.5 truncated to %v, want 1", got)
+	}
+	throwing := [][2]float64{
+		{2020, 0},    // month below 1
+		{2020, 13},   // month above 12
+		{nan(), 1},   // NaN year
+		{-271821, 3}, // before the low limit
+		{275760, 10}, // after the high limit
+	}
+	for _, c := range throwing {
+		if !yearMonthThrows(c[0], c[1]) {
+			t.Errorf("NewPlainYearMonth%v did not throw", c)
+		}
+	}
+	valid := [][2]float64{
+		{-271821, 4}, // at the low limit
+		{275760, 9},  // at the high limit
+	}
+	for _, c := range valid {
+		if yearMonthThrows(c[0], c[1]) {
+			t.Errorf("NewPlainYearMonth%v threw at a valid value", c)
+		}
+	}
+}
+
+// monthDayThrows reports whether NewPlainMonthDay throws a RangeError for the args.
+func monthDayThrows(m, d float64) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewPlainMonthDay(m, d)
+	return false
+}
+
+// TestPlainMonthDayFields checks the getters and rendering, including the leap-reference
+// February 29, against @js-temporal/polyfill.
+func TestPlainMonthDayFields(t *testing.T) {
+	md := NewPlainMonthDay(3, 15)
+	if got := md.MonthCode().ToGoString(); got != "M03" {
+		t.Errorf("monthCode = %q, want M03", got)
+	}
+	if md.Day() != 15 {
+		t.Errorf("day = %v, want 15", md.Day())
+	}
+	if got := md.CalendarId().ToGoString(); got != "iso8601" {
+		t.Errorf("calendarId = %q, want iso8601", got)
+	}
+	if got := md.ToString().ToGoString(); got != "03-15" {
+		t.Errorf("toString = %q, want 03-15", got)
+	}
+	if got := md.ToJSON().ToGoString(); got != "03-15" {
+		t.Errorf("toJSON = %q, want 03-15", got)
+	}
+	feb29 := NewPlainMonthDay(2, 29)
+	if got := feb29.ToString().ToGoString(); got != "02-29" {
+		t.Errorf("Feb 29 toString = %q, want 02-29", got)
+	}
+}
+
+// TestPlainMonthDayEqualsAndFrom checks equals and the copy from makes.
+func TestPlainMonthDayEqualsAndFrom(t *testing.T) {
+	a := NewPlainMonthDay(3, 15)
+	if !a.Equals(NewPlainMonthDay(3, 15)) || a.Equals(NewPlainMonthDay(3, 16)) {
+		t.Error("equals mismatch")
+	}
+	b := PlainMonthDayFrom(a)
+	if a == b {
+		t.Error("PlainMonthDayFrom returned the same pointer")
+	}
+	if !a.Equals(b) {
+		t.Error("copy does not equal its source")
+	}
+}
+
+// TestPlainMonthDayTruncatesAndRejects checks that a fractional argument truncates and that
+// the out-of-range cases throw, including February 30, the bounds from @js-temporal/polyfill.
+func TestPlainMonthDayTruncatesAndRejects(t *testing.T) {
+	if got := NewPlainMonthDay(1.5, 1).MonthCode().ToGoString(); got != "M01" {
+		t.Errorf("month 1.5 truncated to %q, want M01", got)
+	}
+	throwing := [][2]float64{
+		{13, 1},    // month above 12
+		{1, 32},    // day above the month length
+		{nan(), 1}, // NaN month
+		{2, 30},    // February 30 does not exist in the leap reference year
+	}
+	for _, c := range throwing {
+		if !monthDayThrows(c[0], c[1]) {
+			t.Errorf("NewPlainMonthDay%v did not throw", c)
+		}
+	}
+	if monthDayThrows(2, 29) {
+		t.Error("NewPlainMonthDay(2, 29) threw, but the leap reference year admits it")
+	}
+}
