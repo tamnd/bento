@@ -1118,6 +1118,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isPromise(recvNode) {
 		return r.promiseMethodCall(recvNode, method, argNodes)
 	}
+	// An iterator helper, arr.values().map(f) or Iterator.from(x).filter(g), lowers to
+	// the value.Iter* free function over the receiver's Next. It routes before the
+	// generator drive because a helper result is typed IteratorObject, one of the wider
+	// iterator names generatorMethodCall also claims, and before the array iterator drive
+	// so a helper method on an ArrayIterator receiver is caught here rather than handed
+	// back as an unknown array-iterator method. A receiver that is neither an
+	// IteratorObject nor an ArrayIterator returns ok false and falls through, so a real
+	// generator (typed Generator) still reaches generatorMethodCall below.
+	if e, ok, err := r.iterHelperMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
+	}
 	// A manual drive of a generator, it.next(v), lowers to the runtime helper that packs
 	// the { value, done } result. Like Map, Set, and Promise it routes before the
 	// primitive and string paths, which expect a number, boolean, or string receiver a
