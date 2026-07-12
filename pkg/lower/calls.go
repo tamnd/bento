@@ -64,6 +64,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if expr, handled, err := r.promiseStaticCall(n, kids[0], kids[1:]); handled || err != nil {
 			return expr, err
 		}
+		// A static call on a concrete typed-array constructor (Int32Array.of,
+		// Int32Array.from) is a constructor-level factory, not a method on a view, so
+		// it routes here before methodCall, which expects a value receiver. It needs
+		// the whole call node n to read the constructed array's element type.
+		if expr, handled, err := r.typedArrayStaticCall(n, kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
 		return r.methodCall(kids[0], kids[1:])
 	}
 	// A method call spelled with a bracket key, C["m"](...) or c["m"](...), is the
@@ -985,6 +992,18 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// string receiver an array is not.
 	if _, ok := r.arrayElem(recvNode); ok {
 		return r.arrayMethodCall(recvNode, method, argNodes)
+	}
+	// A method on a numeric typed-array receiver lowers to a value.TypedArray
+	// method. It routes right after the array path, since a typed array shares the
+	// copy and search shapes but runs over a view that clamps to its length, and
+	// before the Map, Set, and primitive paths, which expect a receiver a typed
+	// array is not. Only the generic *value.TypedArray[T] family routes here:
+	// Uint8Array has its own []byte representation without these view methods, and
+	// the bigint typed arrays are a separate value type whose methods are not wired,
+	// so both fall through to the hand-back below rather than emit a call to a method
+	// they do not have.
+	if r.genericTypedArray(recvNode) {
+		return r.typedArrayMethodCall(recvNode, method, argNodes)
 	}
 	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
 	// routes before the primitive and string paths, which expect a number, boolean,
@@ -2501,6 +2520,25 @@ func (r *Renderer) isObjectProtoToString(n frontend.Node) bool {
 func (r *Renderer) objectProtoToStringCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	if method != "call" || len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "Object.prototype.toString borrowed with anything other than .call(x) is a later slice"}
+	}
+	// A statically known typed array carries the Symbol.toStringTag its constructor
+	// installs, so Object.prototype.toString.call(ta) reads "[object Int32Array]" off
+	// the concrete constructor name rather than the generic object tag. A typed array
+	// does not box into a value.Value, so the runtime ClassTag cannot recover the name;
+	// TypedArrayClassTag takes the view and the compiler-known name, evaluating the view
+	// for its side effects and reading it as a use while the tag comes from the name.
+	// The whole family is covered, since typedArrayName names Uint8Array and the bigint
+	// arrays too, each of which has the same class-tag rule.
+	if name, ok := r.typedArrayName(r.prog.TypeAt(argNodes[0])); ok {
+		view, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "TypedArrayClassTag"),
+			Args: []ast.Expr{view, &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}},
+		}, nil
 	}
 	arg, err := r.boxOperand(argNodes[0])
 	if err != nil {
