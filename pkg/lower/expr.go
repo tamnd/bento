@@ -996,6 +996,20 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return &ast.CallExpr{Fun: sel("value", "Add"), Args: []ast.Expr{l, rr}}, nil
 	}
 
+	// A symbol-typed operand compares by reference identity. A symbol lowers to a
+	// boxed value.Value whether or not its binding is dynamically bound, so a symbol
+	// interned by Symbol.for or annotated `: symbol` still has a box even though it is
+	// not on the dynamic path. === and !== go through the runtime's StrictEquals over
+	// the two boxes, the pointer identity the language compares symbols by, and == and
+	// != coincide with strict since neither side of a symbol compare coerces. This
+	// routes before the operator table, which has no symbol case, so a symbol equality
+	// that the dynamic path did not already claim still lowers rather than handing back.
+	if expr, handled, err := r.symbolEquality(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	// The other operators a dynamic operand reaches: strict and loose equality
 	// through the runtime's StrictEquals and LooseEquals (or the IsUndefined/IsNull
 	// presence forms against a literal), the relationals through the runtime's
@@ -1720,6 +1734,40 @@ func (r *Renderer) referenceIdentityOp(opText string, left, right frontend.Node)
 		return token.ILLEGAL, false
 	}
 	return goOp, true
+}
+
+// symbolEquality lowers an equality between two symbol-typed operands to the
+// runtime's identity compare. Both operands render to a boxed value.Value, so ===
+// and !== go through value.StrictEquals, which compares two symbols by the pointer
+// their boxes hold, and == and != coincide with strict for two symbols since a
+// symbol never coerces against another symbol; loose equality reuses StrictEquals
+// rather than LooseEquals so the intent reads plainly. It reports handled=false for
+// a non-equality operator or when either operand is not a symbol, leaving those to
+// the dynamic path and the operator table. This is what lets `Symbol.for("k") ===
+// Symbol.for("k")` lower when the interned symbols are not on the dynamic path.
+func (r *Renderer) symbolEquality(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	switch opText {
+	case "===", "!==", "==", "!=":
+	default:
+		return nil, false, nil
+	}
+	if !r.isSymbol(left) || !r.isSymbol(right) {
+		return nil, false, nil
+	}
+	l, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, false, err
+	}
+	rr, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	eq := &ast.CallExpr{Fun: sel("value", "StrictEquals"), Args: []ast.Expr{l, rr}}
+	if opText == "!==" || opText == "!=" {
+		return &ast.UnaryExpr{Op: token.NOT, X: eq}, true, nil
+	}
+	return eq, true, nil
 }
 
 // numericBinaryOp maps a TypeScript operator on number operands to its Go token.
