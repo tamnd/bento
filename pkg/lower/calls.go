@@ -2521,6 +2521,25 @@ func (r *Renderer) objectProtoToStringCall(method string, argNodes []frontend.No
 	if method != "call" || len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "Object.prototype.toString borrowed with anything other than .call(x) is a later slice"}
 	}
+	// A statically known typed array carries the Symbol.toStringTag its constructor
+	// installs, so Object.prototype.toString.call(ta) reads "[object Int32Array]" off
+	// the concrete constructor name rather than the generic object tag. A typed array
+	// does not box into a value.Value, so the runtime ClassTag cannot recover the name;
+	// TypedArrayClassTag takes the view and the compiler-known name, evaluating the view
+	// for its side effects and reading it as a use while the tag comes from the name.
+	// The whole family is covered, since typedArrayName names Uint8Array and the bigint
+	// arrays too, each of which has the same class-tag rule.
+	if name, ok := r.typedArrayName(r.prog.TypeAt(argNodes[0])); ok {
+		view, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun:  sel("value", "TypedArrayClassTag"),
+			Args: []ast.Expr{view, &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}},
+		}, nil
+	}
 	arg, err := r.boxOperand(argNodes[0])
 	if err != nil {
 		return nil, err

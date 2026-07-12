@@ -113,6 +113,8 @@ func (r *Renderer) typedArrayMethodCall(recvNode frontend.Node, method string, a
 		return r.typedArraySort(recvNode, "ToSorted", "ToSortedFunc", argNodes)
 	case "with":
 		return r.typedArrayWith(recvNode, argNodes)
+	case "toString":
+		return r.typedArrayToString(recvNode, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "typed array method ." + method + " is a later slice"}
 	}
@@ -565,6 +567,27 @@ func (r *Renderer) typedArrayWith(recvNode frontend.Node, argNodes []frontend.No
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: []ast.Expr{idx, val}}, nil
+}
+
+// typedArrayToString lowers ta.toString() to the same comma join
+// Array.prototype.toString performs, which the typed-array prototype inherits: the
+// method takes no argument and joins the elements with a comma, each element
+// stringified as a Number. It reuses the Join method the join lowering targets with
+// a fixed comma separator, so a typed array and an array render identically. The
+// sibling toLocaleString is not this method: its output groups digits by the runtime
+// locale and has no single deterministic form to emit, so it is left to hand back. A
+// toString call with any argument is not the zero-argument method and hands back.
+func (r *Renderer) typedArrayToString(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 0 {
+		return nil, &NotYetLowerable{Reason: "typed array toString takes no arguments"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	sep := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: `","`}}}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Join")}, Args: []ast.Expr{sep}}, nil
 }
 
 // typedArrayElemType returns the Go element type of a typed-array receiver as an
