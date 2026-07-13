@@ -1,0 +1,17 @@
+== stdout:
+gregory
+2024
+gregory
+2024
+2024-06-30[u-ca=gregory]
+gregory-inverse
+6
+1
+0
+false
+true
+gregory
+2024-06-30T12:34:56[u-ca=gregory]
+gregory
+== exit:
+0

@@ -10,24 +10,27 @@ import (
 )
 
 // PlainDate is bento's runtime representation of a Temporal.PlainDate (Temporal
-// §3): a calendar date with no time and no zone, an ISO year, month, and day. This
-// slice hosts only the ISO 8601 calendar, the one every Temporal.PlainDate carries
-// unless a caller names another; a non-ISO calendar hands back at lowering, so a
-// PlainDate that reached the runtime is always iso8601 and its calendarId reports
-// that string.
+// §3): a calendar date with no time and no zone, held as an ISO year, month, and day
+// paired with a calendar that interprets them. Every PlainDate stores its date over
+// the proleptic Gregorian (ISO 8601) calendar the way Temporal does internally; the
+// cal field names the calendar the getters report under, "" reading as iso8601. This
+// slice hosts the ISO 8601 calendar and the proleptic Gregorian calendar, whose date
+// arithmetic is the ISO one with an era; a calendar bento does not host yet hands
+// back at lowering, so cal is always "" or "gregory".
 //
-// The three fields are the proleptic Gregorian year, the month in 1..12, and the
+// The three date fields are the proleptic Gregorian year, the month in 1..12, and the
 // day in 1..(days in that month). They are stored as the integers RejectISODate
 // validated, so every derived accessor (the weekday, the day of the year, the leap
-// flag) recomputes from them over the ISO calendar rather than caching a second
-// copy. The calendar-dependent getters the checker types as an optional read as the
-// value the ISO calendar gives them: era and eraYear are undefined, since ISO has no
-// era, and weekOfYear and yearOfWeek are the ISO 8601 week date computed from the
-// ordinal day and the weekday.
+// flag) recomputes from them rather than caching a second copy. The calendar-dependent
+// getters the checker types as an optional read as the value the calendar gives them:
+// era and eraYear are undefined under ISO but read the gregory era under gregory, and
+// weekOfYear and yearOfWeek are the ISO 8601 week date computed from the ordinal day
+// and the weekday, which the gregory calendar shares.
 type PlainDate struct {
-	year  int // proleptic Gregorian year, may be negative or above 9999
-	month int // 1..12
-	day   int // 1..isoDaysInMonth(year, month)
+	year  int    // proleptic Gregorian year, may be negative or above 9999
+	month int    // 1..12
+	day   int    // 1..isoDaysInMonth(year, month)
+	cal   string // canonical calendar id, "" reads as iso8601
 }
 
 // NewPlainDate builds a PlainDate from the constructor's three number arguments,
@@ -43,6 +46,54 @@ func NewPlainDate(isoYear, isoMonth, isoDay float64) *PlainDate {
 	d := toIntegerWithTruncation(isoDay)
 	rejectISODate(y, m, d)
 	return &PlainDate{year: int(y), month: int(m), day: int(d)}
+}
+
+// canonicalCalendar canonicalizes a Temporal calendar identifier the way
+// CanonicalizeCalendar does: identifiers are case-insensitive, so it lowercases the
+// id and returns the canonical form, with ok=false for an id bento does not host.
+// This slice hosts the ISO 8601 calendar and the proleptic Gregorian calendar; the
+// lowerer only ever routes one of these two here, but the check is kept so a stray id
+// throws the RangeError the specification requires rather than silently mislabelling.
+func canonicalCalendar(id string) (string, bool) {
+	switch strings.ToLower(id) {
+	case "iso8601":
+		return "iso8601", true
+	case "gregory":
+		return "gregory", true
+	default:
+		return "", false
+	}
+}
+
+// NewPlainDateCal builds a PlainDate under a named calendar, the four-argument
+// constructor new Temporal.PlainDate(y, m, d, calendar). It follows the specification
+// order: ToIntegerWithTruncation on each component first, so a non-finite one throws a
+// RangeError, then CanonicalizeCalendar, so an unhosted or invalid id throws a
+// RangeError, then RejectISODate, so an out-of-range date throws. The date fields are
+// the ISO date the components spell; the calendar only changes how the getters label
+// them.
+func NewPlainDateCal(isoYear, isoMonth, isoDay float64, calendar string) *PlainDate {
+	y := toIntegerWithTruncation(isoYear)
+	m := toIntegerWithTruncation(isoMonth)
+	d := toIntegerWithTruncation(isoDay)
+	cal, ok := canonicalCalendar(calendar)
+	if !ok {
+		Throw(NewRangeError(FromGoString("invalid calendar identifier " + calendar)))
+	}
+	rejectISODate(y, m, d)
+	return &PlainDate{year: int(y), month: int(m), day: int(d), cal: cal}
+}
+
+// PlainDateWithCalendar implements Temporal.PlainDate.prototype.withCalendar: it
+// reinterprets the same ISO date under another calendar, returning a fresh PlainDate
+// with the given calendar id. The id is canonicalized and validated, so an unhosted or
+// invalid one throws a RangeError.
+func PlainDateWithCalendar(pd *PlainDate, calendar string) *PlainDate {
+	cal, ok := canonicalCalendar(calendar)
+	if !ok {
+		Throw(NewRangeError(FromGoString("invalid calendar identifier " + calendar)))
+	}
+	return &PlainDate{year: pd.year, month: pd.month, day: pd.day, cal: cal}
 }
 
 // PlainDateFrom implements Temporal.PlainDate.from for a PlainDate argument: it
@@ -162,8 +213,17 @@ func (pd *PlainDate) Month() float64 { return float64(pd.month) }
 // Day returns the ISO day of the month.
 func (pd *PlainDate) Day() float64 { return float64(pd.day) }
 
-// CalendarId returns the calendar identifier, always "iso8601" for this slice.
-func (pd *PlainDate) CalendarId() BStr { return FromGoString("iso8601") }
+// calendarID returns the canonical calendar id this date reports under, mapping the
+// empty stored value to "iso8601" so a date built without a calendar reads as ISO.
+func (pd *PlainDate) calendarID() string {
+	if pd.cal == "" {
+		return "iso8601"
+	}
+	return pd.cal
+}
+
+// CalendarId returns the calendar identifier, "iso8601" or "gregory".
+func (pd *PlainDate) CalendarId() BStr { return FromGoString(pd.calendarID()) }
 
 // MonthCode returns the ISO month code, "M" followed by the two-digit month. The
 // ISO calendar has no leap months, so the code never carries the trailing "L".
@@ -207,14 +267,34 @@ func (pd *PlainDate) MonthsInYear() float64 { return 12 }
 // InLeapYear reports whether this date's year is an ISO leap year.
 func (pd *PlainDate) InLeapYear() bool { return isLeapISO(pd.year) }
 
-// Era implements Temporal.PlainDate.prototype.era. The ISO 8601 calendar has no
-// era, so the getter the checker types string | undefined is always undefined, the
-// empty optional the lowerer boxes to undefined at any dynamic read.
-func (pd *PlainDate) Era() Opt[BStr] { return None[BStr]() }
+// Era implements Temporal.PlainDate.prototype.era. The ISO 8601 calendar has no era,
+// so the getter the checker types string | undefined is undefined under ISO. The
+// gregory calendar splits the timeline at year 1: a year of 1 or above is the "gregory"
+// era and a year of 0 or below the "gregory-inverse" era, the era codes CLDR gives the
+// proleptic Gregorian calendar.
+func (pd *PlainDate) Era() Opt[BStr] {
+	if pd.cal != "gregory" {
+		return None[BStr]()
+	}
+	if pd.year >= 1 {
+		return Some(FromGoString("gregory"))
+	}
+	return Some(FromGoString("gregory-inverse"))
+}
 
-// EraYear implements Temporal.PlainDate.prototype.eraYear. Like era it is undefined
-// under the ISO calendar, which has no era to count a year within.
-func (pd *PlainDate) EraYear() Opt[float64] { return None[float64]() }
+// EraYear implements Temporal.PlainDate.prototype.eraYear, the year counted within the
+// era. It is undefined under ISO; under gregory it is the year itself in the "gregory"
+// era and 1 minus the year in the "gregory-inverse" era, so ISO year 0 is eraYear 1
+// and ISO year -5 is eraYear 6.
+func (pd *PlainDate) EraYear() Opt[float64] {
+	if pd.cal != "gregory" {
+		return None[float64]()
+	}
+	if pd.year >= 1 {
+		return Some(float64(pd.year))
+	}
+	return Some(float64(1 - pd.year))
+}
 
 // WeekOfYear implements Temporal.PlainDate.prototype.weekOfYear, the ISO 8601 week
 // number 1..53. The ISO calendar always defines it, so the optional the checker
@@ -275,9 +355,11 @@ func isoDayOfWeek(year, month, day int) int {
 }
 
 // Equals implements Temporal.PlainDate.prototype.equals: two dates are equal when
-// their year, month, and day match under the same (ISO) calendar.
+// their year, month, and day match and they carry the same calendar, so the same ISO
+// day under iso8601 and under gregory does not compare equal.
 func (pd *PlainDate) Equals(other *PlainDate) bool {
-	return pd.year == other.year && pd.month == other.month && pd.day == other.day
+	return pd.year == other.year && pd.month == other.month && pd.day == other.day &&
+		pd.calendarID() == other.calendarID()
 }
 
 // PlainDateCompare implements Temporal.PlainDate.compare, the static comparator:
@@ -304,11 +386,27 @@ func PlainDateCompare(a, b *PlainDate) float64 {
 	}
 }
 
-// isoString renders the ISO 8601 date, YYYY-MM-DD, with the year expanded to a
-// signed six-digit form outside 0..9999. It is the Go string toString wraps, and
-// the piece PlainDateTime joins with the time across a "T".
-func (pd *PlainDate) isoString() string {
+// dateCore renders the ISO 8601 date, YYYY-MM-DD, with the year expanded to a signed
+// six-digit form outside 0..9999, and no calendar annotation. It is the piece
+// PlainDateTime joins with the time across a "T" before the annotation trails the whole
+// string.
+func (pd *PlainDate) dateCore() string {
 	return formatISOYear(pd.year) + "-" + twoDigit(pd.month) + "-" + twoDigit(pd.day)
+}
+
+// calendarAnnotation returns the RFC 9557 calendar suffix a non-ISO calendar appends to
+// a toString, "[u-ca=<id>]", or "" for the ISO calendar, which prints no annotation.
+func (pd *PlainDate) calendarAnnotation() string {
+	if pd.cal == "" || pd.cal == "iso8601" {
+		return ""
+	}
+	return "[u-ca=" + pd.cal + "]"
+}
+
+// isoString renders the ISO 8601 date with its calendar annotation, the string
+// PlainDate.toString wraps.
+func (pd *PlainDate) isoString() string {
+	return pd.dateCore() + pd.calendarAnnotation()
 }
 
 // ToString implements Temporal.PlainDate.prototype.toString for the default
@@ -467,10 +565,10 @@ func (pt *PlainTime) ToJSON() BStr { return pt.ToString() }
 // PlainDateTime is bento's runtime representation of a Temporal.PlainDateTime (Temporal
 // §5): a calendar date paired with a wall-clock time, no zone. It is exactly a PlainDate
 // and a PlainTime carried together, so it holds one of each and delegates every field,
-// every string rendering, and both comparisons to them rather than restating the ISO
-// calendar and the time math. Like PlainDate it hosts only the ISO 8601 calendar; a
-// non-ISO calendar hands back at lowering, so a PlainDateTime that reached the runtime is
-// always iso8601.
+// every string rendering, and both comparisons to them rather than restating the
+// calendar and the time math. It carries whatever calendar its date does, iso8601 or
+// gregory in this slice, so era and eraYear and the [u-ca=...] annotation follow from
+// the date half.
 type PlainDateTime struct {
 	date PlainDate
 	time PlainTime
@@ -511,6 +609,47 @@ func PlainDateTimeFrom(pdt *PlainDateTime) *PlainDateTime {
 	return &PlainDateTime{date: pdt.date, time: pdt.time}
 }
 
+// NewPlainDateTimeCal builds a PlainDateTime under a named calendar, the ten-argument
+// constructor new Temporal.PlainDateTime(y, mo, d, h, mi, s, ms, us, ns, calendar). It
+// mirrors NewPlainDateTime with the specification's calendar step folded in: the
+// components truncate first, then the calendar is canonicalized, so an unhosted id
+// throws a RangeError, then the date and time are rejected.
+func NewPlainDateTimeCal(isoYear, isoMonth, isoDay, hour, minute, second, millisecond, microsecond, nanosecond float64, calendar string) *PlainDateTime {
+	y := toIntegerWithTruncation(isoYear)
+	mo := toIntegerWithTruncation(isoMonth)
+	d := toIntegerWithTruncation(isoDay)
+	h := toIntegerWithTruncation(hour)
+	mi := toIntegerWithTruncation(minute)
+	s := toIntegerWithTruncation(second)
+	ms := toIntegerWithTruncation(millisecond)
+	us := toIntegerWithTruncation(microsecond)
+	ns := toIntegerWithTruncation(nanosecond)
+	cal, ok := canonicalCalendar(calendar)
+	if !ok {
+		Throw(NewRangeError(FromGoString("invalid calendar identifier " + calendar)))
+	}
+	rejectISODate(y, mo, d)
+	rejectTime(h, mi, s, ms, us, ns)
+	return &PlainDateTime{
+		date: PlainDate{year: int(y), month: int(mo), day: int(d), cal: cal},
+		time: PlainTime{int(h), int(mi), int(s), int(ms), int(us), int(ns)},
+	}
+}
+
+// PlainDateTimeWithCalendar implements Temporal.PlainDateTime.prototype.withCalendar: it
+// reinterprets the same ISO date and time under another calendar, returning a fresh
+// PlainDateTime. The id is canonicalized and validated, so an unhosted or invalid one
+// throws a RangeError.
+func PlainDateTimeWithCalendar(pdt *PlainDateTime, calendar string) *PlainDateTime {
+	cal, ok := canonicalCalendar(calendar)
+	if !ok {
+		Throw(NewRangeError(FromGoString("invalid calendar identifier " + calendar)))
+	}
+	nd := pdt.date
+	nd.cal = cal
+	return &PlainDateTime{date: nd, time: pdt.time}
+}
+
 // Year returns the ISO year.
 func (pdt *PlainDateTime) Year() float64 { return pdt.date.Year() }
 
@@ -538,7 +677,7 @@ func (pdt *PlainDateTime) Microsecond() float64 { return pdt.time.Microsecond() 
 // Nanosecond returns the nanosecond, 0..999.
 func (pdt *PlainDateTime) Nanosecond() float64 { return pdt.time.Nanosecond() }
 
-// CalendarId returns the calendar identifier, always "iso8601" for this slice.
+// CalendarId returns the calendar identifier the date half carries.
 func (pdt *PlainDateTime) CalendarId() BStr { return pdt.date.CalendarId() }
 
 // MonthCode returns the ISO month code, "M" followed by the two-digit month.
@@ -567,8 +706,8 @@ func (pdt *PlainDateTime) InLeapYear() bool { return pdt.date.InLeapYear() }
 
 // Era, EraYear, WeekOfYear, and YearOfWeek read the calendar-dependent fields off
 // the date half, so a date-time answers them the same as the date it carries: era
-// and eraYear undefined under the ISO calendar, weekOfYear and yearOfWeek the ISO
-// 8601 week date.
+// and eraYear undefined under ISO and the gregory era under gregory, weekOfYear and
+// yearOfWeek the ISO 8601 week date.
 func (pdt *PlainDateTime) Era() Opt[BStr]           { return pdt.date.Era() }
 func (pdt *PlainDateTime) EraYear() Opt[float64]    { return pdt.date.EraYear() }
 func (pdt *PlainDateTime) WeekOfYear() Opt[float64] { return pdt.date.WeekOfYear() }
@@ -594,7 +733,7 @@ func PlainDateTimeCompare(a, b *PlainDateTime) float64 {
 // the ISO 8601 date and time joined by "T", each rendered as its own type renders it, so
 // the fractional-second part appears only when a sub-second field is set.
 func (pdt *PlainDateTime) ToString() BStr {
-	return FromGoString(pdt.date.isoString() + "T" + pdt.time.isoString())
+	return FromGoString(pdt.date.dateCore() + "T" + pdt.time.isoString() + pdt.date.calendarAnnotation())
 }
 
 // ToJSON implements Temporal.PlainDateTime.prototype.toJSON, the same ISO string toString
