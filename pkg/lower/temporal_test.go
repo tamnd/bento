@@ -360,9 +360,9 @@ func TestPlainTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "until arithmetic",
-			src:  "const a = new Temporal.PlainTime(12, 30);\nconst b = new Temporal.PlainTime(14, 0);\nconst d = a.until(b);\nconsole.log(d.hours);",
-			want: "Temporal.PlainTime.prototype.until is a later slice",
+			name: "until over a string argument",
+			src:  "const a = new Temporal.PlainTime(12, 30);\nconst d = a.until(\"14:00\");\nconsole.log(d.hours);",
+			want: "Temporal.PlainTime.prototype.until over an argument that is not a Temporal.PlainTime is a later slice",
 		},
 		{
 			name: "add over a dynamic string",
@@ -516,6 +516,47 @@ console.log(r.hour);`
 		".Round(",
 		`"hour"`,
 		`"halfExpand"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeUntil pins the difference emit: t.until(other) lowers to other.Until with the
+// four option arguments, defaulting largestUnit to hour, smallestUnit to nanosecond, the
+// increment to one, and the mode to trunc.
+func TestPlainTimeUntil(t *testing.T) {
+	const src = `const a = new Temporal.PlainTime(12, 30);
+const b = new Temporal.PlainTime(14, 0);
+const d = a.until(b);
+console.log(d.hours);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		".Until(",
+		`"hour"`,
+		`"nanosecond"`,
+		`"trunc"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeSince pins the reversed difference and its option bag: t.since(other) lowers to
+// Since, and largestUnit/smallestUnit/roundingIncrement/roundingMode carry through.
+func TestPlainTimeSince(t *testing.T) {
+	const src = `const a = new Temporal.PlainTime(12, 30);
+const b = new Temporal.PlainTime(14, 0);
+const d = a.since(b, { largestUnit: "minute", smallestUnit: "minute", roundingIncrement: 5, roundingMode: "ceil" });
+console.log(d.minutes);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		".Since(",
+		`"minute"`,
+		"5",
+		`"ceil"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered program missing %q:\n%s", want, got)
