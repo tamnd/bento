@@ -170,6 +170,43 @@ func TestPlainDateUntilSince(t *testing.T) {
 	}
 }
 
+// TestPlainDateWith pins the reshape: with routes to WithFields carrying each recognized
+// field as a present or absent optional and the overflow option as a string, with the
+// constrain default and an explicit reject riding through.
+func TestPlainDateWith(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "a single field with the constrain default",
+			src:   "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ month: 2 }).day);",
+			wants: []string{".WithFields(", "value.Some[float64](", "value.None[float64]()", `"constrain"`},
+		},
+		{
+			name:  "all three fields",
+			src:   "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ year: 2021, month: 6, day: 10 }).day);",
+			wants: []string{".WithFields(", "value.Some[float64](2021)", "value.Some[float64](6)", "value.Some[float64](10)"},
+		},
+		{
+			name:  "an explicit reject overflow",
+			src:   "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ day: 40 }, { overflow: \"reject\" }).day);",
+			wants: []string{".WithFields(", `"reject"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
 // and conversion methods, from over a dynamic string or a property bag, and the other
 // Temporal types each hand back with a reason naming where the work belongs.
@@ -188,6 +225,11 @@ func TestPlainDateHandBacks(t *testing.T) {
 			name: "until with a rounding option",
 			src:  "const a = new Temporal.PlainDate(2020, 1, 31);\nconst b = new Temporal.PlainDate(2021, 3, 30);\nconsole.log(a.until(b, { smallestUnit: \"month\" }).months);",
 			want: "Temporal.PlainDate.prototype.until with the rounding option smallestUnit is a later slice",
+		},
+		{
+			name: "with a monthCode field",
+			src:  "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ monthCode: \"M02\" }).day);",
+			want: "Temporal.PlainDate.prototype.with over a bag with the field monthCode is a later slice",
 		},
 		{
 			name: "from a property bag",
