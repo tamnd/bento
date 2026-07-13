@@ -755,6 +755,44 @@ func TestPlainDateToPlainYearMonth(t *testing.T) {
 	}
 }
 
+func TestPlainDateToPlainMonthDay(t *testing.T) {
+	iso := mustPlainDate(t, 2020, 5, 15)
+	if got := iso.ToPlainMonthDay().ToString().ToGoString(); got != "05-15" {
+		t.Errorf("iso toPlainMonthDay toString: got %q, want 05-15", got)
+	}
+	if got := iso.ToPlainMonthDay().Day(); got != 15 {
+		t.Errorf("iso toPlainMonthDay day: got %v, want 15", got)
+	}
+
+	// A non-ISO month-day keeps its calendar: toString shows the reference year 1972,
+	// the actual month and day, and the annotation.
+	roc := PlainDateWithCalendar(iso, "roc")
+	if got := roc.ToPlainMonthDay().ToString().ToGoString(); got != "1972-05-15[u-ca=roc]" {
+		t.Errorf("roc toPlainMonthDay toString: got %q, want 1972-05-15[u-ca=roc]", got)
+	}
+	greg := PlainDateWithCalendar(iso, "gregory")
+	if got := greg.ToPlainMonthDay().ToString().ToGoString(); got != "1972-05-15[u-ca=gregory]" {
+		t.Errorf("gregory toPlainMonthDay toString: got %q, want 1972-05-15[u-ca=gregory]", got)
+	}
+	if got := greg.ToPlainMonthDay().CalendarId().ToGoString(); got != "gregory" {
+		t.Errorf("gregory toPlainMonthDay calendarId: got %q, want gregory", got)
+	}
+
+	// A leap-day month-day round-trips the day in both the ISO and non-ISO forms.
+	leap := mustPlainDate(t, 2020, 2, 29)
+	if got := leap.ToPlainMonthDay().ToString().ToGoString(); got != "02-29" {
+		t.Errorf("iso leap toPlainMonthDay toString: got %q, want 02-29", got)
+	}
+	if got := PlainDateWithCalendar(leap, "roc").ToPlainMonthDay().ToString().ToGoString(); got != "1972-02-29[u-ca=roc]" {
+		t.Errorf("roc leap toPlainMonthDay toString: got %q, want 1972-02-29[u-ca=roc]", got)
+	}
+
+	// equals splits on the calendar even when the month and day match.
+	if roc.ToPlainMonthDay().Equals(iso.ToPlainMonthDay()) {
+		t.Error("a roc month-day should not equal the ISO month-day with the same fields")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()
