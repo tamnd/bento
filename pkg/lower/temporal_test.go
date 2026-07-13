@@ -465,9 +465,9 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 			want: "Temporal.PlainDateTime.prototype.add is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const dt = Temporal.PlainDateTime.from(\"2020-01-01T12:30:00\");\nconsole.log(dt.hour);",
-			want: "Temporal.PlainDateTime.from over a string or a property bag is a later slice",
+			name: "from a property bag",
+			src:  "const dt = Temporal.PlainDateTime.from({ year: 2020, month: 1, day: 1, hour: 12 });\nconsole.log(dt.hour);",
+			want: "Temporal.PlainDateTime.from over a dynamic string or a property bag is a later slice",
 		},
 		{
 			name: "toPlainDate conversion",
@@ -482,6 +482,29 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestPlainDateTimeFromStringConstruction pins Temporal.PlainDateTime.from over a string
+// literal to value.PlainDateTimeFromString with the string carried through verbatim.
+func TestPlainDateTimeFromStringConstruction(t *testing.T) {
+	const src = `const dt = Temporal.PlainDateTime.from("2020-01-01T12:30:00");
+console.log(dt.hour);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.PlainDateTimeFromString("2020-01-01T12:30:00")`) {
+		t.Errorf("rendered program missing the from-string call:\n%s", got)
+	}
+}
+
+// TestPlainDateTimeFromStringHandsBack pins that a string literal naming a calendar bento
+// does not host hands back, since the runtime parser would reject it where the specification
+// would succeed.
+func TestPlainDateTimeFromStringHandsBack(t *testing.T) {
+	const src = `const dt = Temporal.PlainDateTime.from("2020-01-01T12:30:00[u-ca=hebrew]");
+console.log(dt.hour);`
+	got := renderProgramHandBack(t, src)
+	if !strings.Contains(got, "Temporal.PlainDateTime.from over a string naming a calendar bento does not host is a later slice") {
+		t.Errorf("hand-back reason = %q, want the unhosted-calendar ceiling", got)
 	}
 }
 
