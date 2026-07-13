@@ -699,6 +699,42 @@ func TestPlainDateWithFields(t *testing.T) {
 	}
 }
 
+func TestPlainDateFromFields(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"plain date", PlainDateFromFields(2020, 3, 14, "iso8601", "constrain").ToString().ToGoString(), "2020-03-14"},
+		{"day constrains to the leap February", PlainDateFromFields(2020, 2, 31, "iso8601", "constrain").ToString().ToGoString(), "2020-02-29"},
+		{"day constrains to the common February", PlainDateFromFields(2021, 2, 31, "iso8601", "constrain").ToString().ToGoString(), "2021-02-28"},
+		{"month over twelve clamps to December", PlainDateFromFields(2020, 13, 5, "iso8601", "constrain").ToString().ToGoString(), "2020-12-05"},
+		{"gregory carries its calendar", PlainDateFromFields(2020, 5, 15, "gregory", "constrain").ToString().ToGoString(), "2020-05-15[u-ca=gregory]"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// roc reads the bag year in Minguo reckoning, so year 109 is ISO 2020.
+	roc := PlainDateFromFields(109, 5, 15, "roc", "constrain")
+	if got := roc.ToString().ToGoString(); got != "2020-05-15[u-ca=roc]" {
+		t.Errorf("roc from fields: got %q, want %q", got, "2020-05-15[u-ca=roc]")
+	}
+	if got := roc.Year(); got != 109 {
+		t.Errorf("roc year: got %v, want 109", got)
+	}
+	if got := roc.CalendarId().ToGoString(); got != "roc" {
+		t.Errorf("roc calendarId: got %q, want roc", got)
+	}
+
+	// reject throws when a field does not fit the resulting month.
+	if !bagThrows(func() { PlainDateFromFields(2020, 2, 31, "iso8601", "reject") }) {
+		t.Error("from fields day 31 in February under reject did not throw")
+	}
+}
+
 func TestPlainDateToPlainDateTime(t *testing.T) {
 	d := mustPlainDate(t, 2020, 3, 14)
 	cases := []struct {

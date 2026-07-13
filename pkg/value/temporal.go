@@ -409,6 +409,40 @@ func (pd *PlainDate) WithFields(year, month, day Opt[float64], overflow string) 
 	return &PlainDate{year: int(isoYear), month: int(m), day: int(d), cal: pd.cal}
 }
 
+// PlainDateFromFields implements Temporal.PlainDate.from over a property bag: it builds a
+// PlainDate from the required year, month, and day fields under the given calendar, regulating
+// the result with the overflow option. The year is read in the calendar's own reckoning, so a
+// roc bag year maps back to the ISO year by adding 1911 while the other hosted calendars count
+// the ISO year directly. Under constrain the month clamps to 1..12 and the day to that month's
+// length; under reject an out-of-range field throws a RangeError. The calendar is canonicalized
+// and validated, so an unhosted id throws, though the lowerer only routes a hosted one here.
+func PlainDateFromFields(year, month, day float64, calendar, overflow string) *PlainDate {
+	cal, ok := canonicalCalendar(calendar)
+	if !ok {
+		Throw(NewRangeError(FromGoString("invalid calendar identifier " + calendar)))
+	}
+	calYear := toIntegerWithTruncation(year)
+	m := toIntegerWithTruncation(month)
+	d := toIntegerWithTruncation(day)
+	isoYear := calYear
+	if cal == "roc" {
+		isoYear = calYear + 1911
+	}
+	if overflow == timeOverflowReject {
+		rejectISODate(isoYear, m, d)
+	} else {
+		m = clampFloat(m, 1, 12)
+		if isoYear < -271821 || isoYear > 275760 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+		}
+		d = clampFloat(d, 1, float64(isoDaysInMonth(int(isoYear), int(m))))
+	}
+	if !isoDateWithinLimits(int(isoYear), int(m), int(d)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+	}
+	return &PlainDate{year: int(isoYear), month: int(m), day: int(d), cal: cal}
+}
+
 // ToPlainDateTime implements Temporal.PlainDate.prototype.toPlainDateTime: it pairs the date
 // with a wall-clock time to make a PlainDateTime, defaulting to midnight when no time is
 // given. The result keeps this date's calendar, so a non-ISO date stays under its calendar.
