@@ -1,0 +1,20 @@
+== stdout:
+japanese
+2024
+reiwa
+6
+6 30
+2024-06-30[u-ca=japanese]
+heisei 1
+showa 64
+meiji 1
+meiji 45
+japanese 1868
+japanese-inverse 6
+0
+false
+japanese
+2024-06-30T12:34:56[u-ca=japanese]
+reiwa 6
+== exit:
+0

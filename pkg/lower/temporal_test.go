@@ -1196,3 +1196,25 @@ console.log(d.year, dt.era, w.calendarId);`)
 		t.Errorf("uppercase ROC did not canonicalize to roc:\n%s", got)
 	}
 }
+
+// TestJapaneseCalendarConstruction pins the japanese calendar routing through the same seam
+// gregory and roc take, on the PlainDate constructor, the PlainDateTime constructor, and
+// withCalendar.
+func TestJapaneseCalendarConstruction(t *testing.T) {
+	got := renderProgram(t, `const d = new Temporal.PlainDate(2024, 6, 30, "japanese");
+const dt = new Temporal.PlainDateTime(2024, 6, 30, 12, 34, 56, 0, 0, 0, "japanese");
+const w = new Temporal.PlainDate(2024, 6, 30).withCalendar("JAPANESE");
+console.log(d.era, dt.eraYear, w.calendarId);`)
+	for _, want := range []string{
+		`value.NewPlainDateCal(2024, 6, 30, "japanese")`,
+		`value.NewPlainDateTimeCal(2024, 6, 30, 12, 34, 56, 0, 0, 0, "japanese")`,
+		`value.PlainDateWithCalendar(`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, `"japanese"`) {
+		t.Errorf("uppercase JAPANESE did not canonicalize to japanese:\n%s", got)
+	}
+}
