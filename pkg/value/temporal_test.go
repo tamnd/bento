@@ -658,6 +658,47 @@ func TestPlainDateUntilSince(t *testing.T) {
 	}
 }
 
+// TestPlainDateWithFields checks with lays a bag's fields over the receiver and regulates
+// the result: an omitted field keeps its value, constrain clamps a short month and an
+// out-of-range month or day, reject throws, and under roc the bag year maps through the
+// 1911 offset to the ISO year the date stores.
+func TestPlainDateWithFields(t *testing.T) {
+	d := mustPlainDate(t, 2020, 1, 31)
+	some := func(v float64) Opt[float64] { return Some(v) }
+	none := None[float64]()
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"month constrains the day", d.WithFields(none, some(2), none, "constrain").ToString().ToGoString(), "2020-02-29"},
+		{"day only", d.WithFields(none, none, some(15), "constrain").ToString().ToGoString(), "2020-01-15"},
+		{"all three fields", d.WithFields(some(2021), some(6), some(10), "constrain").ToString().ToGoString(), "2021-06-10"},
+		{"month over twelve clamps", d.WithFields(none, some(13), none, "constrain").ToString().ToGoString(), "2020-12-31"},
+		{"day over the month clamps", d.WithFields(none, none, some(40), "constrain").ToString().ToGoString(), "2020-01-31"},
+		{"leap day settles on a common year", mustPlainDate(t, 2020, 2, 29).WithFields(some(2021), none, none, "constrain").ToString().ToGoString(), "2021-02-28"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// roc reads the bag year in Minguo reckoning, so year 100 is ISO 2011.
+	roc := PlainDateWithCalendar(mustPlainDate(t, 2024, 5, 15), "roc")
+	if got := roc.WithFields(some(100), none, none, "constrain").ToString().ToGoString(); got != "2011-05-15[u-ca=roc]" {
+		t.Errorf("roc with year: got %q, want %q", got, "2011-05-15[u-ca=roc]")
+	}
+
+	// reject throws when a field does not fit the resulting month.
+	if !bagThrows(func() { d.WithFields(none, none, some(40), "reject") }) {
+		t.Error("with day 40 under reject did not throw")
+	}
+	if !bagThrows(func() { d.WithFields(none, some(13), none, "reject") }) {
+		t.Error("with month 13 under reject did not throw")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()
