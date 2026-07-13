@@ -406,8 +406,9 @@ func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argN
 // instantStaticCall lowers a static call on Temporal.Instant. compare lowers to
 // value.InstantCompare; fromEpochMilliseconds and fromEpochNanoseconds lower to the
 // matching value factory over a number or a bigint; from lowers to value.InstantFrom for
-// an Instant argument (the copy the specification makes) and hands back for a string,
-// which needs the ISO parser this slice does not carry.
+// an Instant argument (the copy the specification makes) and to value.InstantFromString for a
+// string literal. An Instant ignores any calendar the string names, so the literal needs no
+// calendar gate, like PlainTime; only a dynamic string or a non-string argument hands back.
 func (r *Renderer) instantStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
@@ -457,15 +458,19 @@ func (r *Renderer) instantStaticCall(method string, argNodes []frontend.Node) (a
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.Instant.from takes exactly one argument"}
 		}
-		if !r.isInstant(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.Instant.from over a string is a later slice"}
+		if r.isInstant(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "InstantFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "InstantFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "InstantFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.Instant.from over a dynamic string or a non-string is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Instant." + method + " is a later slice"}
 	}

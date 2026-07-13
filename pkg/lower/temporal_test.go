@@ -880,8 +880,8 @@ console.log(e.epochMilliseconds);`
 }
 
 // TestInstantHandBacks pins the honest ceilings: the arithmetic and rounding methods, the
-// zoned conversion, and from over a string each hand back with a reason naming where the
-// work belongs.
+// zoned conversion, and from over a dynamic string each hand back with a reason naming where
+// the work belongs.
 func TestInstantHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -899,9 +899,9 @@ func TestInstantHandBacks(t *testing.T) {
 			want: "Temporal.Instant.prototype.round is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const i = Temporal.Instant.from(\"1970-01-01T00:00:00Z\");\nconsole.log(i.epochMilliseconds);",
-			want: "Temporal.Instant.from over a string is a later slice",
+			name: "from a dynamic string",
+			src:  "function at(s: string) { return Temporal.Instant.from(s).epochMilliseconds; }\nconsole.log(at(\"1970-01-01T00:00:00Z\"));",
+			want: "Temporal.Instant.from over a dynamic string or a non-string is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -911,6 +911,17 @@ func TestInstantHandBacks(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestInstantFromStringConstruction pins Temporal.Instant.from over a string literal to
+// value.InstantFromString with the string carried through verbatim.
+func TestInstantFromStringConstruction(t *testing.T) {
+	const src = `const i = Temporal.Instant.from("2020-01-01T00:00:00Z");
+console.log(i.epochMilliseconds);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.InstantFromString("2020-01-01T00:00:00Z")`) {
+		t.Errorf("rendered program missing the from-string call:\n%s", got)
 	}
 }
 
