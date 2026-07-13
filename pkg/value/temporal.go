@@ -409,6 +409,18 @@ func (pd *PlainDate) WithFields(year, month, day Opt[float64], overflow string) 
 	return &PlainDate{year: int(isoYear), month: int(m), day: int(d), cal: pd.cal}
 }
 
+// ToPlainDateTime implements Temporal.PlainDate.prototype.toPlainDateTime: it pairs the date
+// with a wall-clock time to make a PlainDateTime, defaulting to midnight when no time is
+// given. The result keeps this date's calendar, so a non-ISO date stays under its calendar.
+// The receiver is copied, so the new PlainDateTime shares no state with it.
+func (pd *PlainDate) ToPlainDateTime(time *PlainTime) *PlainDateTime {
+	t := PlainTime{}
+	if time != nil {
+		t = *time
+	}
+	return &PlainDateTime{date: *pd, time: t}
+}
+
 // displayYear returns the year the calendar counts, which the year getter reports and
 // the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
 // and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year

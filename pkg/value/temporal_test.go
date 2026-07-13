@@ -699,6 +699,30 @@ func TestPlainDateWithFields(t *testing.T) {
 	}
 }
 
+func TestPlainDateToPlainDateTime(t *testing.T) {
+	d := mustPlainDate(t, 2020, 3, 14)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"no time defaults to midnight", d.ToPlainDateTime(nil).ToString().ToGoString(), "2020-03-14T00:00:00"},
+		{"a plain time pairs in", d.ToPlainDateTime(NewPlainTime(15, 30, 45, 0, 0, 0)).ToString().ToGoString(), "2020-03-14T15:30:45"},
+		{"subsecond components carry", d.ToPlainDateTime(NewPlainTime(1, 2, 3, 4, 5, 6)).ToString().ToGoString(), "2020-03-14T01:02:03.004005006"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// The result keeps the date's calendar, so a roc date stays under roc.
+	roc := PlainDateWithCalendar(mustPlainDate(t, 2024, 5, 15), "roc")
+	if got := roc.ToPlainDateTime(nil).ToString().ToGoString(); got != "2024-05-15T00:00:00[u-ca=roc]" {
+		t.Errorf("roc toPlainDateTime: got %q, want %q", got, "2024-05-15T00:00:00[u-ca=roc]")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()
