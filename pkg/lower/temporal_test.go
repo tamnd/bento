@@ -1034,6 +1034,17 @@ console.log(c.epochMilliseconds);`
 	}
 }
 
+// TestZonedDateTimeFromStringConstruction pins Temporal.ZonedDateTime.from over a string
+// literal to value.ZonedDateTimeFromString with the string carried through verbatim.
+func TestZonedDateTimeFromStringConstruction(t *testing.T) {
+	const src = `const z = Temporal.ZonedDateTime.from("2020-06-15T12:30:00[America/New_York]");
+console.log(z.epochMilliseconds);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.ZonedDateTimeFromString("2020-06-15T12:30:00[America/New_York]")`) {
+		t.Errorf("rendered program missing the from-string call:\n%s", got)
+	}
+}
+
 // TestZonedDateTimeHandBacks pins the honest ceilings: the arithmetic and rounding methods,
 // the reshaping, the start-of-day and transition queries, from over a string, and a
 // constructor with a calendar argument each hand back with a reason naming where the work
@@ -1060,9 +1071,14 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 			want: "Temporal.ZonedDateTime.prototype.startOfDay is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const z = Temporal.ZonedDateTime.from(\"1970-01-01T00:00:00+00:00[UTC]\");\nconsole.log(z.epochMilliseconds);",
-			want: "Temporal.ZonedDateTime.from over a string or a property bag is a later slice",
+			name: "from a dynamic string",
+			src:  "function at(s: string) { return Temporal.ZonedDateTime.from(s).epochMilliseconds; }\nconsole.log(at(\"1970-01-01T00:00:00+00:00[UTC]\"));",
+			want: "Temporal.ZonedDateTime.from over a dynamic string or a property bag is a later slice",
+		},
+		{
+			name: "from a string naming a non-ISO calendar",
+			src:  "const z = Temporal.ZonedDateTime.from(\"1970-01-01T00:00:00+00:00[UTC][u-ca=gregory]\");\nconsole.log(z.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.from over a string naming a non-ISO calendar is a later slice",
 		},
 		{
 			name: "constructor with a calendar",
