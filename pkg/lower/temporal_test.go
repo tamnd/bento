@@ -606,9 +606,14 @@ func TestPlainYearMonthHandBacks(t *testing.T) {
 			want: "Temporal.PlainYearMonth.prototype.add is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const ym = Temporal.PlainYearMonth.from(\"2020-03\");\nconsole.log(ym.month);",
-			want: "Temporal.PlainYearMonth.from over a string or a property bag is a later slice",
+			name: "from a property bag",
+			src:  "const ym = Temporal.PlainYearMonth.from({ year: 2020, month: 3 });\nconsole.log(ym.month);",
+			want: "Temporal.PlainYearMonth.from over a dynamic string or a property bag is a later slice",
+		},
+		{
+			name: "from a non-ISO calendar string",
+			src:  "const ym = Temporal.PlainYearMonth.from(\"2020-03-15[u-ca=gregory]\");\nconsole.log(ym.month);",
+			want: "Temporal.PlainYearMonth.from over a string naming a non-ISO calendar is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -618,6 +623,17 @@ func TestPlainYearMonthHandBacks(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestPlainYearMonthFromStringConstruction pins Temporal.PlainYearMonth.from over a string
+// literal to value.PlainYearMonthFromString with the string carried through verbatim.
+func TestPlainYearMonthFromStringConstruction(t *testing.T) {
+	const src = `const ym = Temporal.PlainYearMonth.from("2020-03");
+console.log(ym.month);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.PlainYearMonthFromString("2020-03")`) {
+		t.Errorf("rendered program missing the from-string call:\n%s", got)
 	}
 }
 
