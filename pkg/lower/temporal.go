@@ -916,6 +916,15 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToPlainDateTime")}, Args: []ast.Expr{timeArg}}, nil
+	case "toPlainYearMonth":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype.toPlainYearMonth takes no argument"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToPlainYearMonth")}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " is a later slice"}
 	}
