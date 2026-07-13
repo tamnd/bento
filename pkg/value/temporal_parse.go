@@ -236,6 +236,7 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 	// Minutes and seconds follow either extended with ":" separators or basic as two
 	// more digit pairs, each in 0..59. The offset value does not matter to a Plain type,
 	// so only its shape is validated before hasOffset is recorded.
+	haveSecond := false
 	if sc.accept(':') {
 		if m, ok := sc.digits(2); !ok || m > 59 {
 			sc.pos = save
@@ -246,6 +247,7 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 				sc.pos = save
 				return
 			}
+			haveSecond = true
 		}
 	} else {
 		if m, ok := sc.digits(2); ok {
@@ -253,16 +255,30 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 				sc.pos = save
 				return
 			}
-			if s, ok := sc.digits(2); ok && s > 59 {
-				sc.pos = save
-				return
+			if s, ok := sc.digits(2); ok {
+				if s > 59 {
+					sc.pos = save
+					return
+				}
+				haveSecond = true
 			}
 		}
 	}
-	if c := sc.peek(); c == '.' || c == ',' {
-		sc.pos++
-		for !sc.atEnd() && isDigit(sc.s[sc.pos]) {
+	// A sub-minute fraction is allowed only immediately after the seconds field, one to nine
+	// digits like the time fraction. A fraction without a seconds field, a separator with no
+	// digit, or a tenth digit is left unconsumed here, so the caller's end-of-input check
+	// rejects it, matching the grammar which permits a fraction only on the seconds.
+	if haveSecond {
+		if c := sc.peek(); c == '.' || c == ',' {
+			mark := sc.pos
 			sc.pos++
+			start := sc.pos
+			for !sc.atEnd() && isDigit(sc.s[sc.pos]) && sc.pos-start < 9 {
+				sc.pos++
+			}
+			if sc.pos == start {
+				sc.pos = mark // no fraction digit followed the separator
+			}
 		}
 	}
 	p.hasOffset = true
