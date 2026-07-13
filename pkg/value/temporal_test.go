@@ -407,6 +407,48 @@ func TestPlainTimeWith(t *testing.T) {
 	}
 }
 
+// TestPlainTimeAddDuration folds a Duration into a PlainTime and checks the wall-clock
+// wraps mod 24h, only the time units count, and subtract is add over a negated Duration.
+// The expected strings are taken from @js-temporal/polyfill.
+func TestPlainTimeAddDuration(t *testing.T) {
+	base := mustPlainTime(t, 12, 30, 15, 0, 0, 0)
+	dur := func(a ...float64) *Duration {
+		t.Helper()
+		var d *Duration
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("NewDuration(%v) threw: %v", a, r)
+				}
+			}()
+			d = NewDuration(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9])
+		}()
+		return d
+	}
+	cases := []struct {
+		name string
+		d    *Duration
+		want string
+	}{
+		{"hours 25 wraps", dur(0, 0, 0, 0, 25, 0, 0, 0, 0, 0), "13:30:15"},
+		{"days ignored", dur(0, 0, 0, 1, 0, 0, 0, 0, 0, 0), "12:30:15"},
+		{"months ignored", dur(0, 1, 0, 0, 0, 0, 0, 0, 0, 0), "12:30:15"},
+		{"hours 90 minutes 90", dur(0, 0, 0, 0, 90, 90, 0, 0, 0, 0), "08:00:15"},
+		{"negative hour wraps", dur(0, 0, 0, 0, -1, 0, 0, 0, 0, 0), "11:30:15"},
+		{"fractional millis", dur(0, 0, 0, 0, 0, 0, 0, 1500, 0, 0), "12:30:16.5"},
+	}
+	for _, tc := range cases {
+		if got := base.AddDuration(tc.d).ToString().ToGoString(); got != tc.want {
+			t.Errorf("%s: add = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// subtract 13 hours from 12:30:15 wraps back to the previous day at 23:30:15.
+	sub := dur(0, 0, 0, 0, 13, 0, 0, 0, 0, 0).Negated()
+	if got := base.AddDuration(sub).ToString().ToGoString(); got != "23:30:15" {
+		t.Errorf("subtract 13h = %q, want 23:30:15", got)
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()

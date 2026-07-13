@@ -605,6 +605,51 @@ func (pt *PlainTime) With(hour, minute, second, millisecond, microsecond, nanose
 	return regulatePlainTime(base, [6]Opt[float64]{hour, minute, second, millisecond, microsecond, nanosecond}, overflow)
 }
 
+// AddDuration implements Temporal.PlainTime.prototype.add: it folds the duration's time
+// units into the receiver's wall clock. Only the six time units count, since days, weeks,
+// months, and years do not move the time of day, and the total wraps mod 24 hours, so
+// adding past midnight lands on the following day's clock and a net-negative offset lands
+// on the previous day's. The receiver is unchanged. subtract is add over a negated
+// duration, so no separate SubtractDuration is needed. The fold runs in big.Int because an
+// hour field can be up to 2^53 and hours-to-nanoseconds overflows int64.
+func (pt *PlainTime) AddDuration(dur *Duration) *PlainTime {
+	total := new(big.Int)
+	total.Add(total, bigMulInt(float64(pt.hour), 3_600_000_000_000))
+	total.Add(total, bigMulInt(float64(pt.minute), 60_000_000_000))
+	total.Add(total, bigMulInt(float64(pt.second), 1_000_000_000))
+	total.Add(total, bigMulInt(float64(pt.millisecond), 1_000_000))
+	total.Add(total, bigMulInt(float64(pt.microsecond), 1_000))
+	total.Add(total, big.NewInt(int64(pt.nanosecond)))
+	total.Add(total, bigMulInt(dur.hours, 3_600_000_000_000))
+	total.Add(total, bigMulInt(dur.minutes, 60_000_000_000))
+	total.Add(total, bigMulInt(dur.seconds, 1_000_000_000))
+	total.Add(total, bigMulInt(dur.milliseconds, 1_000_000))
+	total.Add(total, bigMulInt(dur.microseconds, 1_000))
+	total.Add(total, bigMulInt(dur.nanoseconds, 1))
+	total.Mod(total, nsPerDay)
+	return plainTimeFromDayNanos(total)
+}
+
+// plainTimeFromDayNanos rebuilds a PlainTime from a nanosecond count already reduced into
+// a single day, splitting it into the six fields most-significant first.
+func plainTimeFromDayNanos(total *big.Int) *PlainTime {
+	n := new(big.Int).Set(total)
+	q := new(big.Int)
+	r := new(big.Int)
+	split := func(div int64) int {
+		q.QuoRem(n, big.NewInt(div), r)
+		n.Set(r)
+		return int(q.Int64())
+	}
+	hour := split(3_600_000_000_000)
+	minute := split(60_000_000_000)
+	second := split(1_000_000_000)
+	millisecond := split(1_000_000)
+	microsecond := split(1_000)
+	nanosecond := int(n.Int64())
+	return &PlainTime{hour, minute, second, millisecond, microsecond, nanosecond}
+}
+
 // rejectTime throws a RangeError unless every field is in its ISO range: the hour in
 // 0..23, the minute and second in 0..59, and each of the three sub-second fields in
 // 0..999. The arguments are the truncated float64s from ToIntegerWithTruncation.
