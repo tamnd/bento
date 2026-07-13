@@ -92,8 +92,8 @@ console.log(c.day);`
 }
 
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
-// and conversion methods, from over a string, and the other Temporal types each hand
-// back with a reason naming where the work belongs.
+// and conversion methods, from over a dynamic string or a property bag, and the other
+// Temporal types each hand back with a reason naming where the work belongs.
 func TestPlainDateHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -106,9 +106,9 @@ func TestPlainDateHandBacks(t *testing.T) {
 			want: "Temporal.PlainDate.prototype.add is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const d = Temporal.PlainDate.from(\"2020-02-29\");\nconsole.log(d.day);",
-			want: "Temporal.PlainDate.from over a string or a property bag is a later slice",
+			name: "from a property bag",
+			src:  "const d = Temporal.PlainDate.from({ year: 2020, month: 2, day: 29 });\nconsole.log(d.day);",
+			want: "Temporal.PlainDate.from over a dynamic string or a property bag is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -1216,5 +1216,35 @@ console.log(d.era, dt.eraYear, w.calendarId);`)
 	}
 	if !strings.Contains(got, `"japanese"`) {
 		t.Errorf("uppercase JAPANESE did not canonicalize to japanese:\n%s", got)
+	}
+}
+
+// TestPlainDateFromStringConstruction pins Temporal.PlainDate.from over a literal ISO
+// string routing to value.PlainDateFromString, including a hosted-calendar annotation.
+func TestPlainDateFromStringConstruction(t *testing.T) {
+	got := renderProgram(t, `const a = Temporal.PlainDate.from("2024-06-30");
+const b = Temporal.PlainDate.from("2024-06-30[u-ca=gregory]");
+console.log(a.toString(), b.calendarId);`)
+	for _, want := range []string{
+		`value.PlainDateFromString("2024-06-30")`,
+		`value.PlainDateFromString("2024-06-30[u-ca=gregory]")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainDateFromStringHandsBack pins the two from-string cases the slice hands back: a
+// dynamic string, whose calendar cannot be checked at compile time, and a literal naming a
+// calendar bento does not host, which the runtime parser would wrongly reject.
+func TestPlainDateFromStringHandsBack(t *testing.T) {
+	dyn := renderProgramHandBack(t, `function f(s: string) { return Temporal.PlainDate.from(s); }`)
+	if !strings.Contains(dyn, "dynamic string") {
+		t.Errorf("dynamic-string from did not hand back with the expected reason: %q", dyn)
+	}
+	unhosted := renderProgramHandBack(t, `const d = Temporal.PlainDate.from("2024-06-30[u-ca=hebrew]");`)
+	if !strings.Contains(unhosted, "does not host") {
+		t.Errorf("unhosted-calendar from did not hand back with the expected reason: %q", unhosted)
 	}
 }
