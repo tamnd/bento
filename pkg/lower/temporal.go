@@ -470,7 +470,15 @@ func (r *Renderer) instantStaticCall(method string, argNodes []frontend.Node) (a
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "InstantFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.Instant.from over a dynamic string or a non-string is a later slice"}
+		if r.isString(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "InstantFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "Temporal.Instant.from over a property bag or a value not statically typed as a string is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Instant." + method + " is a later slice"}
 	}
@@ -761,7 +769,15 @@ func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "DurationFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a dynamic string or a property bag is a later slice"}
+		if r.isString(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "DurationFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a property bag or a value not statically typed as a string is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration." + method + " is a later slice"}
 	}
@@ -1202,7 +1218,15 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a dynamic string or a property bag is a later slice"}
+		if r.isString(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a property bag or a value not statically typed as a string is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime." + method + " is a later slice"}
 	}
@@ -1283,6 +1307,15 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 	default:
 		return nil, &NotYetLowerable{Reason: "new Temporal." + typeName + " is a later slice"}
 	}
+}
+
+// goStringOf reads the Go string behind a lowered bento string expression, the
+// receiver.ToGoString() the from-string factories need since they take a Go string but a
+// string-typed argument lowers to a value.BStr. It is the dynamic-string counterpart of the
+// strconv.Quote a string literal takes: a from over a string value not known until run time
+// lowers the argument and reads its Go string through this.
+func goStringOf(expr ast.Expr) ast.Expr {
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToGoString")}}
 }
 
 // hostedCalendar reads a calendar-identifier argument the runtime hosts, the literal
