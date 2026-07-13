@@ -1175,3 +1175,24 @@ console.log(f("gregory"));`)
 		t.Errorf("dynamic calendar handback reason = %q, want a calendar reason", dyn)
 	}
 }
+
+// TestRocCalendarConstruction pins the roc calendar routing through the same seam gregory
+// takes, on the PlainDate constructor, the PlainDateTime constructor, and withCalendar.
+func TestRocCalendarConstruction(t *testing.T) {
+	got := renderProgram(t, `const d = new Temporal.PlainDate(2024, 6, 30, "roc");
+const dt = new Temporal.PlainDateTime(2024, 6, 30, 12, 34, 56, 0, 0, 0, "roc");
+const w = new Temporal.PlainDate(2024, 6, 30).withCalendar("ROC");
+console.log(d.year, dt.era, w.calendarId);`)
+	for _, want := range []string{
+		`value.NewPlainDateCal(2024, 6, 30, "roc")`,
+		`value.NewPlainDateTimeCal(2024, 6, 30, 12, 34, 56, 0, 0, 0, "roc")`,
+		`value.PlainDateWithCalendar(`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, `"roc"`) {
+		t.Errorf("uppercase ROC did not canonicalize to roc:\n%s", got)
+	}
+}

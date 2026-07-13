@@ -60,6 +60,8 @@ func canonicalCalendar(id string) (string, bool) {
 		return "iso8601", true
 	case "gregory":
 		return "gregory", true
+	case "roc":
+		return "roc", true
 	default:
 		return "", false
 	}
@@ -204,8 +206,34 @@ func isoToEpochDays(year, month, day int) int {
 	return era*146097 + doe - 719468
 }
 
-// Year returns the ISO year.
-func (pd *PlainDate) Year() float64 { return float64(pd.year) }
+// displayYear returns the year the calendar counts, which the year getter reports and
+// the era split turns on. It matches the ISO year for iso8601 and gregory; roc, the
+// Minguo calendar, counts from 1912, so its year is the ISO year minus 1911.
+func (pd *PlainDate) displayYear() int {
+	if pd.cal == "roc" {
+		return pd.year - 1911
+	}
+	return pd.year
+}
+
+// calendarEraBase returns the era base name for a calendar that has an era, and false
+// for one that does not. iso8601 has none. gregory and roc each carry a two-part era
+// that splits at their own year 1, the base name below year 1 and the base name with a
+// "-inverse" suffix at year 1 and above.
+func calendarEraBase(cal string) (string, bool) {
+	switch cal {
+	case "gregory":
+		return "gregory", true
+	case "roc":
+		return "roc", true
+	default:
+		return "", false
+	}
+}
+
+// Year returns the year the calendar counts: the ISO year under iso8601 and gregory,
+// and the ISO year minus 1911 under roc.
+func (pd *PlainDate) Year() float64 { return float64(pd.displayYear()) }
 
 // Month returns the ISO month, 1..12.
 func (pd *PlainDate) Month() float64 { return float64(pd.month) }
@@ -222,7 +250,7 @@ func (pd *PlainDate) calendarID() string {
 	return pd.cal
 }
 
-// CalendarId returns the calendar identifier, "iso8601" or "gregory".
+// CalendarId returns the calendar identifier, "iso8601", "gregory", or "roc".
 func (pd *PlainDate) CalendarId() BStr { return FromGoString(pd.calendarID()) }
 
 // MonthCode returns the ISO month code, "M" followed by the two-digit month. The
@@ -268,32 +296,35 @@ func (pd *PlainDate) MonthsInYear() float64 { return 12 }
 func (pd *PlainDate) InLeapYear() bool { return isLeapISO(pd.year) }
 
 // Era implements Temporal.PlainDate.prototype.era. The ISO 8601 calendar has no era,
-// so the getter the checker types string | undefined is undefined under ISO. The
-// gregory calendar splits the timeline at year 1: a year of 1 or above is the "gregory"
-// era and a year of 0 or below the "gregory-inverse" era, the era codes CLDR gives the
-// proleptic Gregorian calendar.
+// so the getter the checker types string | undefined is undefined under ISO. A calendar
+// that has one splits its timeline at its own year 1: a display year of 1 or above is
+// the base era and a display year of 0 or below the "-inverse" era. gregory splits at
+// ISO year 1, roc at ISO year 1912, since roc counts from 1912.
 func (pd *PlainDate) Era() Opt[BStr] {
-	if pd.cal != "gregory" {
+	base, ok := calendarEraBase(pd.cal)
+	if !ok {
 		return None[BStr]()
 	}
-	if pd.year >= 1 {
-		return Some(FromGoString("gregory"))
+	if pd.displayYear() >= 1 {
+		return Some(FromGoString(base))
 	}
-	return Some(FromGoString("gregory-inverse"))
+	return Some(FromGoString(base + "-inverse"))
 }
 
 // EraYear implements Temporal.PlainDate.prototype.eraYear, the year counted within the
-// era. It is undefined under ISO; under gregory it is the year itself in the "gregory"
-// era and 1 minus the year in the "gregory-inverse" era, so ISO year 0 is eraYear 1
-// and ISO year -5 is eraYear 6.
+// era. It is undefined under ISO; under a calendar with an era it is the display year
+// itself in the base era and 1 minus the display year in the "-inverse" era. So under
+// gregory ISO year 0 is eraYear 1, and under roc ISO year 1911 (roc year 0) is eraYear
+// 1 in the "roc-inverse" era.
 func (pd *PlainDate) EraYear() Opt[float64] {
-	if pd.cal != "gregory" {
+	if _, ok := calendarEraBase(pd.cal); !ok {
 		return None[float64]()
 	}
-	if pd.year >= 1 {
-		return Some(float64(pd.year))
+	y := pd.displayYear()
+	if y >= 1 {
+		return Some(float64(y))
 	}
-	return Some(float64(1 - pd.year))
+	return Some(float64(1 - y))
 }
 
 // WeekOfYear implements Temporal.PlainDate.prototype.weekOfYear, the ISO 8601 week

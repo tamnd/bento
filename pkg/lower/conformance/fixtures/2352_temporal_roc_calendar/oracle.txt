@@ -1,0 +1,17 @@
+== stdout:
+roc
+113
+roc
+113
+6 30
+2024-06-30[u-ca=roc]
+1 roc 1
+0 roc-inverse 1
+-1916 1917
+0
+false
+roc
+2024-06-30T12:34:56[u-ca=roc]
+113
+== exit:
+0

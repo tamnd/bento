@@ -1443,3 +1443,74 @@ func TestGregoryPlainDateTime(t *testing.T) {
 		t.Errorf("withCalendar ToString = %q", got)
 	}
 }
+
+// TestRocCalendar checks the roc (Minguo) calendar against @js-temporal/polyfill. It counts
+// from 1912, so its year is the ISO year minus 1911 while the month and day stay ISO, and its
+// toString prints the unchanged ISO year with the calendar annotation. The era splits at ISO
+// year 1912: 2024 is roc year 113 in the "roc" era, 1912 is roc year 1, 1911 is roc year 0 in
+// the "roc-inverse" era eraYear 1, and ISO year -5 is "roc-inverse" eraYear 1917.
+func TestRocCalendar(t *testing.T) {
+	r := NewPlainDateCal(2024, 6, 30, "roc")
+	if got := r.CalendarId().ToGoString(); got != "roc" {
+		t.Errorf("CalendarId = %q, want roc", got)
+	}
+	if r.Year() != 113 || r.Month() != 6 || r.Day() != 30 {
+		t.Errorf("fields = %v-%v-%v, want 113-6-30", r.Year(), r.Month(), r.Day())
+	}
+	if r.Era().IsUndefined() || r.Era().Get().ToGoString() != "roc" {
+		t.Errorf("Era = %v, want roc", r.Era())
+	}
+	if r.EraYear().IsUndefined() || r.EraYear().Get() != 113 {
+		t.Errorf("EraYear = %v, want 113", r.EraYear())
+	}
+	if got := r.ToString().ToGoString(); got != "2024-06-30[u-ca=roc]" {
+		t.Errorf("ToString = %q, want 2024-06-30[u-ca=roc]", got)
+	}
+
+	one := NewPlainDateCal(1912, 1, 1, "roc")
+	if one.Year() != 1 || one.Era().Get().ToGoString() != "roc" || one.EraYear().Get() != 1 {
+		t.Errorf("1912 = year %v era %v eraYear %v, want 1 roc 1", one.Year(), one.Era(), one.EraYear())
+	}
+	zero := NewPlainDateCal(1911, 12, 31, "roc")
+	if zero.Year() != 0 || zero.Era().Get().ToGoString() != "roc-inverse" || zero.EraYear().Get() != 1 {
+		t.Errorf("1911 = year %v era %v eraYear %v, want 0 roc-inverse 1", zero.Year(), zero.Era(), zero.EraYear())
+	}
+	neg := NewPlainDateCal(-5, 1, 1, "roc")
+	if neg.Year() != -1916 || neg.EraYear().Get() != 1917 {
+		t.Errorf("-5 = year %v eraYear %v, want -1916 1917", neg.Year(), neg.EraYear())
+	}
+}
+
+// TestRocEqualsAndCompare mirrors the gregory check: equals weighs the calendar, compare
+// ignores it, so an iso8601 day and a roc day on the same ISO date are unequal but order the
+// same, and roc and gregory on the same ISO date are unequal.
+func TestRocEqualsAndCompare(t *testing.T) {
+	iso := NewPlainDate(2024, 6, 30)
+	r := NewPlainDateCal(2024, 6, 30, "roc")
+	if iso.Equals(r) {
+		t.Error("iso8601 date equals roc date, want not equal")
+	}
+	if c := PlainDateCompare(iso, r); c != 0 {
+		t.Errorf("compare iso vs roc = %v, want 0", c)
+	}
+	if r.Equals(NewPlainDateCal(2024, 6, 30, "gregory")) {
+		t.Error("roc date equals gregory date, want not equal")
+	}
+}
+
+// TestRocPlainDateTime checks roc on PlainDateTime: it delegates the year offset and era to
+// its date half and trails the annotation after the time, over both the ten-argument
+// constructor and withCalendar.
+func TestRocPlainDateTime(t *testing.T) {
+	dt := NewPlainDateTimeCal(2024, 6, 30, 12, 34, 56, 0, 0, 0, "roc")
+	if dt.Year() != 113 || dt.EraYear().Get() != 113 {
+		t.Errorf("year %v eraYear %v, want 113 113", dt.Year(), dt.EraYear())
+	}
+	if got := dt.ToString().ToGoString(); got != "2024-06-30T12:34:56[u-ca=roc]" {
+		t.Errorf("ToString = %q, want 2024-06-30T12:34:56[u-ca=roc]", got)
+	}
+	wc := PlainDateTimeWithCalendar(NewPlainDateTime(2024, 6, 30, 12, 0, 0, 0, 0, 0), "roc")
+	if got := wc.CalendarId().ToGoString(); got != "roc" {
+		t.Errorf("withCalendar id = %q, want roc", got)
+	}
+}
