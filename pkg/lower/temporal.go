@@ -570,8 +570,10 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 // zonedDateTimeStaticCall lowers a static call on Temporal.ZonedDateTime. compare lowers to
 // value.ZonedDateTimeCompare over two ZonedDateTime arguments, ordering on the exact time;
 // from lowers to value.ZonedDateTimeFrom for a ZonedDateTime argument (the copy the
-// specification makes) and hands back for a string or a property bag, which need the parser
-// and the disambiguation handling this slice does not carry.
+// specification makes) and to value.ZonedDateTimeFromString for a string literal. A
+// ZonedDateTime hosts only the iso8601 calendar, so the literal is gated on
+// literalISOCalendarOnly, the same stricter gate the two other ISO-only types use: a literal
+// naming a non-ISO calendar hands back, as does a dynamic string or a property bag.
 func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
@@ -595,15 +597,22 @@ func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.No
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from takes exactly one argument"}
 		}
-		if !r.isZonedDateTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a string or a property bag is a later slice"}
+		if r.isZonedDateTime(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if !literalISOCalendarOnly(lit) {
+				return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a string naming a non-ISO calendar is a later slice"}
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a dynamic string or a property bag is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime." + method + " is a later slice"}
 	}

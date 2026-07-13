@@ -277,6 +277,57 @@ func TestInstantFromStringThrows(t *testing.T) {
 	}
 }
 
+// TestZonedDateTimeFromString pins the string parser feeding Temporal.ZonedDateTime.from: a
+// bare wall-clock reading resolved through the zone, a matching numeric offset, a Z designator
+// giving the exact instant, the UTC and fixed-offset zones, a fall-back overlap taking the
+// earlier reading, and a spring-forward gap shifting past the transition, all against
+// @js-temporal/polyfill.
+func TestZonedDateTimeFromString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"2020-06-15T12:30:00[America/New_York]", "2020-06-15T12:30:00-04:00[America/New_York]"},
+		{"2020-06-15T12:30:00-04:00[America/New_York]", "2020-06-15T12:30:00-04:00[America/New_York]"},
+		{"2020-06-15T12:30:00Z[America/New_York]", "2020-06-15T08:30:00-04:00[America/New_York]"},
+		{"2020-06-15T12:30:00[UTC]", "2020-06-15T12:30:00+00:00[UTC]"},
+		{"2020-06-15T12:30:00-05:00[-05:00]", "2020-06-15T12:30:00-05:00[-05:00]"},
+		{"2020-06-15[America/New_York]", "2020-06-15T00:00:00-04:00[America/New_York]"},
+		{"2020-11-01T01:30:00[America/New_York]", "2020-11-01T01:30:00-04:00[America/New_York]"},
+		{"2020-11-01T01:30:00-05:00[America/New_York]", "2020-11-01T01:30:00-05:00[America/New_York]"},
+		{"2020-03-08T02:30:00[America/New_York]", "2020-03-08T03:30:00-04:00[America/New_York]"},
+	}
+	for _, c := range cases {
+		if got := ZonedDateTimeFromString(c.in).ToString().ToGoString(); got != c.want {
+			t.Errorf("ZonedDateTimeFromString(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestZonedDateTimeFromStringThrows pins the strings ZonedDateTime.from rejects: a string with
+// no time-zone annotation, an offset the zone never applies for that wall clock, an unknown
+// zone, a non-ISO calendar, and an out-of-range date each throw a RangeError, all against
+// @js-temporal/polyfill.
+func TestZonedDateTimeFromStringThrows(t *testing.T) {
+	bad := []string{
+		"2020-06-15T12:30:00",
+		"2020-06-15T12:30:00Z",
+		"2020-06-15T12:30:00-04:00",
+		"2020-06-15T12:30:00-05:00[America/New_York]",
+		"2020-06-15T12:30:00-04:00[-05:00]",
+		"2020-06-15T12:30:00[Not/AZone]",
+		"2020-06-15T12:30:00[America/New_York][u-ca=gregory]",
+		"2020-13-01T00:00:00[UTC]",
+	}
+	for _, s := range bad {
+		name := catchThrow(func() { ZonedDateTimeFromString(s) })
+		if name == "" {
+			t.Errorf("ZonedDateTimeFromString(%q) did not throw, want RangeError", s)
+			continue
+		}
+		if name != "RangeError" {
+			t.Errorf("ZonedDateTimeFromString(%q) threw %s, want RangeError", s, name)
+		}
+	}
+}
+
 // TestPlainYearMonthFromString pins the string parser feeding Temporal.PlainYearMonth.from:
 // the bare year-month forms whose day the type does not carry, the full date and date-time
 // forms whose year and month it keeps, the expanded year, and the explicit iso8601 annotation,
