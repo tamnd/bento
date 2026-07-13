@@ -892,6 +892,26 @@ func (r *Renderer) plainTimeMethodCall(recvNode frontend.Node, method string, ar
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: append(fields[:], stringLit(overflow))}, nil
+	case "add", "subtract":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype." + method + " takes at least one argument"}
+		}
+		what := "Temporal.PlainTime.prototype." + method
+		dur, err := r.durationArg(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		if _, err := r.temporalOverflowOption(what, argNodes[1:]); err != nil {
+			return nil, err
+		}
+		if method == "subtract" {
+			dur = &ast.CallExpr{Fun: &ast.SelectorExpr{X: dur, Sel: ident("Negated")}}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDuration")}, Args: []ast.Expr{dur}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype." + method + " is a later slice"}
 	}
@@ -1305,6 +1325,85 @@ func (r *Renderer) temporalOverflowOption(what string, argNodes []frontend.Node)
 		overflow = lit
 	}
 	return overflow, nil
+}
+
+// durationUnitKeys is the ordered set of Duration component names a duration-like bag may
+// carry, from the largest unit to the smallest. The order matches value.NewDuration's
+// parameter order.
+var durationUnitKeys = [10]string{"years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds", "microseconds", "nanoseconds"}
+
+// durationArg lowers a Temporal duration argument, the value the PlainTime arithmetic
+// methods take. It is a Temporal.Duration expression, a duration-like bag of numbers, or
+// an ISO 8601 duration string literal; anything else hands back, since the duration would
+// then depend on runtime data or a coercion this slice does not carry.
+func (r *Renderer) durationArg(what string, n frontend.Node) (ast.Expr, error) {
+	if r.isDuration(n) {
+		return r.lowerExpr(n)
+	}
+	if lit, ok := r.stringLiteralValue(n); ok {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "DurationFromString"), Args: []ast.Expr{stringLit(lit)}}, nil
+	}
+	if n.Kind() == frontend.NodeObjectLiteralExpression {
+		return r.durationBag(what, n)
+	}
+	return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Duration, a duration-like bag of numbers, or a string literal is a later slice"}
+}
+
+// durationBag reads a duration-like property bag at compile time into a value.NewDuration
+// call over its ten unit fields. Each member must be a plain property keyed by a duration
+// unit name with a number-typed value; a spread, a computed or shorthand key, an unknown
+// key, a non-number value, or a repeated field hands back, since the field would then
+// depend on runtime data or a coercion this slice does not carry. At least one field must
+// be present, the record Temporal requires. Each present field lowers to its value and
+// each absent one to a float64 zero, so the fold sees the whole ten-unit record.
+func (r *Renderer) durationBag(what string, n frontend.Node) (ast.Expr, error) {
+	var fields [10]ast.Expr
+	var seen [10]bool
+	present := false
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		idx := -1
+		for i, k := range durationUnitKeys {
+			if k == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+		if seen[idx] {
+			return nil, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+		}
+		if !r.isNumber(kids[1]) {
+			return nil, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+		}
+		val, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return nil, err
+		}
+		fields[idx] = val
+		seen[idx] = true
+		present = true
+	}
+	if !present {
+		return nil, &NotYetLowerable{Reason: what + " over an empty bag (a TypeError at run time) is a later slice"}
+	}
+	for i := range fields {
+		if fields[i] == nil {
+			fields[i] = &ast.BasicLit{Kind: token.FLOAT, Value: "0"}
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewDuration"), Args: fields[:]}, nil
 }
 
 // plainTimeStaticCall lowers Temporal.PlainTime.compare(a, b) or Temporal.PlainTime.from(x),

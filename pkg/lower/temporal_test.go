@@ -360,9 +360,14 @@ func TestPlainTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "add arithmetic",
-			src:  "const t = new Temporal.PlainTime(12, 30);\nconst e = t.add({ hours: 1 });\nconsole.log(e.hour);",
-			want: "Temporal.PlainTime.prototype.add is a later slice",
+			name: "until arithmetic",
+			src:  "const a = new Temporal.PlainTime(12, 30);\nconst b = new Temporal.PlainTime(14, 0);\nconst d = a.until(b);\nconsole.log(d.hours);",
+			want: "Temporal.PlainTime.prototype.until is a later slice",
+		},
+		{
+			name: "add over a dynamic string",
+			src:  "function go(s: string) {\n  const t = new Temporal.PlainTime(12, 30);\n  return t.add(s).hour;\n}\nconsole.log(go(\"PT1H\"));",
+			want: "Temporal.PlainTime.prototype.add over an argument that is not a Duration, a duration-like bag of numbers, or a string literal is a later slice",
 		},
 		{
 			name: "from a bag with a shorthand key",
@@ -432,6 +437,43 @@ console.log(u.minute);`
 		"value.Some[float64](45)",
 		`"constrain"`,
 	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeAdd pins Temporal.PlainTime.prototype.add: a duration-like bag builds a
+// value.NewDuration over the ten padded unit fields and the receiver folds it with
+// AddDuration.
+func TestPlainTimeAdd(t *testing.T) {
+	const src = `const t = new Temporal.PlainTime(12, 30, 15);
+const u = t.add({ hours: 1, minutes: 30 });
+console.log(u.hour);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		".AddDuration(",
+		"value.NewDuration(0, 0, 0, 0, 1, 30, 0, 0, 0, 0)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, ".Negated()") {
+		t.Errorf("add negated the duration:\n%s", got)
+	}
+}
+
+// TestPlainTimeSubtract pins Temporal.PlainTime.prototype.subtract: the same duration read
+// negated before the fold, so subtract is add over a negated Duration. A Duration receiver
+// passes straight through with no bag construction.
+func TestPlainTimeSubtract(t *testing.T) {
+	const src = `const d = new Temporal.Duration(0, 0, 0, 0, 13);
+const t = new Temporal.PlainTime(12, 30, 15);
+const u = t.subtract(d);
+console.log(u.hour);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".AddDuration(", ".Negated()"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered program missing %q:\n%s", want, got)
 		}
