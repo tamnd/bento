@@ -252,6 +252,19 @@ func TestPlainDateToPlainMonthDay(t *testing.T) {
 	}
 }
 
+func TestPlainDateToZonedDateTime(t *testing.T) {
+	src := "const d = new Temporal.PlainDate(2020, 3, 14);\n" +
+		"console.log(d.toZonedDateTime(\"UTC\").toString());\n" +
+		"console.log(d.toZonedDateTime({ timeZone: \"America/New_York\", plainTime: \"15:30\" }).toString());"
+	got := renderProgram(t, src)
+	if !strings.Contains(got, ".ToZonedDateTime(") {
+		t.Errorf("rendered program missing .ToZonedDateTime():\n%s", got)
+	}
+	if !strings.Contains(got, "value.PlainTimeFromString(") {
+		t.Errorf("rendered program missing PlainTimeFromString for a plainTime string option:\n%s", got)
+	}
+}
+
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
 // and conversion methods, from over a dynamic string or a property bag, and the other
 // Temporal types each hand back with a reason naming where the work belongs.
