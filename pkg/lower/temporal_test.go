@@ -375,9 +375,14 @@ func TestPlainTimeHandBacks(t *testing.T) {
 			want: "Temporal.PlainTime.from over a bag with a computed or shorthand key is a later slice",
 		},
 		{
-			name: "round",
-			src:  "const t = new Temporal.PlainTime(12, 30, 45);\nconst r = t.round({ smallestUnit: \"minute\" });\nconsole.log(r.minute);",
-			want: "Temporal.PlainTime.prototype.round is a later slice",
+			name: "round with a dynamic smallestUnit",
+			src:  "function go(u: \"minute\" | \"hour\") {\n  const t = new Temporal.PlainTime(12, 30, 45);\n  return t.round({ smallestUnit: u }).minute;\n}\nconsole.log(go(\"minute\"));",
+			want: "Temporal.PlainTime.prototype.round with a non-literal smallestUnit is a later slice",
+		},
+		{
+			name: "round with a dynamic roundingMode",
+			src:  "function go(m: \"ceil\" | \"floor\") {\n  const t = new Temporal.PlainTime(12, 30, 45);\n  return t.round({ smallestUnit: \"minute\", roundingMode: m }).minute;\n}\nconsole.log(go(\"ceil\"));",
+			want: "Temporal.PlainTime.prototype.round with a non-literal roundingMode is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -474,6 +479,44 @@ const u = t.subtract(d);
 console.log(u.hour);`
 	got := renderProgram(t, src)
 	for _, want := range []string{".AddDuration(", ".Negated()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeRound pins Temporal.PlainTime.prototype.round over an options bag: the
+// smallestUnit and roundingMode ride through as string literals and the roundingIncrement
+// as a number expression, with the default increment one and the default mode halfExpand.
+func TestPlainTimeRound(t *testing.T) {
+	const src = `const t = new Temporal.PlainTime(3, 34, 56);
+const r = t.round({ smallestUnit: "minute", roundingIncrement: 15, roundingMode: "ceil" });
+console.log(r.minute);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		".Round(",
+		`"minute"`,
+		"15",
+		`"ceil"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeRoundShorthand pins the smallestUnit string shorthand: t.round("hour")
+// carries the default increment one and the default mode halfExpand.
+func TestPlainTimeRoundShorthand(t *testing.T) {
+	const src = `const t = new Temporal.PlainTime(3, 34, 56);
+const r = t.round("hour");
+console.log(r.hour);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		".Round(",
+		`"hour"`,
+		`"halfExpand"`,
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered program missing %q:\n%s", want, got)
 		}
