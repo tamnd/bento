@@ -94,3 +94,78 @@ func TestPlainDateFromStringThrows(t *testing.T) {
 		}
 	}
 }
+
+// TestPlainDateFromStringLeapSecond pins that a :60 leap second in the dropped time part is
+// accepted and the date survives, matching @js-temporal/polyfill; the earlier parser wrongly
+// rejected it.
+func TestPlainDateFromStringLeapSecond(t *testing.T) {
+	for _, s := range []string{"2024-06-30T23:59:60", "2024-06-30T23:59:60.5", "2024-06-30T12:00:60"} {
+		pd := PlainDateFromString(s)
+		if got := pd.ToString().ToGoString(); got != "2024-06-30" {
+			t.Errorf("PlainDateFromString(%q) toString = %q, want 2024-06-30", s, got)
+		}
+	}
+}
+
+// TestPlainTimeFromString pins the string parser feeding Temporal.PlainTime.from: the extended
+// and basic forms, a time designator, the date-time forms whose time is kept, the leap second
+// constrained to :59, and a calendar annotation ignored whatever it names, all against
+// @js-temporal/polyfill.
+func TestPlainTimeFromString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"12:30:00", "12:30:00"},
+		{"12:30", "12:30:00"},
+		{"12", "12:00:00"},
+		{"123045", "12:30:45"},
+		{"T12:30:00", "12:30:00"},
+		{"T12", "12:00:00"},
+		{"t12:30", "12:30:00"},
+		{"12:30:00.123456789", "12:30:00.123456789"},
+		{"12:30:00,5", "12:30:00.5"},
+		{"2024-06-30T12:30:00", "12:30:00"},
+		{"2024-06-30T12:30:00.5", "12:30:00.5"},
+		{"2024-06-30 12:30", "12:30:00"},
+		{"12:30:00+05:30", "12:30:00"},
+		{"2024-06-30T12:30:00[America/New_York]", "12:30:00"},
+		{"12:30:00[u-ca=gregory]", "12:30:00"},
+		{"12:30:00[u-ca=bogus]", "12:30:00"},
+		{"2024-06-30T12:30:00[u-ca=japanese]", "12:30:00"},
+		{"1330", "13:30:00"},
+		{"123045.5", "12:30:45.5"},
+		{"120560", "12:05:59"},
+		{"23:59:60", "23:59:59"},
+		{"1230+00:00", "12:30:00"},
+		{"120512.5", "12:05:12.5"},
+	}
+	for _, c := range cases {
+		pt := PlainTimeFromString(c.in)
+		if got := pt.ToString().ToGoString(); got != c.want {
+			t.Errorf("PlainTimeFromString(%q) toString = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestPlainTimeFromStringThrows pins the strings PlainTime.from rejects: a bad grammar, an
+// out-of-range field, a Z designator, a date-only string with no time, and the basic bare
+// forms that are ambiguous with a year-month or month-day date, all against
+// @js-temporal/polyfill.
+func TestPlainTimeFromStringThrows(t *testing.T) {
+	bad := []string{
+		"1230", "0630", "2400", "1260", "12305", "1234567",
+		"120512", "130512", "010101", "0229", "0430", "1231",
+		"12:60", "24:00:00", "12:30:00Z", "12:30.5", "12.5",
+		"2024-06-30", "2024-06-30T12:30:00Z", "2024-13-30T12:30",
+		"2024-06-31T12:30", "1230[u-ca=iso8601]", "1230[America/New_York]",
+		"1230.5", "+123045", "  12:30  ",
+	}
+	for _, s := range bad {
+		name := catchThrow(func() { PlainTimeFromString(s) })
+		if name == "" {
+			t.Errorf("PlainTimeFromString(%q) did not throw, want RangeError", s)
+			continue
+		}
+		if name != "RangeError" {
+			t.Errorf("PlainTimeFromString(%q) threw %s, want RangeError", s, name)
+		}
+	}
+}

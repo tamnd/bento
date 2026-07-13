@@ -168,13 +168,17 @@ func (sc *isoScanner) scanTime(p *isoParse) bool {
 	} else if isDigit(sc.peek()) {
 		haveSecond = true
 	}
-	if haveSecond {
-		second, ok := sc.digits(2)
-		if !ok || second > 59 {
-			return false
-		}
-		p.second = second
+	if !haveSecond {
+		return true // a fractional part follows the second, so without one there is none
 	}
+	second, ok := sc.digits(2)
+	if !ok || second > 60 {
+		return false
+	}
+	if second == 60 {
+		second = 59 // a leap second is always constrained to :59, whatever the overflow option
+	}
+	p.second = second
 	if c := sc.peek(); c == '.' || c == ',' {
 		sc.pos++
 		return sc.scanFraction(p)
@@ -323,4 +327,98 @@ func PlainDateFromString(s string) *PlainDate {
 		cal = c
 	}
 	return &PlainDate{year: p.year, month: p.month, day: p.day, cal: cal}
+}
+
+// parseTemporalTimeOnly parses a time-only Temporal string, the form Temporal.PlainTime.from
+// accepts when the string carries no date: an optional "T" or "t" designator, a time, an
+// optional offset, and zero or more annotations. When no designator is present a bare
+// basic-format time whose digits are byte-identical to a valid year-month or month-day date,
+// "1230" reading as 12-30 or "120512" reading as 1205-12, is ambiguous and rejected, matching
+// the grammar's not-ambiguous constraint; a fraction, an offset, or the ":" separators of the
+// extended form all break the tie in the time's favour, and the designator removes it outright.
+func parseTemporalTimeOnly(s string) (isoParse, bool) {
+	sc := &isoScanner{s: s}
+	var p isoParse
+	designator := false
+	if c := sc.peek(); c == 'T' || c == 't' {
+		sc.pos++
+		designator = true
+	}
+	specStart := sc.pos
+	if !sc.scanTime(&p) {
+		return p, false
+	}
+	specEnd := sc.pos
+	sc.scanOffsetOrZ(&p)
+	afterOffset := sc.pos
+	if !sc.scanAnnotations(&p) {
+		return p, false
+	}
+	if !sc.atEnd() {
+		return p, false
+	}
+	p.hasTime = true
+	// Only a bare time with nothing after its spec but annotations can collide with a date,
+	// so an offset (which moved the position past the spec) already breaks the ambiguity.
+	if !designator && specEnd == afterOffset && ambiguousTimeSpec(s[specStart:specEnd]) {
+		return p, false
+	}
+	return p, true
+}
+
+// ambiguousTimeSpec reports whether spec, the exact bytes of a basic-format time with no
+// separators, no fraction, and no offset, is byte-identical to a valid ISO date and so cannot
+// be told apart from one without a time designator. Four digits "HHMM" collide with a month-day
+// "MMDD" and six digits "HHMMSS" collide with a year-month "YYYYMM"; the month-day check uses
+// the 1972 leap reference year so February 29 counts. Any other length, or a non-digit byte
+// from a separator or fraction, is unambiguous.
+func ambiguousTimeSpec(spec string) bool {
+	for i := 0; i < len(spec); i++ {
+		if !isDigit(spec[i]) {
+			return false
+		}
+	}
+	switch len(spec) {
+	case 4:
+		month := int(spec[0]-'0')*10 + int(spec[1]-'0')
+		day := int(spec[2]-'0')*10 + int(spec[3]-'0')
+		return month >= 1 && month <= 12 && day >= 1 && day <= isoDaysInMonth(1972, month)
+	case 6:
+		month := int(spec[4]-'0')*10 + int(spec[5]-'0')
+		return month >= 1 && month <= 12
+	}
+	return false
+}
+
+// timeFromParse builds a PlainTime from the parsed time fields, the components shared by the
+// time-only and the full date-time forms once the caller has decided the string is a time.
+func timeFromParse(p isoParse) *PlainTime {
+	return &PlainTime{p.hour, p.minute, p.second, p.millisecond, p.microsecond, p.nanosecond}
+}
+
+// PlainTimeFromString implements Temporal.PlainTime.from over a string. It reads either a full
+// date-time string, whose date it validates and whose time it keeps, or a time-only string; a
+// date-only string with no time, a Z designator (a wall-clock time has no zone to resolve it
+// against), or a syntax the grammar rejects each throws a RangeError. A calendar annotation is
+// accepted and ignored whatever it names, since a PlainTime carries no calendar, so an unhosted
+// or unknown identifier is not an error the way it is for a PlainDate.
+func PlainTimeFromString(s string) *PlainTime {
+	if p, ok := parseTemporalISOString(s); ok {
+		if p.hasZ {
+			Throw(NewRangeError(FromGoString("a Temporal.PlainTime string cannot carry a Z designator")))
+		}
+		if !p.hasTime {
+			Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.PlainTime: no time")))
+		}
+		rejectISODate(float64(p.year), float64(p.month), float64(p.day))
+		return timeFromParse(p)
+	}
+	p, ok := parseTemporalTimeOnly(s)
+	if !ok {
+		Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.PlainTime")))
+	}
+	if p.hasZ {
+		Throw(NewRangeError(FromGoString("a Temporal.PlainTime string cannot carry a Z designator")))
+	}
+	return timeFromParse(p)
 }
