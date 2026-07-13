@@ -1099,6 +1099,20 @@ func DurationFrom(d *Duration) *Duration {
 	return &c
 }
 
+// DurationFromString implements Temporal.Duration.from over a string. It parses the ISO 8601
+// duration grammar, PnYnMnWnDTnHnMnS with an optional leading sign, where only the smallest
+// present time component may carry a fraction that cascades into the finer fields down to
+// nanoseconds. A grammar the parser rejects, an empty duration with no component, or a field
+// out of the valid Duration range each throws a RangeError.
+func DurationFromString(s string) *Duration {
+	p, ok := parseTemporalDurationString(s)
+	if !ok {
+		Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.Duration")))
+	}
+	rejectDuration(p.years, p.months, p.weeks, p.days, p.hours, p.minutes, p.seconds, p.milliseconds, p.microseconds, p.nano)
+	return &Duration{p.years, p.months, p.weeks, p.days, p.hours, p.minutes, p.seconds, p.milliseconds, p.microseconds, p.nano}
+}
+
 // toIntegerIfIntegral implements the abstract operation ToIntegerIfIntegral (Temporal):
 // a NaN, non-finite, or non-integral value throws a RangeError, and an integral value is
 // returned unchanged. It is the gate Temporal.Duration uses on every field, and it

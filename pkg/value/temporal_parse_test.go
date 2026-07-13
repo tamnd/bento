@@ -328,6 +328,55 @@ func TestZonedDateTimeFromStringThrows(t *testing.T) {
 	}
 }
 
+// TestDurationFromString pins the ISO 8601 duration parser feeding Temporal.Duration.from: a
+// full duration, a leading sign, case-insensitive designators, the comma decimal separator, and
+// a fraction on the hours, minutes, or seconds cascading into the finer fields, each round-tripped
+// through toString against @js-temporal/polyfill.
+func TestDurationFromString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"P1Y2M3W4DT5H6M7S", "P1Y2M3W4DT5H6M7S"},
+		{"PT1.5H", "PT1H30M"},
+		{"PT1.5M", "PT1M30S"},
+		{"PT2.5M", "PT2M30S"},
+		{"PT1.234567891S", "PT1.234567891S"},
+		{"P1YT1.5678H", "P1YT1H34M4.08S"},
+		{"-P1Y2M", "-P1Y2M"},
+		{"-PT1.5H", "-PT1H30M"},
+		{"+PT0.5H", "PT30M"},
+		{"P0D", "PT0S"},
+		{"PT0S", "PT0S"},
+		{"p1yt1h", "P1YT1H"},
+		{"PT1,5S", "PT1.5S"},
+		{"PT1H1S", "PT1H1S"},
+		{"P1W", "P1W"},
+	}
+	for _, c := range cases {
+		if got := DurationFromString(c.in).ToString().ToGoString(); got != c.want {
+			t.Errorf("DurationFromString(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestDurationFromStringThrows pins the strings Duration.from rejects: an empty duration, a
+// missing designator, a time component with no T, a fraction on a non-final or a whole date
+// component, a leading dot, a per-component sign, and units out of order each throw a RangeError,
+// all against @js-temporal/polyfill.
+func TestDurationFromStringThrows(t *testing.T) {
+	bad := []string{
+		"P", "PT", "1Y", "P1H", "PT1.5H30M", "P1.5Y", "PT.5S", "P-1Y", "P1W2D3Y", "",
+	}
+	for _, s := range bad {
+		name := catchThrow(func() { DurationFromString(s) })
+		if name == "" {
+			t.Errorf("DurationFromString(%q) did not throw, want RangeError", s)
+			continue
+		}
+		if name != "RangeError" {
+			t.Errorf("DurationFromString(%q) threw %s, want RangeError", s, name)
+		}
+	}
+}
+
 // TestPlainYearMonthFromString pins the string parser feeding Temporal.PlainYearMonth.from:
 // the bare year-month forms whose day the type does not carry, the full date and date-time
 // forms whose year and month it keeps, the expanded year, and the explicit iso8601 annotation,
