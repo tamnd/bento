@@ -453,3 +453,86 @@ func PlainDateTimeFromString(s string) *PlainDateTime {
 		time: PlainTime{p.hour, p.minute, p.second, p.millisecond, p.microsecond, p.nanosecond},
 	}
 }
+
+// parseTemporalYearMonthOnly parses a bare year-month Temporal string, the form
+// Temporal.PlainYearMonth.from accepts when the string carries no day: a year, a month in the
+// extended "YYYY-MM" or basic "YYYYMM" form, and zero or more annotations, with no time and no
+// day. It is the year-month counterpart of the date the full parser requires, so "2024-06" and
+// "202406" parse here while a day, a time, or a "T" designator either routes the string to the
+// full parser or fails outright.
+func parseTemporalYearMonthOnly(s string) (isoParse, bool) {
+	sc := &isoScanner{s: s}
+	var p isoParse
+	sign := 1
+	expanded := false
+	if sc.accept('+') {
+		expanded = true
+	} else if sc.accept('-') {
+		expanded = true
+		sign = -1
+	}
+	var year int
+	if expanded {
+		v, ok := sc.digits(6)
+		if !ok {
+			return p, false
+		}
+		year = sign * v
+	} else {
+		v, ok := sc.digits(4)
+		if !ok {
+			return p, false
+		}
+		year = v
+	}
+	sc.accept('-')
+	month, ok := sc.digits(2)
+	if !ok {
+		return p, false
+	}
+	p.year, p.month = year, month
+	if !sc.scanAnnotations(&p) {
+		return p, false
+	}
+	if !sc.atEnd() {
+		return p, false
+	}
+	return p, true
+}
+
+// yearMonthRequireISO throws a RangeError unless cal, the calendar annotation a year-month
+// string carried, is empty or names the ISO calendar. bento's PlainYearMonth is ISO-only, so a
+// bare year-month string naming another calendar is an error the way the specification treats
+// it, and the lowerer hands back any literal naming a non-ISO calendar before this is reached,
+// so at run time cal is always "" or "iso8601".
+func yearMonthRequireISO(cal string) {
+	if cal != "" && !strings.EqualFold(cal, "iso8601") {
+		Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth from a string supports only the iso8601 calendar")))
+	}
+}
+
+// PlainYearMonthFromString implements Temporal.PlainYearMonth.from over a string. It reads a
+// bare year-month string like "2024-06", whose day the type does not carry, or a full date or
+// date-time string like "2024-06-30", whose year and month it keeps and whose day and time it
+// drops. A grammar the parser rejects, an out-of-range year-month, an out-of-range day on a
+// full-date string, a Z designator, or a non-ISO calendar each throws a RangeError. The
+// year-month-only form carries no time, so a "T" designator or a space after the month sends
+// the string to the full parser, which needs a day, and both failing throws.
+func PlainYearMonthFromString(s string) *PlainYearMonth {
+	if p, ok := parseTemporalISOString(s); ok {
+		if p.hasZ {
+			Throw(NewRangeError(FromGoString("a Temporal.PlainYearMonth string cannot carry a Z designator")))
+		}
+		rejectISODate(float64(p.year), float64(p.month), float64(p.day))
+		yearMonthRequireISO(p.calendar)
+		rejectISOYearMonth(float64(p.year), float64(p.month))
+		return &PlainYearMonth{year: p.year, month: p.month}
+	}
+	p, ok := parseTemporalYearMonthOnly(s)
+	if !ok {
+		Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.PlainYearMonth")))
+	}
+	yearMonthRequireISO(p.calendar)
+	rejectISOYearMonth(float64(p.year), float64(p.month))
+	return &PlainYearMonth{year: p.year, month: p.month}
+}

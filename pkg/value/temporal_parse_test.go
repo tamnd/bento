@@ -229,3 +229,54 @@ func TestPlainDateTimeFromStringThrows(t *testing.T) {
 		}
 	}
 }
+
+// TestPlainYearMonthFromString pins the string parser feeding Temporal.PlainYearMonth.from:
+// the bare year-month forms whose day the type does not carry, the full date and date-time
+// forms whose year and month it keeps, the expanded year, and the explicit iso8601 annotation,
+// all against @js-temporal/polyfill.
+func TestPlainYearMonthFromString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"2024-06", "2024-06"},
+		{"202406", "2024-06"},
+		{"2024-06-30", "2024-06"},
+		{"20240630", "2024-06"},
+		{"2024-06-30T12:30:45", "2024-06"},
+		{"2024-06-01", "2024-06"},
+		{"2024-06[u-ca=iso8601]", "2024-06"},
+		{"2024-06[!u-ca=iso8601]", "2024-06"},
+		{"2024-06-30[u-ca=iso8601]", "2024-06"},
+		{"+002024-06", "2024-06"},
+		{"-000005-06", "-000005-06"},
+		{"+002024-06-30T23:59:60", "2024-06"},
+	}
+	for _, c := range cases {
+		ym := PlainYearMonthFromString(c.in)
+		if got := ym.ToString().ToGoString(); got != c.want {
+			t.Errorf("PlainYearMonthFromString(%q) toString = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestPlainYearMonthFromStringThrows pins the strings PlainYearMonth.from rejects: a bad
+// grammar, a bare year-month with a time, an out-of-range month or day, a Z designator, and a
+// non-ISO calendar on a bare year-month each throw a RangeError, all against
+// @js-temporal/polyfill.
+func TestPlainYearMonthFromStringThrows(t *testing.T) {
+	bad := []string{
+		"2024", "06", "12:30:45", "2024-W06", "2024-366",
+		"2024-06T12:30", "2024-06 12:30", "202406T1230",
+		"2024-13", "2024-00", "2024-6-30", "2024-06-31",
+		"2024-02-30", "2024-06-00", "2024-06Z", "2024-06-30T12:30:45Z",
+		"2024-06[u-ca=gregory]", "2024-06[u-ca=japanese]", "2024-06[u-ca=bogus]",
+	}
+	for _, s := range bad {
+		name := catchThrow(func() { PlainYearMonthFromString(s) })
+		if name == "" {
+			t.Errorf("PlainYearMonthFromString(%q) did not throw, want RangeError", s)
+			continue
+		}
+		if name != "RangeError" {
+			t.Errorf("PlainYearMonthFromString(%q) threw %s, want RangeError", s, name)
+		}
+	}
+}

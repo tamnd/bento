@@ -1015,7 +1015,9 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 // plainYearMonthStaticCall lowers Temporal.PlainYearMonth.compare(a, b) or
 // Temporal.PlainYearMonth.from(x), the mirror of the PlainDate statics. compare lowers to
 // value.PlainYearMonthCompare; from lowers to value.PlainYearMonthFrom for a PlainYearMonth
-// argument and hands back for a string or a bag.
+// argument and to value.PlainYearMonthFromString for a string literal. A PlainYearMonth is
+// ISO-only, so the literal is gated on literalYearMonthISOOnly, stricter than the PlainDate
+// gate: a literal naming any non-ISO calendar hands back, as does a dynamic string or a bag.
 func (r *Renderer) plainYearMonthStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
@@ -1039,15 +1041,22 @@ func (r *Renderer) plainYearMonthStaticCall(method string, argNodes []frontend.N
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.from with options is a later slice"}
 		}
-		if !r.isPlainYearMonth(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.from over a string or a property bag is a later slice"}
+		if r.isPlainYearMonth(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainYearMonthFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if !literalYearMonthISOOnly(lit) {
+				return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.from over a string naming a non-ISO calendar is a later slice"}
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainYearMonthFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "PlainYearMonthFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.from over a dynamic string or a property bag is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth." + method + " is a later slice"}
 	}
@@ -1302,6 +1311,31 @@ func literalCalendarHosted(s string) bool {
 	default:
 		return false
 	}
+}
+
+// literalYearMonthISOOnly reports whether a literal Temporal string carries no calendar
+// annotation or only the ISO calendar, the sole calendar bento's PlainYearMonth hosts. Unlike
+// literalCalendarHosted it rejects gregory, roc, and japanese too, since a PlainYearMonth has
+// no calendar field to carry them: a full-date string naming such a calendar would parse to a
+// non-ISO year-month the specification accepts but the runtime cannot represent, so the from
+// path hands it back rather than drop the calendar and emit a wrong result.
+func literalYearMonthISOOnly(s string) bool {
+	const key = "[u-ca="
+	i := strings.Index(s, key)
+	if i < 0 {
+		i = strings.Index(s, "[!u-ca=")
+		if i < 0 {
+			return true
+		}
+		i += len("[!u-ca=")
+	} else {
+		i += len(key)
+	}
+	end := strings.IndexByte(s[i:], ']')
+	if end < 0 {
+		return true // a malformed annotation; the runtime parser rejects it uniformly
+	}
+	return strings.EqualFold(s[i:i+end], "iso8601")
 }
 
 // calendarLit builds the Go string-literal argument a calendar-aware constructor takes.
