@@ -3,6 +3,8 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -782,6 +784,20 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 			name = "ToJSON"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "withCalendar":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype.withCalendar takes exactly one argument"}
+		}
+		cal, ok := r.hostedCalendar(argNodes[0])
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype.withCalendar over a calendar other than a literal iso8601 or gregory is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainDateWithCalendar"), Args: []ast.Expr{recv, calendarLit(cal)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " is a later slice"}
 	}
@@ -866,6 +882,20 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 			name = "ToJSON"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "withCalendar":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.withCalendar takes exactly one argument"}
+		}
+		cal, ok := r.hostedCalendar(argNodes[0])
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.withCalendar over a calendar other than a literal iso8601 or gregory is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeWithCalendar"), Args: []ast.Expr{recv, calendarLit(cal)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " is a later slice"}
 	}
@@ -1193,28 +1223,62 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 	}
 }
 
+// hostedCalendar reads a calendar-identifier argument the runtime hosts, the literal
+// "iso8601" or "gregory" a caller names on a constructor or withCalendar. It reads the
+// checker's literal type, so a const holding the id resolves the same as a bare literal,
+// lowercases it since identifiers are case-insensitive, and returns the canonical form.
+// It returns false for a dynamic string, whose value is unknown until run time, and for
+// a calendar bento does not host yet, so the caller hands both back rather than emit a
+// call the runtime would reject.
+func (r *Renderer) hostedCalendar(node frontend.Node) (string, bool) {
+	id, ok := r.stringLiteralValue(node)
+	if !ok {
+		return "", false
+	}
+	switch strings.ToLower(id) {
+	case "iso8601":
+		return "iso8601", true
+	case "gregory":
+		return "gregory", true
+	default:
+		return "", false
+	}
+}
+
+// calendarLit builds the Go string-literal argument a calendar-aware constructor takes.
+func calendarLit(cal string) ast.Expr {
+	return &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(cal)}
+}
+
 // newPlainDate lowers new Temporal.PlainDate over its three number arguments (isoYear,
-// isoMonth, isoDay); a fourth calendar argument selects a non-ISO calendar, which this
-// slice does not carry, so it hands back. Each argument must lower as a number, so a
-// non-number component hands back rather than coerce; the runtime constructor runs
-// ToIntegerWithTruncation and RejectISODate, so an out-of-range date throws a RangeError
-// at run time the way the specification requires.
+// isoMonth, isoDay) and an optional fourth calendar argument. A literal iso8601 or gregory
+// calendar routes to NewPlainDateCal; a dynamic or unhosted calendar hands back. Each
+// numeric argument must lower as a number, so a non-number component hands back rather than
+// coerce; the runtime constructor runs ToIntegerWithTruncation and RejectISODate, so an
+// out-of-range date throws a RangeError at run time the way the specification requires.
 func (r *Renderer) newPlainDate(argNodes []frontend.Node) (ast.Expr, error) {
-	if len(argNodes) != 3 {
-		return nil, &NotYetLowerable{Reason: "new Temporal.PlainDate with a calendar argument or fewer than three components is a later slice"}
+	if len(argNodes) < 3 || len(argNodes) > 4 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.PlainDate takes three components and an optional calendar"}
 	}
 	args := make([]ast.Expr, 3)
-	for i, node := range argNodes {
-		if !r.isNumber(node) {
+	for i := range 3 {
+		if !r.isNumber(argNodes[i]) {
 			return nil, &NotYetLowerable{Reason: "new Temporal.PlainDate with a non-number component is a later slice"}
 		}
-		lowered, err := r.lowerExpr(node)
+		lowered, err := r.lowerExpr(argNodes[i])
 		if err != nil {
 			return nil, err
 		}
 		args[i] = lowered
 	}
 	r.requireImport(valuePkg)
+	if len(argNodes) == 4 {
+		cal, ok := r.hostedCalendar(argNodes[3])
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "new Temporal.PlainDate over a calendar other than a literal iso8601 or gregory is a later slice"}
+		}
+		return &ast.CallExpr{Fun: sel("value", "NewPlainDateCal"), Args: append(args, calendarLit(cal))}, nil
+	}
 	return &ast.CallExpr{Fun: sel("value", "NewPlainDate"), Args: args}, nil
 }
 
@@ -1248,33 +1312,47 @@ func (r *Renderer) newPlainTime(argNodes []frontend.Node) (ast.Expr, error) {
 }
 
 // newPlainDateTime lowers new Temporal.PlainDateTime over its three required date components
-// (isoYear, isoMonth, isoDay) and up to six optional time components (hour, minute, second,
-// millisecond, microsecond, nanosecond), each time field defaulting to zero. Fewer than three
-// arguments, or a tenth calendar argument, hands back: this slice carries only the ISO
-// calendar. A missing trailing time component is padded with a float64 zero so the runtime
-// constructor always sees nine numbers. Each supplied argument must lower as a number, so a
-// non-number component hands back; the runtime runs ToIntegerWithTruncation then RejectISODate
-// and RejectTime, so an out-of-range date or time throws a RangeError at run time.
+// (isoYear, isoMonth, isoDay), up to six optional time components (hour, minute, second,
+// millisecond, microsecond, nanosecond), each defaulting to zero, and an optional tenth
+// calendar argument. The calendar is positional after all nine numbers, so it appears only
+// when ten arguments are given; a literal iso8601 or gregory calendar routes to
+// NewPlainDateTimeCal and a dynamic or unhosted one hands back. A missing trailing time
+// component is padded with a float64 zero so the runtime constructor always sees nine
+// numbers. Each supplied numeric argument must lower as a number, so a non-number component
+// hands back; the runtime runs ToIntegerWithTruncation then RejectISODate and RejectTime, so
+// an out-of-range date or time throws a RangeError at run time.
 func (r *Renderer) newPlainDateTime(argNodes []frontend.Node) (ast.Expr, error) {
-	if len(argNodes) < 3 || len(argNodes) > 9 {
-		return nil, &NotYetLowerable{Reason: "new Temporal.PlainDateTime with a calendar argument or fewer than three components is a later slice"}
+	if len(argNodes) < 3 || len(argNodes) > 10 {
+		return nil, &NotYetLowerable{Reason: "new Temporal.PlainDateTime takes three to nine components and an optional calendar"}
+	}
+	hasCal := len(argNodes) == 10
+	timeArgs := argNodes
+	if hasCal {
+		timeArgs = argNodes[:9]
 	}
 	args := make([]ast.Expr, 9)
 	for i := range args {
-		if i >= len(argNodes) {
+		if i >= len(timeArgs) {
 			args[i] = &ast.BasicLit{Kind: token.FLOAT, Value: "0"}
 			continue
 		}
-		if !r.isNumber(argNodes[i]) {
+		if !r.isNumber(timeArgs[i]) {
 			return nil, &NotYetLowerable{Reason: "new Temporal.PlainDateTime with a non-number component is a later slice"}
 		}
-		lowered, err := r.lowerExpr(argNodes[i])
+		lowered, err := r.lowerExpr(timeArgs[i])
 		if err != nil {
 			return nil, err
 		}
 		args[i] = lowered
 	}
 	r.requireImport(valuePkg)
+	if hasCal {
+		cal, ok := r.hostedCalendar(argNodes[9])
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "new Temporal.PlainDateTime over a calendar other than a literal iso8601 or gregory is a later slice"}
+		}
+		return &ast.CallExpr{Fun: sel("value", "NewPlainDateTimeCal"), Args: append(args, calendarLit(cal))}, nil
+	}
 	return &ast.CallExpr{Fun: sel("value", "NewPlainDateTime"), Args: args}, nil
 }
 

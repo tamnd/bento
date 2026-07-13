@@ -1099,3 +1099,79 @@ func TestNowHandBacks(t *testing.T) {
 		})
 	}
 }
+
+// TestGregoryCalendarConstruction pins the gregory calendar routing: a fourth string
+// calendar argument on new Temporal.PlainDate routes to value.NewPlainDateCal with the
+// canonical id, and the era and eraYear reads lower to their getters.
+func TestGregoryCalendarConstruction(t *testing.T) {
+	const src = `const d = new Temporal.PlainDate(2024, 6, 30, "gregory");
+console.log(d.era, d.eraYear, d.calendarId);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		`value.NewPlainDateCal(2024, 6, 30, "gregory")`,
+		".Era()",
+		".EraYear()",
+		".CalendarId()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGregoryCalendarCanonicalizes pins the case-insensitive canonicalization: an uppercase
+// id lowers to the canonical lowercase form the runtime hosts.
+func TestGregoryCalendarCanonicalizes(t *testing.T) {
+	const src = `const d = new Temporal.PlainDate(2024, 6, 30, "GREGORY");
+console.log(d.calendarId);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.NewPlainDateCal(2024, 6, 30, "gregory")`) {
+		t.Errorf("uppercase GREGORY did not canonicalize:\n%s", got)
+	}
+}
+
+// TestGregoryPlainDateTimeConstruction pins the tenth calendar argument on
+// new Temporal.PlainDateTime routing to value.NewPlainDateTimeCal.
+func TestGregoryPlainDateTimeConstruction(t *testing.T) {
+	const src = `const d = new Temporal.PlainDateTime(2024, 6, 30, 12, 34, 56, 0, 0, 0, "gregory");
+console.log(d.era, d.toString());`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.NewPlainDateTimeCal(2024, 6, 30, 12, 34, 56, 0, 0, 0, "gregory")`) {
+		t.Errorf("PlainDateTime gregory did not route to NewPlainDateTimeCal:\n%s", got)
+	}
+}
+
+// TestWithCalendarConstruction pins withCalendar routing to the value helper for a literal id.
+func TestWithCalendarConstruction(t *testing.T) {
+	const src = `const d = new Temporal.PlainDate(2024, 6, 30).withCalendar("gregory");
+console.log(d.calendarId);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.PlainDateWithCalendar(`) || !strings.Contains(got, `"gregory"`) {
+		t.Errorf("withCalendar did not route to PlainDateWithCalendar:\n%s", got)
+	}
+}
+
+// TestCalendarHandBacks pins the conservative boundary: a three-argument PlainDate stays on
+// the ISO constructor, an unhosted calendar hands back rather than mislower, and a dynamic
+// calendar hands back since its value is unknown until run time.
+func TestCalendarHandBacks(t *testing.T) {
+	iso := renderProgram(t, `const d = new Temporal.PlainDate(2024, 6, 30);
+console.log(d.day);`)
+	if !strings.Contains(iso, "value.NewPlainDate(2024, 6, 30)") || strings.Contains(iso, "NewPlainDateCal") {
+		t.Errorf("three-argument PlainDate did not stay on NewPlainDate:\n%s", iso)
+	}
+
+	unhosted := renderProgramHandBack(t, `const d = new Temporal.PlainDate(2024, 6, 30, "hebrew");
+console.log(d.calendarId);`)
+	if !strings.Contains(unhosted, "calendar") {
+		t.Errorf("unhosted calendar handback reason = %q, want a calendar reason", unhosted)
+	}
+
+	dyn := renderProgramHandBack(t, `function f(c: string): string {
+	return new Temporal.PlainDate(2024, 6, 30, c).calendarId;
+}
+console.log(f("gregory"));`)
+	if !strings.Contains(dyn, "calendar") {
+		t.Errorf("dynamic calendar handback reason = %q, want a calendar reason", dyn)
+	}
+}
