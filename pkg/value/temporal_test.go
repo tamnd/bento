@@ -617,6 +617,47 @@ func TestPlainDateAddSubtract(t *testing.T) {
 	}
 }
 
+// TestPlainDateUntilSince pins the calendar difference: the largestUnit balancing from days
+// up to years, the month anchoring that settles a short-month remainder in days, since as the
+// negation of until, and the RangeError when the two dates carry different calendars. Every
+// expected value was checked against @js-temporal/polyfill.
+func TestPlainDateUntilSince(t *testing.T) {
+	a := mustPlainDate(t, 2020, 1, 31)
+	b := mustPlainDate(t, 2021, 3, 30)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"until day default", a.Until(b, "day").ToString().ToGoString(), "P424D"},
+		{"until year", a.Until(b, "year").ToString().ToGoString(), "P1Y1M30D"},
+		{"until month", a.Until(b, "month").ToString().ToGoString(), "P13M30D"},
+		{"until week", a.Until(b, "week").ToString().ToGoString(), "P60W4D"},
+		{"since year negates until", a.Since(b, "year").ToString().ToGoString(), "-P1Y1M30D"},
+		{"since day negates until", a.Since(b, "day").ToString().ToGoString(), "-P424D"},
+		{"reversed until year", b.Until(a, "year").ToString().ToGoString(), "-P1Y1M29D"},
+		{"jan31 to feb29 year settles in days", mustPlainDate(t, 2020, 1, 31).Until(mustPlainDate(t, 2020, 2, 29), "year").ToString().ToGoString(), "P29D"},
+		{"feb29 to mar1 month", mustPlainDate(t, 2020, 2, 29).Until(mustPlainDate(t, 2020, 3, 1), "month").ToString().ToGoString(), "P1D"},
+		{"long span year", mustPlainDate(t, 2000, 1, 1).Until(mustPlainDate(t, 2025, 6, 15), "year").ToString().ToGoString(), "P25Y5M14D"},
+		{"within a month", mustPlainDate(t, 2020, 6, 10).Until(mustPlainDate(t, 2020, 6, 25), "month").ToString().ToGoString(), "P15D"},
+		{"year boundary as year", mustPlainDate(t, 2020, 12, 31).Until(mustPlainDate(t, 2021, 1, 1), "year").ToString().ToGoString(), "P1D"},
+		{"since across months", mustPlainDate(t, 2024, 3, 31).Since(mustPlainDate(t, 2024, 1, 31), "month").ToString().ToGoString(), "P2M"},
+		{"equal dates", a.Until(a, "year").ToString().ToGoString(), "PT0S"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// until and since throw when the two dates carry different calendars.
+	iso := mustPlainDate(t, 2020, 6, 1)
+	greg := PlainDateWithCalendar(mustPlainDate(t, 2020, 6, 15), "gregory")
+	if !bagThrows(func() { iso.Until(greg, "day") }) {
+		t.Error("until across two calendars did not throw")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()
