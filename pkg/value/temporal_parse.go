@@ -268,14 +268,17 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 	p.hasOffset = true
 }
 
-// scanAnnotations reads zero or more bracketed RFC 9557 annotations. A bracket that
-// carries a "key=value" pair whose key is "u-ca" names the calendar; a bracket with no
-// "=" is a time-zone annotation this parser records nothing from. A leading "!" marks a
-// critical annotation and is accepted the same way.
+// scanAnnotations reads zero or more bracketed RFC 9557 annotations. A bracket that carries
+// a "key=value" pair is an annotation whose key must match the annotation-key grammar (a
+// lowercase leading letter or underscore then lowercase letters, digits, underscores, or
+// hyphens); the "u-ca" key names the calendar and the first one wins, while any other key is
+// ignored unless a leading "!" marks it critical, in which case an unrecognised key is
+// rejected. A bracket with no "=" is a time-zone annotation this parser records nothing from
+// and accepts whether or not it is critical, since a Plain type drops the zone.
 func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
 	for sc.peek() == '[' {
 		sc.pos++
-		sc.accept('!')
+		critical := sc.accept('!')
 		start := sc.pos
 		for !sc.atEnd() && sc.s[sc.pos] != ']' {
 			sc.pos++
@@ -288,15 +291,50 @@ func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
 		if body == "" {
 			return false
 		}
-		if eq := strings.IndexByte(body, '='); eq >= 0 {
-			key := body[:eq]
-			val := body[eq+1:]
-			if key == "u-ca" {
-				if val == "" {
-					return false
-				}
-				p.calendar = val
+		eq := strings.IndexByte(body, '=')
+		if eq < 0 {
+			continue // a time-zone annotation, dropped by every Plain type
+		}
+		key := body[:eq]
+		val := body[eq+1:]
+		if !validAnnotationKey(key) {
+			return false
+		}
+		if key == "u-ca" {
+			if val == "" {
+				return false
 			}
+			if p.calendar == "" {
+				p.calendar = val // the first calendar annotation wins
+			}
+			continue
+		}
+		if critical {
+			return false // a critical annotation whose key is not understood is an error
+		}
+	}
+	return true
+}
+
+// validAnnotationKey reports whether key matches the RFC 9557 annotation-key grammar: a
+// leading lowercase letter or underscore followed by lowercase letters, digits, underscores,
+// or hyphens. An uppercase or otherwise out-of-grammar key, such as "U-CA" or "FOO", makes the
+// annotation, and so the whole string, invalid.
+func validAnnotationKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		lead := (c >= 'a' && c <= 'z') || c == '_'
+		if i == 0 {
+			if !lead {
+				return false
+			}
+			continue
+		}
+		if !lead && (c < '0' || c > '9') && c != '-' {
+			return false
 		}
 	}
 	return true
