@@ -1,8 +1,7 @@
-// PlainDate arithmetic hands back in this slice: add and subtract need a Duration and
-// the ISO date math to balance overflowing fields, until and since return a Duration,
-// and with reshapes through a property bag. Each waits on the Duration type and the
-// calendar field math, so the compiler reports the ceiling rather than emit a wrong
-// date.
+// PlainDate difference hands back in this slice: until and since return the Duration
+// between two dates, which needs the calendar field math to balance years, months, and
+// days from the largest unit down. It waits on that difference model, so the compiler
+// reports the ceiling rather than emit a wrong Duration. add and subtract already lower.
 const d = new Temporal.PlainDate(2020, 2, 29);
-const later = d.add({ days: 1 });
-console.log(later.day);
+const gap = d.until(new Temporal.PlainDate(2021, 3, 1));
+console.log(gap.days);

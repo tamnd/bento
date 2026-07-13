@@ -834,6 +834,27 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "PlainDateWithCalendar"), Args: []ast.Expr{recv, calendarLit(cal)}}, nil
+	case "add", "subtract":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " takes at least one argument"}
+		}
+		what := "Temporal.PlainDate.prototype." + method
+		dur, err := r.durationArg(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		if method == "subtract" {
+			dur = &ast.CallExpr{Fun: &ast.SelectorExpr{X: dur, Sel: ident("Negated")}}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDate")}, Args: []ast.Expr{dur, stringLit(overflow)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " is a later slice"}
 	}

@@ -208,6 +208,65 @@ func isoToEpochDays(year, month, day int) int {
 	return era*146097 + doe - 719468
 }
 
+// floorDiv returns the floor of a divided by b for a positive divisor b, which Go's
+// truncating division does not give for a negative dividend. It is used to carry a month
+// count into a year, where the intermediate month can be negative.
+func floorDiv(a, b int) int {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
+}
+
+// addISODate applies the specification's AddISODate: it adds years, months, weeks, and days
+// to an ISO date under the overflow rule and returns the balanced date. Years and months carry
+// into the year through BalanceISOYearMonth, then the original day is regulated against the new
+// month, clamped to the month end under constrain or throwing a RangeError under reject when it
+// does not fit. Weeks fold into days at seven each, and the days balance through the epoch-day
+// count so a day past the month end rolls into the following months. The days argument is a
+// big.Int because the caller has already folded the duration's time part into a whole-day carry
+// that can exceed an int.
+func addISODate(year, month, day, years, months, weeks int, days *big.Int, overflow string) (int, int, int) {
+	inMonth := month + months
+	y := year + years + floorDiv(inMonth-1, 12)
+	m := (inMonth - 1) % 12
+	if m < 0 {
+		m += 12
+	}
+	m++
+	d := day
+	if dim := isoDaysInMonth(y, m); d > dim {
+		if overflow == timeOverflowReject {
+			Throw(NewRangeError(FromGoString("Temporal.PlainDate day is out of range for the month")))
+		}
+		d = dim
+	}
+	e := big.NewInt(int64(isoToEpochDays(y, m, d)))
+	e.Add(e, big.NewInt(int64(weeks)*7))
+	e.Add(e, days)
+	if !e.IsInt64() {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+	}
+	return epochDaysToISO(int(e.Int64()))
+}
+
+// AddDate implements Temporal.PlainDate.prototype.add and, over a negated Duration, subtract.
+// A PlainDate has no clock, so the duration's time components fold into a whole-day carry
+// truncated toward zero and the sub-day remainder is dropped; that carry joins the duration's
+// days, and the years, months, weeks, and days add through addISODate under the overflow rule.
+// The result keeps the receiver's calendar, whose year and era re-derive from the moved ISO
+// date, and an out-of-range result throws a RangeError.
+func (pd *PlainDate) AddDate(dur *Duration, overflow string) *PlainDate {
+	days := new(big.Int).Quo(durationTimeNanos(dur), nsPerDay)
+	days.Add(days, big.NewInt(int64(dur.days)))
+	y, m, d := addISODate(pd.year, pd.month, pd.day, int(dur.years), int(dur.months), int(dur.weeks), days, overflow)
+	if !isoDateWithinLimits(y, m, d) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+	}
+	return &PlainDate{year: y, month: m, day: d, cal: pd.cal}
+}
+
 // displayYear returns the year the calendar counts, which the year getter reports and
 // the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
 // and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year
@@ -614,14 +673,24 @@ func (pt *PlainTime) With(hour, minute, second, millisecond, microsecond, nanose
 // hour field can be up to 2^53 and hours-to-nanoseconds overflows int64.
 func (pt *PlainTime) AddDuration(dur *Duration) *PlainTime {
 	total := pt.dayNanos()
+	total.Add(total, durationTimeNanos(dur))
+	total.Mod(total, nsPerDay)
+	return plainTimeFromDayNanos(total)
+}
+
+// durationTimeNanos folds a Duration's six time components, hours through nanoseconds, into a
+// single nanosecond count in big.Int. The calendar components (years, months, weeks, days) are
+// ignored; a caller that needs the whole-day carry the time part contributes divides this by
+// nsPerDay. The wall-clock arithmetic and the date arithmetic both fold the time part this way.
+func durationTimeNanos(dur *Duration) *big.Int {
+	total := new(big.Int)
 	total.Add(total, bigMulInt(dur.hours, 3_600_000_000_000))
 	total.Add(total, bigMulInt(dur.minutes, 60_000_000_000))
 	total.Add(total, bigMulInt(dur.seconds, 1_000_000_000))
 	total.Add(total, bigMulInt(dur.milliseconds, 1_000_000))
 	total.Add(total, bigMulInt(dur.microseconds, 1_000))
 	total.Add(total, bigMulInt(dur.nanoseconds, 1))
-	total.Mod(total, nsPerDay)
-	return plainTimeFromDayNanos(total)
+	return total
 }
 
 // dayNanos folds the receiver's six fields into the nanosecond count since midnight, in

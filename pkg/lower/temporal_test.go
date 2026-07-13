@@ -91,6 +91,43 @@ console.log(c.day);`
 	}
 }
 
+// TestPlainDateAddSubtract pins the arithmetic: add routes to AddDate with the constrain
+// default carried as a string, subtract negates the Duration first, and an explicit reject
+// overflow rides through as the string argument.
+func TestPlainDateAddSubtract(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "add a bag with the constrain default",
+			src:   "const d = new Temporal.PlainDate(2020, 1, 31);\nconst e = d.add({ months: 1 });\nconsole.log(e.day);",
+			wants: []string{".AddDate(", "value.NewDuration(", `"constrain"`},
+		},
+		{
+			name:  "subtract negates the Duration",
+			src:   "const d = new Temporal.PlainDate(2020, 3, 31);\nconst e = d.subtract({ months: 1 });\nconsole.log(e.day);",
+			wants: []string{".AddDate(", ".Negated()", `"constrain"`},
+		},
+		{
+			name:  "add with an explicit reject overflow",
+			src:   "const d = new Temporal.PlainDate(2020, 1, 31);\nconst e = d.add({ months: 1 }, { overflow: \"reject\" });\nconsole.log(e.day);",
+			wants: []string{".AddDate(", `"reject"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
 // and conversion methods, from over a dynamic string or a property bag, and the other
 // Temporal types each hand back with a reason naming where the work belongs.
@@ -101,9 +138,9 @@ func TestPlainDateHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "add arithmetic",
-			src:  "const d = new Temporal.PlainDate(2020, 2, 29);\nconst e = d.add({ days: 1 });\nconsole.log(e.day);",
-			want: "Temporal.PlainDate.prototype.add is a later slice",
+			name: "add over a dynamic string",
+			src:  "function at(s: string) { return new Temporal.PlainDate(2020, 2, 29).add(s).day; }\nconsole.log(at(\"P1D\"));",
+			want: "Temporal.PlainDate.prototype.add over an argument that is not a Duration, a duration-like bag of numbers, or a string literal is a later slice",
 		},
 		{
 			name: "from a property bag",
