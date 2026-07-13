@@ -1514,3 +1514,69 @@ func TestRocPlainDateTime(t *testing.T) {
 		t.Errorf("withCalendar id = %q, want roc", got)
 	}
 }
+
+// TestJapaneseCalendar checks the japanese calendar against @js-temporal/polyfill. Its year,
+// month, and day match ISO, but its era is a nengo resolved from the whole date. The modern
+// eras each begin on a fixed day, so the era turns at that day: 1989-01-07 is showa 64 and
+// 1989-01-08 heisei 1. Before Meiji begins on 1868-09-08 the era falls back to "japanese"
+// mirroring the ISO year, and below year 1 to "japanese-inverse".
+func TestJapaneseCalendar(t *testing.T) {
+	j := NewPlainDateCal(2024, 6, 30, "japanese")
+	if got := j.CalendarId().ToGoString(); got != "japanese" {
+		t.Errorf("CalendarId = %q, want japanese", got)
+	}
+	if j.Year() != 2024 || j.Month() != 6 || j.Day() != 30 {
+		t.Errorf("fields = %v-%v-%v, want 2024-6-30", j.Year(), j.Month(), j.Day())
+	}
+	if j.Era().Get().ToGoString() != "reiwa" || j.EraYear().Get() != 6 {
+		t.Errorf("2024 = %v %v, want reiwa 6", j.Era(), j.EraYear())
+	}
+	if got := j.ToString().ToGoString(); got != "2024-06-30[u-ca=japanese]" {
+		t.Errorf("ToString = %q", got)
+	}
+
+	// Each nengo boundary: the start day and the day before.
+	cases := []struct {
+		y, m, d int
+		era     string
+		eraYear float64
+	}{
+		{2019, 5, 1, "reiwa", 1},
+		{2019, 4, 30, "heisei", 31},
+		{1989, 1, 8, "heisei", 1},
+		{1989, 1, 7, "showa", 64},
+		{1926, 12, 25, "showa", 1},
+		{1926, 12, 24, "taisho", 15},
+		{1912, 7, 30, "taisho", 1},
+		{1912, 7, 29, "meiji", 45},
+		{1868, 9, 8, "meiji", 1},
+		{1868, 9, 7, "japanese", 1868},
+		{1000, 1, 1, "japanese", 1000},
+		{1, 1, 1, "japanese", 1},
+		{0, 1, 1, "japanese-inverse", 1},
+		{-5, 6, 15, "japanese-inverse", 6},
+	}
+	for _, c := range cases {
+		d := NewPlainDateCal(float64(c.y), float64(c.m), float64(c.d), "japanese")
+		if d.Era().Get().ToGoString() != c.era || d.EraYear().Get() != c.eraYear {
+			t.Errorf("%d-%d-%d = %v %v, want %s %v", c.y, c.m, c.d, d.Era(), d.EraYear(), c.era, c.eraYear)
+		}
+	}
+}
+
+// TestJapanesePlainDateTime checks japanese on PlainDateTime: it delegates the nengo era to
+// its date half, so a date-time on a boundary reads the same era its date would, and it
+// trails the annotation after the time.
+func TestJapanesePlainDateTime(t *testing.T) {
+	dt := NewPlainDateTimeCal(1989, 1, 8, 0, 0, 0, 0, 0, 0, "japanese")
+	if dt.Era().Get().ToGoString() != "heisei" || dt.EraYear().Get() != 1 {
+		t.Errorf("1989-01-08 = %v %v, want heisei 1", dt.Era(), dt.EraYear())
+	}
+	if got := dt.ToString().ToGoString(); got != "1989-01-08T00:00:00[u-ca=japanese]" {
+		t.Errorf("ToString = %q", got)
+	}
+	wc := PlainDateTimeWithCalendar(NewPlainDateTime(2024, 6, 30, 12, 0, 0, 0, 0, 0), "japanese")
+	if wc.Era().Get().ToGoString() != "reiwa" {
+		t.Errorf("withCalendar era = %v, want reiwa", wc.Era())
+	}
+}

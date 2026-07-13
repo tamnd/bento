@@ -62,6 +62,8 @@ func canonicalCalendar(id string) (string, bool) {
 		return "gregory", true
 	case "roc":
 		return "roc", true
+	case "japanese":
+		return "japanese", true
 	default:
 		return "", false
 	}
@@ -207,8 +209,9 @@ func isoToEpochDays(year, month, day int) int {
 }
 
 // displayYear returns the year the calendar counts, which the year getter reports and
-// the era split turns on. It matches the ISO year for iso8601 and gregory; roc, the
-// Minguo calendar, counts from 1912, so its year is the ISO year minus 1911.
+// the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
+// and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year
+// minus 1911.
 func (pd *PlainDate) displayYear() int {
 	if pd.cal == "roc" {
 		return pd.year - 1911
@@ -250,7 +253,7 @@ func (pd *PlainDate) calendarID() string {
 	return pd.cal
 }
 
-// CalendarId returns the calendar identifier, "iso8601", "gregory", or "roc".
+// CalendarId returns the calendar identifier, "iso8601", "gregory", "roc", or "japanese".
 func (pd *PlainDate) CalendarId() BStr { return FromGoString(pd.calendarID()) }
 
 // MonthCode returns the ISO month code, "M" followed by the two-digit month. The
@@ -295,12 +298,47 @@ func (pd *PlainDate) MonthsInYear() float64 { return 12 }
 // InLeapYear reports whether this date's year is an ISO leap year.
 func (pd *PlainDate) InLeapYear() bool { return isLeapISO(pd.year) }
 
+// japaneseEra returns the Japanese era name and the year within that era for an ISO
+// date. The modern nengo each begin on a fixed proleptic-Gregorian day, so the era turns
+// on the whole date, not just the year: 1989-01-07 is the last day of showa and
+// 1989-01-08 the first of heisei. Each era numbers its first Gregorian year as year 1,
+// so its era year is the ISO year minus the era's base year plus one. Before Meiji begins
+// on 1868-09-08 the calendar has no nengo, so it falls back to a "japanese" era that
+// mirrors the ISO year and splits at year 1 into "japanese" and "japanese-inverse" the
+// way gregory splits its own timeline.
+func japaneseEra(year, month, day int) (string, int) {
+	eras := []struct {
+		y, m, d int
+		name    string
+		base    int
+	}{
+		{2019, 5, 1, "reiwa", 2019},
+		{1989, 1, 8, "heisei", 1989},
+		{1926, 12, 25, "showa", 1926},
+		{1912, 7, 30, "taisho", 1912},
+		{1868, 9, 8, "meiji", 1868},
+	}
+	for _, e := range eras {
+		if year > e.y || (year == e.y && (month > e.m || (month == e.m && day >= e.d))) {
+			return e.name, year - e.base + 1
+		}
+	}
+	if year >= 1 {
+		return "japanese", year
+	}
+	return "japanese-inverse", 1 - year
+}
+
 // Era implements Temporal.PlainDate.prototype.era. The ISO 8601 calendar has no era,
-// so the getter the checker types string | undefined is undefined under ISO. A calendar
-// that has one splits its timeline at its own year 1: a display year of 1 or above is
-// the base era and a display year of 0 or below the "-inverse" era. gregory splits at
-// ISO year 1, roc at ISO year 1912, since roc counts from 1912.
+// so the getter the checker types string | undefined is undefined under ISO. gregory and
+// roc split their timeline at their own year 1: a display year of 1 or above is the base
+// era and 0 or below the "-inverse" era, gregory at ISO year 1 and roc at ISO year 1912.
+// japanese resolves its era from the whole date against the nengo table.
 func (pd *PlainDate) Era() Opt[BStr] {
+	if pd.cal == "japanese" {
+		name, _ := japaneseEra(pd.year, pd.month, pd.day)
+		return Some(FromGoString(name))
+	}
 	base, ok := calendarEraBase(pd.cal)
 	if !ok {
 		return None[BStr]()
@@ -312,11 +350,15 @@ func (pd *PlainDate) Era() Opt[BStr] {
 }
 
 // EraYear implements Temporal.PlainDate.prototype.eraYear, the year counted within the
-// era. It is undefined under ISO; under a calendar with an era it is the display year
-// itself in the base era and 1 minus the display year in the "-inverse" era. So under
-// gregory ISO year 0 is eraYear 1, and under roc ISO year 1911 (roc year 0) is eraYear
-// 1 in the "roc-inverse" era.
+// era. It is undefined under ISO; under gregory or roc it is the display year itself in
+// the base era and 1 minus the display year in the "-inverse" era, so under gregory ISO
+// year 0 is eraYear 1 and under roc ISO year 1911 (roc year 0) is eraYear 1 in the
+// "roc-inverse" era. japanese counts within the nengo the date falls in.
 func (pd *PlainDate) EraYear() Opt[float64] {
+	if pd.cal == "japanese" {
+		_, eraYear := japaneseEra(pd.year, pd.month, pd.day)
+		return Some(float64(eraYear))
+	}
 	if _, ok := calendarEraBase(pd.cal); !ok {
 		return None[float64]()
 	}
