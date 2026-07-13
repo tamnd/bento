@@ -1126,7 +1126,9 @@ func (r *Renderer) plainDateStaticCall(method string, argNodes []frontend.Node) 
 
 // plainTimeStaticCall lowers Temporal.PlainTime.compare(a, b) or Temporal.PlainTime.from(x),
 // the mirror of the PlainDate statics. compare lowers to value.PlainTimeCompare; from lowers
-// to value.PlainTimeFrom for a PlainTime argument and hands back for a string or a bag.
+// to value.PlainTimeFrom for a PlainTime argument and to value.PlainTimeFromString for a
+// string literal. A PlainTime carries no calendar, so unlike the PlainDate from there is no
+// calendar gate on the literal. A dynamic string or a property bag hands back for a later slice.
 func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
@@ -1150,15 +1152,19 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from with options is a later slice"}
 		}
-		if !r.isPlainTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a string or a property bag is a later slice"}
+		if r.isPlainTime(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainTimeFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "PlainTimeFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a dynamic string or a property bag is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime." + method + " is a later slice"}
 	}
