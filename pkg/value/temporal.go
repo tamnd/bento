@@ -429,6 +429,15 @@ func (pd *PlainDate) ToPlainYearMonth() *PlainYearMonth {
 	return &PlainYearMonth{year: pd.year, month: pd.month, cal: pd.cal}
 }
 
+// ToPlainMonthDay implements Temporal.PlainDate.prototype.toPlainMonthDay: it narrows the date
+// to its month and day, dropping the year, under the date's own calendar. The result keeps
+// that calendar, so a non-ISO month-day carries the leap reference year 1972 and the annotation
+// in its toString. The four hosted calendars share the ISO month structure, so the month and
+// day pass through unchanged.
+func (pd *PlainDate) ToPlainMonthDay() *PlainMonthDay {
+	return &PlainMonthDay{month: pd.month, day: pd.day, cal: pd.cal}
+}
+
 // displayYear returns the year the calendar counts, which the year getter reports and
 // the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
 // and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year
@@ -1471,8 +1480,9 @@ func (ym *PlainYearMonth) ToJSON() BStr { return ym.ToString() }
 // to admit February 29, so this type stores the month and day and validates against the fixed
 // leap reference year without keeping it.
 type PlainMonthDay struct {
-	month int // 1..12
-	day   int // 1..isoDaysInMonth(monthDayReferenceYear, month)
+	month int    // 1..12
+	day   int    // 1..isoDaysInMonth(monthDayReferenceYear, month)
+	cal   string // calendar id; "" reads as iso8601
 }
 
 // monthDayReferenceYear is the ISO year a PlainMonthDay is validated against, 1972, a leap
@@ -1528,19 +1538,41 @@ func (md *PlainMonthDay) MonthCode() BStr {
 // Day returns the ISO day of the month.
 func (md *PlainMonthDay) Day() float64 { return float64(md.day) }
 
-// CalendarId returns the calendar identifier, always "iso8601" for this slice.
-func (md *PlainMonthDay) CalendarId() BStr { return FromGoString("iso8601") }
-
-// Equals implements Temporal.PlainMonthDay.prototype.equals: two month-days are equal when
-// their month and day match under the same (ISO) calendar.
-func (md *PlainMonthDay) Equals(other *PlainMonthDay) bool {
-	return md.month == other.month && md.day == other.day
+// calendarID maps the empty stored calendar to "iso8601" so a month-day built without a
+// calendar reads as ISO.
+func (md *PlainMonthDay) calendarID() string {
+	if md.cal == "" {
+		return "iso8601"
+	}
+	return md.cal
 }
 
-// ToString implements Temporal.PlainMonthDay.prototype.toString for the default options:
-// the ISO 8601 month-day, MM-DD. The ISO calendar hides the reference year, so no year
-// appears.
+// CalendarId returns the calendar identifier, "iso8601", "gregory", "roc", or "japanese".
+func (md *PlainMonthDay) CalendarId() BStr { return FromGoString(md.calendarID()) }
+
+// calendarAnnotation returns the RFC 9557 calendar suffix a non-ISO calendar appends to a
+// toString, "[u-ca=<id>]", or "" for the ISO calendar, which prints no annotation.
+func (md *PlainMonthDay) calendarAnnotation() string {
+	if md.cal == "" || md.cal == "iso8601" {
+		return ""
+	}
+	return "[u-ca=" + md.cal + "]"
+}
+
+// Equals implements Temporal.PlainMonthDay.prototype.equals: two month-days are equal when
+// their month and day match under the same calendar.
+func (md *PlainMonthDay) Equals(other *PlainMonthDay) bool {
+	return md.month == other.month && md.day == other.day && md.calendarID() == other.calendarID()
+}
+
+// ToString implements Temporal.PlainMonthDay.prototype.toString for the default options. The
+// ISO calendar prints MM-DD, hiding the reference year. A non-ISO calendar prints the full ISO
+// reference date, the leap reference year 1972 followed by the month and day, then its
+// "[u-ca=<id>]" annotation, so the calendar can resolve which day the pair falls on.
 func (md *PlainMonthDay) ToString() BStr {
+	if ann := md.calendarAnnotation(); ann != "" {
+		return FromGoString(formatISOYear(monthDayReferenceYear) + "-" + twoDigit(md.month) + "-" + twoDigit(md.day) + ann)
+	}
 	return FromGoString(twoDigit(md.month) + "-" + twoDigit(md.day))
 }
 
