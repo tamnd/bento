@@ -377,6 +377,38 @@ func (pd *PlainDate) Since(other *PlainDate, largestUnit string) *Duration {
 	return plainDateDifference(pd, other, largestUnit).Negated()
 }
 
+// WithFields implements Temporal.PlainDate.prototype.with: it lays the bag's present year,
+// month, and day over the receiver's own fields and regulates the result with the overflow
+// option, so an omitted field keeps its current value. The year is read in the receiver's
+// calendar reckoning, so under roc a bag year maps back to the ISO year the date stores by
+// adding 1911; the other hosted calendars count the ISO year directly. Under constrain the
+// month clamps to 1..12 and the day to that month's length, so with month 2 over January 31
+// lands on the last day of February; under reject an out-of-range field throws a RangeError.
+// monthCode and the era fields are not read here, the lowerer hands back a bag that carries
+// them. The receiver is unchanged.
+func (pd *PlainDate) WithFields(year, month, day Opt[float64], overflow string) *PlainDate {
+	calYear := toIntegerWithTruncation(year.Or(float64(pd.displayYear())))
+	m := toIntegerWithTruncation(month.Or(float64(pd.month)))
+	d := toIntegerWithTruncation(day.Or(float64(pd.day)))
+	isoYear := calYear
+	if pd.cal == "roc" {
+		isoYear = calYear + 1911
+	}
+	if overflow == timeOverflowReject {
+		rejectISODate(isoYear, m, d)
+	} else {
+		m = clampFloat(m, 1, 12)
+		if isoYear < -271821 || isoYear > 275760 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+		}
+		d = clampFloat(d, 1, float64(isoDaysInMonth(int(isoYear), int(m))))
+	}
+	if !isoDateWithinLimits(int(isoYear), int(m), int(d)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+	}
+	return &PlainDate{year: int(isoYear), month: int(m), day: int(d), cal: pd.cal}
+}
+
 // displayYear returns the year the calendar counts, which the year getter reports and
 // the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
 // and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year

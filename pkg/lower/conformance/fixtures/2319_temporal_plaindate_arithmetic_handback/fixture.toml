@@ -1,2 +1,2 @@
 feature = "Temporal"
-handback = "Temporal.PlainDate.prototype.with is a later slice"
+handback = "Temporal.PlainDate.prototype.toPlainDateTime is a later slice"
