@@ -1,7 +1,6 @@
-// PlainDate.toZonedDateTime pins a date to a time zone, resolving the wall-clock instant, which
-// a later slice carries. It hands back here so the compiler reports the ceiling rather than emit
-// a wrong value. add, subtract, until, since, with, toPlainDateTime, toPlainYearMonth, and
-// toPlainMonthDay already lower.
+// PlainDate.toLocaleString formats a date for a locale, which needs the Intl machinery a later
+// slice carries. It hands back here so the compiler reports the ceiling rather than emit a wrong
+// value. add, subtract, until, since, with, and the four conversions toPlainDateTime,
+// toPlainYearMonth, toPlainMonthDay, and toZonedDateTime already lower.
 const d = new Temporal.PlainDate(2020, 2, 29);
-const z = d.toZonedDateTime("UTC");
-console.log(z.epochMilliseconds);
+console.log(d.toLocaleString());
