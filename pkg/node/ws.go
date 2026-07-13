@@ -84,9 +84,13 @@ func (w *wsBridgeState) connect(args []any) (any, error) {
 	w.pool(func() {
 		conn, br, proto, err := w.handshake(raw, protocols)
 		if err != nil {
-			w.loop.Post(func() { w.loop.Unref() })
+			// Drop the loop reference only after the error and close events are
+			// queued. Posting the Unref first lets Run observe refs at zero with an
+			// empty queue in the window before the events land and exit before the
+			// handlers run.
 			w.emit("__bento_ws_dispatchError", id, err.Error())
 			w.emit("__bento_ws_dispatchClose", id, int64(1006), "")
+			w.loop.Post(func() { w.loop.Unref() })
 			return
 		}
 		wc := &wsConn{id: id, conn: conn, writes: make(chan wsOutFrame, 64)}
@@ -318,8 +322,12 @@ done:
 	delete(w.conns, wc.id)
 	w.mu.Unlock()
 	_ = wc.conn.Close()
-	w.loop.Post(func() { w.loop.Unref() })
+	// Emit the close event before dropping the loop reference. The reference has to
+	// outlive the event's enqueue: if the Unref is posted first, Run can wake, run
+	// it, see refs at zero with an empty queue, and exit before onclose runs, which
+	// dropped the clean-close event and made the client test flaky.
 	w.emit("__bento_ws_dispatchClose", wc.id, int64(code), reason)
+	w.loop.Post(func() { w.loop.Unref() })
 }
 
 // emitMessage posts a message event. Binary frames cross as base64 with the
