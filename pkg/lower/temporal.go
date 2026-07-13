@@ -1224,12 +1224,12 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 }
 
 // hostedCalendar reads a calendar-identifier argument the runtime hosts, the literal
-// "iso8601" or "gregory" a caller names on a constructor or withCalendar. It reads the
-// checker's literal type, so a const holding the id resolves the same as a bare literal,
-// lowercases it since identifiers are case-insensitive, and returns the canonical form.
-// It returns false for a dynamic string, whose value is unknown until run time, and for
-// a calendar bento does not host yet, so the caller hands both back rather than emit a
-// call the runtime would reject.
+// "iso8601", "gregory", or "roc" a caller names on a constructor or withCalendar. It
+// reads the checker's literal type, so a const holding the id resolves the same as a
+// bare literal, lowercases it since identifiers are case-insensitive, and returns the
+// canonical form. It returns false for a dynamic string, whose value is unknown until
+// run time, and for a calendar bento does not host yet, so the caller hands both back
+// rather than emit a call the runtime would reject.
 func (r *Renderer) hostedCalendar(node frontend.Node) (string, bool) {
 	id, ok := r.stringLiteralValue(node)
 	if !ok {
@@ -1240,6 +1240,8 @@ func (r *Renderer) hostedCalendar(node frontend.Node) (string, bool) {
 		return "iso8601", true
 	case "gregory":
 		return "gregory", true
+	case "roc":
+		return "roc", true
 	default:
 		return "", false
 	}
