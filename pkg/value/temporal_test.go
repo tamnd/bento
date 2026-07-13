@@ -449,6 +449,67 @@ func TestPlainTimeAddDuration(t *testing.T) {
 	}
 }
 
+// TestPlainTimeRound checks the wall-clock rounding: the six smallest units, an increment
+// above one, every rounding mode over a tie, and the wrap past midnight. The reject cases
+// throw a RangeError. The expected strings are taken from @js-temporal/polyfill.
+func TestPlainTimeRound(t *testing.T) {
+	base := mustPlainTime(t, 3, 34, 56, 987, 654, 321)
+	cases := []struct {
+		name      string
+		pt        *PlainTime
+		unit      string
+		increment float64
+		mode      string
+		want      string
+	}{
+		{"hour halfExpand", base, "hour", 1, "halfExpand", "04:00:00"},
+		{"minute", base, "minute", 1, "halfExpand", "03:35:00"},
+		{"second", base, "second", 1, "halfExpand", "03:34:57"},
+		{"millisecond", base, "millisecond", 1, "halfExpand", "03:34:56.988"},
+		{"microsecond", base, "microsecond", 1, "halfExpand", "03:34:56.987654"},
+		{"nanosecond", base, "nanosecond", 1, "halfExpand", "03:34:56.987654321"},
+		{"minute increment 15", base, "minute", 15, "halfExpand", "03:30:00"},
+		{"minute increment 30 ceil", base, "minute", 30, "ceil", "04:00:00"},
+		{"hour floor", base, "hour", 1, "floor", "03:00:00"},
+		{"hour trunc", base, "hour", 1, "trunc", "03:00:00"},
+		{"hour expand", base, "hour", 1, "expand", "04:00:00"},
+		{"wrap to next day", mustPlainTime(t, 23, 59, 0, 0, 0, 0), "hour", 1, "ceil", "00:00:00"},
+	}
+	for _, tc := range cases {
+		if got := tc.pt.Round(tc.unit, tc.increment, tc.mode).ToString().ToGoString(); got != tc.want {
+			t.Errorf("%s: round = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// The 3:30 tie resolves by mode: floor and the half-toward-low modes keep 03, the
+	// others advance to 04, and halfEven advances because 3 is odd.
+	tie := mustPlainTime(t, 3, 30, 0, 0, 0, 0)
+	ties := map[string]string{
+		"halfCeil": "04:00:00", "halfFloor": "03:00:00", "halfExpand": "04:00:00",
+		"halfTrunc": "03:00:00", "halfEven": "04:00:00",
+	}
+	for mode, want := range ties {
+		if got := tie.Round("hour", 1, mode).ToString().ToGoString(); got != want {
+			t.Errorf("3:30 %s: round = %q, want %q", mode, got, want)
+		}
+	}
+	// The 4:30 tie flips halfEven the other way, since 4 is even.
+	if got := mustPlainTime(t, 4, 30, 0, 0, 0, 0).Round("hour", 1, "halfEven").ToString().ToGoString(); got != "04:00:00" {
+		t.Errorf("4:30 halfEven: round = %q, want 04:00:00", got)
+	}
+
+	// An increment that does not divide the unit's dividend, or equals it, throws.
+	for _, inc := range []float64{5, 24} {
+		if !bagThrows(func() { base.Round("hour", inc, "halfExpand") }) {
+			t.Errorf("hour increment %v did not throw", inc)
+		}
+	}
+	// An increment below one throws.
+	if !bagThrows(func() { base.Round("minute", 0, "halfExpand") }) {
+		t.Error("minute increment 0 did not throw")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()

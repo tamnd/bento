@@ -3,6 +3,7 @@ package lower
 import (
 	"go/ast"
 	"go/token"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -912,6 +913,19 @@ func (r *Renderer) plainTimeMethodCall(recvNode frontend.Node, method string, ar
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDuration")}, Args: []ast.Expr{dur}}, nil
+	case "round":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype.round takes at least one argument"}
+		}
+		unit, increment, mode, err := r.plainTimeRoundOptions("Temporal.PlainTime.prototype.round", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{stringLit(unit), increment, stringLit(mode)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype." + method + " is a later slice"}
 	}
@@ -1404,6 +1418,86 @@ func (r *Renderer) durationBag(what string, n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewDuration"), Args: fields[:]}, nil
+}
+
+// plainTimeRoundUnits is the set of smallest units Temporal.PlainTime.prototype.round
+// accepts, from the largest to the smallest.
+var plainTimeRoundUnits = [6]string{"hour", "minute", "second", "millisecond", "microsecond", "nanosecond"}
+
+// plainTimeRoundModes is the set of rounding modes round accepts. The default when the
+// roundingMode option is absent is halfExpand.
+var plainTimeRoundModes = [9]string{"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven"}
+
+// plainTimeRoundOptions reads the options of Temporal.PlainTime.prototype.round at compile
+// time. The argument is either a smallestUnit string literal shorthand (t.round("hour")) or
+// an object literal carrying a required smallestUnit string literal, an optional
+// roundingIncrement number expression (default one), and an optional roundingMode string
+// literal (default halfExpand). A missing smallestUnit, an unknown key, a non-literal unit
+// or mode, or an out-of-set unit or mode hands back, since the value would then depend on
+// runtime data or a coercion this slice does not carry. The increment is emitted as an
+// expression so the runtime validates its range against the unit.
+func (r *Renderer) plainTimeRoundOptions(what string, argNodes []frontend.Node) (string, ast.Expr, string, error) {
+	if len(argNodes) != 1 {
+		return "", nil, "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	n := argNodes[0]
+	if lit, ok := r.stringLiteralValue(n); ok {
+		if !slices.Contains(plainTimeRoundUnits[:], lit) {
+			return "", nil, "", &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+		}
+		return lit, &ast.BasicLit{Kind: token.FLOAT, Value: "1"}, "halfExpand", nil
+	}
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", nil, "", &NotYetLowerable{Reason: what + " options that are neither a string nor an object literal are a later slice"}
+	}
+	unit := ""
+	var increment ast.Expr = &ast.BasicLit{Kind: token.FLOAT, Value: "1"}
+	mode := "halfExpand"
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", nil, "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", nil, "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "smallestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with a non-literal smallestUnit is a later slice"}
+			}
+			if !slices.Contains(plainTimeRoundUnits[:], lit) {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			unit = lit
+		case "roundingIncrement":
+			if !r.isNumber(kids[1]) {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with a non-number roundingIncrement is a later slice"}
+			}
+			val, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return "", nil, "", err
+			}
+			increment = val
+		case "roundingMode":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with a non-literal roundingMode is a later slice"}
+			}
+			if !slices.Contains(plainTimeRoundModes[:], lit) {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with the invalid roundingMode " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			mode = lit
+		default:
+			return "", nil, "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	if unit == "" {
+		return "", nil, "", &NotYetLowerable{Reason: what + " without a smallestUnit (a RangeError at run time) is a later slice"}
+	}
+	return unit, increment, mode, nil
 }
 
 // plainTimeStaticCall lowers Temporal.PlainTime.compare(a, b) or Temporal.PlainTime.from(x),
