@@ -855,9 +855,88 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDate")}, Args: []ast.Expr{dur, stringLit(overflow)}}, nil
+	case "until", "since":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " takes at least one argument"}
+		}
+		what := "Temporal.PlainDate.prototype." + method
+		if !r.isPlainDate(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainDate is a later slice"}
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		largestUnit, err := r.plainDateDifferenceOptions(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		fn := "Until"
+		if method == "since" {
+			fn = "Since"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(fn)}, Args: []ast.Expr{other, stringLit(largestUnit)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " is a later slice"}
 	}
+}
+
+// plainDateDifferenceUnits maps the calendar difference units, singular and plural, to the
+// singular form the runtime takes. "auto" resolves to "day", the default largestUnit.
+var plainDateDifferenceUnits = map[string]string{
+	"auto": "day", "year": "year", "years": "year", "month": "month", "months": "month",
+	"week": "week", "weeks": "week", "day": "day", "days": "day",
+}
+
+// plainDateDifferenceOptions reads the options of PlainDate.prototype.until and since at
+// compile time and returns the largestUnit, defaulting to day. It accepts largestUnit as a
+// string literal in the calendar-unit set. A smallestUnit, roundingIncrement, or roundingMode
+// would round the calendar duration, which needs the round-with-relativeTo machinery a later
+// slice carries, so any of those, a non-literal or out-of-set largestUnit, an unknown key, or
+// a spread or shorthand member hands back rather than emitting a wrong or partial result.
+func (r *Renderer) plainDateDifferenceOptions(what string, argNodes []frontend.Node) (string, error) {
+	largestUnit := "day"
+	if len(argNodes) == 0 {
+		return largestUnit, nil
+	}
+	if len(argNodes) != 1 {
+		return "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	n := argNodes[0]
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+	}
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "largestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", &NotYetLowerable{Reason: what + " with a non-literal largestUnit is a later slice"}
+			}
+			unit, ok := plainDateDifferenceUnits[lit]
+			if !ok {
+				return "", &NotYetLowerable{Reason: what + " with the invalid largestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			largestUnit = unit
+		case "smallestUnit", "roundingIncrement", "roundingMode":
+			return "", &NotYetLowerable{Reason: what + " with the rounding option " + key + " is a later slice"}
+		default:
+			return "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	return largestUnit, nil
 }
 
 // plainTimeMethodCall lowers a method call on a PlainTime receiver, the mirror of

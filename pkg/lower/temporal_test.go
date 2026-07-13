@@ -128,6 +128,48 @@ func TestPlainDateAddSubtract(t *testing.T) {
 	}
 }
 
+// TestPlainDateUntilSince pins the calendar date difference: until routes to Until with the
+// day default carried as a string, since routes to Since, and an explicit largestUnit rides
+// through as its singular string argument.
+func TestPlainDateUntilSince(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "until with the day default",
+			src:   "const a = new Temporal.PlainDate(2020, 1, 31);\nconst b = new Temporal.PlainDate(2021, 3, 30);\nconsole.log(a.until(b).days);",
+			wants: []string{".Until(", `"day"`},
+		},
+		{
+			name:  "since with the day default",
+			src:   "const a = new Temporal.PlainDate(2020, 1, 31);\nconst b = new Temporal.PlainDate(2021, 3, 30);\nconsole.log(b.since(a).days);",
+			wants: []string{".Since(", `"day"`},
+		},
+		{
+			name:  "until with an explicit largestUnit",
+			src:   "const a = new Temporal.PlainDate(2020, 1, 31);\nconst b = new Temporal.PlainDate(2021, 3, 30);\nconsole.log(a.until(b, { largestUnit: \"year\" }).months);",
+			wants: []string{".Until(", `"year"`},
+		},
+		{
+			name:  "since with a plural largestUnit normalized to singular",
+			src:   "const a = new Temporal.PlainDate(2020, 1, 31);\nconst b = new Temporal.PlainDate(2021, 3, 30);\nconsole.log(b.since(a, { largestUnit: \"months\" }).months);",
+			wants: []string{".Since(", `"month"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
 // and conversion methods, from over a dynamic string or a property bag, and the other
 // Temporal types each hand back with a reason naming where the work belongs.
@@ -141,6 +183,11 @@ func TestPlainDateHandBacks(t *testing.T) {
 			name: "add over a dynamic string",
 			src:  "function at(s: string) { return new Temporal.PlainDate(2020, 2, 29).add(s).day; }\nconsole.log(at(\"P1D\"));",
 			want: "Temporal.PlainDate.prototype.add over an argument that is not a Duration, a duration-like bag of numbers, or a string literal is a later slice",
+		},
+		{
+			name: "until with a rounding option",
+			src:  "const a = new Temporal.PlainDate(2020, 1, 31);\nconst b = new Temporal.PlainDate(2021, 3, 30);\nconsole.log(a.until(b, { smallestUnit: \"month\" }).months);",
+			want: "Temporal.PlainDate.prototype.until with the rounding option smallestUnit is a later slice",
 		},
 		{
 			name: "from a property bag",
