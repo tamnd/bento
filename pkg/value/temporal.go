@@ -421,6 +421,14 @@ func (pd *PlainDate) ToPlainDateTime(time *PlainTime) *PlainDateTime {
 	return &PlainDateTime{date: *pd, time: t}
 }
 
+// ToPlainYearMonth implements Temporal.PlainDate.prototype.toPlainYearMonth: it narrows the
+// date to its year and month, dropping the day, under the date's own calendar. The result
+// keeps that calendar, so its year getter and toString read in the calendar's reckoning and
+// a non-ISO year-month carries the reference day the first of the month.
+func (pd *PlainDate) ToPlainYearMonth() *PlainYearMonth {
+	return &PlainYearMonth{year: pd.year, month: pd.month, cal: pd.cal}
+}
+
 // displayYear returns the year the calendar counts, which the year getter reports and
 // the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
 // and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year
@@ -1289,8 +1297,9 @@ func (pdt *PlainDateTime) ToJSON() BStr { return pdt.ToString() }
 // calendar can resolve calendar-dependent fields, but the ISO calendar needs no reference,
 // so this type stores only the year and the month and derives every getter from them.
 type PlainYearMonth struct {
-	year  int // proleptic Gregorian year, may be negative or above 9999
-	month int // 1..12
+	year  int    // proleptic Gregorian (ISO) year, may be negative or above 9999
+	month int    // 1..12
+	cal   string // calendar id; "" reads as iso8601
 }
 
 // NewPlainYearMonth builds a PlainYearMonth from the constructor's two number arguments,
@@ -1347,14 +1356,43 @@ func isoYearMonthWithinLimits(year, month int) bool {
 	return true
 }
 
-// Year returns the ISO year.
-func (ym *PlainYearMonth) Year() float64 { return float64(ym.year) }
+// displayYear returns the year the calendar counts, the ISO year for iso8601, gregory, and
+// japanese, and the ISO year minus 1911 for roc, the Minguo calendar. It mirrors
+// PlainDate.displayYear so a year-month reports the same year the date it came from does.
+func (ym *PlainYearMonth) displayYear() int {
+	if ym.cal == "roc" {
+		return ym.year - 1911
+	}
+	return ym.year
+}
+
+// Year returns the year the calendar counts: the ISO year under iso8601, gregory, and
+// japanese, and the ISO year minus 1911 under roc.
+func (ym *PlainYearMonth) Year() float64 { return float64(ym.displayYear()) }
 
 // Month returns the ISO month, 1..12.
 func (ym *PlainYearMonth) Month() float64 { return float64(ym.month) }
 
-// CalendarId returns the calendar identifier, always "iso8601" for this slice.
-func (ym *PlainYearMonth) CalendarId() BStr { return FromGoString("iso8601") }
+// calendarID maps the empty stored calendar to "iso8601" so a year-month built without a
+// calendar reads as ISO.
+func (ym *PlainYearMonth) calendarID() string {
+	if ym.cal == "" {
+		return "iso8601"
+	}
+	return ym.cal
+}
+
+// CalendarId returns the calendar identifier, "iso8601", "gregory", "roc", or "japanese".
+func (ym *PlainYearMonth) CalendarId() BStr { return FromGoString(ym.calendarID()) }
+
+// calendarAnnotation returns the RFC 9557 calendar suffix a non-ISO calendar appends to a
+// toString, "[u-ca=<id>]", or "" for the ISO calendar, which prints no annotation.
+func (ym *PlainYearMonth) calendarAnnotation() string {
+	if ym.cal == "" || ym.cal == "iso8601" {
+		return ""
+	}
+	return "[u-ca=" + ym.cal + "]"
+}
 
 // MonthCode returns the ISO month code, "M" followed by the two-digit month. The ISO
 // calendar has no leap months, so the code never carries the trailing "L".
@@ -1386,7 +1424,7 @@ func (ym *PlainYearMonth) InLeapYear() bool { return isLeapISO(ym.year) }
 // Equals implements Temporal.PlainYearMonth.prototype.equals: two year-months are equal
 // when their year and month match under the same (ISO) calendar.
 func (ym *PlainYearMonth) Equals(other *PlainYearMonth) bool {
-	return ym.year == other.year && ym.month == other.month
+	return ym.year == other.year && ym.month == other.month && ym.calendarID() == other.calendarID()
 }
 
 // PlainYearMonthCompare implements Temporal.PlainYearMonth.compare, the static comparator:
@@ -1408,11 +1446,17 @@ func PlainYearMonthCompare(a, b *PlainYearMonth) float64 {
 	}
 }
 
-// ToString implements Temporal.PlainYearMonth.prototype.toString for the default options:
-// the ISO 8601 year-month, YYYY-MM, with the year expanded to a signed six-digit form
-// outside 0..9999. The ISO calendar hides the reference day, so no day appears.
+// ToString implements Temporal.PlainYearMonth.prototype.toString for the default options.
+// The ISO calendar prints YYYY-MM, the year expanded to a signed six-digit form outside
+// 0..9999 and the reference day hidden. A non-ISO calendar prints the full ISO reference
+// date YYYY-MM-DD followed by its "[u-ca=<id>]" annotation; the four hosted calendars align
+// their months with ISO months, so the reference day is the first of the month.
 func (ym *PlainYearMonth) ToString() BStr {
-	return FromGoString(formatISOYear(ym.year) + "-" + twoDigit(ym.month))
+	core := formatISOYear(ym.year) + "-" + twoDigit(ym.month)
+	if ann := ym.calendarAnnotation(); ann != "" {
+		return FromGoString(core + "-01" + ann)
+	}
+	return FromGoString(core)
 }
 
 // ToJSON implements Temporal.PlainYearMonth.prototype.toJSON, the same ISO string toString
