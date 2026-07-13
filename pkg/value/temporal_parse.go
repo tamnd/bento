@@ -19,6 +19,7 @@ type isoParse struct {
 	millisecond, microsecond, nanosecond int
 	hasZ                                 bool   // a Z (UTC) designator followed the time
 	hasOffset                            bool   // a numeric UTC offset followed the time
+	offsetNanoseconds                    int64  // the signed offset in nanoseconds, valid when hasOffset
 	calendar                             string // the raw [u-ca=id] value, "" when none was given
 }
 
@@ -228,22 +229,28 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 		return
 	}
 	save := sc.pos
+	sign := int64(1)
+	if sc.s[sc.pos] == '-' {
+		sign = -1
+	}
 	sc.pos++ // the sign
-	if h, ok := sc.digits(2); !ok || h > 23 {
+	hour, ok := sc.digits(2)
+	if !ok || hour > 23 {
 		sc.pos = save
 		return
 	}
 	// Minutes and seconds follow either extended with ":" separators or basic as two
-	// more digit pairs, each in 0..59. The offset value does not matter to a Plain type,
-	// so only its shape is validated before hasOffset is recorded.
+	// more digit pairs, each in 0..59. The values feed an Instant's offset arithmetic; a
+	// Plain type keeps only the shape and drops the value.
+	var minute, second int
 	haveSecond := false
 	if sc.accept(':') {
-		if m, ok := sc.digits(2); !ok || m > 59 {
+		if minute, ok = sc.digits(2); !ok || minute > 59 {
 			sc.pos = save
 			return
 		}
 		if sc.accept(':') {
-			if s, ok := sc.digits(2); !ok || s > 59 {
+			if second, ok = sc.digits(2); !ok || second > 59 {
 				sc.pos = save
 				return
 			}
@@ -255,11 +262,13 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 				sc.pos = save
 				return
 			}
+			minute = m
 			if s, ok := sc.digits(2); ok {
 				if s > 59 {
 					sc.pos = save
 					return
 				}
+				second = s
 				haveSecond = true
 			}
 		}
@@ -268,6 +277,7 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 	// digits like the time fraction. A fraction without a seconds field, a separator with no
 	// digit, or a tenth digit is left unconsumed here, so the caller's end-of-input check
 	// rejects it, matching the grammar which permits a fraction only on the seconds.
+	fracNanos := int64(0)
 	if haveSecond {
 		if c := sc.peek(); c == '.' || c == ',' {
 			mark := sc.pos
@@ -278,9 +288,18 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 			}
 			if sc.pos == start {
 				sc.pos = mark // no fraction digit followed the separator
+			} else {
+				digits := sc.s[start:sc.pos]
+				for len(digits) < 9 {
+					digits += "0"
+				}
+				for i := 0; i < 9; i++ {
+					fracNanos = fracNanos*10 + int64(digits[i]-'0')
+				}
 			}
 		}
 	}
+	p.offsetNanoseconds = sign * ((int64(hour)*3600+int64(minute)*60+int64(second))*1_000_000_000 + fracNanos)
 	p.hasOffset = true
 }
 

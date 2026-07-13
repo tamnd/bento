@@ -233,6 +233,50 @@ func TestPlainDateTimeFromStringThrows(t *testing.T) {
 	}
 }
 
+// TestInstantFromString pins the string parser feeding Temporal.Instant.from: the wall-clock
+// reading is taken as UTC and the offset is subtracted to reach the epoch count, a Z designator
+// is a zero offset, a sub-minute offset shifts the seconds, and a calendar annotation is ignored,
+// all against @js-temporal/polyfill.
+func TestInstantFromString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"},
+		{"2020-01-01T12:30:45-05:00", "2020-01-01T17:30:45Z"},
+		{"2020-01-01T12:30:45.123456789+01:00", "2020-01-01T11:30:45.123456789Z"},
+		{"2020-01-01T00:00:00-05:00[America/New_York]", "2020-01-01T05:00:00Z"},
+		{"2020-01-01T00:00:00+05:00:30", "2019-12-31T18:59:30Z"},
+		{"19700101T000000Z", "1970-01-01T00:00:00Z"},
+		{"2020-01-01T00Z", "2020-01-01T00:00:00Z"},
+		{"-000001-01-01T00:00:00Z", "-000001-01-01T00:00:00Z"},
+		{"2020-01-01T00:00:00Z[u-ca=hebrew]", "2020-01-01T00:00:00Z"},
+		{"2020-01-01 00:00:00+00:00", "2020-01-01T00:00:00Z"},
+	}
+	for _, c := range cases {
+		if got := InstantFromString(c.in).ToString().ToGoString(); got != c.want {
+			t.Errorf("InstantFromString(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestInstantFromStringThrows pins the strings Instant.from rejects: a date-only or offset-less
+// string, a grammar violation, a count past the Instant range, and a critical non-calendar
+// annotation each throw a RangeError, all against @js-temporal/polyfill.
+func TestInstantFromStringThrows(t *testing.T) {
+	bad := []string{
+		"2020-01-01", "2020-01-01T00:00:00", "2020-01-01T24:00:00Z",
+		"not-a-date", "+275760-09-14T00:00:00Z", "2020-01-01T00:00:00Z[!foo=bar]",
+	}
+	for _, s := range bad {
+		name := catchThrow(func() { InstantFromString(s) })
+		if name == "" {
+			t.Errorf("InstantFromString(%q) did not throw, want RangeError", s)
+			continue
+		}
+		if name != "RangeError" {
+			t.Errorf("InstantFromString(%q) threw %s, want RangeError", s, name)
+		}
+	}
+}
+
 // TestPlainYearMonthFromString pins the string parser feeding Temporal.PlainYearMonth.from:
 // the bare year-month forms whose day the type does not carry, the full date and date-time
 // forms whose year and month it keeps, the expanded year, and the explicit iso8601 annotation,

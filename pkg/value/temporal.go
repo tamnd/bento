@@ -1432,11 +1432,37 @@ func InstantFromEpochMilliseconds(epochMilliseconds float64) *Instant {
 }
 
 // InstantFrom implements Temporal.Instant.from for an Instant argument: it returns a fresh
-// Instant with the same count, the copy the specification makes. from over a string needs
-// the ISO parser this slice does not carry, so it hands back at lowering and this is only
-// reached with an Instant in hand.
+// Instant with the same count, the copy the specification makes. from over a string routes
+// to InstantFromString instead, so this is reached only with an Instant in hand.
 func InstantFrom(inst *Instant) *Instant {
 	return newInstant(inst.ns)
+}
+
+// InstantFromString implements Temporal.Instant.from over a string. An Instant is an exact
+// point on the UTC time line, so the string must fix the offset from UTC: a Z designator or a
+// numeric offset is required, and a date-only or offset-less date-time string throws a
+// RangeError. The wall-clock reading the date and time name is taken as UTC and the offset is
+// subtracted to reach the epoch count, which newInstant range-checks. A calendar annotation is
+// accepted and ignored whatever it names, since an Instant carries no calendar; the shared
+// parser still rejects a malformed annotation or a critical non-calendar one.
+func InstantFromString(s string) *Instant {
+	p, ok := parseTemporalISOString(s)
+	if !ok {
+		Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.Instant")))
+	}
+	if !p.hasZ && !p.hasOffset {
+		Throw(NewRangeError(FromGoString("a Temporal.Instant string requires a UTC offset or a Z designator")))
+	}
+	secs := int64(isoToEpochDays(p.year, p.month, p.day))*86_400 +
+		int64(p.hour)*3600 + int64(p.minute)*60 + int64(p.second)
+	ns := new(big.Int).SetInt64(secs)
+	ns.Mul(ns, big.NewInt(1_000_000_000))
+	sub := int64(p.millisecond)*1_000_000 + int64(p.microsecond)*1_000 + int64(p.nanosecond)
+	ns.Add(ns, big.NewInt(sub))
+	if p.hasOffset {
+		ns.Sub(ns, big.NewInt(p.offsetNanoseconds))
+	}
+	return newInstant(ns)
 }
 
 // EpochNanoseconds returns the nanoseconds since the epoch as a fresh big.Int, so the
