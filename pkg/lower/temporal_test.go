@@ -213,6 +213,18 @@ console.log(d.days);`
 	}
 }
 
+// TestDurationFromDynamicStringConstruction pins Temporal.Duration.from over a string value
+// not known until run time: the argument lowers and reaches value.DurationFromString through
+// its Go string. A Duration carries no calendar, so a dynamic string is always safe.
+func TestDurationFromDynamicStringConstruction(t *testing.T) {
+	const src = `function at(s: string) { return Temporal.Duration.from(s).years; }
+console.log(at("P1Y"));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.DurationFromString(s.ToGoString())`) {
+		t.Errorf("rendered program missing the dynamic from-string call:\n%s", got)
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
 // methods, from over a string, and compare each hand back with a reason naming where the
 // work belongs, waiting on the relativeTo reference and the calendar model.
@@ -238,9 +250,9 @@ func TestDurationHandBacks(t *testing.T) {
 			want: "Temporal.Duration.prototype.total is a later slice",
 		},
 		{
-			name: "from a dynamic string",
-			src:  "function at(s: string) { return Temporal.Duration.from(s).years; }\nconsole.log(at(\"P1Y\"));",
-			want: "Temporal.Duration.from over a dynamic string or a property bag is a later slice",
+			name: "from a property bag",
+			src:  "const d = Temporal.Duration.from({ years: 1 });\nconsole.log(d.years);",
+			want: "Temporal.Duration.from over a property bag or a value not statically typed as a string is a later slice",
 		},
 		{
 			name: "compare",
@@ -355,7 +367,7 @@ func TestPlainTimeHandBacks(t *testing.T) {
 		{
 			name: "from a property bag",
 			src:  "const t = Temporal.PlainTime.from({ hour: 12, minute: 30 });\nconsole.log(t.hour);",
-			want: "Temporal.PlainTime.from over a dynamic string or a property bag is a later slice",
+			want: "Temporal.PlainTime.from over a property bag or a value not statically typed as a string is a later slice",
 		},
 		{
 			name: "round",
@@ -890,9 +902,8 @@ console.log(e.epochMilliseconds);`
 	}
 }
 
-// TestInstantHandBacks pins the honest ceilings: the arithmetic and rounding methods, the
-// zoned conversion, and from over a dynamic string each hand back with a reason naming where
-// the work belongs.
+// TestInstantHandBacks pins the honest ceilings: the arithmetic and rounding methods each
+// hand back with a reason naming where the work belongs.
 func TestInstantHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -908,11 +919,6 @@ func TestInstantHandBacks(t *testing.T) {
 			name: "round",
 			src:  "const i = new Temporal.Instant(1500000000n);\nconst j = i.round(\"second\");\nconsole.log(j.epochMilliseconds);",
 			want: "Temporal.Instant.prototype.round is a later slice",
-		},
-		{
-			name: "from a dynamic string",
-			src:  "function at(s: string) { return Temporal.Instant.from(s).epochMilliseconds; }\nconsole.log(at(\"1970-01-01T00:00:00Z\"));",
-			want: "Temporal.Instant.from over a dynamic string or a non-string is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -933,6 +939,18 @@ console.log(i.epochMilliseconds);`
 	got := renderProgram(t, src)
 	if !strings.Contains(got, `value.InstantFromString("2020-01-01T00:00:00Z")`) {
 		t.Errorf("rendered program missing the from-string call:\n%s", got)
+	}
+}
+
+// TestInstantFromDynamicStringConstruction pins Temporal.Instant.from over a string value not
+// known until run time: the argument lowers and reaches value.InstantFromString through its Go
+// string. An Instant ignores any calendar the string names, so a dynamic string is safe.
+func TestInstantFromDynamicStringConstruction(t *testing.T) {
+	const src = `function at(s: string) { return Temporal.Instant.from(s).epochMilliseconds; }
+console.log(at("1970-01-01T00:00:00Z"));`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.InstantFromString(s.ToGoString())`) {
+		t.Errorf("rendered program missing the dynamic from-string call:\n%s", got)
 	}
 }
 
@@ -1360,11 +1378,13 @@ console.log(a.toString(), b.minute);`)
 	}
 }
 
-// TestPlainTimeFromStringHandsBack pins that a dynamic string, whose value is unknown at
-// compile time, hands back for a later slice, while a literal string lowers.
-func TestPlainTimeFromStringHandsBack(t *testing.T) {
-	dyn := renderProgramHandBack(t, `function f(s: string) { return Temporal.PlainTime.from(s); }`)
-	if !strings.Contains(dyn, "dynamic string") {
-		t.Errorf("dynamic-string from did not hand back with the expected reason: %q", dyn)
+// TestPlainTimeFromDynamicStringConstruction pins Temporal.PlainTime.from over a string value
+// not known until run time: the argument lowers and reaches value.PlainTimeFromString through
+// its Go string. A PlainTime carries no calendar, so a dynamic string is always safe.
+func TestPlainTimeFromDynamicStringConstruction(t *testing.T) {
+	got := renderProgram(t, `function at(s: string) { return Temporal.PlainTime.from(s).minute; }
+console.log(at("12:30:00"));`)
+	if !strings.Contains(got, `value.PlainTimeFromString(s.ToGoString())`) {
+		t.Errorf("rendered program missing the dynamic from-string call:\n%s", got)
 	}
 }
