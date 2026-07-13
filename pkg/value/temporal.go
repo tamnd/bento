@@ -267,6 +267,116 @@ func (pd *PlainDate) AddDate(dur *Duration, overflow string) *PlainDate {
 	return &PlainDate{year: y, month: m, day: d, cal: pd.cal}
 }
 
+// isoDateCompare returns -1, 0, or 1 comparing two ISO dates by year, then month, then day.
+func isoDateCompare(y1, m1, d1, y2, m2, d2 int) int {
+	switch {
+	case y1 != y2:
+		if y1 < y2 {
+			return -1
+		}
+		return 1
+	case m1 != m2:
+		if m1 < m2 {
+			return -1
+		}
+		return 1
+	case d1 != d2:
+		if d1 < d2 {
+			return -1
+		}
+		return 1
+	default:
+		return 0
+	}
+}
+
+// balanceISOYearMonth normalizes a one-based month that may fall outside 1..12 into a year
+// and month, carrying whole years with floored division so a zero or negative month borrows.
+func balanceISOYearMonth(year, month int) (int, int) {
+	y := year + floorDiv(month-1, 12)
+	m := (month-1)%12 + 1
+	if m < 1 {
+		m += 12
+	}
+	return y, m
+}
+
+// isoDateSurpasses reports whether the first date has passed the second in the direction of
+// sign. The comparison uses the raw day of month, unclamped, so a February 31 counts as past
+// February 29; that is what keeps a month step that would only survive by clamping from being
+// counted, so January 31 to February 29 settles as days rather than a whole month.
+func isoDateSurpasses(sign, y1, m1, d1, y2, m2, d2 int) bool {
+	return sign*isoDateCompare(y1, m1, d1, y2, m2, d2) == 1
+}
+
+// differenceISODate implements the specification's DifferenceISODate: the calendar distance
+// from the first date to the second, balanced from largestUnit down to days. For a day or
+// week largestUnit the gap is a whole count of epoch days, split into weeks under "week". For
+// a month or year largestUnit it steps whole years, then whole months, each step testing the
+// raw day of month against the target so a step that would only fit by clamping is not taken,
+// then settles the remainder in days from the constrained intermediate to the target.
+func differenceISODate(y1, m1, d1, y2, m2, d2 int, largestUnit string) (years, months, weeks, days int) {
+	switch largestUnit {
+	case "year", "month":
+		sign := -isoDateCompare(y1, m1, d1, y2, m2, d2)
+		if sign == 0 {
+			return 0, 0, 0, 0
+		}
+		if largestUnit == "year" {
+			for candidate := sign; !isoDateSurpasses(sign, y1+candidate, m1, d1, y2, m2, d2); candidate += sign {
+				years = candidate
+			}
+		}
+		iy, im := balanceISOYearMonth(y1+years, m1+sign)
+		for candidate := sign; !isoDateSurpasses(sign, iy, im, d1, y2, m2, d2); candidate += sign {
+			months = candidate
+			iy, im = balanceISOYearMonth(iy, im+sign)
+		}
+		if largestUnit == "month" {
+			months += years * 12
+			years = 0
+		}
+		my, mm, md := addISODate(y1, m1, d1, years, months, 0, big.NewInt(0), "constrain")
+		days = isoToEpochDays(y2, m2, d2) - isoToEpochDays(my, mm, md)
+		return years, months, 0, days
+	default:
+		sy, sm, sd, ly, lm, ld, sign := y1, m1, d1, y2, m2, d2, 1
+		if isoDateCompare(y1, m1, d1, y2, m2, d2) > 0 {
+			sy, sm, sd, ly, lm, ld, sign = y2, m2, d2, y1, m1, d1, -1
+		}
+		days = isoToEpochDays(ly, lm, ld) - isoToEpochDays(sy, sm, sd)
+		if largestUnit == "week" {
+			weeks = (days / 7) * sign
+			days = days % 7
+		}
+		return 0, 0, weeks, days * sign
+	}
+}
+
+// plainDateDifference builds the Duration from the receiver to other, balanced at largestUnit.
+// until and since share it: a.until(b) is this to other, a.since(b) is its negation, so Since
+// negates the same walk rather than swapping the operands, which keeps the month anchoring on
+// the receiver as the specification requires. The two dates must share a calendar.
+func plainDateDifference(from, to *PlainDate, largestUnit string) *Duration {
+	if from.calendarID() != to.calendarID() {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDate difference between two calendars is not allowed")))
+	}
+	years, months, weeks, days := differenceISODate(from.year, from.month, from.day, to.year, to.month, to.day, largestUnit)
+	return NewDuration(float64(years), float64(months), float64(weeks), float64(days), 0, 0, 0, 0, 0, 0)
+}
+
+// Until returns the calendar difference from the receiver to other as a Duration, balanced
+// from largestUnit down to days.
+func (pd *PlainDate) Until(other *PlainDate, largestUnit string) *Duration {
+	return plainDateDifference(pd, other, largestUnit)
+}
+
+// Since returns the calendar difference from other to the receiver, the negation of Until, so
+// the month anchoring stays on the receiver.
+func (pd *PlainDate) Since(other *PlainDate, largestUnit string) *Duration {
+	return plainDateDifference(pd, other, largestUnit).Negated()
+}
+
 // displayYear returns the year the calendar counts, which the year getter reports and
 // the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
 // and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year
