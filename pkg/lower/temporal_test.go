@@ -202,6 +202,17 @@ console.log(b.days);`
 	}
 }
 
+// TestDurationFromStringConstruction pins Temporal.Duration.from over a string literal to
+// value.DurationFromString with the string carried through verbatim.
+func TestDurationFromStringConstruction(t *testing.T) {
+	const src = `const d = Temporal.Duration.from("P1Y2M3DT4H");
+console.log(d.days);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.DurationFromString("P1Y2M3DT4H")`) {
+		t.Errorf("rendered program missing the from-string call:\n%s", got)
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
 // methods, from over a string, and compare each hand back with a reason naming where the
 // work belongs, waiting on the relativeTo reference and the calendar model.
@@ -227,9 +238,9 @@ func TestDurationHandBacks(t *testing.T) {
 			want: "Temporal.Duration.prototype.total is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const d = Temporal.Duration.from(\"P1Y\");\nconsole.log(d.years);",
-			want: "Temporal.Duration.from over a string or a property bag is a later slice",
+			name: "from a dynamic string",
+			src:  "function at(s: string) { return Temporal.Duration.from(s).years; }\nconsole.log(at(\"P1Y\"));",
+			want: "Temporal.Duration.from over a dynamic string or a property bag is a later slice",
 		},
 		{
 			name: "compare",
