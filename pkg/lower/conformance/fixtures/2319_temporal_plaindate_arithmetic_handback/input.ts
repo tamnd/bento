@@ -1,7 +1,7 @@
-// PlainDate difference hands back in this slice: until and since return the Duration
-// between two dates, which needs the calendar field math to balance years, months, and
-// days from the largest unit down. It waits on that difference model, so the compiler
-// reports the ceiling rather than emit a wrong Duration. add and subtract already lower.
+// PlainDate.with reshapes a date from a bag of calendar fields, which needs the field
+// resolution and constrain-or-reject balancing that a later slice carries. It hands back
+// here so the compiler reports the ceiling rather than emit a wrong date. add, subtract,
+// until, and since already lower.
 const d = new Temporal.PlainDate(2020, 2, 29);
-const gap = d.until(new Temporal.PlainDate(2021, 3, 1));
-console.log(gap.days);
+const e = d.with({ day: 15 });
+console.log(e.day);
