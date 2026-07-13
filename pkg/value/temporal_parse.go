@@ -422,3 +422,34 @@ func PlainTimeFromString(s string) *PlainTime {
 	}
 	return timeFromParse(p)
 }
+
+// PlainDateTimeFromString implements Temporal.PlainDateTime.from over a string. It reads a
+// date, optionally followed by a time it keeps, so a date-only string like "2024-06-30" is
+// accepted with the time defaulting to midnight while a full date-time string keeps its time.
+// A grammar the parser rejects, a date outside the representable range, a Z designator (a
+// Plain type has no zone to resolve it against), or a calendar bento does not host each
+// throws a RangeError. A time-only string with no date is rejected, since the grammar this
+// method accepts always begins with a date. The offset and time-zone annotation a string may
+// carry are parsed for validation and then dropped.
+func PlainDateTimeFromString(s string) *PlainDateTime {
+	p, ok := parseTemporalISOString(s)
+	if !ok {
+		Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.PlainDateTime")))
+	}
+	if p.hasZ {
+		Throw(NewRangeError(FromGoString("a Temporal.PlainDateTime string cannot carry a Z designator")))
+	}
+	rejectISODate(float64(p.year), float64(p.month), float64(p.day))
+	cal := ""
+	if p.calendar != "" {
+		c, hosted := canonicalCalendar(p.calendar)
+		if !hosted {
+			Throw(NewRangeError(FromGoString("invalid calendar identifier " + p.calendar)))
+		}
+		cal = c
+	}
+	return &PlainDateTime{
+		date: PlainDate{year: p.year, month: p.month, day: p.day, cal: cal},
+		time: PlainTime{p.hour, p.minute, p.second, p.millisecond, p.microsecond, p.nanosecond},
+	}
+}
