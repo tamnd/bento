@@ -1173,7 +1173,11 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 // plainDateTimeStaticCall lowers Temporal.PlainDateTime.compare(a, b) or
 // Temporal.PlainDateTime.from(x), the mirror of the PlainDate and PlainTime statics. compare
 // lowers to value.PlainDateTimeCompare; from lowers to value.PlainDateTimeFrom for a
-// PlainDateTime argument and hands back for a string or a bag.
+// PlainDateTime argument and to value.PlainDateTimeFromString for a string literal. Like the
+// PlainDate from, a PlainDateTime carries a calendar, so the literal is gated on
+// literalCalendarHosted and a string naming a calendar bento does not host hands back rather
+// than emit a call the runtime parser would reject. A dynamic string or a property bag hands
+// back for a later slice.
 func (r *Renderer) plainDateTimeStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
@@ -1197,15 +1201,22 @@ func (r *Renderer) plainDateTimeStaticCall(method string, argNodes []frontend.No
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from with options is a later slice"}
 		}
-		if !r.isPlainDateTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from over a string or a property bag is a later slice"}
+		if r.isPlainDateTime(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if !literalCalendarHosted(lit) {
+				return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from over a string naming a calendar bento does not host is a later slice"}
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from over a dynamic string or a property bag is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime." + method + " is a later slice"}
 	}
