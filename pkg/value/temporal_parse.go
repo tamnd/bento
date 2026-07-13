@@ -574,3 +574,106 @@ func PlainYearMonthFromString(s string) *PlainYearMonth {
 	rejectISOYearMonth(float64(p.year), float64(p.month))
 	return &PlainYearMonth{year: p.year, month: p.month}
 }
+
+// parseTemporalMonthDayOnly parses a bare month-day Temporal string, the form
+// Temporal.PlainMonthDay.from accepts when the string carries no year: an optional "--" prefix
+// (the grammar's TwoDashes), a month, an optional "-", a day, and zero or more annotations,
+// with no year and no time. So "10-01", "1001", "--10-01", and "--1001" all parse here, while a
+// single leading dash, a year, or a time either routes the string to the full parser or fails.
+// The grammar bounds the day at two digits with no per-month check, so the caller admits any day
+// in 1..31 for the yearless form, matching the specification's yearless month-day validation.
+func parseTemporalMonthDayOnly(s string) (isoParse, bool) {
+	sc := &isoScanner{s: s}
+	var p isoParse
+	// An optional leading "--" precedes the month; a single leading dash is not a valid prefix,
+	// so once one dash is seen the second is required.
+	if sc.peek() == '-' {
+		sc.pos++
+		if !sc.accept('-') {
+			return p, false
+		}
+	}
+	month, ok := sc.digits(2)
+	if !ok {
+		return p, false
+	}
+	sc.accept('-')
+	day, ok := sc.digits(2)
+	if !ok {
+		return p, false
+	}
+	p.month, p.day = month, day
+	if !sc.scanAnnotations(&p) {
+		return p, false
+	}
+	if !sc.atEnd() {
+		return p, false
+	}
+	return p, true
+}
+
+// monthDayRequireISO throws a RangeError unless cal, the calendar annotation a month-day string
+// carried, is empty or names the ISO calendar. bento's PlainMonthDay is ISO-only, so a bare
+// month-day string naming another calendar is an error the way the specification treats it, and
+// the lowerer hands back any literal naming a non-ISO calendar before this is reached, so at run
+// time cal is always "" or "iso8601".
+func monthDayRequireISO(cal string) {
+	if cal != "" && !strings.EqualFold(cal, "iso8601") {
+		Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay from a string supports only the iso8601 calendar")))
+	}
+}
+
+// rejectMonthDayStringRange throws a RangeError unless (month, day) is in the range the yearless
+// month-day grammar admits: the month in 1..12 and the day in 1..31. Unlike rejectISOMonthDay,
+// which the constructor uses to bound the day by the reference year's month length, the yearless
+// string form has no year to measure against, so "02-30" and "06-31" are accepted the way the
+// specification and the reference implementation accept them.
+func rejectMonthDayStringRange(month, day float64) {
+	if month < 1 || month > 12 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay month must be between 1 and 12")))
+	}
+	if day < 1 || day > 31 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay day must be between 1 and 31")))
+	}
+}
+
+// rejectMonthDayFullDate throws a RangeError unless (month, day) is a real day of that month in
+// the parsed year: the month in 1..12 and the day within the month's length, with the year read
+// only for February's leap length. Unlike rejectISODate it does not range-check the year, since
+// a month-day drops the year and keeps only the month and day, so an expanded-year full date like
+// "-999999-10-01" is accepted the way the specification and the reference implementation accept
+// it while "2024-06-31" and "2021-02-29" still throw.
+func rejectMonthDayFullDate(year, month, day float64) {
+	if month < 1 || month > 12 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay month must be between 1 and 12")))
+	}
+	y, m, d := int(year), int(month), int(day)
+	if d < 1 || d > isoDaysInMonth(y, m) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay day is out of range for the month")))
+	}
+}
+
+// PlainMonthDayFromString implements Temporal.PlainMonthDay.from over a string. It reads a bare
+// month-day string like "10-01" or "--10-01", whose year the type does not carry, or a full date
+// or date-time string like "1976-10-01", whose month and day it keeps and whose year and time it
+// drops. A grammar the parser rejects, an out-of-range month-day, an out-of-range day on a
+// full-date string, a Z designator, or a non-ISO calendar each throws a RangeError. The full-date
+// form validates the day against its real year, so "2024-06-31" throws, while the yearless form
+// has no year and admits any day in 1..31, so "06-31" parses, matching the specification.
+func PlainMonthDayFromString(s string) *PlainMonthDay {
+	if p, ok := parseTemporalISOString(s); ok {
+		if p.hasZ {
+			Throw(NewRangeError(FromGoString("a Temporal.PlainMonthDay string cannot carry a Z designator")))
+		}
+		rejectMonthDayFullDate(float64(p.year), float64(p.month), float64(p.day))
+		monthDayRequireISO(p.calendar)
+		return &PlainMonthDay{month: p.month, day: p.day}
+	}
+	p, ok := parseTemporalMonthDayOnly(s)
+	if !ok {
+		Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.PlainMonthDay")))
+	}
+	monthDayRequireISO(p.calendar)
+	rejectMonthDayStringRange(float64(p.month), float64(p.day))
+	return &PlainMonthDay{month: p.month, day: p.day}
+}
