@@ -613,13 +613,7 @@ func (pt *PlainTime) With(hour, minute, second, millisecond, microsecond, nanose
 // duration, so no separate SubtractDuration is needed. The fold runs in big.Int because an
 // hour field can be up to 2^53 and hours-to-nanoseconds overflows int64.
 func (pt *PlainTime) AddDuration(dur *Duration) *PlainTime {
-	total := new(big.Int)
-	total.Add(total, bigMulInt(float64(pt.hour), 3_600_000_000_000))
-	total.Add(total, bigMulInt(float64(pt.minute), 60_000_000_000))
-	total.Add(total, bigMulInt(float64(pt.second), 1_000_000_000))
-	total.Add(total, bigMulInt(float64(pt.millisecond), 1_000_000))
-	total.Add(total, bigMulInt(float64(pt.microsecond), 1_000))
-	total.Add(total, big.NewInt(int64(pt.nanosecond)))
+	total := pt.dayNanos()
 	total.Add(total, bigMulInt(dur.hours, 3_600_000_000_000))
 	total.Add(total, bigMulInt(dur.minutes, 60_000_000_000))
 	total.Add(total, bigMulInt(dur.seconds, 1_000_000_000))
@@ -628,6 +622,100 @@ func (pt *PlainTime) AddDuration(dur *Duration) *PlainTime {
 	total.Add(total, bigMulInt(dur.nanoseconds, 1))
 	total.Mod(total, nsPerDay)
 	return plainTimeFromDayNanos(total)
+}
+
+// dayNanos folds the receiver's six fields into the nanosecond count since midnight, in
+// [0, nsPerDay). It is the shared starting point for the wall-clock arithmetic and the
+// rounding, which both add or round the count and split it back with plainTimeFromDayNanos.
+func (pt *PlainTime) dayNanos() *big.Int {
+	total := new(big.Int)
+	total.Add(total, bigMulInt(float64(pt.hour), 3_600_000_000_000))
+	total.Add(total, bigMulInt(float64(pt.minute), 60_000_000_000))
+	total.Add(total, bigMulInt(float64(pt.second), 1_000_000_000))
+	total.Add(total, bigMulInt(float64(pt.millisecond), 1_000_000))
+	total.Add(total, bigMulInt(float64(pt.microsecond), 1_000))
+	total.Add(total, big.NewInt(int64(pt.nanosecond)))
+	return total
+}
+
+// Round implements Temporal.PlainTime.prototype.round: it rounds the wall clock to a
+// multiple of roundingIncrement of smallestUnit under one of the nine rounding modes. The
+// smallestUnit fixes the quantum in nanoseconds and the divisor the increment must divide,
+// hour into 24, minute and second into 60, and each sub-second unit into 1000; an increment
+// that is not a positive integer below the divisor and dividing it throws a RangeError. The
+// rounded count wraps mod 24 hours, so rounding up from late in the day lands on the next
+// day's clock. The receiver is unchanged.
+func (pt *PlainTime) Round(smallestUnit string, increment float64, roundingMode string) *PlainTime {
+	var unitNs, dividend int64
+	switch smallestUnit {
+	case "hour":
+		unitNs, dividend = 3_600_000_000_000, 24
+	case "minute":
+		unitNs, dividend = 60_000_000_000, 60
+	case "second":
+		unitNs, dividend = 1_000_000_000, 60
+	case "millisecond":
+		unitNs, dividend = 1_000_000, 1000
+	case "microsecond":
+		unitNs, dividend = 1_000, 1000
+	case "nanosecond":
+		unitNs, dividend = 1, 1000
+	default:
+		Throw(NewRangeError(FromGoString("Temporal.PlainTime.prototype.round smallestUnit is invalid")))
+	}
+	inc := int64(toIntegerWithTruncation(increment))
+	if inc < 1 || inc >= dividend || dividend%inc != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainTime.prototype.round roundingIncrement is out of range")))
+	}
+	quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
+	rounded := roundBigToIncrement(pt.dayNanos(), quantum, roundingMode)
+	rounded.Mod(rounded, nsPerDay)
+	return plainTimeFromDayNanos(rounded)
+}
+
+// roundBigToIncrement rounds x to a multiple of increment (a positive value) under one of
+// the nine Temporal rounding modes, ties resolved by the mode. It is the shared rounding
+// primitive the Temporal round methods call. The quotient is a Euclidean floor, so low is
+// the multiple at or below x and high the one above, and the mode picks between them; the
+// sign of x decides trunc, expand, and the half-toward-zero ties, so the helper is correct
+// for the signed counts the other Temporal types will round.
+func roundBigToIncrement(x, increment *big.Int, mode string) *big.Int {
+	q := new(big.Int)
+	rem := new(big.Int)
+	q.DivMod(x, increment, rem)
+	if rem.Sign() == 0 {
+		return new(big.Int).Set(x)
+	}
+	low := new(big.Int).Mul(q, increment)
+	high := new(big.Int).Add(low, increment)
+	cmp := new(big.Int).Lsh(rem, 1).Cmp(increment)
+	pickHigh := false
+	switch mode {
+	case "ceil":
+		pickHigh = true
+	case "floor":
+		pickHigh = false
+	case "trunc":
+		pickHigh = x.Sign() < 0
+	case "expand":
+		pickHigh = x.Sign() >= 0
+	case "halfCeil":
+		pickHigh = cmp >= 0
+	case "halfFloor":
+		pickHigh = cmp > 0
+	case "halfExpand":
+		pickHigh = cmp > 0 || (cmp == 0 && x.Sign() >= 0)
+	case "halfTrunc":
+		pickHigh = cmp > 0 || (cmp == 0 && x.Sign() < 0)
+	case "halfEven":
+		pickHigh = cmp > 0 || (cmp == 0 && q.Bit(0) == 1)
+	default:
+		Throw(NewRangeError(FromGoString("invalid roundingMode")))
+	}
+	if pickHigh {
+		return high
+	}
+	return low
 }
 
 // plainTimeFromDayNanos rebuilds a PlainTime from a nanosecond count already reduced into
