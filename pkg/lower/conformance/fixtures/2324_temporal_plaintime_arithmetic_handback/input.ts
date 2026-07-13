@@ -1,8 +1,7 @@
-// PlainTime difference arithmetic hands back in this slice: until and since return a
-// Duration between two times, and that leans on the units-and-rounding options bag the
-// compiler cannot read yet. add, subtract, and with already lower, so the ceiling here is
-// the difference math, and the compiler reports it rather than emit a wrong Duration.
+// until and since return a Duration between two times. A Temporal.PlainTime argument already
+// lowers to the difference math, but the methods also accept a plain-time-like bag or an ISO
+// string that must be coerced to a PlainTime first. That coercion is a later slice, so a
+// non-PlainTime argument hands back here rather than emit a wrong Duration.
 const t = new Temporal.PlainTime(12, 30);
-const b = new Temporal.PlainTime(14, 0);
-const d = t.until(b);
+const d = t.until("14:00");
 console.log(d.hours);
