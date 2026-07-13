@@ -207,6 +207,40 @@ func TestPlainDateWith(t *testing.T) {
 	}
 }
 
+func TestPlainDateFromBag(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "the three required fields with the constrain default",
+			src:   "console.log(Temporal.PlainDate.from({ year: 2020, month: 3, day: 14 }).toString());",
+			wants: []string{"value.PlainDateFromFields(2020, 3, 14, ", `"iso8601"`, `"constrain"`},
+		},
+		{
+			name:  "a calendar interprets the year",
+			src:   "console.log(Temporal.PlainDate.from({ year: 109, month: 5, day: 15, calendar: \"roc\" }).toString());",
+			wants: []string{"value.PlainDateFromFields(109, 5, 15, ", `"roc"`},
+		},
+		{
+			name:  "an explicit reject overflow",
+			src:   "console.log(Temporal.PlainDate.from({ year: 2020, month: 2, day: 31 }, { overflow: \"reject\" }).toString());",
+			wants: []string{"value.PlainDateFromFields(", `"reject"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 func TestPlainDateToPlainDateTime(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -266,8 +300,9 @@ func TestPlainDateToZonedDateTime(t *testing.T) {
 }
 
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
-// and conversion methods, from over a dynamic string or a property bag, and the other
-// Temporal types each hand back with a reason naming where the work belongs.
+// and conversion methods, from over a bag that carries a monthCode or omits a required
+// field, and the other Temporal types each hand back with a reason naming where the work
+// belongs.
 func TestPlainDateHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -290,9 +325,9 @@ func TestPlainDateHandBacks(t *testing.T) {
 			want: "Temporal.PlainDate.prototype.with over a bag with the field monthCode is a later slice",
 		},
 		{
-			name: "from a property bag",
-			src:  "const d = Temporal.PlainDate.from({ year: 2020, month: 2, day: 29 });\nconsole.log(d.day);",
-			want: "Temporal.PlainDate.from over a dynamic string or a property bag is a later slice",
+			name: "from a property bag with a monthCode field",
+			src:  "const d = Temporal.PlainDate.from({ monthCode: \"M02\", day: 29 });\nconsole.log(d.day);",
+			want: "Temporal.PlainDate.from over a bag with the field monthCode is a later slice",
 		},
 		{
 			name: "toPlainDateTime over a time bag",
