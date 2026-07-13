@@ -1,7 +1,7 @@
-// PlainDate.toPlainYearMonth narrows a date to its year and month under the date's calendar,
+// PlainDate.toPlainMonthDay narrows a date to its month and day under the date's calendar,
 // which a later slice carries. It hands back here so the compiler reports the ceiling rather
-// than emit a wrong value. add, subtract, until, since, with, and toPlainDateTime already
-// lower.
+// than emit a wrong value. add, subtract, until, since, with, toPlainDateTime, and
+// toPlainYearMonth already lower.
 const d = new Temporal.PlainDate(2020, 2, 29);
-const ym = d.toPlainYearMonth();
-console.log(ym.month);
+const md = d.toPlainMonthDay();
+console.log(md.day);

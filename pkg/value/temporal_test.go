@@ -723,6 +723,38 @@ func TestPlainDateToPlainDateTime(t *testing.T) {
 	}
 }
 
+func TestPlainDateToPlainYearMonth(t *testing.T) {
+	iso := mustPlainDate(t, 2020, 5, 15)
+	if got := iso.ToPlainYearMonth().ToString().ToGoString(); got != "2020-05" {
+		t.Errorf("iso toPlainYearMonth: got %q, want %q", got, "2020-05")
+	}
+	if got := iso.ToPlainYearMonth().Year(); got != 2020 {
+		t.Errorf("iso toPlainYearMonth year: got %v, want 2020", got)
+	}
+
+	// A non-ISO year-month keeps its calendar: the year reads in the calendar's reckoning,
+	// the toString carries the reference day and the annotation, and roc counts from 1912.
+	roc := PlainDateWithCalendar(iso, "roc")
+	if got := roc.ToPlainYearMonth().ToString().ToGoString(); got != "2020-05-01[u-ca=roc]" {
+		t.Errorf("roc toPlainYearMonth: got %q, want %q", got, "2020-05-01[u-ca=roc]")
+	}
+	if got := roc.ToPlainYearMonth().Year(); got != 109 {
+		t.Errorf("roc toPlainYearMonth year: got %v, want 109", got)
+	}
+	greg := PlainDateWithCalendar(iso, "gregory")
+	if got := greg.ToPlainYearMonth().ToString().ToGoString(); got != "2020-05-01[u-ca=gregory]" {
+		t.Errorf("gregory toPlainYearMonth: got %q, want %q", got, "2020-05-01[u-ca=gregory]")
+	}
+	if got := greg.ToPlainYearMonth().CalendarId().ToGoString(); got != "gregory" {
+		t.Errorf("gregory toPlainYearMonth calendarId: got %q, want gregory", got)
+	}
+
+	// equals splits on the calendar even when the ISO year and month match.
+	if roc.ToPlainYearMonth().Equals(iso.ToPlainYearMonth()) {
+		t.Error("a roc year-month should not equal the ISO year-month with the same fields")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()
