@@ -793,6 +793,56 @@ func TestPlainDateToPlainMonthDay(t *testing.T) {
 	}
 }
 
+func TestPlainDateToZonedDateTime(t *testing.T) {
+	d := mustPlainDate(t, 2020, 3, 14)
+
+	// A bare time zone pins the date at midnight and resolves the exact instant.
+	utc := d.ToZonedDateTime("UTC", nil)
+	if got := utc.ToString().ToGoString(); got != "2020-03-14T00:00:00+00:00[UTC]" {
+		t.Errorf("utc toZonedDateTime toString: got %q, want 2020-03-14T00:00:00+00:00[UTC]", got)
+	}
+	if got := utc.EpochMilliseconds(); got != 1584144000000 {
+		t.Errorf("utc toZonedDateTime epochMilliseconds: got %v, want 1584144000000", got)
+	}
+
+	// A named zone reads the offset in force at the instant.
+	ny := d.ToZonedDateTime("America/New_York", nil)
+	if got := ny.ToString().ToGoString(); got != "2020-03-14T00:00:00-04:00[America/New_York]" {
+		t.Errorf("new york toZonedDateTime toString: got %q, want ...-04:00[America/New_York]", got)
+	}
+
+	// A plain time places the wall clock.
+	at := d.ToZonedDateTime("America/New_York", NewPlainTime(15, 30, 45, 0, 0, 0))
+	if got := at.ToString().ToGoString(); got != "2020-03-14T15:30:45-04:00[America/New_York]" {
+		t.Errorf("new york at 15:30:45 toString: got %q, want ...15:30:45-04:00[America/New_York]", got)
+	}
+
+	// A spring-forward gap shifts the reading forward under compatible disambiguation:
+	// 2020-03-08 02:30 does not exist in America/New_York, so it becomes 03:30.
+	gap := mustPlainDate(t, 2020, 3, 8).ToZonedDateTime("America/New_York", NewPlainTime(2, 30, 0, 0, 0, 0))
+	if got := gap.ToString().ToGoString(); got != "2020-03-08T03:30:00-04:00[America/New_York]" {
+		t.Errorf("gap toZonedDateTime toString: got %q, want ...03:30:00-04:00[America/New_York]", got)
+	}
+
+	// A non-ISO date keeps its calendar: the annotation follows the zone bracket, the year
+	// getter reads in the calendar's reckoning, and the era reports the calendar.
+	roc := PlainDateWithCalendar(d, "roc").ToZonedDateTime("UTC", nil)
+	if got := roc.ToString().ToGoString(); got != "2020-03-14T00:00:00+00:00[UTC][u-ca=roc]" {
+		t.Errorf("roc toZonedDateTime toString: got %q, want ...[UTC][u-ca=roc]", got)
+	}
+	if got := roc.Year(); got != 109 {
+		t.Errorf("roc toZonedDateTime year: got %v, want 109", got)
+	}
+	if got := roc.CalendarId().ToGoString(); got != "roc" {
+		t.Errorf("roc toZonedDateTime calendarId: got %q, want roc", got)
+	}
+
+	// equals splits on the calendar even when the instant and zone match.
+	if roc.Equals(utc) {
+		t.Error("a roc zoned date-time should not equal the ISO zoned date-time at the same instant and zone")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()

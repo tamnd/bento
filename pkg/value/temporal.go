@@ -438,6 +438,27 @@ func (pd *PlainDate) ToPlainMonthDay() *PlainMonthDay {
 	return &PlainMonthDay{month: pd.month, day: pd.day, cal: pd.cal}
 }
 
+// ToZonedDateTime implements Temporal.PlainDate.prototype.toZonedDateTime: it pins the date, at
+// a wall-clock time defaulting to midnight, to a time zone, resolving the exact instant under
+// the default compatible disambiguation, which takes the earlier reading in a fall-back overlap
+// and shifts forward across a spring-forward gap. The result keeps this date's calendar, so a
+// non-ISO date stays under its calendar.
+func (pd *PlainDate) ToZonedDateTime(timeZone string, plainTime *PlainTime) *ZonedDateTime {
+	t := PlainTime{}
+	if plainTime != nil {
+		t = *plainTime
+	}
+	loc, canon := resolveTimeZone(timeZone)
+	wall := wallNanoseconds(isoParse{
+		year: pd.year, month: pd.month, day: pd.day,
+		hour: t.hour, minute: t.minute, second: t.second,
+		millisecond: t.millisecond, microsecond: t.microsecond, nanosecond: t.nanosecond,
+	})
+	epoch := disambiguateCompatible(loc, wall)
+	validateEpochNanoseconds(epoch)
+	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon), cal: pd.cal}
+}
+
 // displayYear returns the year the calendar counts, which the year getter reports and
 // the gregory-style era split turns on. It matches the ISO year for iso8601, gregory,
 // and japanese; roc, the Minguo calendar, counts from 1912, so its year is the ISO year
@@ -2136,6 +2157,16 @@ type ZonedDateTime struct {
 	ns   *big.Int       // epoch nanoseconds, in [nsMinInstant, nsMaxInstant]
 	loc  *time.Location // resolved zone the offset lookup runs against
 	tzID BStr           // canonical time-zone identifier, reported by timeZoneId and toString
+	cal  string         // calendar id, empty for iso8601, that reads the wall-clock fields
+}
+
+// calendarID maps the stored calendar to its identifier, reading the empty default as the ISO
+// calendar so a zoned date-time built with no calendar reports iso8601.
+func (z *ZonedDateTime) calendarID() string {
+	if z.cal == "" {
+		return "iso8601"
+	}
+	return z.cal
 }
 
 // resolveTimeZone turns a Temporal time-zone identifier into a standard-library location and
@@ -2235,7 +2266,7 @@ func NewZonedDateTime(epochNanoseconds *big.Int, timeZone BStr) *ZonedDateTime {
 // specification makes. from over a string or a property bag needs the parser and the option
 // handling and hands back at lowering, so this body is only reached with a ZonedDateTime.
 func ZonedDateTimeFrom(z *ZonedDateTime) *ZonedDateTime {
-	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID}
+	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: z.cal}
 }
 
 // ZonedDateTimeFromString implements Temporal.ZonedDateTime.from over a string. The string
@@ -2405,7 +2436,7 @@ func (z *ZonedDateTime) localDateTime() *PlainDateTime {
 	second := int(rem / 1_000_000_000)
 	frac := rem % 1_000_000_000
 	return &PlainDateTime{
-		date: PlainDate{year: year, month: month, day: day},
+		date: PlainDate{year: year, month: month, day: day, cal: z.cal},
 		time: PlainTime{
 			hour:        hour,
 			minute:      minute,
@@ -2433,8 +2464,8 @@ func (z *ZonedDateTime) EpochMilliseconds() float64 {
 // TimeZoneId reports the canonical time-zone identifier.
 func (z *ZonedDateTime) TimeZoneId() BStr { return z.tzID }
 
-// CalendarId reports iso8601, the only calendar this slice hosts.
-func (z *ZonedDateTime) CalendarId() BStr { return FromGoString("iso8601") }
+// CalendarId reports the calendar the wall-clock fields read under, iso8601 by default.
+func (z *ZonedDateTime) CalendarId() BStr { return FromGoString(z.calendarID()) }
 
 // OffsetNanoseconds reports the zone's UTC offset at this instant in nanoseconds. The offset
 // stays within ±14 hours, so the nanosecond product is exact in a float64.
@@ -2496,10 +2527,11 @@ func (z *ZonedDateTime) ToPlainTime() *PlainTime {
 
 // Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two
 // zoned date-times are equal when they name the same instant in the same zone under the same
-// calendar. The calendar is iso8601 on both, so the check is the count and the canonical zone
-// identifier.
+// calendar, so the check is the count, the canonical zone identifier, and the calendar.
 func (z *ZonedDateTime) Equals(other *ZonedDateTime) bool {
-	return z.ns.Cmp(other.ns) == 0 && z.tzID.ToGoString() == other.tzID.ToGoString()
+	return z.ns.Cmp(other.ns) == 0 &&
+		z.tzID.ToGoString() == other.tzID.ToGoString() &&
+		z.calendarID() == other.calendarID()
 }
 
 // ZonedDateTimeCompare implements Temporal.ZonedDateTime.compare: -1, 0, or 1 as the first
@@ -2508,12 +2540,14 @@ func (z *ZonedDateTime) Equals(other *ZonedDateTime) bool {
 func ZonedDateTimeCompare(a, b *ZonedDateTime) float64 { return float64(a.ns.Cmp(b.ns)) }
 
 // ToString implements Temporal.ZonedDateTime.prototype.toString under the default options:
-// the local ISO 8601 date-time, the UTC offset at this instant, and the time-zone identifier
-// in brackets, the round-trippable form.
+// the local ISO 8601 date-time, the UTC offset at this instant, the time-zone identifier in
+// brackets, and, for a non-ISO calendar, the calendar annotation after it, the round-trippable
+// form.
 func (z *ZonedDateTime) ToString() BStr {
 	dt := z.localDateTime()
-	return FromGoString(dt.date.isoString() + "T" + dt.time.isoString() +
-		formatOffset(z.offsetSeconds()) + "[" + z.tzID.ToGoString() + "]")
+	return FromGoString(dt.date.dateCore() + "T" + dt.time.isoString() +
+		formatOffset(z.offsetSeconds()) + "[" + z.tzID.ToGoString() + "]" +
+		dt.date.calendarAnnotation())
 }
 
 // ToJSON implements Temporal.ZonedDateTime.prototype.toJSON, the same string toString
