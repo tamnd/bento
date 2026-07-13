@@ -280,3 +280,53 @@ func TestPlainYearMonthFromStringThrows(t *testing.T) {
 		}
 	}
 }
+
+// TestTemporalAnnotationGrammarAccepts pins the RFC 9557 annotations the shared parser accepts
+// through the PlainDate path: a time zone with or without a critical marker, a known or unknown
+// lowercase key, a key with digits, underscores, or hyphens, and the first of two calendar
+// annotations winning. All checked against @js-temporal/polyfill.
+func TestTemporalAnnotationGrammarAccepts(t *testing.T) {
+	cases := []struct{ in, wantCal string }{
+		{"2024-06-15[America/New_York]", "iso8601"},
+		{"2024-06-15[!America/New_York]", "iso8601"},
+		{"2024-06-15[u-ca=iso8601]", "iso8601"},
+		{"2024-06-15[!u-ca=iso8601]", "iso8601"},
+		{"2024-06-15[foo=bar]", "iso8601"},
+		{"2024-06-15[foo1=bar]", "iso8601"},
+		{"2024-06-15[foo_bar=baz]", "iso8601"},
+		{"2024-06-15[u-ca=iso8601][foo=bar]", "iso8601"},
+		{"2024-06-15[u-ca=gregory][u-ca=iso8601]", "gregory"},
+	}
+	for _, c := range cases {
+		d := PlainDateFromString(c.in)
+		if got := d.CalendarId().ToGoString(); got != c.wantCal {
+			t.Errorf("PlainDateFromString(%q) calendar = %q, want %q", c.in, got, c.wantCal)
+		}
+	}
+}
+
+// TestTemporalAnnotationGrammarRejects pins the RFC 9557 annotations the shared parser rejects
+// through the PlainDate path: an uppercase or mixed-case key, a leading-digit key, an empty
+// bracket, and a critical annotation whose key is not "u-ca". Each throws a RangeError, matching
+// @js-temporal/polyfill.
+func TestTemporalAnnotationGrammarRejects(t *testing.T) {
+	bad := []string{
+		"2024-06-15[FOO=bar]",
+		"2024-06-15[u-CA=iso8601]",
+		"2024-06-15[U-CA=iso8601]",
+		"2024-06-15[9foo=bar]",
+		"2024-06-15[]",
+		"2024-06-15[!foo=bar]",
+		"2024-06-15[!x-y=z]",
+	}
+	for _, s := range bad {
+		name := catchThrow(func() { PlainDateFromString(s) })
+		if name == "" {
+			t.Errorf("PlainDateFromString(%q) did not throw, want RangeError", s)
+			continue
+		}
+		if name != "RangeError" {
+			t.Errorf("PlainDateFromString(%q) threw %s, want RangeError", s, name)
+		}
+	}
+}
