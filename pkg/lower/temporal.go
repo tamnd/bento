@@ -1103,15 +1103,22 @@ func (r *Renderer) plainDateStaticCall(method string, argNodes []frontend.Node) 
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.from with options is a later slice"}
 		}
-		if !r.isPlainDate(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.from over a string or a property bag is a later slice"}
+		if r.isPlainDate(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainDateFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if !literalCalendarHosted(lit) {
+				return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.from over a string naming a calendar bento does not host is a later slice"}
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainDateFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "PlainDateFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.from over a dynamic string or a property bag is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate." + method + " is a later slice"}
 	}
@@ -1246,6 +1253,37 @@ func (r *Renderer) hostedCalendar(node frontend.Node) (string, bool) {
 		return "japanese", true
 	default:
 		return "", false
+	}
+}
+
+// literalCalendarHosted reports whether a literal Temporal string names only a calendar
+// bento hosts, so the from-string path may route it to the runtime parser. It returns
+// false when the string carries a [u-ca=<id>] (or critical [!u-ca=<id>]) annotation whose
+// id is not one of the hosted calendars, since the runtime parser throws a RangeError on an
+// unhosted id while the specification would succeed with that calendar; such a string hands
+// back at lowering instead. A string with no calendar annotation, or one naming a hosted
+// calendar, is safe.
+func literalCalendarHosted(s string) bool {
+	const key = "[u-ca="
+	i := strings.Index(s, key)
+	if i < 0 {
+		i = strings.Index(s, "[!u-ca=")
+		if i < 0 {
+			return true
+		}
+		i += len("[!u-ca=")
+	} else {
+		i += len(key)
+	}
+	end := strings.IndexByte(s[i:], ']')
+	if end < 0 {
+		return true // a malformed annotation; the runtime parser rejects it uniformly
+	}
+	switch strings.ToLower(s[i : i+end]) {
+	case "iso8601", "gregory", "roc", "japanese":
+		return true
+	default:
+		return false
 	}
 }
 
