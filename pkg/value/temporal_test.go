@@ -341,6 +341,72 @@ func TestPlainTimeRejects(t *testing.T) {
 	}
 }
 
+// bagThrows reports whether f panics with a Thrown value, the signal a RangeError
+// reached the caller.
+func bagThrows(f func()) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	f()
+	return false
+}
+
+// TestPlainTimeFromFields drives Temporal.PlainTime.from over a property bag: absent
+// fields fall to zero, present fields set, and overflow chooses between clamp and throw.
+// The expected renderings come from @js-temporal/polyfill.
+func TestPlainTimeFromFields(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	cases := []struct {
+		name                string
+		h, m, s, ms, us, ns Opt[float64]
+		overflow            string
+		want                string
+	}{
+		{"three fields", some(12), some(30), some(15), none, none, none, "constrain", "12:30:15"},
+		{"hour over constrain", some(25), none, none, none, none, none, "constrain", "23:00:00"},
+		{"minute over constrain", none, some(90), none, none, none, none, "constrain", "00:59:00"},
+		{"millisecond only", some(5), none, none, some(250), none, none, "constrain", "05:00:00.25"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pt := PlainTimeFromFields(c.h, c.m, c.s, c.ms, c.us, c.ns, c.overflow)
+			if got := pt.ToString().ToGoString(); got != c.want {
+				t.Errorf("PlainTimeFromFields = %q, want %q", got, c.want)
+			}
+		})
+	}
+	// reject turns an out-of-range field into a RangeError instead of clamping.
+	if !bagThrows(func() {
+		PlainTimeFromFields(some(25), none, none, none, none, none, timeOverflowReject)
+	}) {
+		t.Error("PlainTimeFromFields with hour 25 and reject did not throw")
+	}
+}
+
+// TestPlainTimeWith drives Temporal.PlainTime.prototype.with: absent fields hold the
+// receiver's value, present fields replace it, and overflow governs the out-of-range case.
+func TestPlainTimeWith(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	base := mustPlainTime(t, 12, 30, 15, 0, 0, 0)
+	if got := base.With(none, some(45), none, none, none, none, "constrain").ToString().ToGoString(); got != "12:45:15" {
+		t.Errorf("with minute 45 = %q, want 12:45:15", got)
+	}
+	if got := base.With(some(23), some(90), none, none, none, none, "constrain").ToString().ToGoString(); got != "23:59:15" {
+		t.Errorf("with hour 23 minute 90 constrain = %q, want 23:59:15", got)
+	}
+	if !bagThrows(func() {
+		base.With(some(23), some(90), none, none, none, none, timeOverflowReject)
+	}) {
+		t.Error("with minute 90 and reject did not throw")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()

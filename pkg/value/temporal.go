@@ -547,6 +547,64 @@ func PlainTimeFrom(pt *PlainTime) *PlainTime {
 	return &PlainTime{pt.hour, pt.minute, pt.second, pt.millisecond, pt.microsecond, pt.nanosecond}
 }
 
+// timeOverflowReject is the overflow option value that makes an out-of-range field
+// throw rather than clamp. The other value, "constrain", is the default and the else
+// branch, so only the reject spelling needs a name. The lowerer resolves the option
+// bag at compile time and passes the string through.
+const timeOverflowReject = "reject"
+
+// regulatePlainTime builds a PlainTime from six optional fields laid over six base
+// values. A present field truncates toward zero through ToIntegerWithTruncation; an
+// absent one keeps its base, which is zero for from over a bag and the receiver's own
+// field for with, so the one helper serves both. Running the truncation over a base is
+// a no-op, since a base is already an in-range integer. Under constrain each field then
+// clamps to its ISO range; under reject an out-of-range field throws a RangeError,
+// matching Temporal's RegulateTime.
+func regulatePlainTime(base [6]float64, fields [6]Opt[float64], overflow string) *PlainTime {
+	maxima := [6]float64{23, 59, 59, 999, 999, 999}
+	var v [6]float64
+	for i := range fields {
+		v[i] = toIntegerWithTruncation(fields[i].Or(base[i]))
+	}
+	if overflow == timeOverflowReject {
+		rejectTime(v[0], v[1], v[2], v[3], v[4], v[5])
+	} else {
+		for i := range v {
+			v[i] = clampFloat(v[i], 0, maxima[i])
+		}
+	}
+	return &PlainTime{int(v[0]), int(v[1]), int(v[2]), int(v[3]), int(v[4]), int(v[5])}
+}
+
+// clampFloat returns x confined to the closed range [lo, hi].
+func clampFloat(x, lo, hi float64) float64 {
+	if x < lo {
+		return lo
+	}
+	if x > hi {
+		return hi
+	}
+	return x
+}
+
+// PlainTimeFromFields implements Temporal.PlainTime.from over a property bag: it lays
+// the bag's present fields over an all-zero base, so an omitted field defaults to the
+// zero midnight carries, and regulates with the overflow option. The lowerer reads the
+// bag at compile time, requires at least one time field, and passes each as a present
+// or absent optional.
+func PlainTimeFromFields(hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], overflow string) *PlainTime {
+	return regulatePlainTime([6]float64{}, [6]Opt[float64]{hour, minute, second, millisecond, microsecond, nanosecond}, overflow)
+}
+
+// With implements Temporal.PlainTime.prototype.with: it lays the bag's present fields
+// over the receiver's current fields, so an omitted field keeps its existing value, and
+// regulates with the overflow option. The result is a fresh PlainTime and the receiver
+// is unchanged.
+func (pt *PlainTime) With(hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], overflow string) *PlainTime {
+	base := [6]float64{float64(pt.hour), float64(pt.minute), float64(pt.second), float64(pt.millisecond), float64(pt.microsecond), float64(pt.nanosecond)}
+	return regulatePlainTime(base, [6]Opt[float64]{hour, minute, second, millisecond, microsecond, nanosecond}, overflow)
+}
+
 // rejectTime throws a RangeError unless every field is in its ISO range: the hour in
 // 0..23, the minute and second in 0..59, and each of the three sub-second fields in
 // 0..999. The arguments are the truncated float64s from ToIntegerWithTruncation.

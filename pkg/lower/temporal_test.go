@@ -365,9 +365,9 @@ func TestPlainTimeHandBacks(t *testing.T) {
 			want: "Temporal.PlainTime.prototype.add is a later slice",
 		},
 		{
-			name: "from a property bag",
-			src:  "const t = Temporal.PlainTime.from({ hour: 12, minute: 30 });\nconsole.log(t.hour);",
-			want: "Temporal.PlainTime.from over a property bag or a value not statically typed as a string is a later slice",
+			name: "from a bag with a shorthand key",
+			src:  "const hour = 12;\nconst t = Temporal.PlainTime.from({ hour });\nconsole.log(t.hour);",
+			want: "Temporal.PlainTime.from over a bag with a computed or shorthand key is a later slice",
 		},
 		{
 			name: "round",
@@ -382,6 +382,59 @@ func TestPlainTimeHandBacks(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestPlainTimeFromBag pins Temporal.PlainTime.from over a property bag: each named field
+// lowers to value.Some[float64] and each absent one to value.None[float64], with the
+// overflow option threaded through as a trailing string. The default overflow is constrain.
+func TestPlainTimeFromBag(t *testing.T) {
+	const src = `const t = Temporal.PlainTime.from({ hour: 12, minute: 30 });
+console.log(t.hour);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		"value.PlainTimeFromFields(",
+		"value.Some[float64](12)",
+		"value.Some[float64](30)",
+		"value.None[float64]()",
+		`"constrain"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeFromBagReject pins the overflow option: an explicit reject rides through as
+// the trailing string literal to the runtime factory.
+func TestPlainTimeFromBagReject(t *testing.T) {
+	const src = `const t = Temporal.PlainTime.from({ hour: 12 }, { overflow: "reject" });
+console.log(t.hour);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.PlainTimeFromFields(", `"reject"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeWith pins Temporal.PlainTime.prototype.with: the receiver's With method
+// takes the six present-or-absent fields and the overflow string, so an absent field holds
+// the receiver's value at run time.
+func TestPlainTimeWith(t *testing.T) {
+	const src = `const t = new Temporal.PlainTime(12, 30, 15);
+const u = t.with({ minute: 45 });
+console.log(u.minute);`
+	got := renderProgram(t, src)
+	for _, want := range []string{
+		".With(",
+		"value.None[float64]()",
+		"value.Some[float64](45)",
+		`"constrain"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
 	}
 }
 

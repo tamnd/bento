@@ -875,6 +875,23 @@ func (r *Renderer) plainTimeMethodCall(recvNode frontend.Node, method string, ar
 			name = "ToJSON"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "with":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype.with takes at least one argument"}
+		}
+		fields, err := r.plainTimeBagFields("Temporal.PlainTime.prototype.with", argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption("Temporal.PlainTime.prototype.with", argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: append(fields[:], stringLit(overflow))}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype." + method + " is a later slice"}
 	}
@@ -1178,11 +1195,125 @@ func (r *Renderer) plainDateStaticCall(method string, argNodes []frontend.Node) 
 	}
 }
 
+// timeFieldKeys is the ordered set of PlainTime component names a property bag may
+// carry, the keys Temporal.PlainTime.from and PlainTime.prototype.with read. The order
+// matches the runtime factory's parameter order.
+var timeFieldKeys = [6]string{"hour", "minute", "second", "millisecond", "microsecond", "nanosecond"}
+
+// stringLit renders a Go string literal expression, the overflow option the Temporal
+// from and with lowerings pass to their runtime factory.
+func stringLit(s string) ast.Expr {
+	return &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(s)}
+}
+
+// plainTimeBagFields reads a PlainTime property bag at compile time into six present-or-
+// absent field expressions. The argument must be an object literal whose members are
+// plain properties keyed by a time-field name with a number-typed value; a spread, a
+// computed or shorthand key, an unknown key (calendar and timeZone among them), a
+// non-number value, or a repeated field hands back, since the field would then depend on
+// runtime data or a coercion this slice does not carry. At least one field must be
+// present, the record Temporal requires. Each present field lowers to
+// value.Some[float64](v) and each absent one to value.None[float64]().
+func (r *Renderer) plainTimeBagFields(what string, n frontend.Node) ([6]ast.Expr, error) {
+	var fields [6]ast.Expr
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return fields, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
+	}
+	var seen [6]bool
+	present := false
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		idx := -1
+		for i, k := range timeFieldKeys {
+			if k == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+		if seen[idx] {
+			return fields, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+		}
+		if !r.isNumber(kids[1]) {
+			return fields, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+		}
+		val, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return fields, err
+		}
+		fields[idx] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{val}}
+		seen[idx] = true
+		present = true
+	}
+	if !present {
+		return fields, &NotYetLowerable{Reason: what + " over an empty bag (a TypeError at run time) is a later slice"}
+	}
+	for i := range fields {
+		if fields[i] == nil {
+			fields[i] = &ast.CallExpr{Fun: index(sel("value", "None"), ident("float64"))}
+		}
+	}
+	r.requireImport(valuePkg)
+	return fields, nil
+}
+
+// temporalOverflowOption reads the overflow option from a Temporal from or with options
+// argument at compile time. With no options argument the default is constrain. An
+// options argument must be an object literal carrying only an overflow property whose
+// value is the string literal "constrain" or "reject"; any other shape hands back, since
+// the mode would then depend on runtime data. The returned string is passed straight to
+// the runtime factory.
+func (r *Renderer) temporalOverflowOption(what string, argNodes []frontend.Node) (string, error) {
+	if len(argNodes) == 0 {
+		return "constrain", nil
+	}
+	if len(argNodes) != 1 {
+		return "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	n := argNodes[0]
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+	}
+	overflow := "constrain"
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		if key := r.prog.Text(kids[0]); key != "overflow" {
+			return "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+		lit, ok := r.stringLiteralValue(kids[1])
+		if !ok {
+			return "", &NotYetLowerable{Reason: what + " with a non-literal overflow option is a later slice"}
+		}
+		if lit != "constrain" && lit != "reject" {
+			return "", &NotYetLowerable{Reason: what + " with an invalid overflow option (a RangeError at run time) is a later slice"}
+		}
+		overflow = lit
+	}
+	return overflow, nil
+}
+
 // plainTimeStaticCall lowers Temporal.PlainTime.compare(a, b) or Temporal.PlainTime.from(x),
 // the mirror of the PlainDate statics. compare lowers to value.PlainTimeCompare; from lowers
-// to value.PlainTimeFrom for a PlainTime argument and to value.PlainTimeFromString for a
-// string literal. A PlainTime carries no calendar, so unlike the PlainDate from there is no
-// calendar gate on the literal. A dynamic string or a property bag hands back for a later slice.
+// to value.PlainTimeFrom for a PlainTime argument, value.PlainTimeFromString for a string,
+// and value.PlainTimeFromFields for a property bag with an optional overflow option. A
+// PlainTime carries no calendar, so unlike the PlainDate from there is no calendar gate. A
+// bag that is not an object literal, or one whose fields are not statically numbers, hands
+// back for a later slice.
 func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
@@ -1203,10 +1334,13 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "PlainTimeCompare"), Args: []ast.Expr{a, b}}, nil
 	case "from":
-		if len(argNodes) != 1 {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from with options is a later slice"}
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from takes at least one argument"}
 		}
 		if r.isPlainTime(argNodes[0]) {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a PlainTime with an options argument is a later slice"}
+			}
 			arg, err := r.lowerExpr(argNodes[0])
 			if err != nil {
 				return nil, err
@@ -1215,10 +1349,16 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 			return &ast.CallExpr{Fun: sel("value", "PlainTimeFrom"), Args: []ast.Expr{arg}}, nil
 		}
 		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a string with an options argument is a later slice"}
+			}
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
 		if r.isString(argNodes[0]) {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a string with an options argument is a later slice"}
+			}
 			arg, err := r.lowerExpr(argNodes[0])
 			if err != nil {
 				return nil, err
@@ -1226,7 +1366,16 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.from over a property bag or a value not statically typed as a string is a later slice"}
+		fields, err := r.plainTimeBagFields("Temporal.PlainTime.from", argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption("Temporal.PlainTime.from", argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromFields"), Args: append(fields[:], stringLit(overflow))}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime." + method + " is a later slice"}
 	}
