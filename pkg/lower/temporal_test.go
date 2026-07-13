@@ -342,9 +342,9 @@ func TestPlainTimeHandBacks(t *testing.T) {
 			want: "Temporal.PlainTime.prototype.add is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const t = Temporal.PlainTime.from(\"12:30:00\");\nconsole.log(t.hour);",
-			want: "Temporal.PlainTime.from over a string or a property bag is a later slice",
+			name: "from a property bag",
+			src:  "const t = Temporal.PlainTime.from({ hour: 12, minute: 30 });\nconsole.log(t.hour);",
+			want: "Temporal.PlainTime.from over a dynamic string or a property bag is a later slice",
 		},
 		{
 			name: "round",
@@ -1246,5 +1246,31 @@ func TestPlainDateFromStringHandsBack(t *testing.T) {
 	unhosted := renderProgramHandBack(t, `const d = Temporal.PlainDate.from("2024-06-30[u-ca=hebrew]");`)
 	if !strings.Contains(unhosted, "does not host") {
 		t.Errorf("unhosted-calendar from did not hand back with the expected reason: %q", unhosted)
+	}
+}
+
+// TestPlainTimeFromStringConstruction pins Temporal.PlainTime.from over a literal string
+// routing to value.PlainTimeFromString, both a time-only and a full date-time literal. A
+// PlainTime carries no calendar, so any calendar annotation lowers without a gate.
+func TestPlainTimeFromStringConstruction(t *testing.T) {
+	got := renderProgram(t, `const a = Temporal.PlainTime.from("12:30:00");
+const b = Temporal.PlainTime.from("2024-06-30T12:30:00[u-ca=gregory]");
+console.log(a.toString(), b.minute);`)
+	for _, want := range []string{
+		`value.PlainTimeFromString("12:30:00")`,
+		`value.PlainTimeFromString("2024-06-30T12:30:00[u-ca=gregory]")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainTimeFromStringHandsBack pins that a dynamic string, whose value is unknown at
+// compile time, hands back for a later slice, while a literal string lowers.
+func TestPlainTimeFromStringHandsBack(t *testing.T) {
+	dyn := renderProgramHandBack(t, `function f(s: string) { return Temporal.PlainTime.from(s); }`)
+	if !strings.Contains(dyn, "dynamic string") {
+		t.Errorf("dynamic-string from did not hand back with the expected reason: %q", dyn)
 	}
 }
