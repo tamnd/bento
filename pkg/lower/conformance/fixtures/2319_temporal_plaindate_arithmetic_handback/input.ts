@@ -1,7 +1,7 @@
-// PlainDate.with reshapes a date from a bag of calendar fields, which needs the field
-// resolution and constrain-or-reject balancing that a later slice carries. It hands back
-// here so the compiler reports the ceiling rather than emit a wrong date. add, subtract,
-// until, and since already lower.
+// PlainDate.toPlainDateTime widens a date to a date-time by pairing it with a wall clock,
+// which needs the PlainTime coercion and the combined type a later slice carries. It hands
+// back here so the compiler reports the ceiling rather than emit a wrong value. add,
+// subtract, until, since, and with already lower.
 const d = new Temporal.PlainDate(2020, 2, 29);
-const e = d.with({ day: 15 });
-console.log(e.day);
+const dt = d.toPlainDateTime();
+console.log(dt.day);
