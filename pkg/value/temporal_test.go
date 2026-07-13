@@ -568,6 +568,55 @@ func TestPlainTimeUntilSince(t *testing.T) {
 	}
 }
 
+// TestPlainDateAddSubtract checks the calendar date arithmetic against values taken from
+// @js-temporal/polyfill: the month and year carry with the day clamped to a short month under
+// constrain, the week and day balance across a month and year boundary, the time components
+// folding into a whole-day carry truncated toward zero, and the reject overflow throwing when
+// the clamped day does not fit.
+func TestPlainDateAddSubtract(t *testing.T) {
+	// dur builds a Duration from the named-ish positional components.
+	dur := func(y, mo, w, d, h, mi, s float64) *Duration {
+		return NewDuration(y, mo, w, d, h, mi, s, 0, 0, 0)
+	}
+	jan31 := mustPlainDate(t, 2024, 1, 31)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"month carry clamps to short month", jan31.AddDate(dur(0, 1, 0, 0, 0, 0, 0), "constrain").ToString().ToGoString(), "2024-02-29"},
+		{"year onto a leap day clamps", mustPlainDate(t, 2020, 2, 29).AddDate(dur(1, 0, 0, 0, 0, 0, 0), "constrain").ToString().ToGoString(), "2021-02-28"},
+		{"plain year add", mustPlainDate(t, 2024, 1, 31).AddDate(dur(1, 0, 0, 0, 0, 0, 0), "constrain").ToString().ToGoString(), "2025-01-31"},
+		{"two weeks cross the month", mustPlainDate(t, 2024, 1, 15).AddDate(dur(0, 0, 2, 0, 0, 0, 0), "constrain").ToString().ToGoString(), "2024-01-29"},
+		{"days roll into March", jan31.AddDate(dur(0, 0, 0, 30, 0, 0, 0), "constrain").ToString().ToGoString(), "2024-03-01"},
+		{"day past year end", mustPlainDate(t, 2024, 12, 31).AddDate(dur(0, 0, 0, 1, 0, 0, 0), "constrain").ToString().ToGoString(), "2025-01-01"},
+		{"years months days compose", jan31.AddDate(dur(1, 1, 0, 1, 0, 0, 0), "constrain").ToString().ToGoString(), "2025-03-01"},
+		{"25 hours carry one day", jan31.AddDate(dur(0, 0, 0, 0, 25, 0, 0), "constrain").ToString().ToGoString(), "2024-02-01"},
+		{"day and 25 hours carry two", jan31.AddDate(dur(0, 0, 0, 1, 25, 0, 0), "constrain").ToString().ToGoString(), "2024-02-02"},
+		{"23 hours carry nothing", mustPlainDate(t, 2024, 6, 15).AddDate(dur(0, 0, 0, 0, 23, 0, 0), "constrain").ToString().ToGoString(), "2024-06-15"},
+		{"negative hours trunc toward zero", mustPlainDate(t, 2024, 6, 15).AddDate(dur(0, 0, 0, 0, -25, 0, 0), "constrain").ToString().ToGoString(), "2024-06-14"},
+		{"subtract via negated duration", mustPlainDate(t, 2024, 3, 31).AddDate(dur(0, 1, 0, 0, 0, 0, 0).Negated(), "constrain").ToString().ToGoString(), "2024-02-29"},
+		{"subtract a month negative", mustPlainDate(t, 2024, 3, 31).AddDate(dur(0, -1, 0, 0, 0, 0, 0), "constrain").ToString().ToGoString(), "2024-02-29"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: add = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// reject throws when the day does not fit the target month.
+	if !bagThrows(func() { jan31.AddDate(dur(0, 1, 0, 0, 0, 0, 0), "reject") }) {
+		t.Error("Jan 31 + 1 month under reject did not throw")
+	}
+	if !bagThrows(func() { mustPlainDate(t, 2020, 2, 29).AddDate(dur(1, 0, 0, 0, 0, 0, 0), "reject") }) {
+		t.Error("Feb 29 + 1 year under reject did not throw")
+	}
+	// A date pushed past the representable range throws.
+	if !bagThrows(func() { mustPlainDate(t, 275760, 9, 13).AddDate(dur(0, 0, 0, 1, 0, 0, 0), "constrain") }) {
+		t.Error("a day past the maximum date did not throw")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()
