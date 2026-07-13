@@ -1050,7 +1050,7 @@ func (r *Renderer) plainYearMonthStaticCall(method string, argNodes []frontend.N
 			return &ast.CallExpr{Fun: sel("value", "PlainYearMonthFrom"), Args: []ast.Expr{arg}}, nil
 		}
 		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
-			if !literalYearMonthISOOnly(lit) {
+			if !literalISOCalendarOnly(lit) {
 				return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.from over a string naming a non-ISO calendar is a later slice"}
 			}
 			r.requireImport(valuePkg)
@@ -1064,22 +1064,32 @@ func (r *Renderer) plainYearMonthStaticCall(method string, argNodes []frontend.N
 
 // plainMonthDayStaticCall lowers Temporal.PlainMonthDay.from(x). A month-day has no compare
 // static (month-days are not ordered), so only from is handled: it lowers to
-// value.PlainMonthDayFrom for a PlainMonthDay argument and hands back for a string or a bag.
+// value.PlainMonthDayFrom for a PlainMonthDay argument and value.PlainMonthDayFromString for a
+// string literal. A PlainMonthDay is ISO-only, so the literal is gated on
+// literalISOCalendarOnly, the same stricter gate PlainYearMonth uses: a literal naming any
+// non-ISO calendar hands back, as does a dynamic string or a property bag.
 func (r *Renderer) plainMonthDayStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "from":
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.from with options is a later slice"}
 		}
-		if !r.isPlainMonthDay(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.from over a string or a property bag is a later slice"}
+		if r.isPlainMonthDay(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainMonthDayFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if !literalISOCalendarOnly(lit) {
+				return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.from over a string naming a non-ISO calendar is a later slice"}
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "PlainMonthDayFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "PlainMonthDayFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.from over a dynamic string or a property bag is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay." + method + " is a later slice"}
 	}
@@ -1313,13 +1323,14 @@ func literalCalendarHosted(s string) bool {
 	}
 }
 
-// literalYearMonthISOOnly reports whether a literal Temporal string carries no calendar
-// annotation or only the ISO calendar, the sole calendar bento's PlainYearMonth hosts. Unlike
-// literalCalendarHosted it rejects gregory, roc, and japanese too, since a PlainYearMonth has
-// no calendar field to carry them: a full-date string naming such a calendar would parse to a
-// non-ISO year-month the specification accepts but the runtime cannot represent, so the from
-// path hands it back rather than drop the calendar and emit a wrong result.
-func literalYearMonthISOOnly(s string) bool {
+// literalISOCalendarOnly reports whether a literal Temporal string carries no calendar
+// annotation or only the ISO calendar, the sole calendar bento's PlainYearMonth and
+// PlainMonthDay host. Unlike literalCalendarHosted it rejects gregory, roc, and japanese too,
+// since neither type has a calendar field to carry them: a full-date string naming such a
+// calendar would parse to a non-ISO year-month or month-day the specification accepts but the
+// runtime cannot represent, so the from path hands it back rather than drop the calendar and
+// emit a wrong result.
+func literalISOCalendarOnly(s string) bool {
 	const key = "[u-ca="
 	i := strings.Index(s, key)
 	if i < 0 {

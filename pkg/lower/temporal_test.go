@@ -706,8 +706,9 @@ console.log(c.day);`
 	}
 }
 
-// TestPlainMonthDayHandBacks pins the honest ceilings: the reshaping and conversion methods and
-// from over a string each hand back with a reason naming where the work belongs.
+// TestPlainMonthDayHandBacks pins the honest ceilings: the reshaping and conversion methods, a
+// property bag, and a non-ISO calendar string each hand back with a reason naming where the
+// work belongs.
 func TestPlainMonthDayHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -725,9 +726,14 @@ func TestPlainMonthDayHandBacks(t *testing.T) {
 			want: "Temporal.PlainMonthDay.prototype.toPlainDate is a later slice",
 		},
 		{
-			name: "from a string",
-			src:  "const md = Temporal.PlainMonthDay.from(\"03-15\");\nconsole.log(md.day);",
-			want: "Temporal.PlainMonthDay.from over a string or a property bag is a later slice",
+			name: "from a property bag",
+			src:  "const md = Temporal.PlainMonthDay.from({ month: 3, day: 15 });\nconsole.log(md.day);",
+			want: "Temporal.PlainMonthDay.from over a dynamic string or a property bag is a later slice",
+		},
+		{
+			name: "from a non-ISO calendar string",
+			src:  "const md = Temporal.PlainMonthDay.from(\"2024-06-15[u-ca=gregory]\");\nconsole.log(md.day);",
+			want: "Temporal.PlainMonthDay.from over a string naming a non-ISO calendar is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -737,6 +743,17 @@ func TestPlainMonthDayHandBacks(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestPlainMonthDayFromStringConstruction pins Temporal.PlainMonthDay.from over a string
+// literal to value.PlainMonthDayFromString with the string carried through verbatim.
+func TestPlainMonthDayFromStringConstruction(t *testing.T) {
+	const src = `const md = Temporal.PlainMonthDay.from("03-15");
+console.log(md.day);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.PlainMonthDayFromString("03-15")`) {
+		t.Errorf("rendered program missing the from-string call:\n%s", got)
 	}
 }
 

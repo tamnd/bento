@@ -330,3 +330,60 @@ func TestTemporalAnnotationGrammarRejects(t *testing.T) {
 		}
 	}
 }
+
+// TestPlainMonthDayFromString pins the strings Temporal.PlainMonthDay.from accepts: the bare
+// extended and basic month-day forms with an optional "--" prefix, a full date or date-time
+// string whose month and day it keeps, an expanded-year full date, an explicit iso8601
+// annotation, and the yearless forms that admit a day out of range for the month. All checked
+// against @js-temporal/polyfill.
+func TestPlainMonthDayFromString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"10-01", "10-01"},
+		{"1001", "10-01"},
+		{"--10-01", "10-01"},
+		{"--1001", "10-01"},
+		{"1976-10-01", "10-01"},
+		{"19761001", "10-01"},
+		{"1976-10-01T15:23:30.1+00:00", "10-01"},
+		{"2024-06-30T12:30:45", "06-30"},
+		{"-999999-10-01", "10-01"},
+		{"+999999-10-01", "10-01"},
+		{"10-01[u-ca=iso8601]", "10-01"},
+		{"10-01[!u-ca=iso8601]", "10-01"},
+		{"2024-02-29", "02-29"},
+		{"02-29", "02-29"},
+		{"02-30", "02-30"},
+		{"06-31", "06-31"},
+	}
+	for _, c := range cases {
+		md := PlainMonthDayFromString(c.in)
+		if got := md.ToString().ToGoString(); got != c.want {
+			t.Errorf("PlainMonthDayFromString(%q) toString = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestPlainMonthDayFromStringThrows pins the strings PlainMonthDay.from rejects: a bad grammar, a
+// single leading dash, a bare month-day with a time, an out-of-range month or day, a day out of
+// range on a full date, a Z designator, and a non-ISO calendar on a bare month-day each throw a
+// RangeError, all against @js-temporal/polyfill.
+func TestPlainMonthDayFromStringThrows(t *testing.T) {
+	bad := []string{
+		"10", "100", "10-1", "1-01", "-10-01", "---10-01", "202406",
+		"13-01", "00-15", "06-00", "06-32", "02-32",
+		"10-01T00:00", "10-01 12:00",
+		"2024-06-31", "2024-02-30", "2024-13-01",
+		"2024-06-15Z", "10-01Z",
+		"06-15[u-ca=gregory]", "06-15[u-ca=hebrew]",
+	}
+	for _, s := range bad {
+		name := catchThrow(func() { PlainMonthDayFromString(s) })
+		if name == "" {
+			t.Errorf("PlainMonthDayFromString(%q) did not throw, want RangeError", s)
+			continue
+		}
+		if name != "RangeError" {
+			t.Errorf("PlainMonthDayFromString(%q) threw %s, want RangeError", s, name)
+		}
+	}
+}
