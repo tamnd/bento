@@ -1327,3 +1327,119 @@ func TestNowDefaultZone(t *testing.T) {
 		t.Errorf("NowInstant at epoch = %q", got)
 	}
 }
+
+// calendarThrows reports whether NewPlainDateCal throws a RangeError for the calendar id.
+func calendarThrows(id string) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	NewPlainDateCal(2024, 6, 30, id)
+	return false
+}
+
+// TestGregoryCalendar checks the gregory calendar against @js-temporal/polyfill: it shares
+// the ISO year, month, and day but adds an era, and it annotates its toString with the
+// calendar id. The era splits at ISO year 1, so year 2024 is the "gregory" era, year 0 is
+// "gregory-inverse" eraYear 1, and year -5 is "gregory-inverse" eraYear 6.
+func TestGregoryCalendar(t *testing.T) {
+	g := NewPlainDateCal(2024, 6, 30, "gregory")
+	if got := g.CalendarId().ToGoString(); got != "gregory" {
+		t.Errorf("CalendarId = %q, want gregory", got)
+	}
+	if g.Year() != 2024 || g.Month() != 6 || g.Day() != 30 {
+		t.Errorf("fields = %v-%v-%v, want 2024-6-30", g.Year(), g.Month(), g.Day())
+	}
+	if g.Era().IsUndefined() || g.Era().Get().ToGoString() != "gregory" {
+		t.Errorf("Era = %v, want gregory", g.Era())
+	}
+	if g.EraYear().IsUndefined() || g.EraYear().Get() != 2024 {
+		t.Errorf("EraYear = %v, want 2024", g.EraYear())
+	}
+	if got := g.ToString().ToGoString(); got != "2024-06-30[u-ca=gregory]" {
+		t.Errorf("ToString = %q", got)
+	}
+	if got := g.ToJSON().ToGoString(); got != "2024-06-30[u-ca=gregory]" {
+		t.Errorf("ToJSON = %q", got)
+	}
+
+	// The era boundary: ISO year 0 and year -5 fall in the inverse era.
+	zero := NewPlainDateCal(0, 3, 15, "gregory")
+	if zero.Era().Get().ToGoString() != "gregory-inverse" {
+		t.Errorf("year 0 era = %v, want gregory-inverse", zero.Era())
+	}
+	if zero.EraYear().Get() != 1 {
+		t.Errorf("year 0 eraYear = %v, want 1", zero.EraYear())
+	}
+	neg := NewPlainDateCal(-5, 12, 31, "gregory")
+	if neg.EraYear().Get() != 6 {
+		t.Errorf("year -5 eraYear = %v, want 6", neg.EraYear())
+	}
+}
+
+// TestGregoryEqualsAndCompare checks that equals weighs the calendar while compare ignores
+// it: the same ISO day under iso8601 and under gregory is not equal but orders the same.
+func TestGregoryEqualsAndCompare(t *testing.T) {
+	iso := NewPlainDate(2024, 6, 30)
+	g := NewPlainDateCal(2024, 6, 30, "gregory")
+	if iso.Equals(g) {
+		t.Error("iso8601 date equals gregory date, want not equal")
+	}
+	if c := PlainDateCompare(iso, g); c != 0 {
+		t.Errorf("compare iso vs gregory = %v, want 0", c)
+	}
+	if !g.Equals(NewPlainDateCal(2024, 6, 30, "gregory")) {
+		t.Error("two gregory dates on the same day are not equal")
+	}
+}
+
+// TestPlainDateWithCalendar checks withCalendar reinterprets the ISO date under another
+// calendar, and that an unhosted or invalid id throws a RangeError.
+func TestPlainDateWithCalendar(t *testing.T) {
+	iso := NewPlainDate(2024, 6, 30)
+	g := PlainDateWithCalendar(iso, "gregory")
+	if got := g.CalendarId().ToGoString(); got != "gregory" {
+		t.Errorf("withCalendar id = %q, want gregory", got)
+	}
+	if g.Era().Get().ToGoString() != "gregory" {
+		t.Errorf("withCalendar era = %v, want gregory", g.Era())
+	}
+	if !calendarThrows("nonsense") {
+		t.Error("invalid calendar id did not throw")
+	}
+	if !calendarThrows("gregorian") {
+		t.Error("gregorian (not a hosted alias) did not throw")
+	}
+	if calendarThrows("GREGORY") {
+		t.Error("case-insensitive GREGORY threw, want accepted")
+	}
+}
+
+// TestGregoryPlainDateTime checks the gregory calendar on PlainDateTime: it delegates era
+// and eraYear to its date half and trails the annotation after the time.
+func TestGregoryPlainDateTime(t *testing.T) {
+	dt := NewPlainDateTimeCal(2024, 6, 30, 12, 34, 56, 0, 0, 0, "gregory")
+	if got := dt.CalendarId().ToGoString(); got != "gregory" {
+		t.Errorf("CalendarId = %q, want gregory", got)
+	}
+	if dt.Era().IsUndefined() || dt.Era().Get().ToGoString() != "gregory" {
+		t.Errorf("Era = %v, want gregory", dt.Era())
+	}
+	if dt.EraYear().Get() != 2024 {
+		t.Errorf("EraYear = %v, want 2024", dt.EraYear())
+	}
+	if got := dt.ToString().ToGoString(); got != "2024-06-30T12:34:56[u-ca=gregory]" {
+		t.Errorf("ToString = %q", got)
+	}
+	inv := NewPlainDateTimeCal(0, 3, 15, 1, 2, 3, 0, 0, 0, "gregory")
+	if inv.Era().Get().ToGoString() != "gregory-inverse" {
+		t.Errorf("year 0 era = %v, want gregory-inverse", inv.Era())
+	}
+	wc := PlainDateTimeWithCalendar(NewPlainDateTime(2024, 6, 30, 12, 0, 0, 0, 0, 0), "gregory")
+	if got := wc.ToString().ToGoString(); got != "2024-06-30T12:00:00[u-ca=gregory]" {
+		t.Errorf("withCalendar ToString = %q", got)
+	}
+}
