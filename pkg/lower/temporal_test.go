@@ -207,6 +207,35 @@ func TestPlainDateWith(t *testing.T) {
 	}
 }
 
+func TestPlainDateToPlainDateTime(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "no argument defaults to midnight",
+			src:   "const d = new Temporal.PlainDate(2020, 3, 14);\nconsole.log(d.toPlainDateTime().toString());",
+			wants: []string{".ToPlainDateTime(nil)"},
+		},
+		{
+			name:  "a plain time pairs in",
+			src:   "const d = new Temporal.PlainDate(2020, 3, 14);\nconst t = new Temporal.PlainTime(15, 30);\nconsole.log(d.toPlainDateTime(t).toString());",
+			wants: []string{".ToPlainDateTime(", "value.NewPlainTime("},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
 // and conversion methods, from over a dynamic string or a property bag, and the other
 // Temporal types each hand back with a reason naming where the work belongs.
@@ -235,6 +264,11 @@ func TestPlainDateHandBacks(t *testing.T) {
 			name: "from a property bag",
 			src:  "const d = Temporal.PlainDate.from({ year: 2020, month: 2, day: 29 });\nconsole.log(d.day);",
 			want: "Temporal.PlainDate.from over a dynamic string or a property bag is a later slice",
+		},
+		{
+			name: "toPlainDateTime over a time bag",
+			src:  "const d = new Temporal.PlainDate(2020, 3, 14);\nconsole.log(d.toPlainDateTime({ hour: 12 }).toString());",
+			want: "Temporal.PlainDate.prototype.toPlainDateTime over an argument that is not a Temporal.PlainTime is a later slice",
 		},
 	}
 	for _, c := range cases {

@@ -898,6 +898,24 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithFields")}, Args: append(fields[:], stringLit(overflow))}, nil
+	case "toPlainDateTime":
+		what := "Temporal.PlainDate.prototype.toPlainDateTime"
+		var timeArg ast.Expr = ident("nil")
+		if len(argNodes) > 0 {
+			if !r.isPlainTime(argNodes[0]) {
+				return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainTime is a later slice"}
+			}
+			t, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			timeArg = t
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToPlainDateTime")}, Args: []ast.Expr{timeArg}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " is a later slice"}
 	}
