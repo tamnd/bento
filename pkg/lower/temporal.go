@@ -934,6 +934,17 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToPlainMonthDay")}}, nil
+	case "toZonedDateTime":
+		what := "Temporal.PlainDate.prototype.toZonedDateTime"
+		tz, timeArg, err := r.plainDateToZonedArgs(what, argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToZonedDateTime")}, Args: []ast.Expr{tz, timeArg}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " is a later slice"}
 	}
@@ -1979,6 +1990,94 @@ func (r *Renderer) newTemporal(typeName string, argNodes []frontend.Node) (ast.E
 // lowers the argument and reads its Go string through this.
 func goStringOf(expr ast.Expr) ast.Expr {
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToGoString")}}
+}
+
+// plainDateToZonedArgs reads the arguments of Temporal.PlainDate.prototype.toZonedDateTime at
+// compile time into a time-zone Go-string expression and an optional PlainTime expression. The
+// argument is either a time-zone string, a literal or a string-typed value, in which case the
+// wall clock defaults to midnight, or an options bag carrying a timeZone string and an optional
+// plainTime that is a Temporal.PlainTime or a time string literal. A time-zone-like object, a
+// dynamic plainTime, a missing timeZone, or any other shape hands back, since the zone or time
+// would then depend on runtime data or a coercion this slice does not carry.
+func (r *Renderer) plainDateToZonedArgs(what string, argNodes []frontend.Node) (ast.Expr, ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, nil, &NotYetLowerable{Reason: what + " takes one argument"}
+	}
+	n := argNodes[0]
+	if tz, ok, err := r.timeZoneStringArg(n); err != nil {
+		return nil, nil, err
+	} else if ok {
+		return tz, ident("nil"), nil
+	}
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil, nil, &NotYetLowerable{Reason: what + " over an argument that is not a time-zone string or an options bag is a later slice"}
+	}
+	var tz ast.Expr
+	var pt ast.Expr = ident("nil")
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return nil, nil, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return nil, nil, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		switch key := r.prog.Text(kids[0]); key {
+		case "timeZone":
+			z, ok, err := r.timeZoneStringArg(kids[1])
+			if err != nil {
+				return nil, nil, err
+			}
+			if !ok {
+				return nil, nil, &NotYetLowerable{Reason: what + " over a bag whose timeZone is not a string is a later slice"}
+			}
+			tz = z
+		case "plainTime":
+			p, err := r.plainTimeFieldArg(what, kids[1])
+			if err != nil {
+				return nil, nil, err
+			}
+			pt = p
+		default:
+			return nil, nil, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+	}
+	if tz == nil {
+		return nil, nil, &NotYetLowerable{Reason: what + " over a bag with no timeZone (a TypeError at run time) is a later slice"}
+	}
+	return tz, pt, nil
+}
+
+// timeZoneStringArg lowers a time-zone identifier argument into the Go string the runtime
+// resolves. A string literal quotes straight through; a string-typed value reads its Go string
+// at run time. It reports false when the argument is neither, so the caller can try another
+// argument shape or hand back.
+func (r *Renderer) timeZoneStringArg(n frontend.Node) (ast.Expr, bool, error) {
+	if lit, ok := r.stringLiteralValue(n); ok {
+		return stringLit(lit), true, nil
+	}
+	if r.isString(n) {
+		e, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, false, err
+		}
+		return goStringOf(e), true, nil
+	}
+	return nil, false, nil
+}
+
+// plainTimeFieldArg lowers a plainTime option into the *PlainTime the runtime pairs with the
+// date. It is a Temporal.PlainTime expression or a time string literal parsed at run time;
+// anything else hands back, since the time would then need a coercion this slice does not carry.
+func (r *Renderer) plainTimeFieldArg(what string, n frontend.Node) (ast.Expr, error) {
+	if r.isPlainTime(n) {
+		return r.lowerExpr(n)
+	}
+	if lit, ok := r.stringLiteralValue(n); ok {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{stringLit(lit)}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a bag whose plainTime is not a Temporal.PlainTime or a time string is a later slice"}
 }
 
 // hostedCalendar reads a calendar-identifier argument the runtime hosts, the literal
