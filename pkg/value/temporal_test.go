@@ -510,6 +510,64 @@ func TestPlainTimeRound(t *testing.T) {
 	}
 }
 
+// TestPlainTimeUntilSince pins the wall-clock difference: until measures other minus the
+// receiver and since the reverse, both balanced from largestUnit down and rounded at
+// smallestUnit under the mode, with the default largestUnit hour, smallestUnit nanosecond,
+// and mode trunc. The values were checked against @js-temporal/polyfill.
+func TestPlainTimeUntilSince(t *testing.T) {
+	a := mustPlainTime(t, 12, 30, 15, 0, 0, 0)
+	b := mustPlainTime(t, 14, 45, 30, 0, 0, 0)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"until default", a.Until(b, "hour", "nanosecond", 1, "trunc").ToString().ToGoString(), "PT2H15M15S"},
+		{"since default", a.Since(b, "hour", "nanosecond", 1, "trunc").ToString().ToGoString(), "-PT2H15M15S"},
+		{"until reversed", b.Until(a, "hour", "nanosecond", 1, "trunc").ToString().ToGoString(), "-PT2H15M15S"},
+		{"until largestUnit minute", a.Until(b, "minute", "nanosecond", 1, "trunc").ToString().ToGoString(), "PT135M15S"},
+		{"until largestUnit second", a.Until(b, "second", "nanosecond", 1, "trunc").ToString().ToGoString(), "PT8115S"},
+		{"until smallestUnit minute trunc", a.Until(b, "hour", "minute", 1, "trunc").ToString().ToGoString(), "PT2H15M"},
+		{"until smallestUnit minute ceil", a.Until(b, "hour", "minute", 1, "ceil").ToString().ToGoString(), "PT2H16M"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: difference = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// A 2:45 gap rounded to the hour resolves by the signed mode. until truncs toward zero
+	// to 2 hours, ceil advances to 3, and since carries the same rounding on the negated
+	// difference, so ceil on a negative gap trims toward zero to two hours.
+	c := mustPlainTime(t, 12, 0, 0, 0, 0, 0)
+	d := mustPlainTime(t, 14, 45, 0, 0, 0, 0)
+	signed := map[string]string{
+		c.Until(d, "hour", "hour", 1, "trunc").ToString().ToGoString(): "PT2H",
+		c.Until(d, "hour", "hour", 1, "ceil").ToString().ToGoString():  "PT3H",
+		c.Since(d, "hour", "hour", 1, "trunc").ToString().ToGoString(): "-PT2H",
+		c.Since(d, "hour", "hour", 1, "ceil").ToString().ToGoString():  "-PT2H",
+		c.Since(d, "hour", "hour", 1, "floor").ToString().ToGoString(): "-PT3H",
+	}
+	for got, want := range signed {
+		if got != want {
+			t.Errorf("signed difference = %q, want %q", got, want)
+		}
+	}
+
+	// Two equal times differ by zero.
+	if got := a.Until(a, "hour", "nanosecond", 1, "trunc").ToString().ToGoString(); got != "PT0S" {
+		t.Errorf("equal times: until = %q, want PT0S", got)
+	}
+
+	// largestUnit smaller than smallestUnit throws, as does an out-of-range increment.
+	if !bagThrows(func() { a.Until(b, "second", "hour", 1, "trunc") }) {
+		t.Error("largestUnit second below smallestUnit hour did not throw")
+	}
+	if !bagThrows(func() { a.Until(b, "hour", "minute", 7, "trunc") }) {
+		t.Error("minute increment 7 did not throw")
+	}
+}
+
 // mustPlainDateTime builds a PlainDateTime and fails the test if construction threw.
 func mustPlainDateTime(t *testing.T, a ...float64) *PlainDateTime {
 	t.Helper()

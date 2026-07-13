@@ -646,23 +646,7 @@ func (pt *PlainTime) dayNanos() *big.Int {
 // rounded count wraps mod 24 hours, so rounding up from late in the day lands on the next
 // day's clock. The receiver is unchanged.
 func (pt *PlainTime) Round(smallestUnit string, increment float64, roundingMode string) *PlainTime {
-	var unitNs, dividend int64
-	switch smallestUnit {
-	case "hour":
-		unitNs, dividend = 3_600_000_000_000, 24
-	case "minute":
-		unitNs, dividend = 60_000_000_000, 60
-	case "second":
-		unitNs, dividend = 1_000_000_000, 60
-	case "millisecond":
-		unitNs, dividend = 1_000_000, 1000
-	case "microsecond":
-		unitNs, dividend = 1_000, 1000
-	case "nanosecond":
-		unitNs, dividend = 1, 1000
-	default:
-		Throw(NewRangeError(FromGoString("Temporal.PlainTime.prototype.round smallestUnit is invalid")))
-	}
+	unitNs, dividend, _ := plainTimeUnitInfo(smallestUnit)
 	inc := int64(toIntegerWithTruncation(increment))
 	if inc < 1 || inc >= dividend || dividend%inc != 0 {
 		Throw(NewRangeError(FromGoString("Temporal.PlainTime.prototype.round roundingIncrement is out of range")))
@@ -671,6 +655,77 @@ func (pt *PlainTime) Round(smallestUnit string, increment float64, roundingMode 
 	rounded := roundBigToIncrement(pt.dayNanos(), quantum, roundingMode)
 	rounded.Mod(rounded, nsPerDay)
 	return plainTimeFromDayNanos(rounded)
+}
+
+// plainTimeUnitInfo returns the nanosecond size of a Temporal time unit, the count of that
+// unit in the next larger unit that a rounding increment must divide evenly and stay below,
+// and the unit's rank from hour, 0, down to nanosecond, 5. The round and difference methods
+// share it so their unit tables cannot drift apart.
+func plainTimeUnitInfo(unit string) (unitNs, dividend int64, rank int) {
+	switch unit {
+	case "hour":
+		return 3_600_000_000_000, 24, 0
+	case "minute":
+		return 60_000_000_000, 60, 1
+	case "second":
+		return 1_000_000_000, 60, 2
+	case "millisecond":
+		return 1_000_000, 1000, 3
+	case "microsecond":
+		return 1_000, 1000, 4
+	case "nanosecond":
+		return 1, 1000, 5
+	}
+	Throw(NewRangeError(FromGoString("Temporal.PlainTime time unit is invalid")))
+	return 0, 0, 0
+}
+
+// Until returns the signed wall-clock difference from the receiver to other as a Duration,
+// balanced from largestUnit down and rounded at smallestUnit under roundingMode. The two
+// times sit within one day, so the difference is under 24 hours before balancing.
+func (pt *PlainTime) Until(other *PlainTime, largestUnit, smallestUnit string, increment float64, roundingMode string) *Duration {
+	return plainTimeDifference(pt, other, largestUnit, smallestUnit, increment, roundingMode)
+}
+
+// Since returns the signed wall-clock difference from other to the receiver, the reverse of
+// Until. Both round the signed difference so the mode acts on the true sign, which matches
+// the specification's rule of negating the mode and the result for since.
+func (pt *PlainTime) Since(other *PlainTime, largestUnit, smallestUnit string, increment float64, roundingMode string) *Duration {
+	return plainTimeDifference(other, pt, largestUnit, smallestUnit, increment, roundingMode)
+}
+
+func plainTimeDifference(from, to *PlainTime, largestUnit, smallestUnit string, increment float64, roundingMode string) *Duration {
+	unitNs, dividend, smallRank := plainTimeUnitInfo(smallestUnit)
+	_, _, largeRank := plainTimeUnitInfo(largestUnit)
+	if largeRank > smallRank {
+		Throw(NewRangeError(FromGoString("Temporal.PlainTime difference largestUnit cannot be smaller than smallestUnit")))
+	}
+	inc := int64(toIntegerWithTruncation(increment))
+	if inc < 1 || inc >= dividend || dividend%inc != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.PlainTime difference roundingIncrement is out of range")))
+	}
+	diff := new(big.Int).Sub(to.dayNanos(), from.dayNanos())
+	quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
+	diff = roundBigToIncrement(diff, quantum, roundingMode)
+	return durationFromDayNanos(diff, largeRank)
+}
+
+// durationFromDayNanos balances a signed nanosecond difference into a Duration's six time
+// fields, the field at largeRank unbounded and each smaller one wrapping, all sharing the
+// sign of the difference. The rank runs hour, 0, down to nanosecond, 5, and the fields above
+// largeRank stay zero. Truncated division keeps every field on the same side of zero.
+func durationFromDayNanos(total *big.Int, largeRank int) *Duration {
+	sizes := [6]int64{3_600_000_000_000, 60_000_000_000, 1_000_000_000, 1_000_000, 1_000, 1}
+	var fields [6]float64
+	rem := new(big.Int).Set(total)
+	q := new(big.Int)
+	for i := largeRank; i < 6; i++ {
+		size := big.NewInt(sizes[i])
+		q.Quo(rem, size)
+		fields[i] = float64(q.Int64())
+		rem.Rem(rem, size)
+	}
+	return NewDuration(0, 0, 0, 0, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5])
 }
 
 // roundBigToIncrement rounds x to a multiple of increment (a positive value) under one of
