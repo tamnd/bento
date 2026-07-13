@@ -21,6 +21,7 @@ type isoParse struct {
 	hasOffset                            bool   // a numeric UTC offset followed the time
 	offsetNanoseconds                    int64  // the signed offset in nanoseconds, valid when hasOffset
 	calendar                             string // the raw [u-ca=id] value, "" when none was given
+	timeZone                             string // the first time-zone annotation body, "" when none was given
 }
 
 // isoScanner walks a Temporal ISO string one byte at a time. The whole string must be
@@ -308,8 +309,9 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 // lowercase leading letter or underscore then lowercase letters, digits, underscores, or
 // hyphens); the "u-ca" key names the calendar and the first one wins, while any other key is
 // ignored unless a leading "!" marks it critical, in which case an unrecognised key is
-// rejected. A bracket with no "=" is a time-zone annotation this parser records nothing from
-// and accepts whether or not it is critical, since a Plain type drops the zone.
+// rejected. A bracket with no "=" is a time-zone annotation whose body the parser records in
+// timeZone, the first one winning, and accepts whether or not it is critical; a Plain type
+// drops the zone while ZonedDateTime.from reads it.
 func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
 	for sc.peek() == '[' {
 		sc.pos++
@@ -328,7 +330,10 @@ func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
 		}
 		eq := strings.IndexByte(body, '=')
 		if eq < 0 {
-			continue // a time-zone annotation, dropped by every Plain type
+			if p.timeZone == "" {
+				p.timeZone = body // the first time-zone annotation wins; Plain types drop it
+			}
+			continue
 		}
 		key := body[:eq]
 		val := body[eq+1:]

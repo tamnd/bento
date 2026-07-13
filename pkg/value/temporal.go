@@ -1679,6 +1679,142 @@ func ZonedDateTimeFrom(z *ZonedDateTime) *ZonedDateTime {
 	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID}
 }
 
+// ZonedDateTimeFromString implements Temporal.ZonedDateTime.from over a string. The string
+// must carry a time-zone annotation in brackets, the identifier the wall-clock reading is
+// resolved against; a string with none throws a RangeError the way the specification does,
+// since a zoned date-time has no zone without it. The wall-clock date and time are read
+// through the shared parser, then folded to an exact instant one of three ways: a Z
+// designator names the instant exactly, so the wall clock is read as UTC; a bare string with
+// no offset resolves through the zone with the default compatible disambiguation, which takes
+// the earlier reading in a fall-back overlap and shifts forward across a spring-forward gap; a
+// string with a numeric offset must match one of the zone's offsets for that wall clock under
+// the default reject option, and a mismatch throws. bento's ZonedDateTime hosts only the ISO
+// calendar, so a non-ISO calendar annotation throws, and the lowerer hands back any literal
+// naming one before this is reached.
+func ZonedDateTimeFromString(s string) *ZonedDateTime {
+	p, ok := parseTemporalISOString(s)
+	if !ok {
+		Throw(NewRangeError(FromGoString("cannot parse " + s + " as a Temporal.ZonedDateTime")))
+	}
+	if p.timeZone == "" {
+		Throw(NewRangeError(FromGoString("a Temporal.ZonedDateTime string requires a time zone annotation in brackets")))
+	}
+	if p.calendar != "" && !strings.EqualFold(p.calendar, "iso8601") {
+		Throw(NewRangeError(FromGoString("Temporal.ZonedDateTime from a string supports only the iso8601 calendar")))
+	}
+	rejectISODate(float64(p.year), float64(p.month), float64(p.day))
+	loc, canon := resolveTimeZone(p.timeZone)
+	wall := wallNanoseconds(p)
+	var epoch *big.Int
+	switch {
+	case p.hasZ:
+		epoch = wall // a Z designator gives the exact UTC instant, the zone only reads it back
+	case !p.hasOffset:
+		epoch = disambiguateCompatible(loc, wall)
+	default:
+		epoch = matchZoneOffset(loc, wall, p.offsetNanoseconds, s, canon)
+	}
+	validateEpochNanoseconds(epoch)
+	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon)}
+}
+
+// wallNanoseconds folds a parsed date and time into a nanosecond count, reading the wall clock
+// as though it were UTC. The offset a time zone applies to reach the true instant is left to
+// the caller, so this is the count Instant would hold for the same fields with no offset.
+func wallNanoseconds(p isoParse) *big.Int {
+	secs := int64(isoToEpochDays(p.year, p.month, p.day))*86_400 +
+		int64(p.hour)*3600 + int64(p.minute)*60 + int64(p.second)
+	ns := new(big.Int).SetInt64(secs)
+	ns.Mul(ns, nsPerSecond)
+	sub := int64(p.millisecond)*1_000_000 + int64(p.microsecond)*1_000 + int64(p.nanosecond)
+	ns.Add(ns, big.NewInt(sub))
+	return ns
+}
+
+// zoneOffsetSecondsAt reports the zone's UTC offset in seconds at the given Unix second, the
+// standard-library lookup the disambiguation probes run against.
+func zoneOffsetSecondsAt(loc *time.Location, unixSec int64) int {
+	_, off := time.Unix(unixSec, 0).In(loc).Zone()
+	return off
+}
+
+// possibleInstants returns the exact instants a wall-clock reading maps to in a zone: one for
+// an ordinary reading, two across a fall-back overlap, and none inside a spring-forward gap.
+// The wall clock, held as a UTC-relative count, is probed against the offset a day before and a
+// day after; for each distinct offset the candidate instant is the wall count less that offset,
+// kept only when the zone reports the same offset there, which is the round-trip the
+// specification's GetPossibleEpochNanoseconds performs. The results come back in ascending order.
+func possibleInstants(loc *time.Location, wall *big.Int) []*big.Int {
+	sec := new(big.Int)
+	rem := new(big.Int)
+	sec.DivMod(wall, nsPerSecond, rem)
+	wallSec := sec.Int64()
+	offBefore := zoneOffsetSecondsAt(loc, wallSec-86_400)
+	offAfter := zoneOffsetSecondsAt(loc, wallSec+86_400)
+	var out []*big.Int
+	add := func(off int) {
+		epochSec := wallSec - int64(off)
+		if zoneOffsetSecondsAt(loc, epochSec) == off {
+			ns := new(big.Int).SetInt64(epochSec)
+			ns.Mul(ns, nsPerSecond)
+			ns.Add(ns, rem)
+			out = append(out, ns)
+		}
+	}
+	add(offBefore)
+	if offAfter != offBefore {
+		add(offAfter)
+	}
+	if len(out) == 2 && out[0].Cmp(out[1]) > 0 {
+		out[0], out[1] = out[1], out[0]
+	}
+	return out
+}
+
+// disambiguateCompatible resolves a wall-clock reading to a single instant under Temporal's
+// default compatible disambiguation, the option from over a bare string uses. An ordinary
+// reading has one instant; a fall-back overlap takes the earlier of the two; a spring-forward
+// gap, where the reading names no instant, shifts forward by the size of the gap and takes the
+// reading there, the instant just after the transition.
+func disambiguateCompatible(loc *time.Location, wall *big.Int) *big.Int {
+	if p := possibleInstants(loc, wall); len(p) > 0 {
+		return p[0]
+	}
+	sec := new(big.Int)
+	rem := new(big.Int)
+	sec.DivMod(wall, nsPerSecond, rem)
+	wallSec := sec.Int64()
+	offBefore := zoneOffsetSecondsAt(loc, wallSec-86_400)
+	offAfter := zoneOffsetSecondsAt(loc, wallSec+86_400)
+	gap := int64(offAfter-offBefore) * 1_000_000_000
+	shifted := new(big.Int).Add(wall, big.NewInt(gap))
+	if p := possibleInstants(loc, shifted); len(p) > 0 {
+		return p[len(p)-1]
+	}
+	epochSec := wallSec - int64(offAfter)
+	ns := new(big.Int).SetInt64(epochSec)
+	ns.Mul(ns, nsPerSecond)
+	ns.Add(ns, rem)
+	return ns
+}
+
+// matchZoneOffset resolves a wall-clock reading that carried a numeric offset under the default
+// reject option: the offset must equal the zone's offset for one of the instants the reading
+// maps to, and that instant is the result. A reading whose offset the zone never applies there
+// throws a RangeError, the reject behavior, since a wall clock and an offset that disagree with
+// the zone name an instant the string does not mean.
+func matchZoneOffset(loc *time.Location, wall *big.Int, offsetNanoseconds int64, s, canon string) *big.Int {
+	for _, cand := range possibleInstants(loc, wall) {
+		off := new(big.Int).Sub(wall, cand)
+		if off.IsInt64() && off.Int64() == offsetNanoseconds {
+			return cand
+		}
+	}
+	Throw(NewRangeError(FromGoString("offset " + formatOffset(int(offsetNanoseconds/1_000_000_000)) +
+		" is invalid for " + s + " in " + canon)))
+	return nil
+}
+
 // offsetSeconds returns the zone's UTC offset in seconds at this instant. The count splits
 // into Unix seconds and a sub-second remainder by Euclidean division, so a negative count
 // keys the standard-library lookup on the correct earlier second, and the location reports
