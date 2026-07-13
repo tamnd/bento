@@ -739,24 +739,29 @@ func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, arg
 }
 
 // durationStaticCall lowers a static call on Temporal.Duration. from over a Duration lowers
-// to value.DurationFrom (the copy the specification makes); from over a string or a property
-// bag needs parsing this slice does not carry, and compare needs a relativeTo reference to
-// balance the calendar units, so both hand back.
+// to value.DurationFrom (the copy the specification makes) and from over a string literal to
+// value.DurationFromString. A Duration carries no calendar, so the literal needs no gate; a
+// dynamic string or a property bag hands back, and compare, which needs a relativeTo
+// reference to balance the calendar units, hands back too.
 func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "from":
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.Duration.from takes exactly one argument"}
 		}
-		if !r.isDuration(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a string or a property bag is a later slice"}
+		if r.isDuration(argNodes[0]) {
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "DurationFrom"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
-		if err != nil {
-			return nil, err
+		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "DurationFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "DurationFrom"), Args: []ast.Expr{arg}}, nil
+		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a dynamic string or a property bag is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration." + method + " is a later slice"}
 	}

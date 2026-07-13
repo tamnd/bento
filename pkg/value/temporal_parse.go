@@ -1,6 +1,10 @@
 package value
 
-import "strings"
+import (
+	"math/big"
+	"strconv"
+	"strings"
+)
 
 // This file carries the runtime ISO 8601 / RFC 9557 string parser the Temporal from
 // methods share. It parses the calendar-date grammar Temporal's ParseISODateTime
@@ -716,4 +720,200 @@ func PlainMonthDayFromString(s string) *PlainMonthDay {
 	monthDayRequireISO(p.calendar)
 	rejectMonthDayStringRange(float64(p.month), float64(p.day))
 	return &PlainMonthDay{month: p.month, day: p.day}
+}
+
+// durationParts holds the ten Temporal.Duration fields a duration string yields, with the
+// leading sign already folded into each non-zero field.
+type durationParts struct {
+	years, months, weeks, days       float64
+	hours, minutes, seconds          float64
+	milliseconds, microseconds, nano float64
+}
+
+// durScanner walks a Temporal ISO 8601 duration string one byte at a time.
+type durScanner struct {
+	s   string
+	pos int
+}
+
+func (sc *durScanner) atEnd() bool { return sc.pos >= len(sc.s) }
+
+func (sc *durScanner) peek() byte {
+	if sc.atEnd() {
+		return 0
+	}
+	return sc.s[sc.pos]
+}
+
+// accept consumes b if it is next.
+func (sc *durScanner) accept(b byte) bool {
+	if sc.peek() == b {
+		sc.pos++
+		return true
+	}
+	return false
+}
+
+// acceptFold consumes an ASCII letter next if it matches unit case-insensitively. The
+// duration designators P, T, and the unit letters are all case-insensitive.
+func (sc *durScanner) acceptFold(unit byte) bool {
+	c := sc.peek()
+	if c == unit || c == unit^0x20 {
+		sc.pos++
+		return true
+	}
+	return false
+}
+
+// readDigits consumes and returns the run of decimal digits at the cursor, "" if none.
+func (sc *durScanner) readDigits() string {
+	start := sc.pos
+	for !sc.atEnd() && isDigit(sc.s[sc.pos]) {
+		sc.pos++
+	}
+	return sc.s[start:sc.pos]
+}
+
+// wholePart reads one date component: a run of digits directly followed by unit. It is an
+// ordered optional slot, so when the digits are followed by a different letter it restores
+// the cursor and reports absent, letting the next slot try the same digits. present is true
+// only when the digits and the matching unit letter were both consumed.
+func (sc *durScanner) wholePart(unit byte) (val float64, present bool) {
+	start := sc.pos
+	ds := sc.readDigits()
+	if ds == "" {
+		return 0, false
+	}
+	if !sc.acceptFold(unit) {
+		sc.pos = start
+		return 0, false
+	}
+	return parseDurationWhole(ds), true
+}
+
+// timePart reads one time component: a run of digits, an optional fraction after a "." or
+// "," separator, then unit. Like wholePart it is an ordered optional slot that restores on a
+// letter mismatch. ok is false only when the component is this unit but its fraction is
+// malformed, a separator with no digits or more than nine fraction digits.
+func (sc *durScanner) timePart(unit byte) (val float64, frac string, hasFrac, present, ok bool) {
+	start := sc.pos
+	ds := sc.readDigits()
+	if ds == "" {
+		return 0, "", false, false, true
+	}
+	sawSep := false
+	if sc.peek() == '.' || sc.peek() == ',' {
+		sc.pos++
+		sawSep = true
+		frac = sc.readDigits()
+	}
+	if !sc.acceptFold(unit) {
+		sc.pos = start
+		return 0, "", false, false, true
+	}
+	if sawSep && (frac == "" || len(frac) > 9) {
+		return 0, "", false, true, false
+	}
+	return parseDurationWhole(ds), frac, sawSep, true, true
+}
+
+// parseDurationWhole reads a whole-number duration component. A digit run beyond the float64
+// range parses to an infinity, which the range check downstream rejects, matching the
+// specification's ToIntegerOrInfinity followed by IsValidDuration.
+func parseDurationWhole(ds string) float64 {
+	v, _ := strconv.ParseFloat(ds, 64)
+	return v
+}
+
+// parseTemporalDurationString parses s as a Temporal ISO 8601 duration string, the
+// PnYnMnWnDTnHnMnS form with an optional leading sign, returning the ten fields with the
+// sign applied and ok=false for any syntax the grammar does not accept. The date components
+// and the whole time components are integers; only the smallest present time component may
+// carry a fraction, which cascades into the finer fields down to nanoseconds. It validates
+// the shape only; the field range check is the caller's.
+func parseTemporalDurationString(s string) (durationParts, bool) {
+	var d durationParts
+	sc := &durScanner{s: s}
+	sign := 1.0
+	if sc.accept('-') {
+		sign = -1
+	} else {
+		sc.accept('+')
+	}
+	if !sc.acceptFold('P') {
+		return d, false
+	}
+	any := false
+	for _, part := range []struct {
+		unit byte
+		dst  *float64
+	}{{'Y', &d.years}, {'M', &d.months}, {'W', &d.weeks}, {'D', &d.days}} {
+		if v, present := sc.wholePart(part.unit); present {
+			*part.dst = v
+			any = true
+		}
+	}
+	if sc.acceptFold('T') {
+		timeAny := false
+		fracUsed := false
+		for _, part := range []struct {
+			unit   byte
+			dst    *float64
+			nsPerU int64
+		}{{'H', &d.hours, 3_600_000_000_000}, {'M', &d.minutes, 60_000_000_000}, {'S', &d.seconds, 1_000_000_000}} {
+			val, frac, hasFrac, present, ok := sc.timePart(part.unit)
+			if !ok {
+				return d, false
+			}
+			if !present {
+				continue
+			}
+			if fracUsed {
+				// A fraction ends the time section, so no component may follow it.
+				return d, false
+			}
+			*part.dst = val
+			timeAny = true
+			if hasFrac {
+				spreadDurationFraction(&d, frac, part.nsPerU)
+				fracUsed = true
+			}
+		}
+		if !timeAny {
+			return d, false
+		}
+		any = true
+	}
+	if !any || !sc.atEnd() {
+		return d, false
+	}
+	if sign < 0 {
+		d.years, d.months, d.weeks, d.days = negateField(d.years), negateField(d.months), negateField(d.weeks), negateField(d.days)
+		d.hours, d.minutes, d.seconds = negateField(d.hours), negateField(d.minutes), negateField(d.seconds)
+		d.milliseconds, d.microseconds, d.nano = negateField(d.milliseconds), negateField(d.microseconds), negateField(d.nano)
+	}
+	return d, true
+}
+
+// spreadDurationFraction folds a fractional time component into the finer fields. The
+// fraction, a decimal with one to nine digits, scales by nsPerUnit, the nanoseconds one
+// whole unit holds, to a total nanosecond count floored to the nanosecond, then decomposes
+// into minutes, seconds, milliseconds, microseconds, and nanoseconds. The larger fields
+// come out zero when the fraction sits on a smaller unit, so the one routine serves an
+// hours, a minutes, or a seconds fraction. The scale can exceed int64, so the fold runs in
+// big.Int, matching the specification's per-field floors exactly.
+func spreadDurationFraction(d *durationParts, frac string, nsPerUnit int64) {
+	num := new(big.Int)
+	num.SetString(frac, 10)
+	num.Mul(num, big.NewInt(nsPerUnit))
+	den := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(len(frac))), nil)
+	total := new(big.Int).Quo(num, den)
+	for _, step := range []struct {
+		unit *float64
+		size int64
+	}{{&d.minutes, 60_000_000_000}, {&d.seconds, 1_000_000_000}, {&d.milliseconds, 1_000_000}, {&d.microseconds, 1_000}, {&d.nano, 1}} {
+		q := new(big.Int).Quo(total, big.NewInt(step.size))
+		*step.unit += float64(q.Int64())
+		total.Sub(total, new(big.Int).Mul(q, big.NewInt(step.size)))
+	}
 }
