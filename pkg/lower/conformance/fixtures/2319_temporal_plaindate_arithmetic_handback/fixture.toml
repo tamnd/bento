@@ -1,2 +1,2 @@
 feature = "Temporal"
-handback = "Temporal.PlainDate.prototype.toPlainMonthDay is a later slice"
+handback = "Temporal.PlainDate.prototype.toZonedDateTime is a later slice"
