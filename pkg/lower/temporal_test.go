@@ -244,6 +244,14 @@ func TestPlainDateToPlainYearMonth(t *testing.T) {
 	}
 }
 
+func TestPlainDateToPlainMonthDay(t *testing.T) {
+	src := "const d = new Temporal.PlainDate(2020, 5, 15);\nconsole.log(d.toPlainMonthDay().toString());"
+	got := renderProgram(t, src)
+	if !strings.Contains(got, ".ToPlainMonthDay()") {
+		t.Errorf("rendered program missing .ToPlainMonthDay():\n%s", got)
+	}
+}
+
 // TestPlainDateHandBacks pins the honest ceilings: the union getters, the arithmetic
 // and conversion methods, from over a dynamic string or a property bag, and the other
 // Temporal types each hand back with a reason naming where the work belongs.
