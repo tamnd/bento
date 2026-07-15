@@ -317,6 +317,74 @@ console.log(C.f(undefined));
 	}
 }
 
+// TestCtorRequiredUnionParamNarrows runs the guard in a constructor, whose body
+// reaches its statements without funcDeclNamed's narrowing set. Before the ctor push
+// the narrowed read stayed a bare identifier against the value.Opt[float64] field, so
+// the assignment emitted Go that did not compile; this pins that the read now unwraps
+// with .Get() and the two arms store the narrowed value and the fallback.
+func TestCtorRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class C {
+  v: number;
+  constructor(x: number | undefined) {
+    if (x !== undefined) { this.v = x; } else { this.v = -1; }
+  }
+}
+console.log(new C(5).v);
+console.log(new C(undefined).v);
+`
+	if got, want := runProgramGo(t, src), "5\n-1\n"; got != want {
+		t.Fatalf("constructor required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestDerivedCtorRequiredUnionParamNarrows runs the guard through a super() call, so
+// the derived constructor threads its required-union parameter to the base as an
+// option and the base body narrows it, proving the push covers the split-construction
+// path as well as the general one.
+func TestDerivedCtorRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class B {
+  v: number;
+  constructor(x: number | undefined) {
+    if (x !== undefined) { this.v = x; } else { this.v = -1; }
+  }
+}
+class D extends B {
+  constructor(y: number | undefined) {
+    super(y);
+  }
+}
+console.log(new D(7).v);
+console.log(new D(undefined).v);
+`
+	if got, want := runProgramGo(t, src), "7\n-1\n"; got != want {
+		t.Fatalf("derived constructor required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestCtorBareOptionalParamHandsBack pins that a bare x?: T constructor parameter
+// still hands back: ctorParamFields and the new-X call site fill no value.None yet, so
+// the omitting construction stays a later slice while the required-union form above
+// lowers.
+func TestCtorBareOptionalParamHandsBack(t *testing.T) {
+	const src = `class C {
+  v: number;
+  constructor(x?: number) {
+    if (x !== undefined) { this.v = x; } else { this.v = -1; }
+  }
+}
+console.log(new C(5).v);
+console.log(new C().v);
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "omitting a non-dynamic optional argument") {
+		t.Errorf("hand-back reason %q does not name the constructor omission case", reason)
+	}
+}
+
 // TestAsyncRequiredUnionParamNarrows runs the guard in an async function, whose
 // captured parameter reads through the value.Async closure.
 func TestAsyncRequiredUnionParamNarrows(t *testing.T) {

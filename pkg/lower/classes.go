@@ -2076,6 +2076,20 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 	r.curClass, r.thisName = info, info.recv
 	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 
+	// A constructor parameter annotated x: T | undefined binds a value.Opt[T] field,
+	// which typeExpr renders before ctorParamFields is reached and the new-X call site
+	// always supplies as Some or None, so a read the checker narrowed to T must unwrap
+	// it with .Get(). The constructor body reaches its statements without funcDeclNamed's
+	// narrowing set, so it pushes one here, active through both the general ctorBody and
+	// the split-construction path below, closing the broken Go a narrowed required
+	// optional-union parameter emitted. A bare x?: T stays a handback in ctorParamFields
+	// for want of a call-site None fill, so the set carries only the required-union form.
+	if info.ctor != nil {
+		if sig, ok := r.prog.SignatureAt(info.ctor); ok {
+			defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
+		}
+	}
+
 	if info.hasVTable() || info.chainHasAbstract() {
 		// A virtual hierarchy splits construction: NewX allocates and pins the
 		// class's vtable before any initializer runs, so a virtual call inside a
