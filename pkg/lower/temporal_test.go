@@ -449,9 +449,36 @@ console.log(at("P1Y"));`
 	}
 }
 
+// TestDurationWithConstruction pins Temporal.Duration.prototype.with over a partial bag to a
+// value.With call carrying the present fields as value.Some and the absent ones as value.None.
+func TestDurationWithConstruction(t *testing.T) {
+	const src = `const d = new Temporal.Duration(1, 2, 0, 3);
+const e = d.with({ months: 5, days: 10 });
+console.log(e.days);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".With(", "value.Some[float64](5)", "value.Some[float64](10)", "value.None[float64]()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationFromBagConstruction pins Temporal.Duration.from over an object literal to a
+// value.DurationFromFields call over its ten present-or-absent fields.
+func TestDurationFromBagConstruction(t *testing.T) {
+	const src = `const d = Temporal.Duration.from({ hours: 1, minutes: 30 });
+console.log(d.hours);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.DurationFromFields(", "value.Some[float64](1)", "value.Some[float64](30)", "value.None[float64]()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
-// methods, from over a string, and compare each hand back with a reason naming where the
-// work belongs, waiting on the relativeTo reference and the calendar model.
+// methods and compare each hand back with a reason naming where the work belongs, waiting on
+// the relativeTo reference and the calendar model.
 func TestDurationHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -474,9 +501,14 @@ func TestDurationHandBacks(t *testing.T) {
 			want: "Temporal.Duration.prototype.total is a later slice",
 		},
 		{
-			name: "from a property bag",
-			src:  "const d = Temporal.Duration.from({ years: 1 });\nconsole.log(d.years);",
-			want: "Temporal.Duration.from over a property bag or a value not statically typed as a string is a later slice",
+			name: "from a bag with a spread",
+			src:  "const base = { years: 1 };\nconst d = Temporal.Duration.from({ ...base, months: 2 });\nconsole.log(d.years);",
+			want: "Temporal.Duration.from over a bag with a computed or shorthand key is a later slice",
+		},
+		{
+			name: "with a spread",
+			src:  "const base = { months: 1 };\nconst d = new Temporal.Duration(1);\nconst e = d.with({ ...base, days: 2 });\nconsole.log(e.days);",
+			want: "Temporal.Duration.prototype.with over a bag with a computed or shorthand key is a later slice",
 		},
 		{
 			name: "compare",

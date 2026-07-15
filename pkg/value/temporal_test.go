@@ -1434,6 +1434,59 @@ func TestDurationFromCopies(t *testing.T) {
 	}
 }
 
+// TestDurationWithAndFrom checks Temporal.Duration.prototype.with overlays the present fields
+// onto the receiver and Temporal.Duration.from over a bag defaults the absent ones to zero,
+// each rejecting an empty bag with a TypeError and a fractional or mixed-sign field with a
+// RangeError, every value checked against @js-temporal/polyfill.
+func TestDurationWithAndFrom(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	base := mustDuration(t, 1, 2, 0, 3, 4) // P1Y2M3DT4H
+	if got := base.With(none, some(5), none, none, none, none, none, none, none, none).ToString().ToGoString(); got != "P1Y5M3DT4H" {
+		t.Errorf("with months = %q, want P1Y5M3DT4H", got)
+	}
+	if got := base.With(none, none, none, some(10), some(0), none, none, none, none, none).ToString().ToGoString(); got != "P1Y2M10D" {
+		t.Errorf("with days and zero hours = %q, want P1Y2M10D", got)
+	}
+	if got := base.With(some(-1), some(-2), none, some(-3), some(-4), none, none, none, none, none).ToString().ToGoString(); got != "-P1Y2M3DT4H" {
+		t.Errorf("with negated = %q, want -P1Y2M3DT4H", got)
+	}
+	if base.ToString().ToGoString() != "P1Y2M3DT4H" {
+		t.Error("with mutated the receiver")
+	}
+	if got := DurationFromFields(none, none, none, none, some(1), some(30), none, none, none, none).ToString().ToGoString(); got != "PT1H30M" {
+		t.Errorf("from bag = %q, want PT1H30M", got)
+	}
+	if got := DurationFromFields(none, none, none, some(-2), some(-3), none, none, none, none, none).ToString().ToGoString(); got != "-P2DT3H" {
+		t.Errorf("from bag negative = %q, want -P2DT3H", got)
+	}
+	if got := DurationFromFields(none, none, none, none, none, some(90), none, none, none, none).ToString().ToGoString(); got != "PT90M" {
+		t.Errorf("from bag unbalanced = %q, want PT90M", got)
+	}
+	assertTypeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertTypeError("with empty", func() { base.With(none, none, none, none, none, none, none, none, none, none) })
+	assertTypeError("with fractional", func() { base.With(none, some(1.5), none, none, none, none, none, none, none, none) })
+	assertTypeError("with mixed sign", func() { base.With(some(1), some(-1), none, none, none, none, none, none, none, none) })
+	assertTypeError("from empty", func() {
+		DurationFromFields(none, none, none, none, none, none, none, none, none, none)
+	})
+	assertTypeError("from fractional", func() {
+		DurationFromFields(none, some(1.5), none, none, none, none, none, none, none, none)
+	})
+}
+
 // TestDurationRejects checks the RangeError cases against the polyfill: a non-integral
 // component (Duration rejects rather than truncates), a NaN or non-finite component, a
 // mixed-sign set, a years field at 2^32, and a seconds field at 2^53.

@@ -1897,6 +1897,62 @@ func DurationFromString(s string) *Duration {
 	return &Duration{p.years, p.months, p.weeks, p.days, p.hours, p.minutes, p.seconds, p.milliseconds, p.microseconds, p.nano}
 }
 
+// With implements Temporal.Duration.prototype.with: it overlays the present fields of a
+// partial-duration bag onto the receiver, each absent field keeping the receiver's value.
+// At least one field must be present, matching ToTemporalPartialDurationRecord, or a TypeError
+// is thrown; NewDuration then runs ToIntegerIfIntegral and RejectDuration over the merged ten,
+// so a fractional or mixed-sign field throws a RangeError. with does no balancing, it only
+// reshapes, so it needs no relativeTo reference.
+func (d *Duration) With(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds Opt[float64]) *Duration {
+	if !anyDurationFieldPresent(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds) {
+		Throw(NewTypeError(FromGoString("Temporal.Duration.prototype.with needs at least one duration field")))
+	}
+	pick := func(o Opt[float64], base float64) float64 {
+		if o.IsUndefined() {
+			return base
+		}
+		return o.Get()
+	}
+	return NewDuration(
+		pick(years, d.years), pick(months, d.months), pick(weeks, d.weeks), pick(days, d.days),
+		pick(hours, d.hours), pick(minutes, d.minutes), pick(seconds, d.seconds),
+		pick(milliseconds, d.milliseconds), pick(microseconds, d.microseconds), pick(nanoseconds, d.nanoseconds),
+	)
+}
+
+// DurationFromFields implements Temporal.Duration.from over a property bag: it reads the ten
+// optional unit fields, each absent field defaulting to zero. At least one field must be
+// present, matching ToTemporalDurationRecord, or a TypeError is thrown; NewDuration then runs
+// ToIntegerIfIntegral and RejectDuration over the ten, so a fractional or mixed-sign field
+// throws a RangeError. A duration carries no calendar, so the bag needs no calendar gate.
+func DurationFromFields(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds Opt[float64]) *Duration {
+	if !anyDurationFieldPresent(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds) {
+		Throw(NewTypeError(FromGoString("Temporal.Duration.from needs at least one duration field")))
+	}
+	pick := func(o Opt[float64]) float64 {
+		if o.IsUndefined() {
+			return 0
+		}
+		return o.Get()
+	}
+	return NewDuration(
+		pick(years), pick(months), pick(weeks), pick(days),
+		pick(hours), pick(minutes), pick(seconds),
+		pick(milliseconds), pick(microseconds), pick(nanoseconds),
+	)
+}
+
+// anyDurationFieldPresent reports whether at least one of the ten optional duration fields is
+// present, the precondition both with and from over a bag enforce as a TypeError.
+func anyDurationFieldPresent(fields ...Opt[float64]) bool {
+	for _, f := range fields {
+		if !f.IsUndefined() {
+			return true
+		}
+	}
+	return false
+}
+
 // toIntegerIfIntegral implements the abstract operation ToIntegerIfIntegral (Temporal):
 // a NaN, non-finite, or non-integral value throws a RangeError, and an integral value is
 // returned unchanged. It is the gate Temporal.Duration uses on every field, and it

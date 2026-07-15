@@ -1008,10 +1008,11 @@ func (r *Renderer) newZonedDateTime(argNodes []frontend.Node) (ast.Expr, error) 
 }
 
 // durationMethodCall lowers a method call on a Duration receiver. negated and abs return a
-// reshaped Duration, and toString and toJSON render the ISO 8601 duration string; each takes
-// no argument in this slice. The methods that balance or round across units (round, total,
-// add, subtract, with) need a relativeTo reference and the calendar model, so they hand back
-// with a named reason.
+// reshaped Duration, with overlays a partial-duration bag onto the receiver (a pure reshape,
+// no balancing, so it needs no relativeTo), and toString and toJSON render the ISO 8601
+// duration string. The methods that balance or round across units (round, total, add,
+// subtract) need a relativeTo reference and the calendar model, so they hand back with a
+// named reason.
 func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "negated", "abs":
@@ -1040,16 +1041,30 @@ func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, arg
 			name = "ToJSON"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "with":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype.with takes exactly one argument"}
+		}
+		fields, err := r.durationPartialBag("Temporal.Duration.prototype.with", argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: fields[:]}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " is a later slice"}
 	}
 }
 
 // durationStaticCall lowers a static call on Temporal.Duration. from over a Duration lowers
-// to value.DurationFrom (the copy the specification makes) and from over a string literal to
-// value.DurationFromString. A Duration carries no calendar, so the literal needs no gate; a
-// dynamic string or a property bag hands back, and compare, which needs a relativeTo
-// reference to balance the calendar units, hands back too.
+// to value.DurationFrom (the copy the specification makes), from over a string literal to
+// value.DurationFromString, and from over an object literal to value.DurationFromFields over
+// its ten present-or-absent fields. A Duration carries no calendar, so the literal and bag
+// need no gate; a value not statically typed as a string hands back, and compare, which needs
+// a relativeTo reference to balance the calendar units, hands back too.
 func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "from":
@@ -1076,7 +1091,14 @@ func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "DurationFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a property bag or a value not statically typed as a string is a later slice"}
+		if argNodes[0].Kind() == frontend.NodeObjectLiteralExpression {
+			fields, err := r.durationPartialBag("Temporal.Duration.from", argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: sel("value", "DurationFromFields"), Args: fields[:]}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a value not statically typed as a string is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration." + method + " is a later slice"}
 	}
@@ -2326,6 +2348,62 @@ func (r *Renderer) durationBag(what string, n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewDuration"), Args: fields[:]}, nil
+}
+
+// durationPartialBag reads a Temporal.Duration.prototype.with or Temporal.Duration.from bag at
+// compile time into ten present-or-absent field expressions, present as value.Some[float64](v)
+// and absent as value.None[float64](), so the runtime knows which fields the bag named. It
+// mirrors durationBag but keeps the present-or-absent distinction with and from need: with
+// overlays the present fields onto the receiver and from defaults the absent ones to zero. An
+// empty bag is NOT handed back, so the runtime raises the TypeError the specification mandates.
+// A spread, a computed or shorthand key, an unknown key, a non-number value, or a repeated
+// field still hands back, since the field would then depend on runtime data or a coercion this
+// slice does not carry.
+func (r *Renderer) durationPartialBag(what string, n frontend.Node) ([10]ast.Expr, error) {
+	var fields [10]ast.Expr
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return fields, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
+	}
+	var seen [10]bool
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		idx := -1
+		for i, k := range durationUnitKeys {
+			if k == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+		if seen[idx] {
+			return fields, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+		}
+		if !r.isNumber(kids[1]) {
+			return fields, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+		}
+		val, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return fields, err
+		}
+		fields[idx] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{val}}
+		seen[idx] = true
+	}
+	for i := range fields {
+		if fields[i] == nil {
+			fields[i] = &ast.CallExpr{Fun: index(sel("value", "None"), ident("float64"))}
+		}
+	}
+	r.requireImport(valuePkg)
+	return fields, nil
 }
 
 // plainTimeRoundUnits is the set of smallest units Temporal.PlainTime.prototype.round
