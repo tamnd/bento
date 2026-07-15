@@ -2584,14 +2584,24 @@ func (r *Renderer) generatorMethodDecl(info *classInfo, m classMethod) (ast.Decl
 	if r.closureHasDestructuredParam(m.node) {
 		return nil, &NotYetLowerable{Reason: "a generator method with a destructured parameter is a later slice"}
 	}
-	params, err := r.paramFields(sig)
-	if err != nil {
-		return nil, err
-	}
 
 	prevClass, prevThis := r.curClass, r.thisName
 	r.curClass, r.thisName = info, info.recv
 	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+
+	// A generator method is called through classMethodCall, which fills value.None for
+	// an omitted bare optional (fillOmittedMethodArgs) the same way a plain method call
+	// does, so it builds its fields through funcParamFields under the full optParamsOf,
+	// pushed before the build. A bare x?: T renders its value.Opt[T] field and a
+	// required x: T | undefined binds the same field, either way a read the checker
+	// narrowed to T unwraps with .Get() inside the coroutine, closing the broken Go the
+	// stricter paramFields path had emitted for a narrowed required optional-union
+	// parameter.
+	defer r.pushOptParams(r.optParamsOf(m.node, sig))()
+	params, err := r.funcParamFields(m.node, sig)
+	if err != nil {
+		return nil, err
+	}
 
 	yieldGo, newGen, err := r.generatorCoroutine(m.node)
 	if err != nil {
@@ -2699,7 +2709,19 @@ func (r *Renderer) asyncMethodDecl(info *classInfo, m classMethod, name string) 
 	if r.closureHasDestructuredParam(m.node) {
 		return nil, &NotYetLowerable{Reason: "an async method with a destructured parameter is a later slice"}
 	}
-	params, err := r.paramFields(sig)
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = info, info.recv
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+
+	// An async method is called through classMethodCall, which fills value.None for an
+	// omitted bare optional the same way a plain method call does, so it builds its
+	// fields through funcParamFields under the full optParamsOf, pushed before the
+	// build. A bare x?: T renders its value.Opt[T] field and a required x: T | undefined
+	// binds the same field, either way a read the checker narrowed to T unwraps with
+	// .Get() inside the value.Async body, closing the broken Go the stricter paramFields
+	// path had emitted for a narrowed required optional-union parameter.
+	defer r.pushOptParams(r.optParamsOf(m.node, sig))()
+	params, err := r.funcParamFields(m.node, sig)
 	if err != nil {
 		return nil, err
 	}
@@ -2707,9 +2729,6 @@ func (r *Renderer) asyncMethodDecl(info *classInfo, m classMethod, name string) 
 	if err != nil {
 		return nil, err
 	}
-	prevClass, prevThis := r.curClass, r.thisName
-	r.curClass, r.thisName = info, info.recv
-	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 	body, err := r.asyncBody(sig.Return, m.node)
 	if err != nil {
 		return nil, err
@@ -2743,7 +2762,19 @@ func (r *Renderer) asyncStaticFuncDecl(m classMethod) (ast.Decl, error) {
 	if r.closureHasDestructuredParam(m.node) {
 		return nil, &NotYetLowerable{Reason: "an async static method with a destructured parameter is a later slice"}
 	}
-	params, err := r.paramFields(sig)
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = nil, ""
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+
+	// An async static method is called through staticMethodCall, which fills value.None
+	// for an omitted bare optional the same way a plain method call does, so it builds
+	// its fields through funcParamFields under the full optParamsOf, pushed before the
+	// build. A bare x?: T renders its value.Opt[T] field and a required x: T | undefined
+	// binds the same field, either way a read the checker narrowed to T unwraps with
+	// .Get(), closing the broken Go the stricter paramFields path had emitted for a
+	// narrowed required optional-union parameter.
+	defer r.pushOptParams(r.optParamsOf(m.node, sig))()
+	params, err := r.funcParamFields(m.node, sig)
 	if err != nil {
 		return nil, err
 	}
@@ -2751,9 +2782,6 @@ func (r *Renderer) asyncStaticFuncDecl(m classMethod) (ast.Decl, error) {
 	if err != nil {
 		return nil, err
 	}
-	prevClass, prevThis := r.curClass, r.thisName
-	r.curClass, r.thisName = nil, ""
-	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 	body, err := r.asyncBody(sig.Return, m.node)
 	if err != nil {
 		return nil, err
