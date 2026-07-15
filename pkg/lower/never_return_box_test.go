@@ -41,8 +41,9 @@ run(function () { throw new TypeError("x"); });
 
 // TestCtorOptionalParamHandsBack pins the zero-fail guard: a class constructor
 // with a static optional parameter hands back rather than emit a value.Opt field
-// the body reads as a bare T, which would not compile. It matches the handback a
-// plain function's optional parameter already makes.
+// the body reads as a bare T, which would not compile. A plain function's optional
+// parameter lowers to value.Opt[T] now, but a constructor keeps the stricter
+// paramFields (no optParams narrowing set is built for it), so it stays a later slice.
 func TestCtorOptionalParamHandsBack(t *testing.T) {
 	const src = `class Box {
   message: string;

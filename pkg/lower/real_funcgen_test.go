@@ -344,8 +344,6 @@ func TestRenderFuncHandsBack(t *testing.T) {
 		{"ternaryMixed", "export function m(c: boolean, n: number, s: string): number { const x = c ? n : s; return n; }"},
 		// a generic function needs monomorphization first.
 		{"generic", "export function id<T>(x: T): T { return x; }"},
-		// an optional parameter needs the optional tagged type.
-		{"optionalParam", "export function o(a: number, b?: number): number { return a; }"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

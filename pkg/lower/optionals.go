@@ -206,6 +206,47 @@ func (r *Renderer) isOptionalType(t frontend.Type) bool {
 	return ok
 }
 
+// isOptBinding reports whether name binds an optional (value.Opt[T]) in the body
+// being lowered, whether it is a local declared with an optional type or a bare
+// optional parameter. The two sets are kept apart because a local's optional-ness is
+// recomputed per block from the body's declarations while a parameter's rides the
+// signature, but a narrowed read unwraps either the same way, so the read sites
+// consult this one predicate.
+func (r *Renderer) isOptBinding(name string) bool {
+	return r.optLocals[name] || r.optParams[name]
+}
+
+// optParamsOf returns the set of parameter names that bind a bare optional, the
+// x?: T form with no default whose field funcParamFields lowers to a value.Opt[T].
+// A defaulted optional binds the plain T the default fills, not an option, so it is
+// excluded, as is a dynamic optional (any or unknown), which binds a boxed value that
+// holds undefined natively. It is built once per body so a narrowed read of the
+// parameter unwraps with .Get() wherever in the body it sits.
+func (r *Renderer) optParamsOf(fn frontend.Node, sig frontend.Signature) map[string]bool {
+	paramNodes := r.funcParamNodes(fn)
+	var opt map[string]bool
+	for i, p := range sig.Params {
+		if i < sig.MinArgs {
+			continue
+		}
+		if _, hasDef := r.paramDefaultNode(paramNodes, i); hasDef {
+			continue
+		}
+		if !r.isOptionalType(p.Type) {
+			continue
+		}
+		name, ok := localName(p.Name)
+		if !ok {
+			continue
+		}
+		if opt == nil {
+			opt = map[string]bool{}
+		}
+		opt[name] = true
+	}
+	return opt
+}
+
 // optLocalsOf analyzes a body and returns the set of local names declared with an
 // optional type (T | undefined, lowered to value.Opt[T]), so a read of one at a
 // point the checker narrowed to T can unwrap with .Get(). The walk descends through

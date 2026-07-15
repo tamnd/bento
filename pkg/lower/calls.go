@@ -404,6 +404,18 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 					args = append(args, sel("value", "Undefined"))
 					continue
 				}
+				// A bare optional parameter of the T | undefined shape takes a
+				// value.Opt[T] field, so an omitted trailing argument fills the empty
+				// option value.None[T](), the absent value its body reads, matching the
+				// Some a supplied argument wraps in through bridgeArg.
+				if inner, ok := r.optionalInner(r.prog.UnionMembers(params[i].Type)); ok {
+					none, err := r.noneOf(inner)
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, none)
+					continue
+				}
 				return nil, &NotYetLowerable{Reason: "a call that omits an argument the callee does not default is a later slice"}
 			}
 			lowered, err := r.lowerArgAt(def, params[i].Type)

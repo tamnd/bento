@@ -3362,8 +3362,8 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 			// fail to compile, and a definite right-hand side into one hands back. An
 			// optional right-hand side leaves the target still T | undefined, so no
 			// narrowing happens and either kind of target lowers.
-			if !r.isOptional(parts[2]) && !r.optLocals[name] {
-				return nil, true, &NotYetLowerable{Reason: "??= with a definite right-hand side into a parameter narrows the target, which needs narrowing at a parameter, a later slice"}
+			if !r.isOptional(parts[2]) && !r.isOptBinding(name) {
+				return nil, true, &NotYetLowerable{Reason: "??= with a definite right-hand side into a target the narrowing pre-pass does not track is a later slice"}
 			}
 			cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
 		default:
