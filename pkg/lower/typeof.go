@@ -66,6 +66,31 @@ func (r *Renderer) typeofExpr(n frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("TypeOf")}}, nil
 	}
 
+	// typeof over a tagged-sum union of primitives spans more than one tag, so it
+	// cannot fold to a constant, but the union value carries its tag, and each arm's
+	// tag pins its typeof string. The operand is evaluated once and asked for that
+	// string through the union's TypeOf method, so a side-effecting operand keeps its
+	// effect rather than needing the repeatable-operand gate the fold takes. An object
+	// or mixed union arm has no primitive typeof tag, so it stays on the handback.
+	if info, ok := r.unionInfoOf(r.prog.TypeAt(operand)); ok {
+		allPrim := true
+		for _, a := range info.arms {
+			if a.isObject {
+				allPrim = false
+				break
+			}
+		}
+		if allPrim {
+			e, err := r.lowerExpr(operand)
+			if err != nil {
+				return nil, err
+			}
+			info.needsTypeOf = true
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("TypeOf")}}, nil
+		}
+	}
+
 	tag, ok := r.staticTypeofTag(operand)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "typeof over this static type is a later slice"}

@@ -122,7 +122,7 @@ func (r *Renderer) iterResultDoneRead(n frontend.Node) bool {
 // returns the bento string, so every consumer of the predicate sees the string
 // the lowered expression is.
 func (r *Renderer) isString(n frontend.Node) bool {
-	return r.primitiveFlags(n)&frontend.TypeString != 0 || r.caughtErrorStringRead(n)
+	return r.primitiveFlags(n)&frontend.TypeString != 0 || r.caughtErrorStringRead(n) || r.isTypeofExpr(n)
 }
 
 // isBoxedValue reports whether n lowers to a boxed value.Value at this use, the
