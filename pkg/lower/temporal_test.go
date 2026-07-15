@@ -1333,6 +1333,8 @@ func TestPlainYearMonthGetters(t *testing.T) {
 		"daysInYear":   ".DaysInYear()",
 		"monthsInYear": ".MonthsInYear()",
 		"inLeapYear":   ".InLeapYear()",
+		"era":          ".Era()",
+		"eraYear":      ".EraYear()",
 	}
 	for prop, want := range cases {
 		src := "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym." + prop + ");"
@@ -1417,11 +1419,6 @@ func TestPlainYearMonthHandBacks(t *testing.T) {
 		src  string
 		want string
 	}{
-		{
-			name: "era union getter",
-			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym.era);",
-			want: "Temporal.PlainYearMonth.era is a later slice",
-		},
 		{
 			name: "until over a string argument",
 			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconst d = ym.until(\"2020-05\");\nconsole.log(d.months);",

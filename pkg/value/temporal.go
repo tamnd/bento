@@ -1799,6 +1799,19 @@ func (ym *PlainYearMonth) ToPlainDate(day float64) *PlainDate {
 	return &PlainDate{year: ym.year, month: ym.month, day: int(d), cal: ym.cal}
 }
 
+// Era implements Temporal.PlainYearMonth.prototype.era by resolving the era at the first of the
+// year-month's month, so a year-month reports the same era the date it came from does. It is
+// undefined under the ISO calendar.
+func (ym *PlainYearMonth) Era() Opt[BStr] {
+	return (&PlainDate{year: ym.year, month: ym.month, day: 1, cal: ym.cal}).Era()
+}
+
+// EraYear implements Temporal.PlainYearMonth.prototype.eraYear, the year counted within the era at
+// the first of the month. It is undefined under the ISO calendar.
+func (ym *PlainYearMonth) EraYear() Opt[float64] {
+	return (&PlainDate{year: ym.year, month: ym.month, day: 1, cal: ym.cal}).EraYear()
+}
+
 // PlainMonthDay is bento's runtime representation of a Temporal.PlainMonthDay (Temporal §10):
 // a calendar month and day with no year, no time, and no zone, the way a birthday or a
 // holiday recurs every year. Like PlainDate it hosts only the ISO 8601 calendar; a non-ISO

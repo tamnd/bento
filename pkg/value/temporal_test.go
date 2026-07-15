@@ -1930,6 +1930,38 @@ func TestPlainYearMonthWithAndToPlainDate(t *testing.T) {
 	}
 }
 
+// TestPlainYearMonthEra covers era and eraYear resolving at the first of the month, undefined under
+// ISO and named under the hosted non-ISO calendars.
+func TestPlainYearMonthEra(t *testing.T) {
+	withCal := func(y, m float64, cal string) *PlainYearMonth {
+		return PlainDateWithCalendar(NewPlainDate(y, m, 15), cal).ToPlainYearMonth()
+	}
+	if era := NewPlainYearMonth(2020, 3).Era(); !era.IsUndefined() {
+		t.Errorf("iso era = %v, want undefined", era)
+	}
+	if eraYear := NewPlainYearMonth(2020, 3).EraYear(); !eraYear.IsUndefined() {
+		t.Errorf("iso eraYear = %v, want undefined", eraYear)
+	}
+	eras := []struct {
+		ym      *PlainYearMonth
+		era     string
+		eraYear float64
+	}{
+		{withCal(2020, 3, "gregory"), "gregory", 2020},
+		{withCal(0, 3, "gregory"), "gregory-inverse", 1},
+		{withCal(2020, 3, "roc"), "roc", 109},
+		{withCal(2020, 3, "japanese"), "reiwa", 2},
+	}
+	for i, c := range eras {
+		if era := c.ym.Era(); era.IsUndefined() || era.Get().ToGoString() != c.era {
+			t.Errorf("era %d = %v, want %q", i, era, c.era)
+		}
+		if ey := c.ym.EraYear(); ey.IsUndefined() || ey.Get() != c.eraYear {
+			t.Errorf("eraYear %d = %v, want %v", i, ey, c.eraYear)
+		}
+	}
+}
+
 // monthDayThrows reports whether NewPlainMonthDay throws a RangeError for the args.
 func monthDayThrows(m, d float64) (thrown bool) {
 	defer func() {

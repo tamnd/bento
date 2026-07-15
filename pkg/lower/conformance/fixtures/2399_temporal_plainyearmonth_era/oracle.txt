@@ -1,0 +1,13 @@
+== stdout:
+undefined
+undefined
+gregory
+2020
+gregory-inverse
+1
+roc
+109
+reiwa
+2
+== exit:
+0

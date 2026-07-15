@@ -306,10 +306,10 @@ func durationAccessor(prop string) (method string, ok bool) {
 
 // plainYearMonthAccessor maps a PlainYearMonth field getter to the value.PlainYearMonth method
 // that reads it, or reports ok=false for a name this slice does not host. The clean ISO getters
-// (year, month, month code, calendar id, and the derived counts and leap flag) map to a method;
-// a year-month has no day, and the calendar-dependent getters the checker types number |
-// undefined (era, eraYear) are absent so they hand back rather than lower to a getter that
-// cannot answer the undefined case.
+// (year, month, month code, calendar id, and the derived counts and leap flag) map to a method
+// returning the field's plain type; a year-month has no day. The calendar-dependent getters the
+// checker types string | undefined and number | undefined (era, eraYear) map to a method returning
+// a value.Opt, which the member read boxes at any dynamic use, both undefined under the ISO calendar.
 func plainYearMonthAccessor(prop string) (method string, ok bool) {
 	switch prop {
 	case "year":
@@ -328,6 +328,10 @@ func plainYearMonthAccessor(prop string) (method string, ok bool) {
 		return "MonthsInYear", true
 	case "inLeapYear":
 		return "InLeapYear", true
+	case "era":
+		return "Era", true
+	case "eraYear":
+		return "EraYear", true
 	}
 	return "", false
 }
