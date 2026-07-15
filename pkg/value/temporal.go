@@ -3016,7 +3016,7 @@ func zonedDateTimeDifference(from, to *ZonedDateTime, largestUnit string) *Durat
 		dayCorrection = 1
 	}
 	endEpochDays := isoToEpochDays(endDT.date.year, endDT.date.month, endDT.date.day)
-	iy, im, id := endDT.date.year, endDT.date.month, endDT.date.day
+	var iy, im, id int
 	timeDuration := new(big.Int)
 	for {
 		iy, im, id = epochDaysToISO(endEpochDays - dayCorrection*sign)
