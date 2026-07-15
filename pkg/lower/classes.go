@@ -1079,12 +1079,10 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 		}
 		kids = kids[1:]
 	}
-	if async && generator {
-		// An async generator (async *) yields promises through an async iterator, a
-		// shape neither the generator nor the async lowering models; it keeps its own
-		// reason rather than lowering as one or the other.
-		return classMethod{}, &NotYetLowerable{Reason: "an async generator method is a later slice"}
-	}
+	// An async generator (async *) carries both markers: it yields values a consumer
+	// pulls and awaits promises between yields, the shape asyncGeneratorMethodDecl lowers
+	// to a *value.AsyncGen[Y] coroutine, so both flags ride on the classMethod the way the
+	// plain generator star and the async keyword each ride on their own.
 	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a method without a plain identifier name is a later slice"}
 	}
@@ -1692,6 +1690,22 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 				return nil, err
 			}
 			out = append(out, mds...)
+			continue
+		}
+		if m.generator && m.async {
+			// An async generator method lowers to a *value.AsyncGen[Y] coroutine, the
+			// async mirror of the plain generator method. Its result type is the coroutine
+			// pointer, not a plain value, so like a generator or async method it does not
+			// model the vtable's entry and Impl split yet; one caught in a class hierarchy
+			// hands back rather than emit a dispatch mismatch.
+			if info.vprops[m.prop] || info.overrides[m.prop] {
+				return nil, &NotYetLowerable{Reason: "an async generator method in a class hierarchy is a later slice"}
+			}
+			md, err := r.asyncGeneratorMethodDecl(info, m)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, md)
 			continue
 		}
 		if m.generator {
@@ -2643,6 +2657,62 @@ func (r *Renderer) generatorMethodDecl(info *classInfo, m classMethod) (ast.Decl
 		}}},
 		Name: ident(m.goName),
 		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: star(index(sel("value", "Gen"), yieldGo))}}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{newGen}}}},
+	}, nil
+}
+
+// asyncGeneratorMethodDecl emits an async generator method (async *g()) as a Go method that
+// returns a running coroutine, the *value.AsyncGen[Y] a top-level async generator function
+// returns (asyncgenerator.go). It is generatorMethodDecl over the async generator coroutine:
+// the body both yields values a consumer pulls and awaits promises between yields, and the
+// method's one statement hands the caller value.NewAsyncGen wrapping it. The receiver is in
+// scope for the body, so a this inside it reads the method's receiver, captured by the
+// coroutine closure. Two drives do not share state because each call mints a fresh
+// *value.AsyncGen.
+func (r *Renderer) asyncGeneratorMethodDecl(info *classInfo, m classMethod) (ast.Decl, error) {
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "async generator method has no call signature"}
+	}
+	if len(sig.TypeParams) != 0 {
+		return nil, &NotYetLowerable{Reason: "generic method needs monomorphization, a later slice"}
+	}
+	if sig.RestParam != nil {
+		return nil, &NotYetLowerable{Reason: "rest parameter needs the array boxing slice"}
+	}
+	// An async generator method wraps its body in the coroutine, which has no entry hook
+	// for the destructure bindings a pattern parameter needs, so it hands back.
+	if r.closureHasDestructuredParam(m.node) {
+		return nil, &NotYetLowerable{Reason: "an async generator method with a destructured parameter is a later slice"}
+	}
+
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = info, info.recv
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+
+	// Same optParams handling as generatorMethodDecl: an async generator method is called
+	// through classMethodCall, which fills value.None for an omitted bare optional, so it
+	// builds its fields through funcParamFields under the full optParamsOf, pushed before
+	// the build. A bare x?: T renders its value.Opt[T] field and a required x: T | undefined
+	// binds the same field, either way a read the checker narrowed to T unwraps with .Get()
+	// inside the coroutine.
+	defer r.pushOptParams(r.optParamsOf(m.node, sig))()
+	params, err := r.funcParamFields(m.node, sig)
+	if err != nil {
+		return nil, err
+	}
+
+	yieldGo, newGen, err := r.asyncGeneratorCoroutine(m.node)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{
+			Names: []*ast.Ident{ident(info.recv)},
+			Type:  star(ident(info.goName)),
+		}}},
+		Name: ident(m.goName),
+		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: star(index(sel("value", "AsyncGen"), yieldGo))}}}},
 		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{newGen}}}},
 	}, nil
 }
