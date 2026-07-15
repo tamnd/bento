@@ -71,8 +71,9 @@ func TestNamedEvalLogicalAssignRuns(t *testing.T) {
 }
 
 // TestNullishAssignDefiniteHandsBack pins that x ??= y with a definite right-hand
-// side, which narrows the target, hands back until narrowing at an assignment
-// lands.
+// side into a required T | undefined parameter, which narrows the target the
+// narrowing pre-pass does not track (only a bare x?: T optional parameter and an
+// optional local are tracked), hands back until narrowing at such a target lands.
 func TestNullishAssignDefiniteHandsBack(t *testing.T) {
 	src := `
 function pick(x: string | undefined): string {
@@ -82,7 +83,7 @@ function pick(x: string | undefined): string {
 console.log(pick(undefined));
 `
 	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "narrows the target") {
+	if !strings.Contains(reason, "the narrowing pre-pass does not track") {
 		t.Fatalf("expected a narrowing handback, got: %q", reason)
 	}
 }

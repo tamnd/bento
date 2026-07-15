@@ -216,6 +216,15 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	r.dynLocals = r.dynLocalsOf(sig.Params, bodyStmts)
 	defer func() { r.dynLocals = prevDyn }()
 
+	// The optional-parameters set rides the same body scope. A bare optional
+	// parameter binds a value.Opt[T] field, and a read the checker narrowed to T
+	// unwraps with .Get() the way an optional local does; the set is kept apart from
+	// optLocals because scopedBlockRange recomputes optLocals per block from the
+	// body's declarations, which never carry the signature.
+	prevOptP := r.optParams
+	r.optParams = r.optParamsOf(fn, sig)
+	defer func() { r.optParams = prevOptP }()
+
 	// The object-rest bindings an untyped pattern parameter gathers are boxed values the
 	// checker did not type any, so a read of one routes the dynamic way off this set. It
 	// is built before the body lowers, since a read sits ahead of the entry bindings.
@@ -365,6 +374,13 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 				// A bare optional of dynamic type needs no default: the omitted slot
 				// fills with value.Undefined at the call site, the same absent value
 				// the language binds.
+			case r.isOptionalType(p.Type):
+				// A bare optional of the T | undefined shape lowers to a value.Opt[T]
+				// field: paramFieldType renders the type through typeExpr, which maps
+				// the optional union to Opt[T]. A present argument wraps in Some at the
+				// call site (bridgeArg, boxToOptional) and an omission fills None, so the
+				// body reads the same absent-or-present option either way, and a read the
+				// checker narrowed to T unwraps with .Get() through optParams.
 			default:
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 			}

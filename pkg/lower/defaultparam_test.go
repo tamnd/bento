@@ -198,12 +198,15 @@ console.log(f(1, 5, 9));
 	}
 }
 
-// TestOptionalParamWithoutDefaultHandsBack proves a bare `x?: T` with no default
-// still hands back, since the omitted-argument case wants the undefined optional
-// synthesis, a separate later slice.
-func TestOptionalParamWithoutDefaultHandsBack(t *testing.T) {
-	const src = "function f(x: number, y?: number): number { return x + (y ?? 0); }\nf(1);\n"
-	renderProgramHandBack(t, src)
+// TestOptionalParamWithoutDefaultRuns proves a bare `x?: T` with no default lowers
+// to a value.Opt[T] field: a supplied argument wraps in Some, an omitted one fills
+// None, and the body reads the option, here through the nullish default y ?? 0.
+func TestOptionalParamWithoutDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function f(x: number, y?: number): number { return x + (y ?? 0); }\nconsole.log(f(1));\nconsole.log(f(1, 4));\n"
+	if got, want := runProgramGo(t, src), "1\n5\n"; got != want {
+		t.Fatalf("optional parameter printed %q, want %q", got, want)
+	}
 }
 
 // TestDefaultedFuncUsedAsValueHandsBack proves a function with a default parameter

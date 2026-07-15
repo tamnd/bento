@@ -124,7 +124,7 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// value out with .Get(). The narrowing shows as the type at this node no longer
 		// carrying undefined; a read where the type is still the optional keeps the bare
 		// Opt value, which is what the presence test and an Opt-to-Opt assignment want.
-		if r.optLocals[name] && !r.isOptional(n) {
+		if r.isOptBinding(name) && !r.isOptional(n) {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Get")}}, nil
 		}
 		// A boxed dynamic local the checker narrowed to a single primitive at this

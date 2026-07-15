@@ -201,6 +201,15 @@ type Renderer struct {
 	// stored T is pulled out of the option; a read where the type is still optional
 	// keeps the bare Opt value. A nil map (the default) unwraps nothing.
 	optLocals map[string]bool
+	// optParams is the set of parameter names in the body currently being lowered
+	// that bind a bare optional (x?: T, no default, lowered to a value.Opt[T] field).
+	// It is the parameter counterpart to optLocals, kept separate because optLocals is
+	// recomputed per block in scopedBlockRange from the body's declarations, which do
+	// not include the signature, so a param's optional-ness would be lost there. It is
+	// built once per body next to dynLocals and saved and restored the same way; a read
+	// of one of these params the checker narrowed to T unwraps with .Get() exactly like
+	// an optional local. A nil map (the default) holds no optional params.
+	optParams map[string]bool
 	// dynLocals is the set of names in the body currently being lowered that are
 	// bound as boxed dynamic values: a parameter or a local typed any or unknown,
 	// which typeExpr lowers to value.Value. A read of one at a point the checker
