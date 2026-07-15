@@ -1140,6 +1140,31 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return &ast.BinaryExpr{X: cmp, Op: relOp, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}}, nil
 	}
 
+	// The relational operators on two booleans have no Go form, since Go's < does
+	// not apply to bool. JavaScript runs the Abstract Relational Comparison, and with
+	// neither operand a string it coerces each through ToNumber, which turns true into
+	// 1 and false into 0, then compares the numbers. So true < false is 1 < 0. Each
+	// operand lowers through value.BoolToNumber, the same direct coercion the numeric
+	// unary path uses, and the numeric relational operator applies to the two float64
+	// results. Handled before the operator table, whose boolean case carries no
+	// relational token and would hand back. The checker rejects a boolean mixed with a
+	// number or string here, so a two-boolean pair is the only relational shape that
+	// reaches this point.
+	if relOp, ok := relationalToken(opText); ok && r.isBool(left) && r.isBool(right) {
+		l, err := r.lowerExpr(left)
+		if err != nil {
+			return nil, err
+		}
+		rr, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		ln := &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{l}}
+		rn := &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{rr}}
+		return &ast.BinaryExpr{X: ln, Op: relOp, Y: rn}, nil
+	}
+
 	// === and !== against undefined, where the other operand is an optional
 	// (T | undefined, lowered to value.Opt[T]), is a presence test, not a value
 	// compare. undefined has no Go value to put on the right of a ==, and the
