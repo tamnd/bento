@@ -17,8 +17,17 @@ import (
 // at all, because the upstream compiler is under internal/ and cannot be
 // imported yet. The day a real adapter lands, this test keeps the import
 // confined here.
+//
+// The list runs with -e so a sibling package's throwaway compile dirs cannot make
+// it flake. The equivalence tests in pkg/lower write and delete eqrun-* module
+// dirs at the repo root while they run, and the CI equivalence job runs those
+// alongside this package in one go test invocation, so one of those dirs can vanish
+// mid-walk and fail a plain list with "no such file or directory". -e turns that
+// transient filesystem error into a per-package Error field instead of a nonzero
+// exit, and the scan below is unaffected: a real bento package still loads and
+// reports its imports, so a genuine typescript-go leak is still caught.
 func TestNoTypeScriptGoLeak(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "-json", "github.com/tamnd/bento/...").Output()
+	out, err := exec.Command("go", "list", "-e", "-deps", "-json", "github.com/tamnd/bento/...").Output()
 	if err != nil {
 		t.Fatalf("go list: %v", err)
 	}
