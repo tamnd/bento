@@ -2329,6 +2329,25 @@ func instantDifference(from, to *Instant, largestUnit, smallestUnit string, incr
 	return durationFromDayNanos(diff, largeRank)
 }
 
+// Round implements Temporal.Instant.prototype.round: it rounds the epoch nanosecond count to a
+// multiple of roundingIncrement of smallestUnit under one of the nine rounding modes. Unlike
+// PlainTime.round, whose increment divides the next larger unit, an Instant rounds against the
+// whole day, so the increment must divide the number of the unit in a 24-hour day, hour into 24,
+// minute into 1440, second into 86400, and each sub-second unit correspondingly. An increment that
+// is not a positive integer at or below that count and dividing it throws a RangeError. The quantum
+// divides a day evenly, so the rounding aligns to the day boundary. The receiver is unchanged.
+func (i *Instant) Round(smallestUnit string, increment float64, roundingMode string) *Instant {
+	unitNs, _, _ := plainTimeUnitInfo(smallestUnit)
+	maxInc := new(big.Int).Quo(nsPerDay, big.NewInt(unitNs)).Int64()
+	inc := int64(toIntegerWithTruncation(increment))
+	if inc < 1 || inc > maxInc || maxInc%inc != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.Instant.prototype.round roundingIncrement is out of range")))
+	}
+	quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
+	rounded := roundBigToIncrement(i.ns, quantum, roundingMode)
+	return newInstant(rounded)
+}
+
 // InstantCompare implements Temporal.Instant.compare: -1, 0, or 1 as the first instant is
 // earlier than, equal to, or later than the second, the sign of the big.Int comparison.
 func InstantCompare(a, b *Instant) float64 { return float64(a.ns.Cmp(b.ns)) }

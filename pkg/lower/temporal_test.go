@@ -1604,8 +1604,23 @@ console.log(a.until(b, { smallestUnit: "second", roundingMode: "ceil" }).toStrin
 	}
 }
 
-// TestInstantHandBacks pins the honest ceilings: the arithmetic and rounding methods each
-// hand back with a reason naming where the work belongs.
+// TestInstantRound pins round to value.Instant.Round, reading a string shorthand and an
+// options bag with the increment and mode threaded through.
+func TestInstantRound(t *testing.T) {
+	const src = `const b = new Temporal.Instant(8130250500000n);
+console.log(b.round("hour").toString());
+console.log(b.round({ smallestUnit: "minute", roundingIncrement: 15 }).toString());
+console.log(b.round({ smallestUnit: "second", roundingMode: "ceil" }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Round(", `"hour"`, `"minute"`, `"ceil"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestInstantHandBacks pins the honest ceilings: a rounding option that depends on run-time
+// data and the time-zone conversions each hand back with a reason naming where the work belongs.
 func TestInstantHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1618,9 +1633,14 @@ func TestInstantHandBacks(t *testing.T) {
 			want: "Temporal.Instant.prototype.until with a non-literal largestUnit is a later slice",
 		},
 		{
-			name: "round",
-			src:  "const i = new Temporal.Instant(1500000000n);\nconst j = i.round(\"second\");\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.Instant.prototype.round is a later slice",
+			name: "round with a dynamic smallestUnit",
+			src:  "function at(u: \"hour\" | \"minute\") {\n  const i = new Temporal.Instant(1500000000n);\n  return i.round({ smallestUnit: u }).epochMilliseconds;\n}\nconsole.log(at(\"hour\"));",
+			want: "Temporal.Instant.prototype.round with a non-literal smallestUnit is a later slice",
+		},
+		{
+			name: "toZonedDateTimeISO conversion",
+			src:  "const i = new Temporal.Instant(1500000000n);\nconst z = i.toZonedDateTimeISO(\"UTC\");\nconsole.log(z.toString());",
+			want: "Temporal.Instant.prototype.toZonedDateTimeISO is a later slice",
 		},
 	}
 	for _, c := range cases {
