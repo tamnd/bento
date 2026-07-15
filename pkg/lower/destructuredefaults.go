@@ -176,6 +176,9 @@ type objectAssignElem struct {
 	hasDefault bool
 	defNode    frontend.Node
 	bindMember frontend.Node
+	rest       bool
+	restStruct string
+	restType   frontend.Type
 }
 
 // classifyObjectAssignElem reads one object assignment property into an
