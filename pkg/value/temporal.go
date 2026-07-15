@@ -2854,6 +2854,36 @@ func (z *ZonedDateTime) ToPlainTime() *PlainTime {
 	return &t
 }
 
+// AddDuration implements Temporal.ZonedDateTime.prototype.add and, over a negated Duration,
+// subtract. Following the specification's AddZonedDateTime, the calendar part and the exact-time
+// part move separately. When the duration carries no years, months, weeks, or days the addition
+// is pure exact time: the time fields fold to nanoseconds and add straight onto the count, so an
+// hour added stays an hour on the time line even across a daylight-saving change. Otherwise the
+// calendar part first adds to the wall-clock reading in the calendar under the overflow rule, the
+// moved wall clock re-resolves to an instant through the zone under the default compatible
+// disambiguation, and the exact-time part then folds onto that instant as plain nanoseconds. That
+// order is what makes a day added across a transition land on the same wall-clock time a day later
+// while the offset it reports updates. The zone and calendar carry through and the result is
+// range-checked.
+func (z *ZonedDateTime) AddDuration(dur *Duration, overflow string) *ZonedDateTime {
+	if dur.years == 0 && dur.months == 0 && dur.weeks == 0 && dur.days == 0 {
+		result := new(big.Int).Add(z.ns, durationTimeNanos(dur))
+		validateEpochNanoseconds(result)
+		return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+	}
+	wall := z.localDateTime()
+	dateDur := &Duration{years: dur.years, months: dur.months, weeks: dur.weeks, days: dur.days}
+	moved := wall.date.AddDate(dateDur, overflow)
+	intermediate := disambiguateCompatible(z.loc, wallNanoseconds(isoParse{
+		year: moved.year, month: moved.month, day: moved.day,
+		hour: wall.time.hour, minute: wall.time.minute, second: wall.time.second,
+		millisecond: wall.time.millisecond, microsecond: wall.time.microsecond, nanosecond: wall.time.nanosecond,
+	}))
+	result := new(big.Int).Add(intermediate, durationTimeNanos(dur))
+	validateEpochNanoseconds(result)
+	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
 // Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two
 // zoned date-times are equal when they name the same instant in the same zone under the same
 // calendar, so the check is the count, the canonical zone identifier, and the calendar.

@@ -683,9 +683,12 @@ func zonedDateTimeAccessor(prop string) (method string, ok bool) {
 // plainDateTimeMethodCall. equals(other) compares two zoned date-times, toString and toJSON
 // render the round-trippable string, and the conversions toInstant, toPlainDate, toPlainTime,
 // and toPlainDateTime drop the zone or narrow to a plain type; none takes options in this
-// slice, so a call with arguments beyond the ones handled hands back. The arithmetic and
-// rounding methods, the reshaping (with, withPlainTime, withTimeZone, withCalendar,
-// startOfDay), the transition queries, and toLocaleString hand back with a named reason.
+// slice, so a call with arguments beyond the ones handled hands back. add and subtract move the
+// value by a duration, the calendar part added in the calendar and the exact-time part folded on
+// as nanoseconds after the offset re-resolves, reading the overflow option the same way the plain
+// date-time movers do. The remaining rounding, the reshaping (with, withPlainTime, withTimeZone,
+// withCalendar, startOfDay), the difference (until, since), the transition queries, and
+// toLocaleString hand back with a named reason.
 func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "equals":
@@ -721,6 +724,27 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 			"toPlainDateTime": "ToPlainDateTime",
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(names[method])}}, nil
+	case "add", "subtract":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " takes at least one argument"}
+		}
+		what := "Temporal.ZonedDateTime.prototype." + method
+		dur, err := r.durationArg(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		if method == "subtract" {
+			dur = &ast.CallExpr{Fun: &ast.SelectorExpr{X: dur, Sel: ident("Negated")}}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDuration")}, Args: []ast.Expr{dur, stringLit(overflow)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " is a later slice"}
 	}

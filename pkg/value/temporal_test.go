@@ -2148,6 +2148,39 @@ func TestZonedDateTimeFromCopies(t *testing.T) {
 	}
 }
 
+// TestZonedDateTimeAddDuration checks add and subtract split the calendar part from the exact
+// time. Across the New York spring-forward boundary a whole day added keeps the wall clock at
+// noon and re-resolves the offset to -04:00, while an exact twenty-four hours skips the lost hour
+// and reads 13:00; a calendar-unit duration moves the date and re-resolves the offset; a day
+// added into the fall-back overlap keeps the wall clock and takes the earlier offset; and a Tokyo
+// zone with no transition adds an exact ninety minutes. Every expected value was checked against
+// @js-temporal/polyfill.
+func TestZonedDateTimeAddDuration(t *testing.T) {
+	spring := ZonedDateTimeFromString("2024-03-09T12:00:00-05:00[America/New_York]")
+	fallback := ZonedDateTimeFromString("2024-11-02T01:30:00-04:00[America/New_York]")
+	tokyo := ZonedDateTimeFromString("2024-01-01T00:00:00+09:00[Asia/Tokyo]")
+	cases := []struct {
+		name string
+		base *ZonedDateTime
+		dur  *Duration
+		want string
+	}{
+		{"day across spring forward", spring, NewDuration(0, 0, 0, 1, 0, 0, 0, 0, 0, 0), "2024-03-10T12:00:00-04:00[America/New_York]"},
+		{"exact 24 hours across spring forward", spring, NewDuration(0, 0, 0, 0, 24, 0, 0, 0, 0, 0), "2024-03-10T13:00:00-04:00[America/New_York]"},
+		{"one month", spring, NewDuration(0, 1, 0, 0, 0, 0, 0, 0, 0, 0), "2024-04-09T12:00:00-04:00[America/New_York]"},
+		{"mixed calendar units", spring, NewDuration(1, 2, 0, 3, 0, 0, 0, 0, 0, 0), "2025-05-12T12:00:00-04:00[America/New_York]"},
+		{"subtract a day", spring, NewDuration(0, 0, 0, 1, 0, 0, 0, 0, 0, 0).Negated(), "2024-03-08T12:00:00-05:00[America/New_York]"},
+		{"day into fall-back overlap", fallback, NewDuration(0, 0, 0, 1, 0, 0, 0, 0, 0, 0), "2024-11-03T01:30:00-04:00[America/New_York]"},
+		{"exact time in a stable zone", tokyo, NewDuration(0, 0, 0, 0, 0, 90, 0, 0, 0, 0), "2024-01-01T01:30:00+09:00[Asia/Tokyo]"},
+	}
+	for _, c := range cases {
+		got := c.base.AddDuration(c.dur, "constrain").ToString().ToGoString()
+		if got != c.want {
+			t.Errorf("%s: AddDuration = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // TestZonedDateTimeRejects checks the range guard and the unknown-zone guard both throw a
 // RangeError.
 func TestZonedDateTimeRejects(t *testing.T) {
