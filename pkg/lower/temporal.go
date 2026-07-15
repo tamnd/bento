@@ -1013,8 +1013,8 @@ func (r *Renderer) newZonedDateTime(argNodes []frontend.Node) (ast.Expr, error) 
 // string, and add and subtract fold the receiver and a Duration operand over a fixed 24-hour
 // day (the reduced profile takes no relativeTo, so both throw a RangeError at run time when an
 // operand carries years, months, or weeks). total converts the duration to one unit against an
-// optional relativeTo PlainDate. round, which rounds across the irregular calendar units and
-// re-balances to a largestUnit, hands back with a named reason.
+// optional relativeTo PlainDate. round rounds at a smallestUnit and re-balances to a largestUnit
+// against an optional relativeTo, throwing at run time without a reference for a calendar unit.
 func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "negated", "abs":
@@ -1086,6 +1086,22 @@ func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, arg
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Total")}, Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(unit)}, rel}}, nil
+	case "round":
+		sm, lg, inc, mode, rel, err := r.durationRoundOptions("Temporal.Duration.prototype.round", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(sm)},
+			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lg)},
+			inc,
+			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(mode)},
+			rel,
+		}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " is a later slice"}
 	}
@@ -1269,6 +1285,104 @@ func (r *Renderer) durationRelativeToOption(what string, n frontend.Node) (ast.E
 		}
 	}
 	return rel, nil
+}
+
+// durationRoundOptions reads the options of Temporal.Duration.prototype.round at compile time.
+// round takes a required rounding target, given either as a bare string smallestUnit or as an
+// options object carrying smallestUnit, largestUnit, roundingIncrement, roundingMode, and
+// relativeTo. It returns the smallest and largest units in singular form, each empty when the
+// option was absent so the runtime supplies the default, the lowered increment (default 1), the
+// mode (default halfExpand), and the lowered relativeTo or the nil identifier. A relativeTo that
+// is not a Temporal.PlainDate, a non-literal or invalid unit or mode, a non-number increment, a
+// bag with neither smallestUnit nor largestUnit, an unknown key, or a spread or shorthand member
+// hands back.
+func (r *Renderer) durationRoundOptions(what string, argNodes []frontend.Node) (smallestUnit, largestUnit string, increment ast.Expr, mode string, rel ast.Expr, err error) {
+	increment = &ast.BasicLit{Kind: token.FLOAT, Value: "1"}
+	mode = "halfExpand"
+	rel = ident("nil")
+	if len(argNodes) != 1 {
+		return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " takes exactly one argument"}
+	}
+	n := argNodes[0]
+	if lit, ok := r.stringLiteralValue(n); ok {
+		u, ok := durationTotalUnits[lit]
+		if !ok {
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+		}
+		return u, "", increment, mode, rel, nil
+	}
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " options that are neither a string nor an object literal are a later slice"}
+	}
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "smallestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-literal smallestUnit is a later slice"}
+			}
+			u, ok := durationTotalUnits[lit]
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			smallestUnit = u
+		case "largestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-literal largestUnit is a later slice"}
+			}
+			if lit == "auto" {
+				largestUnit = "auto"
+				continue
+			}
+			u, ok := durationTotalUnits[lit]
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid largestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			largestUnit = u
+		case "roundingIncrement":
+			if !r.isNumber(kids[1]) {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-number roundingIncrement is a later slice"}
+			}
+			val, lowerErr := r.lowerExpr(kids[1])
+			if lowerErr != nil {
+				return "", "", nil, "", nil, lowerErr
+			}
+			increment = val
+		case "roundingMode":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-literal roundingMode is a later slice"}
+			}
+			if !slices.Contains(plainTimeRoundModes[:], lit) {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid roundingMode " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			mode = lit
+		case "relativeTo":
+			if !r.isPlainDate(kids[1]) {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a relativeTo that is not a Temporal.PlainDate is a later slice"}
+			}
+			expr, lowerErr := r.lowerExpr(kids[1])
+			if lowerErr != nil {
+				return "", "", nil, "", nil, lowerErr
+			}
+			rel = expr
+		default:
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	if smallestUnit == "" && (largestUnit == "" || largestUnit == "auto") {
+		return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " without a smallestUnit or largestUnit (a RangeError at run time) is a later slice"}
+	}
+	return smallestUnit, largestUnit, increment, mode, rel, nil
 }
 
 // plainDateMethodCall lowers a method call on a PlainDate receiver. equals(other)

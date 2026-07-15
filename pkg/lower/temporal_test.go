@@ -524,6 +524,22 @@ console.log(Temporal.Duration.compare(new Temporal.Duration(0, 1), b, { relative
 	}
 }
 
+// TestDurationRoundConstruction pins Temporal.Duration.prototype.round to a runtime Round call:
+// a bare-string smallestUnit passes an empty largestUnit, the default increment and mode, and a
+// nil relativeTo; an options object passes the units, increment, mode, and lowered PlainDate.
+func TestDurationRoundConstruction(t *testing.T) {
+	const src = `const d = new Temporal.Duration(0, 0, 0, 1, 12);
+const rel = Temporal.PlainDate.from("2024-01-01");
+console.log(d.round("day").toString());
+console.log(new Temporal.Duration(0, 5).round({ smallestUnit: "month", roundingIncrement: 2, roundingMode: "ceil", relativeTo: rel }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Round(", "\"day\"", "\"halfExpand\"", "nil", "\"month\"", "\"ceil\""} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
 // methods and compare each hand back with a reason naming where the work belongs, waiting on
 // the relativeTo reference and the calendar model.
@@ -539,9 +555,14 @@ func TestDurationHandBacks(t *testing.T) {
 			want: "Temporal.Duration.prototype.add over an argument that is not a Temporal.Duration",
 		},
 		{
-			name: "round",
-			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst r = d.round({ largestUnit: \"hours\" });\nconsole.log(r.hours);",
-			want: "Temporal.Duration.prototype.round is a later slice",
+			name: "round with a dynamic smallestUnit",
+			src:  "function go(u: \"day\" | \"hour\") {\n  const d = new Temporal.Duration(0, 0, 0, 1, 12);\n  return d.round({ smallestUnit: u }).days;\n}\nconsole.log(go(\"day\"));",
+			want: "Temporal.Duration.prototype.round with a non-literal smallestUnit is a later slice",
+		},
+		{
+			name: "round with a non-PlainDate relativeTo",
+			src:  "const d = new Temporal.Duration(0, 1);\nconst r = d.round({ smallestUnit: \"month\", relativeTo: \"2024-01-01\" });\nconsole.log(r.months);",
+			want: "with a relativeTo that is not a Temporal.PlainDate",
 		},
 		{
 			name: "total with a non-PlainDate relativeTo",

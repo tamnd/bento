@@ -1,0 +1,12 @@
+== stdout:
+P2D
+PT26H
+PT30M
+P1Y2M
+P3W
+-P1M
+P6M
+P1DT2H
+RangeError
+== exit:
+0

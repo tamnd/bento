@@ -1615,6 +1615,61 @@ func TestDurationCompare(t *testing.T) {
 	assertRangeError("weeks no rel", func() { DurationCompare(d(0, 0, 1), d(0, 0, 0, 1), nil) })
 }
 
+// TestDurationRound checks round against the polyfill: without a reference the day-and-time
+// duration rounds over a fixed 24-hour day and balances to largestUnit, with a calendar unit or
+// week largestUnit throwing; with a PlainDate reference the endpoint rounds at smallestUnit,
+// irregular units bracketing between two boundaries and negative durations rounding in
+// wall-clock terms, then rebalances to largestUnit.
+func TestDurationRound(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	rel := NewPlainDate(2024, 1, 1)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"day no rel", d(0, 0, 0, 1, 12).Round("day", "", 1, "halfExpand", nil).ToString().ToGoString(), "P2D"},
+		{"day down no rel", d(0, 0, 0, 1, 11).Round("day", "", 1, "halfExpand", nil).ToString().ToGoString(), "P1D"},
+		{"hour no rel", d(0, 0, 0, 0, 1, 30).Round("hour", "", 1, "halfExpand", nil).ToString().ToGoString(), "PT2H"},
+		{"largest hour no rel", d(0, 0, 0, 1, 2).Round("", "hour", 1, "halfExpand", nil).ToString().ToGoString(), "PT26H"},
+		{"largest day from hours", d(0, 0, 0, 0, 50).Round("", "day", 1, "halfExpand", nil).ToString().ToGoString(), "P2DT2H"},
+		{"minute inc 15", d(0, 0, 0, 0, 0, 37).Round("minute", "", 15, "halfExpand", nil).ToString().ToGoString(), "PT30M"},
+		{"hour floor no rel", d(0, 0, 0, 0, 1, 59).Round("hour", "", 1, "floor", nil).ToString().ToGoString(), "PT1H"},
+		{"month rel keeps year", d(1, 2).Round("month", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1Y2M"},
+		{"year rel", d(1, 2).Round("year", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1Y"},
+		{"year rel down to zero", d(0, 5).Round("year", "", 1, "halfExpand", rel).ToString().ToGoString(), "PT0S"},
+		{"largest year rel", d(0, 25).Round("", "year", 1, "halfExpand", rel).ToString().ToGoString(), "P2Y1M"},
+		{"largest month from days", d(0, 0, 0, 70).Round("", "month", 1, "halfExpand", rel).ToString().ToGoString(), "P2M10D"},
+		{"week rel", d(0, 0, 0, 20).Round("week", "", 1, "halfExpand", rel).ToString().ToGoString(), "P3W"},
+		{"day rel mixed", d(0, 1, 0, 15, 12).Round("day", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1M16D"},
+		{"month rel negative", d(0, 0, 0, -40).Round("month", "", 1, "halfExpand", rel).ToString().ToGoString(), "-P1M"},
+		{"month rel inc 2", d(0, 5).Round("month", "", 2, "halfExpand", rel).ToString().ToGoString(), "P6M"},
+		{"largest year sm day", d(0, 25, 0, 5).Round("day", "year", 1, "halfExpand", rel).ToString().ToGoString(), "P2Y1M5D"},
+		{"hour from calendar", d(0, 0, 0, 1, 1, 40).Round("hour", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1DT2H"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("largest week no rel", func() { d(0, 0, 0, 20).Round("", "week", 1, "halfExpand", nil) })
+	assertRangeError("month unit no rel", func() { d(0, 0, 0, 20).Round("month", "", 1, "halfExpand", nil) })
+	assertRangeError("weeks present no rel", func() { d(0, 0, 2).Round("day", "", 1, "halfExpand", nil) })
+}
+
 // TestDurationRejects checks the RangeError cases against the polyfill: a non-integral
 // component (Duration rejects rather than truncates), a NaN or non-finite component, a
 // mixed-sign set, a years field at 2^32, and a seconds field at 2^53.
