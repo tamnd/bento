@@ -993,6 +993,54 @@ func TestPlainDateTimeConversions(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeToZonedDateTime checks the wall clock pins to a zone under each
+// disambiguation, including a spring-forward gap and a fall-back overlap. Every value was checked
+// against @js-temporal/polyfill.
+func TestPlainDateTimeToZonedDateTime(t *testing.T) {
+	dt := mustPlainDateTime(t, 2020, 3, 14, 15, 30, 45, 0, 0, 0)
+	utc := dt.ToZonedDateTime("UTC", "compatible")
+	if got := utc.ToString().ToGoString(); got != "2020-03-14T15:30:45+00:00[UTC]" {
+		t.Errorf("utc toString = %q, want 2020-03-14T15:30:45+00:00[UTC]", got)
+	}
+	ny := dt.ToZonedDateTime("America/New_York", "compatible")
+	if got := ny.EpochMilliseconds(); got != 1584214245000 {
+		t.Errorf("new york epochMilliseconds = %v, want 1584214245000", got)
+	}
+
+	// A spring-forward gap: 2020-03-08 02:30 does not exist in America/New_York.
+	gap := mustPlainDateTime(t, 2020, 3, 8, 2, 30, 0, 0, 0, 0)
+	if got := gap.ToZonedDateTime("America/New_York", "compatible").ToString().ToGoString(); got != "2020-03-08T03:30:00-04:00[America/New_York]" {
+		t.Errorf("gap compatible = %q, want ...03:30:00-04:00[America/New_York]", got)
+	}
+	if got := gap.ToZonedDateTime("America/New_York", "earlier").ToString().ToGoString(); got != "2020-03-08T01:30:00-05:00[America/New_York]" {
+		t.Errorf("gap earlier = %q, want ...01:30:00-05:00[America/New_York]", got)
+	}
+	if got := gap.ToZonedDateTime("America/New_York", "later").ToString().ToGoString(); got != "2020-03-08T03:30:00-04:00[America/New_York]" {
+		t.Errorf("gap later = %q, want ...03:30:00-04:00[America/New_York]", got)
+	}
+	if !plainDateTimeCallThrows(func() { gap.ToZonedDateTime("America/New_York", "reject") }) {
+		t.Error("gap reject did not throw")
+	}
+
+	// A fall-back overlap: 2020-11-01 01:30 happens twice in America/New_York.
+	dup := mustPlainDateTime(t, 2020, 11, 1, 1, 30, 0, 0, 0, 0)
+	if got := dup.ToZonedDateTime("America/New_York", "compatible").ToString().ToGoString(); got != "2020-11-01T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap compatible = %q, want ...01:30:00-04:00[America/New_York]", got)
+	}
+	if got := dup.ToZonedDateTime("America/New_York", "later").ToString().ToGoString(); got != "2020-11-01T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap later = %q, want ...01:30:00-05:00[America/New_York]", got)
+	}
+	if !plainDateTimeCallThrows(func() { dup.ToZonedDateTime("America/New_York", "reject") }) {
+		t.Error("overlap reject did not throw")
+	}
+
+	// A non-ISO date-time keeps its calendar through the zone bracket.
+	g := PlainDateTimeWithCalendar(mustPlainDateTime(t, 2020, 3, 14, 15, 30, 0, 0, 0, 0), "gregory")
+	if got := g.ToZonedDateTime("UTC", "compatible").ToString().ToGoString(); got != "2020-03-14T15:30:00+00:00[UTC][u-ca=gregory]" {
+		t.Errorf("gregory toString = %q, want ...[UTC][u-ca=gregory]", got)
+	}
+}
+
 // TestPlainDateTimeCompareAndEquals checks the static comparator and equals, including a
 // difference that lives only in the time so the date-first fall-through is exercised.
 func TestPlainDateTimeCompareAndEquals(t *testing.T) {

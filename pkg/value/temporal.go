@@ -1368,6 +1368,24 @@ func (pdt *PlainDateTime) ToPlainTime() *PlainTime {
 	return &t
 }
 
+// ToZonedDateTime implements Temporal.PlainDateTime.prototype.toZonedDateTime: it pins the
+// date-time's wall clock to a time zone, resolving the exact instant under the given
+// disambiguation. compatible (the default) takes the earlier reading in a fall-back overlap and
+// shifts forward across a spring-forward gap; earlier and later pick the two overlap readings and
+// the two sides of a gap; reject throws on an ambiguous or gapped reading. The result keeps the
+// date-time's calendar, so a non-ISO date-time stays under its calendar.
+func (pdt *PlainDateTime) ToZonedDateTime(timeZone, disambiguation string) *ZonedDateTime {
+	loc, canon := resolveTimeZone(timeZone)
+	wall := wallNanoseconds(isoParse{
+		year: pdt.date.year, month: pdt.date.month, day: pdt.date.day,
+		hour: pdt.time.hour, minute: pdt.time.minute, second: pdt.time.second,
+		millisecond: pdt.time.millisecond, microsecond: pdt.time.microsecond, nanosecond: pdt.time.nanosecond,
+	})
+	epoch := disambiguatePossible(loc, wall, disambiguation, canon)
+	validateEpochNanoseconds(epoch)
+	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon), cal: pdt.date.cal}
+}
+
 // AddDateTime implements Temporal.PlainDateTime.prototype.add and, over a negated Duration,
 // subtract. Unlike a PlainDate, which drops the duration's sub-day time part, a PlainDateTime
 // carries a wall clock, so the time part folds into the clock first: the duration's six time
@@ -2517,13 +2535,41 @@ func possibleInstants(loc *time.Location, wall *big.Int) []*big.Int {
 }
 
 // disambiguateCompatible resolves a wall-clock reading to a single instant under Temporal's
-// default compatible disambiguation, the option from over a bare string uses. An ordinary
-// reading has one instant; a fall-back overlap takes the earlier of the two; a spring-forward
-// gap, where the reading names no instant, shifts forward by the size of the gap and takes the
-// reading there, the instant just after the transition.
+// default compatible disambiguation, the option from over a bare string uses. It is the
+// compatible arm of disambiguatePossible: an ordinary reading has one instant; a fall-back
+// overlap takes the earlier of the two; a spring-forward gap shifts forward and takes the
+// reading just after the transition. Compatible never rejects, so the zone name is unused.
 func disambiguateCompatible(loc *time.Location, wall *big.Int) *big.Int {
-	if p := possibleInstants(loc, wall); len(p) > 0 {
+	return disambiguatePossible(loc, wall, "compatible", "")
+}
+
+// disambiguatePossible resolves a wall-clock reading to a single instant under one of Temporal's
+// four disambiguation options. An ordinary reading maps to one instant regardless of the option.
+// A fall-back overlap maps to two instants: earlier and compatible take the first, later takes
+// the second, reject throws. A spring-forward gap maps to none: reject throws, earlier shifts the
+// reading back by the gap and takes the instant just before the transition, and compatible and
+// later shift it forward and take the instant just after. The zone name canon appears in the
+// reject error only.
+func disambiguatePossible(loc *time.Location, wall *big.Int, disambiguation, canon string) *big.Int {
+	p := possibleInstants(loc, wall)
+	if len(p) == 1 {
 		return p[0]
+	}
+	if len(p) > 1 {
+		switch disambiguation {
+		case "earlier", "compatible":
+			return p[0]
+		case "later":
+			return p[len(p)-1]
+		default: // reject
+			Throw(NewRangeError(FromGoString("wall-clock time is ambiguous in " + canon)))
+			return nil
+		}
+	}
+	// A gap: the reading names no instant.
+	if disambiguation == "reject" {
+		Throw(NewRangeError(FromGoString("wall-clock time falls in a gap in " + canon)))
+		return nil
 	}
 	sec := new(big.Int)
 	rem := new(big.Int)
@@ -2532,9 +2578,16 @@ func disambiguateCompatible(loc *time.Location, wall *big.Int) *big.Int {
 	offBefore := zoneOffsetSecondsAt(loc, wallSec-86_400)
 	offAfter := zoneOffsetSecondsAt(loc, wallSec+86_400)
 	gap := int64(offAfter-offBefore) * 1_000_000_000
-	shifted := new(big.Int).Add(wall, big.NewInt(gap))
-	if p := possibleInstants(loc, shifted); len(p) > 0 {
-		return p[len(p)-1]
+	if disambiguation == "earlier" {
+		shifted := new(big.Int).Sub(wall, big.NewInt(gap))
+		if q := possibleInstants(loc, shifted); len(q) > 0 {
+			return q[0]
+		}
+	} else { // compatible, later
+		shifted := new(big.Int).Add(wall, big.NewInt(gap))
+		if q := possibleInstants(loc, shifted); len(q) > 0 {
+			return q[len(q)-1]
+		}
 	}
 	epochSec := wallSec - int64(offAfter)
 	ns := new(big.Int).SetInt64(epochSec)
