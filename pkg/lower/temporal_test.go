@@ -1587,6 +1587,23 @@ console.log(d.epochMilliseconds);`
 	}
 }
 
+// TestInstantUntilSince pins until and since to value.Instant.Until and Since, threading the
+// default largestUnit, smallestUnit, increment, and mode, and reading an options bag.
+func TestInstantUntilSince(t *testing.T) {
+	const src = `const a = new Temporal.Instant(0n);
+const b = new Temporal.Instant(8130250500000n);
+console.log(a.until(b).toString());
+console.log(a.since(b).toString());
+console.log(a.until(b, { largestUnit: "hour" }).toString());
+console.log(a.until(b, { smallestUnit: "second", roundingMode: "ceil" }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Until(", ".Since(", `"second"`, `"hour"`, `"ceil"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestInstantHandBacks pins the honest ceilings: the arithmetic and rounding methods each
 // hand back with a reason naming where the work belongs.
 func TestInstantHandBacks(t *testing.T) {
@@ -1596,9 +1613,9 @@ func TestInstantHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "until arithmetic",
-			src:  "const i = new Temporal.Instant(0n);\nconst j = new Temporal.Instant(1n);\nconst d = i.until(j);\nconsole.log(d.nanoseconds);",
-			want: "Temporal.Instant.prototype.until is a later slice",
+			name: "until with a dynamic largestUnit",
+			src:  "function diff(u: \"hour\" | \"minute\") {\n  const i = new Temporal.Instant(0n);\n  const j = new Temporal.Instant(1n);\n  return i.until(j, { largestUnit: u }).nanoseconds;\n}\nconsole.log(diff(\"hour\"));",
+			want: "Temporal.Instant.prototype.until with a non-literal largestUnit is a later slice",
 		},
 		{
 			name: "round",

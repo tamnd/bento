@@ -366,9 +366,10 @@ func instantAccessor(prop string) (method string, ok bool) {
 // plainDateMethodCall. equals(other) compares two instants, and toString and toJSON render
 // the UTC ISO 8601 string; each takes no options in this slice, so a call with arguments
 // beyond the ones handled hands back. add and subtract fold a Duration's time part into the
-// epoch count, rejecting the calendar units at run time. The remaining arithmetic and rounding
-// methods (until, since, round), which need difference and options parsing, and the conversions
-// (toZonedDateTimeISO, toLocaleString) hand back with a named reason.
+// epoch count, rejecting the calendar units at run time. until and since report the exact-time
+// difference balanced from largestUnit down and rounded at smallestUnit. The remaining rounding
+// method (round) and the conversions (toZonedDateTimeISO, toLocaleString) hand back with a named
+// reason.
 func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "equals":
@@ -417,9 +418,112 @@ func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argN
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDuration")}, Args: []ast.Expr{dur}}, nil
+	case "until", "since":
+		what := "Temporal.Instant.prototype." + method
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: what + " takes at least one argument"}
+		}
+		if !r.isInstant(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.Instant is a later slice"}
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		largestUnit, smallestUnit, increment, mode, err := r.instantDifferenceOptions(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		fn := "Until"
+		if method == "since" {
+			fn = "Since"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(fn)}, Args: []ast.Expr{other, stringLit(largestUnit), stringLit(smallestUnit), increment, stringLit(mode)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype." + method + " is a later slice"}
 	}
+}
+
+// instantDifferenceOptions reads the options bag for Temporal.Instant.prototype.until and since.
+// It mirrors plainTimeDifferenceOptions over the same time units and modes, with one difference:
+// an Instant has no wall clock or day, so the default and the auto largestUnit resolve to the
+// coarser of second and the smallestUnit, not to hour. A dynamic unit or mode, an out-of-set
+// unit or mode, or an unknown key hands back; the runtime rejects a largestUnit smaller than the
+// smallestUnit and an out-of-range increment, so those ride through as a RangeError. A calendar
+// unit such as day is not in the accepted set, so it hands back rather than lowering to a throw.
+func (r *Renderer) instantDifferenceOptions(what string, argNodes []frontend.Node) (largestUnit, smallestUnit string, increment ast.Expr, mode string, err error) {
+	largestUnit, smallestUnit, mode = "auto", "nanosecond", "trunc"
+	increment = &ast.BasicLit{Kind: token.FLOAT, Value: "1"}
+	if len(argNodes) > 1 {
+		return "", "", nil, "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	if len(argNodes) == 1 {
+		n := argNodes[0]
+		if n.Kind() != frontend.NodeObjectLiteralExpression {
+			return "", "", nil, "", &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+		}
+		for _, member := range r.prog.Children(n) {
+			if member.Kind() != frontend.NodeUnknown {
+				return "", "", nil, "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+			}
+			kids := r.prog.Children(member)
+			if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+				return "", "", nil, "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+			}
+			key := r.prog.Text(kids[0])
+			switch key {
+			case "largestUnit":
+				lit, ok := r.stringLiteralValue(kids[1])
+				if !ok {
+					return "", "", nil, "", &NotYetLowerable{Reason: what + " with a non-literal largestUnit is a later slice"}
+				}
+				if lit != "auto" && !slices.Contains(plainTimeRoundUnits[:], lit) {
+					return "", "", nil, "", &NotYetLowerable{Reason: what + " with the invalid largestUnit " + lit + " (a RangeError at run time) is a later slice"}
+				}
+				largestUnit = lit
+			case "smallestUnit":
+				lit, ok := r.stringLiteralValue(kids[1])
+				if !ok {
+					return "", "", nil, "", &NotYetLowerable{Reason: what + " with a non-literal smallestUnit is a later slice"}
+				}
+				if !slices.Contains(plainTimeRoundUnits[:], lit) {
+					return "", "", nil, "", &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+				}
+				smallestUnit = lit
+			case "roundingIncrement":
+				if !r.isNumber(kids[1]) {
+					return "", "", nil, "", &NotYetLowerable{Reason: what + " with a non-number roundingIncrement is a later slice"}
+				}
+				val, lowerErr := r.lowerExpr(kids[1])
+				if lowerErr != nil {
+					return "", "", nil, "", lowerErr
+				}
+				increment = val
+			case "roundingMode":
+				lit, ok := r.stringLiteralValue(kids[1])
+				if !ok {
+					return "", "", nil, "", &NotYetLowerable{Reason: what + " with a non-literal roundingMode is a later slice"}
+				}
+				if !slices.Contains(plainTimeRoundModes[:], lit) {
+					return "", "", nil, "", &NotYetLowerable{Reason: what + " with the invalid roundingMode " + lit + " (a RangeError at run time) is a later slice"}
+				}
+				mode = lit
+			default:
+				return "", "", nil, "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+			}
+		}
+	}
+	if largestUnit == "auto" {
+		// An Instant defaults to second, but a coarser smallestUnit raises the floor.
+		secondRank := slices.Index(plainTimeRoundUnits[:], "second")
+		smallRank := slices.Index(plainTimeRoundUnits[:], smallestUnit)
+		largestUnit = plainTimeRoundUnits[min(secondRank, smallRank)]
+	}
+	return largestUnit, smallestUnit, increment, mode, nil
 }
 
 // instantStaticCall lowers a static call on Temporal.Instant. compare lowers to
