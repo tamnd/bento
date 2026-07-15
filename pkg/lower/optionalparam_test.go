@@ -106,6 +106,69 @@ console.log(f());
 	}
 }
 
+// A required parameter annotated x: T | undefined binds a value.Opt[T] field too,
+// since typeExpr renders the two-member optional union to Opt[T]. The caller always
+// supplies it, as Some for a present value or None for an explicit undefined, and a
+// read the checker narrowed to T unwraps with .Get(). These pin that a narrowed read
+// of a required optional-union parameter lowers, not just the bare x?: T form.
+
+// TestRequiredUnionParamNarrows runs the x !== undefined guard on a required
+// x: T | undefined parameter: the narrowed read unwraps, and the explicit-undefined
+// call binds the empty option the else branch returns.
+func TestRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function f(x: number | undefined): number {
+  if (x !== undefined) { return x + 1; }
+  return 0;
+}
+console.log(f(5));
+console.log(f(undefined));
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("required union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestRequiredUnionParamEarlyReturn runs the mirror guard on a required optional-union
+// parameter, whose early return leaves the parameter narrowed to T for the read after.
+func TestRequiredUnionParamEarlyReturn(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function g(s: string | undefined): string {
+  if (s === undefined) { return "none"; }
+  return s + "!";
+}
+console.log(g("hi"));
+console.log(g(undefined));
+`
+	if got, want := runProgramGo(t, src), "hi!\nnone\n"; got != want {
+		t.Fatalf("required union string parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestRequiredUnionParamEmitsGet pins the shape: the read narrowed past the guard
+// unwraps the field with .Get(), the fix for the Opt[T] field the union already
+// rendered before this slice taught the narrowing pass to track it.
+func TestRequiredUnionParamEmitsGet(t *testing.T) {
+	const src = `
+function f(x: number | undefined): number {
+  if (x !== undefined) { return x + 1; }
+  return 0;
+}
+console.log(f(5));
+`
+	out := renderProgram(t, src)
+	for _, want := range []string{
+		"x value.Opt[float64]",
+		"x.Get() + 1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("emitted Go missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // A method, an async function, and a generator all lower their parameters through
 // the shared funcParamFields, but their bodies never build the optParams narrowing
 // set: only a body lowered through funcDeclNamed does. So a bare optional parameter
