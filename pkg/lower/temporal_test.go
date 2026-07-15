@@ -1513,6 +1513,24 @@ console.log(a.toJSON());`
 	}
 }
 
+// TestPlainMonthDayWithAndToPlainDate pins the reshaping and conversion methods: with lowers to
+// WithFields over present or absent month and day optionals, resolving a literal monthCode to its
+// month and carrying the overflow option, and toPlainDate lowers to ToPlainDate over the year the
+// argument bag supplies.
+func TestPlainMonthDayWithAndToPlainDate(t *testing.T) {
+	const src = `const a = new Temporal.PlainMonthDay(3, 15);
+console.log(a.with({ day: 20 }).toString());
+console.log(a.with({ month: 4, day: 30 }, { overflow: "reject" }).toString());
+console.log(a.with({ monthCode: "M07" }).toString());
+console.log(a.toPlainDate({ year: 2020 }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".WithFields(", "value.Some[float64](", "value.None[float64]()", "\"reject\"", ".ToPlainDate("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestPlainMonthDayStatics pins Temporal.PlainMonthDay.from to value.PlainMonthDayFrom. A
 // month-day has no compare static, so from is the only static this type carries.
 func TestPlainMonthDayStatics(t *testing.T) {
@@ -1535,14 +1553,14 @@ func TestPlainMonthDayHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "with reshaping",
-			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst e = md.with({ day: 16 });\nconsole.log(e.day);",
-			want: "Temporal.PlainMonthDay.prototype.with is a later slice",
+			name: "with a year field",
+			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst e = md.with({ year: 2020 });\nconsole.log(e.day);",
+			want: "Temporal.PlainMonthDay.prototype.with over a bag with the field year is a later slice",
 		},
 		{
-			name: "toPlainDate conversion",
-			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst d = md.toPlainDate({ year: 2020 });\nconsole.log(d.day);",
-			want: "Temporal.PlainMonthDay.prototype.toPlainDate is a later slice",
+			name: "toPlainDate over a computed key",
+			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst k = \"year\";\nconst d = md.toPlainDate({ [k]: 2020 });\nconsole.log(d.day);",
+			want: "Temporal.PlainMonthDay.prototype.toPlainDate over a bag with a computed or shorthand key is a later slice",
 		},
 		{
 			name: "from a property bag",

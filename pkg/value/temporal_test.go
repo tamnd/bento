@@ -2037,6 +2037,58 @@ func TestPlainMonthDayTruncatesAndRejects(t *testing.T) {
 	}
 }
 
+// TestPlainMonthDayWithAndToPlainDate covers WithFields overlaying the month and day, constraining
+// or rejecting on overflow, and ToPlainDate supplying the year, with the leap-day cases pinned to
+// @js-temporal/polyfill.
+func TestPlainMonthDayWithAndToPlainDate(t *testing.T) {
+	md := func(m, d float64) *PlainMonthDay { return NewPlainMonthDay(m, d) }
+	some := func(v float64) Opt[float64] { return Some[float64](v) }
+	none := None[float64]()
+	withs := []struct {
+		got  *PlainMonthDay
+		want string
+	}{
+		{md(3, 15).WithFields(none, some(20), "constrain"), "03-20"},
+		{md(3, 15).WithFields(some(12), none, "constrain"), "12-15"},
+		{md(3, 15).WithFields(some(7), some(4), "constrain"), "07-04"},
+		{md(3, 15).WithFields(some(2), some(30), "constrain"), "02-29"},
+	}
+	for i, c := range withs {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("with %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	dates := []struct {
+		got  *PlainDate
+		want string
+	}{
+		{md(3, 15).ToPlainDate(2020), "2020-03-15"},
+		{md(2, 29).ToPlainDate(2020), "2020-02-29"},
+		{md(2, 29).ToPlainDate(2021), "2021-02-28"},
+	}
+	for i, c := range dates {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("toPlainDate %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { md(3, 15).WithFields(some(4), some(31), "reject") }) {
+		t.Error("03-15 with April 31 reject did not throw")
+	}
+}
+
 // TestPlainDateEra pins that the ISO calendar has no era: era and eraYear read as
 // undefined optionals, the value every ISO date gives for the era-based fields.
 func TestPlainDateEra(t *testing.T) {
