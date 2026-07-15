@@ -1,6 +1,0 @@
-type LitCircleRect uint8
-
-const (
-	LitCircleRectCircle LitCircleRect = iota
-	LitCircleRectRect
-)
