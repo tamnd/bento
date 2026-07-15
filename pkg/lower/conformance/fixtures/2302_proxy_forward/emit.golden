@@ -12,9 +12,9 @@ func main() {
 	value.ConsoleLog(value.ToString(p.Get(value.FromGoString("x"))))
 	p.Set(value.FromGoString("y"), value.Number(2))
 	value.ConsoleLog(value.ToString(target.Get(value.FromGoString("y"))))
-	value.ConsoleLog(value.BoolToString(p.HasProperty(value.FromGoString("x"))))
+	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("x")), p)))
 	_ = p.Delete(value.FromGoString("x"))
-	value.ConsoleLog(value.BoolToString(target.HasProperty(value.FromGoString("x"))))
+	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("x")), target)))
 	fn := value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Number((func(a float64, b float64) float64 {
 			return a + b

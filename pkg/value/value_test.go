@@ -297,6 +297,59 @@ func hasPropertyThrewTypeError(t *testing.T, v Value, key BStr) (threw bool) {
 	return false
 }
 
+// TestInOperator pins the general in operator: a string key reads own existence, a
+// numeric key coerces to its property-key string, a symbol key is probed by identity,
+// and a primitive receiver throws a TypeError the way key in primitive does in
+// JavaScript. The prototype-chain walk is covered end to end in the lower tests, which
+// run against a program with the global prototypes installed.
+func TestInOperator(t *testing.T) {
+	obj := NewObject()
+	obj.Set(FromGoString("a"), Number(1))
+	obj.Set(FromGoString("2"), Number(9))
+	if !InOperator(StringValue(FromGoString("a")), obj) {
+		t.Fatalf("in should report a present string key")
+	}
+	if InOperator(StringValue(FromGoString("b")), obj) {
+		t.Fatalf("in should report an absent string key false")
+	}
+	if !InOperator(Number(2), obj) {
+		t.Fatalf("a numeric key should coerce to its property-key string and read the slot")
+	}
+
+	sym := NewSymbol(FromGoString("k"))
+	obj.SetElem(sym, Number(3))
+	if !InOperator(sym, obj) {
+		t.Fatalf("in should probe a symbol key by identity")
+	}
+	if InOperator(NewSymbol(FromGoString("k")), obj) {
+		t.Fatalf("a distinct symbol with the same description should report absent")
+	}
+
+	if !inOperatorThrewTypeError(t, StringValue(FromGoString("x")), Number(5)) {
+		t.Fatalf("in on a primitive receiver should throw a TypeError")
+	}
+}
+
+// inOperatorThrewTypeError runs InOperator(key, obj) and reports whether it threw a
+// TypeError, recovering the panic the Throw path raises so the test can assert on the
+// non-object receiver the way JavaScript's in operator signals it.
+func inOperatorThrewTypeError(t *testing.T, key, obj Value) (threw bool) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		e, ok := r.(Thrown)
+		if !ok {
+			t.Fatalf("InOperator panicked with a non-thrown value %v", r)
+		}
+		threw = e.ErrorName() == "TypeError"
+	}()
+	InOperator(key, obj)
+	return false
+}
+
 func isNaN(f float64) bool { return f != f }
 
 // FromEmpty is a tiny test helper for the empty-string boolean case, kept local so
