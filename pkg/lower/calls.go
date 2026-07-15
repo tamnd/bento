@@ -265,6 +265,14 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		callee = lowered
+		// A const-bound arrow collectArrowDefaults proved escape-safe lowered its
+		// defaulted parameters as plain Go fields, so a call that omits one fills it here
+		// with the arrow's default, exactly as a top-level function's default is filled.
+		// The arrow is only ever a direct call (the escape analysis guarantees it), so the
+		// call site always sees the binding and can reconstruct the default.
+		if defs, ok := r.arrowCallDefaults[sym]; ok {
+			defaults = defs
+		}
 	}
 	return r.finishCall(n, callee, kids[1:], defaults, variadicTail)
 }

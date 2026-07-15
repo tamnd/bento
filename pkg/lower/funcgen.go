@@ -892,6 +892,15 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 		}
 		for _, extra := range pkids[1:] {
 			if extra.Kind() != frontend.NodeUnknown {
+				// An escape-safe const-bound arrow lowers its defaulted parameter as a plain
+				// Go field with no default: collectArrowDefaults proved every call to the
+				// binding is a direct call, so buildCall reconstructs the default at each
+				// omitting call site the same way a top-level function's default is filled.
+				// Every other closure default stays a later slice, since a func value passed
+				// as a callback cannot fill a default it never carried.
+				if r.arrowDropDefaults[n] {
+					break
+				}
 				return nil, &NotYetLowerable{Reason: noun + " parameter with a default value is a later slice"}
 			}
 		}
