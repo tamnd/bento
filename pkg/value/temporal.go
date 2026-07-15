@@ -2348,6 +2348,14 @@ func (i *Instant) Round(smallestUnit string, increment float64, roundingMode str
 	return newInstant(rounded)
 }
 
+// ToZonedDateTimeISO implements Temporal.Instant.prototype.toZonedDateTimeISO: it pairs the exact
+// instant with a time zone under the ISO 8601 calendar, giving the count a wall-clock reading. The
+// epoch nanosecond count is already in range, so newZonedDateTime only resolves the zone, throwing
+// a RangeError on an unrecognized identifier, and stores a copy under the empty ISO calendar.
+func (i *Instant) ToZonedDateTimeISO(timeZone string) *ZonedDateTime {
+	return newZonedDateTime(i.ns, timeZone)
+}
+
 // InstantCompare implements Temporal.Instant.compare: -1, 0, or 1 as the first instant is
 // earlier than, equal to, or later than the second, the sign of the big.Int comparison.
 func InstantCompare(a, b *Instant) float64 { return float64(a.ns.Cmp(b.ns)) }

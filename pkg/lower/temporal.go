@@ -368,8 +368,8 @@ func instantAccessor(prop string) (method string, ok bool) {
 // beyond the ones handled hands back. add and subtract fold a Duration's time part into the
 // epoch count, rejecting the calendar units at run time. until and since report the exact-time
 // difference balanced from largestUnit down and rounded at smallestUnit. round rounds the epoch
-// count to a time unit against the day length. The conversions (toZonedDateTimeISO,
-// toZonedDateTime, toLocaleString) hand back with a named reason.
+// count to a time unit against the day length. toZonedDateTimeISO pairs the instant with a time
+// zone under the ISO calendar. toLocaleString hands back with a named reason.
 func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "equals":
@@ -454,6 +454,23 @@ func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argN
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{stringLit(unit), increment, stringLit(mode)}}, nil
+	case "toZonedDateTimeISO":
+		what := "Temporal.Instant.prototype.toZonedDateTimeISO"
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: what + " takes exactly one argument"}
+		}
+		tz, ok, err := r.timeZoneStringArg(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a time-zone string is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToZonedDateTimeISO")}, Args: []ast.Expr{tz}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype." + method + " is a later slice"}
 	}

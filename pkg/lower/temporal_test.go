@@ -1619,8 +1619,22 @@ console.log(b.round({ smallestUnit: "second", roundingMode: "ceil" }).toString()
 	}
 }
 
+// TestInstantToZonedDateTimeISO pins toZonedDateTimeISO to value.Instant.ToZonedDateTimeISO,
+// threading a time-zone string literal and a dynamic string through the shared reader.
+func TestInstantToZonedDateTimeISO(t *testing.T) {
+	const src = `const i = new Temporal.Instant(0n);
+console.log(i.toZonedDateTimeISO("UTC").toString());
+console.log(i.toZonedDateTimeISO("America/New_York").toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".ToZonedDateTimeISO(", `"UTC"`, `"America/New_York"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestInstantHandBacks pins the honest ceilings: a rounding option that depends on run-time
-// data and the time-zone conversions each hand back with a reason naming where the work belongs.
+// data and the locale conversion each hand back with a reason naming where the work belongs.
 func TestInstantHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1638,9 +1652,9 @@ func TestInstantHandBacks(t *testing.T) {
 			want: "Temporal.Instant.prototype.round with a non-literal smallestUnit is a later slice",
 		},
 		{
-			name: "toZonedDateTimeISO conversion",
-			src:  "const i = new Temporal.Instant(1500000000n);\nconst z = i.toZonedDateTimeISO(\"UTC\");\nconsole.log(z.toString());",
-			want: "Temporal.Instant.prototype.toZonedDateTimeISO is a later slice",
+			name: "toLocaleString conversion",
+			src:  "const i = new Temporal.Instant(1500000000n);\nconsole.log(i.toLocaleString());",
+			want: "Temporal.Instant.prototype.toLocaleString is a later slice",
 		},
 	}
 	for _, c := range cases {
