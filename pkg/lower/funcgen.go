@@ -1247,6 +1247,18 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An optional parameter binds a value.Opt[T] field a read the checker narrowed to T
+	// unwraps with .Get(). A function expression reaches its body builders without
+	// funcDeclNamed's narrowing set, so it pushes one here that stays in scope through
+	// every closure form dispatched below. Unlike the top-level funcParamFields path,
+	// which hands a bare x?: T back for want of a call-site default, a closure's call
+	// sites already fill value.None for an omitted argument, so the set is the full
+	// optParamsOf, tracking both the bare x?: T form and a required x: T | undefined. The
+	// push is skipped when the closure has no optional parameter, so an enclosing
+	// function's set survives a nested closure that adds nothing of its own.
+	if set := r.optParamsOf(n, sig); len(set) > 0 {
+		defer r.pushOptParams(set)()
+	}
 	// A destructured parameter reads its bound names out of the synthesized field at
 	// body entry, which only the plain closure form injects. The async, generator, and
 	// named forms wrap the body in a coroutine or self-reference two-step that has no
@@ -1425,6 +1437,16 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	fields, err := r.closureParamFields(n, sig, "arrow")
 	if err != nil {
 		return nil, err
+	}
+	// An optional parameter binds a value.Opt[T] field a read the checker narrowed to T
+	// unwraps with .Get(); an arrow reaches its body without funcDeclNamed's narrowing
+	// set, so it pushes one here that stays in scope through the block, async, and concise
+	// body forms below. A closure's call sites already fill value.None for an omitted
+	// argument, so the set is the full optParamsOf, both the bare x?: T form and a required
+	// x: T | undefined. The push is skipped when the arrow has no optional parameter, so an
+	// enclosing function's set survives.
+	if set := r.optParamsOf(n, sig); len(set) > 0 {
+		defer r.pushOptParams(set)()
 	}
 	if r.isAsyncFunc(n) {
 		// An async arrow wraps its body in the promise coroutine, which has no entry

@@ -303,3 +303,172 @@ for (const v of g(5)) { console.log(v); }
 		t.Fatalf("generator required-union parameter printed %q, want %q", got, want)
 	}
 }
+
+// A closure, a function expression or an arrow, lowers its parameters through
+// closureParamFields, a path apart from funcParamFields, and its body reaches none of
+// funcDeclNamed's narrowing set. But a closure's call sites already fill value.None for
+// an omitted argument, so a closure tracks the full optParamsOf: both a bare x?: T and a
+// required x: T | undefined parameter binds a value.Opt[T] field, and a read the checker
+// narrowed to T unwraps with .Get(). These run each closure form end to end, proving the
+// previously broken Go now compiles and runs. The bare form is the stronger case: the
+// top-level path hands it back, a closure runs it, because only a closure fills None.
+
+// TestFuncExprRequiredUnionParamNarrows runs a function expression whose required
+// optional-union parameter is read past a presence guard.
+func TestFuncExprRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const f = function (x: number | undefined): number {
+  if (x !== undefined) { return x + 1; }
+  return 0;
+};
+console.log(f(5));
+console.log(f(undefined));
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("function expression required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestFuncExprBareOptionalParamNarrows runs a function expression with a bare x?: T
+// parameter: its call sites fill None, so the omitting call binds the empty option and
+// the narrowed read unwraps, the case the top-level path hands back.
+func TestFuncExprBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const f = function (x: number, y?: number): number {
+  if (y !== undefined) { return x + y; }
+  return x;
+};
+console.log(f(1, 2));
+console.log(f(1));
+`
+	if got, want := runProgramGo(t, src), "3\n1\n"; got != want {
+		t.Fatalf("function expression bare optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestNamedFuncExprBareOptionalParamNarrows runs the same bare-optional guard in a
+// named function expression, whose body lowers through the self-reference two-step.
+func TestNamedFuncExprBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const f = function add(x: number, y?: number): number {
+  if (y !== undefined) { return x + y; }
+  return x;
+};
+console.log(f(1, 2));
+console.log(f(1));
+`
+	if got, want := runProgramGo(t, src), "3\n1\n"; got != want {
+		t.Fatalf("named function expression bare optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestBlockArrowRequiredUnionParamNarrows runs a block-body arrow whose required
+// optional-union parameter is read past a presence guard.
+func TestBlockArrowRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const f = (x: number | undefined): number => {
+  if (x !== undefined) { return x + 1; }
+  return 0;
+};
+console.log(f(5));
+console.log(f(undefined));
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("block arrow required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestConciseArrowBareOptionalParamNarrows runs a concise-body arrow whose bare
+// optional parameter is read in the ternary's narrowed branch.
+func TestConciseArrowBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const f = (x: number, y?: number): number => (y !== undefined ? x + y : x);
+console.log(f(1, 2));
+console.log(f(1));
+`
+	if got, want := runProgramGo(t, src), "3\n1\n"; got != want {
+		t.Fatalf("concise arrow bare optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncArrowRequiredUnionParamNarrows runs the guard in an async arrow, whose
+// captured parameter reads through the value.Async closure.
+func TestAsyncArrowRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const f = async (x: number | undefined): Promise<number> => {
+  if (x !== undefined) { return x + 1; }
+  return 0;
+};
+f(5).then(v => console.log(v));
+f(undefined).then(v => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("async arrow required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorExprBareOptionalParamNarrows runs the guard in a generator function
+// expression, whose captured parameter reads through the coroutine closure.
+func TestGeneratorExprBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const g = function* (x: number, y?: number): Generator<number> {
+  if (y !== undefined) { yield x + y; }
+  yield x;
+};
+for (const v of g(1, 2)) { console.log(v); }
+`
+	if got, want := runProgramGo(t, src), "3\n1\n"; got != want {
+		t.Fatalf("generator expression bare optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestClosureNestedOptionalParamNarrows nests an arrow with its own required
+// optional-union parameter inside a top-level function that has one too, proving each
+// body unwraps its own parameter and the outer set is restored after the inner arrow
+// lowers.
+func TestClosureNestedOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function outer(x: number | undefined): number {
+  const inner = (y: number | undefined): number => {
+    if (y !== undefined) { return y + 1; }
+    return 0;
+  };
+  if (x !== undefined) { return inner(x) + 100; }
+  return inner(undefined);
+}
+console.log(outer(5));
+console.log(outer(undefined));
+`
+	if got, want := runProgramGo(t, src), "106\n0\n"; got != want {
+		t.Fatalf("nested closure optional parameters printed %q, want %q", got, want)
+	}
+}
+
+// TestClosureOptionalParamPassThrough proves a closure threads a bare option to another
+// closure without a double wrap: the option passes straight in, and only the guarded
+// read at the end unwraps. Pins that tracking a closure's optional parameter does not
+// unwrap a pass-through use whose type stays the optional union.
+func TestClosureOptionalParamPassThrough(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const id = function (x: number | undefined): number | undefined { return x; };
+const g = (x: number | undefined): number => {
+  const y = id(x);
+  if (y !== undefined) { return y; }
+  return -1;
+};
+console.log(g(5));
+console.log(g(undefined));
+`
+	if got, want := runProgramGo(t, src), "5\n-1\n"; got != want {
+		t.Fatalf("closure optional pass-through printed %q, want %q", got, want)
+	}
+}
