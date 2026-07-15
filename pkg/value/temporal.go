@@ -1386,6 +1386,18 @@ func (pdt *PlainDateTime) ToZonedDateTime(timeZone, disambiguation string) *Zone
 	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon), cal: pdt.date.cal}
 }
 
+// WithPlainTime implements Temporal.PlainDateTime.prototype.withPlainTime: it keeps the calendar
+// date and replaces the wall clock, defaulting to midnight when no time is given. The result keeps
+// this date-time's calendar, so a non-ISO date-time stays under its calendar. The receiver's date
+// is copied, so the new PlainDateTime shares no state with it.
+func (pdt *PlainDateTime) WithPlainTime(time *PlainTime) *PlainDateTime {
+	t := PlainTime{}
+	if time != nil {
+		t = *time
+	}
+	return &PlainDateTime{date: pdt.date, time: t}
+}
+
 // AddDateTime implements Temporal.PlainDateTime.prototype.add and, over a negated Duration,
 // subtract. Unlike a PlainDate, which drops the duration's sub-day time part, a PlainDateTime
 // carries a wall clock, so the time part folds into the clock first: the duration's six time
