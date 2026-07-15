@@ -1877,6 +1877,59 @@ func TestPlainYearMonthArithmetic(t *testing.T) {
 	}
 }
 
+// TestPlainYearMonthWithAndToPlainDate covers with overlaying present year and month fields with
+// the overflow option, and toPlainDate combining the year-month with a constrained day.
+func TestPlainYearMonthWithAndToPlainDate(t *testing.T) {
+	ym := func(y, m float64) *PlainYearMonth { return NewPlainYearMonth(y, m) }
+	some := func(v float64) Opt[float64] { return Some[float64](v) }
+	none := None[float64]()
+	withs := []struct {
+		got  *PlainYearMonth
+		want string
+	}{
+		{ym(2020, 3).WithFields(none, some(11), "constrain"), "2020-11"},
+		{ym(2020, 3).WithFields(some(1999), none, "constrain"), "1999-03"},
+		{ym(2020, 3).WithFields(some(2021), some(2), "constrain"), "2021-02"},
+		{ym(2020, 3).WithFields(none, some(13), "constrain"), "2020-12"},
+		{ym(2020, 3).WithFields(none, some(7), "constrain"), "2020-07"},
+	}
+	for i, c := range withs {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("with %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	dates := []struct {
+		got  *PlainDate
+		want string
+	}{
+		{ym(2020, 3).ToPlainDate(15), "2020-03-15"},
+		{ym(2020, 3).ToPlainDate(31), "2020-03-31"},
+		{ym(2020, 2).ToPlainDate(31), "2020-02-29"},
+		{ym(2021, 2).ToPlainDate(31), "2021-02-28"},
+	}
+	for i, c := range dates {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("toPlainDate %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { ym(2020, 3).WithFields(none, some(13), "reject") }) {
+		t.Error("2020-03 with month 13 reject did not throw")
+	}
+}
+
 // monthDayThrows reports whether NewPlainMonthDay throws a RangeError for the args.
 func monthDayThrows(m, d float64) (thrown bool) {
 	defer func() {

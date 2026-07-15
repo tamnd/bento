@@ -1376,6 +1376,22 @@ console.log(a.since(b, { largestUnit: "month" }).toString());`
 	}
 }
 
+// TestPlainYearMonthWithAndToPlainDate pins with to value.PlainYearMonth.WithFields, a literal
+// monthCode resolving to a numeric month, and toPlainDate to value.PlainYearMonth.ToPlainDate.
+func TestPlainYearMonthWithAndToPlainDate(t *testing.T) {
+	const src = `const a = new Temporal.PlainYearMonth(2020, 3);
+console.log(a.with({ month: 11 }).toString());
+console.log(a.with({ year: 1999 }, { overflow: "reject" }).toString());
+console.log(a.with({ monthCode: "M07" }).toString());
+console.log(a.toPlainDate({ day: 15 }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".WithFields(", "value.Some[float64](", "value.None[float64]()", "\"reject\"", ".ToPlainDate("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestPlainYearMonthStatics pins Temporal.PlainYearMonth.compare and .from to their value
 // package functions.
 func TestPlainYearMonthStatics(t *testing.T) {

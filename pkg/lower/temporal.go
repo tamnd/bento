@@ -1616,6 +1616,148 @@ func (r *Renderer) plainDateBagFields(what string, n frontend.Node) ([3]ast.Expr
 	return fields, nil
 }
 
+// yearMonthFieldKeys is the ordered set of numeric PlainYearMonth field names a property bag may
+// carry: the calendar year and the month, the two fields WithFields takes. monthCode is a
+// recognized key too, but it names the month through a code the reader resolves to a number, and
+// the era fields resolve a year through the calendar a later slice carries, so the bag reader
+// handles a literal monthCode itself and hands back on the era fields.
+var yearMonthFieldKeys = [2]string{"year", "month"}
+
+// plainYearMonthBagFields reads a PlainYearMonth.prototype.with bag at compile time and returns the
+// year and month as present or absent optionals in WithFields order. A present year or month must
+// be a number, and a monthCode must be a string literal of the form "MNN" that resolves to its
+// month. A bag carrying both month and monthCode, an era field, a day, or any other key, a spread
+// or shorthand member, a repeated field, a computed key, a non-number value, an empty bag (a
+// TypeError at run time), or a dynamic or malformed monthCode hands back rather than emitting a
+// wrong or partial reshape.
+func (r *Renderer) plainYearMonthBagFields(what string, n frontend.Node) ([2]ast.Expr, error) {
+	var fields [2]ast.Expr
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return fields, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
+	}
+	var seen [2]bool
+	monthCodeSeen := false
+	present := false
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		if key == "monthCode" {
+			if seen[1] {
+				return fields, &NotYetLowerable{Reason: what + " over a bag carrying both month and monthCode is a later slice"}
+			}
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return fields, &NotYetLowerable{Reason: what + " over a bag whose monthCode is dynamic is a later slice"}
+			}
+			month, ok := monthFromCode(lit)
+			if !ok {
+				return fields, &NotYetLowerable{Reason: what + " over a bag whose monthCode " + lit + " is not a plain ISO month code is a later slice"}
+			}
+			fields[1] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(month)}}}
+			seen[1] = true
+			monthCodeSeen = true
+			present = true
+			continue
+		}
+		idx := -1
+		for i, k := range yearMonthFieldKeys {
+			if k == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+		if seen[idx] {
+			if idx == 1 && monthCodeSeen {
+				return fields, &NotYetLowerable{Reason: what + " over a bag carrying both month and monthCode is a later slice"}
+			}
+			return fields, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+		}
+		if !r.isNumber(kids[1]) {
+			return fields, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+		}
+		val, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return fields, err
+		}
+		fields[idx] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{val}}
+		seen[idx] = true
+		present = true
+	}
+	if !present {
+		return fields, &NotYetLowerable{Reason: what + " over an empty bag (a TypeError at run time) is a later slice"}
+	}
+	for i := range fields {
+		if fields[i] == nil {
+			fields[i] = &ast.CallExpr{Fun: index(sel("value", "None"), ident("float64"))}
+		}
+	}
+	r.requireImport(valuePkg)
+	return fields, nil
+}
+
+// yearMonthToPlainDateDay reads the day from a PlainYearMonth.prototype.toPlainDate argument bag at
+// compile time. The argument must be an object literal carrying a numeric day; a spread or
+// shorthand member, a computed key, a non-number day, a missing day (a TypeError at run time), a
+// repeated day, or any other key hands back. toPlainDate takes no overflow option, so the runtime
+// always constrains.
+func (r *Renderer) yearMonthToPlainDateDay(what string, n frontend.Node) (ast.Expr, error) {
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
+	}
+	var day ast.Expr
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		if key != "day" {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+		if day != nil {
+			return nil, &NotYetLowerable{Reason: what + " over a bag repeating the field day is a later slice"}
+		}
+		if !r.isNumber(kids[1]) {
+			return nil, &NotYetLowerable{Reason: what + " over a bag whose day is not a number is a later slice"}
+		}
+		val, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return nil, err
+		}
+		day = val
+	}
+	if day == nil {
+		return nil, &NotYetLowerable{Reason: what + " over a bag missing the field day (a TypeError at run time) is a later slice"}
+	}
+	return day, nil
+}
+
+// monthFromCode resolves a plain ISO month code of the form "MNN" (M01 through M12) to its numeric
+// month. It rejects a leap-month code (a trailing L) and any malformed string, since the ISO
+// calendar has no leap months and a later slice carries the non-ISO calendars.
+func monthFromCode(code string) (int, bool) {
+	if len(code) != 3 || code[0] != 'M' {
+		return 0, false
+	}
+	m, err := strconv.Atoi(code[1:])
+	if err != nil || m < 1 || m > 12 {
+		return 0, false
+	}
+	return m, true
+}
+
 var dateTimeFieldKeys = [9]string{"year", "month", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"}
 
 // plainDateTimeBagFields reads a PlainDateTime.prototype.with bag at compile time and returns the
@@ -2243,6 +2385,38 @@ func (r *Renderer) plainYearMonthMethodCall(recvNode frontend.Node, method strin
 			fn = "Since"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(fn)}, Args: []ast.Expr{other, stringLit(largestUnit)}}, nil
+	case "with":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype.with takes at least one argument"}
+		}
+		what := "Temporal.PlainYearMonth.prototype.with"
+		fields, err := r.plainYearMonthBagFields(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithFields")}, Args: append(fields[:], stringLit(overflow))}, nil
+	case "toPlainDate":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype.toPlainDate takes exactly one argument"}
+		}
+		what := "Temporal.PlainYearMonth.prototype.toPlainDate"
+		day, err := r.yearMonthToPlainDateDay(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToPlainDate")}, Args: []ast.Expr{day}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype." + method + " is a later slice"}
 	}
