@@ -1528,6 +1528,52 @@ func TestDurationAddSubtract(t *testing.T) {
 	assertRangeError("subtract years", func() { d(1).Subtract(d(0, 0, 0, 1)) })
 }
 
+// TestDurationTotal checks total against the polyfill. Without a relativeTo reference the
+// duration must be day-or-finer with no calendar units and unit day or smaller, days counting
+// as a fixed 24 hours; with a PlainDate reference the fixed units divide the span and the
+// irregular month and year interpolate between their boundaries.
+func TestDurationTotal(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	rel := NewPlainDate(2024, 1, 1)
+	cases := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"hour no rel", d(0, 0, 0, 1, 1).Total("hour", nil), 25},
+		{"day no rel", d(0, 0, 0, 1, 12).Total("day", nil), 1.5},
+		{"month rel years", d(1, 2).Total("month", rel), 14},
+		{"day rel years", d(1).Total("day", rel), 366},
+		{"week rel", d(0, 0, 0, 20).Total("week", rel), 2.857142857142857},
+		{"year rel months", d(0, 18).Total("year", rel), 1.4958904109589042},
+		{"month rel days+time", d(0, 1, 0, 0, 12).Total("month", rel), 1.0172413793103448},
+		{"year neg", d(0, -1, 0, -15).Total("month", rel), -1.5},
+		{"day rel with time", d(0, 0, 0, 1, 13).Total("day", rel), 1.5416666666666667},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("week unit no rel", func() { d(0, 0, 0, 20).Total("week", nil) })
+	assertRangeError("weeks present no rel", func() { d(0, 0, 2).Total("day", nil) })
+	assertRangeError("months present no rel", func() { d(0, 1).Total("hour", nil) })
+	assertRangeError("month unit no rel", func() { d(0, 2).Total("month", nil) })
+}
+
 // TestDurationRejects checks the RangeError cases against the polyfill: a non-integral
 // component (Duration rejects rather than truncates), a NaN or non-finite component, a
 // mixed-sign set, a years field at 2^32, and a seconds field at 2^53.

@@ -1012,8 +1012,9 @@ func (r *Renderer) newZonedDateTime(argNodes []frontend.Node) (ast.Expr, error) 
 // no balancing, so it needs no relativeTo), toString and toJSON render the ISO 8601 duration
 // string, and add and subtract fold the receiver and a Duration operand over a fixed 24-hour
 // day (the reduced profile takes no relativeTo, so both throw a RangeError at run time when an
-// operand carries years, months, or weeks). round and total, which round across the irregular
-// calendar units and need a relativeTo reference, hand back with a named reason.
+// operand carries years, months, or weeks). total converts the duration to one unit against an
+// optional relativeTo PlainDate. round, which rounds across the irregular calendar units and
+// re-balances to a largestUnit, hands back with a named reason.
 func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "negated", "abs":
@@ -1075,6 +1076,16 @@ func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, arg
 			name = "Subtract"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: []ast.Expr{other}}, nil
+	case "total":
+		unit, rel, err := r.durationTotalOptions("Temporal.Duration.prototype.total", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Total")}, Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(unit)}, rel}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " is a later slice"}
 	}
@@ -1123,6 +1134,80 @@ func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration." + method + " is a later slice"}
 	}
+}
+
+// durationTotalUnits maps the units Temporal.Duration.prototype.total accepts, singular and
+// plural, to the singular form the runtime takes. total has no "auto", so every unit names a
+// concrete scale from year down to nanosecond.
+var durationTotalUnits = map[string]string{
+	"year": "year", "years": "year", "month": "month", "months": "month",
+	"week": "week", "weeks": "week", "day": "day", "days": "day",
+	"hour": "hour", "hours": "hour", "minute": "minute", "minutes": "minute",
+	"second": "second", "seconds": "second", "millisecond": "millisecond", "milliseconds": "millisecond",
+	"microsecond": "microsecond", "microseconds": "microsecond", "nanosecond": "nanosecond", "nanoseconds": "nanosecond",
+}
+
+// durationTotalOptions reads the options of Temporal.Duration.prototype.total at compile time.
+// total takes a required unit, given either as a bare string or as the unit field of an options
+// object, and an optional relativeTo the calendar units resolve against. It returns the unit in
+// its singular form and the lowered relativeTo, or the nil identifier when none was given, which
+// the runtime reads as no reference. A relativeTo that is not a Temporal.PlainDate (a
+// ZonedDateTime, a PlainDateTime, or a string or bag to coerce) hands back, as do a missing or
+// invalid unit, a non-literal unit, an unknown key, or a spread or shorthand member.
+func (r *Renderer) durationTotalOptions(what string, argNodes []frontend.Node) (string, ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return "", nil, &NotYetLowerable{Reason: what + " takes exactly one argument"}
+	}
+	n := argNodes[0]
+	if lit, ok := r.stringLiteralValue(n); ok {
+		unit, ok := durationTotalUnits[lit]
+		if !ok {
+			return "", nil, &NotYetLowerable{Reason: what + " with the invalid unit " + lit + " (a RangeError at run time) is a later slice"}
+		}
+		return unit, ident("nil"), nil
+	}
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", nil, &NotYetLowerable{Reason: what + " options that are neither a string nor an object literal are a later slice"}
+	}
+	unit := ""
+	var rel ast.Expr = ident("nil")
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", nil, &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", nil, &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "unit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", nil, &NotYetLowerable{Reason: what + " with a non-literal unit is a later slice"}
+			}
+			u, ok := durationTotalUnits[lit]
+			if !ok {
+				return "", nil, &NotYetLowerable{Reason: what + " with the invalid unit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			unit = u
+		case "relativeTo":
+			if !r.isPlainDate(kids[1]) {
+				return "", nil, &NotYetLowerable{Reason: what + " with a relativeTo that is not a Temporal.PlainDate is a later slice"}
+			}
+			expr, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return "", nil, err
+			}
+			rel = expr
+		default:
+			return "", nil, &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	if unit == "" {
+		return "", nil, &NotYetLowerable{Reason: what + " without a unit (a RangeError at run time) is a later slice"}
+	}
+	return unit, rel, nil
 }
 
 // plainDateMethodCall lowers a method call on a PlainDate receiver. equals(other)

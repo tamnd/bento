@@ -2029,6 +2029,105 @@ func balanceDayTimeNanos(total *big.Int, rank int) *Duration {
 	return t
 }
 
+// Total implements Temporal.Duration.prototype.total. unit names the output unit, already
+// normalized to its singular form, and rel is the PlainDate the calendar units resolve against,
+// or nil when no relativeTo was given. Without a reference the duration may carry no years,
+// months, or weeks and unit must be day or finer, since week, month, and year each need a
+// calendar, else a RangeError; a day then counts as a fixed 24 hours. With a reference every
+// field resolves against the calendar: the date part lands on an end date, the sub-day time
+// adds over a fixed 24-hour day, and the signed nanosecond span from rel to that endpoint
+// converts to unit. Days and weeks are fixed lengths that divide directly; months and years
+// vary, so the fraction interpolates between the two unit boundaries that bracket the endpoint.
+func (d *Duration) Total(unit string, rel *PlainDate) float64 {
+	if rel == nil {
+		if d.years != 0 || d.months != 0 || d.weeks != 0 || unit == "week" || unit == "month" || unit == "year" {
+			Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.total needs a relativeTo reference for years, months, weeks, or a calendar unit")))
+		}
+		return ratToFloat(durationDayTimeNanos(d), durationUnitNanos(unit))
+	}
+	destNs, target := durationReferenceEndpoint(d, rel)
+	if unit == "year" || unit == "month" {
+		return durationTotalCalendar(rel, target, destNs, unit)
+	}
+	return ratToFloat(destNs, durationUnitNanos(unit))
+}
+
+// durationUnitNanos returns the nanosecond length of a fixed Temporal unit: nsPerDay for a day,
+// seven of those for a week, and the time-unit table for hour through nanosecond. It is called
+// only for the units that hold a constant length, month and year being interpolated instead.
+func durationUnitNanos(unit string) *big.Int {
+	switch unit {
+	case "day":
+		return new(big.Int).Set(nsPerDay)
+	case "week":
+		return new(big.Int).Mul(nsPerDay, big.NewInt(7))
+	default:
+		unitNs, _, _ := plainTimeUnitInfo(unit)
+		return big.NewInt(unitNs)
+	}
+}
+
+// ratToFloat divides num by den as an exact rational and returns the nearest float64, the
+// rounding the specification's total performs when it converts the balanced count to a Number.
+func ratToFloat(num, den *big.Int) float64 {
+	f, _ := new(big.Rat).SetFrac(num, den).Float64()
+	return f
+}
+
+// durationReferenceEndpoint resolves a Duration against a PlainDate anchor into the end date the
+// date part reaches and the signed nanosecond span from the anchor to the endpoint. The time
+// part folds its whole 24-hour days into the date, truncated toward zero, and the sub-day
+// remainder joins the span, so the endpoint is a real calendar date and the remainder stays
+// under a day. The years, months, weeks, and days add through addISODate under constrain.
+func durationReferenceEndpoint(d *Duration, rel *PlainDate) (*big.Int, *PlainDate) {
+	timeNs := durationTimeNanos(d)
+	dayCarry := new(big.Int).Quo(timeNs, nsPerDay)
+	residual := new(big.Int).Rem(timeNs, nsPerDay)
+	days := new(big.Int).Add(big.NewInt(int64(d.days)), dayCarry)
+	y, m, dd := addISODate(rel.year, rel.month, rel.day, int(d.years), int(d.months), int(d.weeks), days, "constrain")
+	if !isoDateWithinLimits(y, m, dd) {
+		Throw(NewRangeError(FromGoString("Temporal.Duration relativeTo arithmetic is outside the representable range")))
+	}
+	target := &PlainDate{year: y, month: m, day: dd, cal: rel.cal}
+	span := new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(y, m, dd)-isoToEpochDays(rel.year, rel.month, rel.day))), nsPerDay)
+	span.Add(span, residual)
+	return span, target
+}
+
+// durationTotalCalendar interpolates the fractional count of an irregular unit, month or year,
+// from a PlainDate anchor to the endpoint. It takes the whole count of the unit that fits, then
+// measures how far the endpoint sits between that unit boundary and the next, both boundaries
+// found by stepping the anchor whole units so their varying lengths are exact. The two spans
+// share the duration's sign, so the fraction is non-negative and carries the sign back.
+func durationTotalCalendar(rel, target *PlainDate, destNs *big.Int, unit string) float64 {
+	if destNs.Sign() == 0 {
+		return 0
+	}
+	years, months, _, _ := differenceISODate(rel.year, rel.month, rel.day, target.year, target.month, target.day, unit)
+	wholeU := months
+	if unit == "year" {
+		wholeU = years
+	}
+	s := destNs.Sign()
+	startNs := durationUnitBoundaryNanos(rel, unit, wholeU)
+	endNs := durationUnitBoundaryNanos(rel, unit, wholeU+s)
+	num := new(big.Int).Sub(destNs, startNs)
+	den := new(big.Int).Sub(endNs, startNs)
+	return float64(wholeU) + float64(s)*ratToFloat(num, den)
+}
+
+// durationUnitBoundaryNanos returns the nanosecond span from rel to the date reached by stepping
+// it n whole units of unit, month or year, under constrain. durationTotalCalendar brackets the
+// endpoint between two such boundaries to size the varying unit exactly.
+func durationUnitBoundaryNanos(rel *PlainDate, unit string, n int) *big.Int {
+	years, months := 0, n
+	if unit == "year" {
+		years, months = n, 0
+	}
+	y, m, dd := addISODate(rel.year, rel.month, rel.day, years, months, 0, big.NewInt(0), "constrain")
+	return new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(y, m, dd)-isoToEpochDays(rel.year, rel.month, rel.day))), nsPerDay)
+}
+
 // toIntegerIfIntegral implements the abstract operation ToIntegerIfIntegral (Temporal):
 // a NaN, non-finite, or non-integral value throws a RangeError, and an integral value is
 // returned unchanged. It is the gate Temporal.Duration uses on every field, and it

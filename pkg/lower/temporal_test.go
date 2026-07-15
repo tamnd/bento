@@ -492,6 +492,22 @@ console.log(sum.days, diff.days);`
 	}
 }
 
+// TestDurationTotalConstruction pins Temporal.Duration.prototype.total to a runtime Total call:
+// a bare-string unit passes the nil relativeTo, and an options object with a PlainDate relativeTo
+// passes the lowered date.
+func TestDurationTotalConstruction(t *testing.T) {
+	const src = `const d = new Temporal.Duration(0, 0, 0, 1, 1);
+const rel = Temporal.PlainDate.from("2024-01-01");
+console.log(d.total("hour"));
+console.log(new Temporal.Duration(0, 18).total({ unit: "year", relativeTo: rel }));`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Total(", "\"hour\"", "nil", "\"year\""} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
 // methods and compare each hand back with a reason naming where the work belongs, waiting on
 // the relativeTo reference and the calendar model.
@@ -512,9 +528,9 @@ func TestDurationHandBacks(t *testing.T) {
 			want: "Temporal.Duration.prototype.round is a later slice",
 		},
 		{
-			name: "total",
-			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconsole.log(d.total({ unit: \"hours\" }));",
-			want: "Temporal.Duration.prototype.total is a later slice",
+			name: "total with a non-PlainDate relativeTo",
+			src:  "const d = new Temporal.Duration(1);\nconsole.log(d.total({ unit: \"day\", relativeTo: \"2024-01-01\" }));",
+			want: "with a relativeTo that is not a Temporal.PlainDate",
 		},
 		{
 			name: "from a bag with a spread",
