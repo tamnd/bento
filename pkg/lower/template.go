@@ -95,6 +95,21 @@ func (r *Renderer) constStringKey(n frontend.Node) (string, bool) {
 	return "", false
 }
 
+// pureConstStringKey folds a computed key to its constant string only when reading the
+// key runs no side effect, so a fold that replaces the key expression with a static field
+// selector drops nothing observable. A bare identifier reads a const binding and a string
+// literal is its own value, both pure; any other expression, a comma sequence, a call, a
+// member read that could trip a getter, keeps its side effect and so is not folded even
+// when the checker gave it a literal string type, `[(n++, "a")]` being the motivating
+// case. It hands such a key to the run-time path rather than fold it to a field.
+func (r *Renderer) pureConstStringKey(n frontend.Node) (string, bool) {
+	switch n.Kind() {
+	case frontend.NodeIdentifier, frontend.NodeStringLiteral:
+		return r.constStringKey(n)
+	}
+	return "", false
+}
+
 func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
 	text := r.prog.Text(n)
 	if len(text) < 2 {

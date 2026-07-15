@@ -155,14 +155,19 @@ func TestDynamicComputedElementWriteLowers(t *testing.T) {
 	}
 }
 
-// TestComputedElementReadHandsBack pins that o[k] with a computed key on a fixed
-// shape hands back rather than lowering: the shape cannot prove that key absent,
-// so folding to undefined would be wrong and emitting a selector would not
-// compile. It waits on the struct-to-value boxer slice.
-func TestComputedElementReadHandsBack(t *testing.T) {
+// TestComputedElementReadConstKeyLowers pins that o[k] with a const key of a literal
+// string type on a fixed shape folds to the struct-field read o.a: the key resolves to
+// the property name at compile time, so the read selects the field the dotted read would,
+// and the const k the fold orphaned is blanked so the Go compiles. A key computed at run
+// time or one that runs a side effect still hands back.
+func TestComputedElementReadConstKeyLowers(t *testing.T) {
 	src := "const o = { a: 1 };\nconst k = \"a\";\nconsole.log(o[k]);\n"
-	if _, err := compileSource(t, src); err == nil {
-		t.Fatalf("computed element read on a fixed shape should hand back, but it lowered")
+	out, err := compileSource(t, src)
+	if err != nil {
+		t.Fatalf("const-key computed element read should lower, got: %v", err)
+	}
+	if !strings.Contains(out, "o.A") {
+		t.Fatalf("expected the const-key read to fold to a field selector, got:\n%s", out)
 	}
 }
 

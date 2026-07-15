@@ -22,17 +22,22 @@ console.log(o["name"]);
 	}
 }
 
-// TestObjectIndexKeyDynamicHandsBack pins that a computed key that is not a string
-// literal, a variable index, still hands back: there is no static field to select,
-// so it is its own later slice rather than a wrong field guess.
-func TestObjectIndexKeyDynamicHandsBack(t *testing.T) {
+// TestObjectIndexKeyConstFolds pins that o[k] with a const key of a literal string
+// type on a fixed shape folds to the same struct field the dotted read selects: the
+// key resolves to the property name at compile time, so the read picks the field
+// rather than handing back or guessing. The const k the fold orphaned is blanked so
+// the emitted Go compiles.
+func TestObjectIndexKeyConstFolds(t *testing.T) {
 	const src = `const o = { a: 1 };
 const k = "a";
 console.log(o[k]);
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "non-array receiver") {
-		t.Errorf("hand-back reason = %q, want it to name the non-array element access", reason)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".A") {
+		t.Errorf("o[k] with a const key did not fold to the .A struct field:\n%s", source)
+	}
+	if strings.Contains(source, "GetElem") {
+		t.Errorf("a fixed-shape const-key read must not route through GetElem:\n%s", source)
 	}
 }
 

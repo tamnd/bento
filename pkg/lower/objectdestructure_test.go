@@ -215,12 +215,17 @@ console.log(b);
 	}
 }
 
-// TestObjectDestructureComputedKeyHandsBack proves a computed key hands back, since
-// reading the source by a key computed at run time needs the dynamic object model of
-// phase 7 rather than a static field selector.
-func TestObjectDestructureComputedKeyHandsBack(t *testing.T) {
+// TestObjectDestructureComputedKeyConstFolds proves a computed key whose key is a const of
+// a literal string type folds to that string and reads the source's field the same way a
+// named property does, `const { [k]: v } = o` with `const k = "x"` reading o.x. A key
+// computed at run time still hands back; the fold applies only to a key the checker proved
+// constant and whose read runs no side effect.
+func TestObjectDestructureComputedKeyConstFolds(t *testing.T) {
 	const src = "const k = \"x\";\nconst o = { x: 1 };\nconst { [k]: v } = o;\nconsole.log(v);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "v := o.X") {
+		t.Fatalf("const computed key did not fold to a field read:\n%s", source)
+	}
 }
 
 // TestObjectDestructureComputedKeySideEffectHandsBack proves a computed key whose

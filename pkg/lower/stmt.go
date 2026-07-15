@@ -1973,7 +1973,7 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		if err != nil {
 			return nil, true, err
 		}
-		prop := r.prog.Text(info.nameNode)
+		prop := r.elemSourceProp(info)
 		srcName, ok := localName(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}

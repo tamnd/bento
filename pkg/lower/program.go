@@ -614,8 +614,8 @@ func countBindingDecls(prog *frontend.Program, entry frontend.Node) map[frontend
 func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int {
 	uses := map[frontend.Symbol]int{}
 	prog := r.prog
-	var walk func(n frontend.Node)
-	walk = func(n frontend.Node) {
+	var walk func(n, parent frontend.Node)
+	walk = func(n, parent frontend.Node) {
 		if n.Kind() == frontend.NodeCallExpression {
 			if arg, ok := elidedObjectReceiver(r, n); ok {
 				if sym, ok := prog.SymbolAt(arg); ok {
@@ -633,12 +633,51 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 				uses[sym]++
 			}
 		}
+		if arg, ok := elidedComputedKey(r, n, parent); ok {
+			if sym, ok := prog.SymbolAt(arg); ok {
+				uses[sym]++
+			}
+		}
 		for _, c := range prog.Children(n) {
-			walk(c)
+			walk(c, n)
 		}
 	}
-	walk(entry)
+	walk(entry, entry)
 	return uses
+}
+
+// elidedComputedKey reports the identifier a static const string key folds away, in the
+// two places a fixed-shape read folds one: an object destructuring computed key,
+// `const { [k]: v } = o`, and a string-keyed element access, `o[k]`. Both fold k to the
+// source's field at compile time when k is a const of a literal string type, so the
+// source names k but the emit never lowers it, which would leave a const k whose only use
+// was the key declared and not used. Recording the read lets bindingUnused blank the
+// orphaned const. Only an identifier key with a constant string value is matched; a
+// string-literal key has no binding to orphan, and a run-time or widened key hands back.
+// The match is syntactic and does not check the receiver is static: a dynamic receiver
+// lowers and reads k for real, where an over-count only adds a harmless _ = k beside it.
+// A computed member of an object literal, `{ [k]: 1 }`, shares the destructuring element's
+// two-child shape but keeps its key, since boxObjectLiteral lowers it through SetKeyed, so
+// it is excluded by its parent being an object-literal expression rather than a pattern.
+func elidedComputedKey(r *Renderer, n, parent frontend.Node) (frontend.Node, bool) {
+	if parent.Kind() != frontend.NodeObjectLiteralExpression {
+		if key, _, ok := r.objectComputedElem(n); ok {
+			if key.Kind() == frontend.NodeIdentifier {
+				if _, ok := r.pureConstStringKey(key); ok {
+					return key, true
+				}
+			}
+		}
+	}
+	if n.Kind() == frontend.NodeElementAccessExpression {
+		kids := r.prog.Children(n)
+		if len(kids) == 2 && kids[1].Kind() == frontend.NodeIdentifier {
+			if _, ok := r.pureConstStringKey(kids[1]); ok {
+				return kids[1], true
+			}
+		}
+	}
+	return nil, false
 }
 
 // elidedTruthyOperand reports the bare-identifier condition of a control-flow node
