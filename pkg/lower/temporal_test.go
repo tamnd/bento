@@ -953,9 +953,9 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 			want: "Temporal.PlainDateTime.prototype.with over a bag with the field monthCode is a later slice",
 		},
 		{
-			name: "from a property bag",
-			src:  "const dt = Temporal.PlainDateTime.from({ year: 2020, month: 1, day: 1, hour: 12 });\nconsole.log(dt.hour);",
-			want: "Temporal.PlainDateTime.from over a dynamic string or a property bag is a later slice",
+			name: "from a dynamic string",
+			src:  "function at(s: string) { return Temporal.PlainDateTime.from(s).hour; }\nconsole.log(at(\"2020-01-01T12:30:00\"));",
+			want: "Temporal.PlainDateTime.from over a dynamic string is a later slice",
 		},
 	}
 	for _, c := range cases {
@@ -1122,6 +1122,77 @@ console.log(dt.hour);`
 	got := renderProgramHandBack(t, src)
 	if !strings.Contains(got, "Temporal.PlainDateTime.from over a string naming a calendar bento does not host is a later slice") {
 		t.Errorf("hand-back reason = %q, want the unhosted-calendar ceiling", got)
+	}
+}
+
+// TestPlainDateTimeFromBag pins Temporal.PlainDateTime.from over a property bag to a
+// value.PlainDateTimeFromFields call: the required date fields, the optional time fields, the
+// calendar, and the overflow option all thread through.
+func TestPlainDateTimeFromBag(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "the date fields with the constrain default",
+			src:   "console.log(Temporal.PlainDateTime.from({ year: 2020, month: 3, day: 14 }).toString());",
+			wants: []string{"value.PlainDateTimeFromFields(2020, 3, 14, ", "value.None[float64]()", `"iso8601"`, `"constrain"`},
+		},
+		{
+			name:  "the time fields lower to present optionals",
+			src:   "console.log(Temporal.PlainDateTime.from({ year: 2020, month: 3, day: 14, hour: 13, minute: 30 }).toString());",
+			wants: []string{"value.PlainDateTimeFromFields(2020, 3, 14, ", "value.Some[float64](13)", "value.Some[float64](30)"},
+		},
+		{
+			name:  "a calendar interprets the year",
+			src:   "console.log(Temporal.PlainDateTime.from({ year: 109, month: 5, day: 15, hour: 12, calendar: \"roc\" }).toString());",
+			wants: []string{"value.PlainDateTimeFromFields(109, 5, 15, ", `"roc"`},
+		},
+		{
+			name:  "an explicit reject overflow",
+			src:   "console.log(Temporal.PlainDateTime.from({ year: 2020, month: 2, day: 31 }, { overflow: \"reject\" }).toString());",
+			wants: []string{"value.PlainDateTimeFromFields(", `"reject"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainDateTimeFromBagHandsBack pins that a bag missing a required date field or carrying a
+// field the runtime does not model hands back rather than dropping to a wrong result.
+func TestPlainDateTimeFromBagHandsBack(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "a monthCode field",
+			src:  "console.log(Temporal.PlainDateTime.from({ monthCode: \"M02\", day: 29 }).toString());",
+			want: "Temporal.PlainDateTime.from over a bag with the field monthCode is a later slice",
+		},
+		{
+			name: "an unhosted calendar",
+			src:  "console.log(Temporal.PlainDateTime.from({ year: 2020, month: 3, day: 14, calendar: \"hebrew\" }).toString());",
+			want: "Temporal.PlainDateTime.from over a bag whose calendar is dynamic or names a calendar bento does not host is a later slice",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgramHandBack(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("hand-back reason = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

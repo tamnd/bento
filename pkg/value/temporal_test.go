@@ -735,6 +735,49 @@ func TestPlainDateFromFields(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeFromFields checks Temporal.PlainDateTime.from over a property bag: the required
+// date fields pair with the optional time fields, an omitted time field defaults to midnight, each
+// half regulates under the overflow option, and the calendar carries. Every value was checked
+// against @js-temporal/polyfill.
+func TestPlainDateTimeFromFields(t *testing.T) {
+	some := func(v float64) Opt[float64] { return Some(v) }
+	none := None[float64]()
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"date only defaults to midnight", PlainDateTimeFromFields(2020, 1, 31, none, none, none, none, none, none, "iso8601", "constrain").ToString().ToGoString(), "2020-01-31T00:00:00"},
+		{"date and time", PlainDateTimeFromFields(2020, 1, 31, some(13), some(30), some(45), none, none, none, "iso8601", "constrain").ToString().ToGoString(), "2020-01-31T13:30:45"},
+		{"day constrains to the leap February", PlainDateTimeFromFields(2020, 2, 31, none, none, none, none, none, none, "iso8601", "constrain").ToString().ToGoString(), "2020-02-29T00:00:00"},
+		{"month over twelve clamps to December", PlainDateTimeFromFields(2020, 13, 5, none, none, none, none, none, none, "iso8601", "constrain").ToString().ToGoString(), "2020-12-05T00:00:00"},
+		{"hour over the day clamps", PlainDateTimeFromFields(2020, 1, 31, some(25), none, none, none, none, none, "iso8601", "constrain").ToString().ToGoString(), "2020-01-31T23:00:00"},
+		{"subsecond time carries", PlainDateTimeFromFields(2020, 1, 31, some(5), none, none, some(250), none, none, "iso8601", "constrain").ToString().ToGoString(), "2020-01-31T05:00:00.25"},
+		{"gregory carries its calendar", PlainDateTimeFromFields(2020, 5, 15, none, none, none, none, none, none, "gregory", "constrain").ToString().ToGoString(), "2020-05-15T00:00:00[u-ca=gregory]"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// roc reads the bag year in Minguo reckoning, so year 109 is ISO 2020, and the calendar carries.
+	roc := PlainDateTimeFromFields(109, 5, 15, some(12), none, none, none, none, none, "roc", "constrain")
+	if got := roc.ToString().ToGoString(); got != "2020-05-15T12:00:00[u-ca=roc]" {
+		t.Errorf("roc from fields: got %q, want %q", got, "2020-05-15T12:00:00[u-ca=roc]")
+	}
+
+	// reject throws when a field does not fit its half.
+	if !bagThrows(func() { PlainDateTimeFromFields(2020, 2, 31, none, none, none, none, none, none, "iso8601", "reject") }) {
+		t.Error("from fields day 31 in February under reject did not throw")
+	}
+	if !bagThrows(func() {
+		PlainDateTimeFromFields(2020, 1, 31, some(25), none, none, none, none, none, "iso8601", "reject")
+	}) {
+		t.Error("from fields hour 25 under reject did not throw")
+	}
+}
+
 func TestPlainDateToPlainDateTime(t *testing.T) {
 	d := mustPlainDate(t, 2020, 3, 14)
 	cases := []struct {
