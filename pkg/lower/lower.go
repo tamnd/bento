@@ -233,6 +233,20 @@ type Renderer struct {
 	// does not exist. It is set around the body of a named function expression and
 	// cleared after, so the self name does not leak past the expression.
 	funcExprSelf map[frontend.Symbol]string
+	// arrowDropDefaults marks an arrow-function node whose defaulted parameters lower
+	// as plain Go fields with no default, because collectArrowDefaults proved the
+	// const binding the arrow initializes never escapes as a value: every call to it is
+	// a direct call the call site can fill the omitted default at, the same way a
+	// top-level function's default is filled. Without this an arrow default hands back,
+	// since a Go func value carries no optional parameter. It is filled once by
+	// collectArrowDefaults before any body lowers.
+	arrowDropDefaults map[frontend.Node]bool
+	// arrowCallDefaults maps such an escape-safe arrow's binding symbol to its
+	// parameter defaults, aligned to the parameter list with a nil where a parameter
+	// has none. A direct call to the binding reads it to fill an omitted or
+	// explicit-undefined trailing argument at the call site, exactly as calleeDefaults
+	// serves a top-level function. It is filled alongside arrowDropDefaults.
+	arrowCallDefaults map[frontend.Symbol][]frontend.Node
 	// promiseSettleParams maps a Promise executor's resolve and reject parameter names
 	// to how each settles the promise while that executor body lowers. A call to one
 	// is not a plain function-value call: resolve carries a value of the element type
@@ -461,7 +475,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

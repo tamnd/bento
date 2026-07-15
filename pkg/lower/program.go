@@ -80,6 +80,11 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// method's call sites ask for. A class then emits one mangled Go method per
 	// instantiation, and a call site rewrites to the one it resolves to.
 	r.collectMonoMethods(entry)
+	// A const-bound arrow whose binding never escapes as a value can carry a default
+	// parameter, filled at each direct call site the way a top-level function's is. The
+	// same pre-pass records which arrows are escape-safe so the arrow's declaration
+	// lowers the default away and its call sites fill it, both reading one map.
+	r.collectArrowDefaults(entry)
 
 	// A module-level binding a top-level function or class body reads cannot stay a
 	// local of main, since a separate Go function cannot see main's locals; it hoists
