@@ -129,14 +129,17 @@ func (r *Renderer) asyncGeneratorFuncDecl(fn frontend.Node, sig frontend.Signatu
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "an async generator with a rest parameter is a later slice"}
 	}
+	// An async generator is called through the shared finishCall path, which fills
+	// value.None for an omitted bare optional the same way a plain function's call
+	// does, so the body tracks the full optParamsOf, both the bare x?: T and a
+	// required x: T | undefined. The push runs before funcParamFields builds the
+	// fields, so a bare optional renders its value.Opt[T] field instead of handing
+	// back, and a read the checker narrowed to T unwraps it with .Get().
+	defer r.pushOptParams(r.optParamsOf(fn, sig))()
 	params, err := r.funcParamFields(fn, sig)
 	if err != nil {
 		return nil, err
 	}
-	// A required x: T | undefined parameter binds a value.Opt[T] field, so a read the
-	// checker narrowed to T unwraps it with .Get(); an async generator body reaches
-	// funcParamFields without funcDeclNamed's narrowing set, so it gains that read here.
-	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	yieldGo, newGen, err := r.asyncGeneratorCoroutine(fn)
 	if err != nil {
 		return nil, err

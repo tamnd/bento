@@ -238,35 +238,65 @@ console.log(new C().g(true));
 	}
 }
 
-// TestAsyncOptionalParamHandsBack pins the async path: an async function with a bare
-// optional parameter hands back, since async.go reaches funcParamFields without the
-// optParams set.
-func TestAsyncOptionalParamHandsBack(t *testing.T) {
-	const src = `async function f(x: number, y?: number): Promise<number> {
-  if (y !== undefined) { return x + y; }
-  return x;
+// TestAsyncBareOptionalParamNarrows runs an async function's bare optional parameter,
+// supplied and omitted, proving async.go now pushes the full optParamsOf before
+// funcParamFields so the bare optional renders its value.Opt[T] field and the shared
+// finishCall path fills value.None for the omitted slot.
+func TestAsyncBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+async function f(x?: number): Promise<number> {
+  if (x !== undefined) { return x + 1; }
+  return -1;
 }
-f(5).then(v => console.log(v));
+async function main(): Promise<void> {
+  console.log(await f(5));
+  console.log(await f());
+}
+main();
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {
-		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
+	if got, want := runProgramGo(t, src), "6\n-1\n"; got != want {
+		t.Fatalf("async bare optional parameter printed %q, want %q", got, want)
 	}
 }
 
-// TestGeneratorOptionalParamHandsBack pins the generator path: a generator with a
-// bare optional parameter hands back, since generator.go reaches funcParamFields
-// without the optParams set.
-func TestGeneratorOptionalParamHandsBack(t *testing.T) {
-	const src = `function* g(x: number, y?: number): Generator<number> {
-  if (y !== undefined) { yield x + y; }
-  yield x;
+// TestGeneratorBareOptionalParamNarrows runs a generator's bare optional parameter,
+// supplied and omitted, the coroutine capturing the value.Opt field the same widened
+// push renders and finishCall filling value.None for the omitted call.
+func TestGeneratorBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function* g(x?: number): Generator<number> {
+  if (x !== undefined) { yield x + 1; } else { yield -1; }
 }
 for (const v of g(5)) { console.log(v); }
+for (const v of g()) { console.log(v); }
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {
-		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
+	if got, want := runProgramGo(t, src), "6\n-1\n"; got != want {
+		t.Fatalf("generator bare optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncGeneratorBareOptionalParamNarrows runs an async generator's bare optional
+// parameter through a manual next(), proving asyncgenerator.go takes the widened push
+// too. The manual next() drives the coroutine because for await...of is a separate
+// later slice.
+func TestAsyncGeneratorBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+async function* ag(x?: number): AsyncGenerator<number> {
+  if (x !== undefined) { yield x + 1; } else { yield -1; }
+}
+async function main(): Promise<void> {
+  const a = ag(5);
+  console.log((await a.next()).value);
+  const b = ag();
+  console.log((await b.next()).value);
+}
+main();
+`
+	if got, want := runProgramGo(t, src), "6\n-1\n"; got != want {
+		t.Fatalf("async generator bare optional parameter printed %q, want %q", got, want)
 	}
 }
 
@@ -274,9 +304,9 @@ for (const v of g(5)) { console.log(v); }
 // method, async, or generator body the same way a top-level function does, since
 // typeExpr renders the union that way before the funcParamFields switch is reached.
 // Those forms reach funcParamFields without funcDeclNamed's narrowing set, so each
-// pushes a required-only optParams set around its body, and a read the checker
-// narrowed to T unwraps with .Get(). These run the narrowed guard end to end, one
-// per body form, proving the previously broken Go now compiles and runs.
+// pushes the full optParamsOf before its fields build, and a read the checker narrowed
+// to T unwraps with .Get(). These run the narrowed guard end to end, one per body form,
+// proving the previously broken Go now compiles and runs.
 
 // TestMethodRequiredUnionParamNarrows runs an instance method whose required
 // optional-union parameter is read past a presence guard.

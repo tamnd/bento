@@ -256,38 +256,6 @@ func (r *Renderer) optParamsOf(fn frontend.Node, sig frontend.Signature) map[str
 	return opt
 }
 
-// requiredOptUnionParamsOf returns the parameter names of a signature that are
-// required, before MinArgs so a caller must supply them, yet annotated x: T | undefined,
-// the two-member optional union typeExpr renders to value.Opt[T]. It is the subset of
-// optParamsOf that a method, async function, or generator body needs. Those forms reach
-// funcParamFields without funcDeclNamed's optParams set, so a bare x?: T there must stay a
-// handback: lowering it to an Opt field would need a call-site None fill those forms do
-// not build. A required optional-union parameter is different: its field is already an
-// Opt[T] whether or not it is tracked, because typeExpr renders the union that way before
-// the funcParamFields switch is even reached, and the caller always supplies it as Some or
-// None, so tracking it only adds the read-side .Get() at a narrowed use and needs no
-// call-site change. This set carries exactly those, leaving the bare form's handback intact.
-func (r *Renderer) requiredOptUnionParamsOf(sig frontend.Signature) map[string]bool {
-	var opt map[string]bool
-	for i, p := range sig.Params {
-		if i >= sig.MinArgs {
-			continue
-		}
-		if !r.isOptionalType(p.Type) {
-			continue
-		}
-		name, ok := localName(p.Name)
-		if !ok {
-			continue
-		}
-		if opt == nil {
-			opt = map[string]bool{}
-		}
-		opt[name] = true
-	}
-	return opt
-}
-
 // pushOptParams sets the body-scoped optional-parameter narrowing set and returns a
 // restore func the caller defers, so a method, async, or generator body lowers a narrowed
 // read of a tracked parameter through .Get() the way a top-level function body does. The
