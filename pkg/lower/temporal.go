@@ -892,10 +892,13 @@ func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.No
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeCompare"), Args: []ast.Expr{a, b}}, nil
 	case "from":
-		if len(argNodes) != 1 {
-			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from takes exactly one argument"}
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from takes at least one argument"}
 		}
 		if r.isZonedDateTime(argNodes[0]) {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a ZonedDateTime with options is a later slice"}
+			}
 			arg, err := r.lowerExpr(argNodes[0])
 			if err != nil {
 				return nil, err
@@ -904,13 +907,19 @@ func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.No
 			return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFrom"), Args: []ast.Expr{arg}}, nil
 		}
 		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a string with options is a later slice"}
+			}
 			if !literalISOCalendarOnly(lit) {
 				return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a string naming a non-ISO calendar is a later slice"}
 			}
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a dynamic string or a property bag is a later slice"}
+		if argNodes[0].Kind() == frontend.NodeObjectLiteralExpression {
+			return r.zonedDateTimeFromBag("Temporal.ZonedDateTime.from", argNodes[0], argNodes[1:])
+		}
+		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.from over a dynamic string is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime." + method + " is a later slice"}
 	}
@@ -2904,6 +2913,184 @@ func (r *Renderer) plainDateTimeFromFields(what string, n frontend.Node) (year, 
 		}
 	}
 	return date[0], date[1], date[2], timeFields, cal, nil
+}
+
+// zonedDateTimeOffsetOptions is the set of offset options a ZonedDateTime.from bag weighs a
+// supplied offset field under.
+var zonedDateTimeOffsetOptions = [4]string{"use", "ignore", "prefer", "reject"}
+
+// zonedDateTimeFromBag lowers Temporal.ZonedDateTime.from over a property bag. The bag carries the
+// required year, month, and day, the optional time fields defaulting to midnight, a required
+// timeZone naming the zone, and an optional offset, a UTC offset string weighed against the zone
+// under the offset option. The options bag supplies overflow (constrain or reject, default
+// constrain), disambiguation (compatible, earlier, later, or reject, default compatible), and
+// offset (use, ignore, prefer, or reject, default reject), each an optional hosted literal. The bag
+// is ISO-calendar gated: a calendar field naming another calendar hands back, since bento's
+// ZonedDateTime hosts only the ISO calendar. A spread, a computed or shorthand key, an unknown key,
+// a non-number date or time field, a non-string timeZone or offset, a dynamic or out-of-set option,
+// a missing timeZone or date field, or a repeated field hands back, since the value would then
+// depend on runtime data or a shape this slice does not carry.
+func (r *Renderer) zonedDateTimeFromBag(what string, bag frontend.Node, optionNodes []frontend.Node) (ast.Expr, error) {
+	var date [3]ast.Expr
+	var dateSeen [3]bool
+	var timeFields [6]ast.Expr
+	var timeSeen [6]bool
+	var tz ast.Expr
+	offsetSeen := false
+	offset := ast.Expr(&ast.CallExpr{Fun: index(sel("value", "None"), ident("string"))})
+	for _, member := range r.prog.Children(bag) {
+		if member.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		if key == "calendar" {
+			id, ok := r.hostedCalendar(kids[1])
+			if !ok {
+				return nil, &NotYetLowerable{Reason: what + " over a bag whose calendar is dynamic or names a calendar bento does not host is a later slice"}
+			}
+			if !strings.EqualFold(id, "iso8601") {
+				return nil, &NotYetLowerable{Reason: what + " over a bag naming the non-ISO calendar " + id + " is a later slice"}
+			}
+			continue
+		}
+		if key == "timeZone" {
+			if tz != nil {
+				return nil, &NotYetLowerable{Reason: what + " over a bag repeating the field timeZone is a later slice"}
+			}
+			z, ok, err := r.timeZoneStringArg(kids[1])
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, &NotYetLowerable{Reason: what + " over a bag whose timeZone is not a string is a later slice"}
+			}
+			tz = z
+			continue
+		}
+		if key == "offset" {
+			if offsetSeen {
+				return nil, &NotYetLowerable{Reason: what + " over a bag repeating the field offset is a later slice"}
+			}
+			o, ok, err := r.timeZoneStringArg(kids[1])
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, &NotYetLowerable{Reason: what + " over a bag whose offset is not a string is a later slice"}
+			}
+			offset = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("string")), Args: []ast.Expr{o}}
+			offsetSeen = true
+			continue
+		}
+		if di := slices.Index(dateFieldKeys[:], key); di >= 0 {
+			if dateSeen[di] {
+				return nil, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+			}
+			if !r.isNumber(kids[1]) {
+				return nil, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+			}
+			val, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return nil, err
+			}
+			date[di] = val
+			dateSeen[di] = true
+			continue
+		}
+		if ti := slices.Index(timeFieldKeys[:], key); ti >= 0 {
+			if timeSeen[ti] {
+				return nil, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+			}
+			if !r.isNumber(kids[1]) {
+				return nil, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+			}
+			val, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return nil, err
+			}
+			timeFields[ti] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{val}}
+			timeSeen[ti] = true
+			continue
+		}
+		return nil, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+	}
+	for i, k := range dateFieldKeys {
+		if !dateSeen[i] {
+			return nil, &NotYetLowerable{Reason: what + " over a bag missing the field " + k + " (a TypeError at run time) is a later slice"}
+		}
+	}
+	if tz == nil {
+		return nil, &NotYetLowerable{Reason: what + " over a bag with no timeZone (a TypeError at run time) is a later slice"}
+	}
+	for i := range timeFields {
+		if timeFields[i] == nil {
+			timeFields[i] = &ast.CallExpr{Fun: index(sel("value", "None"), ident("float64"))}
+		}
+	}
+	overflow, disambiguation, offsetOption, err := r.zonedDateTimeFromOptions(what, optionNodes)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	args := []ast.Expr{date[0], date[1], date[2]}
+	args = append(args, timeFields[:]...)
+	args = append(args, tz, offset, stringLit(overflow), stringLit(disambiguation), stringLit(offsetOption))
+	return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFromFields"), Args: args}, nil
+}
+
+// zonedDateTimeFromOptions reads the options bag of Temporal.ZonedDateTime.from into the overflow,
+// disambiguation, and offset options. Each is an optional hosted string literal from its own set,
+// defaulting to constrain, compatible, and reject the way the specification's ToTemporalZonedDateTime
+// does. A missing bag takes the three defaults; more than one options argument, options that are not
+// an object literal, a spread or non-property member, a computed or shorthand key, an unknown option,
+// or a dynamic or out-of-set value hands back, since the option would then depend on runtime data.
+func (r *Renderer) zonedDateTimeFromOptions(what string, optionNodes []frontend.Node) (overflow, disambiguation, offsetOption string, err error) {
+	overflow, disambiguation, offsetOption = "constrain", "compatible", "reject"
+	if len(optionNodes) == 0 {
+		return overflow, disambiguation, offsetOption, nil
+	}
+	if len(optionNodes) != 1 {
+		return "", "", "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	n := optionNodes[0]
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", "", "", &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+	}
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", "", "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", "", "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		lit, ok := r.stringLiteralValue(kids[1])
+		switch key {
+		case "overflow":
+			if !ok || (lit != "constrain" && lit != "reject") {
+				return "", "", "", &NotYetLowerable{Reason: what + " with a dynamic or out-of-set overflow option is a later slice"}
+			}
+			overflow = lit
+		case "disambiguation":
+			if !ok || !slices.Contains(plainDateTimeDisambiguations[:], lit) {
+				return "", "", "", &NotYetLowerable{Reason: what + " with a dynamic or out-of-set disambiguation option is a later slice"}
+			}
+			disambiguation = lit
+		case "offset":
+			if !ok || !slices.Contains(zonedDateTimeOffsetOptions[:], lit) {
+				return "", "", "", &NotYetLowerable{Reason: what + " with a dynamic or out-of-set offset option is a later slice"}
+			}
+			offsetOption = lit
+		default:
+			return "", "", "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	return overflow, disambiguation, offsetOption, nil
 }
 
 // newTemporal lowers new Temporal.<Type>(...), routing on the type name to the per-type

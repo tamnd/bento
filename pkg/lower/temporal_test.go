@@ -1888,6 +1888,20 @@ console.log(z.epochMilliseconds);`
 	}
 }
 
+// TestZonedDateTimeFromBagConstruction pins Temporal.ZonedDateTime.from over a property bag to
+// value.ZonedDateTimeFromFields, carrying the date and time fields, the time zone, an optional
+// offset field, and the overflow, disambiguation, and offset options through.
+func TestZonedDateTimeFromBagConstruction(t *testing.T) {
+	const src = `const z = Temporal.ZonedDateTime.from({ year: 2024, month: 11, day: 3, hour: 1, minute: 30, timeZone: "America/New_York", offset: "-05:00" }, { disambiguation: "compatible", offset: "prefer" });
+console.log(z.toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.ZonedDateTimeFromFields(", `value.Some[string]("-05:00")`, `"America/New_York"`, `"prefer"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeHandBacks pins the honest ceilings: the arithmetic and rounding methods,
 // the reshaping, the start-of-day and transition queries, from over a string, and a
 // constructor with a calendar argument each hand back with a reason naming where the work
@@ -1931,7 +1945,17 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 		{
 			name: "from a dynamic string",
 			src:  "function at(s: string) { return Temporal.ZonedDateTime.from(s).epochMilliseconds; }\nconsole.log(at(\"1970-01-01T00:00:00+00:00[UTC]\"));",
-			want: "Temporal.ZonedDateTime.from over a dynamic string or a property bag is a later slice",
+			want: "Temporal.ZonedDateTime.from over a dynamic string is a later slice",
+		},
+		{
+			name: "from a bag naming a non-ISO calendar",
+			src:  "const z = Temporal.ZonedDateTime.from({ year: 2024, month: 6, day: 15, timeZone: \"UTC\", calendar: \"gregory\" });\nconsole.log(z.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.from over a bag naming the non-ISO calendar gregory is a later slice",
+		},
+		{
+			name: "from a bag with an out-of-set offset option",
+			src:  "function at(o: \"use\" | \"reject\") { return Temporal.ZonedDateTime.from({ year: 2024, month: 6, day: 15, timeZone: \"UTC\" }, { offset: o }).epochMilliseconds; }\nconsole.log(at(\"use\"));",
+			want: "Temporal.ZonedDateTime.from with a dynamic or out-of-set offset option is a later slice",
 		},
 		{
 			name: "from a string naming a non-ISO calendar",
