@@ -1,0 +1,11 @@
+== stdout:
+P4DT2H
+PT2H
+P1DT22H
+PT180M
+-PT12H
+RangeError
+RangeError
+RangeError
+== exit:
+0

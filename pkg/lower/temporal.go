@@ -1008,10 +1008,13 @@ func (r *Renderer) newZonedDateTime(argNodes []frontend.Node) (ast.Expr, error) 
 }
 
 // durationMethodCall lowers a method call on a Duration receiver. negated and abs return a
-// reshaped Duration, and toString and toJSON render the ISO 8601 duration string; each takes
-// no argument in this slice. The methods that balance or round across units (round, total,
-// add, subtract, with) need a relativeTo reference and the calendar model, so they hand back
-// with a named reason.
+// reshaped Duration, with overlays a partial-duration bag onto the receiver (a pure reshape,
+// no balancing, so it needs no relativeTo), toString and toJSON render the ISO 8601 duration
+// string, and add and subtract fold the receiver and a Duration operand over a fixed 24-hour
+// day (the reduced profile takes no relativeTo, so both throw a RangeError at run time when an
+// operand carries years, months, or weeks). total converts the duration to one unit against an
+// optional relativeTo PlainDate. round rounds at a smallestUnit and re-balances to a largestUnit
+// against an optional relativeTo, throwing at run time without a reference for a calendar unit.
 func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "negated", "abs":
@@ -1040,16 +1043,77 @@ func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, arg
 			name = "ToJSON"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "with":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype.with takes exactly one argument"}
+		}
+		fields, err := r.durationPartialBag("Temporal.Duration.prototype.with", argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: fields[:]}, nil
+	case "add", "subtract":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " takes exactly one argument"}
+		}
+		if !r.isDuration(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " over an argument that is not a Temporal.Duration (a string or bag to coerce) is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		name := "Add"
+		if method == "subtract" {
+			name = "Subtract"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: []ast.Expr{other}}, nil
+	case "total":
+		unit, rel, err := r.durationTotalOptions("Temporal.Duration.prototype.total", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Total")}, Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(unit)}, rel}}, nil
+	case "round":
+		sm, lg, inc, mode, rel, err := r.durationRoundOptions("Temporal.Duration.prototype.round", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{
+			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(sm)},
+			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lg)},
+			inc,
+			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(mode)},
+			rel,
+		}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " is a later slice"}
 	}
 }
 
 // durationStaticCall lowers a static call on Temporal.Duration. from over a Duration lowers
-// to value.DurationFrom (the copy the specification makes) and from over a string literal to
-// value.DurationFromString. A Duration carries no calendar, so the literal needs no gate; a
-// dynamic string or a property bag hands back, and compare, which needs a relativeTo
-// reference to balance the calendar units, hands back too.
+// to value.DurationFrom (the copy the specification makes), from over a string literal to
+// value.DurationFromString, and from over an object literal to value.DurationFromFields over
+// its ten present-or-absent fields. A Duration carries no calendar, so the literal and bag
+// need no gate; a value not statically typed as a string hands back. compare orders two
+// durations over an optional relativeTo PlainDate, folding day-and-time durations on a fixed
+// 24-hour day and resolving calendar units against the reference.
 func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "from":
@@ -1076,10 +1140,249 @@ func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "DurationFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a property bag or a value not statically typed as a string is a later slice"}
+		if argNodes[0].Kind() == frontend.NodeObjectLiteralExpression {
+			fields, err := r.durationPartialBag("Temporal.Duration.from", argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			return &ast.CallExpr{Fun: sel("value", "DurationFromFields"), Args: fields[:]}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a value not statically typed as a string is a later slice"}
+	case "compare":
+		if len(argNodes) < 2 || len(argNodes) > 3 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.compare takes two durations and an optional options argument"}
+		}
+		if !r.isDuration(argNodes[0]) || !r.isDuration(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.compare over an argument that is not a Temporal.Duration (a string or bag to coerce) is a later slice"}
+		}
+		var rel ast.Expr = ident("nil")
+		if len(argNodes) == 3 {
+			expr, err := r.durationRelativeToOption("Temporal.Duration.compare", argNodes[2])
+			if err != nil {
+				return nil, err
+			}
+			rel = expr
+		}
+		a, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		b, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "DurationCompare"), Args: []ast.Expr{a, b, rel}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration." + method + " is a later slice"}
 	}
+}
+
+// durationTotalUnits maps the units Temporal.Duration.prototype.total accepts, singular and
+// plural, to the singular form the runtime takes. total has no "auto", so every unit names a
+// concrete scale from year down to nanosecond.
+var durationTotalUnits = map[string]string{
+	"year": "year", "years": "year", "month": "month", "months": "month",
+	"week": "week", "weeks": "week", "day": "day", "days": "day",
+	"hour": "hour", "hours": "hour", "minute": "minute", "minutes": "minute",
+	"second": "second", "seconds": "second", "millisecond": "millisecond", "milliseconds": "millisecond",
+	"microsecond": "microsecond", "microseconds": "microsecond", "nanosecond": "nanosecond", "nanoseconds": "nanosecond",
+}
+
+// durationTotalOptions reads the options of Temporal.Duration.prototype.total at compile time.
+// total takes a required unit, given either as a bare string or as the unit field of an options
+// object, and an optional relativeTo the calendar units resolve against. It returns the unit in
+// its singular form and the lowered relativeTo, or the nil identifier when none was given, which
+// the runtime reads as no reference. A relativeTo that is not a Temporal.PlainDate (a
+// ZonedDateTime, a PlainDateTime, or a string or bag to coerce) hands back, as do a missing or
+// invalid unit, a non-literal unit, an unknown key, or a spread or shorthand member.
+func (r *Renderer) durationTotalOptions(what string, argNodes []frontend.Node) (string, ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return "", nil, &NotYetLowerable{Reason: what + " takes exactly one argument"}
+	}
+	n := argNodes[0]
+	if lit, ok := r.stringLiteralValue(n); ok {
+		unit, ok := durationTotalUnits[lit]
+		if !ok {
+			return "", nil, &NotYetLowerable{Reason: what + " with the invalid unit " + lit + " (a RangeError at run time) is a later slice"}
+		}
+		return unit, ident("nil"), nil
+	}
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", nil, &NotYetLowerable{Reason: what + " options that are neither a string nor an object literal are a later slice"}
+	}
+	unit := ""
+	var rel ast.Expr = ident("nil")
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", nil, &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", nil, &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "unit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", nil, &NotYetLowerable{Reason: what + " with a non-literal unit is a later slice"}
+			}
+			u, ok := durationTotalUnits[lit]
+			if !ok {
+				return "", nil, &NotYetLowerable{Reason: what + " with the invalid unit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			unit = u
+		case "relativeTo":
+			if !r.isPlainDate(kids[1]) {
+				return "", nil, &NotYetLowerable{Reason: what + " with a relativeTo that is not a Temporal.PlainDate is a later slice"}
+			}
+			expr, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return "", nil, err
+			}
+			rel = expr
+		default:
+			return "", nil, &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	if unit == "" {
+		return "", nil, &NotYetLowerable{Reason: what + " without a unit (a RangeError at run time) is a later slice"}
+	}
+	return unit, rel, nil
+}
+
+// durationRelativeToOption reads a relativeTo from an options object literal, the only option
+// Temporal.Duration.compare takes. It returns the lowered PlainDate or the nil identifier when
+// the object has no relativeTo. A relativeTo that is not a Temporal.PlainDate, an options value
+// that is not an object literal, an unknown key, or a spread or shorthand member hands back.
+func (r *Renderer) durationRelativeToOption(what string, n frontend.Node) (ast.Expr, error) {
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil, &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+	}
+	var rel ast.Expr = ident("nil")
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "relativeTo":
+			if !r.isPlainDate(kids[1]) {
+				return nil, &NotYetLowerable{Reason: what + " with a relativeTo that is not a Temporal.PlainDate is a later slice"}
+			}
+			expr, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return nil, err
+			}
+			rel = expr
+		default:
+			return nil, &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	return rel, nil
+}
+
+// durationRoundOptions reads the options of Temporal.Duration.prototype.round at compile time.
+// round takes a required rounding target, given either as a bare string smallestUnit or as an
+// options object carrying smallestUnit, largestUnit, roundingIncrement, roundingMode, and
+// relativeTo. It returns the smallest and largest units in singular form, each empty when the
+// option was absent so the runtime supplies the default, the lowered increment (default 1), the
+// mode (default halfExpand), and the lowered relativeTo or the nil identifier. A relativeTo that
+// is not a Temporal.PlainDate, a non-literal or invalid unit or mode, a non-number increment, a
+// bag with neither smallestUnit nor largestUnit, an unknown key, or a spread or shorthand member
+// hands back.
+func (r *Renderer) durationRoundOptions(what string, argNodes []frontend.Node) (smallestUnit, largestUnit string, increment ast.Expr, mode string, rel ast.Expr, err error) {
+	increment = &ast.BasicLit{Kind: token.FLOAT, Value: "1"}
+	mode = "halfExpand"
+	rel = ident("nil")
+	if len(argNodes) != 1 {
+		return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " takes exactly one argument"}
+	}
+	n := argNodes[0]
+	if lit, ok := r.stringLiteralValue(n); ok {
+		u, ok := durationTotalUnits[lit]
+		if !ok {
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+		}
+		return u, "", increment, mode, rel, nil
+	}
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " options that are neither a string nor an object literal are a later slice"}
+	}
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "smallestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-literal smallestUnit is a later slice"}
+			}
+			u, ok := durationTotalUnits[lit]
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			smallestUnit = u
+		case "largestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-literal largestUnit is a later slice"}
+			}
+			if lit == "auto" {
+				largestUnit = "auto"
+				continue
+			}
+			u, ok := durationTotalUnits[lit]
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid largestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			largestUnit = u
+		case "roundingIncrement":
+			if !r.isNumber(kids[1]) {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-number roundingIncrement is a later slice"}
+			}
+			val, lowerErr := r.lowerExpr(kids[1])
+			if lowerErr != nil {
+				return "", "", nil, "", nil, lowerErr
+			}
+			increment = val
+		case "roundingMode":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a non-literal roundingMode is a later slice"}
+			}
+			if !slices.Contains(plainTimeRoundModes[:], lit) {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the invalid roundingMode " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			mode = lit
+		case "relativeTo":
+			if !r.isPlainDate(kids[1]) {
+				return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with a relativeTo that is not a Temporal.PlainDate is a later slice"}
+			}
+			expr, lowerErr := r.lowerExpr(kids[1])
+			if lowerErr != nil {
+				return "", "", nil, "", nil, lowerErr
+			}
+			rel = expr
+		default:
+			return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	if smallestUnit == "" && (largestUnit == "" || largestUnit == "auto") {
+		return "", "", nil, "", nil, &NotYetLowerable{Reason: what + " without a smallestUnit or largestUnit (a RangeError at run time) is a later slice"}
+	}
+	return smallestUnit, largestUnit, increment, mode, rel, nil
 }
 
 // plainDateMethodCall lowers a method call on a PlainDate receiver. equals(other)
@@ -2326,6 +2629,62 @@ func (r *Renderer) durationBag(what string, n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewDuration"), Args: fields[:]}, nil
+}
+
+// durationPartialBag reads a Temporal.Duration.prototype.with or Temporal.Duration.from bag at
+// compile time into ten present-or-absent field expressions, present as value.Some[float64](v)
+// and absent as value.None[float64](), so the runtime knows which fields the bag named. It
+// mirrors durationBag but keeps the present-or-absent distinction with and from need: with
+// overlays the present fields onto the receiver and from defaults the absent ones to zero. An
+// empty bag is NOT handed back, so the runtime raises the TypeError the specification mandates.
+// A spread, a computed or shorthand key, an unknown key, a non-number value, or a repeated
+// field still hands back, since the field would then depend on runtime data or a coercion this
+// slice does not carry.
+func (r *Renderer) durationPartialBag(what string, n frontend.Node) ([10]ast.Expr, error) {
+	var fields [10]ast.Expr
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return fields, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
+	}
+	var seen [10]bool
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		idx := -1
+		for i, k := range durationUnitKeys {
+			if k == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+		if seen[idx] {
+			return fields, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+		}
+		if !r.isNumber(kids[1]) {
+			return fields, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+		}
+		val, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return fields, err
+		}
+		fields[idx] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{val}}
+		seen[idx] = true
+	}
+	for i := range fields {
+		if fields[i] == nil {
+			fields[i] = &ast.CallExpr{Fun: index(sel("value", "None"), ident("float64"))}
+		}
+	}
+	r.requireImport(valuePkg)
+	return fields, nil
 }
 
 // plainTimeRoundUnits is the set of smallest units Temporal.PlainTime.prototype.round

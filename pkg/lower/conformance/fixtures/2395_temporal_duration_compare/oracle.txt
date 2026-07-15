@@ -1,0 +1,9 @@
+== stdout:
+1
+0
+1
+0
+1
+RangeError
+== exit:
+0

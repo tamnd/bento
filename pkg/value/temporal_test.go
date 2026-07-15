@@ -1434,6 +1434,242 @@ func TestDurationFromCopies(t *testing.T) {
 	}
 }
 
+// TestDurationWithAndFrom checks Temporal.Duration.prototype.with overlays the present fields
+// onto the receiver and Temporal.Duration.from over a bag defaults the absent ones to zero,
+// each rejecting an empty bag with a TypeError and a fractional or mixed-sign field with a
+// RangeError, every value checked against @js-temporal/polyfill.
+func TestDurationWithAndFrom(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	base := mustDuration(t, 1, 2, 0, 3, 4) // P1Y2M3DT4H
+	if got := base.With(none, some(5), none, none, none, none, none, none, none, none).ToString().ToGoString(); got != "P1Y5M3DT4H" {
+		t.Errorf("with months = %q, want P1Y5M3DT4H", got)
+	}
+	if got := base.With(none, none, none, some(10), some(0), none, none, none, none, none).ToString().ToGoString(); got != "P1Y2M10D" {
+		t.Errorf("with days and zero hours = %q, want P1Y2M10D", got)
+	}
+	if got := base.With(some(-1), some(-2), none, some(-3), some(-4), none, none, none, none, none).ToString().ToGoString(); got != "-P1Y2M3DT4H" {
+		t.Errorf("with negated = %q, want -P1Y2M3DT4H", got)
+	}
+	if base.ToString().ToGoString() != "P1Y2M3DT4H" {
+		t.Error("with mutated the receiver")
+	}
+	if got := DurationFromFields(none, none, none, none, some(1), some(30), none, none, none, none).ToString().ToGoString(); got != "PT1H30M" {
+		t.Errorf("from bag = %q, want PT1H30M", got)
+	}
+	if got := DurationFromFields(none, none, none, some(-2), some(-3), none, none, none, none, none).ToString().ToGoString(); got != "-P2DT3H" {
+		t.Errorf("from bag negative = %q, want -P2DT3H", got)
+	}
+	if got := DurationFromFields(none, none, none, none, none, some(90), none, none, none, none).ToString().ToGoString(); got != "PT90M" {
+		t.Errorf("from bag unbalanced = %q, want PT90M", got)
+	}
+	assertTypeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertTypeError("with empty", func() { base.With(none, none, none, none, none, none, none, none, none, none) })
+	assertTypeError("with fractional", func() { base.With(none, some(1.5), none, none, none, none, none, none, none, none) })
+	assertTypeError("with mixed sign", func() { base.With(some(1), some(-1), none, none, none, none, none, none, none, none) })
+	assertTypeError("from empty", func() {
+		DurationFromFields(none, none, none, none, none, none, none, none, none, none)
+	})
+	assertTypeError("from fractional", func() {
+		DurationFromFields(none, some(1.5), none, none, none, none, none, none, none, none)
+	})
+}
+
+// TestDurationAddSubtract checks add and subtract against the polyfill: the reduced profile
+// takes no relativeTo, so both fold days and time over a fixed 24-hour day, balance to the
+// coarser of the two operands' default largest units, and throw a RangeError when either
+// operand carries years, months, or weeks.
+func TestDurationAddSubtract(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	// P2D + PT50H = P4DT2H (98 hours balanced back over a 24-hour day).
+	if got := d(0, 0, 0, 2).Add(d(0, 0, 0, 0, 50)).ToString().ToGoString(); got != "P4DT2H" {
+		t.Errorf("days + hours = %q, want P4DT2H", got)
+	}
+	// PT1H30M + PT30M = PT2H, both operands coarsest at the hour so no day appears.
+	if got := d(0, 0, 0, 0, 1, 30).Add(d(0, 0, 0, 0, 0, 30)).ToString().ToGoString(); got != "PT2H" {
+		t.Errorf("hours + minutes = %q, want PT2H", got)
+	}
+	// P2DT3H - PT5H = P1DT22H.
+	if got := d(0, 0, 0, 2, 3).Subtract(d(0, 0, 0, 0, 5)).ToString().ToGoString(); got != "P1DT22H" {
+		t.Errorf("subtract = %q, want P1DT22H", got)
+	}
+	base := d(0, 0, 0, 2)
+	base.Add(d(0, 0, 0, 0, 1))
+	if base.ToString().ToGoString() != "P2D" {
+		t.Error("add mutated the receiver")
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("add months operand", func() { d(0, 0, 0, 1).Add(d(0, 1)) })
+	assertRangeError("add weeks receiver", func() { d(0, 0, 1).Add(d(0, 0, 0, 1)) })
+	assertRangeError("subtract years", func() { d(1).Subtract(d(0, 0, 0, 1)) })
+}
+
+// TestDurationTotal checks total against the polyfill. Without a relativeTo reference the
+// duration must be day-or-finer with no calendar units and unit day or smaller, days counting
+// as a fixed 24 hours; with a PlainDate reference the fixed units divide the span and the
+// irregular month and year interpolate between their boundaries.
+func TestDurationTotal(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	rel := NewPlainDate(2024, 1, 1)
+	cases := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"hour no rel", d(0, 0, 0, 1, 1).Total("hour", nil), 25},
+		{"day no rel", d(0, 0, 0, 1, 12).Total("day", nil), 1.5},
+		{"month rel years", d(1, 2).Total("month", rel), 14},
+		{"day rel years", d(1).Total("day", rel), 366},
+		{"week rel", d(0, 0, 0, 20).Total("week", rel), 2.857142857142857},
+		{"year rel months", d(0, 18).Total("year", rel), 1.4958904109589042},
+		{"month rel days+time", d(0, 1, 0, 0, 12).Total("month", rel), 1.0172413793103448},
+		{"year neg", d(0, -1, 0, -15).Total("month", rel), -1.5},
+		{"day rel with time", d(0, 0, 0, 1, 13).Total("day", rel), 1.5416666666666667},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("week unit no rel", func() { d(0, 0, 0, 20).Total("week", nil) })
+	assertRangeError("weeks present no rel", func() { d(0, 0, 2).Total("day", nil) })
+	assertRangeError("months present no rel", func() { d(0, 1).Total("hour", nil) })
+	assertRangeError("month unit no rel", func() { d(0, 2).Total("month", nil) })
+}
+
+// TestDurationCompare checks compare against the polyfill: without a reference the day-and-time
+// durations order on a fixed 24-hour day and a calendar unit throws, and with a PlainDate
+// reference the calendar resolves both endpoints before ordering.
+func TestDurationCompare(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	rel := NewPlainDate(2024, 1, 1)
+	cases := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"time no rel", DurationCompare(d(0, 0, 0, 0, 2), d(0, 0, 0, 0, 0, 90), nil), 1},
+		{"equal no rel", DurationCompare(d(0, 0, 0, 1), d(0, 0, 0, 0, 24), nil), 0},
+		{"days no rel", DurationCompare(d(0, 0, 0, 1), d(0, 0, 0, 2), nil), -1},
+		{"cal rel", DurationCompare(d(0, 1), d(0, 0, 0, 20), rel), 1},
+		{"cal rel equal", DurationCompare(d(0, 1), d(0, 0, 0, 31), rel), 0},
+		{"cal rel neg", DurationCompare(d(0, -1), d(0, 0, 0, -20), rel), -1},
+		{"years rel", DurationCompare(d(1), d(0, 0, 0, 365), rel), 1},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("cal no rel", func() { DurationCompare(d(0, 1), d(0, 0, 0, 1), nil) })
+	assertRangeError("weeks no rel", func() { DurationCompare(d(0, 0, 1), d(0, 0, 0, 1), nil) })
+}
+
+// TestDurationRound checks round against the polyfill: without a reference the day-and-time
+// duration rounds over a fixed 24-hour day and balances to largestUnit, with a calendar unit or
+// week largestUnit throwing; with a PlainDate reference the endpoint rounds at smallestUnit,
+// irregular units bracketing between two boundaries and negative durations rounding in
+// wall-clock terms, then rebalances to largestUnit.
+func TestDurationRound(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	rel := NewPlainDate(2024, 1, 1)
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"day no rel", d(0, 0, 0, 1, 12).Round("day", "", 1, "halfExpand", nil).ToString().ToGoString(), "P2D"},
+		{"day down no rel", d(0, 0, 0, 1, 11).Round("day", "", 1, "halfExpand", nil).ToString().ToGoString(), "P1D"},
+		{"hour no rel", d(0, 0, 0, 0, 1, 30).Round("hour", "", 1, "halfExpand", nil).ToString().ToGoString(), "PT2H"},
+		{"largest hour no rel", d(0, 0, 0, 1, 2).Round("", "hour", 1, "halfExpand", nil).ToString().ToGoString(), "PT26H"},
+		{"largest day from hours", d(0, 0, 0, 0, 50).Round("", "day", 1, "halfExpand", nil).ToString().ToGoString(), "P2DT2H"},
+		{"minute inc 15", d(0, 0, 0, 0, 0, 37).Round("minute", "", 15, "halfExpand", nil).ToString().ToGoString(), "PT30M"},
+		{"hour floor no rel", d(0, 0, 0, 0, 1, 59).Round("hour", "", 1, "floor", nil).ToString().ToGoString(), "PT1H"},
+		{"month rel keeps year", d(1, 2).Round("month", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1Y2M"},
+		{"year rel", d(1, 2).Round("year", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1Y"},
+		{"year rel down to zero", d(0, 5).Round("year", "", 1, "halfExpand", rel).ToString().ToGoString(), "PT0S"},
+		{"largest year rel", d(0, 25).Round("", "year", 1, "halfExpand", rel).ToString().ToGoString(), "P2Y1M"},
+		{"largest month from days", d(0, 0, 0, 70).Round("", "month", 1, "halfExpand", rel).ToString().ToGoString(), "P2M10D"},
+		{"week rel", d(0, 0, 0, 20).Round("week", "", 1, "halfExpand", rel).ToString().ToGoString(), "P3W"},
+		{"day rel mixed", d(0, 1, 0, 15, 12).Round("day", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1M16D"},
+		{"month rel negative", d(0, 0, 0, -40).Round("month", "", 1, "halfExpand", rel).ToString().ToGoString(), "-P1M"},
+		{"month rel inc 2", d(0, 5).Round("month", "", 2, "halfExpand", rel).ToString().ToGoString(), "P6M"},
+		{"largest year sm day", d(0, 25, 0, 5).Round("day", "year", 1, "halfExpand", rel).ToString().ToGoString(), "P2Y1M5D"},
+		{"hour from calendar", d(0, 0, 0, 1, 1, 40).Round("hour", "", 1, "halfExpand", rel).ToString().ToGoString(), "P1DT2H"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("largest week no rel", func() { d(0, 0, 0, 20).Round("", "week", 1, "halfExpand", nil) })
+	assertRangeError("month unit no rel", func() { d(0, 0, 0, 20).Round("month", "", 1, "halfExpand", nil) })
+	assertRangeError("weeks present no rel", func() { d(0, 0, 2).Round("day", "", 1, "halfExpand", nil) })
+}
+
 // TestDurationRejects checks the RangeError cases against the polyfill: a non-integral
 // component (Duration rejects rather than truncates), a NaN or non-finite component, a
 // mixed-sign set, a years field at 2^32, and a seconds field at 2^53.

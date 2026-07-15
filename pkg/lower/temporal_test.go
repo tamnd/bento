@@ -449,9 +449,100 @@ console.log(at("P1Y"));`
 	}
 }
 
+// TestDurationWithConstruction pins Temporal.Duration.prototype.with over a partial bag to a
+// value.With call carrying the present fields as value.Some and the absent ones as value.None.
+func TestDurationWithConstruction(t *testing.T) {
+	const src = `const d = new Temporal.Duration(1, 2, 0, 3);
+const e = d.with({ months: 5, days: 10 });
+console.log(e.days);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".With(", "value.Some[float64](5)", "value.Some[float64](10)", "value.None[float64]()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationFromBagConstruction pins Temporal.Duration.from over an object literal to a
+// value.DurationFromFields call over its ten present-or-absent fields.
+func TestDurationFromBagConstruction(t *testing.T) {
+	const src = `const d = Temporal.Duration.from({ hours: 1, minutes: 30 });
+console.log(d.hours);`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.DurationFromFields(", "value.Some[float64](1)", "value.Some[float64](30)", "value.None[float64]()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationAddSubtractConstruction pins Temporal.Duration.prototype.add and subtract over a
+// Duration operand to the runtime Add and Subtract calls.
+func TestDurationAddSubtractConstruction(t *testing.T) {
+	const src = `const a = new Temporal.Duration(0, 0, 0, 2);
+const b = new Temporal.Duration(0, 0, 0, 0, 50);
+const sum = a.add(b);
+const diff = a.subtract(b);
+console.log(sum.days, diff.days);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Add(", ".Subtract("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationTotalConstruction pins Temporal.Duration.prototype.total to a runtime Total call:
+// a bare-string unit passes the nil relativeTo, and an options object with a PlainDate relativeTo
+// passes the lowered date.
+func TestDurationTotalConstruction(t *testing.T) {
+	const src = `const d = new Temporal.Duration(0, 0, 0, 1, 1);
+const rel = Temporal.PlainDate.from("2024-01-01");
+console.log(d.total("hour"));
+console.log(new Temporal.Duration(0, 18).total({ unit: "year", relativeTo: rel }));`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Total(", "\"hour\"", "nil", "\"year\""} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationCompareConstruction pins Temporal.Duration.compare to a runtime DurationCompare
+// call, passing the nil relativeTo when none is given and the lowered PlainDate when one is.
+func TestDurationCompareConstruction(t *testing.T) {
+	const src = `const a = new Temporal.Duration(0, 0, 0, 1);
+const b = new Temporal.Duration(0, 0, 0, 2);
+const rel = Temporal.PlainDate.from("2024-01-01");
+console.log(Temporal.Duration.compare(a, b));
+console.log(Temporal.Duration.compare(new Temporal.Duration(0, 1), b, { relativeTo: rel }));`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.DurationCompare(", "nil"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestDurationRoundConstruction pins Temporal.Duration.prototype.round to a runtime Round call:
+// a bare-string smallestUnit passes an empty largestUnit, the default increment and mode, and a
+// nil relativeTo; an options object passes the units, increment, mode, and lowered PlainDate.
+func TestDurationRoundConstruction(t *testing.T) {
+	const src = `const d = new Temporal.Duration(0, 0, 0, 1, 12);
+const rel = Temporal.PlainDate.from("2024-01-01");
+console.log(d.round("day").toString());
+console.log(new Temporal.Duration(0, 5).round({ smallestUnit: "month", roundingIncrement: 2, roundingMode: "ceil", relativeTo: rel }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Round(", "\"day\"", "\"halfExpand\"", "nil", "\"month\"", "\"ceil\""} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
-// methods, from over a string, and compare each hand back with a reason naming where the
-// work belongs, waiting on the relativeTo reference and the calendar model.
+// methods and compare each hand back with a reason naming where the work belongs, waiting on
+// the relativeTo reference and the calendar model.
 func TestDurationHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -459,29 +550,39 @@ func TestDurationHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "add arithmetic",
-			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst e = d.add(new Temporal.Duration(0, 0, 0, 1));\nconsole.log(e.days);",
-			want: "Temporal.Duration.prototype.add is a later slice",
+			name: "add over a non-Duration argument",
+			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst e = d.add(\"P1D\");\nconsole.log(e.days);",
+			want: "Temporal.Duration.prototype.add over an argument that is not a Temporal.Duration",
 		},
 		{
-			name: "round",
-			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst r = d.round({ largestUnit: \"hours\" });\nconsole.log(r.hours);",
-			want: "Temporal.Duration.prototype.round is a later slice",
+			name: "round with a dynamic smallestUnit",
+			src:  "function go(u: \"day\" | \"hour\") {\n  const d = new Temporal.Duration(0, 0, 0, 1, 12);\n  return d.round({ smallestUnit: u }).days;\n}\nconsole.log(go(\"day\"));",
+			want: "Temporal.Duration.prototype.round with a non-literal smallestUnit is a later slice",
 		},
 		{
-			name: "total",
-			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconsole.log(d.total({ unit: \"hours\" }));",
-			want: "Temporal.Duration.prototype.total is a later slice",
+			name: "round with a non-PlainDate relativeTo",
+			src:  "const d = new Temporal.Duration(0, 1);\nconst r = d.round({ smallestUnit: \"month\", relativeTo: \"2024-01-01\" });\nconsole.log(r.months);",
+			want: "with a relativeTo that is not a Temporal.PlainDate",
 		},
 		{
-			name: "from a property bag",
-			src:  "const d = Temporal.Duration.from({ years: 1 });\nconsole.log(d.years);",
-			want: "Temporal.Duration.from over a property bag or a value not statically typed as a string is a later slice",
+			name: "total with a non-PlainDate relativeTo",
+			src:  "const d = new Temporal.Duration(1);\nconsole.log(d.total({ unit: \"day\", relativeTo: \"2024-01-01\" }));",
+			want: "with a relativeTo that is not a Temporal.PlainDate",
 		},
 		{
-			name: "compare",
-			src:  "const a = new Temporal.Duration(0, 0, 0, 1);\nconst b = new Temporal.Duration(0, 0, 0, 2);\nconsole.log(Temporal.Duration.compare(a, b));",
-			want: "Temporal.Duration.compare is a later slice",
+			name: "from a bag with a spread",
+			src:  "const base = { years: 1 };\nconst d = Temporal.Duration.from({ ...base, months: 2 });\nconsole.log(d.years);",
+			want: "Temporal.Duration.from over a bag with a computed or shorthand key is a later slice",
+		},
+		{
+			name: "with a spread",
+			src:  "const base = { months: 1 };\nconst d = new Temporal.Duration(1);\nconst e = d.with({ ...base, days: 2 });\nconsole.log(e.days);",
+			want: "Temporal.Duration.prototype.with over a bag with a computed or shorthand key is a later slice",
+		},
+		{
+			name: "compare with a non-PlainDate relativeTo",
+			src:  "const a = new Temporal.Duration(1);\nconst b = new Temporal.Duration(0, 0, 0, 365);\nconsole.log(Temporal.Duration.compare(a, b, { relativeTo: \"2024-01-01\" }));",
+			want: "with a relativeTo that is not a Temporal.PlainDate",
 		},
 	}
 	for _, c := range cases {

@@ -1897,6 +1897,482 @@ func DurationFromString(s string) *Duration {
 	return &Duration{p.years, p.months, p.weeks, p.days, p.hours, p.minutes, p.seconds, p.milliseconds, p.microseconds, p.nano}
 }
 
+// With implements Temporal.Duration.prototype.with: it overlays the present fields of a
+// partial-duration bag onto the receiver, each absent field keeping the receiver's value.
+// At least one field must be present, matching ToTemporalPartialDurationRecord, or a TypeError
+// is thrown; NewDuration then runs ToIntegerIfIntegral and RejectDuration over the merged ten,
+// so a fractional or mixed-sign field throws a RangeError. with does no balancing, it only
+// reshapes, so it needs no relativeTo reference.
+func (d *Duration) With(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds Opt[float64]) *Duration {
+	if !anyDurationFieldPresent(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds) {
+		Throw(NewTypeError(FromGoString("Temporal.Duration.prototype.with needs at least one duration field")))
+	}
+	pick := func(o Opt[float64], base float64) float64 {
+		if o.IsUndefined() {
+			return base
+		}
+		return o.Get()
+	}
+	return NewDuration(
+		pick(years, d.years), pick(months, d.months), pick(weeks, d.weeks), pick(days, d.days),
+		pick(hours, d.hours), pick(minutes, d.minutes), pick(seconds, d.seconds),
+		pick(milliseconds, d.milliseconds), pick(microseconds, d.microseconds), pick(nanoseconds, d.nanoseconds),
+	)
+}
+
+// DurationFromFields implements Temporal.Duration.from over a property bag: it reads the ten
+// optional unit fields, each absent field defaulting to zero. At least one field must be
+// present, matching ToTemporalDurationRecord, or a TypeError is thrown; NewDuration then runs
+// ToIntegerIfIntegral and RejectDuration over the ten, so a fractional or mixed-sign field
+// throws a RangeError. A duration carries no calendar, so the bag needs no calendar gate.
+func DurationFromFields(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds Opt[float64]) *Duration {
+	if !anyDurationFieldPresent(years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds) {
+		Throw(NewTypeError(FromGoString("Temporal.Duration.from needs at least one duration field")))
+	}
+	pick := func(o Opt[float64]) float64 {
+		if o.IsUndefined() {
+			return 0
+		}
+		return o.Get()
+	}
+	return NewDuration(
+		pick(years), pick(months), pick(weeks), pick(days),
+		pick(hours), pick(minutes), pick(seconds),
+		pick(milliseconds), pick(microseconds), pick(nanoseconds),
+	)
+}
+
+// anyDurationFieldPresent reports whether at least one of the ten optional duration fields is
+// present, the precondition both with and from over a bag enforce as a TypeError.
+func anyDurationFieldPresent(fields ...Opt[float64]) bool {
+	for _, f := range fields {
+		if !f.IsUndefined() {
+			return true
+		}
+	}
+	return false
+}
+
+// Add implements Temporal.Duration.prototype.add, and Subtract implements subtract, which is
+// add over a negated operand. The reduced Temporal profile drops the relativeTo option from
+// both, so neither can balance calendar units: if the receiver or the operand carries years,
+// months, or weeks, a RangeError is thrown. Otherwise the two durations fold to one signed
+// nanosecond count over a fixed 24-hour day and re-balance to the coarser of their two default
+// largest units, days when either counts whole days and the largest time unit present
+// otherwise.
+func (d *Duration) Add(other *Duration) *Duration {
+	return addDurations(d, other)
+}
+
+// Subtract implements Temporal.Duration.prototype.subtract as add over a negated operand.
+func (d *Duration) Subtract(other *Duration) *Duration {
+	return addDurations(d, other.Negated())
+}
+
+func addDurations(a, b *Duration) *Duration {
+	if a.years != 0 || a.months != 0 || a.weeks != 0 || b.years != 0 || b.months != 0 || b.weeks != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.add and subtract cannot balance years, months, or weeks without a relativeTo reference, which they do not accept")))
+	}
+	total := new(big.Int).Add(durationDayTimeNanos(a), durationDayTimeNanos(b))
+	rank := a.defaultLargestRank()
+	if r := b.defaultLargestRank(); r < rank {
+		rank = r
+	}
+	return balanceDayTimeNanos(total, rank)
+}
+
+// defaultLargestRank returns the rank of a Duration's coarsest non-zero field on the scale
+// addDurations balances against, day counting as -1 and hour through nanosecond as 0 through 5
+// to match durationFromDayNanos. An all-zero duration reports nanosecond, the finest, so two
+// empty durations fold to an empty result. Only the day and time fields are consulted, since
+// addDurations rejects any duration that carries years, months, or weeks.
+func (d *Duration) defaultLargestRank() int {
+	switch {
+	case d.days != 0:
+		return -1
+	case d.hours != 0:
+		return 0
+	case d.minutes != 0:
+		return 1
+	case d.seconds != 0:
+		return 2
+	case d.milliseconds != 0:
+		return 3
+	case d.microseconds != 0:
+		return 4
+	default:
+		return 5
+	}
+}
+
+// durationDayTimeNanos folds a Duration's days and six time fields into one signed nanosecond
+// count, each day nsPerDay over a fixed 24-hour day. The years, months, and weeks fields are
+// not consulted; addDurations rejects a duration that carries them.
+func durationDayTimeNanos(d *Duration) *big.Int {
+	total := bigMulInt(d.days, 86_400_000_000_000)
+	total.Add(total, durationTimeNanos(d))
+	return total
+}
+
+// balanceDayTimeNanos splits a signed nanosecond count into a Duration whose coarsest field is
+// fixed by rank, day at -1 and hour through nanosecond at 0 through 5. At day rank the whole
+// days come off first at nsPerDay each and the sub-day remainder balances across the six time
+// fields; at a time rank durationFromDayNanos balances the whole count with no day field.
+func balanceDayTimeNanos(total *big.Int, rank int) *Duration {
+	if rank > -1 {
+		return durationFromDayNanos(total, rank)
+	}
+	days := new(big.Int).Quo(total, nsPerDay)
+	rem := new(big.Int).Rem(total, nsPerDay)
+	t := durationFromDayNanos(rem, 0)
+	t.days = float64(days.Int64())
+	return t
+}
+
+// Total implements Temporal.Duration.prototype.total. unit names the output unit, already
+// normalized to its singular form, and rel is the PlainDate the calendar units resolve against,
+// or nil when no relativeTo was given. Without a reference the duration may carry no years,
+// months, or weeks and unit must be day or finer, since week, month, and year each need a
+// calendar, else a RangeError; a day then counts as a fixed 24 hours. With a reference every
+// field resolves against the calendar: the date part lands on an end date, the sub-day time
+// adds over a fixed 24-hour day, and the signed nanosecond span from rel to that endpoint
+// converts to unit. Days and weeks are fixed lengths that divide directly; months and years
+// vary, so the fraction interpolates between the two unit boundaries that bracket the endpoint.
+func (d *Duration) Total(unit string, rel *PlainDate) float64 {
+	if rel == nil {
+		if d.years != 0 || d.months != 0 || d.weeks != 0 || unit == "week" || unit == "month" || unit == "year" {
+			Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.total needs a relativeTo reference for years, months, weeks, or a calendar unit")))
+		}
+		return ratToFloat(durationDayTimeNanos(d), durationUnitNanos(unit))
+	}
+	destNs, target := durationReferenceEndpoint(d, rel)
+	if unit == "year" || unit == "month" {
+		return durationTotalCalendar(rel, target, destNs, unit)
+	}
+	return ratToFloat(destNs, durationUnitNanos(unit))
+}
+
+// durationUnitNanos returns the nanosecond length of a fixed Temporal unit: nsPerDay for a day,
+// seven of those for a week, and the time-unit table for hour through nanosecond. It is called
+// only for the units that hold a constant length, month and year being interpolated instead.
+func durationUnitNanos(unit string) *big.Int {
+	switch unit {
+	case "day":
+		return new(big.Int).Set(nsPerDay)
+	case "week":
+		return new(big.Int).Mul(nsPerDay, big.NewInt(7))
+	default:
+		unitNs, _, _ := plainTimeUnitInfo(unit)
+		return big.NewInt(unitNs)
+	}
+}
+
+// ratToFloat divides num by den as an exact rational and returns the nearest float64, the
+// rounding the specification's total performs when it converts the balanced count to a Number.
+func ratToFloat(num, den *big.Int) float64 {
+	f, _ := new(big.Rat).SetFrac(num, den).Float64()
+	return f
+}
+
+// durationReferenceEndpoint resolves a Duration against a PlainDate anchor into the end date the
+// date part reaches and the signed nanosecond span from the anchor to the endpoint. The time
+// part folds its whole 24-hour days into the date, truncated toward zero, and the sub-day
+// remainder joins the span, so the endpoint is a real calendar date and the remainder stays
+// under a day. The years, months, weeks, and days add through addISODate under constrain.
+func durationReferenceEndpoint(d *Duration, rel *PlainDate) (*big.Int, *PlainDate) {
+	timeNs := durationTimeNanos(d)
+	dayCarry := new(big.Int).Quo(timeNs, nsPerDay)
+	residual := new(big.Int).Rem(timeNs, nsPerDay)
+	days := new(big.Int).Add(big.NewInt(int64(d.days)), dayCarry)
+	y, m, dd := addISODate(rel.year, rel.month, rel.day, int(d.years), int(d.months), int(d.weeks), days, "constrain")
+	if !isoDateWithinLimits(y, m, dd) {
+		Throw(NewRangeError(FromGoString("Temporal.Duration relativeTo arithmetic is outside the representable range")))
+	}
+	target := &PlainDate{year: y, month: m, day: dd, cal: rel.cal}
+	span := new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(y, m, dd)-isoToEpochDays(rel.year, rel.month, rel.day))), nsPerDay)
+	span.Add(span, residual)
+	return span, target
+}
+
+// durationTotalCalendar interpolates the fractional count of an irregular unit, month or year,
+// from a PlainDate anchor to the endpoint. It takes the whole count of the unit that fits, then
+// measures how far the endpoint sits between that unit boundary and the next, both boundaries
+// found by stepping the anchor whole units so their varying lengths are exact. The two spans
+// share the duration's sign, so the fraction is non-negative and carries the sign back.
+func durationTotalCalendar(rel, target *PlainDate, destNs *big.Int, unit string) float64 {
+	if destNs.Sign() == 0 {
+		return 0
+	}
+	years, months, _, _ := differenceISODate(rel.year, rel.month, rel.day, target.year, target.month, target.day, unit)
+	wholeU := months
+	if unit == "year" {
+		wholeU = years
+	}
+	s := destNs.Sign()
+	startNs := durationUnitBoundaryNanos(rel, unit, wholeU)
+	endNs := durationUnitBoundaryNanos(rel, unit, wholeU+s)
+	num := new(big.Int).Sub(destNs, startNs)
+	den := new(big.Int).Sub(endNs, startNs)
+	return float64(wholeU) + float64(s)*ratToFloat(num, den)
+}
+
+// durationUnitBoundaryNanos returns the nanosecond span from rel to the date reached by stepping
+// it n whole units of unit, month or year, under constrain. durationTotalCalendar brackets the
+// endpoint between two such boundaries to size the varying unit exactly.
+func durationUnitBoundaryNanos(rel *PlainDate, unit string, n int) *big.Int {
+	years, months := 0, n
+	if unit == "year" {
+		years, months = n, 0
+	}
+	y, m, dd := addISODate(rel.year, rel.month, rel.day, years, months, 0, big.NewInt(0), "constrain")
+	return new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(y, m, dd)-isoToEpochDays(rel.year, rel.month, rel.day))), nsPerDay)
+}
+
+// DurationCompare implements Temporal.Duration.compare. rel is the PlainDate the calendar units
+// resolve against, or nil when no relativeTo was given. Without a reference neither operand may
+// carry years, months, or weeks, else a RangeError, and each folds to a signed nanosecond count
+// over a fixed 24-hour day; with a reference each resolves against the calendar to an endpoint.
+// The result is the sign of the first span minus the second, -1, 0, or 1.
+func DurationCompare(a, b *Duration, rel *PlainDate) float64 {
+	var spanA, spanB *big.Int
+	if rel == nil {
+		if a.years != 0 || a.months != 0 || a.weeks != 0 || b.years != 0 || b.months != 0 || b.weeks != 0 {
+			Throw(NewRangeError(FromGoString("Temporal.Duration.compare needs a relativeTo reference to compare years, months, or weeks")))
+		}
+		spanA = durationDayTimeNanos(a)
+		spanB = durationDayTimeNanos(b)
+	} else {
+		spanA, _ = durationReferenceEndpoint(a, rel)
+		spanB, _ = durationReferenceEndpoint(b, rel)
+	}
+	return float64(spanA.Cmp(spanB))
+}
+
+// durationUnitRank orders the ten Duration units from coarsest to finest, year 0 through
+// nanosecond 9, so a smaller rank is a coarser unit. Round compares smallestUnit and
+// largestUnit by this order and tests whether a unit sits at day or finer, rank 3 or above.
+func durationUnitRank(unit string) int {
+	switch unit {
+	case "year":
+		return 0
+	case "month":
+		return 1
+	case "week":
+		return 2
+	case "day":
+		return 3
+	case "hour":
+		return 4
+	case "minute":
+		return 5
+	case "second":
+		return 6
+	case "millisecond":
+		return 7
+	case "microsecond":
+		return 8
+	case "nanosecond":
+		return 9
+	}
+	Throw(NewRangeError(FromGoString("Temporal.Duration unit is invalid")))
+	return 0
+}
+
+// defaultLargestUnitName returns the coarsest non-zero field of the duration as a unit name,
+// the largestUnit round and total default to when none is given. An all-zero duration reports
+// nanosecond, the finest.
+func (d *Duration) defaultLargestUnitName() string {
+	switch {
+	case d.years != 0:
+		return "year"
+	case d.months != 0:
+		return "month"
+	case d.weeks != 0:
+		return "week"
+	case d.days != 0:
+		return "day"
+	case d.hours != 0:
+		return "hour"
+	case d.minutes != 0:
+		return "minute"
+	case d.seconds != 0:
+		return "second"
+	case d.milliseconds != 0:
+		return "millisecond"
+	case d.microseconds != 0:
+		return "microsecond"
+	default:
+		return "nanosecond"
+	}
+}
+
+// coarserDurationUnit returns whichever of the two units is coarser, the one with the smaller
+// rank. Round resolves an unset largestUnit to the coarser of the duration's default largest
+// unit and the smallestUnit, so the result never balances finer than requested.
+func coarserDurationUnit(a, b string) string {
+	if durationUnitRank(a) <= durationUnitRank(b) {
+		return a
+	}
+	return b
+}
+
+// Round implements Temporal.Duration.prototype.round. smallestUnit and largestUnit are the
+// singular unit names, either empty when the option was absent; smallestUnit then defaults to
+// nanosecond and largestUnit to the coarser of the duration's default largest unit and the
+// smallestUnit. rel is the PlainDate the calendar units resolve against, or nil when no
+// relativeTo was given. Without a reference the duration may carry no years, months, or weeks
+// and both units must be day or finer, since week, month, and year each need a calendar, else
+// a RangeError; the duration then rounds over a fixed 24-hour day and balances to largestUnit.
+// With a reference every field resolves against the calendar to an endpoint, the endpoint
+// rounds at smallestUnit, and the rounded date rebalances to largestUnit. An irregular
+// smallestUnit, month or year, rounds by bracketing the endpoint between two unit boundaries;
+// a fixed one rounds the nanosecond span and splits it back into whole days and a remainder.
+func (d *Duration) Round(smallestUnit, largestUnit string, increment float64, mode string, rel *PlainDate) *Duration {
+	sm := smallestUnit
+	if sm == "" {
+		sm = "nanosecond"
+	}
+	lg := largestUnit
+	if lg == "" || lg == "auto" {
+		lg = coarserDurationUnit(d.defaultLargestUnitName(), sm)
+	}
+	smRank := durationUnitRank(sm)
+	lgRank := durationUnitRank(lg)
+	if lgRank > smRank {
+		Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.round largestUnit cannot be smaller than smallestUnit")))
+	}
+	inc := int(toIntegerWithTruncation(increment))
+	if inc < 1 {
+		Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.round roundingIncrement must be a positive integer")))
+	}
+	if smRank >= 4 {
+		_, dividend, _ := plainTimeUnitInfo(sm)
+		if int64(inc) >= dividend || dividend%int64(inc) != 0 {
+			Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.round roundingIncrement is out of range")))
+		}
+	}
+	if rel == nil {
+		if d.years != 0 || d.months != 0 || d.weeks != 0 || smRank < 3 || lgRank < 3 {
+			Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.round needs a relativeTo reference for years, months, weeks, or a calendar unit")))
+		}
+		quantum := new(big.Int).Mul(big.NewInt(int64(inc)), durationUnitNanos(sm))
+		roundedNs := roundBigToIncrement(durationDayTimeNanos(d), quantum, mode)
+		return balanceDayTimeNanos(roundedNs, fixedLargeRank(lg))
+	}
+	destNs, target := durationReferenceEndpoint(d, rel)
+	var roundedDate *PlainDate
+	residual := big.NewInt(0)
+	if sm == "year" || sm == "month" {
+		roundedDate = roundDurationCalendarUnit(rel, target, destNs, sm, inc, mode)
+	} else {
+		quantum := new(big.Int).Mul(big.NewInt(int64(inc)), durationUnitNanos(sm))
+		roundedNs := roundBigToIncrement(destNs, quantum, mode)
+		dayTrunc := new(big.Int).Quo(roundedNs, nsPerDay)
+		residual = new(big.Int).Rem(roundedNs, nsPerDay)
+		y, m, dd := addISODate(rel.year, rel.month, rel.day, 0, 0, 0, dayTrunc, "constrain")
+		roundedDate = &PlainDate{year: y, month: m, day: dd, cal: rel.cal}
+	}
+	return rebalanceRoundedDuration(rel, roundedDate, residual, lg)
+}
+
+// fixedLargeRank maps a largestUnit for the no-reference path, always day or finer, to the
+// rank balanceDayTimeNanos expects: day at -1 so its whole days come off first, and hour
+// through nanosecond at 0 through 5.
+func fixedLargeRank(unit string) int {
+	if unit == "day" {
+		return -1
+	}
+	_, _, rank := plainTimeUnitInfo(unit)
+	return rank
+}
+
+// roundDurationCalendarUnit rounds an endpoint to a whole count of an irregular unit, month or
+// year, from the anchor rel. It brackets the endpoint between the boundary at the count that
+// fits toward zero, rounded down to a multiple of increment, and the next one increment away,
+// then rounds the position between them under mode. The mode flips ceil against floor for a
+// negative duration so the direction stays in wall-clock terms, and a half-even tie picks the
+// even count. It returns the date the rounded count reaches, stepped under constrain.
+func roundDurationCalendarUnit(rel, target *PlainDate, destNs *big.Int, unit string, increment int, mode string) *PlainDate {
+	if destNs.Sign() == 0 {
+		return &PlainDate{year: rel.year, month: rel.month, day: rel.day, cal: rel.cal}
+	}
+	years, months, _, _ := differenceISODate(rel.year, rel.month, rel.day, target.year, target.month, target.day, unit)
+	wholeU := months
+	if unit == "year" {
+		wholeU = years
+	}
+	s := destNs.Sign()
+	mag := wholeU
+	if mag < 0 {
+		mag = -mag
+	}
+	lowMag := (mag / increment) * increment
+	low, high := lowMag, lowMag+increment
+	if s < 0 {
+		low, high = -low, -high
+	}
+	startNs := durationUnitBoundaryNanos(rel, unit, low)
+	endNs := durationUnitBoundaryNanos(rel, unit, high)
+	pos := new(big.Int).Abs(new(big.Int).Sub(destNs, startNs))
+	span := new(big.Int).Abs(new(big.Int).Sub(endNs, startNs))
+	count := low
+	if roundBigToIncrement(pos, span, flipModeForSign(mode, s)).Cmp(span) == 0 {
+		count = high
+	}
+	if mode == "halfEven" && new(big.Int).Lsh(pos, 1).Cmp(span) == 0 {
+		if low%2 == 0 {
+			count = low
+		} else {
+			count = high
+		}
+	}
+	years2, months2 := 0, count
+	if unit == "year" {
+		years2, months2 = count, 0
+	}
+	y, m, dd := addISODate(rel.year, rel.month, rel.day, years2, months2, 0, big.NewInt(0), "constrain")
+	return &PlainDate{year: y, month: m, day: dd, cal: rel.cal}
+}
+
+// flipModeForSign flips the direction of a rounding mode for a negative duration, so a mode
+// stated in wall-clock terms rounds the magnitude the roundDurationCalendarUnit bracket works
+// in. Ceil trades with floor and half-ceil with half-floor; the sign-symmetric modes, expand,
+// trunc, their half forms, and half-even, are unchanged.
+func flipModeForSign(mode string, sign int) string {
+	if sign >= 0 {
+		return mode
+	}
+	switch mode {
+	case "ceil":
+		return "floor"
+	case "floor":
+		return "ceil"
+	case "halfCeil":
+		return "halfFloor"
+	case "halfFloor":
+		return "halfCeil"
+	}
+	return mode
+}
+
+// rebalanceRoundedDuration re-expresses the rounded date and its sub-day remainder as a
+// Duration balanced to largestUnit from the anchor rel. A largestUnit of day or coarser splits
+// the date difference into calendar fields through differenceISODate and balances the remainder
+// across the time fields below a day; a time largestUnit folds the whole span, the date's days
+// plus the remainder, into the time fields with no date part.
+func rebalanceRoundedDuration(rel, roundedDate *PlainDate, residual *big.Int, largestUnit string) *Duration {
+	if durationUnitRank(largestUnit) <= 3 {
+		y, mo, w, dd := differenceISODate(rel.year, rel.month, rel.day, roundedDate.year, roundedDate.month, roundedDate.day, largestUnit)
+		t := durationFromDayNanos(residual, 0)
+		return NewDuration(float64(y), float64(mo), float64(w), float64(dd), t.hours, t.minutes, t.seconds, t.milliseconds, t.microseconds, t.nanoseconds)
+	}
+	dayDiff := isoToEpochDays(roundedDate.year, roundedDate.month, roundedDate.day) - isoToEpochDays(rel.year, rel.month, rel.day)
+	totalNs := new(big.Int).Mul(big.NewInt(int64(dayDiff)), nsPerDay)
+	totalNs.Add(totalNs, residual)
+	_, _, rank := plainTimeUnitInfo(largestUnit)
+	return durationFromDayNanos(totalNs, rank)
+}
+
 // toIntegerIfIntegral implements the abstract operation ToIntegerIfIntegral (Temporal):
 // a NaN, non-finite, or non-integral value throws a RangeError, and an integral value is
 // returned unchanged. It is the gate Temporal.Duration uses on every field, and it
