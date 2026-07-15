@@ -473,17 +473,26 @@ type Renderer struct {
 	// bound through a legitimate structural coercion reaches the same bridge with no
 	// 2345 against it). It is built once, lazily, on the first bridge that asks.
 	notAssignSpans []frontend.Span
-	// notAssignReady marks notAssignSpans as built, so an empty slice is not rebuilt on
-	// every bridge. It stays false until the first lookup collects the 2345 spans.
+	// assign2322Spans holds the byte spans of the program's code 2322 diagnostics, the
+	// assignment- and initializer-not-assignable errors the front door tolerates. A 2322
+	// anchors on the target name (an initializer, an assignment, a property declaration)
+	// or on the value (an array element), not always on the value the way 2345 does, so
+	// the binding bridge matches both the source and the target node against these spans.
+	// It is built lazily alongside notAssignSpans.
+	assign2322Spans []frontend.Span
+	// notAssignReady marks notAssignSpans and assign2322Spans as built, so the empty
+	// slices are not rebuilt on every bridge. It stays false until the first lookup
+	// collects the 2345 and 2322 spans.
 	notAssignReady bool
-	// seen2345 records the 2345 spans a guarded bridge inspected, the argument and
-	// constructor sites where the representation guard either lowered a safe value or
-	// handed back. A 2345 span left unseen at the end of a render was lowered by a path
-	// with no guard (a builtin higher-order method callback, a builtin element-slot
-	// argument), which would emit Go the toolchain rejects, so the whole unit hands back
-	// rather than ship it (see unguarded2345). It is keyed by span since a span is a
+	// seenAssign records the not-assignable spans (2345 and 2322) a guarded bridge
+	// inspected, the argument, constructor, and binding sites where the representation
+	// guard either lowered a safe value or handed back. A span left unseen at the end of
+	// a render was lowered by a path with no guard (a builtin higher-order method
+	// callback, a builtin element-slot argument, an assignment construct no bridge
+	// reaches), which would emit Go the toolchain rejects, so the whole unit hands back
+	// rather than ship it (see unguardedNotAssign). It is keyed by span since a span is a
 	// comparable pair of offsets.
-	seen2345 map[frontend.Span]bool
+	seenAssign map[frontend.Span]bool
 }
 
 // maxTypeDepth bounds how deep typeExpr renders a nested type before it hands
@@ -502,7 +511,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seen2345: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a
