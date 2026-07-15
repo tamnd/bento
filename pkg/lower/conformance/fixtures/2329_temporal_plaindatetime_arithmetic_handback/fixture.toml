@@ -1,2 +1,0 @@
-feature = "Temporal"
-handback = "Temporal.PlainDateTime.prototype.add is a later slice"

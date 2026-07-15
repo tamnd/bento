@@ -876,9 +876,71 @@ console.log(c.hour);`
 	}
 }
 
-// TestPlainDateTimeHandBacks pins the honest ceilings for PlainDateTime: the union getters,
-// the arithmetic, from over a string, and a conversion method each hand back with a reason
-// naming where the work belongs.
+// TestPlainDateTimeArithmetic pins add and subtract to AddDateTime with the overflow rule,
+// until and since to Until and Since with the largestUnit, and round to Round with the unit,
+// increment, and mode. subtract negates the duration before it folds into the wall clock.
+func TestPlainDateTimeArithmetic(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "add over a duration bag",
+			src:   "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.add({ hours: 1 });\nconsole.log(e.hour);",
+			wants: []string{".AddDateTime(", "value.NewDuration(", `"constrain"`},
+		},
+		{
+			name:  "subtract negates the duration",
+			src:   "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.subtract({ hours: 1 });\nconsole.log(e.hour);",
+			wants: []string{".AddDateTime(", ".Negated()", `"constrain"`},
+		},
+		{
+			name:  "add with reject overflow",
+			src:   "const dt = new Temporal.PlainDateTime(2020, 1, 31, 12, 30);\nconst e = dt.add({ months: 1 }, { overflow: \"reject\" });\nconsole.log(e.month);",
+			wants: []string{".AddDateTime(", `"reject"`},
+		},
+		{
+			name:  "until defaults to day",
+			src:   "const a = new Temporal.PlainDateTime(2020, 1, 1, 12, 0);\nconst b = new Temporal.PlainDateTime(2020, 1, 2, 6, 0);\nconsole.log(a.until(b).toString());",
+			wants: []string{".Until(", `"day"`},
+		},
+		{
+			name:  "until with a largestUnit year",
+			src:   "const a = new Temporal.PlainDateTime(2020, 1, 1, 12, 0);\nconst b = new Temporal.PlainDateTime(2021, 3, 15, 8, 0);\nconsole.log(a.until(b, { largestUnit: \"year\" }).toString());",
+			wants: []string{".Until(", `"year"`},
+		},
+		{
+			name:  "since routes to Since",
+			src:   "const a = new Temporal.PlainDateTime(2020, 1, 1, 12, 0);\nconst b = new Temporal.PlainDateTime(2020, 1, 2, 6, 0);\nconsole.log(b.since(a).toString());",
+			wants: []string{".Since(", `"day"`},
+		},
+		{
+			name:  "round over an options bag",
+			src:   "const dt = new Temporal.PlainDateTime(2020, 1, 1, 3, 34, 56);\nconsole.log(dt.round({ smallestUnit: \"hour\" }).toString());",
+			wants: []string{".Round(", `"hour"`, `"halfExpand"`},
+		},
+		{
+			name:  "round to day with the string shorthand",
+			src:   "const dt = new Temporal.PlainDateTime(2020, 1, 1, 18, 0);\nconsole.log(dt.round(\"day\").toString());",
+			wants: []string{".Round(", `"day"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainDateTimeHandBacks pins the honest ceilings for PlainDateTime: from over a string,
+// and a reshaping or conversion method each hand back with a reason naming where the work
+// belongs.
 func TestPlainDateTimeHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -886,9 +948,9 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "add arithmetic",
-			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.add({ hours: 1 });\nconsole.log(e.hour);",
-			want: "Temporal.PlainDateTime.prototype.add is a later slice",
+			name: "with reshaping",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.with({ hour: 9 });\nconsole.log(e.hour);",
+			want: "Temporal.PlainDateTime.prototype.with is a later slice",
 		},
 		{
 			name: "from a property bag",

@@ -1223,6 +1223,65 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 			name = "ToJSON"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "add", "subtract":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " takes at least one argument"}
+		}
+		what := "Temporal.PlainDateTime.prototype." + method
+		dur, err := r.durationArg(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		if method == "subtract" {
+			dur = &ast.CallExpr{Fun: &ast.SelectorExpr{X: dur, Sel: ident("Negated")}}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDateTime")}, Args: []ast.Expr{dur, stringLit(overflow)}}, nil
+	case "until", "since":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " takes at least one argument"}
+		}
+		what := "Temporal.PlainDateTime.prototype." + method
+		if !r.isPlainDateTime(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainDateTime is a later slice"}
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		largestUnit, err := r.plainDateTimeDifferenceOptions(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		fn := "Until"
+		if method == "since" {
+			fn = "Since"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(fn)}, Args: []ast.Expr{other, stringLit(largestUnit)}}, nil
+	case "round":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.round takes at least one argument"}
+		}
+		unit, increment, mode, err := r.plainDateTimeRoundOptions("Temporal.PlainDateTime.prototype.round", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{stringLit(unit), increment, stringLit(mode)}}, nil
 	case "withCalendar":
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.withCalendar takes exactly one argument"}
@@ -1923,6 +1982,140 @@ func (r *Renderer) plainTimeDifferenceOptions(what string, argNodes []frontend.N
 		}
 	}
 	return largestUnit, smallestUnit, increment, mode, nil
+}
+
+// plainDateTimeRoundUnits is the set of smallest units Temporal.PlainDateTime.prototype.round
+// accepts, from the largest to the smallest. It is the time units the wall clock rounds to plus
+// day, which rounds the whole date-time to midnight and can carry into the next day.
+var plainDateTimeRoundUnits = [7]string{"day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"}
+
+// plainDateTimeRoundOptions reads the options of Temporal.PlainDateTime.prototype.round at compile
+// time, the mirror of plainTimeRoundOptions over the day-and-time unit set. The argument is either a
+// smallestUnit string literal shorthand or an object literal carrying a required smallestUnit, an
+// optional roundingIncrement number expression (default one), and an optional roundingMode string
+// literal (default halfExpand). A missing smallestUnit, an unknown key, a non-literal unit or mode,
+// or an out-of-set unit or mode hands back. The increment rides through as an expression so the
+// runtime validates its range against the unit, including the rule that day accepts only one.
+func (r *Renderer) plainDateTimeRoundOptions(what string, argNodes []frontend.Node) (string, ast.Expr, string, error) {
+	if len(argNodes) != 1 {
+		return "", nil, "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	n := argNodes[0]
+	if lit, ok := r.stringLiteralValue(n); ok {
+		if !slices.Contains(plainDateTimeRoundUnits[:], lit) {
+			return "", nil, "", &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+		}
+		return lit, &ast.BasicLit{Kind: token.FLOAT, Value: "1"}, "halfExpand", nil
+	}
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", nil, "", &NotYetLowerable{Reason: what + " options that are neither a string nor an object literal are a later slice"}
+	}
+	unit := ""
+	var increment ast.Expr = &ast.BasicLit{Kind: token.FLOAT, Value: "1"}
+	mode := "halfExpand"
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", nil, "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", nil, "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "smallestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with a non-literal smallestUnit is a later slice"}
+			}
+			if !slices.Contains(plainDateTimeRoundUnits[:], lit) {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with the invalid smallestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			unit = lit
+		case "roundingIncrement":
+			if !r.isNumber(kids[1]) {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with a non-number roundingIncrement is a later slice"}
+			}
+			val, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return "", nil, "", err
+			}
+			increment = val
+		case "roundingMode":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with a non-literal roundingMode is a later slice"}
+			}
+			if !slices.Contains(plainTimeRoundModes[:], lit) {
+				return "", nil, "", &NotYetLowerable{Reason: what + " with the invalid roundingMode " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			mode = lit
+		default:
+			return "", nil, "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	if unit == "" {
+		return "", nil, "", &NotYetLowerable{Reason: what + " without a smallestUnit (a RangeError at run time) is a later slice"}
+	}
+	return unit, increment, mode, nil
+}
+
+// plainDateTimeDifferenceUnits maps the largestUnit forms until and since accept, singular and
+// plural, to the singular form the runtime takes. It spans the calendar units and the time units,
+// since a date-time difference can be counted in either. "auto" resolves to "day", the default.
+var plainDateTimeDifferenceUnits = map[string]string{
+	"auto": "day", "year": "year", "years": "year", "month": "month", "months": "month",
+	"week": "week", "weeks": "week", "day": "day", "days": "day",
+	"hour": "hour", "hours": "hour", "minute": "minute", "minutes": "minute",
+	"second": "second", "seconds": "second", "millisecond": "millisecond", "milliseconds": "millisecond",
+	"microsecond": "microsecond", "microseconds": "microsecond", "nanosecond": "nanosecond", "nanoseconds": "nanosecond",
+}
+
+// plainDateTimeDifferenceOptions reads the options of PlainDateTime.prototype.until and since at
+// compile time and returns the largestUnit, defaulting to day. It accepts largestUnit as a string
+// literal in the calendar-or-time unit set. A smallestUnit, roundingIncrement, or roundingMode would
+// round the duration, which needs the round-with-relativeTo machinery a later slice carries, so any
+// of those, a non-literal or out-of-set largestUnit, an unknown key, or a spread or shorthand member
+// hands back rather than emitting a wrong or partial result.
+func (r *Renderer) plainDateTimeDifferenceOptions(what string, argNodes []frontend.Node) (string, error) {
+	largestUnit := "day"
+	if len(argNodes) == 0 {
+		return largestUnit, nil
+	}
+	if len(argNodes) != 1 {
+		return "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	n := argNodes[0]
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+	}
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "largestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", &NotYetLowerable{Reason: what + " with a non-literal largestUnit is a later slice"}
+			}
+			unit, ok := plainDateTimeDifferenceUnits[lit]
+			if !ok {
+				return "", &NotYetLowerable{Reason: what + " with the invalid largestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			largestUnit = unit
+		case "smallestUnit", "roundingIncrement", "roundingMode":
+			return "", &NotYetLowerable{Reason: what + " with the rounding option " + key + " is a later slice"}
+		default:
+			return "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	return largestUnit, nil
 }
 
 // plainTimeStaticCall lowers Temporal.PlainTime.compare(a, b) or Temporal.PlainTime.from(x),
