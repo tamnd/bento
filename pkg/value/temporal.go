@@ -2128,6 +2128,26 @@ func durationUnitBoundaryNanos(rel *PlainDate, unit string, n int) *big.Int {
 	return new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(y, m, dd)-isoToEpochDays(rel.year, rel.month, rel.day))), nsPerDay)
 }
 
+// DurationCompare implements Temporal.Duration.compare. rel is the PlainDate the calendar units
+// resolve against, or nil when no relativeTo was given. Without a reference neither operand may
+// carry years, months, or weeks, else a RangeError, and each folds to a signed nanosecond count
+// over a fixed 24-hour day; with a reference each resolves against the calendar to an endpoint.
+// The result is the sign of the first span minus the second, -1, 0, or 1.
+func DurationCompare(a, b *Duration, rel *PlainDate) float64 {
+	var spanA, spanB *big.Int
+	if rel == nil {
+		if a.years != 0 || a.months != 0 || a.weeks != 0 || b.years != 0 || b.months != 0 || b.weeks != 0 {
+			Throw(NewRangeError(FromGoString("Temporal.Duration.compare needs a relativeTo reference to compare years, months, or weeks")))
+		}
+		spanA = durationDayTimeNanos(a)
+		spanB = durationDayTimeNanos(b)
+	} else {
+		spanA, _ = durationReferenceEndpoint(a, rel)
+		spanB, _ = durationReferenceEndpoint(b, rel)
+	}
+	return float64(spanA.Cmp(spanB))
+}
+
 // toIntegerIfIntegral implements the abstract operation ToIntegerIfIntegral (Temporal):
 // a NaN, non-finite, or non-integral value throws a RangeError, and an integral value is
 // returned unchanged. It is the gate Temporal.Duration uses on every field, and it

@@ -1574,6 +1574,47 @@ func TestDurationTotal(t *testing.T) {
 	assertRangeError("month unit no rel", func() { d(0, 2).Total("month", nil) })
 }
 
+// TestDurationCompare checks compare against the polyfill: without a reference the day-and-time
+// durations order on a fixed 24-hour day and a calendar unit throws, and with a PlainDate
+// reference the calendar resolves both endpoints before ordering.
+func TestDurationCompare(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	rel := NewPlainDate(2024, 1, 1)
+	cases := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"time no rel", DurationCompare(d(0, 0, 0, 0, 2), d(0, 0, 0, 0, 0, 90), nil), 1},
+		{"equal no rel", DurationCompare(d(0, 0, 0, 1), d(0, 0, 0, 0, 24), nil), 0},
+		{"days no rel", DurationCompare(d(0, 0, 0, 1), d(0, 0, 0, 2), nil), -1},
+		{"cal rel", DurationCompare(d(0, 1), d(0, 0, 0, 20), rel), 1},
+		{"cal rel equal", DurationCompare(d(0, 1), d(0, 0, 0, 31), rel), 0},
+		{"cal rel neg", DurationCompare(d(0, -1), d(0, 0, 0, -20), rel), -1},
+		{"years rel", DurationCompare(d(1), d(0, 0, 0, 365), rel), 1},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("cal no rel", func() { DurationCompare(d(0, 1), d(0, 0, 0, 1), nil) })
+	assertRangeError("weeks no rel", func() { DurationCompare(d(0, 0, 1), d(0, 0, 0, 1), nil) })
+}
+
 // TestDurationRejects checks the RangeError cases against the polyfill: a non-integral
 // component (Duration rejects rather than truncates), a NaN or non-finite component, a
 // mixed-sign set, a years field at 2^32, and a seconds field at 2^53.

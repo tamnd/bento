@@ -508,6 +508,22 @@ console.log(new Temporal.Duration(0, 18).total({ unit: "year", relativeTo: rel }
 	}
 }
 
+// TestDurationCompareConstruction pins Temporal.Duration.compare to a runtime DurationCompare
+// call, passing the nil relativeTo when none is given and the lowered PlainDate when one is.
+func TestDurationCompareConstruction(t *testing.T) {
+	const src = `const a = new Temporal.Duration(0, 0, 0, 1);
+const b = new Temporal.Duration(0, 0, 0, 2);
+const rel = Temporal.PlainDate.from("2024-01-01");
+console.log(Temporal.Duration.compare(a, b));
+console.log(Temporal.Duration.compare(new Temporal.Duration(0, 1), b, { relativeTo: rel }));`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.DurationCompare(", "nil"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
 // methods and compare each hand back with a reason naming where the work belongs, waiting on
 // the relativeTo reference and the calendar model.
@@ -543,9 +559,9 @@ func TestDurationHandBacks(t *testing.T) {
 			want: "Temporal.Duration.prototype.with over a bag with a computed or shorthand key is a later slice",
 		},
 		{
-			name: "compare",
-			src:  "const a = new Temporal.Duration(0, 0, 0, 1);\nconst b = new Temporal.Duration(0, 0, 0, 2);\nconsole.log(Temporal.Duration.compare(a, b));",
-			want: "Temporal.Duration.compare is a later slice",
+			name: "compare with a non-PlainDate relativeTo",
+			src:  "const a = new Temporal.Duration(1);\nconst b = new Temporal.Duration(0, 0, 0, 365);\nconsole.log(Temporal.Duration.compare(a, b, { relativeTo: \"2024-01-01\" }));",
+			want: "with a relativeTo that is not a Temporal.PlainDate",
 		},
 	}
 	for _, c := range cases {

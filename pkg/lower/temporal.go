@@ -1095,8 +1095,9 @@ func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, arg
 // to value.DurationFrom (the copy the specification makes), from over a string literal to
 // value.DurationFromString, and from over an object literal to value.DurationFromFields over
 // its ten present-or-absent fields. A Duration carries no calendar, so the literal and bag
-// need no gate; a value not statically typed as a string hands back, and compare, which needs
-// a relativeTo reference to balance the calendar units, hands back too.
+// need no gate; a value not statically typed as a string hands back. compare orders two
+// durations over an optional relativeTo PlainDate, folding day-and-time durations on a fixed
+// 24-hour day and resolving calendar units against the reference.
 func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "from":
@@ -1131,6 +1132,31 @@ func (r *Renderer) durationStaticCall(method string, argNodes []frontend.Node) (
 			return &ast.CallExpr{Fun: sel("value", "DurationFromFields"), Args: fields[:]}, nil
 		}
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration.from over a value not statically typed as a string is a later slice"}
+	case "compare":
+		if len(argNodes) < 2 || len(argNodes) > 3 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.compare takes two durations and an optional options argument"}
+		}
+		if !r.isDuration(argNodes[0]) || !r.isDuration(argNodes[1]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.compare over an argument that is not a Temporal.Duration (a string or bag to coerce) is a later slice"}
+		}
+		var rel ast.Expr = ident("nil")
+		if len(argNodes) == 3 {
+			expr, err := r.durationRelativeToOption("Temporal.Duration.compare", argNodes[2])
+			if err != nil {
+				return nil, err
+			}
+			rel = expr
+		}
+		a, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		b, err := r.lowerExpr(argNodes[1])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "DurationCompare"), Args: []ast.Expr{a, b, rel}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration." + method + " is a later slice"}
 	}
@@ -1208,6 +1234,41 @@ func (r *Renderer) durationTotalOptions(what string, argNodes []frontend.Node) (
 		return "", nil, &NotYetLowerable{Reason: what + " without a unit (a RangeError at run time) is a later slice"}
 	}
 	return unit, rel, nil
+}
+
+// durationRelativeToOption reads a relativeTo from an options object literal, the only option
+// Temporal.Duration.compare takes. It returns the lowered PlainDate or the nil identifier when
+// the object has no relativeTo. A relativeTo that is not a Temporal.PlainDate, an options value
+// that is not an object literal, an unknown key, or a spread or shorthand member hands back.
+func (r *Renderer) durationRelativeToOption(what string, n frontend.Node) (ast.Expr, error) {
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil, &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+	}
+	var rel ast.Expr = ident("nil")
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return nil, &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return nil, &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "relativeTo":
+			if !r.isPlainDate(kids[1]) {
+				return nil, &NotYetLowerable{Reason: what + " with a relativeTo that is not a Temporal.PlainDate is a later slice"}
+			}
+			expr, err := r.lowerExpr(kids[1])
+			if err != nil {
+				return nil, err
+			}
+			rel = expr
+		default:
+			return nil, &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	return rel, nil
 }
 
 // plainDateMethodCall lowers a method call on a PlainDate receiver. equals(other)
