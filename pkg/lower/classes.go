@@ -750,9 +750,14 @@ func (r *Renderer) validateSuper(info *classInfo) error {
 		}
 	}
 	args, _ := r.superCallOf(stmts[superIdx])
-	if len(args) != len(info.base.ctorParams) {
-		return &NotYetLowerable{Reason: "super() with an argument count that differs from the base constructor is a later slice"}
+	if len(args) > len(info.base.ctorParams) {
+		return &NotYetLowerable{Reason: "super() with more arguments than the base constructor is a later slice"}
 	}
+	// A super() that supplies fewer arguments than the base constructor declares omits
+	// a trailing base optional, the same short call new C makes on the constructor. The
+	// omitted slots fill in superCtorArgs the way newClass fills them, so a base optional
+	// the checker accepted the short super() against is filled there, and a base parameter
+	// that is not a recognized optional hands back rather than pass a bogus value.
 	info.superArgs = args
 	info.preSuper = stmts[:superIdx]
 	return nil
@@ -2306,6 +2311,30 @@ func (r *Renderer) superCtorArgs(info *classInfo) ([]ast.Expr, error) {
 				return nil, err
 			}
 			args = append(args, lowered)
+		}
+		// A trailing base parameter super() omits is an optional the checker accepted the
+		// short super() against, filled the same way new C fills an omitted constructor
+		// optional: value.Undefined for a dynamic slot, the empty value.None[T]() for a
+		// recognized T | undefined, and a handback for a static parameter that is not a
+		// recognized optional, so an omitted required base parameter never fills a bogus
+		// value.
+		for i := len(info.superArgs); i < len(base.ctorParams); i++ {
+			pnode := r.paramNameNode(base.ctorParams[i])
+			if r.isDynamic(pnode) {
+				r.requireImport(valuePkg)
+				args = append(args, sel("value", "Undefined"))
+				continue
+			}
+			pt := r.prog.TypeAt(pnode)
+			if inner, ok := r.optionalInner(r.prog.UnionMembers(pt)); ok && r.isOptionalType(pt) {
+				none, err := r.noneOf(inner)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, none)
+				continue
+			}
+			return nil, &NotYetLowerable{Reason: "super() omitting a non-dynamic optional base argument is a later slice"}
 		}
 	}
 	return args, nil
