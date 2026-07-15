@@ -365,8 +365,9 @@ func instantAccessor(prop string) (method string, ok bool) {
 // instantMethodCall lowers a method call on an Instant receiver, the mirror of
 // plainDateMethodCall. equals(other) compares two instants, and toString and toJSON render
 // the UTC ISO 8601 string; each takes no options in this slice, so a call with arguments
-// beyond the ones handled hands back. The arithmetic and rounding methods (add, subtract,
-// until, since, round), which need Duration and options parsing, and the conversions
+// beyond the ones handled hands back. add and subtract fold a Duration's time part into the
+// epoch count, rejecting the calendar units at run time. The remaining arithmetic and rounding
+// methods (until, since, round), which need difference and options parsing, and the conversions
 // (toZonedDateTimeISO, toLocaleString) hand back with a named reason.
 func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
@@ -399,6 +400,23 @@ func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argN
 			name = "ToJSON"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "add", "subtract":
+		what := "Temporal.Instant.prototype." + method
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: what + " takes exactly one argument"}
+		}
+		dur, err := r.durationArg(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		if method == "subtract" {
+			dur = &ast.CallExpr{Fun: &ast.SelectorExpr{X: dur, Sel: ident("Negated")}}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDuration")}, Args: []ast.Expr{dur}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype." + method + " is a later slice"}
 	}
