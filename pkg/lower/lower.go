@@ -480,9 +480,15 @@ type Renderer struct {
 	// the binding bridge matches both the source and the target node against these spans.
 	// It is built lazily alongside notAssignSpans.
 	assign2322Spans []frontend.Span
-	// notAssignReady marks notAssignSpans and assign2322Spans as built, so the empty
-	// slices are not rebuilt on every bridge. It stays false until the first lookup
-	// collects the 2345 and 2322 spans.
+	// overload2769Spans holds the byte spans of the program's code 2769 diagnostics, the
+	// "No overload matches this call" errors the front door tolerates. A 2769 anchors on
+	// the call expression, so the overloaded-call path matches the call node against these
+	// spans to mark a checker-rejected call it lowered as seen. It is built lazily
+	// alongside notAssignSpans.
+	overload2769Spans []frontend.Span
+	// notAssignReady marks notAssignSpans, assign2322Spans, and overload2769Spans as
+	// built, so the empty slices are not rebuilt on every bridge. It stays false until the
+	// first lookup collects the 2345, 2322, and 2769 spans.
 	notAssignReady bool
 	// seenAssign records the not-assignable spans (2345 and 2322) a guarded bridge
 	// inspected, the argument, constructor, and binding sites where the representation

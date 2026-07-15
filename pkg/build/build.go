@@ -305,6 +305,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedAssignability[d.Code] {
 			continue
 		}
+		if toleratedOverload[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -511,6 +514,18 @@ var toleratedComputedKey = map[int]bool{
 var toleratedAssignability = map[int]bool{
 	2345: true, // Argument of type 'X' is not assignable to parameter of type 'Y'.
 	2322: true, // Type 'X' is not assignable to type 'Y'.
+}
+
+// toleratedOverload is the set of diagnostic codes bento admits for a call the checker
+// resolves against no overload signature. 2769 ("No overload matches this call") flags a
+// call whose arguments fit none of a function's overload signatures, which at run time
+// JavaScript still dispatches to the implementation with the arguments it was given. The
+// lowerer reproduces that for a user-defined overloaded function by routing the call
+// through the implementation's boxed dispatch, and its end-of-render reconciliation hands
+// the unit back for any 2769 site that path did not reach (a mismatched builtin overload,
+// a constructor), so admitting the code never emits Go the toolchain rejects.
+var toleratedOverload = map[int]bool{
+	2769: true, // No overload matches this call.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and

@@ -139,6 +139,22 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	for _, stmt := range r.prog.Children(entry) {
 		switch stmt.Kind() {
 		case frontend.NodeFunctionDeclaration:
+			// A function overload set is several declarations under one symbol: the bodyless
+			// signatures carry no runtime code and the implementation body runs. Skip a
+			// signature declaration so only the implementation lowers, once, and the set
+			// emits a single Go func. An overload set whose implementation this slice does
+			// not claim (a concrete or optional parameter, so the call could not box) hands
+			// the whole unit back rather than emit a partial function.
+			if sym, ok := r.prog.SymbolAt(stmt); ok {
+				if _, isOverload := r.overloadImplNode(sym); isOverload {
+					if _, claimed := r.overloadedFuncImpl(sym); !claimed {
+						return Program{}, &NotYetLowerable{Reason: "an overloaded function whose implementation is not all-dynamic is a later slice"}
+					}
+					if _, hasBody := r.funcBodyBlock(stmt); !hasBody {
+						continue
+					}
+				}
+			}
 			fds, err := r.funcDecls(stmt)
 			if err != nil {
 				return Program{}, err

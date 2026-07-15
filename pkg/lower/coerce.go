@@ -282,6 +282,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.callOfDynamicStorage(n) {
 		return true
 	}
+	// A call to a user-defined overloaded function runs its all-dynamic implementation,
+	// whose Go func returns a value.Value. The checker narrows the call to the matched
+	// overload's return, a concrete type the box does not carry as that Go type, so the
+	// call reads as dynamic by shape here to keep the box on the dynamic path where the
+	// surrounding coercion unwraps it.
+	if r.callOfOverloadedFunc(n) {
+		return true
+	}
 	// Object.fromEntries builds a runtime object and Object.entries a runtime array
 	// of pair arrays, each a boxed value.Value, even though the checker types the
 	// results as an index-signature object and a tuple array. A binding holds the box
@@ -750,7 +758,12 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// the primitive box path has a constructor for, so recognizing the calls here is
 	// what lets const d: any = Object.getOwnPropertyDescriptor(o, k) store the box
 	// straight through.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src)
+	// A call to a user-defined overloaded function runs its all-dynamic implementation,
+	// whose Go func returns a value.Value box. The checker narrows the call to the matched
+	// overload's return, a concrete type the primitive box path would try to construct, so
+	// recognizing the call here lets a slot, a stringify, or a console.log take the box
+	// straight through the same as any other boxed result.
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src)
 }
 
 // isIterTerminalBoxedCall reports whether src is a terminal iterator helper whose
@@ -1325,13 +1338,30 @@ func (r *Renderer) ensureNotAssignSpans() {
 			r.notAssignSpans = append(r.notAssignSpans, d.Span)
 		case 2322:
 			r.assign2322Spans = append(r.assign2322Spans, d.Span)
+		case 2769:
+			r.overload2769Spans = append(r.overload2769Spans, d.Span)
 		}
 	}
 	r.notAssignReady = true
 }
 
-// unguardedNotAssign reports the first not-assignable site (2345 or 2322) no guarded
-// bridge inspected, or nil if every one the front door tolerated flowed through the
+// markOverloadCallSeen records the 2769 span the overloaded-call path lowered, so the
+// end-of-render reconciliation does not hand the unit back for it. A valid overloaded
+// call carries no 2769 and marks nothing; only a checker-rejected call the boxed
+// dispatch handled matches a span here. The checker anchors a 2769 on the offending
+// argument, which sits inside the call expression, so the span is matched by containment
+// in the call node's range rather than by the shared-end rule a target-anchored code uses.
+func (r *Renderer) markOverloadCallSeen(call frontend.Node) {
+	r.ensureNotAssignSpans()
+	for _, s := range r.overload2769Spans {
+		if call.Pos() <= s.Start && s.End <= call.End() {
+			r.seenAssign[s] = true
+		}
+	}
+}
+
+// unguardedNotAssign reports the first tolerated-code site (2345, 2322, or 2769) no
+// guarded path inspected, or nil if every one the front door tolerated flowed through the
 // argument, constructor, or binding bridge that either lowered it safely or handed it
 // back. A site left unseen was lowered by a path with no representation guard, a builtin
 // higher-order method callback, a builtin element-slot argument, or an assignment
@@ -1351,6 +1381,11 @@ func (r *Renderer) unguardedNotAssign() error {
 	for _, s := range r.assign2322Spans {
 		if !r.seenAssign[s] {
 			return &NotYetLowerable{Reason: "a value the checker calls not assignable reaches an assignment construct with no representation guard, so the unit routes to the interpreter until that construct grows one"}
+		}
+	}
+	for _, s := range r.overload2769Spans {
+		if !r.seenAssign[s] {
+			return &NotYetLowerable{Reason: "a call with no matching overload reaches a path with no overloaded-call guard, so the unit routes to the interpreter until that path grows one"}
 		}
 	}
 	return nil
