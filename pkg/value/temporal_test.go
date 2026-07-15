@@ -1852,6 +1852,42 @@ func TestInstantAddSubtract(t *testing.T) {
 	}
 }
 
+// TestInstantUntilSince checks Temporal.Instant.prototype.until and since report the exact-time
+// difference, balanced from largestUnit down and rounded at smallestUnit, since negating the
+// result. Every value was checked against @js-temporal/polyfill.
+func TestInstantUntilSince(t *testing.T) {
+	a := NewInstant(bigInt(t, "0"))
+	b := NewInstant(bigInt(t, "8130250500000")) // + 8130.2505 seconds = 2h15m30.2505s
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"until default second", a.Until(b, "second", "nanosecond", 1, "trunc").ToString().ToGoString(), "PT8130.2505S"},
+		{"since default second", a.Since(b, "second", "nanosecond", 1, "trunc").ToString().ToGoString(), "-PT8130.2505S"},
+		{"until largest hour", a.Until(b, "hour", "nanosecond", 1, "trunc").ToString().ToGoString(), "PT2H15M30.2505S"},
+		{"until largest minute", a.Until(b, "minute", "nanosecond", 1, "trunc").ToString().ToGoString(), "PT135M30.2505S"},
+		{"until smallest second trunc", a.Until(b, "second", "second", 1, "trunc").ToString().ToGoString(), "PT8130S"},
+		{"until smallest second ceil", a.Until(b, "second", "second", 1, "ceil").ToString().ToGoString(), "PT8131S"},
+		{"until smallest minute inc15 floor", a.Until(b, "minute", "minute", 15, "floor").ToString().ToGoString(), "PT135M"},
+		{"reversed", b.Until(a, "second", "nanosecond", 1, "trunc").ToString().ToGoString(), "-PT8130.2505S"},
+		{"equal", a.Until(a, "second", "nanosecond", 1, "trunc").ToString().ToGoString(), "PT0S"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// A largestUnit smaller than the smallestUnit and an out-of-range increment each throw.
+	if !bagThrows(func() { a.Until(b, "nanosecond", "second", 1, "trunc") }) {
+		t.Errorf("Until with largestUnit smaller than smallestUnit did not throw")
+	}
+	if !bagThrows(func() { a.Until(b, "second", "minute", 60, "trunc") }) {
+		t.Errorf("Until with an out-of-range increment did not throw")
+	}
+}
+
 // TestInstantFactories checks fromEpochMilliseconds, fromEpochNanoseconds, and from over
 // an Instant, plus that from returns a distinct copy.
 func TestInstantFactories(t *testing.T) {
