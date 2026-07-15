@@ -105,3 +105,58 @@ console.log(f());
 		}
 	}
 }
+
+// A method, an async function, and a generator all lower their parameters through
+// the shared funcParamFields, but their bodies never build the optParams narrowing
+// set: only a body lowered through funcDeclNamed does. So a bare optional parameter
+// there must hand back rather than emit a value.Opt[T] field the body reads as a bare
+// T, which would not compile. These pin that zero-fail guard, one per shared caller.
+
+// TestMethodOptionalParamHandsBack pins the method path: a class method with a bare
+// optional parameter hands back, since no optParams set is built for a method body.
+func TestMethodOptionalParamHandsBack(t *testing.T) {
+	const src = `class C {
+  add(x: number, y?: number): number {
+    if (y !== undefined) { return x + y; }
+    return x;
+  }
+}
+console.log(new C().add(1, 2));
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {
+		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
+	}
+}
+
+// TestAsyncOptionalParamHandsBack pins the async path: an async function with a bare
+// optional parameter hands back, since async.go reaches funcParamFields without the
+// optParams set.
+func TestAsyncOptionalParamHandsBack(t *testing.T) {
+	const src = `async function f(x: number, y?: number): Promise<number> {
+  if (y !== undefined) { return x + y; }
+  return x;
+}
+f(5).then(v => console.log(v));
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {
+		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
+	}
+}
+
+// TestGeneratorOptionalParamHandsBack pins the generator path: a generator with a
+// bare optional parameter hands back, since generator.go reaches funcParamFields
+// without the optParams set.
+func TestGeneratorOptionalParamHandsBack(t *testing.T) {
+	const src = `function* g(x: number, y?: number): Generator<number> {
+  if (y !== undefined) { yield x + y; }
+  yield x;
+}
+for (const v of g(5)) { console.log(v); }
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {
+		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
+	}
+}

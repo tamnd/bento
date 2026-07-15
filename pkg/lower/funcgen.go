@@ -152,6 +152,20 @@ func (r *Renderer) funcDeclHead(fn frontend.Node) (frontend.Symbol, string, fron
 // generic one. The name is the caller's, so a specialization emits under its
 // mangled name (Identity_num) while a plain function emits under its exported name.
 func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name string) (*ast.FuncDecl, error) {
+	// The optional-parameters set is built first, before the parameter fields, because
+	// funcParamFields lowers a bare optional parameter to a value.Opt[T] field only for
+	// a name this set carries: the field and the narrowed read that unwraps it with
+	// .Get() must both exist or neither, and this body-scoped set is what ties them
+	// together. A method, async, or generator body reaches funcParamFields without
+	// this set (they do not go through funcDeclNamed), so its optional parameter keeps
+	// the handback rather than emit a value.Opt field no narrowing pass unwraps. It is
+	// kept apart from optLocals because scopedBlockRange recomputes optLocals per block
+	// from the body's declarations, which never carry the signature, and saved and
+	// restored so one function's optional parameters do not leak into another.
+	prevOptP := r.optParams
+	r.optParams = r.optParamsOf(fn, sig)
+	defer func() { r.optParams = prevOptP }()
+
 	// A default that reads an earlier parameter cannot be filled at the call site,
 	// which does not see the callee's scope, so such a function collapses its optional
 	// tail into one Go variadic and fills each optional in the body. Every other
@@ -215,15 +229,6 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	prevDyn := r.dynLocals
 	r.dynLocals = r.dynLocalsOf(sig.Params, bodyStmts)
 	defer func() { r.dynLocals = prevDyn }()
-
-	// The optional-parameters set rides the same body scope. A bare optional
-	// parameter binds a value.Opt[T] field, and a read the checker narrowed to T
-	// unwraps with .Get() the way an optional local does; the set is kept apart from
-	// optLocals because scopedBlockRange recomputes optLocals per block from the
-	// body's declarations, which never carry the signature.
-	prevOptP := r.optParams
-	r.optParams = r.optParamsOf(fn, sig)
-	defer func() { r.optParams = prevOptP }()
 
 	// The object-rest bindings an untyped pattern parameter gathers are boxed values the
 	// checker did not type any, so a read of one routes the dynamic way off this set. It
@@ -374,13 +379,17 @@ func (r *Renderer) funcParamFields(fn frontend.Node, sig frontend.Signature) (*a
 				// A bare optional of dynamic type needs no default: the omitted slot
 				// fills with value.Undefined at the call site, the same absent value
 				// the language binds.
-			case r.isOptionalType(p.Type):
-				// A bare optional of the T | undefined shape lowers to a value.Opt[T]
-				// field: paramFieldType renders the type through typeExpr, which maps
-				// the optional union to Opt[T]. A present argument wraps in Some at the
-				// call site (bridgeArg, boxToOptional) and an omission fills None, so the
-				// body reads the same absent-or-present option either way, and a read the
-				// checker narrowed to T unwraps with .Get() through optParams.
+			case r.optParams[pname]:
+				// A bare optional of the T | undefined shape the optParams pre-pass
+				// tracked lowers to a value.Opt[T] field: paramFieldType renders the type
+				// through typeExpr, which maps the optional union to Opt[T]. A present
+				// argument wraps in Some at the call site (bridgeArg, boxToOptional) and
+				// an omission fills None, so the body reads the same absent-or-present
+				// option either way, and a read the checker narrowed to T unwraps with
+				// .Get() through optParams. The set is populated only for a body lowered
+				// through funcDeclNamed; a method, async, or generator body reaches here
+				// without it, so its optional parameter falls to the handback below rather
+				// than emit an Opt field no narrowing pass unwraps.
 			default:
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 			}
