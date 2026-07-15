@@ -496,6 +496,10 @@ func (r *Renderer) generatorFuncDecl(fn frontend.Node, sig frontend.Signature, n
 	if err != nil {
 		return nil, err
 	}
+	// A required x: T | undefined parameter binds a value.Opt[T] field, so a read the
+	// checker narrowed to T unwraps it with .Get(); a generator body reaches
+	// funcParamFields without funcDeclNamed's narrowing set, so it gains that read here.
+	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	yieldGo, newGen, err := r.generatorCoroutine(fn)
 	if err != nil {
 		return nil, err

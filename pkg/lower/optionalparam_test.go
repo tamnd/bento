@@ -223,3 +223,83 @@ for (const v of g(5)) { console.log(v); }
 		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
 	}
 }
+
+// A required parameter annotated x: T | undefined binds a value.Opt[T] field in a
+// method, async, or generator body the same way a top-level function does, since
+// typeExpr renders the union that way before the funcParamFields switch is reached.
+// Those forms reach funcParamFields without funcDeclNamed's narrowing set, so each
+// pushes a required-only optParams set around its body, and a read the checker
+// narrowed to T unwraps with .Get(). These run the narrowed guard end to end, one
+// per body form, proving the previously broken Go now compiles and runs.
+
+// TestMethodRequiredUnionParamNarrows runs an instance method whose required
+// optional-union parameter is read past a presence guard.
+func TestMethodRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class C {
+  f(x: number | undefined): number {
+    if (x !== undefined) { return x + 1; }
+    return 0;
+  }
+}
+const c = new C();
+console.log(c.f(5));
+console.log(c.f(undefined));
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("method required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestStaticMethodRequiredUnionParamNarrows runs the same guard in a static method,
+// the second funcParamFields caller in classes.go.
+func TestStaticMethodRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class C {
+  static f(x: number | undefined): number {
+    if (x !== undefined) { return x + 1; }
+    return 0;
+  }
+}
+console.log(C.f(5));
+console.log(C.f(undefined));
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("static method required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncRequiredUnionParamNarrows runs the guard in an async function, whose
+// captured parameter reads through the value.Async closure.
+func TestAsyncRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+async function f(x: number | undefined): Promise<number> {
+  if (x !== undefined) { return x + 1; }
+  return 0;
+}
+f(5).then(v => console.log(v));
+f(undefined).then(v => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("async required-union parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestGeneratorRequiredUnionParamNarrows runs the guard in a generator, whose
+// captured parameter reads through the coroutine closure.
+func TestGeneratorRequiredUnionParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function* g(x: number | undefined): Generator<number> {
+  if (x !== undefined) { yield x + 1; }
+  yield 0;
+}
+for (const v of g(5)) { console.log(v); }
+`
+	if got, want := runProgramGo(t, src), "6\n0\n"; got != want {
+		t.Fatalf("generator required-union parameter printed %q, want %q", got, want)
+	}
+}

@@ -2460,6 +2460,10 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	if err != nil {
 		return nil, err
 	}
+	// A required x: T | undefined parameter binds a value.Opt[T] field here too, so a
+	// read the checker narrowed to T must unwrap it with .Get(); a method reaches
+	// funcParamFields without funcDeclNamed's narrowing set, so it gains that read here.
+	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	results, err := r.resultFields(sig.Return)
 	if err != nil {
 		return nil, err
@@ -2603,6 +2607,10 @@ func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, er
 	if err != nil {
 		return nil, err
 	}
+	// A required x: T | undefined parameter binds a value.Opt[T] field, so a read the
+	// checker narrowed to T unwraps it with .Get(); a static method reaches
+	// funcParamFields without funcDeclNamed's narrowing set, so it gains that read here.
+	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	results, err := r.resultFields(sig.Return)
 	if err != nil {
 		return nil, err
