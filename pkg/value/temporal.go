@@ -2293,6 +2293,42 @@ func (i *Instant) AddDuration(dur *Duration) *Instant {
 	return newInstant(total)
 }
 
+// Until returns the signed exact-time difference from the receiver to other as a Duration,
+// balanced from largestUnit down and rounded at smallestUnit under roundingMode. An Instant
+// carries no calendar, so the units run hour down to nanosecond only; a day or larger unit is
+// rejected at the boundary before this method by the caller's unit set.
+func (i *Instant) Until(other *Instant, largestUnit, smallestUnit string, increment float64, roundingMode string) *Duration {
+	return instantDifference(i, other, largestUnit, smallestUnit, increment, roundingMode)
+}
+
+// Since returns the signed exact-time difference from other to the receiver, the reverse of
+// Until. Both round the signed difference so the mode acts on the true sign, matching the
+// specification's rule of negating the mode and the result for since.
+func (i *Instant) Since(other *Instant, largestUnit, smallestUnit string, increment float64, roundingMode string) *Duration {
+	return instantDifference(other, i, largestUnit, smallestUnit, increment, roundingMode)
+}
+
+// instantDifference is the exact-time analogue of plainTimeDifference: it works over the full
+// epoch nanosecond gap rather than a within-day gap, so the same unit lookup, increment check,
+// shared rounding, and balancing serve both. The gap can span many hours, and durationFromDayNanos
+// rolls the whole gap into the field at largeRank, so largestUnit hour reports 2h15m where the
+// default largestUnit second reports the flat second count.
+func instantDifference(from, to *Instant, largestUnit, smallestUnit string, increment float64, roundingMode string) *Duration {
+	unitNs, dividend, smallRank := plainTimeUnitInfo(smallestUnit)
+	_, _, largeRank := plainTimeUnitInfo(largestUnit)
+	if largeRank > smallRank {
+		Throw(NewRangeError(FromGoString("Temporal.Instant difference largestUnit cannot be smaller than smallestUnit")))
+	}
+	inc := int64(toIntegerWithTruncation(increment))
+	if inc < 1 || inc >= dividend || dividend%inc != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.Instant difference roundingIncrement is out of range")))
+	}
+	diff := new(big.Int).Sub(to.ns, from.ns)
+	quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
+	diff = roundBigToIncrement(diff, quantum, roundingMode)
+	return durationFromDayNanos(diff, largeRank)
+}
+
 // InstantCompare implements Temporal.Instant.compare: -1, 0, or 1 as the first instant is
 // earlier than, equal to, or later than the second, the sign of the big.Int comparison.
 func InstantCompare(a, b *Instant) float64 { return float64(a.ns.Cmp(b.ns)) }
