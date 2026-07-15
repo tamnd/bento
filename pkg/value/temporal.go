@@ -52,9 +52,23 @@ func NewPlainDate(isoYear, isoMonth, isoDay float64) *PlainDate {
 // canonicalCalendar canonicalizes a Temporal calendar identifier the way
 // CanonicalizeCalendar does: identifiers are case-insensitive, so it lowercases the
 // id and returns the canonical form, with ok=false for an id bento does not host.
-// This slice hosts the ISO 8601 calendar and the proleptic Gregorian calendar; the
-// lowerer only ever routes one of these two here, but the check is kept so a stray id
-// throws the RangeError the specification requires rather than silently mislabelling.
+//
+// bento hosts the four proleptic-Gregorian calendars: iso8601, gregory, roc, and
+// japanese. These label one shared ISO day-line and differ only in how the year, era,
+// and eraYear getters read it, so the whole of the date arithmetic runs calendar-blind
+// on the ISO fields and every mover threads the receiver's cal onto its result.
+//
+// This is the honest ceiling. buddhist and the lunar and computed families, persian,
+// indian, coptic, ethiopic, the islamic variants, hebrew, chinese, and dangi, all
+// return ok=false and hand back at the lowerer. They cannot be labelled onto the ISO
+// day-line: they need ICU-grade calendrical algorithms, arithmetic and astronomical
+// month lengths, leap-month insertion, and the pre-1582 Julian cutover, none of which
+// the movers above model. Handing them back is the correct behaviour under the
+// zero-fail invariant, since the alternative is silently mislabelling a date, and a
+// stray or malformed id still throws the RangeError the specification requires. The
+// test262 files these leave as a permanent hand-back are the ones tagged with those
+// calendar ids under built-ins/Temporal, recorded alongside this ceiling in the
+// milestone note; unlocking them is out of scope for a from-source runtime.
 func canonicalCalendar(id string) (string, bool) {
 	switch strings.ToLower(id) {
 	case "iso8601":
