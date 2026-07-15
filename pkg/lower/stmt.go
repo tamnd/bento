@@ -1917,6 +1917,9 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		optional   bool
 		nested     frontend.Node
 		nestedType frontend.Type
+		rest       bool
+		restStruct string
+		restType   frontend.Type
 	}
 	optionalField := map[string]bool{}
 	propType := map[string]frontend.Type{}
@@ -1926,6 +1929,29 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	}
 	fields := make([]binding, len(elems))
 	for i, el := range elems {
+		// A rest property gathers the own properties the pattern did not name into a new
+		// object. On a fixed-shape source the rest's checker type is that object minus the
+		// named properties, so it interns as its own struct and the gather is a struct
+		// literal copying each remaining field off the receiver, built in the emit loop.
+		if restIdent, ok := r.objectRestElem(el); ok {
+			name, ok := localName(r.prog.Text(restIdent))
+			if !ok {
+				return nil, true, &NotYetLowerable{Reason: "an object destructuring rest target is not a Go identifier"}
+			}
+			restType := r.prog.TypeAt(restIdent)
+			if restType.Flags&frontend.TypeObject == 0 {
+				return nil, true, &NotYetLowerable{Reason: "an object destructuring rest whose type is not a fixed-shape object is a later slice"}
+			}
+			if _, isArray := r.prog.ElementType(restType); isArray {
+				return nil, true, &NotYetLowerable{Reason: "an object destructuring rest typed as an array is a later slice"}
+			}
+			structName, err := r.decls.internStruct(r, restType)
+			if err != nil {
+				return nil, true, err
+			}
+			fields[i] = binding{rest: true, name: name, restStruct: structName, restType: restType}
+			continue
+		}
 		// A nested pattern renames a source property into an inner pattern that binds
 		// against the value the property holds; its inner names are validated when the
 		// sub-pattern is bound, so it is routed straight through.
@@ -1972,6 +1998,22 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 		if err != nil {
 			return nil, true, err
 		}
+		if b.rest {
+			elts := make([]ast.Expr, 0, len(r.prog.Properties(b.restType)))
+			for _, pr := range r.prog.Properties(b.restType) {
+				field, ok := exportedField(pr.Name)
+				if !ok {
+					return nil, true, &NotYetLowerable{Reason: "an object destructuring rest property is not a Go field name"}
+				}
+				elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: &ast.SelectorExpr{X: rc, Sel: ident(field)}})
+			}
+			stmts = append(stmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident(b.name)},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(b.restStruct), Elts: elts}}},
+			})
+			continue
+		}
 		if b.nested != nil {
 			tmp := r.freshTemp()
 			stmts = append(stmts, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident(b.field)}}})
@@ -2008,6 +2050,16 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
+		// A named property bound only to be excluded from a rest is a common idiom,
+		// `{ a, ...rest }`, so a binding nothing reads takes the blank the ordinary
+		// variable path gives, keeping the Go declaration used.
+		if r.bindingUnused(b.info.bindNode) {
+			stmts = append(stmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident("_")},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{ident(b.name)},
+			})
+		}
 	}
 	return stmts, true, nil
 }
@@ -2468,13 +2520,44 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	}
 	elems := make([]objectAssignElem, len(props))
 	anyDefault := false
+	anyRest := false
 	for i, prop := range props {
+		// A rest property gathers the properties the pattern did not name into the existing
+		// target. On a fixed-shape source the target's type is that object minus the named
+		// properties, so it interns as its own struct and the gather is a struct literal
+		// copying each remaining field off the source, the assignment sibling of the
+		// declaration rest.
+		if restIdent, ok := r.objectRestElem(prop); ok {
+			if _, ok := localName(r.prog.Text(restIdent)); !ok {
+				return nil, true, &NotYetLowerable{Reason: "an object assignment rest target is not a Go identifier"}
+			}
+			restType := r.prog.TypeAt(restIdent)
+			if restType.Flags&frontend.TypeObject == 0 {
+				return nil, true, &NotYetLowerable{Reason: "an object assignment rest whose type is not a fixed-shape object is a later slice"}
+			}
+			if _, isArray := r.prog.ElementType(restType); isArray {
+				return nil, true, &NotYetLowerable{Reason: "an object assignment rest typed as an array is a later slice"}
+			}
+			structName, err := r.decls.internStruct(r, restType)
+			if err != nil {
+				return nil, true, err
+			}
+			elems[i] = objectAssignElem{rest: true, bindNode: restIdent, restStruct: structName, restType: restType}
+			anyRest = true
+			continue
+		}
 		el, err := r.classifyObjectAssignElem(prop)
 		if err != nil {
 			return nil, true, err
 		}
 		elems[i] = el
 		anyDefault = anyDefault || el.hasDefault
+	}
+	// A rest alongside a default combines the per-property fill with the gather, whose
+	// interleaving is a later slice; the rest with plain and renamed properties takes the
+	// parallel path below.
+	if anyRest && anyDefault {
+		return nil, true, &NotYetLowerable{Reason: "an object assignment that combines a rest with a default is a later slice"}
 	}
 	// A default turns the flat parallel assignment into a per-property fill, so the
 	// pattern with any default takes the block path; the default-free pattern keeps
@@ -2490,6 +2573,27 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 	names := make([]ast.Expr, 0, len(props))
 	values := make([]ast.Expr, 0, len(props))
 	for _, el := range elems {
+		if el.rest {
+			recv, err := r.lowerExpr(rhs)
+			if err != nil {
+				return nil, true, err
+			}
+			name, ok := localName(r.prog.Text(el.bindNode))
+			if !ok {
+				return nil, true, &NotYetLowerable{Reason: "object assignment rest target is not a Go identifier"}
+			}
+			elts := make([]ast.Expr, 0, len(r.prog.Properties(el.restType)))
+			for _, pr := range r.prog.Properties(el.restType) {
+				field, ok := exportedField(pr.Name)
+				if !ok {
+					return nil, true, &NotYetLowerable{Reason: "an object assignment rest property is not a Go field name"}
+				}
+				elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: &ast.SelectorExpr{X: recv, Sel: ident(field)}})
+			}
+			names = append(names, ident(name))
+			values = append(values, &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(el.restStruct), Elts: elts}})
+			continue
+		}
 		srcName, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}

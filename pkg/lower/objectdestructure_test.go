@@ -232,11 +232,62 @@ func TestObjectDestructureComputedKeySideEffectHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestObjectDestructureRestHandsBack proves a rest property hands back, since
-// gathering the remaining properties into an object needs the object model of phase 7.
-func TestObjectDestructureRestHandsBack(t *testing.T) {
+// TestObjectDestructureRestLowers proves an object rest property on a fixed-shape source
+// binds the named property by its field and gathers the rest into a struct literal of the
+// rest's own type, each remaining field copied off the receiver.
+func TestObjectDestructureRestLowers(t *testing.T) {
 	const src = "const pt = { x: 1, y: 2, z: 3 };\nconst { x, ...rest } = pt;\nconsole.log(x);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "x := pt.X") {
+		t.Errorf("named property did not lower to a field read:\n%s", source)
+	}
+	if !strings.Contains(source, "rest := &") || !strings.Contains(source, "Y: pt.Y") || !strings.Contains(source, "Z: pt.Z") {
+		t.Errorf("rest did not gather the remaining fields into a struct literal:\n%s", source)
+	}
+}
+
+// TestObjectDestructureRestRuns builds and runs an object rest declaration so the gathered
+// object holds exactly the properties the pattern did not name.
+func TestObjectDestructureRestRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const obj = { a: 1, b: 2, c: 3 };
+const { a, ...rest } = obj;
+console.log(a);
+console.log(JSON.stringify(rest));
+`
+	if got, want := runProgramGo(t, src), "1\n{\"b\":2,\"c\":3}\n"; got != want {
+		t.Fatalf("object rest declaration printed %q, want %q", got, want)
+	}
+}
+
+// TestObjectDestructureRestAfterRenameRuns proves the rest starts after a renamed named
+// property is consumed, gathering only the properties the pattern left over.
+func TestObjectDestructureRestAfterRenameRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const obj = { a: 1, b: 2, c: 3 };
+const { a: first, ...rest } = obj;
+console.log(first);
+console.log(JSON.stringify(rest));
+`
+	if got, want := runProgramGo(t, src), "1\n{\"b\":2,\"c\":3}\n"; got != want {
+		t.Fatalf("object rest after rename printed %q, want %q", got, want)
+	}
+}
+
+// TestObjectDestructureRestEmptyRuns proves a rest that follows every named property
+// gathers into an empty object.
+func TestObjectDestructureRestEmptyRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const obj = { a: 1, b: 2 };
+const { a, b, ...rest } = obj;
+console.log(JSON.stringify(rest));
+`
+	if got, want := runProgramGo(t, src), "{}\n"; got != want {
+		t.Fatalf("empty object rest printed %q, want %q", got, want)
+	}
 }
 
 // TestObjectDestructureCallSourceLowersToTemp proves a non-variable object source, a

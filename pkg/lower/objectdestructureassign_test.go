@@ -115,11 +115,32 @@ func TestObjectDestructureAssignComputedKeyHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestObjectDestructureAssignRestHandsBack proves a rest property hands back, since
-// gathering the remaining properties into an object needs the object model of phase 7.
-func TestObjectDestructureAssignRestHandsBack(t *testing.T) {
-	const src = "const o = { x: 1, y: 2, z: 3 };\nlet x = 0;\nlet rest = { y: 0, z: 0 };\n({ x, ...rest } = o);\nconsole.log(x);\n"
-	renderProgramHandBack(t, src)
+// TestObjectDestructureAssignRestLowers proves an object rest in an assignment stores the
+// gathered struct literal into the existing target beside the named property's parallel
+// assignment, each remaining field copied off the source.
+func TestObjectDestructureAssignRestLowers(t *testing.T) {
+	const src = "const o = { x: 1, y: 2, z: 3 };\nlet x = 0;\nlet rest = { y: 0, z: 0 };\n({ x, ...rest } = o);\nconsole.log(x);\nconsole.log(JSON.stringify(rest));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "x, rest = o.X, &") || !strings.Contains(source, "Y: o.Y") || !strings.Contains(source, "Z: o.Z") {
+		t.Errorf("rest assignment did not store the gathered struct beside the named target:\n%s", source)
+	}
+}
+
+// TestObjectDestructureAssignRestRuns builds and runs an object rest assignment so the
+// gathered object holds exactly the properties the pattern did not name.
+func TestObjectDestructureAssignRestRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const o = { a: 1, b: 2, c: 3 };
+let a = 0;
+let rest: { b: number; c: number } = { b: 0, c: 0 };
+({ a, ...rest } = o);
+console.log(a);
+console.log(JSON.stringify(rest));
+`
+	if got, want := runProgramGo(t, src), "1\n{\"b\":2,\"c\":3}\n"; got != want {
+		t.Fatalf("object rest assignment printed %q, want %q", got, want)
+	}
 }
 
 // TestObjectDestructureAssignCallSourceHandsBack proves a call source hands back, since
