@@ -707,6 +707,14 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 			val, err = r.objectLiteralContextual(valNode, fieldShape)
 		} else {
 			val, err = r.lowerExpr(valNode)
+			if err == nil && haveFieldShape && fieldShape.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+				// The field is a dynamic value.Value slot, which the inferred shape takes
+				// when the value flows into an untyped destructured binding. A static
+				// member value has to box into that slot the same way an argument crossing
+				// into an any parameter does, so a { a: 1 } for a value.Value field emits
+				// A: value.Number(1) rather than the untyped A: 1 that will not compile.
+				val, err = r.coerceToType(val, valNode, fieldShape)
+			}
 		}
 		if err != nil {
 			return nil, err
