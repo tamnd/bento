@@ -957,17 +957,42 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 			src:  "const dt = Temporal.PlainDateTime.from({ year: 2020, month: 1, day: 1, hour: 12 });\nconsole.log(dt.hour);",
 			want: "Temporal.PlainDateTime.from over a dynamic string or a property bag is a later slice",
 		},
-		{
-			name: "toPlainDate conversion",
-			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst d = dt.toPlainDate();\nconsole.log(d.day);",
-			want: "Temporal.PlainDateTime.prototype.toPlainDate is a later slice",
-		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := renderProgramHandBack(t, c.src)
 			if !strings.Contains(got, c.want) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestPlainDateTimeConversions pins the two simple half-conversions: toPlainDate lowers to
+// ToPlainDate and toPlainTime lowers to ToPlainTime, each a no-argument delegation whose result
+// the checker types as a PlainDate or PlainTime so a chained getter or toString routes on.
+func TestPlainDateTimeConversions(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "toPlainDate",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 5, 15, 13, 30);\nconst d = dt.toPlainDate();\nconsole.log(d.toString());",
+			want: ".ToPlainDate()",
+		},
+		{
+			name: "toPlainTime",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 5, 15, 13, 30);\nconst tm = dt.toPlainTime();\nconsole.log(tm.toString());",
+			want: ".ToPlainTime()",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("rendered program missing %q:\n%s", c.want, got)
 			}
 		})
 	}
