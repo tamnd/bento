@@ -1810,6 +1810,48 @@ func TestInstantCompareEquals(t *testing.T) {
 	}
 }
 
+// TestInstantAddSubtract checks Temporal.Instant.prototype.add and subtract fold a duration's
+// time part into the epoch count, negating for subtract, and reject the calendar units. Every
+// value was checked against @js-temporal/polyfill.
+func TestInstantAddSubtract(t *testing.T) {
+	base := NewInstant(bigInt(t, "1000000000000000000")) // 2001-09-09T01:46:40Z
+	dur := func(h, mi, s, ms, us, ns float64) *Duration {
+		return NewDuration(0, 0, 0, 0, h, mi, s, ms, us, ns)
+	}
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"add an hour", base.AddDuration(dur(1, 0, 0, 0, 0, 0)).ToString().ToGoString(), "2001-09-09T02:46:40Z"},
+		{"add hms", base.AddDuration(dur(1, 30, 15, 0, 0, 0)).ToString().ToGoString(), "2001-09-09T03:16:55Z"},
+		{"add subsecond", base.AddDuration(dur(0, 0, 0, 0, 0, 500)).ToString().ToGoString(), "2001-09-09T01:46:40.0000005Z"},
+		{"subtract two hours", base.AddDuration(dur(-2, 0, 0, 0, 0, 0)).ToString().ToGoString(), "2001-09-08T23:46:40Z"},
+		{"add a negative hour", base.AddDuration(dur(-1, 0, 0, 0, 0, 0)).ToString().ToGoString(), "2001-09-09T00:46:40Z"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// The calendar units are meaningless for an exact time, so each throws a RangeError.
+	calendar := []struct {
+		name string
+		dur  *Duration
+	}{
+		{"days", NewDuration(0, 0, 0, 1, 0, 0, 0, 0, 0, 0)},
+		{"weeks", NewDuration(0, 0, 1, 0, 0, 0, 0, 0, 0, 0)},
+		{"months", NewDuration(0, 1, 0, 0, 0, 0, 0, 0, 0, 0)},
+		{"years", NewDuration(1, 0, 0, 0, 0, 0, 0, 0, 0, 0)},
+	}
+	for _, tc := range calendar {
+		if !bagThrows(func() { base.AddDuration(tc.dur) }) {
+			t.Errorf("Instant add over a %s duration did not throw", tc.name)
+		}
+	}
+}
+
 // TestInstantFactories checks fromEpochMilliseconds, fromEpochNanoseconds, and from over
 // an Instant, plus that from returns a distinct copy.
 func TestInstantFactories(t *testing.T) {
