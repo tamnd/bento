@@ -226,6 +226,20 @@ func (r *Renderer) bindDynamicPattern(pat frontend.Node, recv ast.Expr, tok toke
 	return nil, &NotYetLowerable{Reason: "an untyped destructuring pattern that is neither an object nor an array is a later slice"}
 }
 
+// blankDynBinding appends `_ = name` when the dynamic pattern member bound as name is
+// a fresh declaration the body never reads. bindDynamicPattern reaches this binder only
+// from a destructured parameter or a destructured catch clause, both of which introduce
+// their names with := and would leave an unread member declared and not used in Go. The
+// blank is withheld unless the bind uses DEFINE, so a destructuring assignment, which
+// stores into existing names, is never touched, and bindingUnused only ever withholds
+// the blank, so a member read elsewhere keeps its use.
+func (r *Renderer) blankDynBinding(out []ast.Stmt, bindNode frontend.Node, name string, tok token.Token) []ast.Stmt {
+	if tok != token.DEFINE {
+		return out
+	}
+	return r.blankUnusedParamBinding(out, bindNode, name)
+}
+
 // bindDynamicArray binds an array pattern against a dynamic receiver. Each fixed
 // position reads through GetIndex and binds its name as a value.Value, the same indexed
 // read a dynamic element access lowers to, so an untyped array pattern reads its slots
@@ -278,9 +292,11 @@ func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.
 				return nil, err
 			}
 			out = append(out, fill...)
+			out = r.blankDynBinding(out, info.nameNode, name, tok)
 			continue
 		}
 		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
+		out = r.blankDynBinding(out, info.nameNode, name, tok)
 	}
 	return out, nil
 }
@@ -290,8 +306,8 @@ func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.
 // value.Value; a computed key reads through GetElem by the boxed key; a defaulted
 // property fills from its default when the source is undefined; a nested property binds
 // its inner pattern against the held source; and a trailing rest gathers the properties
-// the pattern did not name through ObjectRest. Each read is emitted unconditionally, the
-// same as the typed binder: an orphaned name is blanked by the shared unused-binding pass.
+// the pattern did not name through ObjectRest. Each read is emitted unconditionally, and a
+// name the body never reads is blanked by blankDynBinding so the entry binding compiles.
 func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token.Token) ([]ast.Stmt, error) {
 	elems := r.prog.Children(pat)
 	if len(elems) == 0 {
@@ -315,6 +331,7 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 				return nil, &NotYetLowerable{Reason: "an untyped destructuring rest target is not a Go identifier"}
 			}
 			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{dynObjectRest(recv, omit)}})
+			out = r.blankDynBinding(out, node, name, tok)
 			continue
 		}
 		// A nested property ({p: {x}}) reads the source into a temporary, then binds the inner
@@ -344,6 +361,7 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 			}
 			computed = true
 			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{dynGetElem(recv, key)}})
+			out = r.blankDynBinding(out, valNode, name, tok)
 			continue
 		}
 		info, err := r.classifyObjectElem(el)
@@ -363,9 +381,11 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 				return nil, err
 			}
 			out = append(out, fill...)
+			out = r.blankDynBinding(out, info.bindNode, name, tok)
 			continue
 		}
 		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
+		out = r.blankDynBinding(out, info.bindNode, name, tok)
 	}
 	return out, nil
 }
