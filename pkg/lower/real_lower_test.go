@@ -101,6 +101,13 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2703 {
 			continue
 		}
+		// 2367 (a comparison the checker judges to have no type overlap) is admitted
+		// because the equality still runs at runtime: a static primitive pair lowers
+		// through value.LooseEquals and anything else hands back, so mirror the front
+		// door here too.
+		if d.Code == 2367 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog

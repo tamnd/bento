@@ -1299,6 +1299,18 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return expr, nil
 	}
 
+	// A loose == or != over two static primitives the operator table cannot fold,
+	// a string on either side or a pair whose kinds differ, runs the abstract
+	// equality comparison that coerces before it compares. It routes here, after the
+	// dynamic and nullish paths, so only a static-primitive pair the operator table
+	// would hand back reaches it; a two-number or two-boolean pair is excluded and
+	// keeps its native Go comparison below.
+	if expr, handled, err := r.staticPrimitiveEquality(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	goOp, err := r.binaryOp(opText, left, right)
 	if err != nil {
 		return nil, err
@@ -1784,6 +1796,55 @@ func (r *Renderer) isNullOrUndefined(n frontend.Node) bool {
 	}
 	f := r.prog.TypeAt(n).Flags
 	return f == frontend.TypeNull || f == frontend.TypeUndefined
+}
+
+// staticPrimitiveEquality lowers a loose == or != over two statically typed
+// primitives that the operator table cannot fold: a string on either side, or a
+// pair whose kinds differ, so the abstract equality comparison has to coerce a
+// boolean or a string against a number before it compares. Both sides box and
+// route through value.LooseEquals, so 1 == "1" and true == 1 are true, "a" == "b"
+// is false, and a != negates the same call. A pair the operator table already
+// lowers natively, two numbers or two booleans, is excluded so it keeps its plain
+// Go comparison. It reports handled=false for any other operator or when either
+// operand is not a static primitive, leaving the dynamic path, the symbol path,
+// and the operator table their own cases.
+func (r *Renderer) staticPrimitiveEquality(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	switch opText {
+	case "==", "!=":
+	default:
+		return nil, false, nil
+	}
+	if !r.isPrimitiveEqOperand(left) || !r.isPrimitiveEqOperand(right) {
+		return nil, false, nil
+	}
+	if r.isNumber(left) && r.isNumber(right) {
+		return nil, false, nil
+	}
+	if r.isBool(left) && r.isBool(right) {
+		return nil, false, nil
+	}
+	l, err := r.boxOperand(left)
+	if err != nil {
+		return nil, false, err
+	}
+	rr, err := r.boxOperand(right)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	eq := &ast.CallExpr{Fun: sel("value", "LooseEquals"), Args: []ast.Expr{l, rr}}
+	if opText == "!=" {
+		return &ast.UnaryExpr{Op: token.NOT, X: eq}, true, nil
+	}
+	return eq, true, nil
+}
+
+// isPrimitiveEqOperand reports whether n is one of the static primitives a static
+// equality coerces and compares directly: a number, a string, or a boolean. A
+// dynamic value, a bigint, a symbol, null, undefined, or a non-primitive is not one
+// of these and takes its own equality path.
+func (r *Renderer) isPrimitiveEqOperand(n frontend.Node) bool {
+	return r.isNumber(n) || r.isString(n) || r.isBool(n)
 }
 
 // referenceIdentityOp recognizes an equality between two operands of the same

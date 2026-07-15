@@ -296,6 +296,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedDeleteForm[d.Code] {
 			continue
 		}
+		if toleratedComparison[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -444,6 +447,23 @@ var toleratedArithOperand = map[int]bool{
 // absent, so delete of a bare variable still gates.
 var toleratedDeleteForm = map[int]bool{
 	2703: true, // The operand of a 'delete' operator must be a property reference.
+}
+
+// toleratedComparison is the set of checker diagnostic codes bento admits because
+// an equality comparison the checker judges pointless still has defined run-time
+// behavior the lowerer reproduces. 2367 ("This comparison appears to be
+// unintentional because the types 'X' and 'Y' have no overlap") flags == or != (and
+// their strict twins) between operands whose static types the checker cannot see
+// overlapping, the shape a literal-typed const or a mixed-primitive comparison
+// takes: 1 == "1", "a" == "b", true == 1. JavaScript still runs the abstract
+// equality comparison, so the renderer lowers a static primitive pair through
+// value.LooseEquals (a mixed pair coercing, a string pair comparing by code unit)
+// and a two-number or two-boolean pair through its native Go comparison. A pair the
+// lowerer cannot yet model, an object operand with no dynamic box or a strict
+// comparison outside the primitive set, still hands back, so admitting the code lets
+// the runnable forms through and never emits Go that fails to compile.
+var toleratedComparison = map[int]bool{
+	2367: true, // This comparison appears to be unintentional because the types 'X' and 'Y' have no overlap.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
