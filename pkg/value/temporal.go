@@ -2951,6 +2951,72 @@ func zonedDateTimeDifference(from, to *ZonedDateTime, largestUnit string) *Durat
 	return NewDuration(float64(years), float64(months), float64(weeks), float64(days), t.hours, t.minutes, t.seconds, t.milliseconds, t.microseconds, t.nanoseconds)
 }
 
+// startOfDayInstant returns the first instant of the given local calendar day in the receiver's
+// zone: the wall-clock midnight resolved through the compatible disambiguation, so an ordinary day
+// starts at 00:00, a fall-back day whose midnight occurs twice takes the earlier, and a rare
+// spring-forward at midnight takes the instant just after the gap. It is the building block the
+// day-unit round and the day-length query lean on.
+func (z *ZonedDateTime) startOfDayInstant(year, month, day int) *big.Int {
+	return disambiguateCompatible(z.loc, wallNanoseconds(isoParse{year: year, month: month, day: day}))
+}
+
+// resolvePreferOffset resolves a wall-clock count to an instant, preferring the receiver's current
+// offset: when the reading is ambiguous, a fall-back overlap, and one of its instants carries that
+// same offset, that instant is kept, so rounding a value inside an overlap stays on the branch it
+// started on. Otherwise it falls to the compatible disambiguation. This is the InterpretISODateTime
+// offset-prefer behavior the specification's round uses.
+func (z *ZonedDateTime) resolvePreferOffset(localCount *big.Int, preferOffsetNs int64) *big.Int {
+	for _, cand := range possibleInstants(z.loc, localCount) {
+		off := new(big.Int).Sub(localCount, cand)
+		if off.IsInt64() && off.Int64() == preferOffsetNs {
+			return cand
+		}
+	}
+	return disambiguateCompatible(z.loc, localCount)
+}
+
+// Round implements Temporal.ZonedDateTime.prototype.round. A day smallestUnit rounds the instant
+// within the zoned day, whose length the daylight-saving transitions stretch or shrink: the day
+// progress from the day's start is rounded to the whole day length, twenty-three or twenty-five
+// hours on a transition day rather than a flat twenty-four, and lands on this midnight or the next.
+// A time smallestUnit rounds the wall clock the way a PlainDateTime does, carrying past midnight
+// when it must, and the rounded wall clock re-resolves to an instant preferring the original offset,
+// so a value rounded inside a fall-back overlap keeps the branch it was on. Only increment one is
+// allowed for the day unit; a time increment must divide its next larger unit.
+func (z *ZonedDateTime) Round(smallestUnit string, increment float64, roundingMode string) *ZonedDateTime {
+	inc := int64(toIntegerWithTruncation(increment))
+	wall := z.localDateTime()
+	if smallestUnit == "day" {
+		if inc != 1 {
+			Throw(NewRangeError(FromGoString("Temporal.ZonedDateTime.prototype.round roundingIncrement is out of range")))
+		}
+		startNs := z.startOfDayInstant(wall.date.year, wall.date.month, wall.date.day)
+		ny, nm, nd := addISODate(wall.date.year, wall.date.month, wall.date.day, 0, 0, 0, big.NewInt(1), "constrain")
+		endNs := z.startOfDayInstant(ny, nm, nd)
+		dayLengthNs := new(big.Int).Sub(endNs, startNs)
+		dayProgressNs := new(big.Int).Sub(z.ns, startNs)
+		rounded := roundBigToIncrement(dayProgressNs, dayLengthNs, roundingMode)
+		result := new(big.Int).Add(startNs, rounded)
+		validateEpochNanoseconds(result)
+		return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+	}
+	unitNs, dividend, _ := plainTimeUnitInfo(smallestUnit)
+	if inc < 1 || inc >= dividend || dividend%inc != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.ZonedDateTime.prototype.round roundingIncrement is out of range")))
+	}
+	quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
+	rounded := roundBigToIncrement(wall.time.dayNanos(), quantum, roundingMode)
+	dayCarry := new(big.Int)
+	timeOfDay := new(big.Int)
+	dayCarry.DivMod(rounded, nsPerDay, timeOfDay)
+	y, m, d := addISODate(wall.date.year, wall.date.month, wall.date.day, 0, 0, 0, dayCarry, "constrain")
+	localCount := new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(y, m, d))), nsPerDay)
+	localCount.Add(localCount, timeOfDay)
+	result := z.resolvePreferOffset(localCount, int64(z.offsetSeconds())*1_000_000_000)
+	validateEpochNanoseconds(result)
+	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
 // Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two
 // zoned date-times are equal when they name the same instant in the same zone under the same
 // calendar, so the check is the count, the canonical zone identifier, and the calendar.

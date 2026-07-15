@@ -2209,6 +2209,34 @@ func TestZonedDateTimeDifference(t *testing.T) {
 	}
 }
 
+func TestZonedDateTimeRound(t *testing.T) {
+	cases := []struct {
+		name      string
+		base      string
+		unit      string
+		increment float64
+		mode      string
+		want      string
+	}{
+		{"hour down", "2024-06-15T12:29:00[America/New_York]", "hour", 1, "halfExpand", "2024-06-15T12:00:00-04:00[America/New_York]"},
+		{"hour up", "2024-06-15T12:30:00[America/New_York]", "hour", 1, "halfExpand", "2024-06-15T13:00:00-04:00[America/New_York]"},
+		{"fifteen minutes", "2024-06-15T12:31:40[America/New_York]", "minute", 15, "halfExpand", "2024-06-15T12:30:00-04:00[America/New_York]"},
+		{"day down", "2024-06-15T11:00:00[America/New_York]", "day", 1, "halfExpand", "2024-06-15T00:00:00-04:00[America/New_York]"},
+		{"day up", "2024-06-15T13:00:00[America/New_York]", "day", 1, "halfExpand", "2024-06-16T00:00:00-04:00[America/New_York]"},
+		{"day on the twenty-three-hour spring day", "2024-03-10T12:00:00[America/New_York]", "day", 1, "halfExpand", "2024-03-10T00:00:00-05:00[America/New_York]"},
+		{"day on the twenty-five-hour fall day", "2024-11-03T12:00:00[America/New_York]", "day", 1, "halfExpand", "2024-11-04T00:00:00-05:00[America/New_York]"},
+		{"day ceil", "2024-06-15T00:00:01[America/New_York]", "day", 1, "ceil", "2024-06-16T00:00:00-04:00[America/New_York]"},
+		{"hour into overlap keeps later offset", "2024-11-03T01:40:00-05:00[America/New_York]", "hour", 1, "floor", "2024-11-03T01:00:00-05:00[America/New_York]"},
+		{"hour up out of overlap", "2024-11-03T01:40:00-05:00[America/New_York]", "hour", 1, "halfExpand", "2024-11-03T02:00:00-05:00[America/New_York]"},
+	}
+	for _, c := range cases {
+		got := ZonedDateTimeFromString(c.base).Round(c.unit, c.increment, c.mode).ToString().ToGoString()
+		if got != c.want {
+			t.Errorf("%s: Round = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // TestZonedDateTimeRejects checks the range guard and the unknown-zone guard both throw a
 // RangeError.
 func TestZonedDateTimeRejects(t *testing.T) {
