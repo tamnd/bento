@@ -686,9 +686,11 @@ func zonedDateTimeAccessor(prop string) (method string, ok bool) {
 // slice, so a call with arguments beyond the ones handled hands back. add and subtract move the
 // value by a duration, the calendar part added in the calendar and the exact-time part folded on
 // as nanoseconds after the offset re-resolves, reading the overflow option the same way the plain
-// date-time movers do. The remaining rounding, the reshaping (with, withPlainTime, withTimeZone,
-// withCalendar, startOfDay), the difference (until, since), the transition queries, and
-// toLocaleString hand back with a named reason.
+// date-time movers do. until and since return the difference under a largestUnit that spans the
+// calendar and exact-time units and defaults to hour, and round rounds the wall clock and re-resolves
+// the offset over the shared day-and-time round-options reader. The remaining reshaping (with,
+// withPlainTime, withTimeZone, withCalendar, startOfDay), the transition queries, and toLocaleString
+// hand back with a named reason.
 func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "equals":
@@ -770,6 +772,17 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 			name = "Since"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: []ast.Expr{other, stringLit(largestUnit)}}, nil
+	case "round":
+		what := "Temporal.ZonedDateTime.prototype.round"
+		unit, increment, mode, err := r.plainDateTimeRoundOptions(what, argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{stringLit(unit), increment, stringLit(mode)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " is a later slice"}
 	}

@@ -1815,6 +1815,21 @@ console.log(a.since(b, { largestUnit: "months" }).months);`
 	}
 }
 
+// TestZonedDateTimeRound pins round over a ZonedDateTime to the runtime Round, the smallestUnit,
+// increment expression, and mode read through the shared day-and-time round-options reader.
+func TestZonedDateTimeRound(t *testing.T) {
+	const src = `const z = new Temporal.ZonedDateTime(0n, "UTC");
+console.log(z.round("hour").epochMilliseconds);
+console.log(z.round({ smallestUnit: "minute", roundingIncrement: 15, roundingMode: "ceil" }).epochMilliseconds);
+console.log(z.round({ smallestUnit: "day" }).epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Round(", `"hour"`, `"minute"`, `"ceil"`, `"day"`, `"halfExpand"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeStatics pins compare and from over a ZonedDateTime, each to its value
 // function.
 func TestZonedDateTimeStatics(t *testing.T) {
