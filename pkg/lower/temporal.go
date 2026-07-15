@@ -1556,24 +1556,29 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 }
 
 // dateFieldKeys are the numeric calendar-date fields PlainDate.prototype.with reshapes,
-// in the order WithFields takes them. monthCode and the era fields are recognized keys
-// too, but they resolve a month or year through the calendar, which a later slice carries,
-// so the bag reader hands back on them rather than listing them here.
+// in the order WithFields takes them. monthCode is a recognized key too, but it names the
+// month through a code the reader resolves to a number, so the bag reader handles a literal
+// monthCode itself rather than listing it here. The era fields resolve a year through the
+// calendar's era table, which needs a reverse nengo lookup and cross-field validation the
+// runtime does not carry, so the reader hands back on them.
 var dateFieldKeys = [3]string{"year", "month", "day"}
 
 // plainDateBagFields reads a PlainDate.prototype.with bag at compile time and returns the
-// year, month, and day as present or absent optionals in WithFields order. A present field
-// must be a number; an absent one becomes None so WithFields keeps the receiver's value. An
-// item that is not an object literal, a spread or shorthand member, a repeated field, a
-// non-number value, an empty bag (a TypeError at run time), or a key outside the numeric
-// three, including monthCode and the era fields, hands back rather than emitting a wrong or
-// partial reshape.
+// year, month, and day as present or absent optionals in WithFields order. A present year,
+// month, or day must be a number, and a monthCode must be a string literal of the form "MNN"
+// that resolves to its month, the same month the getter reports since the hosted calendars
+// have no leap month. An absent field becomes None so WithFields keeps the receiver's value.
+// A bag carrying both month and monthCode, an item that is not an object literal, a spread or
+// shorthand member, a repeated field, a non-number value, an empty bag (a TypeError at run
+// time), a dynamic or malformed monthCode, or a key outside the numeric three, including the
+// era fields, hands back rather than emitting a wrong or partial reshape.
 func (r *Renderer) plainDateBagFields(what string, n frontend.Node) ([3]ast.Expr, error) {
 	var fields [3]ast.Expr
 	if n.Kind() != frontend.NodeObjectLiteralExpression {
 		return fields, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
 	}
 	var seen [3]bool
+	monthCodeSeen := false
 	present := false
 	for _, member := range r.prog.Children(n) {
 		if member.Kind() != frontend.NodeUnknown {
@@ -1584,6 +1589,24 @@ func (r *Renderer) plainDateBagFields(what string, n frontend.Node) ([3]ast.Expr
 			return fields, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
 		}
 		key := r.prog.Text(kids[0])
+		if key == "monthCode" {
+			if seen[1] {
+				return fields, &NotYetLowerable{Reason: what + " over a bag carrying both month and monthCode is a later slice"}
+			}
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return fields, &NotYetLowerable{Reason: what + " over a bag whose monthCode is dynamic is a later slice"}
+			}
+			month, ok := monthFromCode(lit)
+			if !ok {
+				return fields, &NotYetLowerable{Reason: what + " over a bag whose monthCode " + lit + " is not a plain ISO month code is a later slice"}
+			}
+			fields[1] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(month)}}}
+			seen[1] = true
+			monthCodeSeen = true
+			present = true
+			continue
+		}
 		idx := -1
 		for i, k := range dateFieldKeys {
 			if k == key {
@@ -1595,6 +1618,9 @@ func (r *Renderer) plainDateBagFields(what string, n frontend.Node) ([3]ast.Expr
 			return fields, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
 		}
 		if seen[idx] {
+			if idx == 1 && monthCodeSeen {
+				return fields, &NotYetLowerable{Reason: what + " over a bag carrying both month and monthCode is a later slice"}
+			}
 			return fields, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
 		}
 		if !r.isNumber(kids[1]) {
@@ -1894,17 +1920,20 @@ var dateTimeFieldKeys = [9]string{"year", "month", "day", "hour", "minute", "sec
 
 // plainDateTimeBagFields reads a PlainDateTime.prototype.with bag at compile time and returns the
 // year, month, day, and the six time fields as present or absent optionals in WithFields order. A
-// present field must be a number; an absent one becomes None so WithFields keeps the receiver's
-// value. An item that is not an object literal, a spread or shorthand member, a repeated field, a
-// non-number value, an empty bag (a TypeError at run time), or a key outside the numeric nine,
-// including monthCode and the era fields, hands back rather than emitting a wrong or partial
-// reshape.
+// present field must be a number, and a monthCode must be a string literal of the form "MNN" that
+// resolves to its month, the same month the getter reports since the hosted calendars have no leap
+// month. An absent field becomes None so WithFields keeps the receiver's value. A bag carrying both
+// month and monthCode, an item that is not an object literal, a spread or shorthand member, a
+// repeated field, a non-number value, an empty bag (a TypeError at run time), a dynamic or malformed
+// monthCode, or a key outside the numeric nine, including the era fields, hands back rather than
+// emitting a wrong or partial reshape.
 func (r *Renderer) plainDateTimeBagFields(what string, n frontend.Node) ([9]ast.Expr, error) {
 	var fields [9]ast.Expr
 	if n.Kind() != frontend.NodeObjectLiteralExpression {
 		return fields, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
 	}
 	var seen [9]bool
+	monthCodeSeen := false
 	present := false
 	for _, member := range r.prog.Children(n) {
 		if member.Kind() != frontend.NodeUnknown {
@@ -1915,6 +1944,24 @@ func (r *Renderer) plainDateTimeBagFields(what string, n frontend.Node) ([9]ast.
 			return fields, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
 		}
 		key := r.prog.Text(kids[0])
+		if key == "monthCode" {
+			if seen[1] {
+				return fields, &NotYetLowerable{Reason: what + " over a bag carrying both month and monthCode is a later slice"}
+			}
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return fields, &NotYetLowerable{Reason: what + " over a bag whose monthCode is dynamic is a later slice"}
+			}
+			month, ok := monthFromCode(lit)
+			if !ok {
+				return fields, &NotYetLowerable{Reason: what + " over a bag whose monthCode " + lit + " is not a plain ISO month code is a later slice"}
+			}
+			fields[1] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(month)}}}
+			seen[1] = true
+			monthCodeSeen = true
+			present = true
+			continue
+		}
 		idx := -1
 		for i, k := range dateTimeFieldKeys {
 			if k == key {
@@ -1926,6 +1973,9 @@ func (r *Renderer) plainDateTimeBagFields(what string, n frontend.Node) ([9]ast.
 			return fields, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
 		}
 		if seen[idx] {
+			if idx == 1 && monthCodeSeen {
+				return fields, &NotYetLowerable{Reason: what + " over a bag carrying both month and monthCode is a later slice"}
+			}
 			return fields, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
 		}
 		if !r.isNumber(kids[1]) {

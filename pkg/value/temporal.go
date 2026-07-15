@@ -385,8 +385,9 @@ func (pd *PlainDate) Since(other *PlainDate, largestUnit string) *Duration {
 // adding 1911; the other hosted calendars count the ISO year directly. Under constrain the
 // month clamps to 1..12 and the day to that month's length, so with month 2 over January 31
 // lands on the last day of February; under reject an out-of-range field throws a RangeError.
-// monthCode and the era fields are not read here, the lowerer hands back a bag that carries
-// them. The receiver is unchanged.
+// A literal monthCode the lowerer resolves to its numeric month before the call, the same
+// month the getter reports since the hosted calendars have no leap month; the era fields the
+// lowerer hands back. The receiver is unchanged.
 func (pd *PlainDate) WithFields(year, month, day Opt[float64], overflow string) *PlainDate {
 	calYear := toIntegerWithTruncation(year.Or(float64(pd.displayYear())))
 	m := toIntegerWithTruncation(month.Or(float64(pd.month)))
@@ -1406,9 +1407,9 @@ func (pdt *PlainDateTime) ToZonedDateTime(timeZone, disambiguation string) *Zone
 // omitted field keeps its current value. The date half regulates exactly as PlainDate.with, so the
 // year is read in the receiver's calendar reckoning and the day clamps to the resulting month's
 // length under constrain; the time half clamps to its ISO maxima under constrain. Under reject an
-// out-of-range field in either half throws a RangeError. monthCode and the era fields are not read
-// here, the lowerer hands back a bag that carries them. The receiver is unchanged and its calendar
-// carries through.
+// out-of-range field in either half throws a RangeError. A literal monthCode the lowerer resolves to
+// its numeric month before the call; the era fields the lowerer hands back. The receiver is
+// unchanged and its calendar carries through.
 func (pdt *PlainDateTime) WithFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], overflow string) *PlainDateTime {
 	date := pdt.date.WithFields(year, month, day, overflow)
 	base := [6]float64{

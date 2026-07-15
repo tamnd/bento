@@ -194,6 +194,11 @@ func TestPlainDateWith(t *testing.T) {
 			src:   "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ day: 40 }, { overflow: \"reject\" }).day);",
 			wants: []string{".WithFields(", `"reject"`},
 		},
+		{
+			name:  "a monthCode resolves to its month",
+			src:   "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ monthCode: \"M03\" }).day);",
+			wants: []string{".WithFields(", "value.Some[float64](3)", "value.None[float64]()"},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -320,9 +325,9 @@ func TestPlainDateHandBacks(t *testing.T) {
 			want: "Temporal.PlainDate.prototype.until with the rounding option smallestUnit is a later slice",
 		},
 		{
-			name: "with a monthCode field",
-			src:  "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ monthCode: \"M02\" }).day);",
-			want: "Temporal.PlainDate.prototype.with over a bag with the field monthCode is a later slice",
+			name: "with an era field",
+			src:  "const d = new Temporal.PlainDate(2020, 1, 31);\nconsole.log(d.with({ era: \"gregory\", eraYear: 2000 }).day);",
+			want: "Temporal.PlainDate.prototype.with over a bag with the field era is a later slice",
 		},
 		{
 			name: "from a property bag with a monthCode field",
@@ -1049,9 +1054,9 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "with a monthCode field",
-			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.with({ monthCode: \"M02\" });\nconsole.log(e.month);",
-			want: "Temporal.PlainDateTime.prototype.with over a bag with the field monthCode is a later slice",
+			name: "with an era field",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.with({ era: \"gregory\", eraYear: 2000 });\nconsole.log(e.month);",
+			want: "Temporal.PlainDateTime.prototype.with over a bag with the field era is a later slice",
 		},
 		{
 			name: "from a dynamic string",
@@ -1161,6 +1166,11 @@ func TestPlainDateTimeWith(t *testing.T) {
 			name: "overflow reject threads",
 			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 31, 13, 30);\nconsole.log(dt.with({ month: 2 }, { overflow: \"reject\" }).toString());",
 			want: "\"reject\")",
+		},
+		{
+			name: "a monthCode resolves to its month",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 31, 13, 30);\nconsole.log(dt.with({ monthCode: \"M03\" }).toString());",
+			want: "value.Some[float64](3), value.None[float64]()",
 		},
 	}
 	for _, c := range cases {
