@@ -108,6 +108,13 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2367 {
 			continue
 		}
+		// 2464 (a computed property name typed outside string/number/symbol/any) is
+		// admitted because the key still runs ToPropertyKey at runtime: a not-fixed
+		// literal boxes and emits SetKeyed over the boxed key, and a key the renderer
+		// cannot box hands back, so mirror the front door here too.
+		if d.Code == 2464 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog

@@ -299,6 +299,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedComparison[d.Code] {
 			continue
 		}
+		if toleratedComputedKey[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -464,6 +467,22 @@ var toleratedDeleteForm = map[int]bool{
 // the runnable forms through and never emits Go that fails to compile.
 var toleratedComparison = map[int]bool{
 	2367: true, // This comparison appears to be unintentional because the types 'X' and 'Y' have no overlap.
+}
+
+// toleratedComputedKey is the set of checker diagnostic codes bento admits because
+// an object literal's computed property name has a defined run-time key even when
+// the checker rejects its static type. 2464 ("A computed property name must be of
+// type 'string', 'number', 'symbol', or 'any'") flags a computed key `[expr]`
+// whose expression is typed something outside that set, a boolean being the common
+// case. JavaScript still evaluates the key and runs ToPropertyKey on it, turning a
+// boolean into "true"/"false" and any other value into its string form, so an
+// object literal carrying such a key is not statically fixed and lowers through the
+// dynamic bag: the renderer boxes the literal and emits SetKeyed over the boxed key,
+// whose SetElem runs the same ToString the language does. A key the renderer cannot
+// box, an object-typed key, still hands back to a later slice, so admitting the code
+// lets the runnable forms through and never emits Go that fails to compile.
+var toleratedComputedKey = map[int]bool{
+	2464: true, // A computed property name must be of type 'string', 'number', 'symbol', or 'any'.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
