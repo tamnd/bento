@@ -109,6 +109,47 @@ func TestTruthyOptionalStringInlines(t *testing.T) {
 	}
 }
 
+// TestTruthyOptionalObjectInlines pins the non-primitive inner: an optional over a
+// shape (or array, or class instance) the checker proved always truthy when present
+// tests presence alone, so the emitted condition is just !x.IsUndefined() with no inner
+// ToBoolean, because a present object has no falsy member.
+func TestTruthyOptionalObjectInlines(t *testing.T) {
+	src := "function f(x?: { a: number }): number { if (x) { return 1; } return 0; }\nconsole.log(f({ a: 1 }));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if !x.IsUndefined() {") {
+		t.Errorf("optional object condition did not reduce to the presence test alone:\n%s", source)
+	}
+	if strings.Contains(source, "x.Get()") {
+		t.Errorf("optional object condition spelled an inner test it should not:\n%s", source)
+	}
+}
+
+// TestTruthyOptionalObjectRuns builds and runs an optional over an object shape and an
+// array across the boolean positions and matches the oracle: an absent option is falsy
+// and any present object or array is truthy, since neither carries a falsy member.
+func TestTruthyOptionalObjectRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function shape(x?: { a: number }): string {
+  if (x) {
+    return "y";
+  }
+  return "n";
+}
+function arr(x?: number[]): string {
+  return x ? "some" : "none";
+}
+console.log(shape({ a: 1 }));
+console.log(shape());
+console.log(arr([1]));
+console.log(arr());
+`
+	got := runProgramGo(t, src)
+	want := "y\nn\nsome\nnone\n"
+	if got != want {
+		t.Fatalf("optional object truthiness program printed %q, want %q", got, want)
+	}
+}
+
 // TestTruthyOptionalNonRepeatableHandsBack pins that an optional whose evaluation has
 // a side effect, a Map.get here, cannot inline: the presence test and the inner test
 // each name the operand, so a non-repeatable one keeps the handback rather than fire
