@@ -1830,6 +1830,23 @@ console.log(z.round({ smallestUnit: "day" }).epochMilliseconds);`
 	}
 }
 
+// TestZonedDateTimeWithFamily pins the reshaping methods to their runtime calls: with overlays
+// date and time fields through WithFields, withPlainTime replaces the time, withTimeZone re-homes
+// the instant onto a new zone, and withCalendar over a literal iso8601 is the identity WithCalendar.
+func TestZonedDateTimeWithFamily(t *testing.T) {
+	const src = `const z = Temporal.ZonedDateTime.from("2024-06-15T12:30:45[America/New_York]");
+console.log(z.with({ hour: 8 }).toString());
+console.log(z.withPlainTime(new Temporal.PlainTime(9, 15)).toString());
+console.log(z.withTimeZone("Asia/Tokyo").toString());
+console.log(z.withCalendar("iso8601").toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".WithFields(", ".WithPlainTime(", ".WithTimeZone(", ".WithCalendar("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeStatics pins compare and from over a ZonedDateTime, each to its value
 // function.
 func TestZonedDateTimeStatics(t *testing.T) {
@@ -1878,9 +1895,14 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 			want: "Temporal.ZonedDateTime.prototype.add with a non-literal overflow option is a later slice",
 		},
 		{
-			name: "with reshape",
-			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.with({ hour: 3 });\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.ZonedDateTime.prototype.with is a later slice",
+			name: "with an offset field",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.with({ offset: \"+01:00\" });\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.with over a bag with the field offset is a later slice",
+		},
+		{
+			name: "withCalendar to a non-ISO calendar",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.withCalendar(\"gregory\");\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar other than a literal iso8601 is a later slice",
 		},
 		{
 			name: "startOfDay",

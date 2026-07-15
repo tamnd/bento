@@ -783,6 +783,65 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{stringLit(unit), increment, stringLit(mode)}}, nil
+	case "with":
+		what := "Temporal.ZonedDateTime.prototype.with"
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: what + " takes at least one argument"}
+		}
+		fields, err := r.plainDateTimeBagFields(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		args := append(fields[:], stringLit(overflow))
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithFields")}, Args: args}, nil
+	case "withPlainTime":
+		what := "Temporal.ZonedDateTime.prototype.withPlainTime"
+		time, err := r.plainDateTimeWithPlainTimeArg(what, argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithPlainTime")}, Args: []ast.Expr{time}}, nil
+	case "withTimeZone":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.withTimeZone takes exactly one argument"}
+		}
+		tz, ok, err := r.timeZoneStringArg(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.withTimeZone over a time zone that is not a string is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithTimeZone")}, Args: []ast.Expr{tz}}, nil
+	case "withCalendar":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.withCalendar takes exactly one argument"}
+		}
+		lit, ok := r.stringLiteralValue(argNodes[0])
+		if !ok || (!strings.EqualFold(lit, "iso8601") && !strings.EqualFold(lit, "iso")) {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar other than a literal iso8601 is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithCalendar")}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " is a later slice"}
 	}
