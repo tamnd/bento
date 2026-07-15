@@ -661,8 +661,8 @@ func (r *Renderer) newInstant(argNodes []frontend.Node) (ast.Expr, error) {
 // method, and the wall-clock getters are the union of the PlainDate and PlainTime getters,
 // answered off the local reading in the zone, so the calendar-dependent ones (era, eraYear,
 // weekOfYear, yearOfWeek) map to a method returning a value.Opt the member read boxes. The
-// day-length getter hoursInDay needs the day-boundary offset math this slice does not carry,
-// so it is absent and hands back.
+// day-length getter hoursInDay reads the length of the local day, twenty-four hours except across a
+// daylight-saving transition, off the two adjacent midnights.
 func zonedDateTimeAccessor(prop string) (method string, ok bool) {
 	switch prop {
 	case "epochMilliseconds":
@@ -675,6 +675,8 @@ func zonedDateTimeAccessor(prop string) (method string, ok bool) {
 		return "Offset", true
 	case "offsetNanoseconds":
 		return "OffsetNanoseconds", true
+	case "hoursInDay":
+		return "HoursInDay", true
 	}
 	return plainDateTimeAccessor(prop)
 }
@@ -689,8 +691,8 @@ func zonedDateTimeAccessor(prop string) (method string, ok bool) {
 // date-time movers do. until and since return the difference under a largestUnit that spans the
 // calendar and exact-time units and defaults to hour, and round rounds the wall clock and re-resolves
 // the offset over the shared day-and-time round-options reader. The remaining reshaping (with,
-// withPlainTime, withTimeZone, withCalendar, startOfDay), the transition queries, and toLocaleString
-// hand back with a named reason.
+// withPlainTime, withTimeZone, withCalendar) and startOfDay lower, while the transition queries and
+// toLocaleString hand back with a named reason.
 func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "equals":
@@ -842,6 +844,15 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithCalendar")}}, nil
+	case "startOfDay":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.startOfDay takes no arguments"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("StartOfDay")}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " is a later slice"}
 	}

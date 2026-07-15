@@ -1847,6 +1847,20 @@ console.log(z.withCalendar("iso8601").toString());`
 	}
 }
 
+// TestZonedDateTimeDayQueries pins the day-length queries: startOfDay lowers to the runtime
+// StartOfDay and the hoursInDay getter reads through the runtime HoursInDay.
+func TestZonedDateTimeDayQueries(t *testing.T) {
+	const src = `const z = Temporal.ZonedDateTime.from("2024-03-10T15:00:00[America/New_York]");
+console.log(z.startOfDay().toString());
+console.log(z.hoursInDay);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".StartOfDay(", ".HoursInDay("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeStatics pins compare and from over a ZonedDateTime, each to its value
 // function.
 func TestZonedDateTimeStatics(t *testing.T) {
@@ -1905,9 +1919,14 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 			want: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar other than a literal iso8601 is a later slice",
 		},
 		{
-			name: "startOfDay",
-			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.startOfDay();\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.ZonedDateTime.prototype.startOfDay is a later slice",
+			name: "getTimeZoneTransition",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nz.getTimeZoneTransition(\"next\");",
+			want: "Temporal.ZonedDateTime.prototype.getTimeZoneTransition is a later slice",
+		},
+		{
+			name: "toLocaleString",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconsole.log(z.toLocaleString());",
+			want: "Temporal.ZonedDateTime.prototype.toLocaleString is a later slice",
 		},
 		{
 			name: "from a dynamic string",
