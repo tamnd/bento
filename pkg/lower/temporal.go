@@ -1015,6 +1015,67 @@ func (r *Renderer) plainDateBagFields(what string, n frontend.Node) ([3]ast.Expr
 	return fields, nil
 }
 
+var dateTimeFieldKeys = [9]string{"year", "month", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"}
+
+// plainDateTimeBagFields reads a PlainDateTime.prototype.with bag at compile time and returns the
+// year, month, day, and the six time fields as present or absent optionals in WithFields order. A
+// present field must be a number; an absent one becomes None so WithFields keeps the receiver's
+// value. An item that is not an object literal, a spread or shorthand member, a repeated field, a
+// non-number value, an empty bag (a TypeError at run time), or a key outside the numeric nine,
+// including monthCode and the era fields, hands back rather than emitting a wrong or partial
+// reshape.
+func (r *Renderer) plainDateTimeBagFields(what string, n frontend.Node) ([9]ast.Expr, error) {
+	var fields [9]ast.Expr
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return fields, &NotYetLowerable{Reason: what + " over an item that is not an object literal is a later slice"}
+	}
+	var seen [9]bool
+	present := false
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		idx := -1
+		for i, k := range dateTimeFieldKeys {
+			if k == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fields, &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+		}
+		if seen[idx] {
+			return fields, &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+		}
+		if !r.isNumber(kids[1]) {
+			return fields, &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+		}
+		val, err := r.lowerExpr(kids[1])
+		if err != nil {
+			return fields, err
+		}
+		fields[idx] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{val}}
+		seen[idx] = true
+		present = true
+	}
+	if !present {
+		return fields, &NotYetLowerable{Reason: what + " over an empty bag (a TypeError at run time) is a later slice"}
+	}
+	for i := range fields {
+		if fields[i] == nil {
+			fields[i] = &ast.CallExpr{Fun: index(sel("value", "None"), ident("float64"))}
+		}
+	}
+	r.requireImport(valuePkg)
+	return fields, nil
+}
+
 // plainDateDifferenceUnits maps the calendar difference units, singular and plural, to the
 // singular form the runtime takes. "auto" resolves to "day", the default largestUnit.
 var plainDateDifferenceUnits = map[string]string{
@@ -1282,6 +1343,25 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{stringLit(unit), increment, stringLit(mode)}}, nil
+	case "with":
+		what := "Temporal.PlainDateTime.prototype.with"
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: what + " takes at least one argument"}
+		}
+		fields, err := r.plainDateTimeBagFields(what, argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		overflow, err := r.temporalOverflowOption(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		args := append(fields[:], stringLit(overflow))
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithFields")}, Args: args}, nil
 	case "withCalendar":
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.withCalendar takes exactly one argument"}

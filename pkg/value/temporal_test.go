@@ -1015,6 +1015,46 @@ func TestPlainDateTimeWithPlainTime(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeWithFields checks that with overlays the bag's date and time fields on the
+// receiver and regulates each half, keeps the calendar, and throws under reject. Every value was
+// checked against @js-temporal/polyfill.
+func TestPlainDateTimeWithFields(t *testing.T) {
+	dt := mustPlainDateTime(t, 2020, 1, 31, 13, 30, 45, 500, 250, 125)
+	some := func(v float64) Opt[float64] { return Some(v) }
+	none := None[float64]()
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"month constrains the day", dt.WithFields(none, some(2), none, none, none, none, none, none, none, "constrain").ToString().ToGoString(), "2020-02-29T13:30:45.500250125"},
+		{"day only", dt.WithFields(none, none, some(15), none, none, none, none, none, none, "constrain").ToString().ToGoString(), "2020-01-15T13:30:45.500250125"},
+		{"time fields", dt.WithFields(none, none, none, some(6), some(0), none, none, none, none, "constrain").ToString().ToGoString(), "2020-01-31T06:00:45.500250125"},
+		{"date and time", dt.WithFields(some(2021), some(6), some(10), some(8), some(5), some(3), none, none, none, "constrain").ToString().ToGoString(), "2021-06-10T08:05:03.500250125"},
+		{"month over twelve clamps", dt.WithFields(none, some(13), none, none, none, none, none, none, none, "constrain").ToString().ToGoString(), "2020-12-31T13:30:45.500250125"},
+		{"hour over the day clamps", dt.WithFields(none, none, none, some(25), none, none, none, none, none, "constrain").ToString().ToGoString(), "2020-01-31T23:30:45.500250125"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// roc reads the bag year in Minguo reckoning, so year 100 is ISO 2011, and the calendar carries.
+	roc := PlainDateTimeWithCalendar(mustPlainDateTime(t, 2020, 5, 15, 12, 0, 0, 0, 0, 0), "roc")
+	if got := roc.WithFields(some(100), none, none, none, none, none, none, none, none, "constrain").ToString().ToGoString(); got != "2011-05-15T12:00:00[u-ca=roc]" {
+		t.Errorf("roc with year: got %q, want %q", got, "2011-05-15T12:00:00[u-ca=roc]")
+	}
+
+	// reject throws when a field does not fit its half.
+	if !bagThrows(func() { dt.WithFields(none, some(13), none, none, none, none, none, none, none, "reject") }) {
+		t.Error("with month 13 under reject did not throw")
+	}
+	if !bagThrows(func() { dt.WithFields(none, none, none, some(25), none, none, none, none, none, "reject") }) {
+		t.Error("with hour 25 under reject did not throw")
+	}
+}
+
 // TestPlainDateTimeToZonedDateTime checks the wall clock pins to a zone under each
 // disambiguation, including a spring-forward gap and a fall-back overlap. Every value was checked
 // against @js-temporal/polyfill.

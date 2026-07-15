@@ -1386,6 +1386,24 @@ func (pdt *PlainDateTime) ToZonedDateTime(timeZone, disambiguation string) *Zone
 	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon), cal: pdt.date.cal}
 }
 
+// WithFields implements Temporal.PlainDateTime.prototype.with: it lays the bag's present date and
+// time fields over the receiver's own and regulates each half with the overflow option, so an
+// omitted field keeps its current value. The date half regulates exactly as PlainDate.with, so the
+// year is read in the receiver's calendar reckoning and the day clamps to the resulting month's
+// length under constrain; the time half clamps to its ISO maxima under constrain. Under reject an
+// out-of-range field in either half throws a RangeError. monthCode and the era fields are not read
+// here, the lowerer hands back a bag that carries them. The receiver is unchanged and its calendar
+// carries through.
+func (pdt *PlainDateTime) WithFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], overflow string) *PlainDateTime {
+	date := pdt.date.WithFields(year, month, day, overflow)
+	base := [6]float64{
+		float64(pdt.time.hour), float64(pdt.time.minute), float64(pdt.time.second),
+		float64(pdt.time.millisecond), float64(pdt.time.microsecond), float64(pdt.time.nanosecond),
+	}
+	time := regulatePlainTime(base, [6]Opt[float64]{hour, minute, second, millisecond, microsecond, nanosecond}, overflow)
+	return &PlainDateTime{date: *date, time: *time}
+}
+
 // WithPlainTime implements Temporal.PlainDateTime.prototype.withPlainTime: it keeps the calendar
 // date and replaces the wall clock, defaulting to midnight when no time is given. The result keeps
 // this date-time's calendar, so a non-ISO date-time stays under its calendar. The receiver's date

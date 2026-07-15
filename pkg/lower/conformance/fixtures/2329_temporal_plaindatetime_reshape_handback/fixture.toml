@@ -1,2 +1,2 @@
 feature = "Temporal"
-handback = "Temporal.PlainDateTime.prototype.with is a later slice"
+handback = "Temporal.PlainDateTime.prototype.toLocaleString is a later slice"
