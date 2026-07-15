@@ -991,6 +991,22 @@ func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig fron
 	return out, nil
 }
 
+// blankUnusedParamBinding appends `_ = name` when the destructured parameter member
+// bound as name is never read in the body. A parameter member always emits its read
+// at body entry (name := __0.Field), so an unused member is declared and not used in
+// Go the way an unused local is, and the emitted program would not compile. The blank
+// marks it used, mirroring the blank lowerVarStatementMulti appends for an unused
+// variable declaration. bindNode is the member's binding identifier, whose symbol
+// carries its own use count, so a member read elsewhere keeps its use and takes no
+// blank; bindingUnused is conservative and only ever withholds the blank, so a member
+// it cannot resolve is left as is.
+func (r *Renderer) blankUnusedParamBinding(out []ast.Stmt, bindNode frontend.Node, name string) []ast.Stmt {
+	if r.bindingUnused(bindNode) {
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{ident(name)}})
+	}
+	return out
+}
+
 // objectPatternBindings binds each shorthand name an object pattern parameter
 // destructured from the field of the same name on the held object, name := __0.Name,
 // the same struct-field selector a written-out property access lowers to. It mirrors
@@ -1074,6 +1090,7 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 				return nil, err
 			}
 			out = append(out, r.defaultFillStmts(name, nameGo, read, def)...)
+			out = r.blankUnusedParamBinding(out, info.bindNode, name)
 			continue
 		}
 		out = append(out, &ast.AssignStmt{
@@ -1081,6 +1098,7 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
+		out = r.blankUnusedParamBinding(out, info.bindNode, name)
 	}
 	return out, nil
 }
@@ -1162,6 +1180,7 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 				return nil, err
 			}
 			out = append(out, r.defaultFillStmts(name, nameGo, arrayOptRead(ident(goName), i), def)...)
+			out = r.blankUnusedParamBinding(out, info.nameNode, name)
 			continue
 		}
 		read := &ast.CallExpr{
@@ -1173,6 +1192,7 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
+		out = r.blankUnusedParamBinding(out, info.nameNode, name)
 	}
 	if hasRest {
 		bind, err := r.arrayRestBinding(restNode, elemT, ident(goName), len(fixedElems), token.DEFINE)

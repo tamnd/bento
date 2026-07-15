@@ -115,6 +115,12 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2464 {
 			continue
 		}
+		// 7031 (a binding element with no inferable type) is admitted because the
+		// untyped destructured member lowers to a dynamic value slot the same way an
+		// untyped parameter does, so mirror the front door (build.go toleratedCode) here.
+		if d.Code == 7031 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog
