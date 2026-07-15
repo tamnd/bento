@@ -137,6 +137,8 @@ func (r *Renderer) lowerStatement(n frontend.Node) (ast.Stmt, error) {
 		return r.lowerFor(n)
 	case frontend.NodeForOfStatement:
 		return r.lowerForOf(n)
+	case frontend.NodeForInStatement:
+		return r.lowerForIn(n)
 	case frontend.NodeThrowStatement:
 		return r.lowerThrow(n)
 	case frontend.NodeTryStatement:
@@ -281,6 +283,69 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	// and a `for _, _ := range` with no new variable. When the body reads the
 	// binding it is ranged into the loop variable; when it does not, the loop drops
 	// the binding entirely and ranges only to drive the iteration (`for range xs`).
+	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) {
+		rng.Key = ident("_")
+		rng.Value = ident(name)
+		rng.Tok = token.DEFINE
+	}
+	return rng, nil
+}
+
+// lowerForIn lowers for (const k in obj) over a dynamic object to a Go range loop,
+// for _, k := range obj.ForInKeys().Elems(). ForInKeys reports the names for...in
+// visits, the receiver's own then inherited enumerable string keys with shadowing
+// applied, so ranging its backing slice binds each name once in the spec's order and
+// no key bookkeeping is emitted. The loop variable is the key string, which is how
+// the checker types a for...in binding, so no explicit type is written for it.
+//
+// Only a dynamic (any/unknown) receiver is covered: it lowers to a value.Value that
+// carries the ForInKeys method, whereas a statically-shaped object or array lowers to
+// a Go struct or slice that does not, so a typed receiver hands back. A destructured
+// or already-declared loop variable hands back, the same boundary for...of draws; the
+// checker rejects a destructuring for...in head outright, so that form never reaches
+// here under the front door.
+func (r *Renderer) lowerForIn(n frontend.Node) (ast.Stmt, error) {
+	kids := r.prog.Children(n)
+	if len(kids) != 3 {
+		return nil, &NotYetLowerable{Reason: "only for...in with a declaration and a body is lowered yet"}
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, kids[0], &decls)
+	if len(decls) != 1 {
+		return nil, &NotYetLowerable{Reason: "for...in with other than a single loop binding is a later slice"}
+	}
+	dkids := r.prog.Children(decls[0])
+	if len(dkids) != 1 || dkids[0].Kind() != frontend.NodeIdentifier {
+		return nil, &NotYetLowerable{Reason: "for...in with a destructuring or annotated loop variable is a later slice"}
+	}
+	name, ok := localName(r.prog.Text(dkids[0]))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "for...in loop variable is not a Go identifier"}
+	}
+	// A statically-shaped receiver lowers to a Go struct or slice with no ForInKeys
+	// method, so only a dynamic receiver, whose lowering is a value.Value, is enumerated
+	// here; a typed object is a later slice.
+	if !r.isDynamic(kids[1]) {
+		return nil, &NotYetLowerable{Reason: "for...in over a statically-typed object is a later slice"}
+	}
+	recv, err := r.lowerExpr(kids[1])
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(kids[2])
+	if err != nil {
+		return nil, err
+	}
+	rng := &ast.RangeStmt{
+		X: &ast.CallExpr{Fun: &ast.SelectorExpr{
+			X:   &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ForInKeys")}},
+			Sel: ident("Elems"),
+		}},
+		Body: body,
+	}
+	// A for...in may bind a key it never reads, so when the body does not use the
+	// binding the loop drops it and ranges only to drive the iteration, the same
+	// unused-binding handling for...of applies; Go rejects an unused range value.
 	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) {
 		rng.Key = ident("_")
 		rng.Value = ident(name)
