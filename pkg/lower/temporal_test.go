@@ -1783,6 +1783,21 @@ console.log(a.toPlainDateTime().toString());`
 	}
 }
 
+// TestZonedDateTimeAdd pins add and subtract to value.AddDuration, the duration lowering
+// through the shared reader, subtract negating it, and the overflow option carried as a string.
+func TestZonedDateTimeAdd(t *testing.T) {
+	const src = `const z = new Temporal.ZonedDateTime(0n, "UTC");
+console.log(z.add({ days: 1 }).epochMilliseconds);
+console.log(z.subtract({ hours: 2 }).epochMilliseconds);
+console.log(z.add({ months: 1 }, { overflow: "reject" }).epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".AddDuration(", ".Negated()", `"constrain"`, `"reject"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeStatics pins compare and from over a ZonedDateTime, each to its value
 // function.
 func TestZonedDateTimeStatics(t *testing.T) {
@@ -1821,9 +1836,14 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "add arithmetic",
-			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.add({ hours: 1 });\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.ZonedDateTime.prototype.add is a later slice",
+			name: "until difference",
+			src:  "const a = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst b = new Temporal.ZonedDateTime(1n, \"UTC\");\nconsole.log(a.until(b).hours);",
+			want: "Temporal.ZonedDateTime.prototype.until is a later slice",
+		},
+		{
+			name: "add with a dynamic overflow option",
+			src:  "function at(o: \"constrain\" | \"reject\") { return new Temporal.ZonedDateTime(0n, \"UTC\").add({ months: 1 }, { overflow: o }).epochMilliseconds; }\nconsole.log(at(\"constrain\"));",
+			want: "Temporal.ZonedDateTime.prototype.add with a non-literal overflow option is a later slice",
 		},
 		{
 			name: "with reshape",
