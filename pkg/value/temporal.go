@@ -1571,6 +1571,28 @@ func PlainYearMonthFrom(ym *PlainYearMonth) *PlainYearMonth {
 	return &PlainYearMonth{year: ym.year, month: ym.month}
 }
 
+// PlainYearMonthFromFields implements Temporal.PlainYearMonth.from over a property bag for the ISO
+// calendar. The year and month the bag supplies are both required, so the lowerer only reaches here
+// with concrete values; a monthCode is resolved to its numeric month at lowering. Under the default
+// constrain a month outside 1..12 clamps into range; under reject it is a RangeError. Either way a
+// year-month outside the representable range throws.
+func PlainYearMonthFromFields(year, month float64, overflow string) *PlainYearMonth {
+	y := toIntegerWithTruncation(year)
+	m := toIntegerWithTruncation(month)
+	if overflow == timeOverflowReject {
+		rejectISOYearMonth(y, m)
+	} else {
+		m = clampFloat(m, 1, 12)
+		if y < -271821 || y > 275760 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+		}
+	}
+	if !isoYearMonthWithinLimits(int(y), int(m)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+	}
+	return &PlainYearMonth{year: int(y), month: int(m)}
+}
+
 // rejectISOYearMonth throws a RangeError unless (year, month) is a real ISO year-month
 // within Temporal's representable range: the month in 1..12 and the year-month between
 // -271821-04 and +275760-09 inclusive, the bounds ISOYearMonthWithinLimits fixes. The
@@ -1849,6 +1871,33 @@ func NewPlainMonthDay(isoMonth, isoDay float64) *PlainMonthDay {
 // over a string or a property bag hands back at lowering.
 func PlainMonthDayFrom(md *PlainMonthDay) *PlainMonthDay {
 	return &PlainMonthDay{month: md.month, day: md.day}
+}
+
+// PlainMonthDayFromFields implements Temporal.PlainMonthDay.from over a property bag for the ISO
+// calendar. The month and day are required, so the lowerer only reaches here with concrete values;
+// a monthCode is resolved to its numeric month at lowering. A year is optional: when present it sets
+// the year the day is validated against, so February 29 with a common year constrains to the 28th,
+// and when absent the leap reference year 1972 admits February 29. Under reject an out-of-range
+// month or day throws; under the default constrain each clamps into range.
+func PlainMonthDayFromFields(month, day float64, year Opt[float64], overflow string) *PlainMonthDay {
+	m := toIntegerWithTruncation(month)
+	d := toIntegerWithTruncation(day)
+	refYear := monthDayReferenceYear
+	if !year.IsUndefined() {
+		refYear = int(toIntegerWithTruncation(year.Get()))
+	}
+	if overflow == timeOverflowReject {
+		if m < 1 || m > 12 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay month must be between 1 and 12")))
+		}
+		if d < 1 || d > float64(isoDaysInMonth(refYear, int(m))) {
+			Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay day is out of range for the month")))
+		}
+	} else {
+		m = clampFloat(m, 1, 12)
+		d = clampFloat(d, 1, float64(isoDaysInMonth(refYear, int(m))))
+	}
+	return &PlainMonthDay{month: int(m), day: int(d)}
 }
 
 // rejectISOMonthDay throws a RangeError unless (month, day) is a real ISO month-day: the

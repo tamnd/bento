@@ -2089,6 +2089,55 @@ func TestPlainMonthDayWithAndToPlainDate(t *testing.T) {
 	}
 }
 
+// TestPlainYearMonthAndMonthDayFromFields covers the from-bag constructors: PlainYearMonthFromFields
+// building from a year and month with constrain and reject, and PlainMonthDayFromFields building
+// from a month and day with an optional year that sets the leap check, pinned to
+// @js-temporal/polyfill.
+func TestPlainYearMonthAndMonthDayFromFields(t *testing.T) {
+	some := func(v float64) Opt[float64] { return Some[float64](v) }
+	none := None[float64]()
+	if got := PlainYearMonthFromFields(2020, 3, "constrain").ToString().ToGoString(); got != "2020-03" {
+		t.Errorf("year-month from 2020, 3 = %q, want 2020-03", got)
+	}
+	if got := PlainYearMonthFromFields(2020, 13, "constrain").ToString().ToGoString(); got != "2020-12" {
+		t.Errorf("year-month from 2020, 13 constrain = %q, want 2020-12", got)
+	}
+
+	mds := []struct {
+		got  *PlainMonthDay
+		want string
+	}{
+		{PlainMonthDayFromFields(3, 15, none, "constrain"), "03-15"},
+		{PlainMonthDayFromFields(2, 29, none, "constrain"), "02-29"},
+		{PlainMonthDayFromFields(2, 29, some(2021), "constrain"), "02-28"},
+		{PlainMonthDayFromFields(2, 29, some(2020), "constrain"), "02-29"},
+		{PlainMonthDayFromFields(4, 31, none, "constrain"), "04-30"},
+	}
+	for i, c := range mds {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("month-day from %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { PlainYearMonthFromFields(2020, 13, "reject") }) {
+		t.Error("year-month from month 13 reject did not throw")
+	}
+	if !throws(func() { PlainMonthDayFromFields(2, 29, some(2021), "reject") }) {
+		t.Error("month-day from Feb 29 with common year reject did not throw")
+	}
+}
+
 // TestPlainDateEra pins that the ISO calendar has no era: era and eraYear read as
 // undefined optionals, the value every ISO date gives for the era-based fields.
 func TestPlainDateEra(t *testing.T) {
