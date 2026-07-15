@@ -15,9 +15,9 @@ func main() {
 	value.ConsoleLog(value.ToString(child.Get(value.FromGoString("shadowed"))))
 	value.ConsoleLog(value.ToString(child.Get(value.FromGoString("own"))))
 	value.ConsoleLog(value.ToString(child.Get(value.FromGoString("missing"))))
-	value.ConsoleLog(value.BoolToString(child.HasProperty(value.FromGoString("shared"))))
+	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("shared")), child)))
 	bare := value.ObjectCreate(value.Null)
 	bare.Set(value.FromGoString("x"), value.Number(5))
 	value.ConsoleLog(value.ToString(bare.Get(value.FromGoString("x"))))
-	value.ConsoleLog(value.BoolToString(bare.HasProperty(value.FromGoString("shared"))))
+	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("shared")), bare)))
 }

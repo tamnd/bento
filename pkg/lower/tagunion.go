@@ -650,6 +650,28 @@ func (r *Renderer) inUnionCompare(left, right frontend.Node) (ast.Expr, bool, er
 	return expr, true, nil
 }
 
+// inReceiver lowers the right operand of a general `key in obj` to an object value the
+// runtime existence check can read, reporting whether it produced one. A dynamic value
+// is already a box and lowers as itself. An object or array literal boxes member by
+// member into a live value.Object, so `"a" in {a: 1}` lowers even though the literal's
+// own type is a fixed shape. A static fixed-shape object binding has no box yet, so it
+// returns false and the caller hands the whole `in` back.
+func (r *Renderer) inReceiver(right frontend.Node) (ast.Expr, bool, error) {
+	if r.isDynamic(right) {
+		e, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, false, err
+		}
+		return e, true, nil
+	}
+	if boxed, ok, err := r.boxLiteralToDynamic(right); err != nil {
+		return nil, false, err
+	} else if ok {
+		return boxed, true, nil
+	}
+	return nil, false, nil
+}
+
 // typeofOperandAndLiteral picks the typeof operand and the string-literal tag out
 // of a comparison's two sides, in either order, and returns the operand node and
 // the literal's value. It returns false unless exactly one side is typeof x and the

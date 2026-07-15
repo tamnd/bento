@@ -425,6 +425,32 @@ func (v Value) HasProperty(key BStr) bool {
 	}
 }
 
+// InOperator implements the general in operator, key in obj, the property-existence
+// check distinct from the discriminated-union tag test the lowerer folds a narrowing
+// in to. The right operand must be an object: a string primitive carries length and
+// index properties HasProperty would answer, but the language treats it as a non-object
+// and throws, so only KindObject, KindArray, and KindFunc (a proxy is backed by one of
+// these) pass. The key is coerced through ToPropertyKey: a symbol key is probed by
+// identity along the prototype chain, and every other key by its property-key string,
+// so a numeric key like 1 reads the "1" slot and a dynamic key reaches the same check a
+// string key does. The existence probe climbs the prototype chain and sees a
+// non-enumerable property, since HasProperty and hasSymChained both walk every own key.
+func InOperator(key, obj Value) bool {
+	switch obj.kind {
+	case KindObject, KindArray, KindFunc:
+		if key.kind == KindSymbol {
+			return obj.object().hasSymChained(key.symbol())
+		}
+		return obj.HasProperty(ToString(key))
+	}
+	name := "a Symbol"
+	if key.kind != KindSymbol {
+		name = "'" + ToString(key).ToGoString() + "'"
+	}
+	Throw(NewTypeError(FromGoString("Cannot use 'in' operator to search for " + name + " in a non-object")))
+	return false
+}
+
 // ToBoolean implements the ToBoolean abstract operation, JavaScript truthiness:
 // undefined, null, false, +0, -0, NaN, and the empty string are falsy, and every
 // object, every nonempty string, and every other number is truthy.

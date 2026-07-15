@@ -11,7 +11,7 @@ func main() {
 	target := value.NewObject().Set(value.FromGoString("real"), value.Number(1))
 	p := value.NewProxy(target, value.NewObject().Set(value.FromGoString("has"), value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(t value.Value, key value.BStr) bool {
-			return key.Equal(value.FromGoString("virtual")) || t.HasProperty(key)
+			return key.Equal(value.FromGoString("virtual")) || value.InOperator(value.StringValue(key), t)
 		})(value.Arg(__a, 0), value.ToString(value.Arg(__a, 1))))
 	})).Set(value.FromGoString("deleteProperty"), value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(t value.Value, key value.BStr) bool {
@@ -19,9 +19,9 @@ func main() {
 			return false
 		})(value.Arg(__a, 0), value.ToString(value.Arg(__a, 1))))
 	})))
-	value.ConsoleLog(value.BoolToString(p.HasProperty(value.FromGoString("virtual"))))
-	value.ConsoleLog(value.BoolToString(p.HasProperty(value.FromGoString("real"))))
-	value.ConsoleLog(value.BoolToString(p.HasProperty(value.FromGoString("missing"))))
+	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("virtual")), p)))
+	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("real")), p)))
+	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("missing")), p)))
 	value.ConsoleLog(value.BoolToString(p.Delete(value.FromGoString("real"))))
 	value.ConsoleLog(value.ToString(target.Get(value.FromGoString("real"))))
 	value.ConsoleLog(log.Join(value.FromGoString(","), func(x value.BStr) value.BStr {
