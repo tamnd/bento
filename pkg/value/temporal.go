@@ -1354,6 +1354,20 @@ func (pdt *PlainDateTime) ToString() BStr {
 // produces under default options.
 func (pdt *PlainDateTime) ToJSON() BStr { return pdt.ToString() }
 
+// ToPlainDate implements Temporal.PlainDateTime.prototype.toPlainDate: the calendar date half
+// of the date-time, carrying the same calendar, with the clock dropped.
+func (pdt *PlainDateTime) ToPlainDate() *PlainDate {
+	d := pdt.date
+	return &d
+}
+
+// ToPlainTime implements Temporal.PlainDateTime.prototype.toPlainTime: the wall-clock half of
+// the date-time, with the calendar date dropped.
+func (pdt *PlainDateTime) ToPlainTime() *PlainTime {
+	t := pdt.time
+	return &t
+}
+
 // AddDateTime implements Temporal.PlainDateTime.prototype.add and, over a negated Duration,
 // subtract. Unlike a PlainDate, which drops the duration's sub-day time part, a PlainDateTime
 // carries a wall clock, so the time part folds into the clock first: the duration's six time

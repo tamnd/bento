@@ -1296,6 +1296,19 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeWithCalendar"), Args: []ast.Expr{recv, calendarLit(cal)}}, nil
+	case "toPlainDate", "toPlainTime":
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " takes no arguments"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		name := "ToPlainDate"
+		if method == "toPlainTime" {
+			name = "ToPlainTime"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " is a later slice"}
 	}
