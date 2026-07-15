@@ -87,6 +87,82 @@ func TestTruthyUnionHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
+// TestTruthyOptionalNumberInlines pins that an optional number in a condition tests
+// presence and the inner ToBoolean together: !x.IsUndefined() gates undefined, then
+// the inner zero-and-NaN test runs on x.Get(), so an absent option and a present zero
+// are both falsy.
+func TestTruthyOptionalNumberInlines(t *testing.T) {
+	src := "function f(x?: number): number { if (x) { return 1; } return 0; }\nconsole.log(f(2));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if !x.IsUndefined() && (x.Get() != 0 && x.Get() == x.Get()) {") {
+		t.Errorf("optional number condition did not inline presence plus the inner test:\n%s", source)
+	}
+}
+
+// TestTruthyOptionalStringInlines pins the string inner: an absent option is falsy,
+// and a present option runs the emptiness test on the unwrapped inner.
+func TestTruthyOptionalStringInlines(t *testing.T) {
+	src := "function f(s?: string): number { if (s) { return 1; } return 0; }\nconsole.log(f(\"x\"));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if !s.IsUndefined() && s.Get().Length() > 0 {") {
+		t.Errorf("optional string condition did not inline presence plus the emptiness test:\n%s", source)
+	}
+}
+
+// TestTruthyOptionalNonRepeatableHandsBack pins that an optional whose evaluation has
+// a side effect, a Map.get here, cannot inline: the presence test and the inner test
+// each name the operand, so a non-repeatable one keeps the handback rather than fire
+// the effect twice.
+func TestTruthyOptionalNonRepeatableHandsBack(t *testing.T) {
+	src := "function f(m: Map<string, number>): number { if (m.get(\"a\")) { return 1; } return 0; }\nconsole.log(f(new Map()));\n"
+	renderProgramHandBack(t, src)
+}
+
+// TestTruthyOptionalRuns builds and runs an optional across the boolean positions, a
+// condition, a negation, and a ternary, over both a number and a string inner, and
+// matches the oracle: an absent option is falsy, a present zero or empty string is
+// falsy, any other present value is truthy.
+func TestTruthyOptionalRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function num(x?: number): string {
+  if (x) {
+    return "t";
+  }
+  return "f";
+}
+function str(s?: string): string {
+  if (s) {
+    return "has";
+  }
+  return "empty";
+}
+function neg(x?: number): string {
+  if (!x) {
+    return "falsy";
+  }
+  return "truthy";
+}
+function tern(x?: number): string {
+  return x ? "y" : "n";
+}
+console.log(num(5));
+console.log(num(0));
+console.log(num());
+console.log(str("hi"));
+console.log(str(""));
+console.log(str());
+console.log(neg(0));
+console.log(neg(3));
+console.log(tern(5));
+console.log(tern());
+`
+	got := runProgramGo(t, src)
+	want := "t\nf\nf\nhas\nempty\nempty\nfalsy\ntruthy\ny\nn\n"
+	if got != want {
+		t.Fatalf("optional truthiness program printed %q, want %q", got, want)
+	}
+}
+
 // TestTruthyRuns builds and runs the falsy set end to end and matches the Node
 // oracle: zero and NaN are falsy numbers, the empty string is the only falsy
 // string, a non-empty "0" is truthy, and ! flips each.
