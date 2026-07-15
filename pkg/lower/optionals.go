@@ -207,8 +207,9 @@ func (r *Renderer) isOptionalType(t frontend.Type) bool {
 }
 
 // isOptBinding reports whether name binds an optional (value.Opt[T]) in the body
-// being lowered, whether it is a local declared with an optional type or a bare
-// optional parameter. The two sets are kept apart because a local's optional-ness is
+// being lowered, whether it is a local declared with an optional type or a parameter
+// whose field is an option, the bare x?: T form or a required x: T | undefined. The
+// two sets are kept apart because a local's optional-ness is
 // recomputed per block from the body's declarations while a parameter's rides the
 // signature, but a narrowed read unwraps either the same way, so the read sites
 // consult this one predicate.
@@ -216,8 +217,14 @@ func (r *Renderer) isOptBinding(name string) bool {
 	return r.optLocals[name] || r.optParams[name]
 }
 
-// optParamsOf returns the set of parameter names that bind a bare optional, the
-// x?: T form with no default whose field funcParamFields lowers to a value.Opt[T].
+// optParamsOf returns the set of parameter names whose field is a value.Opt[T] the
+// body reads through .Get() at a narrowed use. Two shapes qualify. A bare optional,
+// the x?: T form at or past MinArgs with no default, whose field funcParamFields
+// lowers to Opt[T]. And a required parameter annotated x: T | undefined, before
+// MinArgs, whose field paramFieldType already renders to Opt[T] through typeExpr
+// because the type is the two-member optional union; the caller always supplies it,
+// as Some for a present value or None for an explicit undefined, so no call-site
+// defaulting is involved, but a read the checker narrowed to T still has to unwrap.
 // A defaulted optional binds the plain T the default fills, not an option, so it is
 // excluded, as is a dynamic optional (any or unknown), which binds a boxed value that
 // holds undefined natively. It is built once per body so a narrowed read of the
@@ -226,14 +233,16 @@ func (r *Renderer) optParamsOf(fn frontend.Node, sig frontend.Signature) map[str
 	paramNodes := r.funcParamNodes(fn)
 	var opt map[string]bool
 	for i, p := range sig.Params {
-		if i < sig.MinArgs {
-			continue
-		}
-		if _, hasDef := r.paramDefaultNode(paramNodes, i); hasDef {
-			continue
-		}
 		if !r.isOptionalType(p.Type) {
 			continue
+		}
+		// A defaulted optional binds the plain T the default fills, so its field is
+		// not an option; only an omittable parameter can carry a default, so this is
+		// checked past MinArgs alone.
+		if i >= sig.MinArgs {
+			if _, hasDef := r.paramDefaultNode(paramNodes, i); hasDef {
+				continue
+			}
 		}
 		name, ok := localName(p.Name)
 		if !ok {

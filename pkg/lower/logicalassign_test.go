@@ -70,21 +70,23 @@ func TestNamedEvalLogicalAssignRuns(t *testing.T) {
 	}
 }
 
-// TestNullishAssignDefiniteHandsBack pins that x ??= y with a definite right-hand
-// side into a required T | undefined parameter, which narrows the target the
-// narrowing pre-pass does not track (only a bare x?: T optional parameter and an
-// optional local are tracked), hands back until narrowing at such a target lands.
-func TestNullishAssignDefiniteHandsBack(t *testing.T) {
+// TestNullishAssignRequiredUnionRuns pins that x ??= y with a definite right-hand
+// side into a required T | undefined parameter now lowers and runs: the narrowing
+// pre-pass tracks a required optional-union parameter, so the ??= guards the option
+// with IsUndefined and the trailing read, definite after the assignment, unwraps with
+// .Get(). An omitted call takes the fallback, a supplied one keeps its value.
+func TestNullishAssignRequiredUnionRuns(t *testing.T) {
+	skipIfShort(t)
 	src := `
 function pick(x: string | undefined): string {
   x ??= "fallback";
   return x;
 }
 console.log(pick(undefined));
+console.log(pick("given"));
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "the narrowing pre-pass does not track") {
-		t.Fatalf("expected a narrowing handback, got: %q", reason)
+	if got, want := runProgramGo(t, src), "fallback\ngiven\n"; got != want {
+		t.Fatalf("required-union ??= printed %q, want %q", got, want)
 	}
 }
 
