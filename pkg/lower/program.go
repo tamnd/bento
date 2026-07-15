@@ -350,13 +350,14 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
 
-	// Every code 2345 the front door admitted must have flowed through a guarded
-	// bridge, one that lowered the not-assignable value safely or handed it back. A
-	// 2345 site no bridge reached was lowered by a builtin path with no representation
-	// guard and would emit Go that does not compile, so the whole unit hands back here
-	// rather than ship it (see unguarded2345). This runs after the body lowers, since
-	// only lowering records which sites the guards reached.
-	if err := r.unguarded2345(); err != nil {
+	// Every not-assignable diagnostic the front door admitted (2345 for a call
+	// argument, 2322 for an assignment or initializer) must have flowed through a
+	// guarded bridge, one that lowered the value safely or handed it back. A site no
+	// bridge reached was lowered by a path with no representation guard and would emit
+	// Go that does not compile, so the whole unit hands back here rather than ship it
+	// (see unguardedNotAssign). This runs after the body lowers, since only lowering
+	// records which sites the guards reached.
+	if err := r.unguardedNotAssign(); err != nil {
 		return Program{}, err
 	}
 

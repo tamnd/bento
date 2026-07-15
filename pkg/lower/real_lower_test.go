@@ -121,12 +121,13 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 7031 {
 			continue
 		}
-		// 2345 (an argument not assignable to its parameter) is admitted because the
-		// argument, constructor, and binding bridges land a representation-safe value
-		// and hand back a mismatched one, and the end-of-render reconciliation hands
-		// back any 2345 an unguarded builtin path reached, so mirror the front door
-		// (build.go toleratedAssignability) here too.
-		if d.Code == 2345 {
+		// 2345 (an argument not assignable to its parameter) and 2322 (an assignment or
+		// initializer not assignable to its slot) are admitted because the argument,
+		// constructor, and binding bridges land a representation-safe value and hand back
+		// a mismatched one, and the end-of-render reconciliation hands back any site an
+		// unguarded path reached, so mirror the front door (build.go toleratedAssignability)
+		// here too.
+		if d.Code == 2345 || d.Code == 2322 {
 			continue
 		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)

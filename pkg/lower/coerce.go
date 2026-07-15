@@ -1191,6 +1191,14 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 		if r.staticReprMismatch(src, r.prog.TypeAt(src), r.prog.TypeAt(target)) {
 			return nil, &NotYetLowerable{Reason: "a value the checker calls not assignable whose Go type differs from the slot is a later slice"}
 		}
+		// An assignment or initializer the front door tolerated under code 2322 reaches
+		// this bridge too, with the diagnostic anchored on the target name (or on the
+		// value for an array element). A mismatch whose two sides lower to different Go
+		// types hands back; a same-representation 2322 (a literal type receiving another
+		// literal of the same primitive) falls through and lowers (see assignmentReprMismatch).
+		if r.assignmentReprMismatch(src, target) {
+			return nil, &NotYetLowerable{Reason: "an assignment the checker calls not assignable whose Go type differs from the slot is a later slice"}
+		}
 		return r.bridgeClassBinding(expr, src, r.prog.TypeAt(target))
 	}
 }
@@ -1220,59 +1228,129 @@ func (r *Renderer) staticReprMismatch(srcNode frontend.Node, srcType, tgtType fr
 }
 
 // notAssignableAt reports whether the checker put a code 2345 (argument not assignable)
-// diagnostic exactly on the given node, the front-door-tolerated error the
-// representation guard keys off. The checker anchors the argument-not-assignable error
-// on the argument expression itself, so the match is exact: the node's span equals the
-// diagnostic's. Exactness is what keeps the guard and the end-of-render reconciliation
-// sound. A user call wrapping a builtin call, f([1,2,3].indexOf("x")), carries the 2345
-// on the inner "x", not on the outer argument f is passed, so the outer bridge does not
-// mistake the inner mismatch for its own and mark it handled. A match records the span
-// as seen, so unguarded2345 can tell which 2345 sites a guarded bridge reached.
+// diagnostic on the given node, the front-door-tolerated error the representation guard
+// keys off. The checker anchors the argument-not-assignable error on the argument
+// expression itself, so the match is by shared token extent (see spanCoversNode). That
+// extent keeps the guard and the end-of-render reconciliation sound. A user call wrapping
+// a builtin call, f([1,2,3].indexOf("x")), carries the 2345 on the inner "x", not on the
+// outer argument f is passed, so the outer bridge does not mistake the inner mismatch for
+// its own and mark it handled. A match records the span as seen, so unguardedNotAssign can
+// tell which 2345 sites a guarded bridge reached.
 func (r *Renderer) notAssignableAt(node frontend.Node) bool {
 	if node == nil {
 		return false
 	}
 	r.ensureNotAssignSpans()
-	lo, hi := node.Pos(), node.End()
 	for _, s := range r.notAssignSpans {
-		if s.Start == lo && s.End == hi {
-			r.seen2345[s] = true
+		if spanCoversNode(s, node) {
+			r.seenAssign[s] = true
 			return true
 		}
 	}
 	return false
 }
 
-// ensureNotAssignSpans collects the program's code 2345 spans once and caches them, so
-// both the per-site guard and the end-of-render reconciliation read the same set without
-// re-querying the checker.
+// spanCoversNode reports whether a diagnostic span anchors on node, allowing for the
+// leading trivia a node's full start carries but the diagnostic's start does not. The
+// frontend reports a node's Pos() from its full start, which includes any leading
+// whitespace or comment before the first token, while the checker anchors a diagnostic on
+// the token's real start past that trivia (const n: 0 = 1 gives the name node a Pos of 5,
+// the space, but the 2322 a start of 6, the n). So the two share an end and the
+// diagnostic's start falls at or after the node's full start. Matching on the shared end
+// keeps the guard sound the way an exact match did: a nested inner node, the "x" inside
+// f([1,2,3].indexOf("x")), ends before its enclosing argument, so it cannot be mistaken
+// for it even though both starts sit past their own leading trivia.
+func spanCoversNode(s frontend.Span, node frontend.Node) bool {
+	return s.End == node.End() && node.Pos() <= s.Start && s.Start <= s.End
+}
+
+// assignmentReprMismatch reports whether a static value bound into a static slot would
+// drop a Go value into a slot of another Go type at a site the checker calls not
+// assignable under code 2322, the initializer/assignment analog of staticReprMismatch's
+// 2345. A 2322 anchors on the target name for an initializer, an assignment, or a
+// property declaration, and on the value for an array element, so it matches both the
+// source and the target node against the tolerated 2322 spans and records either as seen
+// so the end-of-render reconciliation knows the binding bridge reached this site. When a
+// site matches it hands back only if neither side is a class and the two types provably
+// lower to different Go types; a match whose two sides share a Go type (a literal type
+// receiving another literal of the same primitive, both float64) is left to lower.
+func (r *Renderer) assignmentReprMismatch(srcNode, tgtNode frontend.Node) bool {
+	srcHit := r.assign2322At(srcNode)
+	tgtHit := r.assign2322At(tgtNode)
+	if !srcHit && !tgtHit {
+		return false
+	}
+	if _, srcClass := r.classOfNode(srcNode); srcClass {
+		return false
+	}
+	tgtType := r.prog.TypeAt(tgtNode)
+	if _, tgtClass := r.classOfType(tgtType); tgtClass {
+		return false
+	}
+	return r.mismatchedLoweredType(r.prog.TypeAt(srcNode), tgtType)
+}
+
+// assign2322At reports whether the checker put a code 2322 (assignment not assignable)
+// diagnostic on the given node and records a match as seen. The binding bridge calls it
+// for both the source and the target node because a 2322 does not anchor on one fixed
+// role: an initializer and an assignment carry it on the target name, an array element
+// carries it on the value. The shared-extent match (spanCoversNode) keeps it sound the
+// same way it does for 2345, and folds in the leading trivia a declaration name node
+// carries: const n: 0 = 1 gives the name node a Pos at the space before n while the 2322
+// starts at n itself.
+func (r *Renderer) assign2322At(node frontend.Node) bool {
+	if node == nil {
+		return false
+	}
+	r.ensureNotAssignSpans()
+	for _, s := range r.assign2322Spans {
+		if spanCoversNode(s, node) {
+			r.seenAssign[s] = true
+			return true
+		}
+	}
+	return false
+}
+
+// ensureNotAssignSpans collects the program's code 2345 and 2322 spans once and caches
+// them, so both the per-site guards and the end-of-render reconciliation read the same
+// sets without re-querying the checker.
 func (r *Renderer) ensureNotAssignSpans() {
 	if r.notAssignReady {
 		return
 	}
 	for _, d := range r.prog.Diagnostics() {
-		if d.Code == 2345 {
+		switch d.Code {
+		case 2345:
 			r.notAssignSpans = append(r.notAssignSpans, d.Span)
+		case 2322:
+			r.assign2322Spans = append(r.assign2322Spans, d.Span)
 		}
 	}
 	r.notAssignReady = true
 }
 
-// unguarded2345 reports the first code 2345 site no guarded bridge inspected, or nil if
-// every 2345 the front door tolerated flowed through the argument, constructor, or
-// binding bridge that either lowered it safely or handed it back. A site left unseen was
-// lowered by a path with no representation guard, a builtin higher-order method callback
-// or a builtin element-slot argument, whose emitted Go drops a value into a slot of
-// another Go type and does not compile. Rather than ship that, the whole unit hands back
-// to the interpreter, which keeps the front-door tolerance of 2345 zero-fail no matter
-// how many builtin argument paths exist: as more of them grow the guard, more of these
-// programs lower, and until then they route to the engine exactly as they did before the
-// front door admitted 2345 at all.
-func (r *Renderer) unguarded2345() error {
+// unguardedNotAssign reports the first not-assignable site (2345 or 2322) no guarded
+// bridge inspected, or nil if every one the front door tolerated flowed through the
+// argument, constructor, or binding bridge that either lowered it safely or handed it
+// back. A site left unseen was lowered by a path with no representation guard, a builtin
+// higher-order method callback, a builtin element-slot argument, or an assignment
+// construct no bridge reaches, whose emitted Go drops a value into a slot of another Go
+// type and does not compile. Rather than ship that, the whole unit hands back to the
+// interpreter, which keeps the front-door tolerance zero-fail no matter how many such
+// paths exist: as more of them grow the guard, more of these programs lower, and until
+// then they route to the engine exactly as they did before the front door admitted the
+// code at all.
+func (r *Renderer) unguardedNotAssign() error {
 	r.ensureNotAssignSpans()
 	for _, s := range r.notAssignSpans {
-		if !r.seen2345[s] {
+		if !r.seenAssign[s] {
 			return &NotYetLowerable{Reason: "an argument the checker calls not assignable reaches a builtin lowering with no representation guard, so the unit routes to the interpreter until that path grows one"}
+		}
+	}
+	for _, s := range r.assign2322Spans {
+		if !r.seenAssign[s] {
+			return &NotYetLowerable{Reason: "a value the checker calls not assignable reaches an assignment construct with no representation guard, so the unit routes to the interpreter until that construct grows one"}
 		}
 	}
 	return nil
