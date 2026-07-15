@@ -377,11 +377,7 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 			args = append(args, lowered)
 			continue
 		}
-		lowered, err := r.lowerExpr(a)
-		if err != nil {
-			return nil, err
-		}
-		lowered, err = r.bridgeArg(lowered, a, params[i].Type)
+		lowered, err := r.lowerArgAt(a, params[i].Type)
 		if err != nil {
 			return nil, err
 		}
@@ -410,11 +406,7 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 				}
 				return nil, &NotYetLowerable{Reason: "a call that omits an argument the callee does not default is a later slice"}
 			}
-			lowered, err := r.lowerExpr(def)
-			if err != nil {
-				return nil, err
-			}
-			lowered, err = r.bridgeArg(lowered, def, params[i].Type)
+			lowered, err := r.lowerArgAt(def, params[i].Type)
 			if err != nil {
 				return nil, err
 			}
@@ -781,6 +773,15 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	} else if ok {
 		return wrapped, nil
 	}
+	// An argument bound into a parameter of a different fixed shape where either
+	// shape carries an optional property cannot compile as one Go struct passed for
+	// another, so it hands back the way an assignment to such a slot does. An object
+	// literal argument builds at the parameter's shape before it reaches here (see
+	// lowerArgAt), so this guard fires only for a non-literal source, a variable of a
+	// fresh required shape passed where the optional shape is declared.
+	if err := r.guardOptionalShapeCross(node, pt); err != nil {
+		return nil, err
+	}
 	// An argument crosses the dynamic boundary the way an assignment does: a
 	// static value into a dynamic parameter boxes, and a dynamic value into a
 	// static parameter coerces, so a string passed for a message?: any lands as
@@ -794,6 +795,29 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 		return r.boxStaticToDynamic(lowered, node)
 	}
 	return r.bridgeClassBinding(lowered, node, pt)
+}
+
+// lowerArgAt lowers one argument node against its declared parameter type. An
+// object literal passed where the parameter declares a fixed shape with an optional
+// property must build at that shape, not its own all-required fresh type, the same
+// contextual typing a declaration and an assignment apply: the literal's own type
+// interns a different Go struct than the parameter's, so passing it straight would
+// emit Go that does not compile. Every other argument lowers at its own type and
+// bridges to the parameter the ordinary way.
+func (r *Renderer) lowerArgAt(a frontend.Node, pt frontend.Type) (ast.Expr, error) {
+	if a.Kind() == frontend.NodeObjectLiteralExpression {
+		if shape, wrap, ok := r.contextualObjectShape(pt); ok {
+			if wrap {
+				return nil, &NotYetLowerable{Reason: "an object literal argument in a T | undefined optional slot is a later slice"}
+			}
+			return r.objectLiteralContextual(a, shape)
+		}
+	}
+	lowered, err := r.lowerExpr(a)
+	if err != nil {
+		return nil, err
+	}
+	return r.bridgeArg(lowered, a, pt)
 }
 
 // objectMethodCall lowers a method call whose receiver is a fixed-shape object
