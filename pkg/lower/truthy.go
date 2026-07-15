@@ -64,14 +64,20 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 	// An optional operand (T | undefined, a value.Opt[T]) is falsy two ways: it is
 	// undefined, or it is present but its inner value is falsy. So if (x) over an
 	// optional tests both, presence and the inner ToBoolean: !x.IsUndefined() && the
-	// inner test on x.Get(). The inner test is only spelled for a primitive inner a Go
-	// comparison reproduces (a number, string, or boolean), and the operand is named
-	// twice, so a repeatable one inlines here while a wider union or a side-effecting
-	// optional keeps the handback below.
+	// inner test on x.Get(). The inner test is spelled two ways: for a primitive inner
+	// a Go comparison reproduces (a number, string, or boolean) it is the inline
+	// ToBoolean on x.Get(), and for an inner the checker proved always truthy when
+	// present (an object, array, or class-instance shape, which carries no falsy
+	// member) it drops away, leaving the presence test alone. The operand is named
+	// twice, so a repeatable one inlines here while a wider or side-effecting optional
+	// keeps the handback below.
 	if opt, kind, ok, err := r.optionalTruthy(n); err != nil {
 		return nil, err
 	} else if ok {
 		present := &ast.UnaryExpr{Op: token.NOT, X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: opt, Sel: ident("IsUndefined")}}}
+		if kind == "present" {
+			return present, nil
+		}
 		get := &ast.CallExpr{Fun: &ast.SelectorExpr{X: opt, Sel: ident("Get")}}
 		return &ast.BinaryExpr{X: present, Op: token.LAND, Y: truthyOfKind(get, kind)}, nil
 	}
@@ -79,13 +85,16 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 }
 
 // optionalTruthy reports whether an operand in boolean position is an optional whose
-// inner type is a primitive with an inline ToBoolean, and returns the lowered optional
-// alongside that inner's kind so lowerTruthy can spell !x.IsUndefined() && the inner
-// test. It fires only for a repeatable operand, since the presence test and the inner
-// test each name the optional once, and only when the inner is exactly a number,
-// string, or boolean: a wider inner union has no single inline falsy rule and stays a
-// later slice. A non-optional, a non-repeatable optional, or an optional over a
-// non-primitive inner reports ok false and leaves the caller on its handback.
+// inner test lowerTruthy can spell inline, and returns the lowered optional alongside a
+// kind that names that inner test so the caller can build !x.IsUndefined() and, unless
+// the inner is always truthy, the inner ToBoolean on x.Get(). It fires only for a
+// repeatable operand, since the presence test and the inner test each name the optional
+// once. The inner qualifies two ways: a primitive with an inline ToBoolean (a number,
+// string, or boolean, kind "number", "string", or "bool"), or a shape the checker
+// proved always truthy when present (an object, array, or class instance, kind
+// "present"), which needs no inner test at all. A non-optional, a non-repeatable
+// optional, or an optional over a wider inner (a null-or-undefined inner with no truthy
+// case, or a dynamic one) reports ok false and leaves the caller on its handback.
 func (r *Renderer) optionalTruthy(n frontend.Node) (opt ast.Expr, kind string, ok bool, err error) {
 	if !r.isOptionalType(r.prog.TypeAt(n)) || !r.repeatableOperand(n) {
 		return nil, "", false, nil
@@ -94,8 +103,12 @@ func (r *Renderer) optionalTruthy(n frontend.Node) (opt ast.Expr, kind string, o
 	if !isOpt {
 		return nil, "", false, nil
 	}
-	kind, ok = primitiveTruthyKind(inner.Flags)
-	if !ok {
+	switch {
+	case primitiveTruthyKindOK(inner.Flags):
+		kind, _ = primitiveTruthyKind(inner.Flags)
+	case staticTruthyIsTrue(inner.Flags):
+		kind = "present"
+	default:
 		return nil, "", false, nil
 	}
 	opt, err = r.lowerExpr(n)
@@ -103,6 +116,21 @@ func (r *Renderer) optionalTruthy(n frontend.Node) (opt ast.Expr, kind string, o
 		return nil, "", false, err
 	}
 	return opt, kind, true, nil
+}
+
+// primitiveTruthyKindOK reports whether a type's flags name a primitive with an inline
+// ToBoolean, the precondition primitiveTruthyKind's ok return states.
+func primitiveTruthyKindOK(f frontend.TypeFlags) bool {
+	_, ok := primitiveTruthyKind(f)
+	return ok
+}
+
+// staticTruthyIsTrue reports whether a type's flags mark it always truthy when present,
+// so an optional over it is truthy exactly when present and its inner ToBoolean drops
+// away. It reuses the always-truthy half of staticTruthyFlags.
+func staticTruthyIsTrue(f frontend.TypeFlags) bool {
+	val, known := staticTruthyFlags(f)
+	return known && val
 }
 
 // primitiveTruthyKind maps a primitive type's flags to the kind truthyOfKind spells an
@@ -135,7 +163,15 @@ func primitiveTruthyKind(f frontend.TypeFlags) (string, bool) {
 // value, is not statically known and reports known false, so it keeps its runtime
 // test.
 func (r *Renderer) staticTruthy(n frontend.Node) (val, known bool) {
-	f := r.prog.TypeAt(n).Flags
+	return staticTruthyFlags(r.prog.TypeAt(n).Flags)
+}
+
+// staticTruthyFlags is the flags-level core of staticTruthy, shared with the optional
+// path so an option's inner type is read for the same always-truthy or always-falsy
+// verdict. A plain object type (which covers arrays and class instances too) is always
+// truthy; a type that is only null, undefined, or void is always falsy; every other
+// type reports known false.
+func staticTruthyFlags(f frontend.TypeFlags) (val, known bool) {
 	if f == frontend.TypeObject {
 		return true, true
 	}
