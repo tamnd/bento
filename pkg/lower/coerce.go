@@ -583,11 +583,13 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
 	case r.isBool(src):
 		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
-	case r.isSymbol(src):
+	case r.isSymbolKey(src):
 		// A symbol expression already lowers to a value.Value: Symbol(x) builds one,
-		// a symbol binding stores it, and a symbol read off the bag hands one back. So
-		// boxing a symbol into a dynamic slot is the identity, the way null and
-		// undefined are boxes already.
+		// a symbol binding stores it, a symbol read off the bag hands one back, and a
+		// well-known symbol read (Symbol.toPrimitive) lowers to its interned identity.
+		// So boxing a symbol into a dynamic slot is the identity, the way null and
+		// undefined are boxes already. isSymbolKey covers the well-known form too,
+		// whose flagless unique-symbol type isSymbol alone would miss.
 		return expr, nil
 	case src.Kind() == frontend.NodeNullKeyword, r.isUndefinedLiteral(src):
 		// The null and undefined literals already lower to the value.Null and
@@ -891,8 +893,16 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 	r.requireImport(valuePkg)
 	var obj ast.Expr = &ast.CallExpr{Fun: sel("value", "NewObject")}
 	for _, p := range r.prog.Children(n) {
+		if p.Kind() == frontend.NodeMethodDeclaration {
+			member, err := r.boxObjectMethodMember(obj, p)
+			if err != nil {
+				return nil, err
+			}
+			obj = member
+			continue
+		}
 		if p.Kind() != frontend.NodeUnknown {
-			return nil, &NotYetLowerable{Reason: "boxing an object literal with a method or accessor member is a later slice"}
+			return nil, &NotYetLowerable{Reason: "boxing an object literal with an accessor member is a later slice"}
 		}
 		if inner, ok := r.computedKey(p); ok {
 			kids := r.prog.Children(p)
@@ -950,6 +960,109 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 		}
 	}
 	return obj, nil
+}
+
+// boxObjectMethodMember boxes one method member of an object literal onto obj, the
+// live object boxObjectLiteral is building, and returns the extended object
+// expression. A method lowers here only in the narrow shape the coercion items
+// need: a plain method (no get, set, async, generator, or private marker) with no
+// declared parameters, whose body is a single `return <expr>`, and whose returned
+// expression neither reads `this` nor names a parameter. The method becomes a
+// value.NewFunc closure that ignores its arguments and returns the boxed
+// expression, so a coercion protocol lookup finds a callable that yields the value.
+// A named method writes its slot through Set; a well-known computed name like
+// [Symbol.toPrimitive] boxes the key and writes through SetKeyed, the same slot the
+// runtime's Symbol.toPrimitive probe reads. Any richer method (a parameter, a body
+// that is more than one return, a this reference) hands back to a later slice.
+func (r *Renderer) boxObjectMethodMember(obj ast.Expr, m frontend.Node) (ast.Expr, error) {
+	// Strip and reject modifiers. A childless leading unnamed node is a keyword
+	// marker (async, the generator star) or a private name (#m); each is a shape
+	// this slice does not box. A computed name [expr] wraps an expression, so it
+	// carries a child and is not stripped: it is the method's name, read below.
+	kids := r.prog.Children(m)
+	if len(kids) > 0 && kids[0].Kind() == frontend.NodeUnknown && len(r.prog.Children(kids[0])) == 0 {
+		w := strings.TrimSpace(r.prog.Text(kids[0]))
+		if strings.HasPrefix(w, "#") {
+			return nil, &NotYetLowerable{Reason: "boxing a private object method is a later slice"}
+		}
+		return nil, &NotYetLowerable{Reason: "boxing a " + w + " object method is a later slice"}
+	}
+	if len(kids) == 0 {
+		return nil, &NotYetLowerable{Reason: "boxing an object method without a name is a later slice"}
+	}
+	nameNode := kids[0]
+	// A declared parameter would need the receiver-bound argument binding this
+	// closure does not build, so a parameterless method is the only shape boxed.
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeParameter {
+			return nil, &NotYetLowerable{Reason: "boxing an object method with a parameter is a later slice"}
+		}
+	}
+	fn, err := r.boxMethodClosure(m)
+	if err != nil {
+		return nil, err
+	}
+	if inner, ok := r.computedKey(m); ok {
+		boxedKey, err := r.boxOperand(inner)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: obj, Sel: ident("SetKeyed")}, Args: []ast.Expr{boxedKey, fn}}, nil
+	}
+	name, ok := r.memberName(nameNode)
+	if !ok {
+		return nil, r.memberNameReason(nameNode, "method")
+	}
+	return &ast.CallExpr{
+		Fun: &ast.SelectorExpr{X: obj, Sel: ident("Set")},
+		Args: []ast.Expr{
+			&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{
+				&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)},
+			}},
+			fn,
+		},
+	}, nil
+}
+
+// boxMethodClosure lowers a parameterless object method whose body is a single
+// return into a value.NewFunc closure that ignores its arguments and returns the
+// boxed return expression. The receiver scope is cleared before the return
+// expression lowers, so a `this` in the body declines through boxOperand rather
+// than binding to an enclosing class receiver this free closure does not carry;
+// that decline is what keeps a this-reading method out of this slice.
+func (r *Renderer) boxMethodClosure(m frontend.Node) (ast.Expr, error) {
+	block, ok := r.funcBodyBlock(m)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "boxing an object method with no body is a later slice"}
+	}
+	stmts := r.prog.Children(block)
+	if len(stmts) != 1 || stmts[0].Kind() != frontend.NodeReturnStatement {
+		return nil, &NotYetLowerable{Reason: "boxing an object method whose body is not a single return is a later slice"}
+	}
+	retKids := r.prog.Children(stmts[0])
+	if len(retKids) != 1 {
+		return nil, &NotYetLowerable{Reason: "boxing an object method with a bare or multi-value return is a later slice"}
+	}
+	prevClass, prevThis := r.curClass, r.thisName
+	r.curClass, r.thisName = nil, ""
+	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
+	boxed, err := r.boxOperand(retKids[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	const argsName = "__a"
+	thunk := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params: &ast.FieldList{List: []*ast.Field{{
+				Names: []*ast.Ident{ident(argsName)},
+				Type:  &ast.ArrayType{Elt: sel("value", "Value")},
+			}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{boxed}}}},
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewFunc"), Args: []ast.Expr{thunk}}, nil
 }
 
 // coerceDynamicToStatic wraps a boxed dynamic value in the coercion that lands it

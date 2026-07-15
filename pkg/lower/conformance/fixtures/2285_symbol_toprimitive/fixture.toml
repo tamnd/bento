@@ -1,2 +1,2 @@
 feature = "symbol-toprimitive"
-handback = "boxing an object literal with a method or accessor member is a later slice"
+handback = "boxing an object method with a parameter is a later slice"
