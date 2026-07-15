@@ -993,6 +993,28 @@ func TestPlainDateTimeConversions(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeWithPlainTime checks that withPlainTime keeps the calendar date and replaces
+// the wall clock, defaulting to midnight when no time is given, and carries the calendar through.
+// Every value was checked against @js-temporal/polyfill.
+func TestPlainDateTimeWithPlainTime(t *testing.T) {
+	pdt := mustPlainDateTime(t, 2020, 5, 15, 13, 30, 45, 500, 250, 125)
+	if got := pdt.WithPlainTime(nil).ToString().ToGoString(); got != "2020-05-15T00:00:00" {
+		t.Errorf("withPlainTime() = %q, want %q", got, "2020-05-15T00:00:00")
+	}
+	if got := pdt.WithPlainTime(mustPlainTime(t, 9, 15, 0, 0, 0, 0)).ToString().ToGoString(); got != "2020-05-15T09:15:00" {
+		t.Errorf("withPlainTime(09:15) = %q, want %q", got, "2020-05-15T09:15:00")
+	}
+	// The date half is copied, so the result shares no state with the receiver.
+	if &pdt.date == &pdt.WithPlainTime(nil).date {
+		t.Error("withPlainTime aliased the receiver's date half, want a copy")
+	}
+	// The calendar carries through the reshape.
+	g := PlainDateTimeWithCalendar(pdt, "gregory")
+	if got := g.WithPlainTime(mustPlainTime(t, 9, 15, 0, 0, 0, 0)).ToString().ToGoString(); got != "2020-05-15T09:15:00[u-ca=gregory]" {
+		t.Errorf("gregory withPlainTime = %q, want %q", got, "2020-05-15T09:15:00[u-ca=gregory]")
+	}
+}
+
 // TestPlainDateTimeToZonedDateTime checks the wall clock pins to a zone under each
 // disambiguation, including a spring-forward gap and a fall-back overlap. Every value was checked
 // against @js-temporal/polyfill.

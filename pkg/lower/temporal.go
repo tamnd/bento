@@ -1309,6 +1309,17 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 			name = "ToPlainTime"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "withPlainTime":
+		what := "Temporal.PlainDateTime.prototype.withPlainTime"
+		time, err := r.plainDateTimeWithPlainTimeArg(what, argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithPlainTime")}, Args: []ast.Expr{time}}, nil
 	case "toZonedDateTime":
 		what := "Temporal.PlainDateTime.prototype.toZonedDateTime"
 		tz, disambiguation, err := r.plainDateTimeToZonedArgs(what, argNodes)
@@ -1323,6 +1334,47 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " is a later slice"}
 	}
+}
+
+// plainDateTimeWithPlainTimeArg reads the argument of Temporal.PlainDateTime.prototype.withPlainTime
+// into the *PlainTime the runtime pairs with the date. No argument, or undefined, defaults the wall
+// clock to midnight (a nil *PlainTime). Otherwise the argument is a Temporal.PlainTime, a time
+// string (a literal or a string-typed value parsed at run time), or a plain-time-like bag of number
+// fields regulated under constrain. Any other shape hands back, since the time would then depend on
+// a coercion this slice does not carry.
+func (r *Renderer) plainDateTimeWithPlainTimeArg(what string, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		return ident("nil"), nil
+	}
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: what + " takes at most one argument"}
+	}
+	n := argNodes[0]
+	if r.isPlainTime(n) {
+		return r.lowerExpr(n)
+	}
+	if lit, ok := r.stringLiteralValue(n); ok {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{stringLit(lit)}}, nil
+	}
+	if r.isString(n) {
+		e, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{goStringOf(e)}}, nil
+	}
+	if n.Kind() == frontend.NodeObjectLiteralExpression {
+		fields, err := r.plainTimeBagFields(what, n)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		args := append(fields[:], stringLit("constrain"))
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromFields"), Args: args}, nil
+	}
+	return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainTime, a time string, or a time-like bag is a later slice"}
 }
 
 // plainDateTimeToZonedArgs reads the arguments of Temporal.PlainDateTime.prototype.toZonedDateTime
