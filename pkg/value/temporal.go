@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -2597,6 +2598,90 @@ func ZonedDateTimeFromString(s string) *ZonedDateTime {
 		epoch = disambiguateCompatible(loc, wall)
 	default:
 		epoch = matchZoneOffset(loc, wall, p.offsetNanoseconds, s, canon)
+	}
+	validateEpochNanoseconds(epoch)
+	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon)}
+}
+
+// offsetFieldPattern matches the offset a property bag carries in its offset field, the same
+// grammar the ISO string offset uses: a sign, then hours and optional minutes, seconds, and a
+// fractional second, with the colons optional. A leading U+2212 minus is accepted alongside the
+// ASCII hyphen the way the specification's grammar allows.
+var offsetFieldPattern = regexp.MustCompile(`^([+\-\x{2212}])(\d{2})(?::?(\d{2}))?(?::?(\d{2}))?(?:[.,](\d{1,9}))?$`)
+
+// parseOffsetFieldNanos reads a property bag's offset field into a signed nanosecond offset. The
+// field is a UTC offset like "-05:00" or "+0530", not a zone name, so it names a fixed shift the
+// offset option weighs against the zone. A field that does not match the offset grammar throws a
+// RangeError, the way Temporal's ParseDateTimeUTCOffset does.
+func parseOffsetFieldNanos(s string) int64 {
+	m := offsetFieldPattern.FindStringSubmatch(s)
+	if m == nil {
+		Throw(NewRangeError(FromGoString("offset " + s + " is not a valid UTC offset")))
+	}
+	sign := int64(1)
+	if m[1] != "+" {
+		sign = -1
+	}
+	hour, _ := strconv.Atoi(m[2])
+	minute := 0
+	if m[3] != "" {
+		minute, _ = strconv.Atoi(m[3])
+	}
+	second := 0
+	if m[4] != "" {
+		second, _ = strconv.Atoi(m[4])
+	}
+	var fracNanos int64
+	if m[5] != "" {
+		frac := m[5]
+		for len(frac) < 9 {
+			frac += "0"
+		}
+		fracNanos, _ = strconv.ParseInt(frac, 10, 64)
+	}
+	total := (int64(hour)*3600+int64(minute)*60+int64(second))*1_000_000_000 + fracNanos
+	return sign * total
+}
+
+// ZonedDateTimeFromFields implements Temporal.ZonedDateTime.from over a property bag. The date and
+// time fields build a wall-clock reading through PlainDateTimeFromFields under the overflow option,
+// the timeZone field names the zone, and the reading folds to an exact instant one of two ways. A
+// bag with no offset field resolves through the zone under the disambiguation option, exactly as a
+// bare string does. A bag that carries an offset field weighs it under the offset option: use takes
+// the offset at face value and reads the instant as the wall clock less that offset; ignore drops
+// the offset and resolves through disambiguation; prefer keeps a zone instant whose offset matches
+// and otherwise falls to disambiguation; reject demands a zone instant whose offset matches and
+// throws when none does. bento's ZonedDateTime hosts only the ISO calendar, so the lowerer hands
+// back a bag naming another before this is reached.
+func ZonedDateTimeFromFields(year, month, day float64, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], timeZone string, offset Opt[string], overflow, disambiguation, offsetOption string) *ZonedDateTime {
+	pdt := PlainDateTimeFromFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond, "iso8601", overflow)
+	loc, canon := resolveTimeZone(timeZone)
+	wall := wallNanoseconds(isoParse{
+		year: pdt.date.year, month: pdt.date.month, day: pdt.date.day,
+		hour: pdt.time.hour, minute: pdt.time.minute, second: pdt.time.second,
+		millisecond: pdt.time.millisecond, microsecond: pdt.time.microsecond, nanosecond: pdt.time.nanosecond,
+	})
+	var epoch *big.Int
+	switch {
+	case offset.IsUndefined() || offsetOption == "ignore":
+		epoch = disambiguatePossible(loc, wall, disambiguation, canon)
+	case offsetOption == "use":
+		epoch = new(big.Int).Sub(wall, big.NewInt(parseOffsetFieldNanos(offset.Get())))
+	case offsetOption == "prefer":
+		offNs := parseOffsetFieldNanos(offset.Get())
+		epoch = nil
+		for _, cand := range possibleInstants(loc, wall) {
+			off := new(big.Int).Sub(wall, cand)
+			if off.IsInt64() && off.Int64() == offNs {
+				epoch = cand
+				break
+			}
+		}
+		if epoch == nil {
+			epoch = disambiguatePossible(loc, wall, disambiguation, canon)
+		}
+	default: // reject
+		epoch = matchZoneOffset(loc, wall, parseOffsetFieldNanos(offset.Get()), timeZone, canon)
 	}
 	validateEpochNanoseconds(epoch)
 	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon)}

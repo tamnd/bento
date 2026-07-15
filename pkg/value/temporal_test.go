@@ -2304,6 +2304,73 @@ func TestZonedDateTimeDayQueries(t *testing.T) {
 	}
 }
 
+// TestZonedDateTimeFromFields pins Temporal.ZonedDateTime.from over a property bag: an ordinary
+// reading, the two disambiguation branches across a spring-forward gap and a fall-back overlap, and
+// every offset-option branch weighing a supplied offset against the zone. Each value was checked
+// against @js-temporal/polyfill.
+func TestZonedDateTimeFromFields(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	noStr := None[string]()
+	someStr := Some[string]
+	from := func(y, mo, d float64, h, mi Opt[float64], off Opt[string], overflow, disamb, offOpt string) string {
+		return ZonedDateTimeFromFields(y, mo, d, h, mi, none, none, none, none, "America/New_York", off, overflow, disamb, offOpt).ToString().ToGoString()
+	}
+	// Ordinary reading.
+	if got := from(2024, 6, 15, some(12), some(30), noStr, "constrain", "compatible", "reject"); got != "2024-06-15T12:30:00-04:00[America/New_York]" {
+		t.Errorf("basic = %q", got)
+	}
+	// Spring-forward gap: compatible shifts forward, earlier shifts back.
+	if got := from(2024, 3, 10, some(2), some(30), noStr, "constrain", "compatible", "reject"); got != "2024-03-10T03:30:00-04:00[America/New_York]" {
+		t.Errorf("gap compatible = %q", got)
+	}
+	if got := from(2024, 3, 10, some(2), some(30), noStr, "constrain", "earlier", "reject"); got != "2024-03-10T01:30:00-05:00[America/New_York]" {
+		t.Errorf("gap earlier = %q", got)
+	}
+	// Fall-back overlap: compatible takes the earlier branch, later the second.
+	if got := from(2024, 11, 3, some(1), some(30), noStr, "constrain", "compatible", "reject"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap compatible = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), noStr, "constrain", "later", "reject"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap later = %q", got)
+	}
+	// Offset option reject: the supplied offset selects the matching overlap branch.
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-05:00"), "constrain", "compatible", "reject"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap offset -05:00 reject = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-04:00"), "constrain", "compatible", "reject"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap offset -04:00 reject = %q", got)
+	}
+	// use takes the offset at face value; ignore drops it; prefer keeps a match and otherwise falls back.
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-05:00"), "constrain", "compatible", "use"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap offset use = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("+05:00"), "constrain", "compatible", "ignore"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap offset ignore = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-05:00"), "constrain", "compatible", "prefer"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap offset prefer match = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("+05:00"), "constrain", "compatible", "prefer"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap offset prefer fallback = %q", got)
+	}
+	// overflow constrain clamps an out-of-range month.
+	if got := from(2024, 13, 15, some(12), none, noStr, "constrain", "compatible", "reject"); got != "2024-12-15T12:00:00-05:00[America/New_York]" {
+		t.Errorf("overflow constrain = %q", got)
+	}
+	// disambiguation reject throws inside a gap; a non-matching offset under reject throws.
+	if !zdtCall(func() {
+		ZonedDateTimeFromFields(2024, 3, 10, some(2), some(30), none, none, none, none, "America/New_York", noStr, "constrain", "reject", "reject")
+	}) {
+		t.Errorf("gap reject did not throw")
+	}
+	if !zdtCall(func() {
+		ZonedDateTimeFromFields(2024, 11, 3, some(1), some(30), none, none, none, none, "America/New_York", someStr("+05:00"), "constrain", "compatible", "reject")
+	}) {
+		t.Errorf("offset reject did not throw")
+	}
+}
+
 // zdtCall runs f and reports whether it threw a Temporal error.
 func zdtCall(f func()) (threw bool) {
 	defer func() {
