@@ -367,9 +367,9 @@ func instantAccessor(prop string) (method string, ok bool) {
 // the UTC ISO 8601 string; each takes no options in this slice, so a call with arguments
 // beyond the ones handled hands back. add and subtract fold a Duration's time part into the
 // epoch count, rejecting the calendar units at run time. until and since report the exact-time
-// difference balanced from largestUnit down and rounded at smallestUnit. The remaining rounding
-// method (round) and the conversions (toZonedDateTimeISO, toLocaleString) hand back with a named
-// reason.
+// difference balanced from largestUnit down and rounded at smallestUnit. round rounds the epoch
+// count to a time unit against the day length. The conversions (toZonedDateTimeISO,
+// toZonedDateTime, toLocaleString) hand back with a named reason.
 func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "equals":
@@ -443,6 +443,17 @@ func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argN
 			fn = "Since"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(fn)}, Args: []ast.Expr{other, stringLit(largestUnit), stringLit(smallestUnit), increment, stringLit(mode)}}, nil
+	case "round":
+		what := "Temporal.Instant.prototype.round"
+		unit, increment, mode, err := r.plainTimeRoundOptions(what, argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Round")}, Args: []ast.Expr{stringLit(unit), increment, stringLit(mode)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype." + method + " is a later slice"}
 	}
