@@ -1953,6 +1953,82 @@ func anyDurationFieldPresent(fields ...Opt[float64]) bool {
 	return false
 }
 
+// Add implements Temporal.Duration.prototype.add, and Subtract implements subtract, which is
+// add over a negated operand. The reduced Temporal profile drops the relativeTo option from
+// both, so neither can balance calendar units: if the receiver or the operand carries years,
+// months, or weeks, a RangeError is thrown. Otherwise the two durations fold to one signed
+// nanosecond count over a fixed 24-hour day and re-balance to the coarser of their two default
+// largest units, days when either counts whole days and the largest time unit present
+// otherwise.
+func (d *Duration) Add(other *Duration) *Duration {
+	return addDurations(d, other)
+}
+
+// Subtract implements Temporal.Duration.prototype.subtract as add over a negated operand.
+func (d *Duration) Subtract(other *Duration) *Duration {
+	return addDurations(d, other.Negated())
+}
+
+func addDurations(a, b *Duration) *Duration {
+	if a.years != 0 || a.months != 0 || a.weeks != 0 || b.years != 0 || b.months != 0 || b.weeks != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.Duration.prototype.add and subtract cannot balance years, months, or weeks without a relativeTo reference, which they do not accept")))
+	}
+	total := new(big.Int).Add(durationDayTimeNanos(a), durationDayTimeNanos(b))
+	rank := a.defaultLargestRank()
+	if r := b.defaultLargestRank(); r < rank {
+		rank = r
+	}
+	return balanceDayTimeNanos(total, rank)
+}
+
+// defaultLargestRank returns the rank of a Duration's coarsest non-zero field on the scale
+// addDurations balances against, day counting as -1 and hour through nanosecond as 0 through 5
+// to match durationFromDayNanos. An all-zero duration reports nanosecond, the finest, so two
+// empty durations fold to an empty result. Only the day and time fields are consulted, since
+// addDurations rejects any duration that carries years, months, or weeks.
+func (d *Duration) defaultLargestRank() int {
+	switch {
+	case d.days != 0:
+		return -1
+	case d.hours != 0:
+		return 0
+	case d.minutes != 0:
+		return 1
+	case d.seconds != 0:
+		return 2
+	case d.milliseconds != 0:
+		return 3
+	case d.microseconds != 0:
+		return 4
+	default:
+		return 5
+	}
+}
+
+// durationDayTimeNanos folds a Duration's days and six time fields into one signed nanosecond
+// count, each day nsPerDay over a fixed 24-hour day. The years, months, and weeks fields are
+// not consulted; addDurations rejects a duration that carries them.
+func durationDayTimeNanos(d *Duration) *big.Int {
+	total := bigMulInt(d.days, 86_400_000_000_000)
+	total.Add(total, durationTimeNanos(d))
+	return total
+}
+
+// balanceDayTimeNanos splits a signed nanosecond count into a Duration whose coarsest field is
+// fixed by rank, day at -1 and hour through nanosecond at 0 through 5. At day rank the whole
+// days come off first at nsPerDay each and the sub-day remainder balances across the six time
+// fields; at a time rank durationFromDayNanos balances the whole count with no day field.
+func balanceDayTimeNanos(total *big.Int, rank int) *Duration {
+	if rank > -1 {
+		return durationFromDayNanos(total, rank)
+	}
+	days := new(big.Int).Quo(total, nsPerDay)
+	rem := new(big.Int).Rem(total, nsPerDay)
+	t := durationFromDayNanos(rem, 0)
+	t.days = float64(days.Int64())
+	return t
+}
+
 // toIntegerIfIntegral implements the abstract operation ToIntegerIfIntegral (Temporal):
 // a NaN, non-finite, or non-integral value throws a RangeError, and an integral value is
 // returned unchanged. It is the gate Temporal.Duration uses on every field, and it

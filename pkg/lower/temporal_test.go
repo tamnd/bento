@@ -476,6 +476,22 @@ console.log(d.hours);`
 	}
 }
 
+// TestDurationAddSubtractConstruction pins Temporal.Duration.prototype.add and subtract over a
+// Duration operand to the runtime Add and Subtract calls.
+func TestDurationAddSubtractConstruction(t *testing.T) {
+	const src = `const a = new Temporal.Duration(0, 0, 0, 2);
+const b = new Temporal.Duration(0, 0, 0, 0, 50);
+const sum = a.add(b);
+const diff = a.subtract(b);
+console.log(sum.days, diff.days);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Add(", ".Subtract("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestDurationHandBacks pins the honest ceilings for Duration: the balancing and rounding
 // methods and compare each hand back with a reason naming where the work belongs, waiting on
 // the relativeTo reference and the calendar model.
@@ -486,9 +502,9 @@ func TestDurationHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "add arithmetic",
-			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst e = d.add(new Temporal.Duration(0, 0, 0, 1));\nconsole.log(e.days);",
-			want: "Temporal.Duration.prototype.add is a later slice",
+			name: "add over a non-Duration argument",
+			src:  "const d = new Temporal.Duration(0, 0, 0, 1);\nconst e = d.add(\"P1D\");\nconsole.log(e.days);",
+			want: "Temporal.Duration.prototype.add over an argument that is not a Temporal.Duration",
 		},
 		{
 			name: "round",

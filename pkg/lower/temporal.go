@@ -1009,10 +1009,11 @@ func (r *Renderer) newZonedDateTime(argNodes []frontend.Node) (ast.Expr, error) 
 
 // durationMethodCall lowers a method call on a Duration receiver. negated and abs return a
 // reshaped Duration, with overlays a partial-duration bag onto the receiver (a pure reshape,
-// no balancing, so it needs no relativeTo), and toString and toJSON render the ISO 8601
-// duration string. The methods that balance or round across units (round, total, add,
-// subtract) need a relativeTo reference and the calendar model, so they hand back with a
-// named reason.
+// no balancing, so it needs no relativeTo), toString and toJSON render the ISO 8601 duration
+// string, and add and subtract fold the receiver and a Duration operand over a fixed 24-hour
+// day (the reduced profile takes no relativeTo, so both throw a RangeError at run time when an
+// operand carries years, months, or weeks). round and total, which round across the irregular
+// calendar units and need a relativeTo reference, hand back with a named reason.
 func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "negated", "abs":
@@ -1054,6 +1055,26 @@ func (r *Renderer) durationMethodCall(recvNode frontend.Node, method string, arg
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("With")}, Args: fields[:]}, nil
+	case "add", "subtract":
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " takes exactly one argument"}
+		}
+		if !r.isDuration(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " over an argument that is not a Temporal.Duration (a string or bag to coerce) is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		name := "Add"
+		if method == "subtract" {
+			name = "Subtract"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: []ast.Expr{other}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Duration.prototype." + method + " is a later slice"}
 	}

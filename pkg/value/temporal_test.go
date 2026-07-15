@@ -1487,6 +1487,47 @@ func TestDurationWithAndFrom(t *testing.T) {
 	})
 }
 
+// TestDurationAddSubtract checks add and subtract against the polyfill: the reduced profile
+// takes no relativeTo, so both fold days and time over a fixed 24-hour day, balance to the
+// coarser of the two operands' default largest units, and throw a RangeError when either
+// operand carries years, months, or weeks.
+func TestDurationAddSubtract(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	// P2D + PT50H = P4DT2H (98 hours balanced back over a 24-hour day).
+	if got := d(0, 0, 0, 2).Add(d(0, 0, 0, 0, 50)).ToString().ToGoString(); got != "P4DT2H" {
+		t.Errorf("days + hours = %q, want P4DT2H", got)
+	}
+	// PT1H30M + PT30M = PT2H, both operands coarsest at the hour so no day appears.
+	if got := d(0, 0, 0, 0, 1, 30).Add(d(0, 0, 0, 0, 0, 30)).ToString().ToGoString(); got != "PT2H" {
+		t.Errorf("hours + minutes = %q, want PT2H", got)
+	}
+	// P2DT3H - PT5H = P1DT22H.
+	if got := d(0, 0, 0, 2, 3).Subtract(d(0, 0, 0, 0, 5)).ToString().ToGoString(); got != "P1DT22H" {
+		t.Errorf("subtract = %q, want P1DT22H", got)
+	}
+	base := d(0, 0, 0, 2)
+	base.Add(d(0, 0, 0, 0, 1))
+	if base.ToString().ToGoString() != "P2D" {
+		t.Error("add mutated the receiver")
+	}
+	assertRangeError := func(name string, fn func()) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Errorf("%s did not throw", name)
+				return
+			}
+			if _, ok := r.(Thrown); !ok {
+				panic(r)
+			}
+		}()
+		fn()
+	}
+	assertRangeError("add months operand", func() { d(0, 0, 0, 1).Add(d(0, 1)) })
+	assertRangeError("add weeks receiver", func() { d(0, 0, 1).Add(d(0, 0, 0, 1)) })
+	assertRangeError("subtract years", func() { d(1).Subtract(d(0, 0, 0, 1)) })
+}
+
 // TestDurationRejects checks the RangeError cases against the polyfill: a non-integral
 // component (Duration rejects rather than truncates), a NaN or non-finite component, a
 // mixed-sign set, a years field at 2^32, and a seconds field at 2^53.
