@@ -26,5 +26,5 @@ func main() {
 	value.ConsoleLog(z.WithPlainTime(value.NewPlainTime(8, 0, 0, 0, 0, 0)).ToString())
 	value.ConsoleLog(z.WithPlainTime(nil).ToString())
 	value.ConsoleLog(z.WithTimeZone("Asia/Tokyo").ToString())
-	value.ConsoleLog(z.WithCalendar().ToString())
+	value.ConsoleLog(z.WithCalendar("iso8601").ToString())
 }

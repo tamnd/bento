@@ -3812,11 +3812,16 @@ func (z *ZonedDateTime) WithTimeZone(timeZone string) *ZonedDateTime {
 	return moved
 }
 
-// WithCalendar implements Temporal.ZonedDateTime.prototype.withCalendar for the ISO calendar, the
-// only one bento's ZonedDateTime hosts. It keeps the instant and the zone and returns a copy; a
-// non-ISO calendar hands back at lowering, so this is only reached for iso8601, an identity move.
-func (z *ZonedDateTime) WithCalendar() *ZonedDateTime {
-	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: z.cal}
+// WithCalendar implements Temporal.ZonedDateTime.prototype.withCalendar: it keeps the instant and the
+// zone and reinterprets the wall-clock fields under another calendar, returning a copy that reads its
+// year, era, and eraYear through the new calendar. The id is canonicalized and validated, so an
+// unhosted or invalid one throws a RangeError; the lowerer only routes a hosted one here.
+func (z *ZonedDateTime) WithCalendar(calendar string) *ZonedDateTime {
+	cal, ok := canonicalCalendar(calendar)
+	if !ok {
+		Throw(NewRangeError(FromGoString("invalid calendar identifier " + calendar)))
+	}
+	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: cal}
 }
 
 // StartOfDay implements Temporal.ZonedDateTime.prototype.startOfDay. It returns the first instant of

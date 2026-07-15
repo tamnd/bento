@@ -2129,9 +2129,9 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 			want: "Temporal.ZonedDateTime.prototype.with over a bag with the field offset is a later slice",
 		},
 		{
-			name: "withCalendar to a non-ISO calendar",
-			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.withCalendar(\"gregory\");\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar other than a literal iso8601 is a later slice",
+			name: "withCalendar to a calendar bento does not host",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.withCalendar(\"hebrew\");\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar that is dynamic or one bento does not host is a later slice",
 		},
 		{
 			name: "getTimeZoneTransition",
@@ -2314,6 +2314,18 @@ console.log(d.calendarId);`
 	got := renderProgram(t, src)
 	if !strings.Contains(got, `value.PlainDateWithCalendar(`) || !strings.Contains(got, `"gregory"`) {
 		t.Errorf("withCalendar did not route to PlainDateWithCalendar:\n%s", got)
+	}
+}
+
+// TestZonedDateTimeWithCalendar pins withCalendar on a ZonedDateTime routing to the WithCalendar
+// method carrying a hosted calendar id, so a non-ISO calendar reinterprets the wall-clock fields
+// rather than handing back.
+func TestZonedDateTimeWithCalendar(t *testing.T) {
+	const src = `const z = new Temporal.ZonedDateTime(0n, "UTC").withCalendar("roc");
+console.log(z.calendarId);`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `.WithCalendar("roc")`) {
+		t.Errorf("withCalendar did not route to WithCalendar with the roc id:\n%s", got)
 	}
 }
 

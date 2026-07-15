@@ -2756,8 +2756,16 @@ func TestZonedDateTimeWithFamily(t *testing.T) {
 		t.Errorf("withTimeZone = %q", got)
 	}
 	// withCalendar: identity for the ISO calendar.
-	if got := base.WithCalendar().ToString().ToGoString(); got != "2024-06-15T12:30:45-04:00[America/New_York]" {
+	if got := base.WithCalendar("iso8601").ToString().ToGoString(); got != "2024-06-15T12:30:45-04:00[America/New_York]" {
 		t.Errorf("withCalendar = %q", got)
+	}
+	// withCalendar: a non-ISO calendar re-reads the wall-clock year and era.
+	roc := base.WithCalendar("roc")
+	if got := roc.CalendarId().ToGoString(); got != "roc" {
+		t.Errorf("withCalendar id = %q, want roc", got)
+	}
+	if got := roc.Year(); got != 113 {
+		t.Errorf("withCalendar roc year = %v, want 113", got)
 	}
 }
 

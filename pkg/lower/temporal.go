@@ -839,15 +839,16 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.withCalendar takes exactly one argument"}
 		}
-		lit, ok := r.stringLiteralValue(argNodes[0])
-		if !ok || (!strings.EqualFold(lit, "iso8601") && !strings.EqualFold(lit, "iso")) {
-			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar other than a literal iso8601 is a later slice"}
+		cal, ok := r.hostedCalendar(argNodes[0])
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar that is dynamic or one bento does not host is a later slice"}
 		}
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithCalendar")}}, nil
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("WithCalendar")}, Args: []ast.Expr{calendarLit(cal)}}, nil
 	case "startOfDay":
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.startOfDay takes no arguments"}
@@ -1431,7 +1432,7 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 		}
 		cal, ok := r.hostedCalendar(argNodes[0])
 		if !ok {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype.withCalendar over a calendar other than a literal iso8601 or gregory is a later slice"}
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype.withCalendar over a calendar that is dynamic or one bento does not host is a later slice"}
 		}
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
@@ -2347,7 +2348,7 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 		}
 		cal, ok := r.hostedCalendar(argNodes[0])
 		if !ok {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.withCalendar over a calendar other than a literal iso8601 or gregory is a later slice"}
+			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.withCalendar over a calendar that is dynamic or one bento does not host is a later slice"}
 		}
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
