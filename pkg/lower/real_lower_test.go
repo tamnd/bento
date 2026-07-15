@@ -130,6 +130,13 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2345 || d.Code == 2322 {
 			continue
 		}
+		// 2769 (no overload matches this call) is admitted because a call to a user-defined
+		// overloaded function lowers through the implementation's boxed dispatch and the
+		// end-of-render reconciliation hands back any 2769 site that path did not reach, so
+		// mirror the front door (build.go toleratedOverload) here too.
+		if d.Code == 2769 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog

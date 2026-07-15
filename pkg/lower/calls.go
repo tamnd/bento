@@ -224,6 +224,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "called function name is not a Go identifier"}
 		}
+		// A call to an overloaded function runs its all-dynamic implementation, which
+		// lowered to a Go func over value.Value parameters. Its argument bridging is not
+		// the matched overload's parameter types SignatureAt reports here, so it routes to
+		// overloadedCall, which boxes each argument instead. This is checked ahead of the
+		// monomorphization and default handling below, which read a single signature the
+		// overloaded callee does not have.
+		if _, ok := r.overloadedFuncImpl(sym); ok {
+			return r.overloadedCall(n, name, kids[1:])
+		}
 		// A call to a generic function resolves to the monomorphization its type
 		// arguments fix, so the callee is the specialized Go name (Identity_num) the
 		// declaration emitted, not the bare exported name. A generic bento could not
