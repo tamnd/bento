@@ -973,6 +973,26 @@ func TestPlainDateTimeToString(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeConversions checks toPlainDate and toPlainTime split the date-time into its
+// two halves. toPlainDate keeps the calendar and drops the clock; toPlainTime keeps the clock and
+// drops the date. Both return a fresh object, verified against @js-temporal/polyfill.
+func TestPlainDateTimeConversions(t *testing.T) {
+	pdt := mustPlainDateTime(t, 2020, 5, 15, 13, 30, 45, 500, 250, 125)
+	if got := pdt.ToPlainDate().ToString().ToGoString(); got != "2020-05-15" {
+		t.Errorf("toPlainDate = %q, want %q", got, "2020-05-15")
+	}
+	if got := pdt.ToPlainTime().ToString().ToGoString(); got != "13:30:45.500250125" {
+		t.Errorf("toPlainTime = %q, want %q", got, "13:30:45.500250125")
+	}
+	// Each conversion returns a distinct object, not an alias of the receiver's halves.
+	if &pdt.date == pdt.ToPlainDate() {
+		t.Error("toPlainDate aliased the receiver's date half, want a copy")
+	}
+	if &pdt.time == pdt.ToPlainTime() {
+		t.Error("toPlainTime aliased the receiver's time half, want a copy")
+	}
+}
+
 // TestPlainDateTimeCompareAndEquals checks the static comparator and equals, including a
 // difference that lives only in the time so the date-first fall-through is exercised.
 func TestPlainDateTimeCompareAndEquals(t *testing.T) {
