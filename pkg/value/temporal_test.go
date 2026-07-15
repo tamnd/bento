@@ -2237,6 +2237,57 @@ func TestZonedDateTimeRound(t *testing.T) {
 	}
 }
 
+func TestZonedDateTimeWithFamily(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	base := ZonedDateTimeFromString("2024-06-15T12:30:45-04:00[America/New_York]")
+	// with: overlay date and time fields, offset preferred.
+	if got := base.WithFields(none, none, none, none, some(0), some(0), none, none, none, "constrain").ToString().ToGoString(); got != "2024-06-15T12:00:00-04:00[America/New_York]" {
+		t.Errorf("with minute/second = %q", got)
+	}
+	gap := ZonedDateTimeFromString("2024-03-10T12:00:00-04:00[America/New_York]")
+	if got := gap.WithFields(none, none, none, some(2), some(30), none, none, none, none, "constrain").ToString().ToGoString(); got != "2024-03-10T03:30:00-04:00[America/New_York]" {
+		t.Errorf("with into the gap = %q", got)
+	}
+	overlap := ZonedDateTimeFromString("2024-11-03T01:30:00-05:00[America/New_York]")
+	if got := overlap.WithFields(none, none, none, none, some(15), none, none, none, none, "constrain").ToString().ToGoString(); got != "2024-11-03T01:15:00-05:00[America/New_York]" {
+		t.Errorf("with inside the overlap = %q", got)
+	}
+	jan31 := ZonedDateTimeFromString("2024-01-31T12:00:00-05:00[America/New_York]")
+	if got := jan31.WithFields(none, some(2), none, none, none, none, none, none, none, "constrain").ToString().ToGoString(); got != "2024-02-29T12:00:00-05:00[America/New_York]" {
+		t.Errorf("with month constrain = %q", got)
+	}
+	if !zdtCall(func() { jan31.WithFields(none, some(2), none, none, none, none, none, none, none, "reject") }) {
+		t.Errorf("with month reject did not throw")
+	}
+	// withPlainTime: replace the time, compatible disambiguation.
+	if got := base.WithPlainTime(PlainTimeFromString("08:00")).ToString().ToGoString(); got != "2024-06-15T08:00:00-04:00[America/New_York]" {
+		t.Errorf("withPlainTime = %q", got)
+	}
+	if got := base.WithPlainTime(nil).ToString().ToGoString(); got != "2024-06-15T00:00:00-04:00[America/New_York]" {
+		t.Errorf("withPlainTime midnight = %q", got)
+	}
+	// withTimeZone: keep the instant, re-home the zone.
+	if got := base.WithTimeZone("Asia/Tokyo").ToString().ToGoString(); got != "2024-06-16T01:30:45+09:00[Asia/Tokyo]" {
+		t.Errorf("withTimeZone = %q", got)
+	}
+	// withCalendar: identity for the ISO calendar.
+	if got := base.WithCalendar().ToString().ToGoString(); got != "2024-06-15T12:30:45-04:00[America/New_York]" {
+		t.Errorf("withCalendar = %q", got)
+	}
+}
+
+// zdtCall runs f and reports whether it threw a Temporal error.
+func zdtCall(f func()) (threw bool) {
+	defer func() {
+		if recover() != nil {
+			threw = true
+		}
+	}()
+	f()
+	return false
+}
+
 // TestZonedDateTimeRejects checks the range guard and the unknown-zone guard both throw a
 // RangeError.
 func TestZonedDateTimeRejects(t *testing.T) {

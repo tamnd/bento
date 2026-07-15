@@ -3017,6 +3017,59 @@ func (z *ZonedDateTime) Round(smallestUnit string, increment float64, roundingMo
 	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
 }
 
+// wallCount returns the naive nanosecond count of a wall-clock reading, the epoch-day count of its
+// ISO date scaled to nanoseconds plus its time of day, the input possibleInstants and the
+// disambiguation helpers take.
+func wallCount(dt *PlainDateTime) *big.Int {
+	c := new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(dt.date.year, dt.date.month, dt.date.day))), nsPerDay)
+	c.Add(c, dt.time.dayNanos())
+	return c
+}
+
+// WithFields implements Temporal.ZonedDateTime.prototype.with. It overlays the bag's present date
+// and time fields onto the wall-clock reading under the overflow rule, reusing the PlainDateTime
+// field overlay, then re-resolves the reshaped wall clock to an instant preferring the original
+// offset, the default offset option with is: a field changed inside a fall-back overlap keeps the
+// branch the value was on, and a field that lands the wall clock in a spring-forward gap shifts
+// forward under the compatible fallback. The zone and the calendar carry through.
+func (z *ZonedDateTime) WithFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], overflow string) *ZonedDateTime {
+	reshaped := z.localDateTime().WithFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond, overflow)
+	result := z.resolvePreferOffset(wallCount(reshaped), int64(z.offsetSeconds())*1_000_000_000)
+	validateEpochNanoseconds(result)
+	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// WithPlainTime implements Temporal.ZonedDateTime.prototype.withPlainTime. It keeps the wall-clock
+// date, replaces the time of day, defaulting to midnight when none is given, and re-resolves through
+// the compatible disambiguation rather than preferring the old offset, so a new time inside a
+// fall-back overlap takes the earlier branch the way the specification's withPlainTime does.
+func (z *ZonedDateTime) WithPlainTime(time *PlainTime) *ZonedDateTime {
+	t := PlainTime{}
+	if time != nil {
+		t = *time
+	}
+	reshaped := &PlainDateTime{date: z.localDateTime().date, time: t}
+	result := disambiguateCompatible(z.loc, wallCount(reshaped))
+	validateEpochNanoseconds(result)
+	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// WithTimeZone implements Temporal.ZonedDateTime.prototype.withTimeZone. It keeps the exact instant
+// and re-homes it in another zone, so the wall clock and the offset re-read there while the instant
+// is unchanged. An unrecognized identifier throws a RangeError through the shared resolver.
+func (z *ZonedDateTime) WithTimeZone(timeZone string) *ZonedDateTime {
+	moved := newZonedDateTime(z.ns, timeZone)
+	moved.cal = z.cal
+	return moved
+}
+
+// WithCalendar implements Temporal.ZonedDateTime.prototype.withCalendar for the ISO calendar, the
+// only one bento's ZonedDateTime hosts. It keeps the instant and the zone and returns a copy; a
+// non-ISO calendar hands back at lowering, so this is only reached for iso8601, an identity move.
+func (z *ZonedDateTime) WithCalendar() *ZonedDateTime {
+	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
 // Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two
 // zoned date-times are equal when they name the same instant in the same zone under the same
 // calendar, so the check is the count, the canonical zone identifier, and the calendar.
