@@ -354,6 +354,38 @@ console.log("sync");
 	}
 }
 
+// TestAsyncGeneratorMethodDrives runs an instance async generator method through a manual
+// next() drive, pinning that the method produces a *value.AsyncGen the consumer pulls, that
+// this reads the receiver inside the coroutine, and that an optional parameter narrows both
+// supplied and omitted.
+func TestAsyncGeneratorMethodDrives(t *testing.T) {
+	skipIfShort(t)
+	const src = `class C {
+  base: number;
+  constructor(b: number) { this.base = b; }
+  async *gen(n?: number): AsyncGenerator<number> {
+    const add = n === undefined ? 0 : n;
+    yield this.base + add;
+    yield this.base + add + 1;
+  }
+}
+async function main() {
+  const c = new C(100);
+  const g = c.gen(5);
+  console.log((await g.next()).value);
+  console.log((await g.next()).value);
+  const g2 = c.gen();
+  console.log((await g2.next()).value);
+}
+main();
+`
+	got := runProgramGo(t, src)
+	want := "105\n106\n100\n"
+	if got != want {
+		t.Errorf("async generator method drive wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestAsyncHandsBack pins the boundary: each async construct outside the
 // await-free subset hands the unit back with its own honest reason rather than
 // mislowering the suspension or propagation away.
@@ -372,11 +404,9 @@ func TestAsyncHandsBack(t *testing.T) {
 			"an await outside a lowered async body is a later slice",
 		},
 		{
-			"asyncGenerator",
-			"class C { async *g(): AsyncGenerator<number> { yield 1; } }\nconsole.log(\"x\");\n",
-			"async generator",
-		},
-		{
+			// A static async generator method keeps its handback: it is neither the
+			// instance coroutine asyncGeneratorMethodDecl builds nor the settled promise
+			// the static async path returns.
 			"staticAsyncGenerator",
 			"class C { static async *g(): AsyncGenerator<number> { yield 1; } }\nconsole.log(\"x\");\n",
 			"async generator",
