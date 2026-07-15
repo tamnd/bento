@@ -350,6 +350,16 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
 
+	// Every code 2345 the front door admitted must have flowed through a guarded
+	// bridge, one that lowered the not-assignable value safely or handed it back. A
+	// 2345 site no bridge reached was lowered by a builtin path with no representation
+	// guard and would emit Go that does not compile, so the whole unit hands back here
+	// rather than ship it (see unguarded2345). This runs after the body lowers, since
+	// only lowering records which sites the guards reached.
+	if err := r.unguarded2345(); err != nil {
+		return Program{}, err
+	}
+
 	src, err := printFile(file)
 	if err != nil {
 		return Program{}, err

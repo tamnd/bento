@@ -302,6 +302,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedComputedKey[d.Code] {
 			continue
 		}
+		if toleratedAssignability[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -483,6 +486,28 @@ var toleratedComparison = map[int]bool{
 // lets the runnable forms through and never emits Go that fails to compile.
 var toleratedComputedKey = map[int]bool{
 	2464: true, // A computed property name must be of type 'string', 'number', 'symbol', or 'any'.
+}
+
+// toleratedAssignability is the set of checker diagnostic codes bento admits because
+// an argument the checker calls not assignable to its parameter still has defined
+// run-time behavior the lowerer reproduces or safely refuses. 2345 ("Argument of
+// type 'X' is not assignable to parameter of type 'Y'") flags a call whose argument
+// type the checker cannot see fitting the parameter, the shape a widened literal
+// (a number for a numeric-literal-union parameter, both float64) or a cross-primitive
+// pass (a number for a string parameter) takes.
+//
+// Two layers keep admitting the code from ever emitting Go the toolchain rejects. The
+// argument, constructor, and binding bridges hand back when a not-assignable value and
+// its slot lower to different Go types and land the value directly when they lower to
+// the same one, so a call the guard reaches either runs or routes to the interpreter.
+// A 2345 no guarded bridge reaches, a callback whose parameter type mismatches a
+// builtin higher-order method's element, a value dropped into a builtin element slot,
+// is caught by the renderer's end-of-render reconciliation, which hands the whole unit
+// back rather than ship the broken Go such a path would emit. So the representation-safe
+// calls lower, the mismatched ones route to the engine where the run-time coercion still
+// runs, and no admitted program compiles to Go that fails to build.
+var toleratedAssignability = map[int]bool{
+	2345: true, // Argument of type 'X' is not assignable to parameter of type 'Y'.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
