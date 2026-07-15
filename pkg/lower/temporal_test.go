@@ -998,6 +998,46 @@ func TestPlainDateTimeConversions(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeWithPlainTime pins withPlainTime: no argument defaults to midnight (a nil
+// *PlainTime), a Temporal.PlainTime passes straight through, a time string parses at run time, and
+// a time-like bag regulates under constrain.
+func TestPlainDateTimeWithPlainTime(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "no argument",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 5, 15, 13, 30);\nconsole.log(dt.withPlainTime().toString());",
+			want: ".WithPlainTime(nil)",
+		},
+		{
+			name: "plain time",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 5, 15, 13, 30);\nconsole.log(dt.withPlainTime(new Temporal.PlainTime(9, 15)).toString());",
+			want: ".WithPlainTime(value.NewPlainTime(",
+		},
+		{
+			name: "time string",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 5, 15, 13, 30);\nconsole.log(dt.withPlainTime(\"22:45:10\").toString());",
+			want: ".WithPlainTime(value.PlainTimeFromString(\"22:45:10\"))",
+		},
+		{
+			name: "time-like bag",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 5, 15, 13, 30);\nconsole.log(dt.withPlainTime({ hour: 6, minute: 5 }).toString());",
+			want: "value.PlainTimeFromFields(",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("rendered program missing %q:\n%s", c.want, got)
+			}
+		})
+	}
+}
+
 // TestPlainDateTimeToZonedDateTime pins toZonedDateTime: a time-zone string lowers to
 // ToZonedDateTime with the default compatible disambiguation, and an options bag carries a
 // disambiguation string literal through.
