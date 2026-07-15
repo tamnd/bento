@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -89,6 +90,11 @@ type unionInfo struct {
 	// property whose string-literal value differs per arm. It is empty for a
 	// primitive union, which narrows on typeof rather than a property.
 	disc string
+	// needsTypeOf records that a bare typeof over a value of this union was lowered,
+	// so the renderer emits the TypeOf method that switches the tag to its typeof
+	// string. It stays false for a union only ever narrowed by a typeof compare,
+	// which folds to a tag test and never calls the method.
+	needsTypeOf bool
 }
 
 // armByDisc returns the object arm a discriminant literal selects, so a compare
@@ -771,8 +777,48 @@ func (r *Renderer) renderUnions() []ast.Decl {
 			out = append(out, unionCtor(info, a))
 		}
 		out = append(out, unionJSONArm(info))
+		if info.needsTypeOf {
+			out = append(out, unionTypeOf(info))
+		}
 	}
 	return out
+}
+
+// unionTypeOf builds the TypeOf method a bare typeof over a primitive union lowers
+// to. The value struct carries no self-describing box, so typeof cannot ask it for
+// its kind the way a dynamic value.Value answers; instead the method switches on the
+// tag and returns the arm's typeof string, the tag each arm already pins down at
+// construction. It returns a value.BStr, the same string type the folded typeof of a
+// known type and the dynamic value.Value.TypeOf both yield, so the result flows on as
+// a plain string. The trailing return is unreachable, the tag always matching an arm,
+// and only satisfies Go's terminating-statement rule.
+func unionTypeOf(info *unionInfo) ast.Decl {
+	cases := make([]ast.Stmt, 0, len(info.arms))
+	for _, a := range info.arms {
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{ident(info.tagConst(a))},
+			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+				&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(a.typeof)}}},
+			}}},
+		})
+	}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("u")}, Type: ident(info.goName)}}},
+		Name: ident("TypeOf"),
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "BStr")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.SwitchStmt{
+				Tag:  &ast.SelectorExpr{X: ident("u"), Sel: ident("tag")},
+				Body: &ast.BlockStmt{List: cases},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{
+				&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote("undefined")}}},
+			}},
+		}},
+	}
 }
 
 // unionJSONArm builds the JSONArm method that hands the union's active member to the
