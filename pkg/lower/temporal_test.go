@@ -1921,7 +1921,7 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 		{
 			name: "getTimeZoneTransition",
 			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nz.getTimeZoneTransition(\"next\");",
-			want: "Temporal.ZonedDateTime.prototype.getTimeZoneTransition is a later slice",
+			want: "Temporal.ZonedDateTime.prototype.getTimeZoneTransition needs a zone transition list the host time package does not expose",
 		},
 		{
 			name: "toLocaleString",

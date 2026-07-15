@@ -853,6 +853,13 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("StartOfDay")}}, nil
+	case "getTimeZoneTransition":
+		// The next or previous offset transition needs the zone's transition list. Go's time
+		// package resolves an offset at an instant but exposes no way to enumerate the transitions,
+		// and the reference polyfill only approximates the list with a wall-clock-dependent bounded
+		// probe, which would make the compiled output nondeterministic. So this hands back honestly
+		// rather than emit a probe that could read the wrong answer past its horizon.
+		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.getTimeZoneTransition needs a zone transition list the host time package does not expose"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " is a later slice"}
 	}
