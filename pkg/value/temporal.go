@@ -443,6 +443,20 @@ func PlainDateFromFields(year, month, day float64, calendar, overflow string) *P
 	return &PlainDate{year: int(isoYear), month: int(m), day: int(d), cal: cal}
 }
 
+// PlainDateTimeFromFields implements Temporal.PlainDateTime.from over a property bag: it builds a
+// PlainDateTime from the required year, month, and day fields plus the optional time fields under
+// the given calendar, regulating each half with the overflow option. The date half reuses
+// PlainDateFromFields, so the year is read in the calendar's own reckoning and the day clamps to
+// the resulting month under constrain; the time half lays the present fields over an all-zero base
+// so an omitted time field defaults to the zero midnight carries, then clamps to its ISO maxima.
+// Under reject an out-of-range field in either half throws a RangeError. The result keeps the
+// calendar, so a roc bag stays under roc.
+func PlainDateTimeFromFields(year, month, day float64, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], calendar, overflow string) *PlainDateTime {
+	date := PlainDateFromFields(year, month, day, calendar, overflow)
+	time := regulatePlainTime([6]float64{}, [6]Opt[float64]{hour, minute, second, millisecond, microsecond, nanosecond}, overflow)
+	return &PlainDateTime{date: *date, time: *time}
+}
+
 // ToPlainDateTime implements Temporal.PlainDate.prototype.toPlainDateTime: it pairs the date
 // with a wall-clock time to make a PlainDateTime, defaulting to midnight when no time is
 // given. The result keeps this date's calendar, so a non-ISO date stays under its calendar.
