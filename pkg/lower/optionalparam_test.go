@@ -549,6 +549,63 @@ console.log(q.b + "," + q.d);
 	}
 }
 
+// TestSuperOmitsBaseOptionalParam runs a derived constructor whose super() supplies fewer
+// arguments than the base declares, omitting the base's trailing bare optional, so the base
+// receives value.None and narrows it to the absent branch, the same short call new C makes.
+func TestSuperOmitsBaseOptionalParam(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class Base {
+  x: number;
+  y: number;
+  constructor(x: number, y?: number) {
+    this.x = x;
+    this.y = y === undefined ? -1 : y;
+  }
+}
+class Derived extends Base {
+  z: number;
+  constructor(x: number) {
+    super(x);
+    this.z = x * 2;
+  }
+}
+const d = new Derived(5);
+console.log(d.x + "," + d.y + "," + d.z);
+`
+	if got, want := runProgramGo(t, src), "5,-1,10\n"; got != want {
+		t.Fatalf("super() omitting a base optional printed %q, want %q", got, want)
+	}
+}
+
+// TestSuperOmitsTwoBaseOptionalParams runs a super() that omits two trailing base optionals,
+// so both slots fill value.None[float64]() and each base read takes the absent branch.
+func TestSuperOmitsTwoBaseOptionalParams(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class Base {
+  a: number;
+  b: number;
+  c: number;
+  constructor(a: number, b?: number, c?: number) {
+    this.a = a;
+    this.b = b === undefined ? -1 : b;
+    this.c = c === undefined ? -2 : c;
+  }
+}
+class D extends Base {
+  constructor() {
+    super(1);
+  }
+}
+const d = new D();
+console.log(d.a + "," + d.b + "," + d.c);
+`
+	if got, want := runProgramGo(t, src), "1,-1,-2\n"; got != want {
+		t.Fatalf("super() omitting two base optionals printed %q, want %q", got, want)
+	}
+}
+
 // TestCtorBooleanOptionalParamHandsBack pins that a bare boolean optional constructor
 // parameter still hands back, since boolean | undefined is a three-member union
 // optionalInner does not fold to a value.Opt[T], so the new-X omission has no option
