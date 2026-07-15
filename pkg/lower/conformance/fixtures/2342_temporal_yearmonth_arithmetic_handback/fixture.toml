@@ -1,2 +1,0 @@
-feature = "Temporal"
-handback = "Temporal.PlainYearMonth.prototype.add is a later slice"

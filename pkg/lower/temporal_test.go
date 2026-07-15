@@ -1333,6 +1333,8 @@ func TestPlainYearMonthGetters(t *testing.T) {
 		"daysInYear":   ".DaysInYear()",
 		"monthsInYear": ".MonthsInYear()",
 		"inLeapYear":   ".InLeapYear()",
+		"era":          ".Era()",
+		"eraYear":      ".EraYear()",
 	}
 	for prop, want := range cases {
 		src := "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym." + prop + ");"
@@ -1353,6 +1355,39 @@ console.log(a.toString());
 console.log(a.toJSON());`
 	got := renderProgram(t, src)
 	for _, want := range []string{".Equals(", ".ToString()", ".ToJSON()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainYearMonthArithmetic pins add, subtract, until, and since to their value.PlainYearMonth
+// methods with the overflow and largestUnit strings carried through.
+func TestPlainYearMonthArithmetic(t *testing.T) {
+	const src = `const a = new Temporal.PlainYearMonth(2020, 3);
+const b = new Temporal.PlainYearMonth(2021, 8);
+console.log(a.add({ months: 1 }).toString());
+console.log(a.subtract({ months: 1 }, { overflow: "reject" }).toString());
+console.log(a.until(b).toString());
+console.log(a.since(b, { largestUnit: "month" }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".AddDuration(", ".SubtractDuration(", ".Until(", ".Since(", "\"constrain\"", "\"reject\"", "\"year\"", "\"month\""} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestPlainYearMonthWithAndToPlainDate pins with to value.PlainYearMonth.WithFields, a literal
+// monthCode resolving to a numeric month, and toPlainDate to value.PlainYearMonth.ToPlainDate.
+func TestPlainYearMonthWithAndToPlainDate(t *testing.T) {
+	const src = `const a = new Temporal.PlainYearMonth(2020, 3);
+console.log(a.with({ month: 11 }).toString());
+console.log(a.with({ year: 1999 }, { overflow: "reject" }).toString());
+console.log(a.with({ monthCode: "M07" }).toString());
+console.log(a.toPlainDate({ day: 15 }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".WithFields(", "value.Some[float64](", "value.None[float64]()", "\"reject\"", ".ToPlainDate("} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered program missing %q:\n%s", want, got)
 		}
@@ -1385,19 +1420,19 @@ func TestPlainYearMonthHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "era union getter",
-			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym.era);",
-			want: "Temporal.PlainYearMonth.era is a later slice",
+			name: "until over a string argument",
+			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconst d = ym.until(\"2020-05\");\nconsole.log(d.months);",
+			want: "Temporal.PlainYearMonth.prototype.until over an argument that is not a Temporal.PlainYearMonth",
 		},
 		{
-			name: "add arithmetic",
-			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconst e = ym.add({ months: 1 });\nconsole.log(e.month);",
-			want: "Temporal.PlainYearMonth.prototype.add is a later slice",
+			name: "from a bag with a calendar",
+			src:  "const ym = Temporal.PlainYearMonth.from({ year: 2020, month: 3, calendar: \"gregory\" });\nconsole.log(ym.month);",
+			want: "Temporal.PlainYearMonth.from over a bag with the field calendar is a later slice",
 		},
 		{
-			name: "from a property bag",
-			src:  "const ym = Temporal.PlainYearMonth.from({ year: 2020, month: 3 });\nconsole.log(ym.month);",
-			want: "Temporal.PlainYearMonth.from over a dynamic string or a property bag is a later slice",
+			name: "from a bag missing the month",
+			src:  "const ym = Temporal.PlainYearMonth.from({ year: 2020 });\nconsole.log(ym.month);",
+			want: "Temporal.PlainYearMonth.from over a bag missing the month (a TypeError at run time) is a later slice",
 		},
 		{
 			name: "from a non-ISO calendar string",
@@ -1423,6 +1458,22 @@ console.log(ym.month);`
 	got := renderProgram(t, src)
 	if !strings.Contains(got, `value.PlainYearMonthFromString("2020-03")`) {
 		t.Errorf("rendered program missing the from-string call:\n%s", got)
+	}
+}
+
+// TestPlainYearMonthFromBag pins Temporal.PlainYearMonth.from over a property bag to
+// value.PlainYearMonthFromFields, resolving a literal monthCode to its month and carrying the
+// overflow option.
+func TestPlainYearMonthFromBag(t *testing.T) {
+	const src = `const a = Temporal.PlainYearMonth.from({ year: 2020, month: 3 });
+console.log(a.toString());
+const b = Temporal.PlainYearMonth.from({ year: 2020, monthCode: "M07" }, { overflow: "reject" });
+console.log(b.toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.PlainYearMonthFromFields(", "\"reject\""} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -1483,6 +1534,24 @@ console.log(a.toJSON());`
 	}
 }
 
+// TestPlainMonthDayWithAndToPlainDate pins the reshaping and conversion methods: with lowers to
+// WithFields over present or absent month and day optionals, resolving a literal monthCode to its
+// month and carrying the overflow option, and toPlainDate lowers to ToPlainDate over the year the
+// argument bag supplies.
+func TestPlainMonthDayWithAndToPlainDate(t *testing.T) {
+	const src = `const a = new Temporal.PlainMonthDay(3, 15);
+console.log(a.with({ day: 20 }).toString());
+console.log(a.with({ month: 4, day: 30 }, { overflow: "reject" }).toString());
+console.log(a.with({ monthCode: "M07" }).toString());
+console.log(a.toPlainDate({ year: 2020 }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".WithFields(", "value.Some[float64](", "value.None[float64]()", "\"reject\"", ".ToPlainDate("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestPlainMonthDayStatics pins Temporal.PlainMonthDay.from to value.PlainMonthDayFrom. A
 // month-day has no compare static, so from is the only static this type carries.
 func TestPlainMonthDayStatics(t *testing.T) {
@@ -1492,6 +1561,22 @@ console.log(c.day);`
 	got := renderProgram(t, src)
 	if !strings.Contains(got, "value.PlainMonthDayFrom(") {
 		t.Errorf("rendered program missing %q:\n%s", "value.PlainMonthDayFrom(", got)
+	}
+}
+
+// TestPlainMonthDayFromBag pins Temporal.PlainMonthDay.from over a property bag to
+// value.PlainMonthDayFromFields, resolving a literal monthCode to its month, emitting the optional
+// year as a value.Opt, and carrying the overflow option.
+func TestPlainMonthDayFromBag(t *testing.T) {
+	const src = `const a = Temporal.PlainMonthDay.from({ month: 3, day: 15 });
+console.log(a.toString());
+const b = Temporal.PlainMonthDay.from({ year: 2021, monthCode: "M02", day: 29 });
+console.log(b.toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.PlainMonthDayFromFields(", "value.Some[float64](", "value.None[float64]()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -1505,19 +1590,24 @@ func TestPlainMonthDayHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "with reshaping",
-			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst e = md.with({ day: 16 });\nconsole.log(e.day);",
-			want: "Temporal.PlainMonthDay.prototype.with is a later slice",
+			name: "with a year field",
+			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst e = md.with({ year: 2020 });\nconsole.log(e.day);",
+			want: "Temporal.PlainMonthDay.prototype.with over a bag with the field year is a later slice",
 		},
 		{
-			name: "toPlainDate conversion",
-			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst d = md.toPlainDate({ year: 2020 });\nconsole.log(d.day);",
-			want: "Temporal.PlainMonthDay.prototype.toPlainDate is a later slice",
+			name: "toPlainDate over a computed key",
+			src:  "const md = new Temporal.PlainMonthDay(3, 15);\nconst k = \"year\";\nconst d = md.toPlainDate({ [k]: 2020 });\nconsole.log(d.day);",
+			want: "Temporal.PlainMonthDay.prototype.toPlainDate over a bag with a computed or shorthand key is a later slice",
 		},
 		{
-			name: "from a property bag",
-			src:  "const md = Temporal.PlainMonthDay.from({ month: 3, day: 15 });\nconsole.log(md.day);",
-			want: "Temporal.PlainMonthDay.from over a dynamic string or a property bag is a later slice",
+			name: "from a bag with a calendar",
+			src:  "const md = Temporal.PlainMonthDay.from({ month: 3, day: 15, calendar: \"gregory\" });\nconsole.log(md.day);",
+			want: "Temporal.PlainMonthDay.from over a bag with the field calendar is a later slice",
+		},
+		{
+			name: "from a bag with a computed key",
+			src:  "const k = \"month\";\nconst md = Temporal.PlainMonthDay.from({ [k]: 3, day: 15 });\nconsole.log(md.day);",
+			want: "Temporal.PlainMonthDay.from over a bag with a computed or shorthand key is a later slice",
 		},
 		{
 			name: "from a non-ISO calendar string",

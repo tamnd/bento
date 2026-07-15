@@ -1815,6 +1815,153 @@ func TestPlainYearMonthTruncatesAndRejects(t *testing.T) {
 	}
 }
 
+// TestPlainYearMonthArithmetic checks add, subtract, until, and since against
+// @js-temporal/polyfill, including the reference-day rule that lets a backward step clamp a
+// long month end and the years-and-months difference.
+func TestPlainYearMonthArithmetic(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	ym := func(y, m float64) *PlainYearMonth { return NewPlainYearMonth(y, m) }
+	cases := []struct {
+		got  *PlainYearMonth
+		want string
+	}{
+		{ym(2024, 1).AddDuration(d(0, 1), "constrain"), "2024-02"},
+		{ym(2024, 1).AddDuration(d(1), "constrain"), "2025-01"},
+		{ym(2024, 1).AddDuration(d(0, 13), "constrain"), "2025-02"},
+		{ym(2024, 1).AddDuration(d(1, 2), "constrain"), "2025-03"},
+		{ym(2024, 1).AddDuration(d(0, 0, 0, 31), "constrain"), "2024-02"},
+		{ym(2024, 1).AddDuration(d(0, 0, 0, 0, 48), "constrain"), "2024-01"},
+		{ym(2024, 12).AddDuration(d(0, 1), "constrain"), "2025-01"},
+		{ym(2024, 1).SubtractDuration(d(0, 1), "constrain"), "2023-12"},
+		{ym(2024, 1).SubtractDuration(d(2, 3), "constrain"), "2021-10"},
+		{ym(2024, 3).SubtractDuration(d(0, 1), "constrain"), "2024-02"},
+		{ym(2024, 1).SubtractDuration(d(0, 0, 0, 1), "constrain"), "2024-01"},
+	}
+	for i, c := range cases {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("case %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	diffs := []struct {
+		got  *Duration
+		want string
+	}{
+		{ym(2024, 1).Until(ym(2025, 6), "year"), "P1Y5M"},
+		{ym(2024, 1).Until(ym(2025, 6), "month"), "P17M"},
+		{ym(2024, 1).Since(ym(2025, 6), "year"), "-P1Y5M"},
+		{ym(2025, 6).Until(ym(2024, 1), "year"), "-P1Y5M"},
+		{ym(2024, 1).Until(ym(2024, 1), "year"), "PT0S"},
+		{ym(2020, 1).Until(ym(2023, 7), "year"), "P3Y6M"},
+	}
+	for i, c := range diffs {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("diff %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	// A subtract that lands on a clamped month end throws under reject.
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { ym(2024, 3).SubtractDuration(d(0, 1), "reject") }) {
+		t.Error("2024-03 subtract P1M reject did not throw")
+	}
+}
+
+// TestPlainYearMonthWithAndToPlainDate covers with overlaying present year and month fields with
+// the overflow option, and toPlainDate combining the year-month with a constrained day.
+func TestPlainYearMonthWithAndToPlainDate(t *testing.T) {
+	ym := func(y, m float64) *PlainYearMonth { return NewPlainYearMonth(y, m) }
+	some := func(v float64) Opt[float64] { return Some[float64](v) }
+	none := None[float64]()
+	withs := []struct {
+		got  *PlainYearMonth
+		want string
+	}{
+		{ym(2020, 3).WithFields(none, some(11), "constrain"), "2020-11"},
+		{ym(2020, 3).WithFields(some(1999), none, "constrain"), "1999-03"},
+		{ym(2020, 3).WithFields(some(2021), some(2), "constrain"), "2021-02"},
+		{ym(2020, 3).WithFields(none, some(13), "constrain"), "2020-12"},
+		{ym(2020, 3).WithFields(none, some(7), "constrain"), "2020-07"},
+	}
+	for i, c := range withs {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("with %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	dates := []struct {
+		got  *PlainDate
+		want string
+	}{
+		{ym(2020, 3).ToPlainDate(15), "2020-03-15"},
+		{ym(2020, 3).ToPlainDate(31), "2020-03-31"},
+		{ym(2020, 2).ToPlainDate(31), "2020-02-29"},
+		{ym(2021, 2).ToPlainDate(31), "2021-02-28"},
+	}
+	for i, c := range dates {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("toPlainDate %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { ym(2020, 3).WithFields(none, some(13), "reject") }) {
+		t.Error("2020-03 with month 13 reject did not throw")
+	}
+}
+
+// TestPlainYearMonthEra covers era and eraYear resolving at the first of the month, undefined under
+// ISO and named under the hosted non-ISO calendars.
+func TestPlainYearMonthEra(t *testing.T) {
+	withCal := func(y, m float64, cal string) *PlainYearMonth {
+		return PlainDateWithCalendar(NewPlainDate(y, m, 15), cal).ToPlainYearMonth()
+	}
+	if era := NewPlainYearMonth(2020, 3).Era(); !era.IsUndefined() {
+		t.Errorf("iso era = %v, want undefined", era)
+	}
+	if eraYear := NewPlainYearMonth(2020, 3).EraYear(); !eraYear.IsUndefined() {
+		t.Errorf("iso eraYear = %v, want undefined", eraYear)
+	}
+	eras := []struct {
+		ym      *PlainYearMonth
+		era     string
+		eraYear float64
+	}{
+		{withCal(2020, 3, "gregory"), "gregory", 2020},
+		{withCal(0, 3, "gregory"), "gregory-inverse", 1},
+		{withCal(2020, 3, "roc"), "roc", 109},
+		{withCal(2020, 3, "japanese"), "reiwa", 2},
+	}
+	for i, c := range eras {
+		if era := c.ym.Era(); era.IsUndefined() || era.Get().ToGoString() != c.era {
+			t.Errorf("era %d = %v, want %q", i, era, c.era)
+		}
+		if ey := c.ym.EraYear(); ey.IsUndefined() || ey.Get() != c.eraYear {
+			t.Errorf("eraYear %d = %v, want %v", i, ey, c.eraYear)
+		}
+	}
+}
+
 // monthDayThrows reports whether NewPlainMonthDay throws a RangeError for the args.
 func monthDayThrows(m, d float64) (thrown bool) {
 	defer func() {
@@ -1887,6 +2034,107 @@ func TestPlainMonthDayTruncatesAndRejects(t *testing.T) {
 	}
 	if monthDayThrows(2, 29) {
 		t.Error("NewPlainMonthDay(2, 29) threw, but the leap reference year admits it")
+	}
+}
+
+// TestPlainMonthDayWithAndToPlainDate covers WithFields overlaying the month and day, constraining
+// or rejecting on overflow, and ToPlainDate supplying the year, with the leap-day cases pinned to
+// @js-temporal/polyfill.
+func TestPlainMonthDayWithAndToPlainDate(t *testing.T) {
+	md := func(m, d float64) *PlainMonthDay { return NewPlainMonthDay(m, d) }
+	some := func(v float64) Opt[float64] { return Some[float64](v) }
+	none := None[float64]()
+	withs := []struct {
+		got  *PlainMonthDay
+		want string
+	}{
+		{md(3, 15).WithFields(none, some(20), "constrain"), "03-20"},
+		{md(3, 15).WithFields(some(12), none, "constrain"), "12-15"},
+		{md(3, 15).WithFields(some(7), some(4), "constrain"), "07-04"},
+		{md(3, 15).WithFields(some(2), some(30), "constrain"), "02-29"},
+	}
+	for i, c := range withs {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("with %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	dates := []struct {
+		got  *PlainDate
+		want string
+	}{
+		{md(3, 15).ToPlainDate(2020), "2020-03-15"},
+		{md(2, 29).ToPlainDate(2020), "2020-02-29"},
+		{md(2, 29).ToPlainDate(2021), "2021-02-28"},
+	}
+	for i, c := range dates {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("toPlainDate %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { md(3, 15).WithFields(some(4), some(31), "reject") }) {
+		t.Error("03-15 with April 31 reject did not throw")
+	}
+}
+
+// TestPlainYearMonthAndMonthDayFromFields covers the from-bag constructors: PlainYearMonthFromFields
+// building from a year and month with constrain and reject, and PlainMonthDayFromFields building
+// from a month and day with an optional year that sets the leap check, pinned to
+// @js-temporal/polyfill.
+func TestPlainYearMonthAndMonthDayFromFields(t *testing.T) {
+	some := func(v float64) Opt[float64] { return Some[float64](v) }
+	none := None[float64]()
+	if got := PlainYearMonthFromFields(2020, 3, "constrain").ToString().ToGoString(); got != "2020-03" {
+		t.Errorf("year-month from 2020, 3 = %q, want 2020-03", got)
+	}
+	if got := PlainYearMonthFromFields(2020, 13, "constrain").ToString().ToGoString(); got != "2020-12" {
+		t.Errorf("year-month from 2020, 13 constrain = %q, want 2020-12", got)
+	}
+
+	mds := []struct {
+		got  *PlainMonthDay
+		want string
+	}{
+		{PlainMonthDayFromFields(3, 15, none, "constrain"), "03-15"},
+		{PlainMonthDayFromFields(2, 29, none, "constrain"), "02-29"},
+		{PlainMonthDayFromFields(2, 29, some(2021), "constrain"), "02-28"},
+		{PlainMonthDayFromFields(2, 29, some(2020), "constrain"), "02-29"},
+		{PlainMonthDayFromFields(4, 31, none, "constrain"), "04-30"},
+	}
+	for i, c := range mds {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("month-day from %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { PlainYearMonthFromFields(2020, 13, "reject") }) {
+		t.Error("year-month from month 13 reject did not throw")
+	}
+	if !throws(func() { PlainMonthDayFromFields(2, 29, some(2021), "reject") }) {
+		t.Error("month-day from Feb 29 with common year reject did not throw")
 	}
 }
 

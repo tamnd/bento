@@ -1571,6 +1571,28 @@ func PlainYearMonthFrom(ym *PlainYearMonth) *PlainYearMonth {
 	return &PlainYearMonth{year: ym.year, month: ym.month}
 }
 
+// PlainYearMonthFromFields implements Temporal.PlainYearMonth.from over a property bag for the ISO
+// calendar. The year and month the bag supplies are both required, so the lowerer only reaches here
+// with concrete values; a monthCode is resolved to its numeric month at lowering. Under the default
+// constrain a month outside 1..12 clamps into range; under reject it is a RangeError. Either way a
+// year-month outside the representable range throws.
+func PlainYearMonthFromFields(year, month float64, overflow string) *PlainYearMonth {
+	y := toIntegerWithTruncation(year)
+	m := toIntegerWithTruncation(month)
+	if overflow == timeOverflowReject {
+		rejectISOYearMonth(y, m)
+	} else {
+		m = clampFloat(m, 1, 12)
+		if y < -271821 || y > 275760 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+		}
+	}
+	if !isoYearMonthWithinLimits(int(y), int(m)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+	}
+	return &PlainYearMonth{year: int(y), month: int(m)}
+}
+
 // rejectISOYearMonth throws a RangeError unless (year, month) is a real ISO year-month
 // within Temporal's representable range: the month in 1..12 and the year-month between
 // -271821-04 and +275760-09 inclusive, the bounds ISOYearMonthWithinLimits fixes. The
@@ -1711,6 +1733,107 @@ func (ym *PlainYearMonth) ToString() BStr {
 // produces under default options.
 func (ym *PlainYearMonth) ToJSON() BStr { return ym.ToString() }
 
+// AddDuration implements Temporal.PlainYearMonth.prototype.add and, over a negated duration,
+// subtract. A year-month has no day, so the specification anchors the arithmetic to a reference
+// day: the first of the month when the duration runs forward, the last of the month when it runs
+// backward, so a month step that would only survive by clamping a large day is never counted.
+// The reference-day date carries the full duration through PlainDate.AddDate, which folds the
+// time part into whole days, and the moved date narrows back to a year-month. The result keeps
+// the receiver's calendar, and an out-of-range step or, under reject, a clamped day throws a
+// RangeError.
+func (ym *PlainYearMonth) AddDuration(dur *Duration, overflow string) *PlainYearMonth {
+	day := 1
+	if durationSign(dur) < 0 {
+		day = isoDaysInMonth(ym.year, ym.month)
+	}
+	base := &PlainDate{year: ym.year, month: ym.month, day: day, cal: ym.cal}
+	return base.AddDate(dur, overflow).ToPlainYearMonth()
+}
+
+// SubtractDuration implements Temporal.PlainYearMonth.prototype.subtract as AddDuration over the
+// negated duration, so the reference day is chosen from the negated sign.
+func (ym *PlainYearMonth) SubtractDuration(dur *Duration, overflow string) *PlainYearMonth {
+	return ym.AddDuration(dur.Negated(), overflow)
+}
+
+// Until implements Temporal.PlainYearMonth.prototype.until, the span from the receiver to the
+// argument as a years-and-months Duration. Since implements the mirror by negating it.
+func (ym *PlainYearMonth) Until(other *PlainYearMonth, largestUnit string) *Duration {
+	return plainYearMonthDifference(ym, other, largestUnit)
+}
+
+// Since implements Temporal.PlainYearMonth.prototype.since as the negation of Until, so
+// a.since(b) is the span from b to a.
+func (ym *PlainYearMonth) Since(other *PlainYearMonth, largestUnit string) *Duration {
+	return plainYearMonthDifference(ym, other, largestUnit).Negated()
+}
+
+// plainYearMonthDifference measures the calendar distance between two year-months at the first
+// of each month, so the day part is always zero and the result carries only years and months.
+// largestUnit is "year" or "month"; under "month" the years roll into the month count. A
+// difference between two calendars throws a RangeError.
+func plainYearMonthDifference(from, to *PlainYearMonth, largestUnit string) *Duration {
+	if from.calendarID() != to.calendarID() {
+		Throw(NewRangeError(FromGoString("cannot compute the difference between two Temporal.PlainYearMonth values in different calendars")))
+	}
+	years, months, _, _ := differenceISODate(from.year, from.month, 1, to.year, to.month, 1, largestUnit)
+	return NewDuration(float64(years), float64(months), 0, 0, 0, 0, 0, 0, 0, 0)
+}
+
+// WithFields implements Temporal.PlainYearMonth.prototype.with: it lays the bag's present year and
+// month over the receiver's own fields and regulates the result with the overflow option, so an
+// omitted field keeps its current value. The year is read in the receiver's calendar reckoning, so
+// under roc a bag year maps back to the ISO year by adding 1911; the other hosted calendars count
+// the ISO year directly. Under constrain the month clamps to 1..12; under reject an out-of-range
+// month throws a RangeError. A month code lowers to a numeric month at compile time, and a bag
+// carrying the era fields or a day hands back there, so only year and month reach here. The
+// receiver is unchanged.
+func (ym *PlainYearMonth) WithFields(year, month Opt[float64], overflow string) *PlainYearMonth {
+	calYear := toIntegerWithTruncation(year.Or(float64(ym.displayYear())))
+	m := toIntegerWithTruncation(month.Or(float64(ym.month)))
+	isoYear := calYear
+	if ym.cal == "roc" {
+		isoYear = calYear + 1911
+	}
+	if overflow == timeOverflowReject {
+		rejectISOYearMonth(isoYear, m)
+	} else {
+		m = clampFloat(m, 1, 12)
+		if isoYear < -271821 || isoYear > 275760 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+		}
+	}
+	if !isoYearMonthWithinLimits(int(isoYear), int(m)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainYearMonth is outside the representable range")))
+	}
+	return &PlainYearMonth{year: int(isoYear), month: int(m), cal: ym.cal}
+}
+
+// ToPlainDate implements Temporal.PlainYearMonth.prototype.toPlainDate: it combines the year-month
+// with the day from the argument bag into a PlainDate in the receiver's calendar. The specification
+// gives toPlainDate no overflow option, so the day always constrains to the month's length. An
+// out-of-range result throws a RangeError.
+func (ym *PlainYearMonth) ToPlainDate(day float64) *PlainDate {
+	d := clampFloat(toIntegerWithTruncation(day), 1, float64(isoDaysInMonth(ym.year, ym.month)))
+	if !isoDateWithinLimits(ym.year, ym.month, int(d)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+	}
+	return &PlainDate{year: ym.year, month: ym.month, day: int(d), cal: ym.cal}
+}
+
+// Era implements Temporal.PlainYearMonth.prototype.era by resolving the era at the first of the
+// year-month's month, so a year-month reports the same era the date it came from does. It is
+// undefined under the ISO calendar.
+func (ym *PlainYearMonth) Era() Opt[BStr] {
+	return (&PlainDate{year: ym.year, month: ym.month, day: 1, cal: ym.cal}).Era()
+}
+
+// EraYear implements Temporal.PlainYearMonth.prototype.eraYear, the year counted within the era at
+// the first of the month. It is undefined under the ISO calendar.
+func (ym *PlainYearMonth) EraYear() Opt[float64] {
+	return (&PlainDate{year: ym.year, month: ym.month, day: 1, cal: ym.cal}).EraYear()
+}
+
 // PlainMonthDay is bento's runtime representation of a Temporal.PlainMonthDay (Temporal §10):
 // a calendar month and day with no year, no time, and no zone, the way a birthday or a
 // holiday recurs every year. Like PlainDate it hosts only the ISO 8601 calendar; a non-ISO
@@ -1748,6 +1871,33 @@ func NewPlainMonthDay(isoMonth, isoDay float64) *PlainMonthDay {
 // over a string or a property bag hands back at lowering.
 func PlainMonthDayFrom(md *PlainMonthDay) *PlainMonthDay {
 	return &PlainMonthDay{month: md.month, day: md.day}
+}
+
+// PlainMonthDayFromFields implements Temporal.PlainMonthDay.from over a property bag for the ISO
+// calendar. The month and day are required, so the lowerer only reaches here with concrete values;
+// a monthCode is resolved to its numeric month at lowering. A year is optional: when present it sets
+// the year the day is validated against, so February 29 with a common year constrains to the 28th,
+// and when absent the leap reference year 1972 admits February 29. Under reject an out-of-range
+// month or day throws; under the default constrain each clamps into range.
+func PlainMonthDayFromFields(month, day float64, year Opt[float64], overflow string) *PlainMonthDay {
+	m := toIntegerWithTruncation(month)
+	d := toIntegerWithTruncation(day)
+	refYear := monthDayReferenceYear
+	if !year.IsUndefined() {
+		refYear = int(toIntegerWithTruncation(year.Get()))
+	}
+	if overflow == timeOverflowReject {
+		if m < 1 || m > 12 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay month must be between 1 and 12")))
+		}
+		if d < 1 || d > float64(isoDaysInMonth(refYear, int(m))) {
+			Throw(NewRangeError(FromGoString("Temporal.PlainMonthDay day is out of range for the month")))
+		}
+	} else {
+		m = clampFloat(m, 1, 12)
+		d = clampFloat(d, 1, float64(isoDaysInMonth(refYear, int(m))))
+	}
+	return &PlainMonthDay{month: int(m), day: int(d)}
 }
 
 // rejectISOMonthDay throws a RangeError unless (month, day) is a real ISO month-day: the
@@ -1818,6 +1968,43 @@ func (md *PlainMonthDay) ToString() BStr {
 // ToJSON implements Temporal.PlainMonthDay.prototype.toJSON, the same ISO string toString
 // produces under default options.
 func (md *PlainMonthDay) ToJSON() BStr { return md.ToString() }
+
+// WithFields implements Temporal.PlainMonthDay.prototype.with: it lays the bag's present month and
+// day over the receiver's own fields and regulates the result with the overflow option, so an
+// omitted field keeps its current value. The day is validated against the leap reference year 1972,
+// so February 29 is admitted. Under constrain the month clamps to 1..12 and the day to that month's
+// length; under reject an out-of-range field throws a RangeError. A month code lowers to a numeric
+// month at compile time, and a bag carrying a year hands back there, so only month and day reach
+// here. The receiver is unchanged.
+func (md *PlainMonthDay) WithFields(month, day Opt[float64], overflow string) *PlainMonthDay {
+	m := toIntegerWithTruncation(month.Or(float64(md.month)))
+	d := toIntegerWithTruncation(day.Or(float64(md.day)))
+	if overflow == timeOverflowReject {
+		rejectISOMonthDay(m, d)
+	} else {
+		m = clampFloat(m, 1, 12)
+		d = clampFloat(d, 1, float64(isoDaysInMonth(monthDayReferenceYear, int(m))))
+	}
+	return &PlainMonthDay{month: int(m), day: int(d), cal: md.cal}
+}
+
+// ToPlainDate implements Temporal.PlainMonthDay.prototype.toPlainDate: it combines the month-day
+// with the year from the argument bag into a PlainDate in the receiver's calendar. The year is read
+// in the calendar's own reckoning, so a roc bag year maps back to the ISO year by adding 1911 while
+// the other hosted calendars count the ISO year directly. The specification gives toPlainDate no
+// overflow option, so the day always constrains to that year's month length, dropping February 29
+// to the 28th in a common year. An out-of-range result throws a RangeError.
+func (md *PlainMonthDay) ToPlainDate(year float64) *PlainDate {
+	isoYear := toIntegerWithTruncation(year)
+	if md.cal == "roc" {
+		isoYear += 1911
+	}
+	d := clampFloat(float64(md.day), 1, float64(isoDaysInMonth(int(isoYear), md.month)))
+	if !isoDateWithinLimits(int(isoYear), md.month, int(d)) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDate is outside the representable range")))
+	}
+	return &PlainDate{year: int(isoYear), month: md.month, day: int(d), cal: md.cal}
+}
 
 // Duration is bento's runtime representation of a Temporal.Duration (Temporal §7):
 // a span of time as ten independent components, from years down to nanoseconds, with
