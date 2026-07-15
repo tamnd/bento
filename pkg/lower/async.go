@@ -42,6 +42,10 @@ func (r *Renderer) asyncFuncDecl(fn frontend.Node, sig frontend.Signature, name 
 	if err != nil {
 		return nil, err
 	}
+	// A required x: T | undefined parameter binds a value.Opt[T] field, so a read the
+	// checker narrowed to T unwraps it with .Get(); an async body reaches funcParamFields
+	// without funcDeclNamed's narrowing set, so it gains that read here.
+	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	results, err := r.resultFields(sig.Return)
 	if err != nil {
 		return nil, err

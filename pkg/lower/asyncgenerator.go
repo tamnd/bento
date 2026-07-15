@@ -133,6 +133,10 @@ func (r *Renderer) asyncGeneratorFuncDecl(fn frontend.Node, sig frontend.Signatu
 	if err != nil {
 		return nil, err
 	}
+	// A required x: T | undefined parameter binds a value.Opt[T] field, so a read the
+	// checker narrowed to T unwraps it with .Get(); an async generator body reaches
+	// funcParamFields without funcDeclNamed's narrowing set, so it gains that read here.
+	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	yieldGo, newGen, err := r.asyncGeneratorCoroutine(fn)
 	if err != nil {
 		return nil, err
