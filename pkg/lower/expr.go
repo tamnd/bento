@@ -1287,6 +1287,18 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return expr, nil
 	}
 
+	// A loose == or != where one side is statically null or undefined runs the
+	// abstract equality rule that the operator table cannot fold: null and undefined
+	// equal only each other, so null == undefined is true while null == 0 and
+	// null == {} are false. It routes here, after the dynamic path (which claims a
+	// dynamic operand) and the string, arithmetic, and reference-identity paths, so
+	// only a static-nullish operand that would otherwise hand back reaches it.
+	if expr, handled, err := r.nullishLooseEquality(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	goOp, err := r.binaryOp(opText, left, right)
 	if err != nil {
 		return nil, err
@@ -1725,6 +1737,53 @@ func (r *Renderer) binaryOp(opText string, left, right frontend.Node) (token.Tok
 		}
 		return token.ILLEGAL, &NotYetLowerable{Reason: "binary operator on mixed or non-primitive operands is a later slice"}
 	}
+}
+
+// nullishLooseEquality lowers a loose == or != where at least one operand is
+// statically null or undefined, the corner the operator table cannot fold because
+// its result follows the abstract equality rule that null and undefined equal only
+// each other. Both operands box and route through value.LooseEquals, which reads
+// null == undefined as true, null == 0 as false, and null == {} as false, while
+// still evaluating each side so a side effect on the non-nullish operand is kept.
+// It reports handled=false for any other operator or when neither operand is
+// statically nullish, leaving those to the operator table. A non-boxable operand,
+// an object with no dynamic box yet, hands back through boxOperand rather than emit
+// a call that would not compile.
+func (r *Renderer) nullishLooseEquality(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	switch opText {
+	case "==", "!=":
+	default:
+		return nil, false, nil
+	}
+	if !r.isNullOrUndefined(left) && !r.isNullOrUndefined(right) {
+		return nil, false, nil
+	}
+	l, err := r.boxOperand(left)
+	if err != nil {
+		return nil, false, err
+	}
+	rr, err := r.boxOperand(right)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	eq := &ast.CallExpr{Fun: sel("value", "LooseEquals"), Args: []ast.Expr{l, rr}}
+	if opText == "!=" {
+		return &ast.UnaryExpr{Op: token.NOT, X: eq}, true, nil
+	}
+	return eq, true, nil
+}
+
+// isNullOrUndefined reports whether the checker types n as exactly null or exactly
+// undefined: the null keyword, the undefined literal, or a binding whose flat type
+// is one of those two flags. A nullable union such as T | null carries more than the
+// single flag, so it is not this case and keeps its own narrowing path.
+func (r *Renderer) isNullOrUndefined(n frontend.Node) bool {
+	if n.Kind() == frontend.NodeNullKeyword || r.isUndefinedLiteral(n) {
+		return true
+	}
+	f := r.prog.TypeAt(n).Flags
+	return f == frontend.TypeNull || f == frontend.TypeUndefined
 }
 
 // referenceIdentityOp recognizes an equality between two operands of the same
