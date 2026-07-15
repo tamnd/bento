@@ -169,22 +169,68 @@ console.log(f(5));
 	}
 }
 
-// A method, an async function, and a generator all lower their parameters through
-// the shared funcParamFields, but their bodies never build the optParams narrowing
-// set: only a body lowered through funcDeclNamed does. So a bare optional parameter
-// there must hand back rather than emit a value.Opt[T] field the body reads as a bare
-// T, which would not compile. These pin that zero-fail guard, one per shared caller.
+// An async function declaration and a generator declaration lower their parameters
+// through the shared funcParamFields but fill no value.None at their call sites, so a
+// bare optional parameter there must hand back rather than emit a value.Opt[T] field
+// the body reads as a bare T, which would not compile. These pin that zero-fail guard,
+// one per still-open caller. A method is no longer among them: it pushes the full
+// optParamsOf before its fields build and every method call site fills value.None, so a
+// method's bare optional lowers, covered by TestMethodBareOptionalParamNarrows below.
 
-// TestMethodOptionalParamHandsBack pins the method path: a class method with a bare
-// optional parameter hands back, since no optParams set is built for a method body.
-func TestMethodOptionalParamHandsBack(t *testing.T) {
+// TestMethodBareOptionalParamNarrows runs an instance method with a bare x?: T
+// parameter read past a presence guard, proving the method declaration binds the
+// value.Opt[T] field, the narrowed read unwraps with .Get(), and an omitting call site
+// fills value.None.
+func TestMethodBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
 	const src = `class C {
   add(x: number, y?: number): number {
     if (y !== undefined) { return x + y; }
     return x;
   }
 }
-console.log(new C().add(1, 2));
+const c = new C();
+console.log(c.add(1, 2));
+console.log(c.add(1));
+`
+	got := runProgramGo(t, src)
+	if want := "3\n1\n"; got != want {
+		t.Fatalf("method bare optional printed %q, want %q", got, want)
+	}
+}
+
+// TestStaticMethodBareOptionalParamNarrows runs the same guard on a static method,
+// whose declaration and call both take the package-function path, to prove the static
+// call site fills value.None too.
+func TestStaticMethodBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `class C {
+  static tag(s?: string): string {
+    if (s !== undefined) { return "got:" + s; }
+    return "none";
+  }
+}
+console.log(C.tag("hi"));
+console.log(C.tag());
+`
+	got := runProgramGo(t, src)
+	if want := "got:hi\nnone\n"; got != want {
+		t.Fatalf("static method bare optional printed %q, want %q", got, want)
+	}
+}
+
+// TestMethodBooleanOptionalParamHandsBack pins that a bare boolean optional method
+// parameter still hands back: TypeScript models boolean as true | false, so
+// boolean | undefined is a three-member union optionalInner does not fold to a
+// value.Opt[T], leaving the declaration on the call-site-defaulting handback.
+func TestMethodBooleanOptionalParamHandsBack(t *testing.T) {
+	const src = `class C {
+  g(b?: boolean): number {
+    if (b) { return 1; }
+    return 0;
+  }
+}
+console.log(new C().g(true));
 `
 	reason := renderProgramHandBack(t, src)
 	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {

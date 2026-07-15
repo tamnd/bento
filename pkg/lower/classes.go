@@ -2456,14 +2456,19 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	r.curClass, r.thisName = info, info.recv
 	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 
+	// A method reaches funcParamFields without funcDeclNamed's narrowing set, so it
+	// pushes one here before the fields build. The set is the full optParamsOf, both a
+	// required x: T | undefined and a bare x?: T: funcParamFields renders the bare
+	// parameter's value.Opt[T] field only for a name this set carries, and every method
+	// call site fills value.None for an omitted bare optional (fillOmittedMethodArgs),
+	// so a method tracks both shapes the way a closure does, unlike the top-level
+	// funcParamFields path that fills no None and keeps the bare form a handback. A read
+	// the checker narrowed to T then unwraps with .Get() wherever it sits in the body.
+	defer r.pushOptParams(r.optParamsOf(m.node, sig))()
 	params, err := r.funcParamFields(m.node, sig)
 	if err != nil {
 		return nil, err
 	}
-	// A required x: T | undefined parameter binds a value.Opt[T] field here too, so a
-	// read the checker narrowed to T must unwrap it with .Get(); a method reaches
-	// funcParamFields without funcDeclNamed's narrowing set, so it gains that read here.
-	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	results, err := r.resultFields(sig.Return)
 	if err != nil {
 		return nil, err
@@ -2603,14 +2608,16 @@ func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, er
 	// A static method takes the same call-site defaulting a top-level function does,
 	// so a default-valued parameter lowers to a plain Go field the call fills; a
 	// default that reads an earlier parameter hands back here.
+	// The narrowing set is pushed before the fields build, the full optParamsOf so
+	// funcParamFields renders a bare x?: T parameter's value.Opt[T] field, matched by the
+	// value.None fill every static call site supplies for an omitted bare optional; a
+	// required x: T | undefined is tracked the same, its narrowed read unwrapping with
+	// .Get().
+	defer r.pushOptParams(r.optParamsOf(m.node, sig))()
 	params, err := r.funcParamFields(m.node, sig)
 	if err != nil {
 		return nil, err
 	}
-	// A required x: T | undefined parameter binds a value.Opt[T] field, so a read the
-	// checker narrowed to T unwraps it with .Get(); a static method reaches
-	// funcParamFields without funcDeclNamed's narrowing set, so it gains that read here.
-	defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
 	results, err := r.resultFields(sig.Return)
 	if err != nil {
 		return nil, err
@@ -2988,9 +2995,13 @@ func (r *Renderer) argForDefaultedSlot(paramNodes []frontend.Node, sig frontend.
 // where the class binding is visible and bridged to the parameter type; a default
 // that reads an earlier parameter needs the callee's scope and hands back, matching
 // the funcParamFields gate the method declaration already applied. A slot with no
-// default fills with value.Undefined only when its type is dynamic, the absent value
-// the language binds; a static optional with no default has no Go value to stand in
-// and hands back.
+// default fills with value.Undefined when its type is dynamic, the absent value the
+// language binds; a static optional with no default fills with the empty option
+// value.None[T](), the same absent value the parameter's value.Opt[T] field reads,
+// matching the field funcParamFields renders for a tracked bare x?: T. A static
+// parameter that is not a recognized two-member optional, a boolean optional the union
+// analysis does not fold, has no option field to fill and hands back, the same shape
+// its declaration hands back on.
 func (r *Renderer) fillOmittedMethodArgs(args *[]ast.Expr, node frontend.Node, sig frontend.Signature, from int) error {
 	paramNodes := r.funcParamNodes(node)
 	for i := from; i < len(sig.Params); i++ {
@@ -3009,11 +3020,21 @@ func (r *Renderer) fillOmittedMethodArgs(args *[]ast.Expr, node frontend.Node, s
 			*args = append(*args, lowered)
 			continue
 		}
-		if sig.Params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
-			return &NotYetLowerable{Reason: "a call omitting a non-dynamic optional argument is a later slice"}
+		pt := sig.Params[i].Type
+		if pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+			r.requireImport(valuePkg)
+			*args = append(*args, sel("value", "Undefined"))
+			continue
 		}
-		r.requireImport(valuePkg)
-		*args = append(*args, sel("value", "Undefined"))
+		if inner, ok := r.optionalInner(r.prog.UnionMembers(pt)); ok && r.isOptionalType(pt) {
+			none, err := r.noneOf(inner)
+			if err != nil {
+				return err
+			}
+			*args = append(*args, none)
+			continue
+		}
+		return &NotYetLowerable{Reason: "a call omitting a non-dynamic non-optional argument is a later slice"}
 	}
 	return nil
 }
