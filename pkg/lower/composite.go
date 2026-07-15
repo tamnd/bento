@@ -522,6 +522,18 @@ func (r *Renderer) objectLiteralNotFixed(n frontend.Node) bool {
 }
 
 func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
+	// A literal whose shape is not statically fixed, one carrying a computed key that
+	// names a runtime value, has no closed key set a Go struct could declare, so it
+	// cannot lower on the struct path here. In a variable initializer such a literal is
+	// intercepted upstream and boxed into the dynamic bag; anywhere else, an argument
+	// or a nested value position, no boxing reaches it yet, so it hands back rather
+	// than build a struct that would silently drop the computed member. This guards the
+	// front door's tolerance of the 2464 computed-key diagnostic: admitting that code
+	// lets such a literal reach the renderer, and this keeps the expr-position form an
+	// honest handback instead of an empty struct.
+	if r.objectLiteralNotFixed(n) {
+		return nil, &NotYetLowerable{Reason: "object literal with a computed runtime key outside a variable initializer is a later slice"}
+	}
 	t := r.prog.TypeAt(n)
 	if t.Flags&frontend.TypeObject == 0 {
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "object literal whose type is not an object shape is a later slice"}
