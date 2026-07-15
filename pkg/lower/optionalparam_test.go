@@ -365,19 +365,84 @@ console.log(new D(undefined).v);
 	}
 }
 
-// TestCtorBareOptionalParamHandsBack pins that a bare x?: T constructor parameter
-// still hands back: ctorParamFields and the new-X call site fill no value.None yet, so
-// the omitting construction stays a later slice while the required-union form above
-// lowers.
-func TestCtorBareOptionalParamHandsBack(t *testing.T) {
-	const src = `class C {
+// TestCtorBareOptionalParamNarrows runs a bare x?: T constructor parameter through a
+// presence guard, both supplied and omitted, proving ctorParamFields now renders the
+// value.Opt[float64] field and the new-X call site fills value.Some or value.None.
+func TestCtorBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class C {
   v: number;
   constructor(x?: number) {
-    if (x !== undefined) { this.v = x; } else { this.v = -1; }
+    if (x !== undefined) { this.v = x + 1; } else { this.v = -1; }
   }
 }
 console.log(new C(5).v);
 console.log(new C().v);
+`
+	if got, want := runProgramGo(t, src), "6\n-1\n"; got != want {
+		t.Fatalf("constructor bare optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestCtorBareOptionalStringParamNarrows runs the same shape over a string inner, so the
+// truthiness guard rides the optional-string lowering and the omitted slot fills
+// value.None[value.BStr]().
+func TestCtorBareOptionalStringParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class Tag {
+  s: string;
+  constructor(t?: string) {
+    if (t) { this.s = "got:" + t; } else { this.s = "none"; }
+  }
+}
+console.log(new Tag("hi").s);
+console.log(new Tag().s);
+`
+	if got, want := runProgramGo(t, src), "got:hi\nnone\n"; got != want {
+		t.Fatalf("constructor bare optional string parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestDerivedOwnBareOptionalParamNarrows runs a derived constructor's own bare optional
+// parameter, supplied and omitted, while super() passes a fixed base argument, proving the
+// new-Derived call site fills None for the derived slot independent of the base construction.
+func TestDerivedOwnBareOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class Base {
+  b: number;
+  constructor(x: number) { this.b = x; }
+}
+class Derived extends Base {
+  d: number;
+  constructor(y?: number) {
+    super(100);
+    if (y !== undefined) { this.d = y; } else { this.d = -1; }
+  }
+}
+const p = new Derived(7);
+const q = new Derived();
+console.log(p.b + "," + p.d);
+console.log(q.b + "," + q.d);
+`
+	if got, want := runProgramGo(t, src), "100,7\n100,-1\n"; got != want {
+		t.Fatalf("derived constructor own bare optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestCtorBooleanOptionalParamHandsBack pins that a bare boolean optional constructor
+// parameter still hands back, since boolean | undefined is a three-member union
+// optionalInner does not fold to a value.Opt[T], so the new-X omission has no option
+// value to fill, the same shape the declaration hands back on.
+func TestCtorBooleanOptionalParamHandsBack(t *testing.T) {
+	const src = `class Flag {
+  f: boolean;
+  constructor(b?: boolean) { if (b) { this.f = true; } else { this.f = false; } }
+}
+console.log(new Flag(true).f);
+console.log(new Flag().f);
 `
 	reason := renderProgramHandBack(t, src)
 	if !strings.Contains(reason, "omitting a non-dynamic optional argument") {

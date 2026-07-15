@@ -2067,27 +2067,29 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 	if info.ctor != nil && subtreeHasKind(r.prog, info.ctor, frontend.NodeReturnStatement) {
 		return nil, &NotYetLowerable{Reason: "a return inside a constructor is a later slice"}
 	}
-	params, err := r.ctorParamFields(info)
-	if err != nil {
-		return nil, err
-	}
 
 	prevClass, prevThis := r.curClass, r.thisName
 	r.curClass, r.thisName = info, info.recv
 	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 
-	// A constructor parameter annotated x: T | undefined binds a value.Opt[T] field,
-	// which typeExpr renders before ctorParamFields is reached and the new-X call site
-	// always supplies as Some or None, so a read the checker narrowed to T must unwrap
-	// it with .Get(). The constructor body reaches its statements without funcDeclNamed's
-	// narrowing set, so it pushes one here, active through both the general ctorBody and
-	// the split-construction path below, closing the broken Go a narrowed required
-	// optional-union parameter emitted. A bare x?: T stays a handback in ctorParamFields
-	// for want of a call-site None fill, so the set carries only the required-union form.
+	// A constructor lowers its parameter fields and its body under the optParams
+	// narrowing set, pushed before ctorParamFields builds the fields. A bare x?: T
+	// renders its value.Opt[T] field only for a name the set carries (the optParams
+	// gate ctorParamFields mirrors from funcParamFields), and a required x: T | undefined
+	// already binds an Opt[T] field typeExpr rendered; either way a read the checker
+	// narrowed to T unwraps with .Get() through the same set. Both call sites, new-X
+	// and super(), fill value.None for an omitted slot, so the widened optParamsOf is
+	// safe here rather than the required-union subset a form with no call-site fill
+	// is limited to.
 	if info.ctor != nil {
 		if sig, ok := r.prog.SignatureAt(info.ctor); ok {
-			defer r.pushOptParams(r.requiredOptUnionParamsOf(sig))()
+			defer r.pushOptParams(r.optParamsOf(info.ctor, sig))()
 		}
+	}
+
+	params, err := r.ctorParamFields(info)
+	if err != nil {
+		return nil, err
 	}
 
 	if info.hasVTable() || info.chainHasAbstract() {
@@ -2116,12 +2118,14 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 
 // ctorParamFields builds the constructor's Go parameter list from the declared
 // parameter nodes, shared by the NewX declaration and the initX split a virtual
-// hierarchy adds. A static optional parameter hands back the same way paramFields
-// makes a plain method's: its Go type is the value.Opt[T] the T | undefined union
-// renders, which the constructor body reads as a bare T, so admitting it would
-// emit Go that does not compile. The call-site defaulting that would fill an
-// omitted slot is a later slice. A dynamic optional is fine, an omitted slot
-// holds the undefined its value.Value already models.
+// hierarchy adds. A bare x?: T optional parameter renders its value.Opt[T] field
+// only for a name the optParams set carries, the same gate funcParamFields applies:
+// classCtor pushes optParamsOf before this build, so a bare optional the pre-pass
+// tracked lowers to an Opt field and the new-X and super() call sites fill value.None
+// for an omitted slot. An untracked bare optional, a boolean the union analysis does
+// not fold or a defaulted parameter, hands back for want of that call-site fill. A
+// dynamic optional is fine, an omitted slot holds the undefined its value.Value
+// already models.
 func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 	var sig frontend.Signature
 	haveSig := false
@@ -2138,7 +2142,7 @@ func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 			return nil, &NotYetLowerable{Reason: "constructor parameter name is not a Go identifier"}
 		}
 		pt := r.prog.TypeAt(nameNode)
-		if haveSig && i >= sig.MinArgs && pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		if haveSig && i >= sig.MinArgs && pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 && !r.optParams[pname] {
 			return nil, &NotYetLowerable{Flags: pt.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 		}
 		goType, err := r.typeExpr(pt)
@@ -2836,15 +2840,30 @@ func (r *Renderer) newClass(info *classInfo, argNodes []frontend.Node) (ast.Expr
 		args = append(args, lowered)
 	}
 	// A trailing parameter the call omits is an optional the checker accepted the
-	// short call against. A dynamic optional's slot fills with value.Undefined,
-	// the absent value the language binds; a static omission has no Go value to
-	// stand in and hands back.
+	// short call against. A dynamic optional's slot fills with value.Undefined, the
+	// absent value the language binds; a recognized T | undefined optional fills with
+	// the empty option value.None[T](), the same absent value its value.Opt[T] field
+	// reads, matching the field ctorParamFields renders for a tracked bare x?: T. A
+	// static parameter that is not a recognized two-member optional, a boolean the
+	// union analysis does not fold, has no option field to fill and hands back, the
+	// same shape its declaration hands back on.
 	for i := len(argNodes); i < len(info.ctorParams); i++ {
-		if !r.isDynamic(r.paramNameNode(info.ctorParams[i])) {
-			return nil, &NotYetLowerable{Reason: "new " + info.name + " omitting a non-dynamic optional argument is a later slice"}
+		pnode := r.paramNameNode(info.ctorParams[i])
+		if r.isDynamic(pnode) {
+			r.requireImport(valuePkg)
+			args = append(args, sel("value", "Undefined"))
+			continue
 		}
-		r.requireImport(valuePkg)
-		args = append(args, sel("value", "Undefined"))
+		pt := r.prog.TypeAt(pnode)
+		if inner, ok := r.optionalInner(r.prog.UnionMembers(pt)); ok && r.isOptionalType(pt) {
+			none, err := r.noneOf(inner)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, none)
+			continue
+		}
+		return nil, &NotYetLowerable{Reason: "new " + info.name + " omitting a non-dynamic optional argument is a later slice"}
 	}
 	return &ast.CallExpr{Fun: ident("New" + info.goName), Args: args}, nil
 }
