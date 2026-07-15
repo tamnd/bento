@@ -466,6 +466,24 @@ type Renderer struct {
 	// an out-of-memory kill that can take the whole machine down. It is reset when a
 	// render starts at depth zero.
 	typeNodes int
+	// notAssignSpans holds the byte spans of the program's code 2345 diagnostics, the
+	// argument-not-assignable errors the front door tolerates. The bridge consults it
+	// so a value hands back only where the checker actually reported the mismatch, not
+	// wherever two static types happen to lower to different Go types (a shaped literal
+	// bound through a legitimate structural coercion reaches the same bridge with no
+	// 2345 against it). It is built once, lazily, on the first bridge that asks.
+	notAssignSpans []frontend.Span
+	// notAssignReady marks notAssignSpans as built, so an empty slice is not rebuilt on
+	// every bridge. It stays false until the first lookup collects the 2345 spans.
+	notAssignReady bool
+	// seen2345 records the 2345 spans a guarded bridge inspected, the argument and
+	// constructor sites where the representation guard either lowered a safe value or
+	// handed back. A 2345 span left unseen at the end of a render was lowered by a path
+	// with no guard (a builtin higher-order method callback, a builtin element-slot
+	// argument), which would emit Go the toolchain rejects, so the whole unit hands back
+	// rather than ship it (see unguarded2345). It is keyed by span since a span is a
+	// comparable pair of offsets.
+	seen2345 map[frontend.Span]bool
 }
 
 // maxTypeDepth bounds how deep typeExpr renders a nested type before it hands
@@ -484,7 +502,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seen2345: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

@@ -1184,8 +1184,122 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	case !srcDyn && tgtDyn:
 		return r.boxStaticToDynamic(expr, src)
 	default:
+		// A not-assignable value the front door tolerated under code 2345 reaches this
+		// bridge once the optional and union widenings above have declined it, so a value
+		// whose Go type differs from the slot hands back rather than emit an assignment
+		// across two Go types that does not compile (see staticReprMismatch).
+		if r.staticReprMismatch(src, r.prog.TypeAt(src), r.prog.TypeAt(target)) {
+			return nil, &NotYetLowerable{Reason: "a value the checker calls not assignable whose Go type differs from the slot is a later slice"}
+		}
 		return r.bridgeClassBinding(expr, src, r.prog.TypeAt(target))
 	}
+}
+
+// staticReprMismatch reports whether a static source bound into a static target would
+// drop a Go value into a slot of another Go type at a site the checker itself calls not
+// assignable. It fires only where the checker reported code 2345 against the source
+// node, so a type-correct binding that reaches the same bridge through a legitimate
+// structural coercion (a shaped object literal, a boxed computed key) is left alone;
+// only when neither side is a class, since a class binding keeps its own upcast bridge
+// whose change of Go type is deliberate; and only when the two types provably lower to
+// different Go types, the direct proof the emitted Go would not compile. The argument
+// bridge and the constructor bridge share it so a not-assignable value the front door
+// tolerated under code 2345 hands back on either path rather than emit Go the toolchain
+// rejects.
+func (r *Renderer) staticReprMismatch(srcNode frontend.Node, srcType, tgtType frontend.Type) bool {
+	if !r.notAssignableAt(srcNode) {
+		return false
+	}
+	if _, srcClass := r.classOfNode(srcNode); srcClass {
+		return false
+	}
+	if _, tgtClass := r.classOfType(tgtType); tgtClass {
+		return false
+	}
+	return r.mismatchedLoweredType(srcType, tgtType)
+}
+
+// notAssignableAt reports whether the checker put a code 2345 (argument not assignable)
+// diagnostic exactly on the given node, the front-door-tolerated error the
+// representation guard keys off. The checker anchors the argument-not-assignable error
+// on the argument expression itself, so the match is exact: the node's span equals the
+// diagnostic's. Exactness is what keeps the guard and the end-of-render reconciliation
+// sound. A user call wrapping a builtin call, f([1,2,3].indexOf("x")), carries the 2345
+// on the inner "x", not on the outer argument f is passed, so the outer bridge does not
+// mistake the inner mismatch for its own and mark it handled. A match records the span
+// as seen, so unguarded2345 can tell which 2345 sites a guarded bridge reached.
+func (r *Renderer) notAssignableAt(node frontend.Node) bool {
+	if node == nil {
+		return false
+	}
+	r.ensureNotAssignSpans()
+	lo, hi := node.Pos(), node.End()
+	for _, s := range r.notAssignSpans {
+		if s.Start == lo && s.End == hi {
+			r.seen2345[s] = true
+			return true
+		}
+	}
+	return false
+}
+
+// ensureNotAssignSpans collects the program's code 2345 spans once and caches them, so
+// both the per-site guard and the end-of-render reconciliation read the same set without
+// re-querying the checker.
+func (r *Renderer) ensureNotAssignSpans() {
+	if r.notAssignReady {
+		return
+	}
+	for _, d := range r.prog.Diagnostics() {
+		if d.Code == 2345 {
+			r.notAssignSpans = append(r.notAssignSpans, d.Span)
+		}
+	}
+	r.notAssignReady = true
+}
+
+// unguarded2345 reports the first code 2345 site no guarded bridge inspected, or nil if
+// every 2345 the front door tolerated flowed through the argument, constructor, or
+// binding bridge that either lowered it safely or handed it back. A site left unseen was
+// lowered by a path with no representation guard, a builtin higher-order method callback
+// or a builtin element-slot argument, whose emitted Go drops a value into a slot of
+// another Go type and does not compile. Rather than ship that, the whole unit hands back
+// to the interpreter, which keeps the front-door tolerance of 2345 zero-fail no matter
+// how many builtin argument paths exist: as more of them grow the guard, more of these
+// programs lower, and until then they route to the engine exactly as they did before the
+// front door admitted 2345 at all.
+func (r *Renderer) unguarded2345() error {
+	r.ensureNotAssignSpans()
+	for _, s := range r.notAssignSpans {
+		if !r.seen2345[s] {
+			return &NotYetLowerable{Reason: "an argument the checker calls not assignable reaches a builtin lowering with no representation guard, so the unit routes to the interpreter until that path grows one"}
+		}
+	}
+	return nil
+}
+
+// mismatchedLoweredType reports whether two checker types provably lower to different
+// Go types. It lowers each through typeExpr and compares the printed Go, so a number
+// and a numeric-literal union that both fold to float64 read as the same
+// representation while a number and a string do not. It answers only what it can
+// prove: a type that does not lower yet, a type parameter awaiting monomorphization
+// being the first, leaves typeExpr with a handback, and the check declines to false so
+// a bridge keeps its prior behavior rather than convert an unrelated lowering gap into
+// a spurious representation mismatch.
+func (r *Renderer) mismatchedLoweredType(a, b frontend.Type) bool {
+	ae, err := r.typeExpr(a)
+	if err != nil {
+		return false
+	}
+	be, err := r.typeExpr(b)
+	if err != nil {
+		return false
+	}
+	same, err := sameGoType(ae, be)
+	if err != nil {
+		return false
+	}
+	return !same
 }
 
 // bridgeClassBinding bridges a binding whose source is one lowered class and

@@ -806,6 +806,13 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	case !srcDyn && tgtDyn:
 		return r.boxStaticToDynamic(lowered, node)
 	}
+	// Both sides are static here. A not-assignable value the front door tolerated
+	// under code 2345 can reach the bridge, so an argument whose Go type differs from
+	// the parameter hands back rather than drop a Go value into a slot of another type
+	// that does not compile (see staticReprMismatch).
+	if r.staticReprMismatch(node, r.prog.TypeAt(node), pt) {
+		return nil, &NotYetLowerable{Reason: "an argument the checker calls not assignable whose Go type differs from the parameter is a later slice"}
+	}
 	return r.bridgeClassBinding(lowered, node, pt)
 }
 
