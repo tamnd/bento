@@ -39,20 +39,20 @@ run(function () { throw new TypeError("x"); });
 	}
 }
 
-// TestCtorOptionalParamHandsBack pins the zero-fail guard: a class constructor
-// with a static optional parameter hands back rather than emit a value.Opt field
-// the body reads as a bare T, which would not compile. A plain function's optional
-// parameter lowers to value.Opt[T] now, but a constructor keeps the stricter
-// paramFields (no optParams narrowing set is built for it), so it stays a later slice.
-func TestCtorOptionalParamHandsBack(t *testing.T) {
+// TestCtorOptionalParamNarrowsInTernary runs a bare optional constructor parameter
+// narrowed by a message === undefined ? ... : message conditional, both supplied and
+// omitted, proving the narrowing reaches a ternary branch and the new-Box call site
+// fills value.Some or value.None.
+func TestCtorOptionalParamNarrowsInTernary(t *testing.T) {
+	skipIfShort(t)
 	const src = `class Box {
   message: string;
-  constructor(message?: string) { this.message = message === undefined ? "" : message; }
+  constructor(message?: string) { this.message = message === undefined ? "none" : message; }
 }
 console.log(new Box("hi").message);
+console.log(new Box().message);
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {
-		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
+	if got, want := runProgramGo(t, src), "hi\nnone\n"; got != want {
+		t.Fatalf("constructor optional parameter in ternary printed %q, want %q", got, want)
 	}
 }

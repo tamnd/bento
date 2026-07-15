@@ -131,10 +131,12 @@ console.log(x);
 	}
 }
 
-// TestOptionalStaticParamStillHandsBack pins the boundary: an omitted optional
-// of a static type has no Go value to stand in for the omission, so the short
-// call hands back the way it always has.
-func TestOptionalStaticParamStillHandsBack(t *testing.T) {
+// TestOmittedStaticCtorParamFillsNone runs an omitted bare optional constructor
+// parameter: ctorParamFields renders its value.Opt[float64] field and the new-E call
+// site fills value.None, so the short call lowers and the body runs even though it
+// never reads the parameter.
+func TestOmittedStaticCtorParamFillsNone(t *testing.T) {
+	skipIfShort(t)
 	const src = `class E {
   n: number;
   constructor(n?: number) {
@@ -144,10 +146,7 @@ func TestOptionalStaticParamStillHandsBack(t *testing.T) {
 const e = new E();
 console.log(e.n);
 `
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	r.SetGoSignatures(testGoSignatures())
-	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
-		t.Fatal("omitting a static optional lowered, want a hand-back until value.Opt synthesis lands")
+	if got, want := runProgramGo(t, src), "1\n"; got != want {
+		t.Fatalf("omitted static constructor parameter printed %q, want %q", got, want)
 	}
 }
