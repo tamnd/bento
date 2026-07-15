@@ -138,6 +138,80 @@ func TestTypeofUnionEmitsMethod(t *testing.T) {
 	}
 }
 
+// TestTypeofOptionalReportsTagOrUndefined proves typeof over an optional (T | undefined,
+// lowered to value.Opt[T]) reports the inner type's tag when the option is present and
+// "undefined" when it is absent, the two tags a possibly-undefined value spans: the Opt
+// boxes through value.OptToValue and the box answers its own runtime tag.
+func TestTypeofOptionalReportsTagOrUndefined(t *testing.T) {
+	skipIfShort(t)
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"number optional",
+			"function f(n: number | undefined): string { return typeof n; }\nconsole.log(f(5));\nconsole.log(f(undefined));\n",
+			"number\nundefined\n",
+		},
+		{
+			"string optional",
+			"function f(s: string | undefined): string { return typeof s; }\nconsole.log(f(\"a\"));\nconsole.log(f(undefined));\n",
+			"string\nundefined\n",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got := runProgramGo(t, c.src); got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestTypeofOptionalNarrowsRead proves a typeof n === "number" guard over a
+// possibly-undefined n both lowers, past the boxed-Opt TypeOf, and narrows n to its
+// inner type inside the guard so the read unwraps with .Get(): the present branch does
+// arithmetic on the number and the absent branch takes the fallback.
+func TestTypeofOptionalNarrowsRead(t *testing.T) {
+	skipIfShort(t)
+	const src = "function g(n: number | undefined): number {\n" +
+		"  if (typeof n === \"number\") { return n + 1; }\n" +
+		"  return 0;\n" +
+		"}\n" +
+		"console.log(g(5));\nconsole.log(g(undefined));\n"
+	if got := runProgramGo(t, src); got != "6\n0\n" {
+		t.Fatalf("got %q, want %q", got, "6\n0\n")
+	}
+}
+
+// TestTypeofOptionalEmitsOptToValue pins the lowering shape: typeof over an optional
+// boxes the value.Opt through value.OptToValue and asks the box for its tag with TypeOf,
+// rather than folding to a single constant that would be wrong for the absent case.
+func TestTypeofOptionalEmitsOptToValue(t *testing.T) {
+	const src = "export function k(n: number | undefined): string { return typeof n; }\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.OptToValue(") {
+		t.Errorf("typeof over an optional did not box through OptToValue:\n%s", source)
+	}
+	if !strings.Contains(source, ".TypeOf()") {
+		t.Errorf("typeof over an optional did not call TypeOf on the boxed value:\n%s", source)
+	}
+}
+
+// TestTypeofOptionalObjectHandsBack pins the zero-fail edge: an optional whose inner is
+// an object shape has no dynamic box, so typeof over it hands back to a later slice
+// rather than fold to a wrong constant or emit a box that would not compile.
+func TestTypeofOptionalObjectHandsBack(t *testing.T) {
+	const src = "interface Box { v: number }\n" +
+		"export function k(b: Box | undefined): string { return typeof b; }\n"
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "later slice") {
+		t.Fatalf("typeof over an object optional reason = %q, want a later-slice handback", reason)
+	}
+}
+
 // TestTypeofUnionCompareStillFolds pins that a typeof compare, typeof x === "number",
 // keeps folding to a discriminant-tag test and does not route through the TypeOf
 // method, so the compare path the narrowing uses is untouched by the bare-typeof slice.
