@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -2602,6 +2603,90 @@ func ZonedDateTimeFromString(s string) *ZonedDateTime {
 	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon)}
 }
 
+// offsetFieldPattern matches the offset a property bag carries in its offset field, the same
+// grammar the ISO string offset uses: a sign, then hours and optional minutes, seconds, and a
+// fractional second, with the colons optional. A leading U+2212 minus is accepted alongside the
+// ASCII hyphen the way the specification's grammar allows.
+var offsetFieldPattern = regexp.MustCompile(`^([+\-\x{2212}])(\d{2})(?::?(\d{2}))?(?::?(\d{2}))?(?:[.,](\d{1,9}))?$`)
+
+// parseOffsetFieldNanos reads a property bag's offset field into a signed nanosecond offset. The
+// field is a UTC offset like "-05:00" or "+0530", not a zone name, so it names a fixed shift the
+// offset option weighs against the zone. A field that does not match the offset grammar throws a
+// RangeError, the way Temporal's ParseDateTimeUTCOffset does.
+func parseOffsetFieldNanos(s string) int64 {
+	m := offsetFieldPattern.FindStringSubmatch(s)
+	if m == nil {
+		Throw(NewRangeError(FromGoString("offset " + s + " is not a valid UTC offset")))
+	}
+	sign := int64(1)
+	if m[1] != "+" {
+		sign = -1
+	}
+	hour, _ := strconv.Atoi(m[2])
+	minute := 0
+	if m[3] != "" {
+		minute, _ = strconv.Atoi(m[3])
+	}
+	second := 0
+	if m[4] != "" {
+		second, _ = strconv.Atoi(m[4])
+	}
+	var fracNanos int64
+	if m[5] != "" {
+		frac := m[5]
+		for len(frac) < 9 {
+			frac += "0"
+		}
+		fracNanos, _ = strconv.ParseInt(frac, 10, 64)
+	}
+	total := (int64(hour)*3600+int64(minute)*60+int64(second))*1_000_000_000 + fracNanos
+	return sign * total
+}
+
+// ZonedDateTimeFromFields implements Temporal.ZonedDateTime.from over a property bag. The date and
+// time fields build a wall-clock reading through PlainDateTimeFromFields under the overflow option,
+// the timeZone field names the zone, and the reading folds to an exact instant one of two ways. A
+// bag with no offset field resolves through the zone under the disambiguation option, exactly as a
+// bare string does. A bag that carries an offset field weighs it under the offset option: use takes
+// the offset at face value and reads the instant as the wall clock less that offset; ignore drops
+// the offset and resolves through disambiguation; prefer keeps a zone instant whose offset matches
+// and otherwise falls to disambiguation; reject demands a zone instant whose offset matches and
+// throws when none does. bento's ZonedDateTime hosts only the ISO calendar, so the lowerer hands
+// back a bag naming another before this is reached.
+func ZonedDateTimeFromFields(year, month, day float64, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], timeZone string, offset Opt[string], overflow, disambiguation, offsetOption string) *ZonedDateTime {
+	pdt := PlainDateTimeFromFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond, "iso8601", overflow)
+	loc, canon := resolveTimeZone(timeZone)
+	wall := wallNanoseconds(isoParse{
+		year: pdt.date.year, month: pdt.date.month, day: pdt.date.day,
+		hour: pdt.time.hour, minute: pdt.time.minute, second: pdt.time.second,
+		millisecond: pdt.time.millisecond, microsecond: pdt.time.microsecond, nanosecond: pdt.time.nanosecond,
+	})
+	var epoch *big.Int
+	switch {
+	case offset.IsUndefined() || offsetOption == "ignore":
+		epoch = disambiguatePossible(loc, wall, disambiguation, canon)
+	case offsetOption == "use":
+		epoch = new(big.Int).Sub(wall, big.NewInt(parseOffsetFieldNanos(offset.Get())))
+	case offsetOption == "prefer":
+		offNs := parseOffsetFieldNanos(offset.Get())
+		epoch = nil
+		for _, cand := range possibleInstants(loc, wall) {
+			off := new(big.Int).Sub(wall, cand)
+			if off.IsInt64() && off.Int64() == offNs {
+				epoch = cand
+				break
+			}
+		}
+		if epoch == nil {
+			epoch = disambiguatePossible(loc, wall, disambiguation, canon)
+		}
+	default: // reject
+		epoch = matchZoneOffset(loc, wall, parseOffsetFieldNanos(offset.Get()), timeZone, canon)
+	}
+	validateEpochNanoseconds(epoch)
+	return &ZonedDateTime{ns: epoch, loc: loc, tzID: FromGoString(canon)}
+}
+
 // wallNanoseconds folds a parsed date and time into a nanosecond count, reading the wall clock
 // as though it were UTC. The offset a time zone applies to reach the true instant is left to
 // the caller, so this is the count Instant would hold for the same fields with no offset.
@@ -2882,6 +2967,216 @@ func (z *ZonedDateTime) AddDuration(dur *Duration, overflow string) *ZonedDateTi
 	result := new(big.Int).Add(intermediate, durationTimeNanos(dur))
 	validateEpochNanoseconds(result)
 	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// Until returns the difference from the receiver to other as a Duration balanced from
+// largestUnit down. Since returns the difference from other to the receiver, the negation of
+// Until, so the calendar anchoring stays on the receiver the way the specification requires.
+func (z *ZonedDateTime) Until(other *ZonedDateTime, largestUnit string) *Duration {
+	return zonedDateTimeDifference(z, other, largestUnit)
+}
+
+// Since returns the negation of the receiver-to-other difference.
+func (z *ZonedDateTime) Since(other *ZonedDateTime, largestUnit string) *Duration {
+	return zonedDateTimeDifference(z, other, largestUnit).Negated()
+}
+
+// zonedDateTimeDifference implements the specification's DifferenceZonedDateTime. A time-unit
+// largestUnit needs no calendar and no zone: the difference is the exact nanosecond gap balanced
+// from that unit down, which is what makes a difference in hours across a daylight-saving change
+// count the real elapsed hours, twenty-three or twenty-five on a transition day rather than a flat
+// twenty-four. A calendar-unit largestUnit splits the distance into a calendar date part and an
+// exact-time part that must share one sign. It walks the end date back by whole days until the
+// intermediate wall clock, taken at the start's time of day and resolved through the zone under
+// the compatible disambiguation, sits on the near side of the target, so the leftover exact time
+// keeps the overall sign and stays within one zoned day, whose length the transition may stretch
+// or shrink. The date part is then the calendar difference from the start date to that
+// intermediate date, and the time part balances from hours down. The two values must share a
+// zone and calendar, which two ZonedDateTimes reached here always do.
+func zonedDateTimeDifference(from, to *ZonedDateTime, largestUnit string) *Duration {
+	switch largestUnit {
+	case "year", "month", "week", "day":
+	default:
+		diff := new(big.Int).Sub(to.ns, from.ns)
+		_, _, largeRank := plainTimeUnitInfo(largestUnit)
+		return durationFromDayNanos(diff, largeRank)
+	}
+	if from.ns.Cmp(to.ns) == 0 {
+		return NewDuration(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	}
+	startDT := from.localDateTime()
+	endDT := to.localDateTime()
+	sign := to.ns.Cmp(from.ns)
+	maxDayCorrection := 1
+	if sign == 1 {
+		maxDayCorrection = 2
+	}
+	dayCorrection := 0
+	if new(big.Int).Sub(endDT.time.dayNanos(), startDT.time.dayNanos()).Sign() == -sign {
+		dayCorrection = 1
+	}
+	endEpochDays := isoToEpochDays(endDT.date.year, endDT.date.month, endDT.date.day)
+	var iy, im, id int
+	timeDuration := new(big.Int)
+	for {
+		iy, im, id = epochDaysToISO(endEpochDays - dayCorrection*sign)
+		intermediate := disambiguateCompatible(from.loc, wallNanoseconds(isoParse{
+			year: iy, month: im, day: id,
+			hour: startDT.time.hour, minute: startDT.time.minute, second: startDT.time.second,
+			millisecond: startDT.time.millisecond, microsecond: startDT.time.microsecond, nanosecond: startDT.time.nanosecond,
+		}))
+		timeDuration.Sub(to.ns, intermediate)
+		if sign != -timeDuration.Sign() || dayCorrection >= maxDayCorrection {
+			break
+		}
+		dayCorrection++
+	}
+	years, months, weeks, days := differenceISODate(startDT.date.year, startDT.date.month, startDT.date.day, iy, im, id, largestUnit)
+	t := durationFromDayNanos(timeDuration, 0)
+	return NewDuration(float64(years), float64(months), float64(weeks), float64(days), t.hours, t.minutes, t.seconds, t.milliseconds, t.microseconds, t.nanoseconds)
+}
+
+// startOfDayInstant returns the first instant of the given local calendar day in the receiver's
+// zone: the wall-clock midnight resolved through the compatible disambiguation, so an ordinary day
+// starts at 00:00, a fall-back day whose midnight occurs twice takes the earlier, and a rare
+// spring-forward at midnight takes the instant just after the gap. It is the building block the
+// day-unit round and the day-length query lean on.
+func (z *ZonedDateTime) startOfDayInstant(year, month, day int) *big.Int {
+	return disambiguateCompatible(z.loc, wallNanoseconds(isoParse{year: year, month: month, day: day}))
+}
+
+// resolvePreferOffset resolves a wall-clock count to an instant, preferring the receiver's current
+// offset: when the reading is ambiguous, a fall-back overlap, and one of its instants carries that
+// same offset, that instant is kept, so rounding a value inside an overlap stays on the branch it
+// started on. Otherwise it falls to the compatible disambiguation. This is the InterpretISODateTime
+// offset-prefer behavior the specification's round uses.
+func (z *ZonedDateTime) resolvePreferOffset(localCount *big.Int, preferOffsetNs int64) *big.Int {
+	for _, cand := range possibleInstants(z.loc, localCount) {
+		off := new(big.Int).Sub(localCount, cand)
+		if off.IsInt64() && off.Int64() == preferOffsetNs {
+			return cand
+		}
+	}
+	return disambiguateCompatible(z.loc, localCount)
+}
+
+// Round implements Temporal.ZonedDateTime.prototype.round. A day smallestUnit rounds the instant
+// within the zoned day, whose length the daylight-saving transitions stretch or shrink: the day
+// progress from the day's start is rounded to the whole day length, twenty-three or twenty-five
+// hours on a transition day rather than a flat twenty-four, and lands on this midnight or the next.
+// A time smallestUnit rounds the wall clock the way a PlainDateTime does, carrying past midnight
+// when it must, and the rounded wall clock re-resolves to an instant preferring the original offset,
+// so a value rounded inside a fall-back overlap keeps the branch it was on. Only increment one is
+// allowed for the day unit; a time increment must divide its next larger unit.
+func (z *ZonedDateTime) Round(smallestUnit string, increment float64, roundingMode string) *ZonedDateTime {
+	inc := int64(toIntegerWithTruncation(increment))
+	wall := z.localDateTime()
+	if smallestUnit == "day" {
+		if inc != 1 {
+			Throw(NewRangeError(FromGoString("Temporal.ZonedDateTime.prototype.round roundingIncrement is out of range")))
+		}
+		startNs := z.startOfDayInstant(wall.date.year, wall.date.month, wall.date.day)
+		ny, nm, nd := addISODate(wall.date.year, wall.date.month, wall.date.day, 0, 0, 0, big.NewInt(1), "constrain")
+		endNs := z.startOfDayInstant(ny, nm, nd)
+		dayLengthNs := new(big.Int).Sub(endNs, startNs)
+		dayProgressNs := new(big.Int).Sub(z.ns, startNs)
+		rounded := roundBigToIncrement(dayProgressNs, dayLengthNs, roundingMode)
+		result := new(big.Int).Add(startNs, rounded)
+		validateEpochNanoseconds(result)
+		return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+	}
+	unitNs, dividend, _ := plainTimeUnitInfo(smallestUnit)
+	if inc < 1 || inc >= dividend || dividend%inc != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.ZonedDateTime.prototype.round roundingIncrement is out of range")))
+	}
+	quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
+	rounded := roundBigToIncrement(wall.time.dayNanos(), quantum, roundingMode)
+	dayCarry := new(big.Int)
+	timeOfDay := new(big.Int)
+	dayCarry.DivMod(rounded, nsPerDay, timeOfDay)
+	y, m, d := addISODate(wall.date.year, wall.date.month, wall.date.day, 0, 0, 0, dayCarry, "constrain")
+	localCount := new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(y, m, d))), nsPerDay)
+	localCount.Add(localCount, timeOfDay)
+	result := z.resolvePreferOffset(localCount, int64(z.offsetSeconds())*1_000_000_000)
+	validateEpochNanoseconds(result)
+	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// wallCount returns the naive nanosecond count of a wall-clock reading, the epoch-day count of its
+// ISO date scaled to nanoseconds plus its time of day, the input possibleInstants and the
+// disambiguation helpers take.
+func wallCount(dt *PlainDateTime) *big.Int {
+	c := new(big.Int).Mul(big.NewInt(int64(isoToEpochDays(dt.date.year, dt.date.month, dt.date.day))), nsPerDay)
+	c.Add(c, dt.time.dayNanos())
+	return c
+}
+
+// WithFields implements Temporal.ZonedDateTime.prototype.with. It overlays the bag's present date
+// and time fields onto the wall-clock reading under the overflow rule, reusing the PlainDateTime
+// field overlay, then re-resolves the reshaped wall clock to an instant preferring the original
+// offset, the default offset option with is: a field changed inside a fall-back overlap keeps the
+// branch the value was on, and a field that lands the wall clock in a spring-forward gap shifts
+// forward under the compatible fallback. The zone and the calendar carry through.
+func (z *ZonedDateTime) WithFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], overflow string) *ZonedDateTime {
+	reshaped := z.localDateTime().WithFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond, overflow)
+	result := z.resolvePreferOffset(wallCount(reshaped), int64(z.offsetSeconds())*1_000_000_000)
+	validateEpochNanoseconds(result)
+	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// WithPlainTime implements Temporal.ZonedDateTime.prototype.withPlainTime. It keeps the wall-clock
+// date, replaces the time of day, defaulting to midnight when none is given, and re-resolves through
+// the compatible disambiguation rather than preferring the old offset, so a new time inside a
+// fall-back overlap takes the earlier branch the way the specification's withPlainTime does.
+func (z *ZonedDateTime) WithPlainTime(time *PlainTime) *ZonedDateTime {
+	t := PlainTime{}
+	if time != nil {
+		t = *time
+	}
+	reshaped := &PlainDateTime{date: z.localDateTime().date, time: t}
+	result := disambiguateCompatible(z.loc, wallCount(reshaped))
+	validateEpochNanoseconds(result)
+	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// WithTimeZone implements Temporal.ZonedDateTime.prototype.withTimeZone. It keeps the exact instant
+// and re-homes it in another zone, so the wall clock and the offset re-read there while the instant
+// is unchanged. An unrecognized identifier throws a RangeError through the shared resolver.
+func (z *ZonedDateTime) WithTimeZone(timeZone string) *ZonedDateTime {
+	moved := newZonedDateTime(z.ns, timeZone)
+	moved.cal = z.cal
+	return moved
+}
+
+// WithCalendar implements Temporal.ZonedDateTime.prototype.withCalendar for the ISO calendar, the
+// only one bento's ZonedDateTime hosts. It keeps the instant and the zone and returns a copy; a
+// non-ISO calendar hands back at lowering, so this is only reached for iso8601, an identity move.
+func (z *ZonedDateTime) WithCalendar() *ZonedDateTime {
+	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// StartOfDay implements Temporal.ZonedDateTime.prototype.startOfDay. It returns the first instant of
+// the receiver's local calendar day in its zone, wall-clock midnight resolved through the compatible
+// rule, so an ordinary day starts at 00:00 and a rare spring-forward at midnight lands just past the
+// gap. The zone and calendar carry over unchanged.
+func (z *ZonedDateTime) StartOfDay() *ZonedDateTime {
+	dt := z.localDateTime()
+	start := z.startOfDayInstant(dt.date.year, dt.date.month, dt.date.day)
+	return &ZonedDateTime{ns: start, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// HoursInDay implements Temporal.ZonedDateTime.prototype.hoursInDay. It reads the length of the
+// receiver's local calendar day as the exact hours between this day's start and the next day's
+// start, so an ordinary day is twenty-four, a spring-forward day twenty-three, and a fall-back day
+// twenty-five. The gap divides in floating point so a zone whose transition is off the hour keeps
+// its fractional part.
+func (z *ZonedDateTime) HoursInDay() float64 {
+	dt := z.localDateTime()
+	today := z.startOfDayInstant(dt.date.year, dt.date.month, dt.date.day)
+	ny, nm, nd := addISODate(dt.date.year, dt.date.month, dt.date.day, 0, 0, 0, big.NewInt(1), "constrain")
+	next := z.startOfDayInstant(ny, nm, nd)
+	gap := new(big.Int).Sub(next, today)
+	return float64(gap.Int64()) / 3_600_000_000_000
 }
 
 // Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two

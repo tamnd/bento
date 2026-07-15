@@ -2181,6 +2181,207 @@ func TestZonedDateTimeAddDuration(t *testing.T) {
 	}
 }
 
+func TestZonedDateTimeDifference(t *testing.T) {
+	a := ZonedDateTimeFromString("2024-03-08T12:00:00[America/New_York]")
+	b := ZonedDateTimeFromString("2024-03-11T12:00:00[America/New_York]")
+	early := ZonedDateTimeFromString("2024-03-11T10:00:00[America/New_York]")
+	t1 := ZonedDateTimeFromString("2024-01-01T00:00:00[Asia/Tokyo]")
+	t2 := ZonedDateTimeFromString("2024-04-06T06:30:00[Asia/Tokyo]")
+	cases := []struct {
+		name string
+		got  *Duration
+		want string
+	}{
+		{"hours across spring forward", a.Until(b, "hour"), "PT71H"},
+		{"days across spring forward", a.Until(b, "day"), "P3D"},
+		{"weeks fold to days", a.Until(b, "week"), "P3D"},
+		{"tokyo months", t1.Until(t2, "month"), "P3M5DT6H30M"},
+		{"tokyo years", t1.Until(t2, "year"), "P3M5DT6H30M"},
+		{"backward days", b.Until(a, "day"), "-P3D"},
+		{"borrow into days", a.Until(early, "day"), "P2DT22H"},
+		{"borrow into hours", a.Until(early, "hour"), "PT69H"},
+		{"since negates", a.Since(b, "day"), "-P3D"},
+	}
+	for _, c := range cases {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("%s: difference = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestZonedDateTimeRound(t *testing.T) {
+	cases := []struct {
+		name      string
+		base      string
+		unit      string
+		increment float64
+		mode      string
+		want      string
+	}{
+		{"hour down", "2024-06-15T12:29:00[America/New_York]", "hour", 1, "halfExpand", "2024-06-15T12:00:00-04:00[America/New_York]"},
+		{"hour up", "2024-06-15T12:30:00[America/New_York]", "hour", 1, "halfExpand", "2024-06-15T13:00:00-04:00[America/New_York]"},
+		{"fifteen minutes", "2024-06-15T12:31:40[America/New_York]", "minute", 15, "halfExpand", "2024-06-15T12:30:00-04:00[America/New_York]"},
+		{"day down", "2024-06-15T11:00:00[America/New_York]", "day", 1, "halfExpand", "2024-06-15T00:00:00-04:00[America/New_York]"},
+		{"day up", "2024-06-15T13:00:00[America/New_York]", "day", 1, "halfExpand", "2024-06-16T00:00:00-04:00[America/New_York]"},
+		{"day on the twenty-three-hour spring day", "2024-03-10T12:00:00[America/New_York]", "day", 1, "halfExpand", "2024-03-10T00:00:00-05:00[America/New_York]"},
+		{"day on the twenty-five-hour fall day", "2024-11-03T12:00:00[America/New_York]", "day", 1, "halfExpand", "2024-11-04T00:00:00-05:00[America/New_York]"},
+		{"day ceil", "2024-06-15T00:00:01[America/New_York]", "day", 1, "ceil", "2024-06-16T00:00:00-04:00[America/New_York]"},
+		{"hour into overlap keeps later offset", "2024-11-03T01:40:00-05:00[America/New_York]", "hour", 1, "floor", "2024-11-03T01:00:00-05:00[America/New_York]"},
+		{"hour up out of overlap", "2024-11-03T01:40:00-05:00[America/New_York]", "hour", 1, "halfExpand", "2024-11-03T02:00:00-05:00[America/New_York]"},
+	}
+	for _, c := range cases {
+		got := ZonedDateTimeFromString(c.base).Round(c.unit, c.increment, c.mode).ToString().ToGoString()
+		if got != c.want {
+			t.Errorf("%s: Round = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestZonedDateTimeWithFamily(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	base := ZonedDateTimeFromString("2024-06-15T12:30:45-04:00[America/New_York]")
+	// with: overlay date and time fields, offset preferred.
+	if got := base.WithFields(none, none, none, none, some(0), some(0), none, none, none, "constrain").ToString().ToGoString(); got != "2024-06-15T12:00:00-04:00[America/New_York]" {
+		t.Errorf("with minute/second = %q", got)
+	}
+	gap := ZonedDateTimeFromString("2024-03-10T12:00:00-04:00[America/New_York]")
+	if got := gap.WithFields(none, none, none, some(2), some(30), none, none, none, none, "constrain").ToString().ToGoString(); got != "2024-03-10T03:30:00-04:00[America/New_York]" {
+		t.Errorf("with into the gap = %q", got)
+	}
+	overlap := ZonedDateTimeFromString("2024-11-03T01:30:00-05:00[America/New_York]")
+	if got := overlap.WithFields(none, none, none, none, some(15), none, none, none, none, "constrain").ToString().ToGoString(); got != "2024-11-03T01:15:00-05:00[America/New_York]" {
+		t.Errorf("with inside the overlap = %q", got)
+	}
+	jan31 := ZonedDateTimeFromString("2024-01-31T12:00:00-05:00[America/New_York]")
+	if got := jan31.WithFields(none, some(2), none, none, none, none, none, none, none, "constrain").ToString().ToGoString(); got != "2024-02-29T12:00:00-05:00[America/New_York]" {
+		t.Errorf("with month constrain = %q", got)
+	}
+	if !zdtCall(func() { jan31.WithFields(none, some(2), none, none, none, none, none, none, none, "reject") }) {
+		t.Errorf("with month reject did not throw")
+	}
+	// withPlainTime: replace the time, compatible disambiguation.
+	if got := base.WithPlainTime(PlainTimeFromString("08:00")).ToString().ToGoString(); got != "2024-06-15T08:00:00-04:00[America/New_York]" {
+		t.Errorf("withPlainTime = %q", got)
+	}
+	if got := base.WithPlainTime(nil).ToString().ToGoString(); got != "2024-06-15T00:00:00-04:00[America/New_York]" {
+		t.Errorf("withPlainTime midnight = %q", got)
+	}
+	// withTimeZone: keep the instant, re-home the zone.
+	if got := base.WithTimeZone("Asia/Tokyo").ToString().ToGoString(); got != "2024-06-16T01:30:45+09:00[Asia/Tokyo]" {
+		t.Errorf("withTimeZone = %q", got)
+	}
+	// withCalendar: identity for the ISO calendar.
+	if got := base.WithCalendar().ToString().ToGoString(); got != "2024-06-15T12:30:45-04:00[America/New_York]" {
+		t.Errorf("withCalendar = %q", got)
+	}
+}
+
+// TestZonedDateTimeDayQueries pins startOfDay to the first instant of the local day and hoursInDay
+// to the day length, twenty-four on an ordinary day, twenty-three across spring forward, and
+// twenty-five across fall back.
+func TestZonedDateTimeDayQueries(t *testing.T) {
+	normal := ZonedDateTimeFromString("2024-06-15T12:30:45-04:00[America/New_York]")
+	if got := normal.StartOfDay().ToString().ToGoString(); got != "2024-06-15T00:00:00-04:00[America/New_York]" {
+		t.Errorf("startOfDay normal = %q", got)
+	}
+	if got := normal.HoursInDay(); got != 24 {
+		t.Errorf("hoursInDay normal = %v", got)
+	}
+	spring := ZonedDateTimeFromString("2024-03-10T15:00:00-04:00[America/New_York]")
+	if got := spring.StartOfDay().ToString().ToGoString(); got != "2024-03-10T00:00:00-05:00[America/New_York]" {
+		t.Errorf("startOfDay spring = %q", got)
+	}
+	if got := spring.HoursInDay(); got != 23 {
+		t.Errorf("hoursInDay spring = %v", got)
+	}
+	fall := ZonedDateTimeFromString("2024-11-03T15:00:00-05:00[America/New_York]")
+	if got := fall.StartOfDay().ToString().ToGoString(); got != "2024-11-03T00:00:00-04:00[America/New_York]" {
+		t.Errorf("startOfDay fall = %q", got)
+	}
+	if got := fall.HoursInDay(); got != 25 {
+		t.Errorf("hoursInDay fall = %v", got)
+	}
+}
+
+// TestZonedDateTimeFromFields pins Temporal.ZonedDateTime.from over a property bag: an ordinary
+// reading, the two disambiguation branches across a spring-forward gap and a fall-back overlap, and
+// every offset-option branch weighing a supplied offset against the zone. Each value was checked
+// against @js-temporal/polyfill.
+func TestZonedDateTimeFromFields(t *testing.T) {
+	some := Some[float64]
+	none := None[float64]()
+	noStr := None[string]()
+	someStr := Some[string]
+	from := func(y, mo, d float64, h, mi Opt[float64], off Opt[string], overflow, disamb, offOpt string) string {
+		return ZonedDateTimeFromFields(y, mo, d, h, mi, none, none, none, none, "America/New_York", off, overflow, disamb, offOpt).ToString().ToGoString()
+	}
+	// Ordinary reading.
+	if got := from(2024, 6, 15, some(12), some(30), noStr, "constrain", "compatible", "reject"); got != "2024-06-15T12:30:00-04:00[America/New_York]" {
+		t.Errorf("basic = %q", got)
+	}
+	// Spring-forward gap: compatible shifts forward, earlier shifts back.
+	if got := from(2024, 3, 10, some(2), some(30), noStr, "constrain", "compatible", "reject"); got != "2024-03-10T03:30:00-04:00[America/New_York]" {
+		t.Errorf("gap compatible = %q", got)
+	}
+	if got := from(2024, 3, 10, some(2), some(30), noStr, "constrain", "earlier", "reject"); got != "2024-03-10T01:30:00-05:00[America/New_York]" {
+		t.Errorf("gap earlier = %q", got)
+	}
+	// Fall-back overlap: compatible takes the earlier branch, later the second.
+	if got := from(2024, 11, 3, some(1), some(30), noStr, "constrain", "compatible", "reject"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap compatible = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), noStr, "constrain", "later", "reject"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap later = %q", got)
+	}
+	// Offset option reject: the supplied offset selects the matching overlap branch.
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-05:00"), "constrain", "compatible", "reject"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap offset -05:00 reject = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-04:00"), "constrain", "compatible", "reject"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap offset -04:00 reject = %q", got)
+	}
+	// use takes the offset at face value; ignore drops it; prefer keeps a match and otherwise falls back.
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-05:00"), "constrain", "compatible", "use"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap offset use = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("+05:00"), "constrain", "compatible", "ignore"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap offset ignore = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("-05:00"), "constrain", "compatible", "prefer"); got != "2024-11-03T01:30:00-05:00[America/New_York]" {
+		t.Errorf("overlap offset prefer match = %q", got)
+	}
+	if got := from(2024, 11, 3, some(1), some(30), someStr("+05:00"), "constrain", "compatible", "prefer"); got != "2024-11-03T01:30:00-04:00[America/New_York]" {
+		t.Errorf("overlap offset prefer fallback = %q", got)
+	}
+	// overflow constrain clamps an out-of-range month.
+	if got := from(2024, 13, 15, some(12), none, noStr, "constrain", "compatible", "reject"); got != "2024-12-15T12:00:00-05:00[America/New_York]" {
+		t.Errorf("overflow constrain = %q", got)
+	}
+	// disambiguation reject throws inside a gap; a non-matching offset under reject throws.
+	if !zdtCall(func() {
+		ZonedDateTimeFromFields(2024, 3, 10, some(2), some(30), none, none, none, none, "America/New_York", noStr, "constrain", "reject", "reject")
+	}) {
+		t.Errorf("gap reject did not throw")
+	}
+	if !zdtCall(func() {
+		ZonedDateTimeFromFields(2024, 11, 3, some(1), some(30), none, none, none, none, "America/New_York", someStr("+05:00"), "constrain", "compatible", "reject")
+	}) {
+		t.Errorf("offset reject did not throw")
+	}
+}
+
+// zdtCall runs f and reports whether it threw a Temporal error.
+func zdtCall(f func()) (threw bool) {
+	defer func() {
+		if recover() != nil {
+			threw = true
+		}
+	}()
+	f()
+	return false
+}
+
 // TestZonedDateTimeRejects checks the range guard and the unknown-zone guard both throw a
 // RangeError.
 func TestZonedDateTimeRejects(t *testing.T) {

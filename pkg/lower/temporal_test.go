@@ -1798,6 +1798,69 @@ console.log(z.add({ months: 1 }, { overflow: "reject" }).epochMilliseconds);`
 	}
 }
 
+// TestZonedDateTimeDifference pins until and since over a ZonedDateTime argument to the runtime
+// Until and Since, the largestUnit read from the options and defaulting to hour, since gets the
+// same difference the runtime negates.
+func TestZonedDateTimeDifference(t *testing.T) {
+	const src = `const a = new Temporal.ZonedDateTime(0n, "UTC");
+const b = new Temporal.ZonedDateTime(1n, "UTC");
+console.log(a.until(b).hours);
+console.log(a.until(b, { largestUnit: "days" }).days);
+console.log(a.since(b, { largestUnit: "months" }).months);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Until(", ".Since(", `"hour"`, `"day"`, `"month"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestZonedDateTimeRound pins round over a ZonedDateTime to the runtime Round, the smallestUnit,
+// increment expression, and mode read through the shared day-and-time round-options reader.
+func TestZonedDateTimeRound(t *testing.T) {
+	const src = `const z = new Temporal.ZonedDateTime(0n, "UTC");
+console.log(z.round("hour").epochMilliseconds);
+console.log(z.round({ smallestUnit: "minute", roundingIncrement: 15, roundingMode: "ceil" }).epochMilliseconds);
+console.log(z.round({ smallestUnit: "day" }).epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Round(", `"hour"`, `"minute"`, `"ceil"`, `"day"`, `"halfExpand"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestZonedDateTimeWithFamily pins the reshaping methods to their runtime calls: with overlays
+// date and time fields through WithFields, withPlainTime replaces the time, withTimeZone re-homes
+// the instant onto a new zone, and withCalendar over a literal iso8601 is the identity WithCalendar.
+func TestZonedDateTimeWithFamily(t *testing.T) {
+	const src = `const z = Temporal.ZonedDateTime.from("2024-06-15T12:30:45[America/New_York]");
+console.log(z.with({ hour: 8 }).toString());
+console.log(z.withPlainTime(new Temporal.PlainTime(9, 15)).toString());
+console.log(z.withTimeZone("Asia/Tokyo").toString());
+console.log(z.withCalendar("iso8601").toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".WithFields(", ".WithPlainTime(", ".WithTimeZone(", ".WithCalendar("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestZonedDateTimeDayQueries pins the day-length queries: startOfDay lowers to the runtime
+// StartOfDay and the hoursInDay getter reads through the runtime HoursInDay.
+func TestZonedDateTimeDayQueries(t *testing.T) {
+	const src = `const z = Temporal.ZonedDateTime.from("2024-03-10T15:00:00[America/New_York]");
+console.log(z.startOfDay().toString());
+console.log(z.hoursInDay);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".StartOfDay(", ".HoursInDay("} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeStatics pins compare and from over a ZonedDateTime, each to its value
 // function.
 func TestZonedDateTimeStatics(t *testing.T) {
@@ -1825,6 +1888,20 @@ console.log(z.epochMilliseconds);`
 	}
 }
 
+// TestZonedDateTimeFromBagConstruction pins Temporal.ZonedDateTime.from over a property bag to
+// value.ZonedDateTimeFromFields, carrying the date and time fields, the time zone, an optional
+// offset field, and the overflow, disambiguation, and offset options through.
+func TestZonedDateTimeFromBagConstruction(t *testing.T) {
+	const src = `const z = Temporal.ZonedDateTime.from({ year: 2024, month: 11, day: 3, hour: 1, minute: 30, timeZone: "America/New_York", offset: "-05:00" }, { disambiguation: "compatible", offset: "prefer" });
+console.log(z.toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{"value.ZonedDateTimeFromFields(", `value.Some[string]("-05:00")`, `"America/New_York"`, `"prefer"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeHandBacks pins the honest ceilings: the arithmetic and rounding methods,
 // the reshaping, the start-of-day and transition queries, from over a string, and a
 // constructor with a calendar argument each hand back with a reason naming where the work
@@ -1836,9 +1913,9 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "until difference",
-			src:  "const a = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst b = new Temporal.ZonedDateTime(1n, \"UTC\");\nconsole.log(a.until(b).hours);",
-			want: "Temporal.ZonedDateTime.prototype.until is a later slice",
+			name: "until with a rounding option",
+			src:  "const a = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst b = new Temporal.ZonedDateTime(1n, \"UTC\");\nconsole.log(a.until(b, { smallestUnit: \"minute\" }).hours);",
+			want: "Temporal.ZonedDateTime.prototype.until with the rounding option smallestUnit is a later slice",
 		},
 		{
 			name: "add with a dynamic overflow option",
@@ -1846,19 +1923,39 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 			want: "Temporal.ZonedDateTime.prototype.add with a non-literal overflow option is a later slice",
 		},
 		{
-			name: "with reshape",
-			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.with({ hour: 3 });\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.ZonedDateTime.prototype.with is a later slice",
+			name: "with an offset field",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.with({ offset: \"+01:00\" });\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.with over a bag with the field offset is a later slice",
 		},
 		{
-			name: "startOfDay",
-			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.startOfDay();\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.ZonedDateTime.prototype.startOfDay is a later slice",
+			name: "withCalendar to a non-ISO calendar",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst j = z.withCalendar(\"gregory\");\nconsole.log(j.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.prototype.withCalendar over a calendar other than a literal iso8601 is a later slice",
+		},
+		{
+			name: "getTimeZoneTransition",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nz.getTimeZoneTransition(\"next\");",
+			want: "Temporal.ZonedDateTime.prototype.getTimeZoneTransition needs a zone transition list the host time package does not expose",
+		},
+		{
+			name: "toLocaleString",
+			src:  "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconsole.log(z.toLocaleString());",
+			want: "Temporal.ZonedDateTime.prototype.toLocaleString is a later slice",
 		},
 		{
 			name: "from a dynamic string",
 			src:  "function at(s: string) { return Temporal.ZonedDateTime.from(s).epochMilliseconds; }\nconsole.log(at(\"1970-01-01T00:00:00+00:00[UTC]\"));",
-			want: "Temporal.ZonedDateTime.from over a dynamic string or a property bag is a later slice",
+			want: "Temporal.ZonedDateTime.from over a dynamic string is a later slice",
+		},
+		{
+			name: "from a bag naming a non-ISO calendar",
+			src:  "const z = Temporal.ZonedDateTime.from({ year: 2024, month: 6, day: 15, timeZone: \"UTC\", calendar: \"gregory\" });\nconsole.log(z.epochMilliseconds);",
+			want: "Temporal.ZonedDateTime.from over a bag naming the non-ISO calendar gregory is a later slice",
+		},
+		{
+			name: "from a bag with an out-of-set offset option",
+			src:  "function at(o: \"use\" | \"reject\") { return Temporal.ZonedDateTime.from({ year: 2024, month: 6, day: 15, timeZone: \"UTC\" }, { offset: o }).epochMilliseconds; }\nconsole.log(at(\"use\"));",
+			want: "Temporal.ZonedDateTime.from with a dynamic or out-of-set offset option is a later slice",
 		},
 		{
 			name: "from a string naming a non-ISO calendar",
