@@ -739,22 +739,93 @@ func Coalesce(a, b Value) Value {
 	return a
 }
 
-// toPrimitiveDefault, toPrimitiveNumber, and toPrimitiveString apply the
-// ToPrimitive abstract operation at the three hints. A primitive is already
-// primitive and returns unchanged. An object has no user valueOf or toString on
-// the dynamic path yet, so it takes the default ordinary result: an array joins
-// its elements and any other object is "[object Object]", which is what the
-// default valueOf/toString pair produces for a plain object. The number and
-// default hints agree here because neither object case has a numeric valueOf.
-func toPrimitiveDefault(v Value) Value {
-	if v.kind != KindObject && v.kind != KindArray && v.kind != KindFunc {
+// primHint is the ToPrimitive hint: the preferred type a coercion asks an object
+// to become, which selects the order valueOf and toString are tried and the string
+// an exotic Symbol.toPrimitive method receives.
+type primHint uint8
+
+const (
+	hintDefault primHint = iota
+	hintNumber
+	hintString
+)
+
+// hintName spells a hint the way the spec passes it to a Symbol.toPrimitive
+// method: the string argument the exotic coercion reads to decide what to return.
+func hintName(hint primHint) Value {
+	switch hint {
+	case hintNumber:
+		return StringValue(FromGoString("number"))
+	case hintString:
+		return StringValue(FromGoString("string"))
+	default:
+		return StringValue(FromGoString("default"))
+	}
+}
+
+// toPrimitive applies the ToPrimitive abstract operation at the given hint. A
+// value that is already primitive returns unchanged. An object is first asked for
+// its Symbol.toPrimitive method: when present it is called with the hint's name and
+// a primitive result is taken, while an object result throws the TypeError the spec
+// raises for a coercion that will not converge. With no such method the object runs
+// OrdinaryToPrimitive, reading valueOf and toString in the hint's order and taking
+// the first that returns a primitive when called with the object as this. When
+// neither yields a primitive the value falls back to its ordinary string form, the
+// "[object Object]" or comma-joined-array spelling the default prototype methods
+// produce, so a plain dynamic object with no user coercion behaves exactly as it
+// did before this path looked for one.
+func toPrimitive(v Value, hint primHint) Value {
+	if !isObjectLike(v) {
 		return v
+	}
+	exotic := v.getSymKey(symbolToPrimitive)
+	if !exotic.IsNullish() {
+		if exotic.kind != KindFunc {
+			Throw(NewTypeError(FromGoString("Symbol.toPrimitive is not a function")))
+			return Undefined
+		}
+		res := exotic.Call(v, hintName(hint))
+		if isObjectLike(res) {
+			Throw(NewTypeError(FromGoString("Cannot convert object to primitive value")))
+			return Undefined
+		}
+		return res
+	}
+	if res, ok := ordinaryToPrimitive(v, hint == hintString); ok {
+		return res
 	}
 	return StringValue(ordinaryToString(v))
 }
 
-func toPrimitiveNumber(v Value) Value { return toPrimitiveDefault(v) }
-func toPrimitiveString(v Value) BStr  { return ordinaryToString(v) }
+// ordinaryToPrimitive is the OrdinaryToPrimitive abstract operation: it reads
+// valueOf and toString off the object, in the order the hint asks (toString first
+// for a string hint, valueOf first otherwise), calls the first callable one with
+// the object as its this receiver, and returns its result the moment it comes back
+// primitive. A method that is absent or not callable is skipped, and a method that
+// returns another object is rejected so the other method still gets its turn. The
+// second return reports whether any method produced a primitive, so the caller can
+// fall back to the ordinary string form when neither did.
+func ordinaryToPrimitive(v Value, stringFirst bool) (Value, bool) {
+	names := [2]BStr{FromGoString("valueOf"), FromGoString("toString")}
+	if stringFirst {
+		names = [2]BStr{FromGoString("toString"), FromGoString("valueOf")}
+	}
+	for _, name := range names {
+		m := v.Get(name)
+		if m.kind != KindFunc {
+			continue
+		}
+		res := m.Call(v)
+		if !isObjectLike(res) {
+			return res, true
+		}
+	}
+	return Undefined, false
+}
+
+func toPrimitiveDefault(v Value) Value { return toPrimitive(v, hintDefault) }
+func toPrimitiveNumber(v Value) Value  { return toPrimitive(v, hintNumber) }
+func toPrimitiveString(v Value) BStr   { return ToString(toPrimitive(v, hintString)) }
 
 // ordinaryToString spells an object the way the default Object.prototype.toString
 // and Array.prototype.toString do: an array is its elements joined by commas with
