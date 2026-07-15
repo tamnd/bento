@@ -1888,6 +1888,41 @@ func TestInstantUntilSince(t *testing.T) {
 	}
 }
 
+func TestInstantRound(t *testing.T) {
+	b := NewInstant(bigInt(t, "8130250500000")) // 2h15m30.2505s after the epoch
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"hour halfExpand", b.Round("hour", 1, "halfExpand").ToString().ToGoString(), "1970-01-01T02:00:00Z"},
+		{"minute halfExpand", b.Round("minute", 1, "halfExpand").ToString().ToGoString(), "1970-01-01T02:16:00Z"},
+		{"second halfExpand", b.Round("second", 1, "halfExpand").ToString().ToGoString(), "1970-01-01T02:15:30Z"},
+		{"second ceil", b.Round("second", 1, "ceil").ToString().ToGoString(), "1970-01-01T02:15:31Z"},
+		{"minute inc15", b.Round("minute", 15, "halfExpand").ToString().ToGoString(), "1970-01-01T02:15:00Z"},
+		{"hour inc6", b.Round("hour", 6, "halfExpand").ToString().ToGoString(), "1970-01-01T00:00:00Z"},
+		{"hour inc24", b.Round("hour", 24, "halfExpand").ToString().ToGoString(), "1970-01-01T00:00:00Z"},
+		{"nanosecond dayspan", b.Round("nanosecond", 86400000000000, "halfExpand").ToString().ToGoString(), "1970-01-01T00:00:00Z"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	// An increment that does not divide the day length, one past the day length, and an invalid
+	// unit each throw a RangeError.
+	if !bagThrows(func() { b.Round("hour", 5, "halfExpand") }) {
+		t.Errorf("Round with an increment not dividing the day did not throw")
+	}
+	if !bagThrows(func() { b.Round("hour", 48, "halfExpand") }) {
+		t.Errorf("Round with an increment past the day length did not throw")
+	}
+	if !bagThrows(func() { b.Round("day", 1, "halfExpand") }) {
+		t.Errorf("Round with a calendar unit did not throw")
+	}
+}
+
 // TestInstantFactories checks fromEpochMilliseconds, fromEpochNanoseconds, and from over
 // an Instant, plus that from returns a distinct copy.
 func TestInstantFactories(t *testing.T) {
