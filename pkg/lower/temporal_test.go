@@ -948,9 +948,9 @@ func TestPlainDateTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "with reshaping",
-			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.with({ hour: 9 });\nconsole.log(e.hour);",
-			want: "Temporal.PlainDateTime.prototype.with is a later slice",
+			name: "with a monthCode field",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 1, 12, 30);\nconst e = dt.with({ monthCode: \"M02\" });\nconsole.log(e.month);",
+			want: "Temporal.PlainDateTime.prototype.with over a bag with the field monthCode is a later slice",
 		},
 		{
 			name: "from a property bag",
@@ -1026,6 +1026,40 @@ func TestPlainDateTimeWithPlainTime(t *testing.T) {
 			name: "time-like bag",
 			src:  "const dt = new Temporal.PlainDateTime(2020, 5, 15, 13, 30);\nconsole.log(dt.withPlainTime({ hour: 6, minute: 5 }).toString());",
 			want: "value.PlainTimeFromFields(",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("rendered program missing %q:\n%s", c.want, got)
+			}
+		})
+	}
+}
+
+// TestPlainDateTimeWith pins with: a bag of date and time fields lowers to WithFields carrying each
+// recognized field as a present or absent optional, and an overflow option threads through.
+func TestPlainDateTimeWith(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "time field",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 31, 13, 30);\nconsole.log(dt.with({ hour: 9 }).toString());",
+			want: ".WithFields(value.None[float64](), value.None[float64](), value.None[float64](), value.Some[float64](9)",
+		},
+		{
+			name: "date and overflow",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 31, 13, 30);\nconsole.log(dt.with({ month: 2 }, { overflow: \"reject\" }).toString());",
+			want: "value.Some[float64](2), value.None[float64]()",
+		},
+		{
+			name: "overflow reject threads",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 1, 31, 13, 30);\nconsole.log(dt.with({ month: 2 }, { overflow: \"reject\" }).toString());",
+			want: "\"reject\")",
 		},
 	}
 	for _, c := range cases {
