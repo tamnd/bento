@@ -1354,6 +1354,113 @@ func (pdt *PlainDateTime) ToString() BStr {
 // produces under default options.
 func (pdt *PlainDateTime) ToJSON() BStr { return pdt.ToString() }
 
+// AddDateTime implements Temporal.PlainDateTime.prototype.add and, over a negated Duration,
+// subtract. Unlike a PlainDate, which drops the duration's sub-day time part, a PlainDateTime
+// carries a wall clock, so the time part folds into the clock first: the duration's six time
+// components add to the receiver's time, and the total splits into a time of day in [0, one day)
+// and a whole-day carry, floored so a net-negative time lands on the previous day's clock. That
+// carry joins the duration's days, and the years, months, weeks, and days add to the date through
+// addISODate under the overflow rule. The result keeps the receiver's calendar, and an
+// out-of-range date throws a RangeError.
+func (pdt *PlainDateTime) AddDateTime(dur *Duration, overflow string) *PlainDateTime {
+	total := pdt.time.dayNanos()
+	total.Add(total, durationTimeNanos(dur))
+	dayCarry := new(big.Int)
+	timeOfDay := new(big.Int)
+	dayCarry.DivMod(total, nsPerDay, timeOfDay)
+	days := new(big.Int).Add(big.NewInt(int64(dur.days)), dayCarry)
+	y, m, d := addISODate(pdt.date.year, pdt.date.month, pdt.date.day, int(dur.years), int(dur.months), int(dur.weeks), days, overflow)
+	if !isoDateWithinLimits(y, m, d) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDateTime is outside the representable range")))
+	}
+	return &PlainDateTime{
+		date: PlainDate{year: y, month: m, day: d, cal: pdt.date.cal},
+		time: *plainTimeFromDayNanos(timeOfDay),
+	}
+}
+
+// Until returns the difference from the receiver to other as a Duration balanced from
+// largestUnit down. Since returns the difference from other to the receiver, the negation of
+// Until, so the month anchoring stays on the receiver the way the specification requires.
+func (pdt *PlainDateTime) Until(other *PlainDateTime, largestUnit string) *Duration {
+	return plainDateTimeDifference(pdt, other, largestUnit)
+}
+
+// Since returns the negation of the receiver-to-other difference.
+func (pdt *PlainDateTime) Since(other *PlainDateTime, largestUnit string) *Duration {
+	return plainDateTimeDifference(pdt, other, largestUnit).Negated()
+}
+
+// plainDateTimeDifference implements the specification's DifferenceISODateTime: it splits the
+// distance from one date-time to another into a calendar date part and a wall-clock time part
+// that share one sign. It first takes the signed time difference within a day. When that points
+// opposite the calendar direction, it borrows a day: the start date steps one day toward the
+// target and twenty-four hours fold into the time difference, so the time part comes to share the
+// date's sign and stays under a day. The date part is then the calendar difference from the
+// adjusted start to the target at largestUnit, and the time part balances from hours down. For a
+// time largestUnit the whole date difference in days folds into the time and balances from that
+// unit. The two date-times must share a calendar.
+func plainDateTimeDifference(from, to *PlainDateTime, largestUnit string) *Duration {
+	if from.date.calendarID() != to.date.calendarID() {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDateTime difference between two calendars is not allowed")))
+	}
+	timeDiff := new(big.Int).Sub(to.time.dayNanos(), from.time.dayNanos())
+	timeSign := timeDiff.Sign()
+	dateSign := isoDateCompare(to.date.year, to.date.month, to.date.day, from.date.year, from.date.month, from.date.day)
+	ay, am, ad := from.date.year, from.date.month, from.date.day
+	if timeSign != 0 && dateSign != 0 && timeSign == -dateSign {
+		ay, am, ad = epochDaysToISO(isoToEpochDays(ay, am, ad) + dateSign)
+		timeDiff.Add(timeDiff, new(big.Int).Mul(big.NewInt(int64(dateSign)), nsPerDay))
+	}
+	switch largestUnit {
+	case "year", "month", "week", "day":
+		years, months, weeks, days := differenceISODate(ay, am, ad, to.date.year, to.date.month, to.date.day, largestUnit)
+		t := durationFromDayNanos(timeDiff, 0)
+		return NewDuration(float64(years), float64(months), float64(weeks), float64(days), t.hours, t.minutes, t.seconds, t.milliseconds, t.microseconds, t.nanoseconds)
+	default:
+		_, _, _, days := differenceISODate(ay, am, ad, to.date.year, to.date.month, to.date.day, "day")
+		timeDiff.Add(timeDiff, new(big.Int).Mul(big.NewInt(int64(days)), nsPerDay))
+		_, _, largeRank := plainTimeUnitInfo(largestUnit)
+		return durationFromDayNanos(timeDiff, largeRank)
+	}
+}
+
+// Round implements Temporal.PlainDateTime.prototype.round: it rounds the wall clock to a
+// multiple of roundingIncrement of smallestUnit under one of the nine rounding modes, carrying a
+// whole day into the date when the clock rounds up past midnight. The day unit rounds the whole
+// date-time to the nearest midnight, so its increment must be exactly one; the time units fix
+// their quantum and the divisor the increment must divide the same way PlainTime.round does. An
+// increment out of range throws a RangeError, and an out-of-range carried date does too. The
+// receiver is unchanged.
+func (pdt *PlainDateTime) Round(smallestUnit string, increment float64, roundingMode string) *PlainDateTime {
+	inc := int64(toIntegerWithTruncation(increment))
+	var rounded *big.Int
+	if smallestUnit == "day" {
+		if inc != 1 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainDateTime.prototype.round roundingIncrement is out of range")))
+		}
+		rounded = roundBigToIncrement(pdt.time.dayNanos(), nsPerDay, roundingMode)
+	} else {
+		unitNs, dividend, _ := plainTimeUnitInfo(smallestUnit)
+		if inc < 1 || inc >= dividend || dividend%inc != 0 {
+			Throw(NewRangeError(FromGoString("Temporal.PlainDateTime.prototype.round roundingIncrement is out of range")))
+		}
+		quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
+		rounded = roundBigToIncrement(pdt.time.dayNanos(), quantum, roundingMode)
+	}
+	dayCarry := new(big.Int)
+	timeOfDay := new(big.Int)
+	dayCarry.DivMod(rounded, nsPerDay, timeOfDay)
+	y, m, d := addISODate(pdt.date.year, pdt.date.month, pdt.date.day, 0, 0, 0, dayCarry, "constrain")
+	if !isoDateWithinLimits(y, m, d) {
+		Throw(NewRangeError(FromGoString("Temporal.PlainDateTime is outside the representable range")))
+	}
+	return &PlainDateTime{
+		date: PlainDate{year: y, month: m, day: d, cal: pdt.date.cal},
+		time: *plainTimeFromDayNanos(timeOfDay),
+	}
+}
+
 // PlainYearMonth is bento's runtime representation of a Temporal.PlainYearMonth (Temporal
 // §9): a calendar year and month with no day, no time, and no zone, the way a credit card
 // carries an expiry. Like PlainDate it hosts only the ISO 8601 calendar; a non-ISO calendar

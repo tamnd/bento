@@ -1047,6 +1047,75 @@ func TestPlainDateTimeRejects(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeArithmetic checks add, subtract, until, since, and round against the
+// polyfill: the time part folds into the wall clock and carries a whole day into the date, the
+// difference borrows a day when the time part points against the calendar direction, and round
+// carries a day past midnight. The reject overflow throws.
+func TestPlainDateTimeArithmetic(t *testing.T) {
+	ck := func(got BStr, want string) {
+		t.Helper()
+		if got.ToGoString() != want {
+			t.Errorf("got %q, want %q", got.ToGoString(), want)
+		}
+	}
+	base := mustPlainDateTime(t, 2020, 1, 31, 12, 30, 45, 0, 0, 0)
+	ck(base.AddDateTime(mustDuration(t, 0, 1), "constrain").ToString(), "2020-02-29T12:30:45")
+	ck(base.AddDateTime(mustDuration(t, 4, 1), "constrain").ToString(), "2024-02-29T12:30:45")
+	ck(base.AddDateTime(mustDuration(t, 0, 0, 0, 0, 13), "constrain").ToString(), "2020-02-01T01:30:45")
+	ck(base.AddDateTime(mustDuration(t, 0, 0, 0, 1, 25), "constrain").ToString(), "2020-02-02T13:30:45")
+	ck(base.AddDateTime(mustDuration(t, 0, 0, 0, 0, -13), "constrain").ToString(), "2020-01-30T23:30:45")
+	ck(base.AddDateTime(mustDuration(t, 0, 1).Negated(), "constrain").ToString(), "2019-12-31T12:30:45")
+
+	a := mustPlainDateTime(t, 2020, 1, 1, 12, 0, 0, 0, 0, 0)
+	b := mustPlainDateTime(t, 2020, 1, 2, 6, 0, 0, 0, 0, 0)
+	ck(a.Until(b, "day").ToString(), "PT18H")
+	ck(a.Since(b, "day").ToString(), "-PT18H")
+
+	c := mustPlainDateTime(t, 2020, 1, 31, 12, 30, 45, 0, 0, 0)
+	d := mustPlainDateTime(t, 2021, 3, 30, 18, 45, 50, 500, 0, 0)
+	ck(c.Until(d, "day").ToString(), "P424DT6H15M5.5S")
+	ck(c.Until(d, "year").ToString(), "P1Y1M30DT6H15M5.5S")
+	ck(c.Until(d, "month").ToString(), "P13M30DT6H15M5.5S")
+	ck(c.Until(d, "week").ToString(), "P60W4DT6H15M5.5S")
+	ck(c.Until(d, "hour").ToString(), "PT10182H15M5.5S")
+	ck(d.Since(c, "year").ToString(), "P1Y1M29DT6H15M5.5S")
+	ck(c.Until(c, "day").ToString(), "PT0S")
+
+	e := mustPlainDateTime(t, 2020, 3, 1, 6, 0, 0, 0, 0, 0)
+	f := mustPlainDateTime(t, 2020, 4, 1, 2, 0, 0, 0, 0, 0)
+	ck(e.Until(f, "month").ToString(), "P30DT20H")
+
+	rb := mustPlainDateTime(t, 2020, 1, 31, 3, 34, 56, 987, 654, 321)
+	ck(rb.Round("day", 1, "halfExpand").ToString(), "2020-01-31T00:00:00")
+	ck(mustPlainDateTime(t, 2020, 1, 31, 18, 0, 0, 0, 0, 0).Round("day", 1, "halfExpand").ToString(), "2020-02-01T00:00:00")
+	ck(rb.Round("hour", 1, "halfExpand").ToString(), "2020-01-31T04:00:00")
+	ck(rb.Round("minute", 15, "halfExpand").ToString(), "2020-01-31T03:30:00")
+	ck(mustPlainDateTime(t, 2020, 1, 31, 23, 59, 59, 0, 0, 0).Round("minute", 1, "halfExpand").ToString(), "2020-02-01T00:00:00")
+
+	if !plainDateTimeCallThrows(func() { base.AddDateTime(mustDuration(t, 0, 1), "reject") }) {
+		t.Error("add with overflow reject did not throw")
+	}
+	if !plainDateTimeCallThrows(func() { rb.Round("day", 2, "halfExpand") }) {
+		t.Error("round to day with increment 2 did not throw")
+	}
+	if !plainDateTimeCallThrows(func() { rb.Round("hour", 5, "halfExpand") }) {
+		t.Error("round to hour with increment 5 did not throw")
+	}
+}
+
+// plainDateTimeCallThrows reports whether fn throws a Temporal RangeError.
+func plainDateTimeCallThrows(fn func()) (thrown bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(Thrown); ok {
+				thrown = true
+			}
+		}
+	}()
+	fn()
+	return false
+}
+
 // mustDuration builds a Duration and fails the test if construction threw.
 func mustDuration(t *testing.T, a ...float64) *Duration {
 	t.Helper()
