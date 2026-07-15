@@ -2428,10 +2428,14 @@ func (r *Renderer) plainDateTimeStaticCall(method string, argNodes []frontend.No
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeCompare"), Args: []ast.Expr{a, b}}, nil
 	case "from":
-		if len(argNodes) != 1 {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from with options is a later slice"}
+		what := "Temporal.PlainDateTime.from"
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: what + " requires an argument"}
 		}
 		if r.isPlainDateTime(argNodes[0]) {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: what + " over a PlainDateTime with an options argument is a later slice"}
+			}
 			arg, err := r.lowerExpr(argNodes[0])
 			if err != nil {
 				return nil, err
@@ -2440,16 +2444,124 @@ func (r *Renderer) plainDateTimeStaticCall(method string, argNodes []frontend.No
 			return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFrom"), Args: []ast.Expr{arg}}, nil
 		}
 		if lit, ok := r.stringLiteralValue(argNodes[0]); ok {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: what + " over a string with an options argument is a later slice"}
+			}
 			if !literalCalendarHosted(lit) {
-				return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from over a string naming a calendar bento does not host is a later slice"}
+				return nil, &NotYetLowerable{Reason: what + " over a string naming a calendar bento does not host is a later slice"}
 			}
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
 		}
-		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.from over a dynamic string or a property bag is a later slice"}
+		if argNodes[0].Kind() == frontend.NodeObjectLiteralExpression {
+			return r.plainDateTimeFromBag(what, argNodes[0], argNodes[1:])
+		}
+		return nil, &NotYetLowerable{Reason: what + " over a dynamic string is a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime." + method + " is a later slice"}
 	}
+}
+
+// plainDateTimeFromBag lowers Temporal.PlainDateTime.from over a property bag to a
+// value.PlainDateTimeFromFields call: it reads the required year, month, and day fields, the
+// optional time fields, and the optional calendar from the bag, then the overflow option from the
+// second argument. The calendar is gated on a hosted id the same way the from-string path is, so an
+// unhosted or dynamic calendar hands back rather than dropping to a wrong result.
+func (r *Renderer) plainDateTimeFromBag(what string, bag frontend.Node, optionNodes []frontend.Node) (ast.Expr, error) {
+	year, month, day, timeFields, cal, err := r.plainDateTimeFromFields(what, bag)
+	if err != nil {
+		return nil, err
+	}
+	overflow, err := r.temporalOverflowOption(what, optionNodes)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	args := []ast.Expr{year, month, day}
+	args = append(args, timeFields[:]...)
+	args = append(args, stringLit(cal), stringLit(overflow))
+	return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFromFields"), Args: args}, nil
+}
+
+// plainDateTimeFromFields reads a PlainDateTime property bag at compile time into the three
+// required date field expressions, the six present-or-absent time field expressions, and the
+// calendar id. Like the PlainDate from bag, the year, month, and day are required, the record a
+// fresh date needs, so a missing one hands back; the time fields default to absent, so an omitted
+// one falls to the midnight the runtime carries. The calendar is an optional hosted string literal
+// defaulting to iso8601. A spread, a computed or shorthand key, an unknown key (monthCode and the
+// era fields among them), a non-number value, a dynamic or unhosted calendar, or a repeated field
+// hands back, since the field or the calendar would then depend on runtime data or a calendar bento
+// cannot represent.
+func (r *Renderer) plainDateTimeFromFields(what string, n frontend.Node) (year, month, day ast.Expr, timeFields [6]ast.Expr, cal string, err error) {
+	cal = "iso8601"
+	var date [3]ast.Expr
+	var dateSeen [3]bool
+	var timeSeen [6]bool
+	calSeen := false
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag with a spread or non-property member is a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag with a computed or shorthand key is a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		if key == "calendar" {
+			if calSeen {
+				return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag repeating the field calendar is a later slice"}
+			}
+			id, ok := r.hostedCalendar(kids[1])
+			if !ok {
+				return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag whose calendar is dynamic or names a calendar bento does not host is a later slice"}
+			}
+			cal = id
+			calSeen = true
+			continue
+		}
+		if di := slices.Index(dateFieldKeys[:], key); di >= 0 {
+			if dateSeen[di] {
+				return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+			}
+			if !r.isNumber(kids[1]) {
+				return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+			}
+			val, verr := r.lowerExpr(kids[1])
+			if verr != nil {
+				return nil, nil, nil, timeFields, "", verr
+			}
+			date[di] = val
+			dateSeen[di] = true
+			continue
+		}
+		if ti := slices.Index(timeFieldKeys[:], key); ti >= 0 {
+			if timeSeen[ti] {
+				return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag repeating the field " + key + " is a later slice"}
+			}
+			if !r.isNumber(kids[1]) {
+				return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag whose " + key + " is not a number is a later slice"}
+			}
+			val, verr := r.lowerExpr(kids[1])
+			if verr != nil {
+				return nil, nil, nil, timeFields, "", verr
+			}
+			timeFields[ti] = &ast.CallExpr{Fun: index(sel("value", "Some"), ident("float64")), Args: []ast.Expr{val}}
+			timeSeen[ti] = true
+			continue
+		}
+		return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag with the field " + key + " is a later slice"}
+	}
+	for i, k := range dateFieldKeys {
+		if !dateSeen[i] {
+			return nil, nil, nil, timeFields, "", &NotYetLowerable{Reason: what + " over a bag missing the field " + k + " (a TypeError at run time) is a later slice"}
+		}
+	}
+	for i := range timeFields {
+		if timeFields[i] == nil {
+			timeFields[i] = &ast.CallExpr{Fun: index(sel("value", "None"), ident("float64"))}
+		}
+	}
+	return date[0], date[1], date[2], timeFields, cal, nil
 }
 
 // newTemporal lowers new Temporal.<Type>(...), routing on the type name to the per-type
