@@ -745,6 +745,31 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AddDuration")}, Args: []ast.Expr{dur, stringLit(overflow)}}, nil
+	case "until", "since":
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " takes at least one argument"}
+		}
+		what := "Temporal.ZonedDateTime.prototype." + method
+		if !r.isZonedDateTime(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: what + " over a non-ZonedDateTime argument (a string or bag to coerce) is a later slice"}
+		}
+		largestUnit, err := r.zonedDateTimeDifferenceOptions(what, argNodes[1:])
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		other, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, err
+		}
+		name := "Until"
+		if method == "since" {
+			name = "Since"
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: []ast.Expr{other, stringLit(largestUnit)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " is a later slice"}
 	}
@@ -2485,6 +2510,59 @@ func (r *Renderer) plainDateTimeDifferenceOptions(what string, argNodes []fronte
 			lit, ok := r.stringLiteralValue(kids[1])
 			if !ok {
 				return "", &NotYetLowerable{Reason: what + " with a non-literal largestUnit is a later slice"}
+			}
+			unit, ok := plainDateTimeDifferenceUnits[lit]
+			if !ok {
+				return "", &NotYetLowerable{Reason: what + " with the invalid largestUnit " + lit + " (a RangeError at run time) is a later slice"}
+			}
+			largestUnit = unit
+		case "smallestUnit", "roundingIncrement", "roundingMode":
+			return "", &NotYetLowerable{Reason: what + " with the rounding option " + key + " is a later slice"}
+		default:
+			return "", &NotYetLowerable{Reason: what + " with the option " + key + " is a later slice"}
+		}
+	}
+	return largestUnit, nil
+}
+
+// zonedDateTimeDifferenceOptions reads the options of ZonedDateTime.prototype.until and since at
+// compile time and returns the largestUnit. It shares the unit vocabulary of the plain date-time
+// difference but defaults to hour, not day: a ZonedDateTime difference counts in exact-time units by
+// default and only spans days when a calendar largestUnit is asked for, so "auto" and the absent
+// option both resolve to hour here. A smallestUnit, roundingIncrement, or roundingMode would round
+// the duration, which needs the round-with-relativeTo machinery a later slice carries, so any of
+// those, a non-literal or out-of-set largestUnit, an unknown key, or a spread or shorthand member
+// hands back rather than emitting a wrong or partial result.
+func (r *Renderer) zonedDateTimeDifferenceOptions(what string, argNodes []frontend.Node) (string, error) {
+	largestUnit := "hour"
+	if len(argNodes) == 0 {
+		return largestUnit, nil
+	}
+	if len(argNodes) != 1 {
+		return "", &NotYetLowerable{Reason: what + " with more than an options argument is a later slice"}
+	}
+	n := argNodes[0]
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return "", &NotYetLowerable{Reason: what + " options that are not an object literal are a later slice"}
+	}
+	for _, member := range r.prog.Children(n) {
+		if member.Kind() != frontend.NodeUnknown {
+			return "", &NotYetLowerable{Reason: what + " options with a spread or non-property member are a later slice"}
+		}
+		kids := r.prog.Children(member)
+		if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			return "", &NotYetLowerable{Reason: what + " options with a computed or shorthand key are a later slice"}
+		}
+		key := r.prog.Text(kids[0])
+		switch key {
+		case "largestUnit":
+			lit, ok := r.stringLiteralValue(kids[1])
+			if !ok {
+				return "", &NotYetLowerable{Reason: what + " with a non-literal largestUnit is a later slice"}
+			}
+			if lit == "auto" {
+				largestUnit = "hour"
+				continue
 			}
 			unit, ok := plainDateTimeDifferenceUnits[lit]
 			if !ok {

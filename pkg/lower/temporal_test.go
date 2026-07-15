@@ -1798,6 +1798,23 @@ console.log(z.add({ months: 1 }, { overflow: "reject" }).epochMilliseconds);`
 	}
 }
 
+// TestZonedDateTimeDifference pins until and since over a ZonedDateTime argument to the runtime
+// Until and Since, the largestUnit read from the options and defaulting to hour, since gets the
+// same difference the runtime negates.
+func TestZonedDateTimeDifference(t *testing.T) {
+	const src = `const a = new Temporal.ZonedDateTime(0n, "UTC");
+const b = new Temporal.ZonedDateTime(1n, "UTC");
+console.log(a.until(b).hours);
+console.log(a.until(b, { largestUnit: "days" }).days);
+console.log(a.since(b, { largestUnit: "months" }).months);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".Until(", ".Since(", `"hour"`, `"day"`, `"month"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestZonedDateTimeStatics pins compare and from over a ZonedDateTime, each to its value
 // function.
 func TestZonedDateTimeStatics(t *testing.T) {
@@ -1836,9 +1853,9 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "until difference",
-			src:  "const a = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst b = new Temporal.ZonedDateTime(1n, \"UTC\");\nconsole.log(a.until(b).hours);",
-			want: "Temporal.ZonedDateTime.prototype.until is a later slice",
+			name: "until with a rounding option",
+			src:  "const a = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst b = new Temporal.ZonedDateTime(1n, \"UTC\");\nconsole.log(a.until(b, { smallestUnit: \"minute\" }).hours);",
+			want: "Temporal.ZonedDateTime.prototype.until with the rounding option smallestUnit is a later slice",
 		},
 		{
 			name: "add with a dynamic overflow option",
