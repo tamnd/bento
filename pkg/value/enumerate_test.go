@@ -88,6 +88,78 @@ func TestOwnSymbols(t *testing.T) {
 	}
 }
 
+// TestForInKeys proves for...in enumeration order and filtering: an object's own
+// enumerable string keys come back in spec order, integer indices ascending before
+// the insertion-ordered named keys, and a non-enumerable own key is left out.
+func TestForInKeys(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("b"), Number(2))
+	o.Set(FromGoString("2"), Number(20))
+	o.Set(FromGoString("a"), Number(1))
+	o.Set(FromGoString("0"), Number(0))
+	// a non-enumerable own key the walk must skip while still recording it as seen
+	o.object().keys = append(o.object().keys, FromGoString("hidden"))
+	o.object().descs = append(o.object().descs, descriptor{value: Number(7)})
+
+	got := forInKeyStrings(o.ForInKeys())
+	want := []string{"0", "2", "b", "a"}
+	if len(got) != len(want) {
+		t.Fatalf("ForInKeys = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("ForInKeys[%d] = %q, want %q (all: %v)", i, got[i], w, got)
+		}
+	}
+}
+
+// TestForInKeysPrototypeChain proves for...in visits own keys then inherited
+// enumerable keys, that an own key shadows the same name on a prototype, and that a
+// non-enumerable own key still shadows an inherited enumerable one so the name never
+// appears.
+func TestForInKeysPrototypeChain(t *testing.T) {
+	proto := NewObject()
+	proto.Set(FromGoString("inherited"), Number(1))
+	proto.Set(FromGoString("shadowed"), Number(1))
+	proto.Set(FromGoString("hiddenByChild"), Number(1))
+
+	child := NewObject()
+	child.Set(FromGoString("own"), Number(2))
+	child.Set(FromGoString("shadowed"), Number(2)) // own enumerable hides the proto's
+	// a non-enumerable own key that must hide the proto's enumerable one
+	child.object().keys = append(child.object().keys, FromGoString("hiddenByChild"))
+	child.object().descs = append(child.object().descs, descriptor{value: Number(2)})
+	child.SetPrototype(proto)
+
+	got := forInKeyStrings(child.ForInKeys())
+	want := []string{"own", "shadowed", "inherited"}
+	if len(got) != len(want) {
+		t.Fatalf("ForInKeys chain = %v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("ForInKeys chain[%d] = %q, want %q (all: %v)", i, got[i], w, got)
+		}
+	}
+}
+
+// TestForInKeysPrimitive proves a primitive receiver, which has no object storage,
+// enumerates nothing.
+func TestForInKeysPrimitive(t *testing.T) {
+	if n := Number(3).ForInKeys().Len(); n != 0 {
+		t.Fatalf("ForInKeys over a number = %v keys, want 0", n)
+	}
+}
+
+func forInKeyStrings(a *Array[BStr]) []string {
+	elems := a.Elems()
+	out := make([]string, len(elems))
+	for i, e := range elems {
+		out[i] = e.ToGoString()
+	}
+	return out
+}
+
 // TestEntries proves the receiver's own enumerable properties come back as [key,
 // value] pairs in enumeration order, integer indices before named keys.
 func TestEntries(t *testing.T) {

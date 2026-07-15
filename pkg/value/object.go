@@ -453,6 +453,84 @@ func (o *Object) orderedStringKeysFiltered(enumerableOnly bool) []BStr {
 	return append(out, strKeys...)
 }
 
+// forInEntries returns this object's own string keys in the spec's enumeration
+// order paired with whether each is enumerable, the shape the for...in prototype
+// walk consumes. The walk needs every own key, not only the enumerable ones, so a
+// non-enumerable own key can shadow an enumerable one an ancestor supplies; it
+// needs the enumerable flag to decide which of the surviving keys to yield. The
+// ordering matches orderedStringKeys: canonical integer indices ascending, then
+// the remaining string keys in insertion order. Dense array elements are always
+// enumerable data properties, so they carry a true flag.
+func (o *Object) forInEntries() ([]BStr, []bool) {
+	type idxEntry struct {
+		n    int
+		enum bool
+	}
+	var idx []idxEntry
+	for i := range o.elems {
+		if isHole(o.elems[i]) {
+			continue // a hole is not an own property, so it is not enumerated
+		}
+		idx = append(idx, idxEntry{i, true})
+	}
+	var strKeys []BStr
+	var strEnum []bool
+	for i, k := range o.keys {
+		if n, ok := arrayIndex(k.ToGoString()); ok {
+			idx = append(idx, idxEntry{n, o.descs[i].enumerable})
+		} else {
+			strKeys = append(strKeys, k)
+			strEnum = append(strEnum, o.descs[i].enumerable)
+		}
+	}
+	sort.Slice(idx, func(a, b int) bool { return idx[a].n < idx[b].n })
+	keys := make([]BStr, 0, len(idx)+len(strKeys))
+	enum := make([]bool, 0, len(idx)+len(strKeys))
+	for _, e := range idx {
+		keys = append(keys, NumberToString(float64(e.n)))
+		enum = append(enum, e.enum)
+	}
+	keys = append(keys, strKeys...)
+	enum = append(enum, strEnum...)
+	return keys, enum
+}
+
+// ForInKeys returns the property names a for...in loop visits over the receiver: its
+// own enumerable string keys followed by those it inherits, walking the prototype
+// chain and yielding each name once. A key seen at a lower level shadows the same
+// name higher up whether or not it was enumerable there, so a non-enumerable own
+// property hides an inherited enumerable one and the name does not appear. Symbol
+// keys are never visited, which matches the string-side model, and a receiver with
+// no object storage (a primitive) yields an empty array. The user prototype chain is
+// the one o.proto threads, so built-in prototypes and their non-enumerable methods
+// never enter the enumeration.
+func (v Value) ForInKeys() *Array[BStr] {
+	if p := v.asProxy(); p != nil {
+		return NewArray(p.stringKeys(true)...)
+	}
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return NewArray[BStr]()
+	}
+	var out []BStr
+	visited := make(map[string]bool)
+	for cur := v.object(); cur != nil; cur = cur.proto {
+		keys, enum := cur.forInEntries()
+		for i, k := range keys {
+			gk := k.ToGoString()
+			if visited[gk] {
+				continue
+			}
+			visited[gk] = true
+			if enum[i] {
+				out = append(out, k)
+			}
+		}
+	}
+	return NewArray(out...)
+}
+
 // ObjectRest returns a new plain object holding the receiver's own enumerable
 // properties except those named in omit, the value an object rest element binds:
 // { a, ...rest } gathers every own property but a. The properties copy in the
