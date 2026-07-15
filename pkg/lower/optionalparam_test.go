@@ -300,6 +300,93 @@ main();
 	}
 }
 
+// TestGeneratorMethodOptionalParamNarrows runs a generator method's optional parameter
+// in both shapes, supplied and omitted, proving generatorMethodDecl now builds its
+// fields through funcParamFields under the full optParamsOf and the coroutine reads the
+// narrowed value with .Get(). Before the switch from paramFields a required union
+// narrowed and used emitted `x + 1` against a value.Opt[float64] field, which go build
+// rejected.
+func TestGeneratorMethodOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class C {
+  *req(x: number | undefined): Generator<number> {
+    if (x !== undefined) { yield x + 1; } else { yield -1; }
+  }
+  *bare(x?: number): Generator<number> {
+    if (x !== undefined) { yield x + 1; } else { yield -1; }
+  }
+}
+const c = new C();
+for (const v of c.req(5)) { console.log(v); }
+for (const v of c.req(undefined)) { console.log(v); }
+for (const v of c.bare(5)) { console.log(v); }
+for (const v of c.bare()) { console.log(v); }
+`
+	if got, want := runProgramGo(t, src), "6\n-1\n6\n-1\n"; got != want {
+		t.Fatalf("generator method optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncMethodOptionalParamNarrows runs an async instance method's optional parameter
+// in both shapes, the value.Async body reading the narrowed value with .Get() where the
+// paramFields path had emitted broken Go for a narrowed required optional-union parameter.
+func TestAsyncMethodOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class C {
+  async req(x: number | undefined): Promise<number> {
+    if (x !== undefined) { return x + 1; }
+    return -1;
+  }
+  async bare(x?: number): Promise<number> {
+    if (x !== undefined) { return x + 1; }
+    return -1;
+  }
+}
+async function main(): Promise<void> {
+  const c = new C();
+  console.log(await c.req(5));
+  console.log(await c.req(undefined));
+  console.log(await c.bare(5));
+  console.log(await c.bare());
+}
+main();
+`
+	if got, want := runProgramGo(t, src), "6\n-1\n6\n-1\n"; got != want {
+		t.Fatalf("async method optional parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncStaticMethodOptionalParamNarrows runs an async static method's optional
+// parameter in both shapes, driven through staticMethodCall which fills value.None for
+// the omitted slot, covering asyncStaticFuncDecl's switch to funcParamFields.
+func TestAsyncStaticMethodOptionalParamNarrows(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class C {
+  static async req(x: number | undefined): Promise<number> {
+    if (x !== undefined) { return x + 1; }
+    return -1;
+  }
+  static async bare(x?: number): Promise<number> {
+    if (x !== undefined) { return x + 1; }
+    return -1;
+  }
+}
+async function main(): Promise<void> {
+  console.log(await C.req(5));
+  console.log(await C.req(undefined));
+  console.log(await C.bare(5));
+  console.log(await C.bare());
+}
+main();
+`
+	if got, want := runProgramGo(t, src), "6\n-1\n6\n-1\n"; got != want {
+		t.Fatalf("async static method optional parameter printed %q, want %q", got, want)
+	}
+}
+
 // A required parameter annotated x: T | undefined binds a value.Opt[T] field in a
 // method, async, or generator body the same way a top-level function does, since
 // typeExpr renders the union that way before the funcParamFields switch is reached.
