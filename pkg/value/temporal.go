@@ -2279,6 +2279,20 @@ func (i *Instant) EpochMilliseconds() float64 {
 // instants are equal exactly when their nanosecond counts match.
 func (i *Instant) Equals(other *Instant) bool { return i.ns.Cmp(other.ns) == 0 }
 
+// AddDuration implements Temporal.Instant.prototype.add: it folds the duration's time part into
+// the epoch nanosecond count. An Instant has no calendar and no wall clock, so a nonzero years,
+// months, weeks, or days field is meaningless and throws a RangeError, matching the specification's
+// rejection of the calendar units. The fold runs in big.Int, so an hour field near the safe-integer
+// ceiling does not overflow, and newInstant re-validates the range so a result past the Instant
+// bounds throws. subtract reuses this over a negated duration.
+func (i *Instant) AddDuration(dur *Duration) *Instant {
+	if dur.years != 0 || dur.months != 0 || dur.weeks != 0 || dur.days != 0 {
+		Throw(NewRangeError(FromGoString("Temporal.Instant arithmetic does not accept the calendar units years, months, weeks, or days")))
+	}
+	total := new(big.Int).Add(i.ns, durationTimeNanos(dur))
+	return newInstant(total)
+}
+
 // InstantCompare implements Temporal.Instant.compare: -1, 0, or 1 as the first instant is
 // earlier than, equal to, or later than the second, the sign of the big.Int comparison.
 func InstantCompare(a, b *Instant) float64 { return float64(a.ns.Cmp(b.ns)) }

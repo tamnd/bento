@@ -1567,6 +1567,26 @@ console.log(e.epochMilliseconds);`
 	}
 }
 
+// TestInstantAddSubtract pins add and subtract to value.Instant.AddDuration, negating the
+// duration for subtract, over a bag, a Duration value, and a string literal.
+func TestInstantAddSubtract(t *testing.T) {
+	const src = `const i = new Temporal.Instant(0n);
+const a = i.add({ hours: 1 });
+const b = i.subtract({ minutes: 30 });
+const c = i.add(Temporal.Duration.from("PT1H"));
+const d = i.add("PT15M");
+console.log(a.epochMilliseconds);
+console.log(b.epochMilliseconds);
+console.log(c.epochMilliseconds);
+console.log(d.epochMilliseconds);`
+	got := renderProgram(t, src)
+	for _, want := range []string{".AddDuration(", ".Negated()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestInstantHandBacks pins the honest ceilings: the arithmetic and rounding methods each
 // hand back with a reason naming where the work belongs.
 func TestInstantHandBacks(t *testing.T) {
@@ -1576,9 +1596,9 @@ func TestInstantHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "add arithmetic",
-			src:  "const i = new Temporal.Instant(0n);\nconst j = i.add({ seconds: 1 });\nconsole.log(j.epochMilliseconds);",
-			want: "Temporal.Instant.prototype.add is a later slice",
+			name: "until arithmetic",
+			src:  "const i = new Temporal.Instant(0n);\nconst j = new Temporal.Instant(1n);\nconst d = i.until(j);\nconsole.log(d.nanoseconds);",
+			want: "Temporal.Instant.prototype.until is a later slice",
 		},
 		{
 			name: "round",
