@@ -66,6 +66,33 @@ func (r *Renderer) typeofExpr(n frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("TypeOf")}}, nil
 	}
 
+	// typeof over an optional (T | undefined, lowered to value.Opt[T]) spans two tags,
+	// the inner type's tag when the option is present and "undefined" when it is not,
+	// which is exactly what boxing the Opt into a dynamic value and asking it for its
+	// runtime tag yields: value.OptToValue maps None to the undefined singleton and
+	// Some to the inner's box, and value.Value.TypeOf then answers "undefined" or the
+	// inner's tag. The operand is evaluated once as the box receiver, so a side effect
+	// is preserved without the repeatable-operand gate the constant fold below needs.
+	// This is what lets a typeof n === "number" guard over a possibly-undefined n
+	// lower, past which the checker narrows n to T so its read unwraps with .Get(). An
+	// optional of a shape with no dynamic box, or a multi-member optional whose inner
+	// is not a single primitive, hands back through boxOptionalToDynamic rather than
+	// fold to a wrong constant. isOptional gates this ahead of the tagged-sum union
+	// path, which never interned the Opt and so would miss it.
+	if r.isOptional(operand) {
+		e, err := r.lowerExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		boxed, ok, err := r.boxOptionalToDynamic(e, operand)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: boxed, Sel: ident("TypeOf")}}, nil
+		}
+	}
+
 	// typeof over a tagged-sum union of primitives spans more than one tag, so it
 	// cannot fold to a constant, but the union value carries its tag, and each arm's
 	// tag pins its typeof string. The operand is evaluated once and asked for that
