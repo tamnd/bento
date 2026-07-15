@@ -94,4 +94,3 @@ func (r *Renderer) optionalInner(members []frontend.Type) (frontend.Type, bool) 
 		return frontend.Type{}, false
 	}
 }
-
