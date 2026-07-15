@@ -2884,6 +2884,73 @@ func (z *ZonedDateTime) AddDuration(dur *Duration, overflow string) *ZonedDateTi
 	return &ZonedDateTime{ns: result, loc: z.loc, tzID: z.tzID, cal: z.cal}
 }
 
+// Until returns the difference from the receiver to other as a Duration balanced from
+// largestUnit down. Since returns the difference from other to the receiver, the negation of
+// Until, so the calendar anchoring stays on the receiver the way the specification requires.
+func (z *ZonedDateTime) Until(other *ZonedDateTime, largestUnit string) *Duration {
+	return zonedDateTimeDifference(z, other, largestUnit)
+}
+
+// Since returns the negation of the receiver-to-other difference.
+func (z *ZonedDateTime) Since(other *ZonedDateTime, largestUnit string) *Duration {
+	return zonedDateTimeDifference(z, other, largestUnit).Negated()
+}
+
+// zonedDateTimeDifference implements the specification's DifferenceZonedDateTime. A time-unit
+// largestUnit needs no calendar and no zone: the difference is the exact nanosecond gap balanced
+// from that unit down, which is what makes a difference in hours across a daylight-saving change
+// count the real elapsed hours, twenty-three or twenty-five on a transition day rather than a flat
+// twenty-four. A calendar-unit largestUnit splits the distance into a calendar date part and an
+// exact-time part that must share one sign. It walks the end date back by whole days until the
+// intermediate wall clock, taken at the start's time of day and resolved through the zone under
+// the compatible disambiguation, sits on the near side of the target, so the leftover exact time
+// keeps the overall sign and stays within one zoned day, whose length the transition may stretch
+// or shrink. The date part is then the calendar difference from the start date to that
+// intermediate date, and the time part balances from hours down. The two values must share a
+// zone and calendar, which two ZonedDateTimes reached here always do.
+func zonedDateTimeDifference(from, to *ZonedDateTime, largestUnit string) *Duration {
+	switch largestUnit {
+	case "year", "month", "week", "day":
+	default:
+		diff := new(big.Int).Sub(to.ns, from.ns)
+		_, _, largeRank := plainTimeUnitInfo(largestUnit)
+		return durationFromDayNanos(diff, largeRank)
+	}
+	if from.ns.Cmp(to.ns) == 0 {
+		return NewDuration(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	}
+	startDT := from.localDateTime()
+	endDT := to.localDateTime()
+	sign := to.ns.Cmp(from.ns)
+	maxDayCorrection := 1
+	if sign == 1 {
+		maxDayCorrection = 2
+	}
+	dayCorrection := 0
+	if new(big.Int).Sub(endDT.time.dayNanos(), startDT.time.dayNanos()).Sign() == -sign {
+		dayCorrection = 1
+	}
+	endEpochDays := isoToEpochDays(endDT.date.year, endDT.date.month, endDT.date.day)
+	iy, im, id := endDT.date.year, endDT.date.month, endDT.date.day
+	timeDuration := new(big.Int)
+	for {
+		iy, im, id = epochDaysToISO(endEpochDays - dayCorrection*sign)
+		intermediate := disambiguateCompatible(from.loc, wallNanoseconds(isoParse{
+			year: iy, month: im, day: id,
+			hour: startDT.time.hour, minute: startDT.time.minute, second: startDT.time.second,
+			millisecond: startDT.time.millisecond, microsecond: startDT.time.microsecond, nanosecond: startDT.time.nanosecond,
+		}))
+		timeDuration.Sub(to.ns, intermediate)
+		if sign != -timeDuration.Sign() || dayCorrection >= maxDayCorrection {
+			break
+		}
+		dayCorrection++
+	}
+	years, months, weeks, days := differenceISODate(startDT.date.year, startDT.date.month, startDT.date.day, iy, im, id, largestUnit)
+	t := durationFromDayNanos(timeDuration, 0)
+	return NewDuration(float64(years), float64(months), float64(weeks), float64(days), t.hours, t.minutes, t.seconds, t.milliseconds, t.microseconds, t.nanoseconds)
+}
+
 // Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two
 // zoned date-times are equal when they name the same instant in the same zone under the same
 // calendar, so the check is the count, the canonical zone identifier, and the calendar.

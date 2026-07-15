@@ -2181,6 +2181,34 @@ func TestZonedDateTimeAddDuration(t *testing.T) {
 	}
 }
 
+func TestZonedDateTimeDifference(t *testing.T) {
+	a := ZonedDateTimeFromString("2024-03-08T12:00:00[America/New_York]")
+	b := ZonedDateTimeFromString("2024-03-11T12:00:00[America/New_York]")
+	early := ZonedDateTimeFromString("2024-03-11T10:00:00[America/New_York]")
+	t1 := ZonedDateTimeFromString("2024-01-01T00:00:00[Asia/Tokyo]")
+	t2 := ZonedDateTimeFromString("2024-04-06T06:30:00[Asia/Tokyo]")
+	cases := []struct {
+		name string
+		got  *Duration
+		want string
+	}{
+		{"hours across spring forward", a.Until(b, "hour"), "PT71H"},
+		{"days across spring forward", a.Until(b, "day"), "P3D"},
+		{"weeks fold to days", a.Until(b, "week"), "P3D"},
+		{"tokyo months", t1.Until(t2, "month"), "P3M5DT6H30M"},
+		{"tokyo years", t1.Until(t2, "year"), "P3M5DT6H30M"},
+		{"backward days", b.Until(a, "day"), "-P3D"},
+		{"borrow into days", a.Until(early, "day"), "P2DT22H"},
+		{"borrow into hours", a.Until(early, "hour"), "PT69H"},
+		{"since negates", a.Since(b, "day"), "-P3D"},
+	}
+	for _, c := range cases {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("%s: difference = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // TestZonedDateTimeRejects checks the range guard and the unknown-zone guard both throw a
 // RangeError.
 func TestZonedDateTimeRejects(t *testing.T) {
