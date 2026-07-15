@@ -1359,6 +1359,23 @@ console.log(a.toJSON());`
 	}
 }
 
+// TestPlainYearMonthArithmetic pins add, subtract, until, and since to their value.PlainYearMonth
+// methods with the overflow and largestUnit strings carried through.
+func TestPlainYearMonthArithmetic(t *testing.T) {
+	const src = `const a = new Temporal.PlainYearMonth(2020, 3);
+const b = new Temporal.PlainYearMonth(2021, 8);
+console.log(a.add({ months: 1 }).toString());
+console.log(a.subtract({ months: 1 }, { overflow: "reject" }).toString());
+console.log(a.until(b).toString());
+console.log(a.since(b, { largestUnit: "month" }).toString());`
+	got := renderProgram(t, src)
+	for _, want := range []string{".AddDuration(", ".SubtractDuration(", ".Until(", ".Since(", "\"constrain\"", "\"reject\"", "\"year\"", "\"month\""} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered program missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestPlainYearMonthStatics pins Temporal.PlainYearMonth.compare and .from to their value
 // package functions.
 func TestPlainYearMonthStatics(t *testing.T) {
@@ -1390,9 +1407,9 @@ func TestPlainYearMonthHandBacks(t *testing.T) {
 			want: "Temporal.PlainYearMonth.era is a later slice",
 		},
 		{
-			name: "add arithmetic",
-			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconst e = ym.add({ months: 1 });\nconsole.log(e.month);",
-			want: "Temporal.PlainYearMonth.prototype.add is a later slice",
+			name: "until over a string argument",
+			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconst d = ym.until(\"2020-05\");\nconsole.log(d.months);",
+			want: "Temporal.PlainYearMonth.prototype.until over an argument that is not a Temporal.PlainYearMonth",
 		},
 		{
 			name: "from a property bag",

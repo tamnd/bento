@@ -1711,6 +1711,53 @@ func (ym *PlainYearMonth) ToString() BStr {
 // produces under default options.
 func (ym *PlainYearMonth) ToJSON() BStr { return ym.ToString() }
 
+// AddDuration implements Temporal.PlainYearMonth.prototype.add and, over a negated duration,
+// subtract. A year-month has no day, so the specification anchors the arithmetic to a reference
+// day: the first of the month when the duration runs forward, the last of the month when it runs
+// backward, so a month step that would only survive by clamping a large day is never counted.
+// The reference-day date carries the full duration through PlainDate.AddDate, which folds the
+// time part into whole days, and the moved date narrows back to a year-month. The result keeps
+// the receiver's calendar, and an out-of-range step or, under reject, a clamped day throws a
+// RangeError.
+func (ym *PlainYearMonth) AddDuration(dur *Duration, overflow string) *PlainYearMonth {
+	day := 1
+	if durationSign(dur) < 0 {
+		day = isoDaysInMonth(ym.year, ym.month)
+	}
+	base := &PlainDate{year: ym.year, month: ym.month, day: day, cal: ym.cal}
+	return base.AddDate(dur, overflow).ToPlainYearMonth()
+}
+
+// SubtractDuration implements Temporal.PlainYearMonth.prototype.subtract as AddDuration over the
+// negated duration, so the reference day is chosen from the negated sign.
+func (ym *PlainYearMonth) SubtractDuration(dur *Duration, overflow string) *PlainYearMonth {
+	return ym.AddDuration(dur.Negated(), overflow)
+}
+
+// Until implements Temporal.PlainYearMonth.prototype.until, the span from the receiver to the
+// argument as a years-and-months Duration. Since implements the mirror by negating it.
+func (ym *PlainYearMonth) Until(other *PlainYearMonth, largestUnit string) *Duration {
+	return plainYearMonthDifference(ym, other, largestUnit)
+}
+
+// Since implements Temporal.PlainYearMonth.prototype.since as the negation of Until, so
+// a.since(b) is the span from b to a.
+func (ym *PlainYearMonth) Since(other *PlainYearMonth, largestUnit string) *Duration {
+	return plainYearMonthDifference(ym, other, largestUnit).Negated()
+}
+
+// plainYearMonthDifference measures the calendar distance between two year-months at the first
+// of each month, so the day part is always zero and the result carries only years and months.
+// largestUnit is "year" or "month"; under "month" the years roll into the month count. A
+// difference between two calendars throws a RangeError.
+func plainYearMonthDifference(from, to *PlainYearMonth, largestUnit string) *Duration {
+	if from.calendarID() != to.calendarID() {
+		Throw(NewRangeError(FromGoString("cannot compute the difference between two Temporal.PlainYearMonth values in different calendars")))
+	}
+	years, months, _, _ := differenceISODate(from.year, from.month, 1, to.year, to.month, 1, largestUnit)
+	return NewDuration(float64(years), float64(months), 0, 0, 0, 0, 0, 0, 0, 0)
+}
+
 // PlainMonthDay is bento's runtime representation of a Temporal.PlainMonthDay (Temporal §10):
 // a calendar month and day with no year, no time, and no zone, the way a birthday or a
 // holiday recurs every year. Like PlainDate it hosts only the ISO 8601 calendar; a non-ISO

@@ -1815,6 +1815,68 @@ func TestPlainYearMonthTruncatesAndRejects(t *testing.T) {
 	}
 }
 
+// TestPlainYearMonthArithmetic checks add, subtract, until, and since against
+// @js-temporal/polyfill, including the reference-day rule that lets a backward step clamp a
+// long month end and the years-and-months difference.
+func TestPlainYearMonthArithmetic(t *testing.T) {
+	d := func(a ...float64) *Duration { return mustDuration(t, a...) }
+	ym := func(y, m float64) *PlainYearMonth { return NewPlainYearMonth(y, m) }
+	cases := []struct {
+		got  *PlainYearMonth
+		want string
+	}{
+		{ym(2024, 1).AddDuration(d(0, 1), "constrain"), "2024-02"},
+		{ym(2024, 1).AddDuration(d(1), "constrain"), "2025-01"},
+		{ym(2024, 1).AddDuration(d(0, 13), "constrain"), "2025-02"},
+		{ym(2024, 1).AddDuration(d(1, 2), "constrain"), "2025-03"},
+		{ym(2024, 1).AddDuration(d(0, 0, 0, 31), "constrain"), "2024-02"},
+		{ym(2024, 1).AddDuration(d(0, 0, 0, 0, 48), "constrain"), "2024-01"},
+		{ym(2024, 12).AddDuration(d(0, 1), "constrain"), "2025-01"},
+		{ym(2024, 1).SubtractDuration(d(0, 1), "constrain"), "2023-12"},
+		{ym(2024, 1).SubtractDuration(d(2, 3), "constrain"), "2021-10"},
+		{ym(2024, 3).SubtractDuration(d(0, 1), "constrain"), "2024-02"},
+		{ym(2024, 1).SubtractDuration(d(0, 0, 0, 1), "constrain"), "2024-01"},
+	}
+	for i, c := range cases {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("case %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	diffs := []struct {
+		got  *Duration
+		want string
+	}{
+		{ym(2024, 1).Until(ym(2025, 6), "year"), "P1Y5M"},
+		{ym(2024, 1).Until(ym(2025, 6), "month"), "P17M"},
+		{ym(2024, 1).Since(ym(2025, 6), "year"), "-P1Y5M"},
+		{ym(2025, 6).Until(ym(2024, 1), "year"), "-P1Y5M"},
+		{ym(2024, 1).Until(ym(2024, 1), "year"), "PT0S"},
+		{ym(2020, 1).Until(ym(2023, 7), "year"), "P3Y6M"},
+	}
+	for i, c := range diffs {
+		if got := c.got.ToString().ToGoString(); got != c.want {
+			t.Errorf("diff %d = %q, want %q", i, got, c.want)
+		}
+	}
+
+	// A subtract that lands on a clamped month end throws under reject.
+	throws := func(fn func()) (thrown bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(Thrown); ok {
+					thrown = true
+				}
+			}
+		}()
+		fn()
+		return false
+	}
+	if !throws(func() { ym(2024, 3).SubtractDuration(d(0, 1), "reject") }) {
+		t.Error("2024-03 subtract P1M reject did not throw")
+	}
+}
+
 // monthDayThrows reports whether NewPlainMonthDay throws a RangeError for the args.
 func monthDayThrows(m, d float64) (thrown bool) {
 	defer func() {
