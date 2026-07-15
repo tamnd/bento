@@ -3070,6 +3070,30 @@ func (z *ZonedDateTime) WithCalendar() *ZonedDateTime {
 	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: z.cal}
 }
 
+// StartOfDay implements Temporal.ZonedDateTime.prototype.startOfDay. It returns the first instant of
+// the receiver's local calendar day in its zone, wall-clock midnight resolved through the compatible
+// rule, so an ordinary day starts at 00:00 and a rare spring-forward at midnight lands just past the
+// gap. The zone and calendar carry over unchanged.
+func (z *ZonedDateTime) StartOfDay() *ZonedDateTime {
+	dt := z.localDateTime()
+	start := z.startOfDayInstant(dt.date.year, dt.date.month, dt.date.day)
+	return &ZonedDateTime{ns: start, loc: z.loc, tzID: z.tzID, cal: z.cal}
+}
+
+// HoursInDay implements Temporal.ZonedDateTime.prototype.hoursInDay. It reads the length of the
+// receiver's local calendar day as the exact hours between this day's start and the next day's
+// start, so an ordinary day is twenty-four, a spring-forward day twenty-three, and a fall-back day
+// twenty-five. The gap divides in floating point so a zone whose transition is off the hour keeps
+// its fractional part.
+func (z *ZonedDateTime) HoursInDay() float64 {
+	dt := z.localDateTime()
+	today := z.startOfDayInstant(dt.date.year, dt.date.month, dt.date.day)
+	ny, nm, nd := addISODate(dt.date.year, dt.date.month, dt.date.day, 0, 0, 0, big.NewInt(1), "constrain")
+	next := z.startOfDayInstant(ny, nm, nd)
+	gap := new(big.Int).Sub(next, today)
+	return float64(gap.Int64()) / 3_600_000_000_000
+}
+
 // Equals implements Temporal.ZonedDateTime.prototype.equals for a ZonedDateTime argument: two
 // zoned date-times are equal when they name the same instant in the same zone under the same
 // calendar, so the check is the count, the canonical zone identifier, and the calendar.

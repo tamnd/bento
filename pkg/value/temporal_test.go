@@ -2277,6 +2277,33 @@ func TestZonedDateTimeWithFamily(t *testing.T) {
 	}
 }
 
+// TestZonedDateTimeDayQueries pins startOfDay to the first instant of the local day and hoursInDay
+// to the day length, twenty-four on an ordinary day, twenty-three across spring forward, and
+// twenty-five across fall back.
+func TestZonedDateTimeDayQueries(t *testing.T) {
+	normal := ZonedDateTimeFromString("2024-06-15T12:30:45-04:00[America/New_York]")
+	if got := normal.StartOfDay().ToString().ToGoString(); got != "2024-06-15T00:00:00-04:00[America/New_York]" {
+		t.Errorf("startOfDay normal = %q", got)
+	}
+	if got := normal.HoursInDay(); got != 24 {
+		t.Errorf("hoursInDay normal = %v", got)
+	}
+	spring := ZonedDateTimeFromString("2024-03-10T15:00:00-04:00[America/New_York]")
+	if got := spring.StartOfDay().ToString().ToGoString(); got != "2024-03-10T00:00:00-05:00[America/New_York]" {
+		t.Errorf("startOfDay spring = %q", got)
+	}
+	if got := spring.HoursInDay(); got != 23 {
+		t.Errorf("hoursInDay spring = %v", got)
+	}
+	fall := ZonedDateTimeFromString("2024-11-03T15:00:00-05:00[America/New_York]")
+	if got := fall.StartOfDay().ToString().ToGoString(); got != "2024-11-03T00:00:00-04:00[America/New_York]" {
+		t.Errorf("startOfDay fall = %q", got)
+	}
+	if got := fall.HoursInDay(); got != 25 {
+		t.Errorf("hoursInDay fall = %v", got)
+	}
+}
+
 // zdtCall runs f and reports whether it threw a Temporal error.
 func zdtCall(f func()) (threw bool) {
 	defer func() {
