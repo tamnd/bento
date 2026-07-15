@@ -2225,6 +2225,8 @@ func TestNowConstruction(t *testing.T) {
 		{"plainDateISO default", "const d = Temporal.Now.plainDateISO();\nconsole.log(d.year);", "value.NowPlainDateISO()"},
 		{"plainTimeISO default", "const t2 = Temporal.Now.plainTimeISO();\nconsole.log(t2.hour);", "value.NowPlainTimeISO()"},
 		{"plainTimeISO in zone", "const t2 = Temporal.Now.plainTimeISO(\"UTC\");\nconsole.log(t2.hour);", "value.NowPlainTimeISOIn("},
+		{"zonedDateTimeISO from a ZonedDateTime", "const ref = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst z = Temporal.Now.zonedDateTimeISO(ref);\nconsole.log(z.epochMilliseconds);", "value.NowZonedDateTimeISOIn(ref.TimeZoneId())"},
+		{"plainDateISO from a ZonedDateTime", "const ref = new Temporal.ZonedDateTime(0n, \"America/New_York\");\nconst d = Temporal.Now.plainDateISO(ref);\nconsole.log(d.year);", "value.NowPlainDateISOIn(ref.TimeZoneId())"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -2236,9 +2238,13 @@ func TestNowConstruction(t *testing.T) {
 	}
 }
 
-// TestNowHandBacks checks the boundaries Temporal.Now does not carry: a non-string time-zone
-// argument (a ZonedDateTime is a valid TimeZoneLike the checker accepts but this slice does not
-// coerce), and a superfluous argument to a no-argument function.
+// TestNowHandBacks checks the one boundary Temporal.Now does not carry: a time-zone argument
+// typed as the TimeZoneLike union (ZonedDateTime | string) itself. TimeZoneLike mixes an object
+// member and a string member, so the argument hands back in the shared union machinery before
+// nowCall runs, which is why the reason is the generic union one rather than a Now-specific
+// message. A bare string and a bare ZonedDateTime both resolve and lower, covered by
+// TestNowConstruction; nowCall's own not-a-string-or-ZonedDateTime branch stays defensive since
+// no type-valid TimeZoneLike reaches it.
 func TestNowHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -2246,14 +2252,14 @@ func TestNowHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "zoned time-zone argument",
-			src:  "const ref = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst z = Temporal.Now.zonedDateTimeISO(ref);\nconsole.log(z.epochMilliseconds);",
-			want: "Temporal.Now.zonedDateTimeISO over a non-string time-zone argument is a later slice",
+			name: "union TimeZoneLike argument",
+			src:  "function at(tz: Temporal.TimeZoneLike) {\n  const z = Temporal.Now.zonedDateTimeISO(tz);\n  console.log(z.epochMilliseconds);\n}\nat(\"UTC\");",
+			want: "union mixing object and non-object members is a later slice",
 		},
 		{
-			name: "plainDateISO zoned argument",
-			src:  "const ref = new Temporal.ZonedDateTime(0n, \"UTC\");\nconst d = Temporal.Now.plainDateISO(ref);\nconsole.log(d.year);",
-			want: "Temporal.Now.plainDateISO over a non-string time-zone argument is a later slice",
+			name: "plainDateISO union argument",
+			src:  "function at(tz: Temporal.TimeZoneLike) {\n  const d = Temporal.Now.plainDateISO(tz);\n  console.log(d.year);\n}\nat(\"UTC\");",
+			want: "union mixing object and non-object members is a later slice",
 		},
 	}
 	for _, c := range cases {

@@ -933,9 +933,10 @@ func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.No
 // nowCall lowers a Temporal.Now function. Now reads the clock, so each function lowers to a
 // value.Now* constructor that reads the host wall clock, or, when BENTO_NOW_NS is set, the fixed
 // instant the differential harness pins. instant and timeZoneId take no argument. The four ISO
-// functions take an optional time-zone identifier: with none the host default zone is used, and
-// with a string argument that names a zone; a non-string zone argument, a TimeZoneLike object
-// this slice does not carry, hands back rather than coerce.
+// functions take an optional time-zone identifier: with none the host default zone is used, with
+// a string argument that names a zone, and with a Temporal.ZonedDateTime whose own time zone is
+// read. Any other TimeZoneLike, a plain object the spec would reject with a TypeError, hands back
+// rather than coerce.
 func (r *Renderer) nowCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	// noArg wraps a Now function that takes no argument.
 	noArg := func(fn string) (ast.Expr, error) {
@@ -953,15 +954,26 @@ func (r *Renderer) nowCall(method string, argNodes []frontend.Node) (ast.Expr, e
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", defaultFn)}, nil
 		case 1:
-			if !r.isString(argNodes[0]) {
-				return nil, &NotYetLowerable{Reason: "Temporal.Now." + method + " over a non-string time-zone argument is a later slice"}
+			if r.isString(argNodes[0]) {
+				tz, err := r.lowerExpr(argNodes[0])
+				if err != nil {
+					return nil, err
+				}
+				r.requireImport(valuePkg)
+				return &ast.CallExpr{Fun: sel("value", inFn), Args: []ast.Expr{tz}}, nil
 			}
-			tz, err := r.lowerExpr(argNodes[0])
-			if err != nil {
-				return nil, err
+			// A Temporal.ZonedDateTime is a TimeZoneLike: its own time zone is read. The spec's
+			// ToTemporalTimeZoneIdentifier returns the value's [[TimeZone]] slot, which is what
+			// TimeZoneId reports, so route through the named-zone constructor with that id.
+			if r.isZonedDateTime(argNodes[0]) {
+				recv, err := r.lowerExpr(argNodes[0])
+				if err != nil {
+					return nil, err
+				}
+				r.requireImport(valuePkg)
+				return &ast.CallExpr{Fun: sel("value", inFn), Args: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("TimeZoneId")}}}}, nil
 			}
-			r.requireImport(valuePkg)
-			return &ast.CallExpr{Fun: sel("value", inFn), Args: []ast.Expr{tz}}, nil
+			return nil, &NotYetLowerable{Reason: "Temporal.Now." + method + " over a time-zone argument that is not a string or a Temporal.ZonedDateTime is a later slice"}
 		default:
 			return nil, &NotYetLowerable{Reason: "Temporal.Now." + method + " takes at most one argument"}
 		}
