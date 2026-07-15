@@ -565,19 +565,16 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 				r.requireImport(valuePkg)
 				return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, nil
 			}
-			field, ok := exportedField(prop)
+			fieldName, ok := exportedField(prop)
 			if !ok {
 				return nil, &NotYetLowerable{Reason: "property name ." + prop + " is not a Go identifier"}
 			}
 			// An optional field is a value.Opt, so a read the checker has narrowed to
-			// the bare element type (inside an x !== undefined guard) would need the
-			// Get unwrap to match its float64 or string slot. That narrowed read is a
-			// later slice, so it hands back rather than emit an Opt where T is wanted;
-			// an unnarrowed read stays the Opt the field holds and lowers straight to
-			// the selector below.
-			if sp, ok := r.shapeProp(objType, prop); ok && sp.Optional && !r.isOptionalType(r.prog.TypeAt(n)) {
-				return nil, &NotYetLowerable{Reason: "a narrowed read of the optional property ." + prop + " needs the Get unwrap, a later slice"}
-			}
+			// the bare element type (inside an x !== undefined guard) unwraps with the
+			// field's .Get() to match its float64, string, or struct slot, the same
+			// unwrap an optional parameter's narrowed read takes. The checker proved the
+			// value present at this read, so the Get is sound; an unnarrowed read keeps
+			// the Opt the field holds and lowers straight to the selector below.
 			if _, err := r.decls.internStruct(r, objType); err != nil {
 				return nil, err
 			}
@@ -585,7 +582,11 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			if err != nil {
 				return nil, err
 			}
-			return &ast.SelectorExpr{X: recv, Sel: ident(field)}, nil
+			field := &ast.SelectorExpr{X: recv, Sel: ident(fieldName)}
+			if sp, ok := r.shapeProp(objType, prop); ok && sp.Optional && !r.isOptionalType(r.prog.TypeAt(n)) {
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: field, Sel: ident("Get")}}, nil
+			}
+			return field, nil
 		}
 	}
 	return nil, &NotYetLowerable{Reason: "property access ." + prop + " on this type is a later slice"}

@@ -35,22 +35,16 @@ console.log(dist(b));
 	}
 }
 
-// TestOptionalPropertyHandsBack pins the boundaries this slice keeps: a narrowed
-// read of the optional member needs the Get unwrap, an object literal in a
-// T | undefined slot needs the outer boxing, and Object.keys and JSON.stringify of
-// an optional shape need the key-presence and Opt-field handling their own slices
-// add, so each hands back with a named reason.
+// TestOptionalPropertyHandsBack pins the boundaries this slice keeps: an object
+// literal in a T | undefined slot needs the outer boxing, and Object.keys of an
+// optional shape needs the key-presence handling its own slice adds, so each hands
+// back with a named reason.
 func TestOptionalPropertyHandsBack(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
 		want string
 	}{
-		{
-			"narrowedMemberRead",
-			"type Point = { x: number; y?: number };\nfunction f(p: Point): number {\n  if (p.y !== undefined) {\n    return p.y;\n  }\n  return 0;\n}\nconsole.log(f({ x: 1 }));\n",
-			"narrowed read of the optional property",
-		},
 		{
 			"literalIntoOptionalSlot",
 			"type Point = { x: number; y?: number };\nconst a: Point | undefined = { x: 3 };\nconsole.log(a === undefined);\n",
@@ -75,6 +69,38 @@ func TestOptionalPropertyHandsBack(t *testing.T) {
 				t.Errorf("hand-back reason = %q, want it to contain %q", nyl.Reason, tc.want)
 			}
 		})
+	}
+}
+
+// TestNarrowedOptionalPropertyRuns builds and runs a narrowed read of an optional
+// property: inside an x !== undefined guard the read unwraps the value.Opt field with
+// .Get(), so a supplied optional reads back its inner value and an omitted one takes the
+// else branch, over both a primitive inner and a nested-shape inner.
+func TestNarrowedOptionalPropertyRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `interface P { name: string; age?: number; }
+function tell(p: P): string {
+  if (p.age !== undefined) {
+    return p.name + ":" + (p.age + 1);
+  }
+  return p.name + ":none";
+}
+interface Box { inner?: { val: number }; }
+function peek(b: Box): number {
+  if (b.inner !== undefined) {
+    return b.inner.val;
+  }
+  return -1;
+}
+console.log(tell({ name: "amy", age: 30 }));
+console.log(tell({ name: "bo" }));
+console.log(peek({ inner: { val: 5 } }));
+console.log(peek({}));
+`
+	got := runProgramGo(t, src)
+	want := "amy:31\nbo:none\n5\n-1\n"
+	if got != want {
+		t.Fatalf("narrowed optional-property program printed %q, want %q", got, want)
 	}
 }
 
