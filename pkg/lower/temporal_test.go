@@ -561,7 +561,7 @@ func TestDurationHandBacks(t *testing.T) {
 		},
 		{
 			name: "round with a dynamic smallestUnit",
-			src:  "function go(u: \"day\" | \"hour\") {\n  const d = new Temporal.Duration(0, 0, 0, 1, 12);\n  return d.round({ smallestUnit: u }).days;\n}\nconsole.log(go(\"day\"));",
+			src:  "function go(u: any) {\n  const d = new Temporal.Duration(0, 0, 0, 1, 12);\n  return d.round({ smallestUnit: u }).days;\n}\nconsole.log(go(\"day\"));",
 			want: "Temporal.Duration.prototype.round with a non-literal smallestUnit is a later slice",
 		},
 		{
@@ -706,12 +706,12 @@ func TestPlainTimeHandBacks(t *testing.T) {
 		},
 		{
 			name: "round with a dynamic smallestUnit",
-			src:  "function go(u: \"minute\" | \"hour\") {\n  const t = new Temporal.PlainTime(12, 30, 45);\n  return t.round({ smallestUnit: u }).minute;\n}\nconsole.log(go(\"minute\"));",
+			src:  "function go(u: any) {\n  const t = new Temporal.PlainTime(12, 30, 45);\n  return t.round({ smallestUnit: u }).minute;\n}\nconsole.log(go(\"minute\"));",
 			want: "Temporal.PlainTime.prototype.round with a non-literal smallestUnit is a later slice",
 		},
 		{
 			name: "round with a dynamic roundingMode",
-			src:  "function go(m: \"ceil\" | \"floor\") {\n  const t = new Temporal.PlainTime(12, 30, 45);\n  return t.round({ smallestUnit: \"minute\", roundingMode: m }).minute;\n}\nconsole.log(go(\"ceil\"));",
+			src:  "function go(m: any) {\n  const t = new Temporal.PlainTime(12, 30, 45);\n  return t.round({ smallestUnit: \"minute\", roundingMode: m }).minute;\n}\nconsole.log(go(\"ceil\"));",
 			want: "Temporal.PlainTime.prototype.round with a non-literal roundingMode is a later slice",
 		},
 	}
@@ -1844,12 +1844,12 @@ func TestInstantHandBacks(t *testing.T) {
 	}{
 		{
 			name: "until with a dynamic largestUnit",
-			src:  "function diff(u: \"hour\" | \"minute\") {\n  const i = new Temporal.Instant(0n);\n  const j = new Temporal.Instant(1n);\n  return i.until(j, { largestUnit: u }).nanoseconds;\n}\nconsole.log(diff(\"hour\"));",
+			src:  "function diff(u: any) {\n  const i = new Temporal.Instant(0n);\n  const j = new Temporal.Instant(1n);\n  return i.until(j, { largestUnit: u }).nanoseconds;\n}\nconsole.log(diff(\"hour\"));",
 			want: "Temporal.Instant.prototype.until with a non-literal largestUnit is a later slice",
 		},
 		{
 			name: "round with a dynamic smallestUnit",
-			src:  "function at(u: \"hour\" | \"minute\") {\n  const i = new Temporal.Instant(1500000000n);\n  return i.round({ smallestUnit: u }).epochMilliseconds;\n}\nconsole.log(at(\"hour\"));",
+			src:  "function at(u: any) {\n  const i = new Temporal.Instant(1500000000n);\n  return i.round({ smallestUnit: u }).epochMilliseconds;\n}\nconsole.log(at(\"hour\"));",
 			want: "Temporal.Instant.prototype.round with a non-literal smallestUnit is a later slice",
 		},
 		{
@@ -2120,7 +2120,7 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 		},
 		{
 			name: "add with a dynamic overflow option",
-			src:  "function at(o: \"constrain\" | \"reject\") { return new Temporal.ZonedDateTime(0n, \"UTC\").add({ months: 1 }, { overflow: o }).epochMilliseconds; }\nconsole.log(at(\"constrain\"));",
+			src:  "function at(o: any) { return new Temporal.ZonedDateTime(0n, \"UTC\").add({ months: 1 }, { overflow: o }).epochMilliseconds; }\nconsole.log(at(\"constrain\"));",
 			want: "Temporal.ZonedDateTime.prototype.add with a non-literal overflow option is a later slice",
 		},
 		{
@@ -2155,7 +2155,7 @@ func TestZonedDateTimeHandBacks(t *testing.T) {
 		},
 		{
 			name: "from a bag with an out-of-set offset option",
-			src:  "function at(o: \"use\" | \"reject\") { return Temporal.ZonedDateTime.from({ year: 2024, month: 6, day: 15, timeZone: \"UTC\" }, { offset: o }).epochMilliseconds; }\nconsole.log(at(\"use\"));",
+			src:  "function at(o: any) { return Temporal.ZonedDateTime.from({ year: 2024, month: 6, day: 15, timeZone: \"UTC\" }, { offset: o }).epochMilliseconds; }\nconsole.log(at(\"use\"));",
 			want: "Temporal.ZonedDateTime.from with a dynamic or out-of-set offset option is a later slice",
 		},
 		{
