@@ -998,6 +998,36 @@ func TestPlainDateTimeConversions(t *testing.T) {
 	}
 }
 
+// TestPlainDateTimeToZonedDateTime pins toZonedDateTime: a time-zone string lowers to
+// ToZonedDateTime with the default compatible disambiguation, and an options bag carries a
+// disambiguation string literal through.
+func TestPlainDateTimeToZonedDateTime(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "bare time zone",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 3, 14, 15, 30);\nconsole.log(dt.toZonedDateTime(\"UTC\").toString());",
+			want: ".ToZonedDateTime(\"UTC\", \"compatible\")",
+		},
+		{
+			name: "disambiguation option",
+			src:  "const dt = new Temporal.PlainDateTime(2020, 3, 8, 2, 30);\nconsole.log(dt.toZonedDateTime(\"America/New_York\", { disambiguation: \"earlier\" }).toString());",
+			want: ".ToZonedDateTime(\"America/New_York\", \"earlier\")",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("rendered program missing %q:\n%s", c.want, got)
+			}
+		})
+	}
+}
+
 // TestPlainDateTimeFromStringConstruction pins Temporal.PlainDateTime.from over a string
 // literal to value.PlainDateTimeFromString with the string carried through verbatim.
 func TestPlainDateTimeFromStringConstruction(t *testing.T) {
