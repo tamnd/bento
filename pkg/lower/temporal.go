@@ -1309,9 +1309,67 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 			name = "ToPlainTime"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}}, nil
+	case "toZonedDateTime":
+		what := "Temporal.PlainDateTime.prototype.toZonedDateTime"
+		tz, disambiguation, err := r.plainDateTimeToZonedArgs(what, argNodes)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToZonedDateTime")}, Args: []ast.Expr{tz, stringLit(disambiguation)}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " is a later slice"}
 	}
+}
+
+// plainDateTimeToZonedArgs reads the arguments of Temporal.PlainDateTime.prototype.toZonedDateTime
+// at compile time into a time-zone Go-string expression and a disambiguation string. The first
+// argument is a time-zone string, a literal or a string-typed value; the optional second is an
+// options bag carrying a disambiguation that is one of compatible, earlier, later, or reject,
+// defaulting to compatible. A time-zone-like object, a missing time zone, a dynamic or out-of-set
+// disambiguation, or any other shape hands back, since the zone or the resolution would then
+// depend on runtime data this slice does not carry.
+func (r *Renderer) plainDateTimeToZonedArgs(what string, argNodes []frontend.Node) (ast.Expr, string, error) {
+	if len(argNodes) == 0 {
+		return nil, "", &NotYetLowerable{Reason: what + " takes at least one argument"}
+	}
+	tz, ok, err := r.timeZoneStringArg(argNodes[0])
+	if err != nil {
+		return nil, "", err
+	}
+	if !ok {
+		return nil, "", &NotYetLowerable{Reason: what + " over a time zone that is not a string is a later slice"}
+	}
+	disambiguation := "compatible"
+	if len(argNodes) > 1 {
+		n := argNodes[1]
+		if n.Kind() != frontend.NodeObjectLiteralExpression {
+			return nil, "", &NotYetLowerable{Reason: what + " with options that are not an object literal is a later slice"}
+		}
+		for _, member := range r.prog.Children(n) {
+			if member.Kind() != frontend.NodeUnknown {
+				return nil, "", &NotYetLowerable{Reason: what + " over options with a spread or non-property member is a later slice"}
+			}
+			kids := r.prog.Children(member)
+			if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+				return nil, "", &NotYetLowerable{Reason: what + " over options with a computed or shorthand key is a later slice"}
+			}
+			switch key := r.prog.Text(kids[0]); key {
+			case "disambiguation":
+				v, ok := r.stringLiteralValue(kids[1])
+				if !ok || !slices.Contains(plainDateTimeDisambiguations[:], v) {
+					return nil, "", &NotYetLowerable{Reason: what + " over a dynamic or out-of-set disambiguation is a later slice"}
+				}
+				disambiguation = v
+			default:
+				return nil, "", &NotYetLowerable{Reason: what + " over options with the field " + key + " is a later slice"}
+			}
+		}
+	}
+	return tz, disambiguation, nil
 }
 
 // plainYearMonthMethodCall lowers a method call on a PlainYearMonth receiver, the mirror of
@@ -2001,6 +2059,11 @@ func (r *Renderer) plainTimeDifferenceOptions(what string, argNodes []frontend.N
 // accepts, from the largest to the smallest. It is the time units the wall clock rounds to plus
 // day, which rounds the whole date-time to midnight and can carry into the next day.
 var plainDateTimeRoundUnits = [7]string{"day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"}
+
+// plainDateTimeDisambiguations is the set of disambiguation options
+// Temporal.PlainDateTime.prototype.toZonedDateTime accepts when a wall clock is ambiguous or
+// falls in a gap: compatible (the default), earlier, later, and reject.
+var plainDateTimeDisambiguations = [4]string{"compatible", "earlier", "later", "reject"}
 
 // plainDateTimeRoundOptions reads the options of Temporal.PlainDateTime.prototype.round at compile
 // time, the mirror of plainTimeRoundOptions over the day-and-time unit set. The argument is either a
