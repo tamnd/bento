@@ -52,9 +52,23 @@ func NewPlainDate(isoYear, isoMonth, isoDay float64) *PlainDate {
 // canonicalCalendar canonicalizes a Temporal calendar identifier the way
 // CanonicalizeCalendar does: identifiers are case-insensitive, so it lowercases the
 // id and returns the canonical form, with ok=false for an id bento does not host.
-// This slice hosts the ISO 8601 calendar and the proleptic Gregorian calendar; the
-// lowerer only ever routes one of these two here, but the check is kept so a stray id
-// throws the RangeError the specification requires rather than silently mislabelling.
+//
+// bento hosts the four proleptic-Gregorian calendars: iso8601, gregory, roc, and
+// japanese. These label one shared ISO day-line and differ only in how the year, era,
+// and eraYear getters read it, so the whole of the date arithmetic runs calendar-blind
+// on the ISO fields and every mover threads the receiver's cal onto its result.
+//
+// This is the honest ceiling. buddhist and the lunar and computed families, persian,
+// indian, coptic, ethiopic, the islamic variants, hebrew, chinese, and dangi, all
+// return ok=false and hand back at the lowerer. They cannot be labelled onto the ISO
+// day-line: they need ICU-grade calendrical algorithms, arithmetic and astronomical
+// month lengths, leap-month insertion, and the pre-1582 Julian cutover, none of which
+// the movers above model. Handing them back is the correct behaviour under the
+// zero-fail invariant, since the alternative is silently mislabelling a date, and a
+// stray or malformed id still throws the RangeError the specification requires. The
+// test262 files these leave as a permanent hand-back are the ones tagged with those
+// calendar ids under built-ins/Temporal, recorded alongside this ceiling in the
+// milestone note; unlocking them is out of scope for a from-source runtime.
 func canonicalCalendar(id string) (string, bool) {
 	switch strings.ToLower(id) {
 	case "iso8601":
@@ -385,8 +399,9 @@ func (pd *PlainDate) Since(other *PlainDate, largestUnit string) *Duration {
 // adding 1911; the other hosted calendars count the ISO year directly. Under constrain the
 // month clamps to 1..12 and the day to that month's length, so with month 2 over January 31
 // lands on the last day of February; under reject an out-of-range field throws a RangeError.
-// monthCode and the era fields are not read here, the lowerer hands back a bag that carries
-// them. The receiver is unchanged.
+// A literal monthCode the lowerer resolves to its numeric month before the call, the same
+// month the getter reports since the hosted calendars have no leap month; the era fields the
+// lowerer hands back. The receiver is unchanged.
 func (pd *PlainDate) WithFields(year, month, day Opt[float64], overflow string) *PlainDate {
 	calYear := toIntegerWithTruncation(year.Or(float64(pd.displayYear())))
 	m := toIntegerWithTruncation(month.Or(float64(pd.month)))
@@ -1406,9 +1421,9 @@ func (pdt *PlainDateTime) ToZonedDateTime(timeZone, disambiguation string) *Zone
 // omitted field keeps its current value. The date half regulates exactly as PlainDate.with, so the
 // year is read in the receiver's calendar reckoning and the day clamps to the resulting month's
 // length under constrain; the time half clamps to its ISO maxima under constrain. Under reject an
-// out-of-range field in either half throws a RangeError. monthCode and the era fields are not read
-// here, the lowerer hands back a bag that carries them. The receiver is unchanged and its calendar
-// carries through.
+// out-of-range field in either half throws a RangeError. A literal monthCode the lowerer resolves to
+// its numeric month before the call; the era fields the lowerer hands back. The receiver is
+// unchanged and its calendar carries through.
 func (pdt *PlainDateTime) WithFields(year, month, day, hour, minute, second, millisecond, microsecond, nanosecond Opt[float64], overflow string) *PlainDateTime {
 	date := pdt.date.WithFields(year, month, day, overflow)
 	base := [6]float64{
@@ -3811,11 +3826,16 @@ func (z *ZonedDateTime) WithTimeZone(timeZone string) *ZonedDateTime {
 	return moved
 }
 
-// WithCalendar implements Temporal.ZonedDateTime.prototype.withCalendar for the ISO calendar, the
-// only one bento's ZonedDateTime hosts. It keeps the instant and the zone and returns a copy; a
-// non-ISO calendar hands back at lowering, so this is only reached for iso8601, an identity move.
-func (z *ZonedDateTime) WithCalendar() *ZonedDateTime {
-	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: z.cal}
+// WithCalendar implements Temporal.ZonedDateTime.prototype.withCalendar: it keeps the instant and the
+// zone and reinterprets the wall-clock fields under another calendar, returning a copy that reads its
+// year, era, and eraYear through the new calendar. The id is canonicalized and validated, so an
+// unhosted or invalid one throws a RangeError; the lowerer only routes a hosted one here.
+func (z *ZonedDateTime) WithCalendar(calendar string) *ZonedDateTime {
+	cal, ok := canonicalCalendar(calendar)
+	if !ok {
+		Throw(NewRangeError(FromGoString("invalid calendar identifier " + calendar)))
+	}
+	return &ZonedDateTime{ns: new(big.Int).Set(z.ns), loc: z.loc, tzID: z.tzID, cal: cal}
 }
 
 // StartOfDay implements Temporal.ZonedDateTime.prototype.startOfDay. It returns the first instant of

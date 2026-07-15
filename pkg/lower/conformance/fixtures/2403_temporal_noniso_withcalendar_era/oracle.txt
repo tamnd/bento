@@ -1,0 +1,9 @@
+== stdout:
+2024-03-15[u-ca=roc] 113 roc 113
+2024-03-15[u-ca=japanese] 2024 reiwa 6
+1989-01-08[u-ca=japanese] heisei 1
+2024-03-15T09:30:00[u-ca=roc] 113 roc 113
+113 roc 113 roc
+2024 reiwa 6 japanese
+== exit:
+0

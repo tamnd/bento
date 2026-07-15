@@ -1,0 +1,15 @@
+== stdout:
+2024-02-29[u-ca=gregory]
+2023-11-30[u-ca=gregory]
+2024-02-29[u-ca=roc]
+P1Y1M1D
+P1Y1M1D
+2019-05-20[u-ca=japanese] reiwa 1
+2024-03-31[u-ca=gregory]
+2024-04-30[u-ca=roc]
+2025-01-31[u-ca=roc]
+2020-04-20[u-ca=japanese]
+2024-02-29T12:00:00[u-ca=gregory]
+2024-03-31T12:00:00[u-ca=gregory]
+== exit:
+0
