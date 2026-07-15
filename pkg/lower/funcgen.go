@@ -1043,7 +1043,7 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 		if err != nil {
 			return nil, err
 		}
-		prop := r.prog.Text(info.nameNode)
+		prop := r.elemSourceProp(info)
 		srcName, ok := localName(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}

@@ -110,7 +110,7 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 		if err != nil {
 			return nil, err
 		}
-		prop := r.prog.Text(info.nameNode)
+		prop := r.elemSourceProp(info)
 		srcName, ok := localName(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}

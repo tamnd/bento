@@ -882,14 +882,19 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			return expr, err
 		}
 	}
-	// o["k"] with a string-literal key on a fixed-shape object is the struct-field
-	// read o.k spelled with brackets, so it lowers to the same selector through the
-	// same exportedField and internStruct the dotted read uses, and a read and its
-	// value agree on the field. Only a string-literal key takes this path: a dynamic
-	// key has no static field to select and is its own later slice. An array or typed
-	// array, which is also a TypeObject, is excluded so its numeric index still
-	// routes to the At read below.
-	if key, ok := r.stringLiteralKey(idxNode); ok {
+	// o["k"] with a compile-time-constant string key on a fixed-shape object is the
+	// struct-field read o.k spelled with brackets, so it lowers to the same selector
+	// through the same exportedField and internStruct the dotted read uses, and a read
+	// and its value agree on the field. pureConstStringKey folds both a plain string
+	// literal and a const binding the checker gave a string-literal type, so
+	// `const k = "a"; o[k]` reads o.a the same way o["a"] does. It folds only a key whose
+	// read runs no side effect, an identifier or a string literal, so an impure key such
+	// as `o[(n++, "a")]` keeps its effect and takes the run-time path rather than fold to
+	// a field. A key with no constant string type (a wide string, a let binding, a number,
+	// a symbol) has no static field to select and stays a later slice. An array or typed
+	// array, which is also a TypeObject, is excluded so its numeric index still routes to
+	// the At read below.
+	if key, ok := r.pureConstStringKey(idxNode); ok {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {

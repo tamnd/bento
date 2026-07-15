@@ -60,6 +60,19 @@ type objectDefaultElem struct {
 	bindNode   frontend.Node
 	hasDefault bool
 	defNode    frontend.Node
+	keyName    string
+}
+
+// elemSourceProp is the source property an object binding element reads: the resolved
+// constant string of a computed const key when the element carries one, else the text of
+// its name node. A computed key [k] whose k is a const of a literal string type folds to
+// that string here, so `const { [k]: v } = o` reads the same o.a field `const { a: v } = o`
+// does, while a non-computed element keeps reading through its name node unchanged.
+func (r *Renderer) elemSourceProp(info objectDefaultElem) string {
+	if info.keyName != "" {
+		return info.keyName
+	}
+	return strings.TrimSpace(r.prog.Text(info.nameNode))
 }
 
 // classifyObjectElem reads one object binding pattern element into an
@@ -79,11 +92,25 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring rest property gathers the remaining own properties into an object, which needs the object model of phase 7"}
 	}
 	ec := r.prog.Children(el)
-	// A computed key ({[k]: v}) reads the source by a key the pattern computes at run
-	// time, which needs the dynamic object model to index a value by a run-time key, a
-	// phase 7 capability. It hands back rather than guess the key statically.
+	// A computed key ({[k]: v}) whose key the checker proved a constant string folds to
+	// that string, so the element reads the fixed-shape source's field by the folded name
+	// the same way a named property does: `const { [k]: v } = o` with `const k = "a"` reads
+	// o.a. The resolved name is carried on keyName so the static readers select the field
+	// by it rather than by the key expression's text. Only a plain `[k]: v` shape folds, an
+	// identifier target and no default; a computed key with a default or a non-identifier
+	// target has more than two children, so objectComputedElem declines it. A key with no
+	// constant string type (a wide string, a side-effecting expression, a symbol, a number)
+	// has no static field to select and hands back, which keeps a run-time key over a static
+	// struct a later slice, since the dynamic-source path serves it through GetElem instead.
+	if key, target, ok := r.objectComputedElem(el); ok {
+		name, ok := r.pureConstStringKey(key)
+		if !ok {
+			return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring computed key whose key is not a constant string reads the source by a key computed at run time, which needs the dynamic object model of phase 7"}
+		}
+		return objectDefaultElem{nameNode: key, bindNode: target, keyName: name}, nil
+	}
 	if len(ec) > 0 && strings.HasPrefix(strings.TrimSpace(r.prog.Text(ec[0])), "[") {
-		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring computed key reads the source by a key computed at run time, which needs the dynamic object model of phase 7"}
+		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring computed key with a default or a non-identifier target is a later slice"}
 	}
 	switch {
 	case len(ec) == 1 && ec[0].Kind() == frontend.NodeIdentifier:
