@@ -44,6 +44,13 @@ func (r *Renderer) arrayElem(n frontend.Node) (ast.Expr, bool) {
 // A literal that splices in a spread element takes the arraySpread path instead;
 // an elided hole still hands back to a later slice.
 func (r *Renderer) arrayLiteral(n frontend.Node) (ast.Expr, error) {
+	// A literal the checker typed as a tuple, a contextually-typed [x, y], builds the
+	// positional tuple struct rather than a value.Array: a tuple answers TupleElements
+	// and refuses ElementType, so it is recognized here before the array path, whose
+	// element-type read below would fail on it and hand the whole literal back.
+	if elems, ok := r.prog.TupleElements(r.prog.TypeAt(n)); ok {
+		return r.tupleLiteral(n, elems)
+	}
 	elemType, ok := r.arrayElem(n)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "array literal whose element type does not lower yet"}
