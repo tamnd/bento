@@ -68,15 +68,13 @@ func TestThrowStringLowers(t *testing.T) {
 	}
 }
 
-// TestThrowNonErrorHandsBack proves throwing a value with no Thrown lowering (a
-// bare number) still hands back rather than emit an unsound panic; boxing the
-// remaining primitive throws is a later slice.
-func TestThrowNonErrorHandsBack(t *testing.T) {
-	prog := compile(t, "throw 42;\n")
-	r := NewRenderer(prog)
-	r.SetGoSignatures(testGoSignatures())
-	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
-		t.Fatal("throwing a number lowered, want a hand-back until arbitrary throws are boxed")
+// TestThrowNonErrorValueLowers proves throwing a value that is neither a built-in
+// error nor a string boxes into the runtime's ThrownValue carrier, so a bare number
+// rides the panic path with the value behind it rather than handing back.
+func TestThrowNonErrorValueLowers(t *testing.T) {
+	source := renderProgram(t, "throw 42;\n")
+	if !strings.Contains(source, "value.Throw(value.NewThrownValue(") {
+		t.Errorf("thrown number did not box into value.NewThrownValue:\n%s", source)
 	}
 }
 
@@ -349,19 +347,19 @@ func TestInstanceofOutsideCatchHandsBack(t *testing.T) {
 	handsBack(t, "class C {}\nconst c: unknown = new C();\nif (c instanceof C) { console.log(\"c\"); }\n")
 }
 
-// TestDestructuredCatchThrowValueHandsBack proves that with the destructured catch
-// binding now lowering against the caught value's boxed form, these snippets defer on
-// the throw side instead: throwing a plain object or array literal is a separate slice,
-// so the deferral moves off the catch binding and onto the thrown value. The catch
-// pattern itself lowers, as TestUntypedCatchObjectDestructureRuns shows over a thrown
-// built-in error the throw path already carries.
-func TestDestructuredCatchThrowValueHandsBack(t *testing.T) {
+// TestDestructuredCatchThrowValueLowers proves the two halves now meet: the throw
+// side boxes an object or array literal into the ThrownValue carrier and the catch
+// side destructures the caught value's boxed form, so throwing a plain object or
+// array and destructuring it in the catch lowers end to end rather than deferring on
+// either side. Both snippets box the thrown value, so each emits the carrier call.
+func TestDestructuredCatchThrowValueLowers(t *testing.T) {
 	for _, src := range []string{
 		"try {\n  throw { code: 1 };\n} catch ({ code }: any) {\n  console.log(code);\n}\n",
 		"try {\n  throw [1, 2];\n} catch ([a, b]: any) {\n  console.log(a + b);\n}\n",
 	} {
-		if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "not a built-in error") {
-			t.Fatalf("catch throw-value handback reason = %q, want a thrown-value deferral", reason)
+		source := renderProgram(t, src)
+		if !strings.Contains(source, "value.Throw(value.NewThrownValue(") {
+			t.Errorf("catch throw-value did not box into value.NewThrownValue:\n%s", source)
 		}
 	}
 }
