@@ -351,37 +351,42 @@ func TestRealDistinctShapesShareBaseNameGetSuffix(t *testing.T) {
 	}
 }
 
-// TestRealStringLiteralUnionHandsBack pins the current contract for a closed
-// string-literal union: it would lower to an integer tag enum, but the value
-// conversions that enum needs (a string literal into its tag, a tag back to its
-// string for a comparison, a print, a template, or a coercion) are a later slice,
-// so the type hands back rather than emit an enum no string enters or leaves.
-func TestRealStringLiteralUnionHandsBack(t *testing.T) {
-	_, _, err := renderReal(t, `const x: "circle" | "rect" = "circle";`)
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderType(string-literal union) err = %v, want *NotYetLowerable", err)
+// TestRealStringLiteralUnionRendersBStr pins the contract for a closed
+// string-literal union: it is a plain string at run time, one of a fixed set of
+// strings, so it renders to value.BStr and every operation reads it through the
+// ordinary string machinery rather than a separate tag representation.
+func TestRealStringLiteralUnionRendersBStr(t *testing.T) {
+	_, got, err := renderReal(t, `const x: "circle" | "rect" = "circle";`)
+	if err != nil {
+		t.Fatalf("RenderType(string-literal union) err = %v, want value.BStr", err)
+	}
+	if got != "value.BStr" {
+		t.Fatalf("RenderType(string-literal union) = %q, want value.BStr", got)
 	}
 }
 
-// TestRealSameStringUnionHandsBack pins that a string-literal union naming two
-// fields still hands back under the same rule, not just at a single use site.
-func TestRealSameStringUnionHandsBack(t *testing.T) {
-	_, _, err := renderReal(t, "type Dir = \"north\" | \"south\";\nconst d: Dir = \"north\";")
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderType(named string-literal union) err = %v, want *NotYetLowerable", err)
+// TestRealSameStringUnionRendersBStr pins that a named string-literal union renders
+// the same value.BStr, not just an inline one at a single use site.
+func TestRealSameStringUnionRendersBStr(t *testing.T) {
+	_, got, err := renderReal(t, "type Dir = \"north\" | \"south\";\nconst d: Dir = \"north\";")
+	if err != nil {
+		t.Fatalf("RenderType(named string-literal union) err = %v, want value.BStr", err)
+	}
+	if got != "value.BStr" {
+		t.Fatalf("RenderType(named string-literal union) = %q, want value.BStr", got)
 	}
 }
 
-// TestRealNonIdentifierStringUnionHandsBack pins that a string-literal union whose
-// member is not a Go identifier hands back under the same enum-deferral rule; the
-// name mangle it would have needed is moot until the enum lowering lands.
-func TestRealNonIdentifierStringUnionHandsBack(t *testing.T) {
-	_, _, err := renderReal(t, `const x: "north" | "due east" = "north";`)
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderType(union with a spaced member) err = %v, want *NotYetLowerable", err)
+// TestRealNonIdentifierStringUnionRendersBStr pins that a string-literal union
+// whose member is not a Go identifier still renders value.BStr; the member is a
+// run-time string value, so a spaced member needs no name mangle at all.
+func TestRealNonIdentifierStringUnionRendersBStr(t *testing.T) {
+	_, got, err := renderReal(t, `const x: "north" | "due east" = "north";`)
+	if err != nil {
+		t.Fatalf("RenderType(union with a spaced member) err = %v, want value.BStr", err)
+	}
+	if got != "value.BStr" {
+		t.Fatalf("RenderType(union with a spaced member) = %q, want value.BStr", got)
 	}
 }
 

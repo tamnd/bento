@@ -339,9 +339,9 @@ func (r *Renderer) monoAtom(t frontend.Type) (string, bool) {
 	// typeExpr runs: a union all of whose members carry the number or boolean facet
 	// widens to that primitive's Go type. primitiveFlagsOfType folds the facet in
 	// whether or not the union already spells it, so both spellings mangle here.
-	// Only number and boolean fold; a string-literal union lowers to a tag enum,
-	// not value.BStr, and mixed or nullable unions have their own Go shape, so both
-	// are left to a later slice rather than mangled.
+	// Only number and boolean fold here; a string-literal union lowers to value.BStr
+	// but is not mangled through this branch, and mixed or nullable unions have their
+	// own Go shape, so both are left to a later slice rather than mangled.
 	if t.Flags&frontend.TypeUnion != 0 && t.Flags&(frontend.TypeNumber|frontend.TypeBoolean|frontend.TypeString) == 0 {
 		switch pf := r.primitiveFlagsOfType(t); {
 		case pf&frontend.TypeNumber != 0:
@@ -356,9 +356,9 @@ func (r *Renderer) monoAtom(t frontend.Type) (string, bool) {
 	case t.Flags&frontend.TypeNumber != 0:
 		return "num", true
 	case t.Flags&frontend.TypeString != 0:
-		// A closed string-literal union lowers to an integer tag enum, not value.BStr,
-		// so only a type argument that is string (or a lone string literal, which widens
-		// to string) mangles here; a genuine string-literal union is caught above.
+		// Only a type argument that is string (or a lone string literal, which widens
+		// to string) mangles here; a genuine string-literal union, though it lowers to
+		// value.BStr, is caught above and left unmangled as a later slice.
 		if t.Flags&frontend.TypeUnion != 0 {
 			return "", false
 		}

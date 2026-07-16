@@ -684,13 +684,14 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	}
 
 	// A union whose members all share a primitive facet (a numeric-literal union
-	// like 1 | 2 | 3 is a number, true | false is a boolean) widens to that
-	// primitive's Go type, the same type the predicates fold it to, so a function
-	// returning such a union gets a float64 or bool result rather than routing to
-	// the tagged-sum machinery a real object union needs. A closed string-literal
-	// union is deliberately left out: it lowers to an integer tag enum below, not a
-	// primitive. A union that folds nothing (a mixed or optional union) keeps its
-	// own flags and falls through to the union handling.
+	// like 1 | 2 | 3 is a number, true | false is a boolean, a closed string-literal
+	// union "a" | "b" is a string) widens to that primitive's Go type, the same type
+	// the predicates fold it to, so a function returning such a union gets a float64,
+	// bool, or value.BStr result rather than routing to the tagged-sum machinery a
+	// real object union needs. A closed string-literal union is a plain string at run
+	// time, so value.BStr carries it and every string operation reads it directly. A
+	// union that folds nothing (a mixed or optional union) keeps its own flags and
+	// falls through to the union handling.
 	if t.Flags&frontend.TypeUnion != 0 {
 		if pf := r.primitiveFlagsOfType(t); pf != t.Flags {
 			switch {
@@ -698,6 +699,9 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 				return ident("float64"), nil
 			case pf&frontend.TypeBoolean != 0:
 				return ident("bool"), nil
+			case pf&frontend.TypeString != 0:
+				r.requireImport(valuePkg)
+				return sel("value", "BStr"), nil
 			}
 		}
 		// The IteratorResult union a generator's next/return/throw hand back lowers to

@@ -10,9 +10,9 @@ import (
 // is a boolean. A function returning such a union must lower to the primitive's Go
 // type (float64, bool) rather than route to the tagged-sum machinery a real object
 // union needs, which has no decl to render and used to crash the printer. A closed
-// string-literal union is not covered here: it lowers to an integer tag enum
-// (union.go). A union that folds nothing (a mixed or optional union) keeps its own
-// flags and hands the unit back to the interpreter.
+// string-literal union folds the same way: it is a plain string at run time, so it
+// lowers to value.BStr (union.go). A union that folds nothing (a mixed or optional
+// union) keeps its own flags and hands the unit back to the interpreter.
 
 // TestNumericLiteralUnionReturnLowers proves a function whose return type is the
 // numeric-literal union 1 | 2 | 3 lowers to a float64 result rather than routing to
@@ -41,6 +41,42 @@ func TestBooleanLiteralUnionReturnLowers(t *testing.T) {
 func TestMixedUnionReturnHandsBack(t *testing.T) {
 	const src = "export function m(n: number): string | number { if (n > 0) return \"pos\"; return n; }\nconsole.log(m(1));\n"
 	renderProgramHandBack(t, src)
+}
+
+// TestStringLiteralUnionReturnLowers proves a function whose return type is the
+// closed string-literal union "a" | "b" lowers to a value.BStr result, the same
+// string it is at run time, rather than handing back.
+func TestStringLiteralUnionReturnLowers(t *testing.T) {
+	const src = "export function s(n: number): \"a\" | \"b\" { return n > 0 ? \"a\" : \"b\"; }\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func S(n float64) value.BStr") {
+		t.Errorf("string-literal union return did not lower to value.BStr:\n%s", source)
+	}
+}
+
+// TestStringLiteralUnionRun builds and runs a program that reads a string-literal
+// union across a compare, a print, a concat, and a reassignment, proving it renders
+// the way JavaScript does through the ordinary string machinery.
+func TestStringLiteralUnionRun(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+type Dir = "north" | "south" | "east" | "west";
+function opposite(d: Dir): Dir {
+  if (d === "north") return "south";
+  if (d === "south") return "north";
+  return d;
+}
+let cur: Dir = "north";
+console.log(cur);
+console.log(opposite(cur));
+console.log("dir=" + cur);
+console.log(typeof cur);
+cur = "east";
+console.log(cur === "east");
+`
+	if got, want := runProgramGo(t, src), "north\nsouth\ndir=north\nstring\ntrue\n"; got != want {
+		t.Fatalf("string-literal union run printed %q, want %q", got, want)
+	}
 }
 
 // TestLiteralUnionReturnsRun builds and runs the generated Go so a folded union

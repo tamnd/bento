@@ -47,17 +47,19 @@ func TestConditionalStringTernaryNestedLowers(t *testing.T) {
 	}
 }
 
-// TestConditionalStringTernaryTagEnumHandsBack guards the boundary: a value typed
-// as a closed string-literal union but stored in a binding (a parameter here) is a
-// tag enum, not a BStr, so it still hands back on its own path. The new isString
-// hook fires only for a conditional-expression node, never for such a binding.
-func TestConditionalStringTernaryTagEnumHandsBack(t *testing.T) {
+// TestConditionalStringUnionBindingLowers pins that a value typed as a closed
+// string-literal union stored in a binding (a parameter here) now lowers to a
+// value.BStr, the same string it is at run time, so a bare read prints through the
+// ordinary string machinery rather than handing back. This is the binding shape the
+// conditional-expression isString hook did not cover, closed by rendering the union
+// type itself as value.BStr.
+func TestConditionalStringUnionBindingLowers(t *testing.T) {
 	src := `function h(v: "on" | "off"): void {
   console.log(v);
 }`
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "tag enum") {
-		t.Fatalf("string-literal-union parameter should still hand back as a tag enum, got: %s", reason)
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "v value.BStr") {
+		t.Fatalf("string-literal-union parameter should lower to a value.BStr, got:\n%s", out)
 	}
 }
 
