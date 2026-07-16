@@ -187,6 +187,39 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
 				continue
 			}
+			// A spread of a generator drains its coroutine into a slice of its yielded
+			// element type, then splices that slice the same way an array's Elems is. The
+			// generator lowers to a *value.Gen the drain pulls with Next until done; an
+			// iterator-helper shape (an IteratorObject, a *value.IterHelper) has a different
+			// Next and stays out of this path, matching how for...of routes the two apart.
+			// The yield type must lower to the same Go type as the target element, so the
+			// drained values splice without a conversion.
+			if r.isGeneratorIterable(operand) && !r.isIterHelperType(r.prog.TypeAt(operand)) {
+				if yieldT, ok := r.generatorElemType(r.prog.TypeAt(operand)); ok {
+					yieldGo, err := r.typeExpr(yieldT)
+					if err != nil {
+						return nil, err
+					}
+					same, err := sameGoType(elemType, yieldGo)
+					if err != nil {
+						return nil, err
+					}
+					if !same {
+						return nil, &NotYetLowerable{Reason: "spread of a generator with a different element type is a later slice"}
+					}
+					src, err := r.lowerExpr(operand)
+					if err != nil {
+						return nil, err
+					}
+					flush()
+					if acc == nil {
+						acc = &ast.CompositeLit{Type: seedType}
+					}
+					drained := r.generatorToSliceExpr(src, elemType)
+					acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
+					continue
+				}
+			}
 			// A spread of a string splices its code points, each a one-code-point
 			// string, the same walk for...of over a string takes. value.BStr.CodePoints
 			// returns the []BStr the append splices, so the target must be a string
