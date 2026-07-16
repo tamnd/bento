@@ -219,11 +219,38 @@ console.log(C.tag());
 	}
 }
 
-// TestMethodBooleanOptionalParamHandsBack pins that a bare boolean optional method
-// parameter still hands back: TypeScript models boolean as true | false, so
-// boolean | undefined is a three-member union optionalInner does not fold to a
-// value.Opt[T], leaving the declaration on the call-site-defaulting handback.
-func TestMethodBooleanOptionalParamHandsBack(t *testing.T) {
+// TestBooleanOptionalFormsRun exercises the boolean optional fold across the presence
+// shapes a value.Opt[bool] must serve: the undefined-compare on a bare parameter, the
+// narrowed read of a required boolean | undefined, typeof over the option, the truthiness
+// test (an absent option and a present false are both falsy), and an uninitialized local.
+func TestBooleanOptionalFormsRun(t *testing.T) {
+	skipIfShort(t)
+	const src = `function f(x?: boolean): string { return x === undefined ? "none" : (x ? "yes" : "no"); }
+function g(x: boolean | undefined): string { if (x === undefined) return "u"; return x ? "T" : "F"; }
+function h(x?: boolean): string { return typeof x === "boolean" ? "b" : "u"; }
+function t(x?: boolean): string { return x ? "y" : "n"; }
+console.log(f(), f(true), f(false));
+console.log(g(undefined), g(true), g(false));
+console.log(h(), h(true));
+console.log(t(), t(true), t(false));
+let b: boolean | undefined;
+console.log(b === undefined ? "u" : "d");
+b = true;
+console.log(b === undefined ? "u" : "d");
+`
+	want := "none yes no\nu T F\nu b\nn y n\nu\nd\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("boolean optional forms printed %q, want %q", got, want)
+	}
+}
+
+// TestMethodBooleanOptionalParamRuns runs a bare boolean optional method parameter,
+// which now lowers: TypeScript models boolean as true | false, so boolean | undefined
+// arrives as the three members true | false | undefined, and optionalInner folds those
+// two boolean members to a value.Opt[bool], its field filled with value.None at the
+// call site and truthy-tested inside the body.
+func TestMethodBooleanOptionalParamRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = `class C {
   g(b?: boolean): number {
     if (b) { return 1; }
@@ -231,10 +258,11 @@ func TestMethodBooleanOptionalParamHandsBack(t *testing.T) {
   }
 }
 console.log(new C().g(true));
+console.log(new C().g(false));
+console.log(new C().g());
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "optional parameter needs call-site defaulting") {
-		t.Errorf("hand-back reason %q does not name the optional-parameter case", reason)
+	if got, want := runProgramGo(t, src), "1\n0\n0\n"; got != want {
+		t.Fatalf("bare boolean optional method printed %q, want %q", got, want)
 	}
 }
 
@@ -606,11 +634,11 @@ console.log(d.a + "," + d.b + "," + d.c);
 	}
 }
 
-// TestCtorBooleanOptionalParamHandsBack pins that a bare boolean optional constructor
-// parameter still hands back, since boolean | undefined is a three-member union
-// optionalInner does not fold to a value.Opt[T], so the new-X omission has no option
-// value to fill, the same shape the declaration hands back on.
-func TestCtorBooleanOptionalParamHandsBack(t *testing.T) {
+// TestCtorBooleanOptionalParamRuns runs a bare boolean optional constructor parameter,
+// which now lowers: boolean | undefined folds to a value.Opt[bool], so the new-Flag
+// omission fills value.None the body truthy-tests, and a supplied argument wraps in Some.
+func TestCtorBooleanOptionalParamRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = `class Flag {
   f: boolean;
   constructor(b?: boolean) { if (b) { this.f = true; } else { this.f = false; } }
@@ -618,9 +646,8 @@ func TestCtorBooleanOptionalParamHandsBack(t *testing.T) {
 console.log(new Flag(true).f);
 console.log(new Flag().f);
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "omitting a non-dynamic optional argument") {
-		t.Errorf("hand-back reason %q does not name the constructor omission case", reason)
+	if got, want := runProgramGo(t, src), "true\nfalse\n"; got != want {
+		t.Fatalf("bare boolean optional constructor printed %q, want %q", got, want)
 	}
 }
 
