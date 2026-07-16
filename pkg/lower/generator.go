@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -56,6 +57,56 @@ func (r *Renderer) generatorElemType(t frontend.Type) (frontend.Type, bool) {
 		return frontend.Type{}, false
 	}
 	return args[0], true
+}
+
+// generatorToSliceExpr drains a generator into a Go slice of its yielded element
+// type, the form a spread needs in expression position. It is the pull-until-done
+// walk forOfGenerator emits, wrapped in a func literal that returns the collected
+// slice so it stands where a value is expected: a spread splices the slice. The
+// generator is obtained inside the literal, so each spread of the same source gets
+// its own fresh coroutine, the protocol's rule. Next takes value.Undefined as the
+// sent value, since a spread never feeds a value back in the way a hand-written
+// next(v) can. The element type is the caller's, already checked to match the
+// generator's yield type, so the appended values need no conversion.
+func (r *Renderer) generatorToSliceExpr(src, elemType ast.Expr) ast.Expr {
+	r.requireImport(valuePkg)
+	sliceName := r.freshTemp()
+	genName := r.freshTemp()
+	valName := r.freshTemp()
+	doneName := r.freshTemp()
+	decl := &ast.DeclStmt{Decl: &ast.GenDecl{
+		Tok:   token.VAR,
+		Specs: []ast.Spec{&ast.ValueSpec{Names: []*ast.Ident{ident(sliceName)}, Type: &ast.ArrayType{Elt: elemType}}},
+	}}
+	getGen := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(genName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{src},
+	}
+	pull := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(valName), ident(doneName)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{&ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident(genName), Sel: ident("Next")},
+			Args: []ast.Expr{sel("value", "Undefined")},
+		}},
+	}
+	brk := &ast.IfStmt{Cond: ident(doneName), Body: &ast.BlockStmt{List: []ast.Stmt{&ast.BranchStmt{Tok: token.BREAK}}}}
+	grow := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(sliceName)},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{&ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{ident(sliceName), ident(valName)}}},
+	}
+	loop := &ast.ForStmt{Body: &ast.BlockStmt{List: []ast.Stmt{pull, brk, grow}}}
+	ret := &ast.ReturnStmt{Results: []ast.Expr{ident(sliceName)}}
+	fn := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: &ast.ArrayType{Elt: elemType}}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{decl, getGen, loop, ret}},
+	}
+	return &ast.CallExpr{Fun: fn}
 }
 
 // collectYields gathers every yield expression under n, the nodes whose operands fix
