@@ -1084,6 +1084,19 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 		return expr, nil
 	}
 
+	// x === undefined or x === null on a tagged-sum union local that carries the
+	// sentinel as a tag-only arm lowers to a tag compare, x.tag == NumOrStrOrUndefUndef,
+	// the presence-test companion of the typeof narrowing: the sentinel is one of the
+	// union's arms, so the compare is one integer test rather than building the sentinel
+	// value and matching it (tagunion.go). It routes before the value compare, which
+	// would otherwise lower the bare undefined against a struct. A union with no such
+	// sentinel arm, or an operand that is not a union local, falls through.
+	if expr, handled, err := r.unionSentinelCompare(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	// s.kind === "circle" on a discriminated object union lowers to a tag compare,
 	// s.tag == ShapeOrCircleCircle, rather than reading a kind field and matching a
 	// string: the tag already distinguishes the arms, so the narrowing is one integer

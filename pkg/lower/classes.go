@@ -2461,7 +2461,7 @@ func (r *Renderer) pureCtorValue(n frontend.Node) bool {
 	switch n.Kind() {
 	case frontend.NodeIdentifier, frontend.NodeNumericLiteral, frontend.NodeStringLiteral,
 		frontend.NodeBigIntLiteral, frontend.NodeNoSubstitutionTemplateLiteral,
-		frontend.NodeTrueKeyword, frontend.NodeFalseKeyword:
+		frontend.NodeTrueKeyword, frontend.NodeFalseKeyword, frontend.NodeNullKeyword:
 		return true
 	case frontend.NodeParenthesizedExpression, frontend.NodePrefixUnaryExpression:
 		kids := r.prog.Children(n)

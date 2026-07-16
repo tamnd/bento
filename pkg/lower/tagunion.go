@@ -48,19 +48,40 @@ import (
 // the arms of one union order the same way regardless of the order the checker
 // lists the members. Only these primitives are inline arms; an object, array, or
 // class arm needs the pointer-field form of a later slice.
+//
+// undefined and null are tag-only arms: each is a single sentinel value carrying no
+// payload, so it needs a tag to tell it apart from the value arms but no struct
+// field to store, no constructor parameter, and no Go type. Their typeof strings are
+// the ones JavaScript reports, "undefined" for undefined and "object" for null, so a
+// typeof narrowing and the TypeOf method answer them from the tag like any other arm.
 type primArm struct {
-	flag   frontend.TypeFlags
-	field  string
-	suffix string
-	typeof string
-	rank   int
+	flag    frontend.TypeFlags
+	field   string
+	suffix  string
+	typeof  string
+	rank    int
+	tagOnly bool
 }
 
 var primArms = []primArm{
-	{frontend.TypeNumber, "num", "Num", "number", 0},
-	{frontend.TypeString, "str", "Str", "string", 1},
-	{frontend.TypeBoolean, "bl", "Bool", "boolean", 2},
-	{frontend.TypeBigInt, "big", "Big", "bigint", 3},
+	{flag: frontend.TypeNumber, field: "num", suffix: "Num", typeof: "number", rank: 0},
+	{flag: frontend.TypeString, field: "str", suffix: "Str", typeof: "string", rank: 1},
+	{flag: frontend.TypeBoolean, field: "bl", suffix: "Bool", typeof: "boolean", rank: 2},
+	{flag: frontend.TypeBigInt, field: "big", suffix: "Big", typeof: "bigint", rank: 3},
+	{flag: frontend.TypeUndefined, suffix: "Undef", typeof: "undefined", rank: 4, tagOnly: true},
+	{flag: frontend.TypeNull, suffix: "Null", typeof: "object", rank: 5, tagOnly: true},
+}
+
+// singletonName returns the value-package singleton a tag-only arm's narrowed read
+// evaluates to, value.Undefined for the undefined arm and value.Null for the null
+// arm, the same singletons the bare undefined and null literals lower to, so a
+// reference the checker narrowed to the sentinel reads as that one value. It is
+// meaningful only for a tag-only arm.
+func (a primArm) singletonName() string {
+	if a.flag == frontend.TypeNull {
+		return "Null"
+	}
+	return "Undefined"
 }
 
 // unionArm is one arm of an interned union: the primitive descriptor it matched
@@ -141,9 +162,21 @@ func (u *unionInfo) armForFlags(f frontend.TypeFlags) (unionArm, bool) {
 	// A narrowed boolean is the true|false union the checker keeps, so its flags carry
 	// the union bit alongside the boolean bit; matching on the arm bit rather than
 	// rejecting any union lets that narrowing select the boolean arm. The whole
-	// tagged-sum union carries only the union bit and none of the arm bits, so it
-	// matches no arm here and the caller keeps the bare struct.
+	// tagged-sum union carries only the union bit and none of the value-arm bits, so
+	// it matches no value arm here and the caller keeps the bare struct.
+	//
+	// A tag-only sentinel arm (undefined, null) matches only when the flags are
+	// exactly that sentinel, the shape a reference narrowed to the sentinel carries.
+	// The whole union's own flags may include the undefined or null bit alongside the
+	// union bit, so a subset test would misread a whole-union reference as the sentinel
+	// arm; the exact match keeps it to a genuinely narrowed sentinel.
 	for _, a := range u.arms {
+		if a.tagOnly {
+			if f == a.flag {
+				return a, true
+			}
+			continue
+		}
 		if f&a.flag != 0 {
 			return a, true
 		}
@@ -182,7 +215,18 @@ func (r *Renderer) primUnionArms(t frontend.Type) ([]primArm, bool) {
 		seen[arm.flag] = true
 		arms = append(arms, arm)
 	}
-	if len(arms) < 2 {
+	// A tag-only sentinel arm rides only alongside two or more value arms. A union with
+	// fewer value arms is a T | undefined optional (value.Opt) or a T | null single-value
+	// shape, each of which keeps its own path rather than the tagged sum; requiring two
+	// value arms here leaves those to their handlers and avoids interning a spurious
+	// tagged union the optional pre-pass would then read as a union local.
+	valueArms := 0
+	for _, a := range arms {
+		if !a.tagOnly {
+			valueArms++
+		}
+	}
+	if valueArms < 2 {
 		return nil, false
 	}
 	sortArmsByRank(arms)
@@ -249,6 +293,12 @@ func (r *Renderer) internUnion(t frontend.Type) (*unionInfo, error) {
 
 	arms := make([]unionArm, len(prims))
 	for i, a := range prims {
+		if a.tagOnly {
+			// A sentinel arm has no payload, so it carries no Go type and no field; only
+			// its tag distinguishes it.
+			arms[i] = unionArm{primArm: a}
+			continue
+		}
 		gt, err := r.typeExpr(memberType(r.prog, t, a.flag))
 		if err != nil {
 			return nil, err
@@ -443,6 +493,18 @@ func (r *Renderer) wrapToUnion(expr ast.Expr, src frontend.Node, target frontend
 		}
 	}
 	if arm, ok := info.armForFlags(r.primitiveFlags(src)); ok {
+		if arm.tagOnly {
+			// A sentinel value flowing into the union sets the tag alone through the
+			// no-argument constructor, so the lowered source expr (value.Undefined or
+			// value.Null) is dropped. That is sound only when reading the source has no
+			// side effect, the case for the bare undefined and null literals that reach
+			// here; a side-effecting source whose type is the sentinel hands back rather
+			// than lose its effect.
+			if !r.repeatableOperand(src) {
+				return nil, false, &NotYetLowerable{Reason: "constructing a union sentinel arm from a side-effecting source is a later slice"}
+			}
+			return &ast.CallExpr{Fun: ident(info.ctorName(arm))}, true, nil
+		}
 		return &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{expr}}, true, nil
 	}
 	// An object value flowing into an object union: its structural key names the arm,
@@ -471,6 +533,13 @@ func (r *Renderer) narrowedUnionRead(name string, n frontend.Node) (ast.Expr, bo
 		return nil, false
 	}
 	if arm, ok := info.armForFlags(r.primitiveFlags(n)); ok {
+		if arm.tagOnly {
+			// The reference narrowed to a sentinel: there is no field to read, so it
+			// reads as the one value that arm holds, the value.Undefined or value.Null
+			// singleton the bare literal lowers to.
+			r.requireImport(valuePkg)
+			return sel("value", arm.singletonName()), true
+		}
 		return &ast.SelectorExpr{X: ident(name), Sel: ident(arm.field)}, true
 	}
 	// An object union narrows to a single member: the checker types the reference
@@ -532,6 +601,87 @@ func (r *Renderer) typeofUnionCompare(opText string, left, right frontend.Node) 
 		cmp.Op = token.NEQ
 	}
 	return cmp, true, nil
+}
+
+// unionSentinelCompare lowers an equality between a tagged-sum union local and the
+// bare undefined or null keyword to a tag compare, the sentinel-narrowing companion
+// of typeofUnionCompare: x === undefined on a number | string | undefined lowers to
+// comparing the tag against the undefined arm rather than building the sentinel and
+// matching it, and x === null likewise. One operand must be a union local and the
+// other exactly the undefined or null keyword. It returns false for any other shape,
+// so a union with no matching sentinel arm (the compare is a constant TypeScript does
+// not narrow on) falls through to the caller, and negates the result for !==.
+func (r *Renderer) unionSentinelCompare(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	if opText != "===" && opText != "!==" {
+		return nil, false, nil
+	}
+	name, info, flag, ok := r.unionAndSentinel(left, right)
+	if !ok {
+		return nil, false, nil
+	}
+	arm, ok := info.armForFlags(flag)
+	if !ok {
+		return nil, false, nil
+	}
+	cmp := &ast.BinaryExpr{
+		X:  &ast.SelectorExpr{X: ident(name), Sel: ident("tag")},
+		Op: token.EQL,
+		Y:  ident(info.tagConst(arm)),
+	}
+	if opText == "!==" {
+		cmp.Op = token.NEQ
+	}
+	return cmp, true, nil
+}
+
+// unionAndSentinel picks the union local and the sentinel keyword out of a
+// comparison's two sides, in either order. It returns the local name, its interned
+// descriptor, and the sentinel's flag (TypeUndefined or TypeNull) when exactly one
+// side is a tagged-sum union local and the other is exactly the undefined or null
+// keyword, and false otherwise.
+func (r *Renderer) unionAndSentinel(a, b frontend.Node) (string, *unionInfo, frontend.TypeFlags, bool) {
+	if name, info, ok := r.unionLocalRef(a); ok {
+		if flag, ok := r.sentinelFlag(b); ok {
+			return name, info, flag, true
+		}
+	}
+	if name, info, ok := r.unionLocalRef(b); ok {
+		if flag, ok := r.sentinelFlag(a); ok {
+			return name, info, flag, true
+		}
+	}
+	return "", nil, 0, false
+}
+
+// unionLocalRef reports whether a node is a bare reference to a tagged-sum union
+// local, returning the local name and its descriptor. It is the receiver side of a
+// sentinel compare, the union whose tag the compare tests.
+func (r *Renderer) unionLocalRef(n frontend.Node) (string, *unionInfo, bool) {
+	if n.Kind() != frontend.NodeIdentifier {
+		return "", nil, false
+	}
+	name, ok := localName(r.prog.Text(n))
+	if !ok {
+		return "", nil, false
+	}
+	info, ok := r.unionLocals[name]
+	if !ok {
+		return "", nil, false
+	}
+	return name, info, true
+}
+
+// sentinelFlag reports whether a node is exactly the undefined or null keyword,
+// returning TypeUndefined or TypeNull. A node whose type merely includes the sentinel
+// facet (a wider type) is not the bare keyword and returns false.
+func (r *Renderer) sentinelFlag(n frontend.Node) (frontend.TypeFlags, bool) {
+	switch r.prog.TypeAt(n).Flags {
+	case frontend.TypeUndefined:
+		return frontend.TypeUndefined, true
+	case frontend.TypeNull:
+		return frontend.TypeNull, true
+	}
+	return 0, false
 }
 
 // discriminantUnionCompare lowers a discriminant test on an object union against a
@@ -888,11 +1038,16 @@ func unionTypeOf(info *unionInfo) ast.Decl {
 func unionJSONArm(info *unionInfo) ast.Decl {
 	cases := make([]ast.Stmt, 0, len(info.arms))
 	for _, a := range info.arms {
+		result := ast.Expr(&ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)})
+		if a.tagOnly {
+			// A sentinel arm has no field to hand the serializer; nil renders as JSON
+			// null, which is what a null arm is and the closest the encoder has for an
+			// undefined the serializer would otherwise omit.
+			result = ident("nil")
+		}
 		cases = append(cases, &ast.CaseClause{
 			List: []ast.Expr{ident(info.tagConst(a))},
-			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
-				&ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)},
-			}}},
+			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{result}}},
 		})
 	}
 	return &ast.FuncDecl{
@@ -943,6 +1098,10 @@ func unionStruct(info *unionInfo) ast.Decl {
 		{Names: []*ast.Ident{ident("tag")}, Type: ident(info.tagType)},
 	}}
 	for _, a := range info.arms {
+		if a.tagOnly {
+			// A sentinel arm stores no value, so it contributes only its tag and no field.
+			continue
+		}
 		fields.List = append(fields.List, &ast.Field{Names: []*ast.Ident{ident(a.field)}, Type: a.goType})
 	}
 	return &ast.GenDecl{
@@ -955,6 +1114,25 @@ func unionStruct(info *unionInfo) ast.Decl {
 // matching field in a single struct literal so a construction never leaves the two
 // out of step.
 func unionCtor(info *unionInfo, a unionArm) ast.Decl {
+	// A sentinel arm carries no payload, so its constructor takes no parameter and sets
+	// the tag alone; the value arm's takes the value and sets both tag and field.
+	if a.tagOnly {
+		return &ast.FuncDecl{
+			Name: ident(info.ctorName(a)),
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: ident(info.goName)}}},
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+				&ast.CompositeLit{
+					Type: ident(info.goName),
+					Elts: []ast.Expr{
+						&ast.KeyValueExpr{Key: ident("tag"), Value: ident(info.tagConst(a))},
+					},
+				},
+			}}}},
+		}
+	}
 	return &ast.FuncDecl{
 		Name: ident(info.ctorName(a)),
 		Type: &ast.FuncType{

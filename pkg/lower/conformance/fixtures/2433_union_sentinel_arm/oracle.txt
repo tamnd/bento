@@ -1,0 +1,12 @@
+== stdout:
+num:7
+str:hi
+missing
+3
+text
+true
+false
+object
+
+== exit:
+0
