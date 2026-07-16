@@ -163,22 +163,31 @@ func (r *Renderer) recordNodeImport(decl frontend.Node, internal map[string]bool
 }
 
 // recordInternalImport handles an import from a sibling module the build composed
-// into the same unit. A named import binds each name to the sibling's
+// into the same unit. A named or default import binds each name to the sibling's
 // package-level Go declaration, which carries the same Go spelling the binding
 // takes there, so the import records nothing and each reference lowers to that
-// name directly. The forms this slice does not lower hand back so the whole unit
-// routes to the engine rather than emit a reference with no target: a bare
-// side-effect import (whose module evaluation order the composed unit would have
-// to preserve), a default or namespace import, and an aliased import (whose local
-// name differs from the exported one, so the reference would not spell the
-// declaration's Go name).
+// name directly: a named import spells the exported name, and a default import the
+// Default name bento gives a sibling's default export, both of which the reference
+// recovers from the alias at its site. The forms this slice does not lower hand
+// back so the whole unit routes to the engine rather than emit a reference with no
+// target: a bare side-effect import (whose module evaluation order the composed
+// unit would have to preserve), a namespace import (which needs a struct of the
+// exports), and an aliased import (whose local name differs from the exported one,
+// so the reference would not spell the declaration's Go name).
 func (r *Renderer) recordInternalImport(module string, clause frontend.Node, haveClause bool) error {
 	if !haveClause {
 		return &NotYetLowerable{Reason: "a bare side-effect import of a sibling module is a later slice"}
 	}
+	if internalNamespaceImport(r.prog, clause) {
+		return &NotYetLowerable{Reason: "a namespace import of a sibling module is a later slice"}
+	}
+	// A pure default import carries no named-imports node, only the default binding,
+	// which records nothing; its reference resolves to the sibling's Default
+	// declaration through the alias at the call site. A named or mixed import walks
+	// its specifiers below.
 	named, ok := namedImportsNode(r.prog, clause)
 	if !ok {
-		return &NotYetLowerable{Reason: "a default or namespace import of a sibling module is a later slice"}
+		return nil
 	}
 	for _, spec := range r.prog.Children(named) {
 		names := identChildren(r.prog, spec)
@@ -187,6 +196,21 @@ func (r *Renderer) recordInternalImport(module string, clause frontend.Node, hav
 		}
 	}
 	return nil
+}
+
+// internalNamespaceImport reports whether a composed sibling's import clause binds
+// a namespace (`import * as ns`), the one form that still hands back because it
+// needs a struct of the module's exports rather than a direct reference. A
+// namespace binding is the clause's `* as name` child, spelled with a leading star;
+// a default binding is a bare identifier and a named list is a brace node, neither
+// of which starts with one.
+func internalNamespaceImport(prog *frontend.Program, clause frontend.Node) bool {
+	for _, c := range prog.Children(clause) {
+		if c.Kind() == frontend.NodeUnknown && strings.HasPrefix(strings.TrimSpace(prog.Text(c)), "*") {
+			return true
+		}
+	}
+	return false
 }
 
 // namedImportsNode descends an import clause to its named-imports node, the brace
