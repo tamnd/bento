@@ -940,6 +940,13 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "InOperator"), Args: []ast.Expr{key, obj}}, nil
 		}
+		// A static fixed-shape receiver has no box, but a required own property is
+		// provably present, so "key" in obj folds to true where key names one. The
+		// absent and optional cases stay on the handback below rather than fold to a
+		// false the prototype chain could contradict.
+		if expr, ok := r.inStaticShapeRequired(left, right); ok {
+			return expr, nil
+		}
 		return nil, &NotYetLowerable{Reason: "the in operator outside a discriminated-union narrowing is a later slice"}
 	}
 

@@ -113,13 +113,64 @@ func TestInRoutesThroughInOperator(t *testing.T) {
 	}
 }
 
-// TestInStaticShapeReceiverHandsBack pins that a static fixed-shape object binding, which
-// has no box yet, hands the whole in back rather than emit Go that cannot answer runtime
-// property existence, keeping the zero-fail invariant until object boxing lands.
-func TestInStaticShapeReceiverHandsBack(t *testing.T) {
-	const src = "const o = { a: 1 };\nconsole.log(\"a\" in o);\n"
+// TestInStaticShapeRequiredFoldsTrue pins that a required own property on a static
+// fixed-shape binding folds "key" in obj to the constant true, the value the boxing
+// InOperator would answer without a box, since a required property is always present.
+func TestInStaticShapeRequiredFoldsTrue(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o = { a: 1, b: 2 };\nconsole.log(\"a\" in o);\n"
+	want := "true\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("required-member in printed %q, want %q", got, want)
+	}
+	source := renderProgram(t, src)
+	if strings.Contains(source, "value.InOperator") {
+		t.Fatalf("required-member in should fold to a constant, not route through InOperator:\n%s", source)
+	}
+}
+
+// TestInStaticShapeRequiredMethodFoldsTrue pins that a class method, a property on the
+// instance's prototype rather than an own field, still folds to true, the membership a
+// required method always answers.
+func TestInStaticShapeRequiredMethodFoldsTrue(t *testing.T) {
+	skipIfShort(t)
+	const src = "class C { m(): number { return 1; } }\nconst c = new C();\nconsole.log(\"m\" in c);\n"
+	want := "true\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("required-method in printed %q, want %q", got, want)
+	}
+}
+
+// TestInStaticShapeOptionalHandsBack pins that an optional member does not fold, since it
+// may be absent, so the whole in hands back rather than emit an unsound true.
+func TestInStaticShapeOptionalHandsBack(t *testing.T) {
+	const src = "const o: { x?: number } = {};\nconsole.log(\"x\" in o);\n"
 	reason := renderProgramHandBack(t, src)
 	if !strings.Contains(reason, "in operator outside a discriminated-union narrowing") {
-		t.Fatalf("static-shape receiver handed back with %q, want the in-operator reason", reason)
+		t.Fatalf("optional-member in handed back with %q, want the in-operator reason", reason)
+	}
+}
+
+// TestInStaticShapeAbsentHandsBack pins that a member the shape does not declare does not
+// fold to false, since JavaScript may still find it on Object.prototype, so a name like
+// toString keeps the honest handback rather than fold to an unsound false.
+func TestInStaticShapeAbsentHandsBack(t *testing.T) {
+	for _, key := range []string{"z", "toString"} {
+		src := "const o = { a: 1 };\nconsole.log(\"" + key + "\" in o);\n"
+		reason := renderProgramHandBack(t, src)
+		if !strings.Contains(reason, "in operator outside a discriminated-union narrowing") {
+			t.Fatalf("absent-member %q in handed back with %q, want the in-operator reason", key, reason)
+		}
+	}
+}
+
+// TestInStaticShapeSideEffectingReceiverHandsBack pins that a receiver with a side effect
+// does not fold, since folding drops the receiver and would lose its effect, so a call
+// receiver keeps the handback.
+func TestInStaticShapeSideEffectingReceiverHandsBack(t *testing.T) {
+	const src = "function mk() { return { x: 1 }; }\nconsole.log(\"x\" in mk());\n"
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "in operator outside a discriminated-union narrowing") {
+		t.Fatalf("side-effecting-receiver in handed back with %q, want the in-operator reason", reason)
 	}
 }
