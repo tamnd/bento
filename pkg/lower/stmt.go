@@ -560,6 +560,16 @@ func (r *Renderer) forOfDestructure(iterable, pattern, bodyNode frontend.Node) (
 	if stmt, handled, err := r.forOfMapSetDestructure(iterable, pattern, bodyNode); handled {
 		return stmt, err
 	}
+	// An iterable that lowers to a whole-value box, Object.entries on a dynamic
+	// receiver being the motivating case, carries no Go .Elems() slice for the range
+	// paths below to walk even though the checker types it as a tuple or object array.
+	// The concrete-array paths would emit `box.Elems()`, which does not compile, so a
+	// boxed source hands back to the runtime iterator rather than mislower. A
+	// concrete any[] whose elements are boxed is not dynamic here (its Go storage is a
+	// value.Array), so the dynamic-element path below still fires for it.
+	if r.isDynamic(iterable) {
+		return nil, &NotYetLowerable{Reason: "a destructuring for...of over an iterable that lowers to a boxed value is a later slice"}
+	}
 	if !isArrayElem(r, iterable) {
 		return nil, &NotYetLowerable{Reason: "a destructuring for...of over a non-array iterable is a later slice"}
 	}

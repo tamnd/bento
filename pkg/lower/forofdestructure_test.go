@@ -220,3 +220,15 @@ func TestForOfObjectDestructureUnusedHandsBack(t *testing.T) {
 		t.Fatalf("for-of unused handback reason = %q, want an unused-bound-name reason", reason)
 	}
 }
+
+// TestForOfDynamicEntriesDestructureHandsBack proves a destructuring for...of over
+// Object.entries on a dynamic receiver hands back rather than emit box.Elems(), which
+// does not compile: the checker types the entries result as a tuple array, but its
+// dynamic receiver lowers the whole result to a boxed value.Value with no backing
+// slice for the range to walk. The fixed-shape receiver keeps its concrete fold.
+func TestForOfDynamicEntriesDestructureHandsBack(t *testing.T) {
+	const src = "const o: any = { a: 1, b: 2 };\nfor (const [k, v] of Object.entries(o)) {\n  console.log(k, String(v));\n}\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "boxed value") {
+		t.Fatalf("dynamic entries for-of handback reason = %q, want a boxed-value reason", reason)
+	}
+}
