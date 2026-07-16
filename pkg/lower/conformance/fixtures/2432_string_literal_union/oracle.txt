@@ -1,0 +1,12 @@
+== stdout:
+north
+south
+dir:north
+going north
+string
+west
+true
+true
+
+== exit:
+0

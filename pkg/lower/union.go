@@ -63,14 +63,14 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 		// has no value representation to render.
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union with no members has no lowering"}
 	}
-	// A closed string-literal union would lower to a small integer tag enum, but the
-	// value conversions that enum needs, a string literal into its tag and a tag back
-	// to its string for a comparison, a print, a template, or a coercion, are a later
-	// slice. The enum type alone carries no value without them: emitting it would leave
-	// a binding the source assigns a string to holding a Go integer type no string
-	// enters or leaves, so the union hands back and the partitioner routes the unit to
-	// the interpreter until those conversions land.
-	return nil, &NotYetLowerable{Flags: t.Flags, Reason: "a closed string-literal union lowers to a tag enum, whose value conversions are a later slice"}
+	// A closed string-literal union is a plain string at run time: its value is always
+	// one of a fixed set of strings, so value.BStr carries it and every operation the
+	// source writes, a compare against a member, a print, a template, a coercion, reads
+	// it through the ordinary string machinery. typeExpr already folds this union to
+	// value.BStr through primitiveFlagsOfType, so it reaches here only if that fold
+	// missed the shape; returning the same BStr keeps the two paths in agreement.
+	r.requireImport(valuePkg)
+	return sel("value", "BStr"), nil
 }
 
 // optionalInner reports whether members are the optional shape T | undefined and

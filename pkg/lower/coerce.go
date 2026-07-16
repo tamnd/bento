@@ -60,15 +60,17 @@ func (r *Renderer) primitiveFlagsOfType(t frontend.Type) frontend.TypeFlags {
 		}
 	}
 	// A union folds in a primitive facet only when every member carries it, so a
-	// union of numeric literals (1 | 2 | 3) is a number and true | false (how the
-	// checker often spells boolean) is a boolean, the same widening TypeScript
-	// applies. A member outside that primitive, including null or undefined, clears
-	// the facet, so a mixed union like string | number or an optional string |
-	// undefined folds nothing and stays on its own path. String is deliberately not
-	// in this mask: a closed string-literal union ("on" | "off") lowers to a compact
-	// integer tag enum (union.go, section 10), not a bstr, so its value is a tag and
-	// must not be treated as a string for coercion or type mapping.
-	const unionPrim = frontend.TypeNumber | frontend.TypeBoolean
+	// union of numeric literals (1 | 2 | 3) is a number, true | false (how the
+	// checker often spells boolean) is a boolean, and a closed string-literal union
+	// ("on" | "off") is a string, the same widening TypeScript applies. A member
+	// outside that primitive, including null or undefined, clears the facet, so a
+	// mixed union like string | number or an optional string | undefined folds
+	// nothing and stays on its own path. A closed string-literal union folds the
+	// String facet because such a value is observably a plain string at run time,
+	// so it lowers to value.BStr (union.go, section 10) and every string operation,
+	// a print, a compare, a template, a coercion, reads it through the ordinary
+	// string machinery with no separate tag representation.
+	const unionPrim = frontend.TypeNumber | frontend.TypeBoolean | frontend.TypeString
 	if f&frontend.TypeUnion != 0 {
 		if members := r.prog.UnionMembers(t); len(members) > 0 {
 			common := frontend.TypeFlags(unionPrim)
@@ -126,16 +128,14 @@ func (r *Renderer) isString(n frontend.Node) bool {
 }
 
 // conditionalStringValued reports whether n is a ternary whose branches both
-// lower to a value.BStr, the shape `cond ? "a" : "b"`. The checker types the
-// whole ternary as the union of its branch types ("a" | "b"), and a closed
-// string-literal union folds no String facet (primitiveFlagsOfType keeps String
-// out of the union mask because such a union is otherwise a tag enum), so the
-// ternary node carries no string flag even though conditionalExpr lowers it to a
-// value.BStr IIFE. isString consults this so a ternary of strings coerces as the
-// string it is rather than handing back, the same rescue caughtErrorStringRead
-// gives a read the checker leaves untyped. It fires only for a conditional
-// expression node, never for a tag-enum-typed binding, so a real tag value still
-// takes its own path.
+// lower to a value.BStr, the shape `cond ? "a" : "b"`. The checker types the whole
+// ternary as the union of its branch types ("a" | "b"), which primitiveFlagsOfType
+// now folds to the String facet, so isString already reads such a ternary as a
+// string through its primitive path; this hook stays as an explicit fallback for a
+// ternary whose union the fold does not reach (for example one branch a wider
+// string source), and re-enters on a nested inner ternary. isString consults it so
+// a ternary of strings coerces as the string it is rather than handing back, the
+// same rescue caughtErrorStringRead gives a read the checker leaves untyped.
 func (r *Renderer) conditionalStringValued(n frontend.Node) bool {
 	// A parenthesized ternary, `(cond ? "a" : "b")`, is the same string its inner
 	// conditional lowers to, so it must read as a string too. The checker types the
