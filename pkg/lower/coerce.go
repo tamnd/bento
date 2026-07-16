@@ -426,7 +426,19 @@ func (r *Renderer) objectBoxedResultCall(n frontend.Node) bool {
 		return false
 	}
 	method := r.prog.Text(parts[1])
-	return method == "fromEntries" || method == "entries"
+	if method == "fromEntries" {
+		return true
+	}
+	if method != "entries" {
+		return false
+	}
+	// Object.entries on a fixed-shape receiver now lowers to a concrete value.Array
+	// of pair tuples (objectEntriesShapeCall), not a box, so only the dynamic-receiver
+	// form, which runs the runtime Entries walk, reads as boxed here. A fixed-shape
+	// receiver whose entries do not lower hands the whole call back regardless, so its
+	// classification does not matter.
+	args := kids[1:]
+	return len(args) == 1 && r.isDynamic(args[0])
 }
 
 // arrayProtoBorrowedResultCall reports whether n is a call whose callee is

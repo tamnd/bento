@@ -71,6 +71,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if expr, handled, err := r.typedArrayStaticCall(n, kids[0], kids[1:]); handled || err != nil {
 			return expr, err
 		}
+		// Object.entries(o) on a fixed-shape object folds to a [key, value][] built
+		// from the struct's fields, which needs the whole call node n to read the
+		// result tuple's element type, a type methodCall does not receive. The dynamic
+		// receiver stays on the objectCall path below.
+		if expr, handled, err := r.objectEntriesShapeCall(n, kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
 		return r.methodCall(kids[0], kids[1:])
 	}
 	// A method call spelled with a bracket key, C["m"](...) or c["m"](...), is the
@@ -2186,6 +2193,97 @@ func (r *Renderer) objectEntries(argNodes []frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Entries")}}, nil
+}
+
+// objectEntriesShapeCall lowers Object.entries(o) on a fixed-shape object to the
+// array of [name, value] pairs the checker types the call as, built at compile
+// time from the struct's fields the way Object.values already builds its value
+// array. The result is a value.NewArray of the interned two-element tuple struct
+// Tuple_str_T, one element per field, each pairing the field-name literal with the
+// field read. It owns only the fixed-shape case: a dynamic receiver, a call with
+// other than one argument, or a receiver whose global is not Object returns
+// handled false, so the runtime Entries walk in objectEntries still covers those.
+//
+// The value slot of the pair is one Go type, the tuple's second element, so the
+// field values must share it: the checker types Object.entries of a heterogeneous
+// shape as [string, A | B][], whose tuple value element is a union that hands back
+// at typeExpr, and a shape whose fields agree gives a concrete slot every field
+// read fills. fixedShapeProps already rejects an optional field, whose absence
+// would leave a pair with no value, so only required fields reach the pairing.
+func (r *Renderer) objectEntriesShapeCall(call, callee frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	recvNode, method := kids[0], r.prog.Text(kids[1])
+	if !r.isGlobalRef(recvNode, "Object") || method != "entries" {
+		return nil, false, nil
+	}
+	if len(argNodes) != 1 || r.isDynamic(argNodes[0]) {
+		return nil, false, nil
+	}
+	props, err := r.objectShapeArg("entries", argNodes)
+	if err != nil {
+		return nil, true, err
+	}
+	// The result the checker gives the whole call is [string, T][]; its array
+	// element is the pair tuple, and its two element types are the Go types the
+	// field-name literal and the field read must produce. A result that is not a
+	// two-element tuple array, or whose value element does not lower, hands back.
+	tupleT, ok := r.prog.ElementType(r.prog.TypeAt(call))
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "Object.entries whose result is not an array is a later slice"}
+	}
+	elems, ok := r.prog.TupleElements(tupleT)
+	if !ok || len(elems) != 2 {
+		return nil, true, &NotYetLowerable{Reason: "Object.entries whose result is not a two-element tuple array is a later slice"}
+	}
+	keyType, err := r.typeExpr(elems[0].Type)
+	if err != nil {
+		return nil, true, err
+	}
+	if goTypeString(keyType) != "value.BStr" {
+		return nil, true, &NotYetLowerable{Reason: "Object.entries whose key element is not a string is a later slice"}
+	}
+	valType, err := r.typeExpr(elems[1].Type)
+	if err != nil {
+		return nil, true, err
+	}
+	valGo := goTypeString(valType)
+	// Each field read fills the tuple's value slot, so a field whose Go type differs
+	// from that slot would not compile into the pair, and hands back. A heterogeneous
+	// shape already fails above at the union value element, so this guards the
+	// residual mismatch a widened field type could leave.
+	for _, p := range props {
+		t, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, true, err
+		}
+		if goTypeString(t) != valGo {
+			return nil, true, &NotYetLowerable{Reason: "Object.entries of a shape whose field types differ is a later slice"}
+		}
+	}
+	tname, err := r.decls.internTuple(r, tupleT, elems)
+	if err != nil {
+		return nil, true, err
+	}
+	recv, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, true, err
+	}
+	r.requireImport(valuePkg)
+	pairs := make([]ast.Expr, len(props))
+	for i, p := range props {
+		field, ok := exportedField(p.Name)
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "Object.entries field name is not a Go identifier"}
+		}
+		pairs[i] = &ast.CompositeLit{Type: ident(tname), Elts: []ast.Expr{
+			&ast.KeyValueExpr{Key: ident("E0"), Value: &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p.Name)}}}},
+			&ast.KeyValueExpr{Key: ident("E1"), Value: &ast.SelectorExpr{X: recv, Sel: ident(field)}},
+		}}
+	}
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), ident(tname)), Args: pairs}, true, nil
 }
 
 // objectOwnSymbols lowers Object.getOwnPropertySymbols(o) to a runtime OwnSymbols on
