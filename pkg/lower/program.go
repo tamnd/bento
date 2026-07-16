@@ -462,15 +462,23 @@ func (r *Renderer) checkMangleCollisions(entry frontend.Node) error {
 	return nil
 }
 
-// crossBoundaryModuleNames returns the module-level binding names a top-level
-// function or class body reads. Those cannot be locals of main, since a separate Go
-// function has no access to main's locals, so the assembler hoists them to
-// package-level vars. A reference counts only when its identifier resolves to the
-// module binding's own symbol, so a parameter or local that merely shares the name
-// does not force a hoist; the module binding it shadows stays a main local when no
-// body actually reads it.
+// crossBoundaryModuleNames returns the module-level binding names a package-scope
+// body reads. Those cannot be locals of main, since a separate Go function has no
+// access to main's locals, so the assembler hoists them to package-level vars. A
+// reference counts only when its identifier resolves to the module binding's own
+// symbol, so a parameter or local that merely shares the name does not force a hoist;
+// the module binding it shadows stays a main local when no body actually reads it.
+//
+// A top-level function or class body is one package-scope reader. A closure held by a
+// binding that is itself hoisted is another: its Go func literal is built in main at
+// the binding's position but may be called after init, when a captured main local of
+// a later binding is not in scope, so every module binding that closure reads must be
+// a package var too. That relationship is transitive, since a hoisted binding's
+// closure can name a second binding whose own closure names a third, so the set is
+// grown to a fixpoint over the closures inside each hoisted binding's initializer.
 func (r *Renderer) crossBoundaryModuleNames(entry frontend.Node) map[string]bool {
 	module := map[frontend.Symbol]string{}
+	initOf := map[string]frontend.Node{}
 	for _, stmt := range r.prog.Children(entry) {
 		if stmt.Kind() != frontend.NodeVariableStatement {
 			continue
@@ -489,6 +497,9 @@ func (r *Renderer) crossBoundaryModuleNames(entry frontend.Node) map[string]bool
 			if sym, ok := r.prog.SymbolAt(kids[0]); ok {
 				module[sym] = name
 			}
+			if len(kids) == 2 || len(kids) == 3 {
+				initOf[name] = kids[len(kids)-1]
+			}
 		}
 	}
 	if len(module) == 0 {
@@ -501,10 +512,48 @@ func (r *Renderer) crossBoundaryModuleNames(entry frontend.Node) map[string]bool
 			collectModuleRefs(r.prog, stmt, module, used)
 		}
 	}
+	// Grow the set: a hoisted binding's initializer closures cross the boundary too,
+	// so the module bindings they read hoist alongside it. Repeat until no new name
+	// is added, which closes the set over chains of closures naming one another.
+	for {
+		grew := false
+		for name := range used {
+			init, ok := initOf[name]
+			if !ok {
+				continue
+			}
+			before := len(used)
+			collectClosureModuleRefs(r.prog, init, module, used)
+			if len(used) != before {
+				grew = true
+			}
+		}
+		if !grew {
+			break
+		}
+	}
 	if len(used) == 0 {
 		return nil
 	}
 	return used
+}
+
+// collectClosureModuleRefs records the module bindings read from inside a function
+// literal within n, the reads a hoisted binding's initializer defers to call time. It
+// descends the initializer's immediate expression without recording its reads, since
+// those run in main where a main local is still reachable, and switches to the whole
+// subtree collector at each function, arrow, or method literal it meets, since that
+// body is what may run after init at package scope.
+func collectClosureModuleRefs(prog *frontend.Program, n frontend.Node, module map[frontend.Symbol]string, out map[string]bool) {
+	switch n.Kind() {
+	case frontend.NodeArrowFunction, frontend.NodeFunctionExpression, frontend.NodeFunctionDeclaration,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		collectModuleRefs(prog, n, module, out)
+		return
+	}
+	for _, c := range prog.Children(n) {
+		collectClosureModuleRefs(prog, c, module, out)
+	}
 }
 
 // collectModuleRefs records every identifier in n's subtree that resolves to a
@@ -1034,18 +1083,59 @@ func (r *Renderer) moduleZeroVarSpec(d frontend.Node) (ast.Spec, error) {
 // or of the binding itself, would see an unset package var. A read of an earlier
 // module binding is fine, since its assignment has already run.
 func (r *Renderer) forwardModuleRef(n frontend.Node, order map[frontend.Symbol]int, self int) bool {
-	if n.Kind() == frontend.NodeIdentifier {
+	switch n.Kind() {
+	case frontend.NodeIdentifier:
 		if sym, ok := r.prog.SymbolAt(n); ok {
 			if ord, ok := order[sym]; ok && ord >= self {
 				return true
 			}
 		}
 		return false
+	case frontend.NodeArrowFunction, frontend.NodeFunctionExpression, frontend.NodeFunctionDeclaration,
+		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor, frontend.NodeSetAccessor, frontend.NodeConstructor:
+		// A nested function body, and its default parameter values, run when the
+		// closure is called, not while this initializer evaluates. A read of a later
+		// module binding from inside is therefore deferred past init and cannot see an
+		// unset package var, so it is not a forward reference. The checker rejects any
+		// forward reference that is read immediately (an IIFE or a plain read) as a
+		// use-before-declaration before lowering, so only these deferred reads reach
+		// here. The one form the checker cannot trace, a helper invoked mid-init that
+		// transitively reads a not-yet-assigned binding, is a documented approximation.
+		return false
+	case frontend.NodeCallExpression, frontend.NodeNewExpression:
+		// A function literal in callee position is invoked now, so its body does run at
+		// init time. Descend into it as an immediate read even though the opaque case
+		// above would otherwise skip it, keeping the guard sound on its own.
+		kids := r.prog.Children(n)
+		if len(kids) > 0 && isInvokedFunctionLiteral(kids[0]) {
+			for _, c := range r.prog.Children(kids[0]) {
+				if r.forwardModuleRef(c, order, self) {
+					return true
+				}
+			}
+			for _, c := range kids[1:] {
+				if r.forwardModuleRef(c, order, self) {
+					return true
+				}
+			}
+			return false
+		}
 	}
 	for _, c := range r.prog.Children(n) {
 		if r.forwardModuleRef(c, order, self) {
 			return true
 		}
+	}
+	return false
+}
+
+// isInvokedFunctionLiteral reports whether a node is a bare function literal, the
+// callee shape of an immediately invoked function expression. Its body runs at the
+// call site rather than being deferred, so forwardModuleRef must look through it.
+func isInvokedFunctionLiteral(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeArrowFunction, frontend.NodeFunctionExpression:
+		return true
 	}
 	return false
 }

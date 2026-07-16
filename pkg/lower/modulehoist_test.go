@@ -99,6 +99,71 @@ console.log(outer());
 	}
 }
 
+// TestModuleClosureForwardRefHoistsRuns proves a closure that reads a module binding
+// declared later hoists both bindings to package vars and reads the settled value.
+// The closure runs only after init, so the forward reference is legal JavaScript, and
+// the later binding must hoist alongside the closure that names it rather than stay a
+// main local the package-scope closure could not reach.
+func TestModuleClosureForwardRefHoistsRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const get = () => later;
+const later = 42;
+function run(): number { return get(); }
+console.log(run());
+`
+	if got, want := runProgramGo(t, src), "42\n"; got != want {
+		t.Fatalf("forward closure module read printed %q, want %q", got, want)
+	}
+}
+
+// TestModuleClosureForwardChainHoistsRuns proves the forward-reference hoist closes
+// transitively: the first closure names a second binding whose own closure names a
+// third, and each hoists in turn so the whole chain of package vars resolves.
+func TestModuleClosureForwardChainHoistsRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const get = () => mid();
+const mid = () => later;
+const later = 7;
+function run(): number { return get(); }
+console.log(run());
+`
+	if got, want := runProgramGo(t, src), "7\n"; got != want {
+		t.Fatalf("forward closure chain printed %q, want %q", got, want)
+	}
+}
+
+// TestForwardModuleRefSkipsDeferredClosure locks the guard's split between an
+// immediate read and a deferred one. A bare forward read at the initializer's own
+// eval is a forward reference the in-place hoist must decline, but the same read
+// wrapped in an arrow is deferred to call time and is not, since the closure runs
+// after the module has settled every binding.
+func TestForwardModuleRefSkipsDeferredClosure(t *testing.T) {
+	const src = "var later = 1;\nvar direct = later;\nvar deferred = () => later;\n"
+	prog := compile(t, src)
+	entry := entryFile(t, prog)
+	r := NewRenderer(prog)
+	order := moduleBindingOrder(prog, entry)
+
+	var decls []frontend.Node
+	collectKind(prog, []frontend.Node{entry}, frontend.NodeVariableDeclaration, &decls)
+	if len(decls) != 3 {
+		t.Fatalf("found %d variable declarations, want 3", len(decls))
+	}
+	// The initializers read `later`, declared first at ordinal 0. Checked at ordinal 0
+	// itself, a bare read is a forward reference to the current slot, but the same read
+	// inside an arrow is deferred and safe.
+	directInit := lastChild(prog, decls[1])
+	if !r.forwardModuleRef(directInit, order, 0) {
+		t.Errorf("a bare read of the current slot was not flagged as a forward reference")
+	}
+	deferredInit := lastChild(prog, decls[2])
+	if r.forwardModuleRef(deferredInit, order, 0) {
+		t.Errorf("a read inside a deferred closure was flagged as a forward reference")
+	}
+}
+
 // TestForwardModuleRefDetection locks the in-place-assignment safety guard directly.
 // The TypeScript checker already rejects a direct module-binding forward reference as
 // a use-before-assignment, so the guard is defensive, but it must still order the
