@@ -1903,6 +1903,56 @@ console.log(md.day);`
 	}
 }
 
+// TestPlainMonthDayEqualsCoercesArg pins the ToTemporalMonthDay coercion equals applies to its
+// argument: an ISO string literal parses through value.PlainMonthDayFromString and a month-day-like
+// bag through value.PlainMonthDayFromFields, so equals tests against the month-day the argument
+// names rather than handing back. A month-day is not ordered, so equals is the only coercing method.
+func TestPlainMonthDayEqualsCoercesArg(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "equals over a string literal",
+			src:   "const md = new Temporal.PlainMonthDay(3, 15);\nconsole.log(md.equals(\"03-15\"));",
+			wants: []string{".Equals(", "value.PlainMonthDayFromString(\"03-15\")"},
+		},
+		{
+			name:  "equals over a property bag",
+			src:   "const md = new Temporal.PlainMonthDay(3, 15);\nconsole.log(md.equals({ month: 3, day: 15 }));",
+			wants: []string{".Equals(", "value.PlainMonthDayFromFields("},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainMonthDayEqualsCoercionRuns builds and runs the coercion end to end, proving an ISO
+// string and a month-day-like bag reach the runtime as the month-days they name and equals tests
+// identity.
+func TestPlainMonthDayEqualsCoercionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const md = new Temporal.PlainMonthDay(3, 15);
+console.log(md.equals("03-15"));
+console.log(md.equals({ month: 3, day: 15 }));
+console.log(md.equals("03-16"));
+`
+	got := runProgramGo(t, src)
+	const want = "true\ntrue\nfalse\n"
+	if got != want {
+		t.Fatalf("PlainMonthDay equals coercion printed %q, want %q", got, want)
+	}
+}
+
 // TestPlainDateCalendarFieldsLower pins that the calendar-dependent getters lower to
 // their value.PlainDate methods, the optional era read and the week-date read the
 // dynamic boxing then renders.

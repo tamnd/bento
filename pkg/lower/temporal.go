@@ -2616,14 +2616,11 @@ func (r *Renderer) plainMonthDayMethodCall(recvNode frontend.Node, method string
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.prototype.equals takes exactly one argument"}
 		}
-		if !r.isPlainMonthDay(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay.prototype.equals over a non-PlainMonthDay argument (a string or bag to coerce) is a later slice"}
-		}
-		recv, err := r.lowerExpr(recvNode)
+		other, err := r.coercePlainMonthDayArg("Temporal.PlainMonthDay.prototype.equals", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		other, err := r.lowerExpr(argNodes[0])
+		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
@@ -2920,6 +2917,32 @@ func (r *Renderer) plainMonthDayStaticCall(method string, argNodes []frontend.No
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainMonthDay." + method + " is a later slice"}
 	}
+}
+
+// coercePlainMonthDayArg lowers a PlainMonthDay-like argument to an expression yielding a
+// *value.PlainMonthDay, the ToTemporalMonthDay coercion equals applies to its argument. A month-day
+// is not ordered, so there is no compare, until, or since, and equals is the only caller. It mirrors
+// coercePlainYearMonthArg over the PlainMonthDay from machinery: a PlainMonthDay lowers directly, a
+// string literal naming the ISO calendar parses through value.PlainMonthDayFromString gated on
+// literalISOCalendarOnly since a PlainMonthDay is ISO-only, and an object literal reads its month
+// and day through plainMonthDayFromBag with no options bag, taking the default constrain the way
+// ToTemporalMonthDay does. A dynamic string, a string naming a non-ISO calendar, or a bag the reader
+// rejects keeps its handback through the same gates from applies.
+func (r *Renderer) coercePlainMonthDayArg(what string, argNode frontend.Node) (ast.Expr, error) {
+	if r.isPlainMonthDay(argNode) {
+		return r.lowerExpr(argNode)
+	}
+	if lit, ok := r.stringLiteralValue(argNode); ok {
+		if !literalISOCalendarOnly(lit) {
+			return nil, &NotYetLowerable{Reason: what + " over a string naming a non-ISO calendar is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainMonthDayFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
+	}
+	if argNode.Kind() == frontend.NodeObjectLiteralExpression {
+		return r.plainMonthDayFromBag(what, argNode, nil)
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a dynamic value that is not a Temporal.PlainMonthDay is a later slice"}
 }
 
 // plainMonthDayFromBag lowers Temporal.PlainMonthDay.from over a property bag to a

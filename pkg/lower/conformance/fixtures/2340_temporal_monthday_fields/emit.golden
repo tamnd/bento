@@ -16,6 +16,8 @@ func main() {
 	value.ConsoleLog(value.NewPlainMonthDay(2, 29).ToString())
 	value.ConsoleLog(value.BoolToString(md.Equals(value.NewPlainMonthDay(3, 15))))
 	value.ConsoleLog(value.BoolToString(md.Equals(value.NewPlainMonthDay(3, 16))))
+	value.ConsoleLog(value.BoolToString(md.Equals(value.PlainMonthDayFromString("03-15"))))
+	value.ConsoleLog(value.BoolToString(md.Equals(value.PlainMonthDayFromFields(3, 16, value.None[float64](), "constrain"))))
 	c := value.PlainMonthDayFrom(md)
 	value.ConsoleLog(c.ToString())
 }
