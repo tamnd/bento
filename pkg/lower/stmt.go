@@ -1204,20 +1204,39 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 		// A binding with no initializer holds undefined until its first assignment, the
 		// way `var x;` reads undefined in JavaScript. A dynamic binding (any or unknown)
 		// lowers to value.Value, whose Go zero value is exactly that undefined, so a
-		// bare var declaration with no value is correct on its own. A binding with a
-		// static type has a Go zero value that is not undefined (0 for a number, "" for
-		// a string), so a typed declaration with no initializer would observe the wrong
-		// value if it were read before assignment and hands back for a later slice.
+		// bare var declaration with no value is correct on its own.
 		if initIdx < 0 {
-			if r.prog.TypeAt(kids[0]).Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
-				return nil, &NotYetLowerable{Reason: "a statically typed binding with no initializer is a later slice"}
+			nameType := r.prog.TypeAt(kids[0])
+			if nameType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+				r.requireImport(valuePkg)
+				specs = append(specs, &ast.ValueSpec{
+					Names: []*ast.Ident{ident(name)},
+					Type:  sel("value", "Value"),
+				})
+				continue
 			}
-			r.requireImport(valuePkg)
-			specs = append(specs, &ast.ValueSpec{
-				Names: []*ast.Ident{ident(name)},
-				Type:  sel("value", "Value"),
-			})
-			continue
+			// An optional binding (T | undefined) lowers to value.Opt[T], whose Go zero
+			// value is the undefined case (None), exactly what a JavaScript optional reads
+			// before its first assignment. So `let x: number | undefined;` declares
+			// var x value.Opt[float64] with no initializer and is correct on its own; the
+			// optLocals pre-pass already tracks the name, so a later read the checker
+			// narrowed past an x !== undefined guard unwraps with .Get().
+			if r.isOptionalType(nameType) {
+				optGo, err := r.typeExpr(nameType)
+				if err != nil {
+					return nil, err
+				}
+				specs = append(specs, &ast.ValueSpec{
+					Names: []*ast.Ident{ident(name)},
+					Type:  optGo,
+				})
+				continue
+			}
+			// Any other static type has a Go zero value that is not undefined (0 for a
+			// number, "" for a string), so a typed declaration with no initializer would
+			// observe the wrong value if it were read before assignment and hands back
+			// for a later slice.
+			return nil, &NotYetLowerable{Reason: "a statically typed binding with no initializer is a later slice"}
 		}
 		// A local the analysis proved holds only 32-bit integers is declared as a Go
 		// int32 and its initializer is lowered in the int32 domain, so the counter or

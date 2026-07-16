@@ -1,0 +1,7 @@
+== stdout:
+fallback
+hi
+n-undefined
+
+== exit:
+0
