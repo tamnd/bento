@@ -480,6 +480,38 @@ func (a *RealAdapter) TypeArgsOf(p ProgramHandle, t TypeHandle) (args []TypeHand
 	return args
 }
 
+// TupleElemsOf returns the positional elements of a tuple type, the [K, V] in a
+// [string, number], so lowering can spell the positional struct the tuple maps
+// to. It reports false for a non-tuple. The checker's TupleElementsOf gates on
+// the tuple kind itself, reads the element types off the tuple reference's type
+// arguments, and the optional flag, rest flag, and label off the tuple target, so
+// this method only has to wrap each element type into a handle.
+func (a *RealAdapter) TupleElemsOf(p ProgramHandle, t TypeHandle) ([]TupleElem, bool) {
+	c, release := prog(p).checker()
+	defer release()
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return nil, false
+	}
+	elems, ok := c.TupleElementsOf(ty)
+	if !ok {
+		return nil, false
+	}
+	out := make([]TupleElem, len(elems))
+	for i, e := range elems {
+		if e.Type == nil {
+			return nil, false
+		}
+		out[i] = TupleElem{
+			Type:     wrapType(e.Type),
+			Optional: e.Optional,
+			Rest:     e.Rest,
+			Label:    e.Label,
+		}
+	}
+	return out, true
+}
+
 func (a *RealAdapter) LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool) {
 	ty := typeOfHandle(t)
 	if ty == nil {

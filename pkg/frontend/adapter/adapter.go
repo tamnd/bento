@@ -59,6 +59,17 @@ type ParamInfo struct {
 	Optional bool
 }
 
+// TupleElem is one positional element of a tuple type as the adapter reports it.
+// Type is an opaque handle the frontend wraps. Optional marks a `T?` position,
+// Rest marks the `...T[]` or `...T` tail, and Label carries the element name when
+// the source named it, empty otherwise.
+type TupleElem struct {
+	Type     TypeHandle
+	Optional bool
+	Rest     bool
+	Label    string
+}
+
 // SignatureInfo is a call or construct signature in adapter terms.
 type SignatureInfo struct {
 	Params     []ParamInfo
@@ -177,6 +188,10 @@ type TSAdapter interface {
 	PropertiesOf(p ProgramHandle, t TypeHandle) []PropertyInfo
 	ElementOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
 	TypeArgsOf(p ProgramHandle, t TypeHandle) []TypeHandle
+	// TupleElemsOf returns the positional elements of a tuple type, and false for
+	// a non-tuple. Each element carries its element type, optional and rest flags,
+	// and label, so lowering can spell the positional struct a tuple maps to.
+	TupleElemsOf(p ProgramHandle, t TypeHandle) ([]TupleElem, bool)
 	LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool)
 
 	// Module graph.

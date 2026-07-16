@@ -379,6 +379,29 @@ func (p *Program) TypeArguments(t Type) []Type {
 	return out
 }
 
+// TupleElements returns the positional elements of a tuple type, the [K, V] in a
+// [string, number], and false for a non-tuple. Each element carries its element
+// type, whether the position is optional or the rest tail, and its label, so
+// lowering can spell the positional struct the tuple maps to. This is the query
+// that separates a tuple from the array ElementType reports on: an array has one
+// element type for every index, a tuple has a fixed sequence of them.
+func (p *Program) TupleElements(t Type) ([]TupleElem, bool) {
+	elems, ok := p.adapter.TupleElemsOf(p.handle, p.typeHandle(t))
+	if !ok {
+		return nil, false
+	}
+	out := make([]TupleElem, len(elems))
+	for i, e := range elems {
+		out[i] = TupleElem{
+			Type:     p.wrapType(e.Type),
+			Optional: e.Optional,
+			Rest:     e.Rest,
+			Label:    e.Label,
+		}
+	}
+	return out, true
+}
+
 // LiteralValue returns the literal value of a literal type, so lowering can fold
 // closed unions into integer tags and refine integers.
 func (p *Program) LiteralValue(t Type) (LiteralValue, bool) {

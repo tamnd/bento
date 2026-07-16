@@ -122,6 +122,75 @@ func TestProgramQueriesOverRealCompile(t *testing.T) {
 	}
 }
 
+// TestTupleElementFactsOverRealCompile proves the tuple element facts cross the
+// seam: TupleElements reports each positional element's type, its optional and
+// rest flags, and its label, a tuple refuses ElementType so the two array
+// representations stay apart, and a non-tuple reports not-a-tuple (typed/05
+// delivery slice 1).
+func TestTupleElementFactsOverRealCompile(t *testing.T) {
+	p := loadOne(t, "export function f(pair: [name: string, count?: number, ...rest: boolean[]]): number { return pair.length; }\n")
+	fn := firstOfKind(t, p, p.SourceFiles(), NodeFunctionDeclaration)
+	sig, ok := p.SignatureAt(fn)
+	if !ok {
+		t.Fatal("SignatureAt returned no signature")
+	}
+	tup := sig.Params[0].Type
+
+	elems, ok := p.TupleElements(tup)
+	if !ok {
+		t.Fatalf("TupleElements reported the tuple param as not a tuple")
+	}
+	if len(elems) != 3 {
+		t.Fatalf("tuple elements = %d, want 3", len(elems))
+	}
+
+	// name: string, a required labeled element.
+	if elems[0].Type.Flags&TypeString == 0 {
+		t.Errorf("element 0 type = %b, want string", elems[0].Type.Flags)
+	}
+	if elems[0].Optional || elems[0].Rest {
+		t.Errorf("element 0 optional=%v rest=%v, want both false", elems[0].Optional, elems[0].Rest)
+	}
+	if elems[0].Label != "name" {
+		t.Errorf("element 0 label = %q, want name", elems[0].Label)
+	}
+
+	// count?: number, an optional labeled element. Its optional-ness rides the
+	// flag, not the element type, so only the flag and the label are asserted.
+	if !elems[1].Optional {
+		t.Errorf("element 1 optional = false, want true")
+	}
+	if elems[1].Rest {
+		t.Errorf("element 1 rest = true, want false")
+	}
+	if elems[1].Label != "count" {
+		t.Errorf("element 1 label = %q, want count", elems[1].Label)
+	}
+
+	// ...rest: boolean[], the labeled rest tail. Its element type is the member
+	// type boolean, not the boolean[] array, so lowering can gather the tail.
+	if !elems[2].Rest {
+		t.Errorf("element 2 rest = false, want true")
+	}
+	if elems[2].Type.Flags&TypeBoolean == 0 {
+		t.Errorf("element 2 type = %b, want boolean", elems[2].Type.Flags)
+	}
+	if elems[2].Label != "rest" {
+		t.Errorf("element 2 label = %q, want rest", elems[2].Label)
+	}
+
+	// A tuple refuses ElementType, so the array path cannot claim it and the two
+	// representations never blur.
+	if _, ok := p.ElementType(tup); ok {
+		t.Errorf("ElementType claimed a tuple; want refusal")
+	}
+
+	// A non-tuple type reports not-a-tuple.
+	if _, ok := p.TupleElements(sig.Return); ok {
+		t.Errorf("TupleElements claimed the number return type as a tuple")
+	}
+}
+
 // TestDeclaredTypeAtReportsNarrowing proves the partitioner can tell a narrowed
 // use from its declared type, which is how it decides a union parameter is still
 // lowerable when a guard narrows it to a concrete type. The checker narrows x to

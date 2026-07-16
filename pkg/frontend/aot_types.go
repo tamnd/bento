@@ -247,6 +247,16 @@ type Param struct {
 	Optional bool
 }
 
+// TupleElem is one positional element of a tuple type: its element type, whether
+// the position is optional or the rest tail, and its label when the source named
+// it. Lowering reads the slice to spell the positional struct a tuple maps to.
+type TupleElem struct {
+	Type     Type
+	Optional bool
+	Rest     bool
+	Label    string
+}
+
 // Signature is bento's view of a call or construct signature. Lowering reads it
 // to emit a Go function signature; the partitioner reads it to decide whether
 // every parameter and the return are lowerable.
