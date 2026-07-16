@@ -259,6 +259,23 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
 				continue
 			}
+			// A spread of a Map used directly or of any entries() call splices its
+			// [key, value] pairs, a Set's entries() the member twice, each pair the interned
+			// tuple the target array's element type names. The entries collect into a fresh
+			// []Tuple the append splices; a target that is not a two-element tuple array hands
+			// back. This is checked before the keys()/values() accessor path since an
+			// entries() call also matches mapSetIterForOfCall.
+			if members, ok, err := r.spreadCollEntries(operand, elemT, hasElemT); ok {
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
+				continue
+			}
 			// A spread of a Map or Set keys()/values() call splices the same insertion-
 			// ordered snapshot slice a for...of over that iterator ranges: a Map's keys()
 			// and values() splice Keys() and Values(), a Set's keys() and values() both
