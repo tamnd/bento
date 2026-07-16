@@ -753,6 +753,17 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// never re-derived structurally.
 			return star(ident(info.goName)), nil
 		}
+		if _, ok := r.prog.TupleElements(t); ok {
+			// A tuple is a fixed sequence of positional element types, not a struct
+			// shape and not an array with a single element type. Its positional-struct
+			// emission (typed/05 T7) lands in a later slice; until then it hands back
+			// here rather than falling through to renderObject, which would intern the
+			// tuple's inherited array members as struct fields and miscompile the shape.
+			// The partitioner already treats a tuple as lowerable when its elements are,
+			// so this is the honest handback that keeps that promise sound until the
+			// struct emission slice lands.
+			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "tuple positional-struct emission is a later slice"}
+		}
 		// An ArrayIterator, the object arr.values(), arr.keys(), and arr.entries() hand
 		// back, is the *value.ArrayIter the runtime walks. It routes before the generator
 		// family and the structural object path, which would otherwise expand the

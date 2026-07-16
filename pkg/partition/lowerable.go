@@ -60,7 +60,22 @@ func lowerableRec(p *frontend.Program, t frontend.Type, visited map[int]bool) bo
 	}
 
 	if f&frontend.TypeObject != 0 {
-		// An array or tuple lowers when its element type does.
+		// A tuple lowers when every positional element type does. Recognize it
+		// before the array and the fixed-shape object cases: a tuple answers
+		// TupleElements and refuses ElementType, and its own object properties are
+		// the inherited array members, not its positional shape, so the object path
+		// below would judge it on the wrong facts. Keeping the tuple on the compiled
+		// path is what stops Pass A routing a tuple-typed unit to the engine
+		// (typed/05, delivery slice 1).
+		if elems, ok := p.TupleElements(t); ok {
+			for _, e := range elems {
+				if !lowerableRec(p, e.Type, visited) {
+					return false
+				}
+			}
+			return true
+		}
+		// An array lowers when its element type does.
 		if elem, ok := p.ElementType(t); ok {
 			return lowerableRec(p, elem, visited)
 		}
