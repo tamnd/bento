@@ -116,6 +116,10 @@ type unionInfo struct {
 	// string. It stays false for a union only ever narrowed by a typeof compare,
 	// which folds to a tag test and never calls the method.
 	needsTypeOf bool
+	// needsToBoolean records that a value of this union stood in boolean position, so
+	// the renderer emits the ToBoolean method that switches the tag to its arm's
+	// JavaScript truthiness. It stays false for a union never tested for truth.
+	needsToBoolean bool
 }
 
 // armByDisc returns the object arm a discriminant literal selects, so a compare
@@ -987,6 +991,9 @@ func (r *Renderer) renderUnions() []ast.Decl {
 		if info.needsTypeOf {
 			out = append(out, unionTypeOf(info))
 		}
+		if info.needsToBoolean {
+			out = append(out, unionToBoolean(info))
+		}
 	}
 	return out
 }
@@ -1024,6 +1031,64 @@ func unionTypeOf(info *unionInfo) ast.Decl {
 			&ast.ReturnStmt{Results: []ast.Expr{
 				&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote("undefined")}}},
 			}},
+		}},
+	}
+}
+
+// unionToBooleanSupported reports whether every arm of a union has a truthiness
+// unionToBoolean can spell: a value arm that is a number, string, or boolean, whose
+// inline ToBoolean truthyOfKind builds, or a tag-only sentinel (undefined, null),
+// which is always falsy. A bigint or object arm has no inline truthiness here yet, so
+// a union carrying one is not supported and its truthiness keeps the handback.
+func unionToBooleanSupported(info *unionInfo) bool {
+	for _, a := range info.arms {
+		if a.tagOnly {
+			continue
+		}
+		if _, ok := primitiveTruthyKind(a.flag); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// unionToBoolean builds the ToBoolean method a value of this union lowers to when it
+// stands in boolean position. JavaScript reads any value there through its falsy set,
+// which for a union means the falsy rule of the arm the tag selects: a number is
+// falsy at zero and NaN, a string when empty, a boolean is its own truth, and the
+// undefined and null sentinels are always falsy. The method switches on the tag and
+// returns each value arm's inline ToBoolean; the tag-only sentinels emit no case and
+// fall to the trailing return false, the truth every sentinel has. It returns a plain
+// Go bool, the value the if, for, or ! position wants, and evaluating the union once
+// through the method call keeps a side-effecting operand's effect that the inlined
+// two-name form could not.
+func unionToBoolean(info *unionInfo) ast.Decl {
+	cases := make([]ast.Stmt, 0, len(info.arms))
+	for _, a := range info.arms {
+		if a.tagOnly {
+			continue
+		}
+		kind, _ := primitiveTruthyKind(a.flag)
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{ident(info.tagConst(a))},
+			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+				truthyOfKind(&ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)}, kind),
+			}}},
+		})
+	}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("u")}, Type: ident(info.goName)}}},
+		Name: ident("ToBoolean"),
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident("bool")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.SwitchStmt{
+				Tag:  &ast.SelectorExpr{X: ident("u"), Sel: ident("tag")},
+				Body: &ast.BlockStmt{List: cases},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{ident("false")}},
 		}},
 	}
 }

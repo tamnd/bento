@@ -79,12 +79,15 @@ func TestTruthyObjectCollapses(t *testing.T) {
 	}
 }
 
-// TestTruthyUnionHandsBack pins the remaining boundary: a union in boolean position
-// mixes types with different falsy rules, which this slice does not model, so it
-// hands the unit back rather than guess one.
-func TestTruthyUnionHandsBack(t *testing.T) {
+// TestTruthyUnionCallsToBoolean pins that a tagged-sum union in boolean position reads
+// its truth through the union's ToBoolean method, which switches the tag to the active
+// arm's falsy rule rather than mixing the rules by hand.
+func TestTruthyUnionCallsToBoolean(t *testing.T) {
 	src := "function f(x: number | string): number { if (x) { return 1; } return 0; }\nconsole.log(f(1));\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if x.ToBoolean() {") {
+		t.Errorf("union condition did not lower to ToBoolean:\n%s", source)
+	}
 }
 
 // TestTruthyOptionalNumberInlines pins that an optional number in a condition tests
