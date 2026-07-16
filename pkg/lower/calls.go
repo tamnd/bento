@@ -1377,6 +1377,14 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if e, ok, err := r.arrayIterMethodCall(recvNode, method, argNodes); ok || err != nil {
 		return e, err
 	}
+	// A manual drive of a stored Map or Set iterator, it.next(), lowers to the runtime's
+	// Next over the *value.ArrayIter its construction minted, the same { value, done }
+	// pack the array iterator drive returns. Like the other iterator drives it routes
+	// before the primitive and string paths, which expect a number, boolean, or string
+	// receiver a collection iterator is not; a non-iterator receiver falls through.
+	if e, ok, err := r.collIterMethodCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
+	}
 	// toString and valueOf on a number or a boolean value are the first methods on
 	// a non-string receiver: they lower to the same coercion a String() call or a
 	// bare use would take, so they route here before the string-method path.

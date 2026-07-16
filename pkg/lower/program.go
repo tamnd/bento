@@ -150,6 +150,10 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// their declarations emit nothing and each loop ranges the receiver directly. It
 	// reads the use tallies above to prove the local is referenced exactly once.
 	r.collectStoredCollIters(entry)
+	// Record every mutating call on a Map or Set identifier so a manual iterator drive can
+	// prove its receiver is not mutated after the iterator is minted, the snapshot
+	// faithfulness bar the for...of drive holds against its loop body.
+	r.collectCollMutations(entry)
 
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl

@@ -437,6 +437,13 @@ type Renderer struct {
 	// but that one consumer, is not recorded, so the stored iterator's single-use
 	// semantics are preserved. It is program-scoped.
 	storedCollIters map[frontend.Symbol]storedCollIter
+	// collMutations records, per Map or Set binding symbol, the source positions of every
+	// mutating call on it: add, set, delete, or clear. A manual drive of a stored Map or
+	// Set iterator reads it to prove its receiver is not mutated after the iterator is
+	// minted, since the drive walks a snapshot taken at mint time and a later mutation
+	// would diverge from a live iterator's view. It is filled once in RenderProgram and
+	// read at each iterator construction site. It is program-scoped.
+	collMutations map[frontend.Symbol][]frontend.Pos
 	// blockDeclared is a stack of the local names already given a Go declaration in
 	// each open block, innermost last. A block is pushed when its statements start
 	// lowering and popped when they finish, so the top frame names the bindings the
@@ -796,6 +803,18 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		// iterator's next() result into the IteratorResult union and hand back. This is
 		// the slot a `const it = arr.values()` binding takes.
 		if r.isArrayIteratorType(t) {
+			r.requireImport(valuePkg)
+			return star(sel("value", "ArrayIter")), nil
+		}
+		// A MapIterator or SetIterator, the object m.keys(), m.values(), s.keys(), and
+		// s.values() hand back, is the *value.ArrayIter the runtime walks over the
+		// receiver's insertion-ordered snapshot. Its keys() and values() are the only
+		// sources of these types that lower: entries() hands back at construction, so any
+		// surviving MapIterator or SetIterator is a single-value drive the ArrayIter slot
+		// holds. It routes before the structural object path, which would otherwise expand
+		// the iterator's next() result into the IteratorResult union and hand back. This is
+		// the slot a `const it = m.values()` binding takes.
+		if r.isCollIteratorType(t) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "ArrayIter")), nil
 		}
