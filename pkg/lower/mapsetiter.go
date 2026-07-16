@@ -57,6 +57,38 @@ func (r *Renderer) mapSetIterForOfCall(iterable frontend.Node) (recv frontend.No
 	return nil, "", "", false
 }
 
+// collIterAccessor recognizes a Map or Set keys()/values() call used as an iterable in
+// a value position (a spread, a destructuring source) and reports the receiver node,
+// the Go accessor whose typed snapshot slice holds the yielded members (Keys, Values,
+// or Members), and the member type. A Set's keys() and values() both yield its
+// members, so both map to Members; a Map's keys() and values() map to Keys and Values.
+// entries() yields a [key, value] tuple, which does not lower, so it reports ok=false,
+// as does a receiver whose key, value, or member type the checker does not expose.
+func (r *Renderer) collIterAccessor(operand frontend.Node) (recv frontend.Node, accessor string, elem frontend.Type, ok bool) {
+	rn, method, kind, isCall := r.mapSetIterForOfCall(operand)
+	if !isCall || method == "entries" {
+		return nil, "", frontend.Type{}, false
+	}
+	switch kind {
+	case "set":
+		e, eok := r.setElem(r.prog.TypeAt(rn))
+		if !eok {
+			return nil, "", frontend.Type{}, false
+		}
+		return rn, "Members", e, true
+	case "map":
+		k, v, mok := r.mapKeyVal(r.prog.TypeAt(rn))
+		if !mok {
+			return nil, "", frontend.Type{}, false
+		}
+		if method == "keys" {
+			return rn, "Keys", k, true
+		}
+		return rn, "Values", v, true
+	}
+	return nil, "", frontend.Type{}, false
+}
+
 // forOfMapSetSingle lowers a for...of with a single loop binding whose iterable is a
 // Set, or a Map or Set's keys()/values() call, to a range over the runtime's
 // insertion-ordered snapshot. A Set and set.values()/set.keys() range Members, a

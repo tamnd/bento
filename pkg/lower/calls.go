@@ -807,6 +807,35 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 				continue
 			}
 		}
+		// A spread of a Map or Set keys()/values() call into a rest parameter splices the
+		// same insertion-ordered snapshot slice the array-literal spread does: a Map's
+		// keys() and values() splice Keys() and Values(), a Set's keys() and values() both
+		// splice Members(). entries(), which yields a [key, value] tuple, and an unreadable
+		// member type hand back.
+		if recv, accessor, memberT, ok := r.collIterAccessor(operand); ok {
+			memberGo, err := r.typeExpr(memberT)
+			if err != nil {
+				return nil, err
+			}
+			same, err := sameGoType(elemGo, memberGo)
+			if err != nil {
+				return nil, err
+			}
+			if !same {
+				return nil, &NotYetLowerable{Reason: "a spread of a map or set iterator with a different element type into a rest parameter is a later slice"}
+			}
+			src, err := r.lowerExpr(recv)
+			if err != nil {
+				return nil, err
+			}
+			flush()
+			if acc == nil {
+				acc = &ast.CompositeLit{Type: seedType}
+			}
+			members := collCall(src, accessor)
+			acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
+			continue
+		}
 		shape, ok := r.symbolIteratorShape(r.prog.TypeAt(operand))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a spread of a non-iterable into a rest parameter is a later slice"}

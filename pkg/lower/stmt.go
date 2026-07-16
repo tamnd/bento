@@ -1644,7 +1644,9 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	// is collected into a value.Array bound once, indexed the same way an array or a
 	// user-iterable drain is, so only the drained expression differs.
 	iterShape, iterOK := iteratorShape{}, false
-	genOK, setOK := false, false
+	genOK, setOK, collOK := false, false, false
+	var collRecv frontend.Node
+	collAccessor := ""
 	if !ok {
 		if iterShape, iterOK = r.symbolIteratorShape(initType); iterOK {
 			elemT = iterShape.elem
@@ -1656,8 +1658,13 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 			if setElemT, sok := r.setElem(initType); sok {
 				elemT, setOK = setElemT, true
 			}
+		} else if recv, accessor, memberT, cok := r.collIterAccessor(initNode); cok {
+			// A Map or Set keys()/values() call drains the same insertion-ordered snapshot
+			// slice its spread splices, off the receiver, not the call: Keys, Values, or
+			// Members. entries() and an unreadable member type stay on the handback below.
+			elemT, collOK, collRecv, collAccessor = memberT, true, recv, accessor
 		}
-		if !iterOK && !genOK && !setOK {
+		if !iterOK && !genOK && !setOK && !collOK {
 			return nil, true, &NotYetLowerable{Reason: "array destructuring on a non-array or tuple source is a later slice"}
 		}
 	}
@@ -1715,13 +1722,19 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	}
 	var prefix []ast.Stmt
 	var recv func() (ast.Expr, error)
-	if iterOK || genOK || setOK {
+	if iterOK || genOK || setOK || collOK {
 		// The source is drained into a value.Array bound once, so each index read selects
 		// off the held array and the source is walked a single time: a user iterable
 		// through its iterator, a generator through its coroutine, a Set through its typed
-		// Members() snapshot. Only the drained slice differs; the value.Array wrap and the
-		// indexed reads below are shared with the array-source path.
-		src, err := r.lowerExpr(initNode)
+		// Members() snapshot, a Map/Set keys()/values() call through its typed accessor.
+		// Only the drained slice differs; the value.Array wrap and the indexed reads below
+		// are shared with the array-source path. A collection iterator lowers its receiver,
+		// not the call, since the accessor is read straight off the runtime collection.
+		srcNode := initNode
+		if collOK {
+			srcNode = collRecv
+		}
+		src, err := r.lowerExpr(srcNode)
 		if err != nil {
 			return nil, true, err
 		}
@@ -1734,6 +1747,8 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 			slice = r.generatorToSliceExpr(src, elemGo)
 		case setOK:
 			slice = &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Members")}}
+		case collOK:
+			slice = collCall(src, collAccessor)
 		}
 		drained := &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{slice}}
 		tmp := r.freshTemp()
