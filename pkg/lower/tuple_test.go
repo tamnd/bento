@@ -112,3 +112,68 @@ func TestTupleHandsBackDynamicIndex(t *testing.T) {
 		t.Fatalf("dynamic-index tuple handback reason = %q, want a tuple-index reason", reason)
 	}
 }
+
+// TestTupleAssignDestructureReadsFields proves an assignment-form array destructure of
+// a tuple, [a, b] = pair into already-declared locals, lowers to the parallel field
+// assignment a, b = pair.E0, pair.E1, the read-into-existing-locals sibling of the
+// const [a, b] = pair bind.
+func TestTupleAssignDestructureReadsFields(t *testing.T) {
+	const src = `export function use(pair: [string, number]): number {
+  let label = "";
+  let value = 0;
+  [label, value] = pair;
+  return value + label.length;
+}
+`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, ".E0") || !strings.Contains(got, ".E1") {
+		t.Errorf("assignment-form tuple destructure did not read positional fields:\n%s", got)
+	}
+	if strings.Contains(got, ".AtI(") {
+		t.Errorf("assignment-form tuple destructure should read fields, not array positions:\n%s", got)
+	}
+}
+
+// TestTupleAssignDestructureRuns builds and runs the assignment-form destructure so
+// the field reads are proven to pick the right positions, including a pattern that
+// binds fewer names than the tuple has and a three-element heterogeneous tuple.
+func TestTupleAssignDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const pair: [string, number] = ["k", 7];
+let a = "";
+let b = 0;
+[a, b] = pair;
+console.log(a + ":" + b);
+let first = "";
+[first] = pair;
+console.log(first);
+const trip: [number, string, boolean] = [1, "two", true];
+let n = 0;
+let s = "";
+let flag = false;
+[n, s, flag] = trip;
+console.log(n + s + flag);
+`
+	want := "k:7\nk\n1twotrue\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("assignment-form tuple destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestTupleAssignDestructureHandsBackTypeMismatch pins the zero-fail edge where a
+// target's Go type differs from the tuple element it reads: a target widened to a
+// union does not render to the element's field type, so a = pair.E0 would not be a
+// well-typed Go assignment and the whole statement hands back.
+func TestTupleAssignDestructureHandsBackTypeMismatch(t *testing.T) {
+	const src = `export function f(pair: [string, number]): void {
+  let a: string | number = "";
+  let b = 0;
+  [a, b] = pair;
+}
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "target's type differs from the tuple element type") {
+		t.Fatalf("type-mismatch handback reason = %q, want a target-type-differs reason", reason)
+	}
+}

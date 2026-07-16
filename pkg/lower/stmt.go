@@ -2449,6 +2449,14 @@ func (r *Renderer) arrayDestructureAssignFill(elems []arrayAssignElem, restNode 
 func (r *Renderer) arrayDestructureValues(targets []frontend.Node, rhs frontend.Node) ([]ast.Expr, error) {
 	switch rhs.Kind() {
 	case frontend.NodeIdentifier:
+		// A tuple source reads each target's element as the interned struct's field
+		// rather than through AtI: a tuple's positions are fixed and typed, so [a, b] =
+		// pair lowers to a, b = pair.E0, pair.E1, the assignment-form sibling of the
+		// const [a, b] = pair destructure. It routes before the array ElementType path,
+		// which refuses a tuple type and would hand the whole statement back.
+		if elems, ok := r.prog.TupleElements(r.prog.TypeAt(rhs)); ok {
+			return r.tupleDestructureValues(targets, rhs, elems)
+		}
 		elemT, ok := r.prog.ElementType(r.prog.TypeAt(rhs))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "array destructuring assignment from a non-array or tuple source is a later slice"}
