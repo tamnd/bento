@@ -1,0 +1,13 @@
+== stdout:
+truthy
+falsy
+truthy
+falsy
+falsy
+some:present
+none:absent
+some:present
+none:absent
+
+== exit:
+0

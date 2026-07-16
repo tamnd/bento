@@ -81,7 +81,36 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 		get := &ast.CallExpr{Fun: &ast.SelectorExpr{X: opt, Sel: ident("Get")}}
 		return &ast.BinaryExpr{X: present, Op: token.LAND, Y: truthyOfKind(get, kind)}, nil
 	}
+	// A tagged-sum union operand reads its truth through the ToBoolean method the
+	// renderer emits for it: the method switches the tag to the active arm's falsy rule,
+	// so if (x) over a number | string | undefined is falsy for undefined, a zero or NaN
+	// number, and an empty string, and truthy otherwise. The union is evaluated once by
+	// the method call, so a side-effecting operand keeps its effect, unlike the inlined
+	// primitive forms that name the operand twice.
+	if _, ok := r.unionTruthy(n); ok {
+		x, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: x, Sel: ident("ToBoolean")}}, nil
+	}
 	return nil, &NotYetLowerable{Reason: "truthiness of a union or a side-effecting non-primitive is a later slice"}
+}
+
+// unionTruthy reports whether an operand in boolean position is a tagged-sum union
+// whose truthiness the ToBoolean method can spell, and marks the union so the renderer
+// emits that method. It fires for a primitive union all of whose arms are a number,
+// string, boolean, or a tag-only sentinel; a union carrying a bigint or object arm has
+// no inline truthiness yet and reports false, keeping the caller on its handback. An
+// operand whose type is not an interned union, or an optional the earlier path already
+// took, reports false too.
+func (r *Renderer) unionTruthy(n frontend.Node) (*unionInfo, bool) {
+	info, ok := r.unionInfoOrIntern(r.prog.TypeAt(n))
+	if !ok || !unionToBooleanSupported(info) {
+		return nil, false
+	}
+	info.needsToBoolean = true
+	return info, true
 }
 
 // optionalTruthy reports whether an operand in boolean position is an optional whose
