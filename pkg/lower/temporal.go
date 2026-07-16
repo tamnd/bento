@@ -2245,14 +2245,11 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.equals takes exactly one argument"}
 		}
-		if !r.isPlainDateTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype.equals over a non-PlainDateTime argument (a string or bag to coerce) is a later slice"}
-		}
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
-		other, err := r.lowerExpr(argNodes[0])
+		other, err := r.coercePlainDateTimeArg("Temporal.PlainDateTime.prototype.equals", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -2296,10 +2293,7 @@ func (r *Renderer) plainDateTimeMethodCall(recvNode frontend.Node, method string
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.prototype." + method + " takes at least one argument"}
 		}
 		what := "Temporal.PlainDateTime.prototype." + method
-		if !r.isPlainDateTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainDateTime is a later slice"}
-		}
-		other, err := r.lowerExpr(argNodes[0])
+		other, err := r.coercePlainDateTimeArg(what, argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -3855,26 +3849,24 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 
 // plainDateTimeStaticCall lowers Temporal.PlainDateTime.compare(a, b) or
 // Temporal.PlainDateTime.from(x), the mirror of the PlainDate and PlainTime statics. compare
-// lowers to value.PlainDateTimeCompare; from lowers to value.PlainDateTimeFrom for a
-// PlainDateTime argument and to value.PlainDateTimeFromString for a string literal. Like the
-// PlainDate from, a PlainDateTime carries a calendar, so the literal is gated on
-// literalCalendarHosted and a string naming a calendar bento does not host hands back rather
-// than emit a call the runtime parser would reject. A dynamic string or a property bag hands
-// back for a later slice.
+// compare coerces each argument to a PlainDateTime through coercePlainDateTimeArg, so a
+// PlainDateTime, a string literal, or a property bag all compare; from lowers to
+// value.PlainDateTimeFrom for a PlainDateTime argument, to value.PlainDateTimeFromString for a
+// string literal, and reads a property bag. Like the PlainDate from, a PlainDateTime carries a
+// calendar, so a string or bag literal is gated on literalCalendarHosted and one naming a
+// calendar bento does not host hands back rather than emit a call the runtime parser would
+// reject. A dynamic (non-literal) string hands back for a later slice.
 func (r *Renderer) plainDateTimeStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
 		if len(argNodes) != 2 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.compare takes exactly two arguments"}
 		}
-		if !r.isPlainDateTime(argNodes[0]) || !r.isPlainDateTime(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDateTime.compare over an argument that is not a PlainDateTime (a string or bag to coerce) is a later slice"}
-		}
-		a, err := r.lowerExpr(argNodes[0])
+		a, err := r.coercePlainDateTimeArg("Temporal.PlainDateTime.compare", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		b, err := r.lowerExpr(argNodes[1])
+		b, err := r.coercePlainDateTimeArg("Temporal.PlainDateTime.compare", argNodes[1])
 		if err != nil {
 			return nil, err
 		}
@@ -3934,6 +3926,39 @@ func (r *Renderer) plainDateTimeFromBag(what string, bag frontend.Node, optionNo
 	args = append(args, timeFields[:]...)
 	args = append(args, stringLit(cal), stringLit(overflow))
 	return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFromFields"), Args: args}, nil
+}
+
+// coercePlainDateTimeArg lowers a PlainDateTime-like argument to an expression yielding a
+// *value.PlainDateTime, the ToTemporalDateTime coercion the comparison and difference methods
+// apply to an argument that is not already a Temporal.PlainDateTime. It mirrors
+// coercePlainDateArg over the PlainDateTime from machinery: a PlainDateTime lowers directly, a
+// string literal naming a hosted calendar parses through PlainDateTimeFromString, and an object
+// literal reads its date and optional time fields through PlainDateTimeFromFields under the
+// default constrain overflow. A dynamic string, an unhosted calendar, or a bag the reader
+// rejects hands back, the same gates Temporal.PlainDateTime.from applies.
+func (r *Renderer) coercePlainDateTimeArg(what string, argNode frontend.Node) (ast.Expr, error) {
+	if r.isPlainDateTime(argNode) {
+		return r.lowerExpr(argNode)
+	}
+	if lit, ok := r.stringLiteralValue(argNode); ok {
+		if !literalCalendarHosted(lit) {
+			return nil, &NotYetLowerable{Reason: what + " over a string naming a calendar bento does not host is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
+	}
+	if argNode.Kind() == frontend.NodeObjectLiteralExpression {
+		year, month, day, timeFields, cal, err := r.plainDateTimeFromFields(what, argNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		args := []ast.Expr{year, month, day}
+		args = append(args, timeFields[:]...)
+		args = append(args, stringLit(cal), stringLit("constrain"))
+		return &ast.CallExpr{Fun: sel("value", "PlainDateTimeFromFields"), Args: args}, nil
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a dynamic value that is not a Temporal.PlainDateTime is a later slice"}
 }
 
 // plainDateTimeFromFields reads a PlainDateTime property bag at compile time into the three

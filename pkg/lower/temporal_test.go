@@ -1047,6 +1047,71 @@ console.log(c.hour);`
 	}
 }
 
+// TestPlainDateTimeComparisonCoercesArg pins the ToTemporalDateTime coercion the comparison
+// and difference methods apply to an argument that is not already a PlainDateTime: compare over
+// a string literal parses through PlainDateTimeFromString and over a bag reads through
+// PlainDateTimeFromFields, equals coerces its one argument the same way, and until routes the
+// coerced date-time into Until.
+func TestPlainDateTimeComparisonCoercesArg(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "compare over string literals",
+			src:   "console.log(Temporal.PlainDateTime.compare(\"2020-01-01T12:30\", \"2020-03-15T08:00\"));",
+			wants: []string{"value.PlainDateTimeCompare(", "value.PlainDateTimeFromString(\"2020-01-01T12:30\")", "value.PlainDateTimeFromString(\"2020-03-15T08:00\")"},
+		},
+		{
+			name:  "compare over property bags",
+			src:   "console.log(Temporal.PlainDateTime.compare({ year: 2020, month: 1, day: 1, hour: 12 }, { year: 2020, month: 1, day: 1, hour: 13 }));",
+			wants: []string{"value.PlainDateTimeCompare(", "value.PlainDateTimeFromFields(", `"constrain"`},
+		},
+		{
+			name:  "equals over a string literal",
+			src:   "const d = new Temporal.PlainDateTime(2020, 3, 14, 9, 15);\nconsole.log(d.equals(\"2020-03-14T09:15\"));",
+			wants: []string{".Equals(", "value.PlainDateTimeFromString(\"2020-03-14T09:15\")"},
+		},
+		{
+			name:  "until over a string literal",
+			src:   "const a = new Temporal.PlainDateTime(2020, 1, 1, 0, 0);\nconsole.log(a.until(\"2020-01-01T10:00\").hours);",
+			wants: []string{".Until(", "value.PlainDateTimeFromString(\"2020-01-01T10:00\")"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainDateTimeComparisonCoercionRuns builds and runs the coercion end to end, proving a
+// string and a property bag reach the runtime as the date-times they name: compare orders them,
+// equals compares the wall clock, and until measures the hour span.
+func TestPlainDateTimeComparisonCoercionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `console.log(Temporal.PlainDateTime.compare("2020-01-01T12:30", "2020-03-15T08:00"));
+console.log(Temporal.PlainDateTime.compare("2020-03-15T08:00", "2020-01-01T12:30"));
+console.log(Temporal.PlainDateTime.compare({ year: 2020, month: 1, day: 1, hour: 12 }, { year: 2020, month: 1, day: 1, hour: 13 }));
+const d = new Temporal.PlainDateTime(2020, 3, 14, 9, 15);
+console.log(d.equals("2020-03-14T09:15"));
+console.log(d.equals({ year: 2020, month: 3, day: 14, hour: 10 }));
+const a = new Temporal.PlainDateTime(2020, 1, 1, 0, 0);
+console.log(a.until("2020-01-01T10:00").hours);
+`
+	got := runProgramGo(t, src)
+	const want = "-1\n1\n-1\ntrue\nfalse\n10\n"
+	if got != want {
+		t.Fatalf("PlainDateTime comparison coercion printed %q, want %q", got, want)
+	}
+}
+
 // TestPlainDateTimeArithmetic pins add and subtract to AddDateTime with the overflow rule,
 // until and since to Until and Since with the largestUnit, and round to Round with the unit,
 // increment, and mode. subtract negates the duration before it folds into the wall clock.
