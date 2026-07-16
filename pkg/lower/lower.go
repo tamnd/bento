@@ -1018,6 +1018,36 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 	case t.Flags&frontend.TypeTypeParameter != 0:
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "type parameter needs monomorphization, a later slice"}
 
+	case t.Flags&(frontend.TypeUndefined|frontend.TypeNull) != 0:
+		// A slot typed exactly undefined or null holds only that one sentinel, and
+		// bento already lowers both literals to the value.Undefined and value.Null
+		// singletons, which are value.Value. So the slot's Go type is value.Value,
+		// the boxed representation the singleton fits, agreeing with the literal
+		// lowering wherever the value flows in: a struct field, a tuple or array
+		// element, or a function-type parameter typed null or undefined. This runs
+		// after the union case, so a T | undefined union still routes to renderUnion;
+		// only a bare undefined or null reaches here.
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+
+	case t.Flags&frontend.TypeVoid != 0:
+		// A slot typed void carries no meaningful value, and a void expression
+		// evaluates to undefined at run time, so it takes the same boxed value.Value
+		// the undefined sentinel does. A void return is handled at the signature
+		// level, which drops it before it reaches here; this covers a void in a value
+		// position, such as a field or element typed void.
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+
+	case t.Flags&frontend.TypeNever != 0:
+		// never is uninhabited, so no value ever reaches a never-typed slot at run
+		// time, but a Go declaration still needs a type for it: a never[] element
+		// (the type of an empty array literal), a field, or a function-type parameter
+		// no caller can supply. value.Value is the boxed placeholder that renders
+		// each of these without inventing a representation a real value would need.
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+
 	default:
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "no lowering for this type"}
 	}
