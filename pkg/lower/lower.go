@@ -201,6 +201,16 @@ type Renderer struct {
 	// stored T is pulled out of the option; a read where the type is still optional
 	// keeps the bare Opt value. A nil map (the default) unwraps nothing.
 	optLocals map[string]bool
+	// definiteLocals is the set of local names in the body currently being lowered
+	// that are declared with a non-optional, non-dynamic static type and no
+	// initializer, and that no nested closure captures. Such a binding lowers to a
+	// plain `var x T` at the declared Go type: the checker's strict definite-assignment
+	// analysis rejects any direct read before the first assignment, so the Go zero value
+	// is never observed as a JavaScript value, and the closure exclusion covers the one
+	// read shape that analysis does not police. It is computed once per body by
+	// definiteLocalsOf and, like optLocals, saved and restored around each body. A nil
+	// map (the default) keeps every no-initializer typed binding on the handback path.
+	definiteLocals map[string]bool
 	// optParams is the set of parameter names in the body currently being lowered
 	// that bind a bare optional (x?: T, no default, lowered to a value.Opt[T] field).
 	// It is the parameter counterpart to optLocals, kept separate because optLocals is
