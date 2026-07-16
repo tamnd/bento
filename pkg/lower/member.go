@@ -929,6 +929,15 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			}
 		}
 	}
+	// A tuple read t[i] with a literal index is the field read t.E<i>: a tuple's
+	// positions are fixed and typed, so the read selects the interned struct's field
+	// directly rather than going through the array At the dynamic-length receivers
+	// take. It routes before the array and typed-array paths, whose arrayElem read
+	// fails on a tuple (it answers TupleElements, not ElementType) and would hand the
+	// read back. A non-literal or out-of-range index hands back inside.
+	if elems, ok := r.prog.TupleElements(r.prog.TypeAt(obj)); ok {
+		return r.tupleElementRead(obj, idxNode, elems)
+	}
 	// A string read s[i] is the code-unit index read: the one-code-unit string at
 	// index i through BStr.CharAt, the bracket spelling of charAt. The divergence
 	// from JS is the one the array read already accepts: JS answers undefined for an

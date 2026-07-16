@@ -74,6 +74,7 @@ func TestRenderProgramGoldens(t *testing.T) {
 		{"stdoutWrite", "prog_stdout_write", "prog_stdout_write.golden"},
 		{"object", "prog_object", "prog_object.golden"},
 		{"readwrite", "prog_readwrite", "prog_readwrite.golden"},
+		{"tuple", "prog_tuple", "prog_tuple.golden"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,6 +119,7 @@ func TestProgramTSAndGoAgree(t *testing.T) {
 		{"funcArea", "prog_func_area"},
 		{"stdoutWrite", "prog_stdout_write"},
 		{"object", "prog_object"},
+		{"tuple", "prog_tuple"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

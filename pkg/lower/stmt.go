@@ -1632,6 +1632,14 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 		return r.dynamicSourceDestructure(patNode, initNode)
 	}
 	initType := r.prog.TypeAt(initNode)
+	// A tuple source binds each position by its own field read, const [a, b] = pair
+	// becoming a, b := pair.E0, pair.E1, rather than the uniform AtI read an array
+	// source takes: a tuple answers TupleElements and refuses ElementType, so it is
+	// intercepted here before the array path judges it on the wrong facts.
+	if elems, ok := r.prog.TupleElements(initType); ok {
+		stmts, err := r.tupleDestructure(patNode, initNode, elems)
+		return stmts, true, err
+	}
 	elemT, ok := r.prog.ElementType(initType)
 	// A source that is not an array or tuple but is a user iterable destructures
 	// through the iterator protocol: it is drained into a value.Array once, then each

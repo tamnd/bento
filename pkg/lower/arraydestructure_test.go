@@ -277,11 +277,21 @@ console.log(b);
 	}
 }
 
-// TestArrayDestructureTupleSourceHandsBack proves a tuple-literal source hands back,
-// since a tuple has no single array element type to read every name through AtI.
-func TestArrayDestructureTupleSourceHandsBack(t *testing.T) {
+// TestArrayDestructureTupleSourceRuns proves a tuple source destructures through its
+// positional fields rather than the array AtI read: the checker types a bare
+// [10, 20] as the tuple [number, number], so each name binds from its E<i> field
+// (typed/05 delivery slice 5), and the compiled program prints the same sum the
+// TypeScript does.
+func TestArrayDestructureTupleSourceRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = "const [a, b] = [10, 20];\nconsole.log(a + b);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".E0") || !strings.Contains(source, ".E1") {
+		t.Errorf("tuple source did not read positional fields:\n%s", source)
+	}
+	if got, want := runProgramGo(t, src), "30\n"; got != want {
+		t.Fatalf("tuple source destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayDestructureMemberSourceLowersToTemp proves a member-read array source is
