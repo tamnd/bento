@@ -47,6 +47,45 @@ func TestSetSpreadSplicesMembers(t *testing.T) {
 	}
 }
 
+// TestSetSpreadIntoRestParam proves a spread of a Set into a rest parameter splices
+// its Members() snapshot, so the callee receives the members as the collected rest
+// slice, alone and mixed with fixed arguments, with the Set's de-duplication carried.
+func TestSetSpreadIntoRestParam(t *testing.T) {
+	skipIfShort(t)
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"bare, dedup carried",
+			"function sum(...ns: number[]): number { let t = 0; for (const n of ns) t += n; return t; }\n" +
+				"const s = new Set<number>([1, 2, 3, 3]);\nconsole.log(sum(...s));\n",
+			"6\n",
+		},
+		{
+			"mixed with fixed args",
+			"function sum(...ns: number[]): number { let t = 0; for (const n of ns) t += n; return t; }\n" +
+				"const s = new Set<number>([1, 2, 3]);\nconsole.log(sum(10, ...s, 20));\n",
+			"36\n",
+		},
+		{
+			"string members",
+			"function join(...ss: string[]): string { return ss.join(\"-\"); }\n" +
+				"const s = new Set<string>([\"a\", \"b\"]);\nconsole.log(join(\"x\", ...s));\n",
+			"x-a-b\n",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got := runProgramGo(t, c.src); got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // TestSetSpreadEmitsMembers pins the lowering shape: a spread of a Set splices its
 // Members() slice, the typed insertion-ordered snapshot, rather than route through a
 // per-element drain.

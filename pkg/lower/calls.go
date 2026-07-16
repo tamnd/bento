@@ -776,6 +776,37 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 				continue
 			}
 		}
+		// A spread of a Set into a rest parameter splices its typed Members() snapshot in
+		// insertion order, the same splice the array-literal spread takes. The members are
+		// already the element type, so no drain or conversion is needed and the Set's
+		// de-duplication rides through; a member type that does not lower to the rest
+		// element's Go type hands back rather than mix kinds.
+		if r.isSet(operand) {
+			if setElemT, ok := r.setElem(r.prog.TypeAt(operand)); ok {
+				memberGo, err := r.typeExpr(setElemT)
+				if err != nil {
+					return nil, err
+				}
+				same, err := sameGoType(elemGo, memberGo)
+				if err != nil {
+					return nil, err
+				}
+				if !same {
+					return nil, &NotYetLowerable{Reason: "a spread of a set with a different element type into a rest parameter is a later slice"}
+				}
+				src, err := r.lowerExpr(operand)
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				members := &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Members")}}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
+				continue
+			}
+		}
 		shape, ok := r.symbolIteratorShape(r.prog.TypeAt(operand))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a spread of a non-iterable into a rest parameter is a later slice"}
