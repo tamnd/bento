@@ -1,0 +1,15 @@
+== stdout:
+u
+u
+val=u
+d
+d
+val=d
+pos
+zero
+neg
+missing
+present
+
+== exit:
+0
