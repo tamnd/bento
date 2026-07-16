@@ -38,6 +38,45 @@ func TestVarNoInitTypedHandsBack(t *testing.T) {
 	}
 }
 
+// TestVarNoInitOptionalLowers pins that an optional binding declared with no
+// initializer lowers to a bare value.Opt[T] declaration rather than handing back:
+// the Go zero value of value.Opt[T] is the undefined case (None), exactly what a
+// JavaScript optional reads before its first assignment, so the declaration is
+// correct on its own.
+func TestVarNoInitOptionalLowers(t *testing.T) {
+	src := "function f(): void { let x: number | undefined; console.log(x === undefined); }"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var x value.Opt[float64]") {
+		t.Fatalf("optional binding with no initializer did not lower to a bare value.Opt:\n%s", out)
+	}
+}
+
+// TestVarNoInitOptionalRuns builds and runs the optional no-initializer shape: a
+// fresh binding reads undefined, accepts a later assignment, and flows where the
+// callee expects the same T | undefined, matching Node.
+func TestVarNoInitOptionalRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+function pick(v: string | undefined): string {
+  return v ?? "fallback";
+}
+function f(): void {
+  let s: string | undefined;
+  console.log(pick(s));
+  s = "hi";
+  console.log(pick(s));
+  let n: number | undefined;
+  console.log(n === undefined);
+}
+f();
+`
+	got := runProgramGo(t, src)
+	want := "fallback\nhi\ntrue\n"
+	if got != want {
+		t.Fatalf("optional no-initializer run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestVarNoInitRuns builds and runs the no-initializer shape and checks a dynamic
 // binding reads undefined before its first assignment and the assigned value
 // after, the way JavaScript does.
