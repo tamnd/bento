@@ -824,6 +824,14 @@ func (r *Renderer) scopedBlockRange(block frontend.Node, lo, hi int) (*ast.Block
 	r.optLocals = r.optLocalsOf(r.prog.Children(block))
 	defer func() { r.optLocals = prevOpt }()
 
+	// The definite-assignment set rides the same body scope: a no-initializer typed
+	// local the checker proves is assigned before every direct read, and no closure
+	// captures, lowers to a plain var of its declared type wherever in the body it
+	// sits, and one function's proofs do not leak into another's declarations.
+	prevDef := r.definiteLocals
+	r.definiteLocals = r.definiteLocalsOf(r.prog.Children(block))
+	defer func() { r.definiteLocals = prevDef }()
+
 	// The builder set is scoped to this body the same way: a template site anywhere
 	// in the body, however deeply nested, records its builder here, and blockOf
 	// hoists a var for each above the whole body so a builder inside a loop is reused

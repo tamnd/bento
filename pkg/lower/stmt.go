@@ -1254,9 +1254,25 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 				continue
 			}
 			// Any other static type has a Go zero value that is not undefined (0 for a
-			// number, "" for a string), so a typed declaration with no initializer would
-			// observe the wrong value if it were read before assignment and hands back
-			// for a later slice.
+			// number, "" for a string). The declaration is still sound when the checker's
+			// definite-assignment analysis proves no read observes the slot before its
+			// first assignment: the Go zero is then never seen as a JavaScript value, so
+			// the binding lowers to a plain `var x T` at the declared type. The
+			// definiteLocals pre-pass carries that proof, reproducing the checker's
+			// guarantee for direct reads and excluding a local a nested closure captures,
+			// the one read shape the checker does not police. A binding the pre-pass did
+			// not clear keeps handing back.
+			if r.definiteLocals[name] {
+				optGo, err := r.typeExpr(nameType)
+				if err != nil {
+					return nil, err
+				}
+				specs = append(specs, &ast.ValueSpec{
+					Names: []*ast.Ident{ident(name)},
+					Type:  optGo,
+				})
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "a statically typed binding with no initializer is a later slice"}
 		}
 		// A local the analysis proved holds only 32-bit integers is declared as a Go

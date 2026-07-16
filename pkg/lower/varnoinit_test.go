@@ -27,14 +27,26 @@ func TestVarNoInitMultiLowers(t *testing.T) {
 	}
 }
 
-// TestVarNoInitTypedHandsBack pins that a statically typed binding with no
-// initializer still hands back: its Go zero value is not undefined, so declaring
-// it bare would read the wrong value before its first assignment.
-func TestVarNoInitTypedHandsBack(t *testing.T) {
+// TestVarNoInitTypedLowers pins that a statically typed binding with no initializer
+// assigned before it is read lowers to a plain typed var. The checker's strict
+// definite-assignment analysis rejects any read before the assignment, so the Go zero
+// value the declaration starts at is never observed as a JavaScript value.
+func TestVarNoInitTypedLowers(t *testing.T) {
 	src := "function f(): void { let x: number; x = 1; console.log(x); }"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var x float64") {
+		t.Fatalf("typed binding with no initializer did not lower to a plain typed var:\n%s", out)
+	}
+}
+
+// TestVarNoInitTypedCapturedHandsBack pins the soundness boundary that survives: a
+// no-initializer typed binding a nested closure captures still hands back, since the
+// closure may read it while it is still unassigned, a read the checker does not police.
+func TestVarNoInitTypedCapturedHandsBack(t *testing.T) {
+	src := "function f(): number { let x: number; const g = () => x; const r = g(); x = 1; return r; }\nconsole.log(f());"
 	reason := renderProgramHandBack(t, src)
 	if !strings.Contains(reason, "no initializer") {
-		t.Fatalf("typed binding with no initializer handed back for the wrong reason: %q", reason)
+		t.Fatalf("captured typed binding with no initializer handed back for the wrong reason: %q", reason)
 	}
 }
 
