@@ -220,6 +220,38 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 					continue
 				}
 			}
+			// A spread of a Set splices its members in insertion order, the walk for...of
+			// over a Set takes. A Set lowers to a *value.Set[T] whose Members() returns the
+			// typed []T the append splices directly, so the target element type must lower
+			// to the same Go type; a different element type hands back rather than mix kinds.
+			if r.isSet(operand) {
+				setElemT, ok := r.setElem(r.prog.TypeAt(operand))
+				if !ok {
+					return nil, &NotYetLowerable{Reason: "spread of a set whose member type is unreadable is a later slice"}
+				}
+				memberGo, err := r.typeExpr(setElemT)
+				if err != nil {
+					return nil, err
+				}
+				same, err := sameGoType(elemType, memberGo)
+				if err != nil {
+					return nil, err
+				}
+				if !same {
+					return nil, &NotYetLowerable{Reason: "spread of a set with a different element type is a later slice"}
+				}
+				src, err := r.lowerExpr(operand)
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				members := &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Members")}}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
+				continue
+			}
 			// A spread of a string splices its code points, each a one-code-point
 			// string, the same walk for...of over a string takes. value.BStr.CodePoints
 			// returns the []BStr the append splices, so the target must be a string
