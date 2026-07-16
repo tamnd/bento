@@ -1092,6 +1092,17 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	if len(decls) == 0 {
 		return nil, &NotYetLowerable{Reason: "variable declaration has no binding"}
 	}
+	// A lone binding the pre-pass recorded as a stored Map or Set iterator emits
+	// nothing: its iterator-object type does not lower, and the one for...of that
+	// consumes it ranges the receiver's snapshot directly, so keeping the local would
+	// only declare an unused Go value of a type that has no shape.
+	if len(decls) == 1 {
+		if sym, ok := r.prog.SymbolAt(r.prog.Children(decls[0])[0]); ok {
+			if _, recorded := r.storedCollIters[sym]; recorded {
+				return &ast.EmptyStmt{Implicit: true}, nil
+			}
+		}
+	}
 	if stmt, ok, err := r.redeclaredVarAssign(decls); err != nil || ok {
 		return stmt, err
 	}
