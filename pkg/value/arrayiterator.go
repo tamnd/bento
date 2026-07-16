@@ -60,6 +60,22 @@ func ArrayIterFromTyped[T any](a *Array[T], kind ArrayIterKind, box func(T) Valu
 	return &ArrayIter{src: NewArrayValue(boxed), kind: kind}
 }
 
+// ArrayIterFromSlice mints an array iterator over a snapshot slice of typed
+// elements, the form a manual drive of a Map or Set iterator takes: the runtime's
+// Keys, Values, or Members accessor hands back an insertion-ordered snapshot slice,
+// and this boxes it once into a dynamic array the ArrayIter walks. The box closure
+// lifts each typed element into a value.Value, the same constructor a static-to-
+// dynamic crossing uses, since the iterator yields boxed values whatever the element
+// type. The snapshot is taken when the iterator is minted, matching the moment
+// map.values() is called; the mutation-after-mint case the caller proves absent.
+func ArrayIterFromSlice[T any](elems []T, kind ArrayIterKind, box func(T) Value) *ArrayIter {
+	boxed := make([]Value, len(elems))
+	for i, e := range elems {
+		boxed[i] = box(e)
+	}
+	return &ArrayIter{src: NewArrayValue(boxed), kind: kind}
+}
+
 // Next advances the iterator one step and packs the { value, done } result. Once
 // the index reaches the current length it reports done with undefined; otherwise it
 // yields the projection its kind selects and steps the index. It reads length live,
