@@ -1,0 +1,7 @@
+== stdout:
+6
+hello
+sum:9
+
+== exit:
+0
