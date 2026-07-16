@@ -78,6 +78,63 @@ for (const k of it) {
 	renderProgramHandBack(t, src)
 }
 
+// TestStoredMapKeysSpreadLowers pins that a Map keys() iterator stored in a local and
+// spread into an array literal lowers: the declaration emits nothing and the spread
+// ranges the receiver's Keys snapshot the direct [...m.keys()] form ranges.
+func TestStoredMapKeysSpreadLowers(t *testing.T) {
+	src := `const m = new Map<string, number>([["a", 1], ["b", 2]]);
+const it = m.keys();
+const arr = [...it];
+console.log(arr.length);`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, ".Keys()") {
+		t.Fatalf("stored map keys spread did not range the receiver snapshot:\n%s", out)
+	}
+	if strings.Contains(out, "it :=") || strings.Contains(out, "it =") {
+		t.Fatalf("stored iterator binding was not suppressed:\n%s", out)
+	}
+}
+
+// TestStoredSpreadUsedTwiceHandsBack guards the single-use invariant on the spread
+// consumer: a stored iterator spread twice would replay the receiver's snapshot the
+// second time, which the live iterator would not, so it must not be recorded.
+func TestStoredSpreadUsedTwiceHandsBack(t *testing.T) {
+	src := `const m = new Map<string, number>([["a", 1]]);
+const it = m.keys();
+const a = [...it];
+const b = [...it];
+console.log(a.length, b.length);`
+	renderProgramHandBack(t, src)
+}
+
+// TestStoredSpreadRuns builds and runs the stored spread forms, a Map's keys/values/
+// entries and a Set's values spread into an array literal and a call rest, so the
+// snapshot drive is proven to yield the receiver's members the direct spread does.
+func TestStoredSpreadRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const m = new Map<string, number>([["a", 1], ["b", 2]]);
+const mk = m.keys();
+const ka = [...mk];
+console.log(ka.length, ka[0], ka[1]);
+const mv = m.values();
+const va = [...mv];
+console.log(va.length, va[0], va[1]);
+const me = m.entries();
+const ea = [...me];
+console.log(ea.length, ea[0][0], ea[0][1]);
+const s = new Set<number>([7, 8, 9]);
+const sv = s.values();
+function count(...xs: number[]): number { return xs.length; }
+console.log(count(...sv));
+`
+	got := runProgramGo(t, src)
+	want := "2 a b\n2 1 2\n2 a 1\n3\n"
+	if got != want {
+		t.Fatalf("stored iterator spread run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestStoredIterForOfRuns builds and runs every stored form, a Map's entries/keys/
 // values and a Set's values/entries, so the snapshot drive is proven to yield the
 // receiver's members in insertion order the way the direct call form does.
