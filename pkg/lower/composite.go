@@ -1184,6 +1184,12 @@ func (r *Renderer) mapMethodCall(recvNode frontend.Node, method string, argNodes
 		goName, want = "Clear", 0
 	case "forEach":
 		return r.mapForEach(recvNode, argNodes)
+	case "values", "keys", "entries":
+		// A values(), keys(), or entries() reaching here is not a for...of or spread that
+		// ranges the receiver directly, since those intercept the call before it lowers as
+		// a method; it is a stored iterator a manual next() drive steps, so it mints the
+		// runtime *value.ArrayIter over the receiver's snapshot.
+		return r.collIterConstructor(recvNode, method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "map method ." + method + " is a later slice"}
 	}
@@ -1240,6 +1246,11 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 		return r.setAlgebraCall(recvNode, "IsSupersetOf", argNodes)
 	case "isDisjointFrom":
 		return r.setAlgebraCall(recvNode, "IsDisjointFrom", argNodes)
+	case "values", "keys", "entries":
+		// A values(), keys(), or entries() reaching here is a stored iterator a manual
+		// next() drive steps, not a for...of or spread that ranges the receiver directly,
+		// so it mints the runtime *value.ArrayIter over the receiver's members snapshot.
+		return r.collIterConstructor(recvNode, method, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "set method ." + method + " is a later slice"}
 	}
