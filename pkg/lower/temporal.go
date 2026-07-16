@@ -2482,14 +2482,11 @@ func (r *Renderer) plainYearMonthMethodCall(recvNode frontend.Node, method strin
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype.equals takes exactly one argument"}
 		}
-		if !r.isPlainYearMonth(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype.equals over a non-PlainYearMonth argument (a string or bag to coerce) is a later slice"}
-		}
-		recv, err := r.lowerExpr(recvNode)
+		other, err := r.coercePlainYearMonthArg("Temporal.PlainYearMonth.prototype.equals", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		other, err := r.lowerExpr(argNodes[0])
+		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
@@ -2534,10 +2531,7 @@ func (r *Renderer) plainYearMonthMethodCall(recvNode frontend.Node, method strin
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.prototype." + method + " takes at least one argument"}
 		}
 		what := "Temporal.PlainYearMonth.prototype." + method
-		if !r.isPlainYearMonth(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainYearMonth (a string or bag to coerce) is a later slice"}
-		}
-		other, err := r.lowerExpr(argNodes[0])
+		other, err := r.coercePlainYearMonthArg(what, argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -2693,25 +2687,24 @@ func (r *Renderer) temporalStaticCall(typeName, method string, argNodes []fronte
 }
 
 // plainYearMonthStaticCall lowers Temporal.PlainYearMonth.compare(a, b) or
-// Temporal.PlainYearMonth.from(x), the mirror of the PlainDate statics. compare lowers to
+// Temporal.PlainYearMonth.from(x), the mirror of the PlainDate statics. compare coerces each
+// argument to a PlainYearMonth through coercePlainYearMonthArg, so a string literal or a
+// year-month-like bag orders against the year-month it names, then lowers to
 // value.PlainYearMonthCompare; from lowers to value.PlainYearMonthFrom for a PlainYearMonth
 // argument and to value.PlainYearMonthFromString for a string literal. A PlainYearMonth is
-// ISO-only, so the literal is gated on literalYearMonthISOOnly, stricter than the PlainDate
-// gate: a literal naming any non-ISO calendar hands back, as does a dynamic string or a bag.
+// ISO-only, so a string literal is gated on literalISOCalendarOnly: a literal naming any non-ISO
+// calendar hands back, as does a dynamic string, the same gates from applies.
 func (r *Renderer) plainYearMonthStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
 		if len(argNodes) != 2 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.compare takes exactly two arguments"}
 		}
-		if !r.isPlainYearMonth(argNodes[0]) || !r.isPlainYearMonth(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainYearMonth.compare over an argument that is not a PlainYearMonth (a string or bag to coerce) is a later slice"}
-		}
-		a, err := r.lowerExpr(argNodes[0])
+		a, err := r.coercePlainYearMonthArg("Temporal.PlainYearMonth.compare", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		b, err := r.lowerExpr(argNodes[1])
+		b, err := r.coercePlainYearMonthArg("Temporal.PlainYearMonth.compare", argNodes[1])
 		if err != nil {
 			return nil, err
 		}
@@ -2767,6 +2760,32 @@ func (r *Renderer) plainYearMonthFromBag(what string, bag frontend.Node, optionN
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "PlainYearMonthFromFields"), Args: []ast.Expr{year, month, stringLit(overflow)}}, nil
+}
+
+// coercePlainYearMonthArg lowers a PlainYearMonth-like argument to an expression yielding a
+// *value.PlainYearMonth, the ToTemporalYearMonth coercion the compare, equals, until, and since
+// methods apply to their argument. It mirrors coerceZonedDateTimeArg over the PlainYearMonth from
+// machinery: a PlainYearMonth lowers directly (a comparison reads the operand without a fresh
+// copy), a string literal naming the ISO calendar parses through value.PlainYearMonthFromString
+// gated on literalYearMonthISOOnly, and an object literal reads its year and month through
+// plainYearMonthFromBag with no options bag, taking the default constrain the way
+// ToTemporalYearMonth does. A dynamic (non-literal) string, a string naming a non-ISO calendar, or
+// a bag the reader rejects keeps its handback through the same gates from applies.
+func (r *Renderer) coercePlainYearMonthArg(what string, argNode frontend.Node) (ast.Expr, error) {
+	if r.isPlainYearMonth(argNode) {
+		return r.lowerExpr(argNode)
+	}
+	if lit, ok := r.stringLiteralValue(argNode); ok {
+		if !literalISOCalendarOnly(lit) {
+			return nil, &NotYetLowerable{Reason: what + " over a string naming a non-ISO calendar is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainYearMonthFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
+	}
+	if argNode.Kind() == frontend.NodeObjectLiteralExpression {
+		return r.plainYearMonthFromBag(what, argNode, nil)
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a dynamic value that is not a Temporal.PlainYearMonth is a later slice"}
 }
 
 // yearMonthFromFields reads a PlainYearMonth.from property bag at compile time into the required

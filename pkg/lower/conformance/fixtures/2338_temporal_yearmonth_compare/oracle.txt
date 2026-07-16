@@ -1,8 +1,11 @@
 == stdout:
 -1
 1
+-1
+1
 true
 false
+true
 2020-03
 == exit:
 0

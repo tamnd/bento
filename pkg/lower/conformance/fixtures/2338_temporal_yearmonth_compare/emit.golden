@@ -11,8 +11,11 @@ func main() {
 	b := value.NewPlainYearMonth(2020, 4)
 	value.ConsoleLog(value.NumberToString(value.PlainYearMonthCompare(a, b)))
 	value.ConsoleLog(value.NumberToString(value.PlainYearMonthCompare(b, a)))
+	value.ConsoleLog(value.NumberToString(value.PlainYearMonthCompare(value.PlainYearMonthFromString("2020-03"), value.PlainYearMonthFromString("2020-04"))))
+	value.ConsoleLog(value.NumberToString(value.PlainYearMonthCompare(value.PlainYearMonthFromFields(2021, 1, "constrain"), value.PlainYearMonthFromFields(2020, 12, "constrain"))))
 	value.ConsoleLog(value.BoolToString(a.Equals(value.NewPlainYearMonth(2020, 3))))
 	value.ConsoleLog(value.BoolToString(a.Equals(b)))
+	value.ConsoleLog(value.BoolToString(a.Equals(value.PlainYearMonthFromString("2020-03"))))
 	c := value.PlainYearMonthFrom(a)
 	value.ConsoleLog(c.ToString())
 }
