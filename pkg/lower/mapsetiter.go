@@ -280,6 +280,147 @@ func (r *Renderer) rangeCollPairSingle(recvNode, bindNode frontend.Node, name st
 	return &ast.BlockStmt{List: append(decls, rng)}, true, nil
 }
 
+// spreadCollEntries lowers a spread of a Map used directly, or of any Map or Set
+// entries() call, in an array literal to a slice of the interned [key, value] tuple
+// the append then splices. A Map's default iterator and its entries() both yield the
+// [key, value] pairs, a Set's entries() yields the member twice, so each spliced
+// element is the materialized tuple the target array's element type names. It reports
+// ok=false when the operand is neither shape, so the caller keeps looking; ok=true with
+// a hand-back when the target element type is not a two-element tuple or its fields do
+// not lower to the same Go types as the pair, so no wrong slice is spliced.
+func (r *Renderer) spreadCollEntries(operand frontend.Node, tupleT frontend.Type, hasTupleT bool) (ast.Expr, bool, error) {
+	var recvNode frontend.Node
+	kind := ""
+	if recv, method, k, ok := r.mapSetIterForOfCall(operand); ok && method == "entries" {
+		recvNode, kind = recv, k
+	} else if r.isMap(operand) {
+		recvNode, kind = operand, "map"
+	} else {
+		return nil, false, nil
+	}
+	if !hasTupleT {
+		return nil, true, &NotYetLowerable{Reason: "spread of a " + kind + "'s entries needs the target's tuple element type, a later slice"}
+	}
+	elems, ok := r.prog.TupleElements(tupleT)
+	if !ok || len(elems) != 2 {
+		return nil, true, &NotYetLowerable{Reason: "spread of a " + kind + "'s entries into other than a two-element tuple array is a later slice"}
+	}
+	// The tuple's two field types must lower to the same Go types as the pair the
+	// runtime yields, a Map's key and value or a Set's member twice, or the composite
+	// literal that packs each entry would not compile, so a mismatch hands back.
+	e0Go, err := r.typeExpr(elems[0].Type)
+	if err != nil {
+		return nil, true, err
+	}
+	e1Go, err := r.typeExpr(elems[1].Type)
+	if err != nil {
+		return nil, true, err
+	}
+	var fst, snd frontend.Type
+	if kind == "set" {
+		m, ok := r.setElem(r.prog.TypeAt(recvNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "spread of a set's entries whose member type is unreadable is a later slice"}
+		}
+		fst, snd = m, m
+	} else {
+		k, v, ok := r.mapKeyVal(r.prog.TypeAt(recvNode))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "spread of a map's entries whose key or value type is unreadable is a later slice"}
+		}
+		fst, snd = k, v
+	}
+	fstGo, err := r.typeExpr(fst)
+	if err != nil {
+		return nil, true, err
+	}
+	sndGo, err := r.typeExpr(snd)
+	if err != nil {
+		return nil, true, err
+	}
+	if sameFst, err := sameGoType(e0Go, fstGo); err != nil {
+		return nil, true, err
+	} else if sameSnd, err := sameGoType(e1Go, sndGo); err != nil {
+		return nil, true, err
+	} else if !sameFst || !sameSnd {
+		return nil, true, &NotYetLowerable{Reason: "spread of a " + kind + "'s entries into a tuple with a different field type is a later slice"}
+	}
+	tname, err := r.decls.internTuple(r, tupleT, elems)
+	if err != nil {
+		return nil, true, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, true, err
+	}
+	return r.collEntriesTupleSlice(recv, tname, kind), true, nil
+}
+
+// collEntriesTupleSlice builds the immediately-called function literal that collects a
+// Map or Set's entries into a fresh []Tname the spread's append splices. A Map ranges
+// its Keys and Values snapshots in parallel by index so each entry pairs a key with its
+// own value; a Set ranges its Members and pairs each with itself. The slice is
+// preallocated to the snapshot length, the same walk a for...of over the entries takes.
+func (r *Renderer) collEntriesTupleSlice(recv ast.Expr, tname, kind string) ast.Expr {
+	out := r.freshTemp()
+	sliceT := &ast.ArrayType{Elt: ident(tname)}
+	tuple := func(e0, e1 ast.Expr) ast.Expr {
+		return &ast.CompositeLit{Type: ident(tname), Elts: []ast.Expr{
+			&ast.KeyValueExpr{Key: ident("E0"), Value: e0},
+			&ast.KeyValueExpr{Key: ident("E1"), Value: e1},
+		}}
+	}
+	var body []ast.Stmt
+	if kind == "set" {
+		ms := r.freshTemp()
+		idx := r.freshTemp()
+		mem := r.freshTemp()
+		assign := &ast.AssignStmt{
+			Lhs: []ast.Expr{&ast.IndexExpr{X: ident(out), Index: ident(idx)}},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{tuple(ident(mem), ident(mem))},
+		}
+		body = []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(ms)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(recv, "Members")}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(out)}, Tok: token.DEFINE, Rhs: []ast.Expr{makeSlice(sliceT, ident(ms))}},
+			&ast.RangeStmt{Key: ident(idx), Value: ident(mem), Tok: token.DEFINE, X: ident(ms), Body: &ast.BlockStmt{List: []ast.Stmt{assign}}},
+			&ast.ReturnStmt{Results: []ast.Expr{ident(out)}},
+		}
+	} else {
+		m := r.freshTemp()
+		ks := r.freshTemp()
+		vs := r.freshTemp()
+		idx := r.freshTemp()
+		key := r.freshTemp()
+		assign := &ast.AssignStmt{
+			Lhs: []ast.Expr{&ast.IndexExpr{X: ident(out), Index: ident(idx)}},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{tuple(ident(key), &ast.IndexExpr{X: ident(vs), Index: ident(idx)})},
+		}
+		body = []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(m)}, Tok: token.DEFINE, Rhs: []ast.Expr{recv}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(ks)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Keys")}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(vs)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Values")}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(out)}, Tok: token.DEFINE, Rhs: []ast.Expr{makeSlice(sliceT, ident(ks))}},
+			&ast.RangeStmt{Key: ident(idx), Value: ident(key), Tok: token.DEFINE, X: ident(ks), Body: &ast.BlockStmt{List: []ast.Stmt{assign}}},
+			&ast.ReturnStmt{Results: []ast.Expr{ident(out)}},
+		}
+	}
+	fn := &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: sliceT}}}},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: fn}
+}
+
+// makeSlice builds make([]T, len(src)), preallocating a slice to a snapshot's length.
+func makeSlice(sliceT ast.Expr, src ast.Expr) ast.Expr {
+	return &ast.CallExpr{Fun: ident("make"), Args: []ast.Expr{
+		sliceT,
+		&ast.CallExpr{Fun: ident("len"), Args: []ast.Expr{src}},
+	}}
+}
+
 // forOfMapSetDestructure lowers `for (const [k, v] of map)`, its entries() spelling,
 // and `for (const [a, b] of set.entries())` to a range over the runtime's snapshot
 // whose two values bind the pattern's two names directly, sidestepping the [K, V]

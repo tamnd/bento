@@ -107,13 +107,17 @@ func TestCollIterSpreadEmitsAccessor(t *testing.T) {
 	}
 }
 
-// TestCollIterEntriesHandsBack pins the zero-fail edge: entries() yields a [key, value]
-// tuple the value model does not lower, so spreading it stays on the handback.
-func TestCollIterEntriesHandsBack(t *testing.T) {
+// TestCollIterEntriesBuildsTupleSlice pins the lowering: entries() yields [key, value]
+// pairs, so spreading it collects the Keys/Values snapshots into a slice of the interned
+// tuple the append splices, rather than staying on the old handback.
+func TestCollIterEntriesBuildsTupleSlice(t *testing.T) {
 	const src = "const m = new Map<string, number>([[\"a\", 1]]);\n" +
 		"export function k(): number { const xs = [...m.entries()]; return xs.length; }\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "later slice") {
-		t.Fatalf("map entries spread reason = %q, want a later-slice handback", reason)
+	got := renderProgram(t, src)
+	if !strings.Contains(got, ".Keys()") || !strings.Contains(got, ".Values()") {
+		t.Errorf("map entries spread did not collect the Keys/Values snapshots:\n%s", got)
+	}
+	if !strings.Contains(got, "Tuple_str_num{") {
+		t.Errorf("map entries spread did not build the interned tuple:\n%s", got)
 	}
 }

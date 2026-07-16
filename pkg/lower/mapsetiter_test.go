@@ -89,3 +89,70 @@ for (const p of s.entries()) {
 		t.Fatalf("map/set pair for-of printed %q, want %q", got, want)
 	}
 }
+
+// TestSpreadMapDirectBuildsTupleSlice proves a spread of a Map used directly collects
+// its Keys/Values snapshots into a fresh slice of the interned tuple the append splices.
+func TestSpreadMapDirectBuildsTupleSlice(t *testing.T) {
+	const src = "const m = new Map<string, number>();\nm.set(\"a\", 1);\nconst a = [...m];\nconsole.log(a[0][0]);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Keys()") || !strings.Contains(source, ".Values()") {
+		t.Errorf("map spread did not collect the Keys/Values snapshots:\n%s", source)
+	}
+	if !strings.Contains(source, "[]Tuple_str_num{") && !strings.Contains(source, "make([]Tuple_str_num") {
+		t.Errorf("map spread did not build a slice of the interned tuple:\n%s", source)
+	}
+	if !strings.Contains(source, "append(") {
+		t.Errorf("map spread did not splice the tuple slice with append:\n%s", source)
+	}
+}
+
+// TestSpreadMapEntriesBuildsTupleSlice proves the entries() spelling spreads the same
+// way as the default iterator.
+func TestSpreadMapEntriesBuildsTupleSlice(t *testing.T) {
+	const src = "const m = new Map<string, number>();\nm.set(\"a\", 1);\nconst a = [...m.entries()];\nconsole.log(a[0][0]);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "Tuple_str_num{") {
+		t.Errorf("entries() spread did not build the interned tuple:\n%s", source)
+	}
+}
+
+// TestSpreadSetEntriesBuildsTupleSlice proves a Set's entries() spreads a [v, v] tuple
+// per member off the Members snapshot.
+func TestSpreadSetEntriesBuildsTupleSlice(t *testing.T) {
+	const src = "const s = new Set<number>();\ns.add(10);\nconst a = [...s.entries()];\nconsole.log(a[0][0]);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Members()") {
+		t.Errorf("set entries spread did not range the Members snapshot:\n%s", source)
+	}
+	if !strings.Contains(source, "Tuple_num_num{") {
+		t.Errorf("set entries spread did not build the interned [v, v] tuple:\n%s", source)
+	}
+}
+
+// TestSpreadMapEntriesRuns builds and runs each spread form so the collected tuples are
+// proven to carry the right pairs in insertion order, including destructuring off the
+// spread result.
+func TestSpreadMapEntriesRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const m = new Map<string, number>();
+m.set("a", 1);
+m.set("b", 2);
+const pairs = [...m];
+console.log(pairs.length);
+console.log(pairs[0][0] + "=" + pairs[0][1]);
+const ents = [...m.entries()];
+console.log(ents[1][0] + ":" + ents[1][1]);
+const s = new Set<number>();
+s.add(10);
+const svs = [...s.entries()];
+console.log(svs[0][0] + "," + svs[0][1]);
+for (const [k, v] of [...m]) {
+  console.log(k + "->" + v);
+}
+`
+	want := "2\na=1\nb:2\n10,10\na->1\nb->2\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("map/set entries spread printed %q, want %q", got, want)
+	}
+}
