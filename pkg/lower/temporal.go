@@ -703,14 +703,11 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.equals takes exactly one argument"}
 		}
-		if !r.isZonedDateTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype.equals over a non-ZonedDateTime argument (a string or bag to coerce) is a later slice"}
-		}
-		recv, err := r.lowerExpr(recvNode)
+		other, err := r.coerceZonedDateTimeArg("Temporal.ZonedDateTime.prototype.equals", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		other, err := r.lowerExpr(argNodes[0])
+		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
@@ -758,18 +755,15 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.prototype." + method + " takes at least one argument"}
 		}
 		what := "Temporal.ZonedDateTime.prototype." + method
-		if !r.isZonedDateTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: what + " over a non-ZonedDateTime argument (a string or bag to coerce) is a later slice"}
+		other, err := r.coerceZonedDateTimeArg(what, argNodes[0])
+		if err != nil {
+			return nil, err
 		}
 		largestUnit, err := r.zonedDateTimeDifferenceOptions(what, argNodes[1:])
 		if err != nil {
 			return nil, err
 		}
 		recv, err := r.lowerExpr(recvNode)
-		if err != nil {
-			return nil, err
-		}
-		other, err := r.lowerExpr(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -870,8 +864,9 @@ func (r *Renderer) zonedDateTimeMethodCall(recvNode frontend.Node, method string
 	}
 }
 
-// zonedDateTimeStaticCall lowers a static call on Temporal.ZonedDateTime. compare lowers to
-// value.ZonedDateTimeCompare over two ZonedDateTime arguments, ordering on the exact time;
+// zonedDateTimeStaticCall lowers a static call on Temporal.ZonedDateTime. compare coerces each
+// argument to a ZonedDateTime through coerceZonedDateTimeArg, so a ZonedDateTime, a string
+// literal, or a property bag all order on the exact time, and lowers to value.ZonedDateTimeCompare;
 // from lowers to value.ZonedDateTimeFrom for a ZonedDateTime argument (the copy the
 // specification makes) and to value.ZonedDateTimeFromString for a string literal. A
 // ZonedDateTime hosts only the iso8601 calendar, so the literal is gated on
@@ -883,14 +878,11 @@ func (r *Renderer) zonedDateTimeStaticCall(method string, argNodes []frontend.No
 		if len(argNodes) != 2 {
 			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.compare takes exactly two arguments"}
 		}
-		if !r.isZonedDateTime(argNodes[0]) || !r.isZonedDateTime(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.ZonedDateTime.compare over an argument that is not a ZonedDateTime (a string or bag to coerce) is a later slice"}
-		}
-		a, err := r.lowerExpr(argNodes[0])
+		a, err := r.coerceZonedDateTimeArg("Temporal.ZonedDateTime.compare", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		b, err := r.lowerExpr(argNodes[1])
+		b, err := r.coerceZonedDateTimeArg("Temporal.ZonedDateTime.compare", argNodes[1])
 		if err != nil {
 			return nil, err
 		}
@@ -4167,6 +4159,33 @@ func (r *Renderer) zonedDateTimeFromBag(what string, bag frontend.Node, optionNo
 	args = append(args, timeFields[:]...)
 	args = append(args, tz, offset, stringLit(overflow), stringLit(disambiguation), stringLit(offsetOption))
 	return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFromFields"), Args: args}, nil
+}
+
+// coerceZonedDateTimeArg lowers a ZonedDateTime-like argument to an expression yielding a
+// *value.ZonedDateTime, the ToTemporalZonedDateTime coercion the comparison and difference
+// methods apply to their argument. It mirrors coercePlainDateArg and coercePlainDateTimeArg over
+// the ZonedDateTime from machinery: a ZonedDateTime lowers directly (a comparison reads the
+// operand without a fresh copy), a string literal naming the ISO calendar parses through
+// value.ZonedDateTimeFromString gated on literalISOCalendarOnly, and an object literal reads its
+// date, time, timeZone, and offset through zonedDateTimeFromBag with no options bag, taking the
+// default constrain, compatible, and reject the way ToTemporalZonedDateTime does. A dynamic
+// (non-literal) string, a string naming a non-ISO calendar, or a bag the reader rejects keeps its
+// handback through the same gates from applies.
+func (r *Renderer) coerceZonedDateTimeArg(what string, argNode frontend.Node) (ast.Expr, error) {
+	if r.isZonedDateTime(argNode) {
+		return r.lowerExpr(argNode)
+	}
+	if lit, ok := r.stringLiteralValue(argNode); ok {
+		if !literalISOCalendarOnly(lit) {
+			return nil, &NotYetLowerable{Reason: what + " over a string naming a non-ISO calendar is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ZonedDateTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
+	}
+	if argNode.Kind() == frontend.NodeObjectLiteralExpression {
+		return r.zonedDateTimeFromBag(what, argNode, nil)
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a dynamic value that is not a Temporal.ZonedDateTime is a later slice"}
 }
 
 // zonedDateTimeFromOptions reads the options bag of Temporal.ZonedDateTime.from into the overflow,
