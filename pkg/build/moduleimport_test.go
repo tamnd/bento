@@ -123,3 +123,80 @@ func TestAliasedImportHandsBack(t *testing.T) {
 		t.Fatal("an aliased import should hand back for a later slice, but it lowered")
 	}
 }
+
+// TestDefaultExportFunctionComposes pins the default export and import: a sibling
+// that default-exports a function composes as the package-level Default func bento
+// gives a default export, and a default import of it calls that Go name. The
+// function's own name does not survive the default export, in Go as in JavaScript,
+// so both the declaration and the call spell Default.
+func TestDefaultExportFunctionComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
+		"dbl.ts":  "export default function double(n: number): number { return n * 2; }\n",
+		"main.ts": "import double from \"./dbl\";\nconsole.log(double(4));\n",
+	})
+	if err != nil {
+		t.Fatalf("a default function export should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "func Default(n float64) float64") {
+		t.Fatalf("expected the default export to lower to `func Default`, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Default(4)") {
+		t.Fatalf("expected the default import to call `Default(4)`, got:\n%s", out)
+	}
+}
+
+// TestDefaultExportFunctionRunsComposed carries the default program through the
+// build and runs it, so the Default name agreement holds at runtime: double(4) is
+// 8.
+func TestDefaultExportFunctionRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"dbl.ts":  "export default function double(n: number): number { return n * 2; }\n",
+		"main.ts": "import double from \"./dbl\";\nconsole.log(double(4));\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "8\n" {
+		t.Fatalf("want 8, got %q", got)
+	}
+}
+
+// TestMixedDefaultAndNamedImportComposes pins that one import can carry both a
+// default binding and a named list, `import def, { a } from`, composing each to its
+// Go name in the same statement: the default calls Default and the named binding
+// calls the exported name.
+func TestMixedDefaultAndNamedImportComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
+		"m.ts":    "export function inc(n: number): number { return n + 1; }\nexport default function dbl(n: number): number { return n * 2; }\n",
+		"main.ts": "import dbl, { inc } from \"./m\";\nconsole.log(dbl(inc(3)));\n",
+	})
+	if err != nil {
+		t.Fatalf("a mixed default and named import should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "Default(Inc(3))") {
+		t.Fatalf("expected the mixed import to call `Default(Inc(3))`, got:\n%s", out)
+	}
+}
+
+// TestNamespaceImportHandsBack pins that a namespace import still hands back, since
+// it needs a struct of the module's exports rather than a direct reference, which
+// is a later Group 2 slice.
+func TestNamespaceImportHandsBack(t *testing.T) {
+	_, err := compileModule(t, "main.ts", map[string]string{
+		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
+		"main.ts": "import * as m from \"./m\";\nconsole.log(m.inc(1));\n",
+	})
+	if err == nil {
+		t.Fatal("a namespace import should hand back for a later slice, but it lowered")
+	}
+}
