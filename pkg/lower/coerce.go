@@ -122,7 +122,42 @@ func (r *Renderer) iterResultDoneRead(n frontend.Node) bool {
 // returns the bento string, so every consumer of the predicate sees the string
 // the lowered expression is.
 func (r *Renderer) isString(n frontend.Node) bool {
-	return r.primitiveFlags(n)&frontend.TypeString != 0 || r.caughtErrorStringRead(n) || r.isTypeofExpr(n)
+	return r.primitiveFlags(n)&frontend.TypeString != 0 || r.caughtErrorStringRead(n) || r.isTypeofExpr(n) || r.conditionalStringValued(n)
+}
+
+// conditionalStringValued reports whether n is a ternary whose branches both
+// lower to a value.BStr, the shape `cond ? "a" : "b"`. The checker types the
+// whole ternary as the union of its branch types ("a" | "b"), and a closed
+// string-literal union folds no String facet (primitiveFlagsOfType keeps String
+// out of the union mask because such a union is otherwise a tag enum), so the
+// ternary node carries no string flag even though conditionalExpr lowers it to a
+// value.BStr IIFE. isString consults this so a ternary of strings coerces as the
+// string it is rather than handing back, the same rescue caughtErrorStringRead
+// gives a read the checker leaves untyped. It fires only for a conditional
+// expression node, never for a tag-enum-typed binding, so a real tag value still
+// takes its own path.
+func (r *Renderer) conditionalStringValued(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeConditionalExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 5 {
+		return false
+	}
+	return r.branchStringValued(kids[2]) && r.branchStringValued(kids[4])
+}
+
+// branchStringValued reports whether a ternary branch lowers to a value.BStr,
+// seeing through parentheses so `cond ? ("a") : "b"` reads the same as the bare
+// literal. A nested string ternary is caught by the isString delegation, which
+// re-enters conditionalStringValued on the strictly smaller inner node.
+func (r *Renderer) branchStringValued(n frontend.Node) bool {
+	if n.Kind() == frontend.NodeParenthesizedExpression {
+		if kids := r.prog.Children(n); len(kids) == 1 {
+			return r.branchStringValued(kids[0])
+		}
+	}
+	return r.isString(n)
 }
 
 // isBoxedValue reports whether n lowers to a boxed value.Value at this use, the
