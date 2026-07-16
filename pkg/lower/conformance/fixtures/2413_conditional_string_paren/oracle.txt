@@ -1,0 +1,12 @@
+== stdout:
+hi
+hi!
+v=hi
+2
+yo
+yo!
+v=yo
+2
+
+== exit:
+0

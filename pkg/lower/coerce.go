@@ -137,6 +137,18 @@ func (r *Renderer) isString(n frontend.Node) bool {
 // expression node, never for a tag-enum-typed binding, so a real tag value still
 // takes its own path.
 func (r *Renderer) conditionalStringValued(n frontend.Node) bool {
+	// A parenthesized ternary, `(cond ? "a" : "b")`, is the same string its inner
+	// conditional lowers to, so it must read as a string too. The checker types the
+	// parenthesized node as the branches' literal union, which folds no String facet,
+	// and stringifyOperand and the ToString switch see the outer parenthesized node
+	// when a concat operand or a bare console.log argument is written with the
+	// grouping parentheses source often carries, so unwrapping here lets those sites
+	// find the string ternary within.
+	if n.Kind() == frontend.NodeParenthesizedExpression {
+		if kids := r.prog.Children(n); len(kids) == 1 {
+			return r.conditionalStringValued(kids[0])
+		}
+	}
 	if n.Kind() != frontend.NodeConditionalExpression {
 		return false
 	}
