@@ -744,6 +744,38 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 			return nil, &NotYetLowerable{Reason: "a spread argument with an unexpected shape is a later slice"}
 		}
 		operand := operands[0]
+		// A spread of a generator into a rest parameter drains its *value.Gen coroutine
+		// into a slice of its yielded element type, then splices that slice, the same
+		// drain the array-literal spread takes. A generator lowers to a coroutine the
+		// protocol path (symbolIteratorShape) deliberately skips, so it is drained on its
+		// own path here; an iterator-helper result has a different Next and stays out,
+		// matching how for...of routes generators and helpers apart.
+		if r.isGeneratorIterable(operand) && !r.isIterHelperType(r.prog.TypeAt(operand)) {
+			if yieldT, ok := r.generatorElemType(r.prog.TypeAt(operand)); ok {
+				yieldGo, err := r.typeExpr(yieldT)
+				if err != nil {
+					return nil, err
+				}
+				same, err := sameGoType(elemGo, yieldGo)
+				if err != nil {
+					return nil, err
+				}
+				if !same {
+					return nil, &NotYetLowerable{Reason: "a spread of a generator with a different element type into a rest parameter is a later slice"}
+				}
+				src, err := r.lowerExpr(operand)
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				drained := r.generatorToSliceExpr(src, elemGo)
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
+				continue
+			}
+		}
 		shape, ok := r.symbolIteratorShape(r.prog.TypeAt(operand))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a spread of a non-iterable into a rest parameter is a later slice"}
