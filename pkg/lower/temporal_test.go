@@ -2337,6 +2337,69 @@ console.log(z.toPlainDate().toString());`
 	}
 }
 
+// TestZonedDateTimeComparisonCoercesArg pins the ToTemporalZonedDateTime coercion the comparison
+// and difference methods apply: compare, equals, until, and since accept a string literal or a
+// property bag naming the zoned date-time and route it through value.ZonedDateTimeFromString or
+// value.ZonedDateTimeFromFields before comparing.
+func TestZonedDateTimeComparisonCoercesArg(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "compare over string literals",
+			src:   "console.log(Temporal.ZonedDateTime.compare(\"1970-01-01T00:00:00+00:00[UTC]\", \"1970-01-01T01:00:00+00:00[UTC]\"));",
+			wants: []string{"value.ZonedDateTimeCompare(", "value.ZonedDateTimeFromString(\"1970-01-01T00:00:00+00:00[UTC]\")", "value.ZonedDateTimeFromString(\"1970-01-01T01:00:00+00:00[UTC]\")"},
+		},
+		{
+			name:  "compare over property bags",
+			src:   "console.log(Temporal.ZonedDateTime.compare({ year: 1970, month: 1, day: 1, hour: 0, timeZone: \"UTC\" }, { year: 1970, month: 1, day: 1, hour: 1, timeZone: \"UTC\" }));",
+			wants: []string{"value.ZonedDateTimeCompare(", "value.ZonedDateTimeFromFields(", `"constrain"`, `"compatible"`},
+		},
+		{
+			name:  "equals over a string literal",
+			src:   "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconsole.log(z.equals(\"1970-01-01T00:00:00+00:00[UTC]\"));",
+			wants: []string{".Equals(", "value.ZonedDateTimeFromString(\"1970-01-01T00:00:00+00:00[UTC]\")"},
+		},
+		{
+			name:  "until over a string literal",
+			src:   "const z = new Temporal.ZonedDateTime(0n, \"UTC\");\nconsole.log(z.until(\"1970-01-01T10:00:00+00:00[UTC]\").hours);",
+			wants: []string{".Until(", "value.ZonedDateTimeFromString(\"1970-01-01T10:00:00+00:00[UTC]\")"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestZonedDateTimeComparisonCoercionRuns builds and runs the coercion end to end, proving a
+// string and a property bag reach the runtime as the zoned date-times they name: compare orders
+// them on the exact time, equals compares the instant and zone, and until measures the hour span.
+func TestZonedDateTimeComparisonCoercionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `console.log(Temporal.ZonedDateTime.compare("1970-01-01T00:00:00+00:00[UTC]", "1970-01-01T01:00:00+00:00[UTC]"));
+console.log(Temporal.ZonedDateTime.compare("1970-01-01T01:00:00+00:00[UTC]", "1970-01-01T00:00:00+00:00[UTC]"));
+console.log(Temporal.ZonedDateTime.compare({ year: 1970, month: 1, day: 1, hour: 0, timeZone: "UTC" }, { year: 1970, month: 1, day: 1, hour: 1, timeZone: "UTC" }));
+const z = new Temporal.ZonedDateTime(0n, "UTC");
+console.log(z.equals("1970-01-01T00:00:00+00:00[UTC]"));
+console.log(z.equals({ year: 1970, month: 1, day: 1, hour: 1, timeZone: "UTC" }));
+console.log(z.until("1970-01-01T10:00:00+00:00[UTC]").hours);
+`
+	got := runProgramGo(t, src)
+	const want = "-1\n1\n-1\ntrue\nfalse\n10\n"
+	if got != want {
+		t.Fatalf("ZonedDateTime comparison coercion printed %q, want %q", got, want)
+	}
+}
+
 // TestNowConstruction checks each Temporal.Now function lowers to its value.Now* constructor:
 // instant and timeZoneId with no argument, and the ISO functions with the default zone and with
 // a named zone.
