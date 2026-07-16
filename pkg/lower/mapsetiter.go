@@ -104,9 +104,10 @@ func (r *Renderer) forOfMapSetSingle(iterable, bindNode frontend.Node, name stri
 		}
 		switch {
 		case kind == "set":
-			// A Set's keys() and values() both yield its members.
+			// A Set's keys() and values() both yield its members. entries() yields a
+			// [member, member] pair, which now binds one name to the materialized tuple.
 			if method == "entries" {
-				return nil, true, &NotYetLowerable{Reason: "a for...of over a Set's entries() with a single binding needs a tuple, a later slice"}
+				return r.rangeCollPairSingle(recv, bindNode, name, bodyNode, "set")
 			}
 			return r.rangeCollSingle(recv, bindNode, name, bodyNode, "Members")
 		case method == "keys":
@@ -114,7 +115,7 @@ func (r *Renderer) forOfMapSetSingle(iterable, bindNode frontend.Node, name stri
 		case method == "values":
 			return r.rangeCollSingle(recv, bindNode, name, bodyNode, "Values")
 		default:
-			return nil, true, &NotYetLowerable{Reason: "a for...of over a Map's entries() with a single binding needs a tuple, a later slice"}
+			return r.rangeCollPairSingle(recv, bindNode, name, bodyNode, "map")
 		}
 	}
 	if r.isSet(iterable) {
@@ -124,7 +125,10 @@ func (r *Renderer) forOfMapSetSingle(iterable, bindNode frontend.Node, name stri
 		return r.rangeCollSingle(iterable, bindNode, name, bodyNode, "Members")
 	}
 	if r.isMap(iterable) {
-		return nil, true, &NotYetLowerable{Reason: "a for...of over a Map with a single binding yields a [key, value] pair, which needs a tuple, a later slice"}
+		if hb := r.forOfCollMutationHandback(iterable, "map", bodyNode); hb != nil {
+			return nil, true, hb
+		}
+		return r.rangeCollPairSingle(iterable, bindNode, name, bodyNode, "map")
 	}
 	return nil, false, nil
 }
@@ -199,6 +203,81 @@ func (r *Renderer) rangeCollSingle(recvNode, bindNode frontend.Node, name string
 		rng.Tok = token.DEFINE
 	}
 	return rng, true, nil
+}
+
+// rangeCollPairSingle lowers a for...of with a single binding whose iterable yields a
+// pair, `for (const e of map)`, its entries() spelling, and `for (const e of
+// set.entries())`, binding the one name to the materialized [key, value] tuple each
+// turn. It is the single-binding counterpart of forOfMapSetDestructure, which binds a
+// two-name pattern straight off the snapshots; here the body reads the pair through the
+// bound name (e[0], e[1]), so the tuple has to exist as a value, which it now does. A
+// Map ranges its Keys and Values snapshots in parallel by index and builds Tuple{E0:
+// key, E1: values[i]}; a Set's entries pair is the member twice, so it builds Tuple{E0:
+// member, E1: member}. A binding the body never reads drops to a bare range with no
+// tuple built, the same unused-binding rule the other collection loops apply. The
+// binding's type is the [K, V] tuple; if the checker did not type it as a two-element
+// tuple this hands back rather than guess a shape.
+func (r *Renderer) rangeCollPairSingle(recvNode, bindNode frontend.Node, name string, bodyNode frontend.Node, kind string) (ast.Stmt, bool, error) {
+	used := r.bodyUsesName(bodyNode, r.prog.Text(bindNode))
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, true, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, true, err
+	}
+	// An unused binding drives the loop off one snapshot with no tuple, since there is
+	// nothing to bind. Keys drives a Map, Members a Set, each an insertion-ordered walk
+	// of the right length.
+	if !used {
+		drive := "Members"
+		if kind == "map" {
+			drive = "Keys"
+		}
+		return &ast.RangeStmt{X: collCall(recv, drive), Body: body}, true, nil
+	}
+	elems, ok := r.prog.TupleElements(r.prog.TypeAt(bindNode))
+	if !ok || len(elems) != 2 {
+		return nil, true, &NotYetLowerable{Reason: "a for...of over a " + kind + "'s pair with a single binding needs a two-element tuple, a later slice"}
+	}
+	tname, err := r.decls.internTuple(r, r.prog.TypeAt(bindNode), elems)
+	if err != nil {
+		return nil, true, err
+	}
+	tuple := func(e0, e1 ast.Expr) ast.Expr {
+		return &ast.CompositeLit{Type: ident(tname), Elts: []ast.Expr{
+			&ast.KeyValueExpr{Key: ident("E0"), Value: e0},
+			&ast.KeyValueExpr{Key: ident("E1"), Value: e1},
+		}}
+	}
+	if kind == "set" {
+		// The pair is the member twice, so both fields read the ranged member.
+		mem := r.freshTemp()
+		bind := &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{tuple(ident(mem), ident(mem))}}
+		body.List = append([]ast.Stmt{bind}, body.List...)
+		return &ast.RangeStmt{Key: ident("_"), Value: ident(mem), Tok: token.DEFINE, X: collCall(recv, "Members"), Body: body}, true, nil
+	}
+	// A Map ranges its Keys and Values snapshots in parallel, indexing Values by the
+	// range index so each turn's tuple pairs the key with its own value.
+	m := r.freshTemp()
+	ks := r.freshTemp()
+	vs := r.freshTemp()
+	idx := r.freshTemp()
+	key := r.freshTemp()
+	decls := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(m)}, Tok: token.DEFINE, Rhs: []ast.Expr{recv}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(ks)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Keys")}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(vs)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Values")}},
+	}
+	bind := &ast.AssignStmt{
+		Lhs: []ast.Expr{ident(name)},
+		Tok: token.DEFINE,
+		Rhs: []ast.Expr{tuple(ident(key), &ast.IndexExpr{X: ident(vs), Index: ident(idx)})},
+	}
+	body.List = append([]ast.Stmt{bind}, body.List...)
+	rng := &ast.RangeStmt{Key: ident(idx), Value: ident(key), Tok: token.DEFINE, X: ident(ks), Body: body}
+	return &ast.BlockStmt{List: append(decls, rng)}, true, nil
 }
 
 // forOfMapSetDestructure lowers `for (const [k, v] of map)`, its entries() spelling,
