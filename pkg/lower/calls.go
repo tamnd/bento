@@ -316,6 +316,120 @@ func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []front
 	return r.buildCall(callee, argNodes, params, rest, defaults, variadicTail)
 }
 
+// buildFixedTupleSpreadCall lowers a call whose argument list contains a spread of a
+// fixed-length tuple, f(...pair) or g(x, ...rest3), when the callee has only fixed
+// parameters and the spread expands onto them exactly. Each spread of a tuple typed
+// [A, B, C] becomes the field reads operand.E0, operand.E1, operand.E2, the same
+// positional struct fields a tuple element access reads, so the spread splices its
+// members in position with no runtime array. It reports handled false, leaving the
+// caller's honest handback in place, for any shape it does not cover: a call-site
+// default or variadic tail, a spread of a non-tuple or a tuple with an optional or
+// rest element, a side-effecting spread operand whose repeated field reads would run
+// its effect more than once, an argument count that does not match the parameters, or
+// a spread element whose Go type differs from its parameter and would need the source
+// node the bridge reads to coerce.
+func (r *Renderer) buildFixedTupleSpreadCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, defaults []frontend.Node, variadicTail bool) (ast.Expr, bool, error) {
+	if variadicTail || len(defaults) != 0 {
+		return nil, false, nil
+	}
+	// A plan entry is either a source node to lower against its parameter, or a tuple
+	// element read already at its element type. The two passes keep the structural
+	// checks ahead of any lowering, so an unsupported shape returns handled false
+	// without interning a struct or requiring an import on a path that then bails.
+	type planEntry struct {
+		node    frontend.Node // a plain argument to lower and bridge; nil for a spread element
+		operand frontend.Node // the spread operand a tuple element reads from
+		index   int           // the element position within the tuple
+		typ     frontend.Type // the tuple element type
+	}
+	var plan []planEntry
+	sawSpread := false
+	for _, a := range argNodes {
+		if a.Kind() != frontend.NodeSpreadElement {
+			plan = append(plan, planEntry{node: a})
+			continue
+		}
+		sawSpread = true
+		operands := r.prog.Children(a)
+		if len(operands) != 1 {
+			return nil, false, nil
+		}
+		operand := operands[0]
+		elems, ok := r.prog.TupleElements(r.prog.TypeAt(operand))
+		if !ok {
+			return nil, false, nil
+		}
+		if !r.repeatableOperand(operand) {
+			return nil, false, nil
+		}
+		for i, el := range elems {
+			if el.Optional || el.Rest {
+				return nil, false, nil
+			}
+			plan = append(plan, planEntry{operand: operand, index: i, typ: el.Type})
+		}
+	}
+	if !sawSpread || len(plan) != len(params) {
+		return nil, false, nil
+	}
+	// Every spread element must already share its parameter's Go type: a spliced field
+	// read carries no source node, so the argument bridge cannot coerce an int into a
+	// float or box a static value into a dynamic slot the way a lowered node would.
+	for j, e := range plan {
+		if e.node != nil {
+			continue
+		}
+		same, err := r.sameParamGoType(e.typ, params[j].Type)
+		if err != nil {
+			return nil, false, err
+		}
+		if !same {
+			return nil, false, nil
+		}
+	}
+	// The shape checks all passed, so lowering the operands and plain arguments now
+	// commits to this call. A spread operand is lowered once and its field reads share
+	// that receiver, which is why the operand must be repeatable.
+	lowered := make(map[frontend.Node]ast.Expr)
+	args := make([]ast.Expr, 0, len(plan))
+	for j, e := range plan {
+		if e.node != nil {
+			a, err := r.lowerArgAt(e.node, params[j].Type)
+			if err != nil {
+				return nil, false, err
+			}
+			args = append(args, a)
+			continue
+		}
+		recv, ok := lowered[e.operand]
+		if !ok {
+			rv, err := r.lowerExpr(e.operand)
+			if err != nil {
+				return nil, false, err
+			}
+			recv = rv
+			lowered[e.operand] = rv
+		}
+		args = append(args, &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(e.index))})
+	}
+	return &ast.CallExpr{Fun: callee, Args: args}, true, nil
+}
+
+// sameParamGoType reports whether two checker types render to the same Go type, the
+// test a spread element must pass to ride into a parameter with no bridging. It renders
+// each type and compares the two Go type expressions structurally.
+func (r *Renderer) sameParamGoType(a, b frontend.Type) (bool, error) {
+	ago, err := r.typeExpr(a)
+	if err != nil {
+		return false, err
+	}
+	bgo, err := r.typeExpr(b)
+	if err != nil {
+		return false, err
+	}
+	return sameGoType(ago, bgo)
+}
+
 // calleeFillsInBody reports whether the top-level function a symbol names fills its
 // optional tail in its own body through a Go variadic, the shape a default that
 // reads an earlier parameter takes. A call to such a function passes only the
@@ -345,6 +459,17 @@ func (r *Renderer) calleeFillsInBody(sym frontend.Symbol) (bool, error) {
 // object) shares the exact same argument bridging without a call node to look the
 // signature up from.
 func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool) (ast.Expr, error) {
+	// A spread of a fixed-length tuple into a fixed parameter list expands to the
+	// tuple's element reads, f(...pair) becoming f(pair.E0, pair.E1), so the spread
+	// lowers rather than hand back on the spread element kind the ordinary argument
+	// loop cannot lower. It routes only when there is no rest parameter and the
+	// expansion lands exactly on the fixed parameters; every other spread shape leaves
+	// handled false and falls through to the honest handback below.
+	if rest == nil {
+		if expr, handled, err := r.buildFixedTupleSpreadCall(callee, argNodes, params, defaults, variadicTail); handled || err != nil {
+			return expr, err
+		}
+	}
 	args := make([]ast.Expr, 0, len(params)+1)
 	// The arguments that land on a fixed parameter lower and bridge in position; any
 	// beyond the fixed count belong to a rest parameter and are gathered below.
