@@ -1186,6 +1186,18 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 			}
 			return check, nil
 		}
+		// The same presence test where the optional operand is an identifier the
+		// checker has narrowed away from the optional union, the shape a write leaves,
+		// reads the raw value.Opt[T] slot by name rather than through lowerExpr, which
+		// would emit the .Get() a narrowed value read wants. The slot still holds Some
+		// or None, so IsUndefined answers correctly.
+		if name, ok := r.optionalSlotUndefinedCompare(left, right); ok {
+			check := &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
+			if opText == "!==" {
+				return &ast.UnaryExpr{Op: token.NOT, X: check}, nil
+			}
+			return check, nil
+		}
 	}
 
 	// A bigint operator is a *big.Int method, never a Go binary operator, because

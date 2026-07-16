@@ -186,6 +186,41 @@ func (r *Renderer) optionalUndefinedCompare(left, right frontend.Node) (frontend
 	}
 }
 
+// optionalSlotUndefinedCompare recognizes an equality between the bare undefined
+// literal and an identifier that binds an optional slot (value.Opt[T]) whose type
+// the checker has narrowed away from the optional union at this use, and returns
+// the name. It is the shape a write leaves behind: after `n = 42` the checker knows
+// n holds a number, so the operand no longer types as optional and
+// optionalUndefinedCompare declines it, but the Go slot stays Opt[T] and holds Some,
+// so the presence test is a valid n.IsUndefined() that answers false, exactly what
+// `42 === undefined` evaluates to. The name is returned rather than the node so the
+// caller reads the raw slot: lowerExpr of a narrowed optBinding emits the .Get() a
+// value read wants, which would not carry IsUndefined.
+func (r *Renderer) optionalSlotUndefinedCompare(left, right frontend.Node) (string, bool) {
+	if name, ok := r.optSlotName(left); ok && r.prog.TypeAt(right).Flags == frontend.TypeUndefined {
+		return name, true
+	}
+	if name, ok := r.optSlotName(right); ok && r.prog.TypeAt(left).Flags == frontend.TypeUndefined {
+		return name, true
+	}
+	return "", false
+}
+
+// optSlotName returns the name of an identifier that binds an optional slot,
+// whether a local declared T | undefined or an optional parameter, so the presence
+// test can read the raw value.Opt[T] regardless of how the checker has narrowed the
+// reference at this use.
+func (r *Renderer) optSlotName(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodeIdentifier {
+		return "", false
+	}
+	name, ok := localName(r.prog.Text(n))
+	if !ok || !r.isOptBinding(name) {
+		return "", false
+	}
+	return name, true
+}
+
 // isOptional reports whether a node's type is an optional, the T | undefined
 // shape that lowers to value.Opt[T]. It reads the type as a union and checks the
 // optional shape the same way renderUnion does, so the presence-test rewrite
