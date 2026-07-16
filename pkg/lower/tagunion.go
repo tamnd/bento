@@ -678,6 +678,63 @@ func (r *Renderer) inReceiver(right frontend.Node) (ast.Expr, bool, error) {
 	return nil, false, nil
 }
 
+// inStaticShapeRequired folds "key" in obj to the constant true when obj carries a
+// required own property named key on its static object shape. A required property is
+// always present, so the membership test is a compile-time true, the value the boxing
+// InOperator would answer at run time without a box to build. Only that branch folds:
+// every other case returns not-handled so the caller keeps its honest handback, since
+// none of them is a provable present. An optional member may be absent; a member the
+// shape does not declare may still live on Object.prototype, so a false fold would be
+// unsound; a non-literal key is not known here; and a receiver that is not
+// side-effect-free would lose its effect once the receiver is dropped. The receiver is
+// never dynamic at this point, since inReceiver has already taken the boxed path for a
+// dynamic value, so reading its declared properties is safe.
+func (r *Renderer) inStaticShapeRequired(left, right frontend.Node) (ast.Expr, bool) {
+	prop, ok := r.stringLiteralValue(left)
+	if !ok {
+		return nil, false
+	}
+	if !r.repeatableOperand(right) {
+		return nil, false
+	}
+	for _, p := range r.prog.Properties(r.prog.TypeAt(right)) {
+		if p.Name != prop {
+			continue
+		}
+		if p.Optional {
+			return nil, false
+		}
+		return ident("true"), true
+	}
+	return nil, false
+}
+
+// elidedInReceiver reports the identifier receiver a required-member in fold drops from
+// the emit. "key" in obj folds to the constant true when obj carries a required own
+// property named key and never lowers obj, so a binding whose only read was that
+// receiver would be declared and not used in Go. Recording the read lets bindingUnused
+// blank it. The match is the one inStaticShapeRequired makes, restricted to a bare
+// identifier receiver since only a binding can be orphaned: a literal or property-access
+// receiver names no local to blank. An over-count is harmless, since a receiver that
+// does not fold hands the whole unit back and emits no Go.
+func elidedInReceiver(r *Renderer, n frontend.Node) (frontend.Node, bool) {
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 3 || r.prog.Text(kids[1]) != "in" {
+		return nil, false
+	}
+	left, right := kids[0], kids[2]
+	if right.Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	if _, ok := r.inStaticShapeRequired(left, right); !ok {
+		return nil, false
+	}
+	return right, true
+}
+
 // typeofOperandAndLiteral picks the typeof operand and the string-literal tag out
 // of a comparison's two sides, in either order, and returns the operand node and
 // the literal's value. It returns false unless exactly one side is typeof x and the

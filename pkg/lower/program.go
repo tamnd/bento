@@ -762,6 +762,11 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 				uses[sym]++
 			}
 		}
+		if arg, ok := elidedInReceiver(r, n); ok {
+			if sym, ok := prog.SymbolAt(arg); ok {
+				uses[sym]++
+			}
+		}
 		for _, c := range prog.Children(n) {
 			walk(c, n)
 		}
