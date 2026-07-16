@@ -1,0 +1,10 @@
+== stdout:
+none yes no
+u T F
+u b
+n y n
+u
+d
+
+== exit:
+0

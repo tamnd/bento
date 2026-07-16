@@ -74,23 +74,44 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 }
 
 // optionalInner reports whether members are the optional shape T | undefined and
-// returns the non-undefined member T if so. That shape is exactly two members
-// where one is the bare undefined type; a undefined member is recognized by its
+// returns the non-undefined member T if so. That shape is exactly one bare
+// undefined member alongside the inner; a undefined member is recognized by its
 // flags being exactly TypeUndefined, not by a undefined constituent of a wider
-// type. A union with more than two members, or a two-member union without an
-// undefined member (for example T | null), is not this shape and returns false,
-// so the caller falls through to the string-literal and hand-back paths.
+// type. A union without an undefined member (for example T | null), or with more
+// than one, is not this shape and returns false, so the caller falls through to
+// the string-literal and hand-back paths.
+//
+// The inner is usually a single member, T | undefined. The one exception is
+// boolean: the checker spells boolean as the pair true | false, so boolean |
+// undefined arrives as the three members true | false | undefined. When every
+// non-undefined member carries the boolean facet, they widen to boolean, whose Go
+// slot is bool, the same folding primitiveFlagsOfType applies to a bare true |
+// false, so the inner is one of those boolean members and typeExpr renders it as
+// bool. Any other multi-member remainder (a genuine string | number | undefined)
+// is not an optional over a single inner and returns false.
 func (r *Renderer) optionalInner(members []frontend.Type) (frontend.Type, bool) {
-	if len(members) != 2 {
+	undefIdx := -1
+	rest := make([]frontend.Type, 0, len(members))
+	for i, m := range members {
+		if m.Flags == frontend.TypeUndefined {
+			if undefIdx != -1 {
+				return frontend.Type{}, false
+			}
+			undefIdx = i
+			continue
+		}
+		rest = append(rest, m)
+	}
+	if undefIdx == -1 || len(rest) == 0 {
 		return frontend.Type{}, false
 	}
-	a, b := members[0], members[1]
-	switch {
-	case a.Flags == frontend.TypeUndefined && b.Flags != frontend.TypeUndefined:
-		return b, true
-	case b.Flags == frontend.TypeUndefined && a.Flags != frontend.TypeUndefined:
-		return a, true
-	default:
-		return frontend.Type{}, false
+	if len(rest) == 1 {
+		return rest[0], true
 	}
+	for _, m := range rest {
+		if m.Flags&frontend.TypeBoolean == 0 {
+			return frontend.Type{}, false
+		}
+	}
+	return rest[0], true
 }
