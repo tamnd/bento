@@ -122,6 +122,10 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// once and read once. Without this a redeclaration reads as a use and a never-read
 	// redeclared var goes unblanked, so the emitted Go trips declared-and-not-used.
 	r.bindingDecls = countBindingDecls(r.prog, entry)
+	// Record the stored Map and Set iterators a local holds and one for...of drives, so
+	// their declarations emit nothing and each loop ranges the receiver directly. It
+	// reads the use tallies above to prove the local is referenced exactly once.
+	r.collectStoredCollIters(entry)
 
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
