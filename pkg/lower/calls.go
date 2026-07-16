@@ -213,6 +213,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "call to an unresolved callee is a later slice"}
 	}
+	// A call to a name imported from a sibling module resolves to an alias symbol,
+	// which carries neither the function flag nor the exported name its declaration
+	// took. Resolving the alias to the symbol it names recovers the callee the
+	// sibling emitted, so the call spells the same Go function name, the way a call
+	// within the declaring module does.
+	sym = r.derefAlias(sym)
 	// The callee resolves either to a top-level function symbol, called by the
 	// exported Go name its declaration takes, or to a value binding of function
 	// type (an arrow stored in a const, a callback parameter), called directly on

@@ -54,6 +54,7 @@ var nodeModuleExports = map[string]map[string]bool{
 // NotYetLowerable so the whole unit routes to the engine rather than compiling a
 // call to a helper that does not exist.
 func (r *Renderer) collectNodeImports(entry frontend.Node) error {
+	internal := r.internalImports(entry)
 	for _, stmt := range r.prog.Children(entry) {
 		if stmt.Kind() != frontend.NodeUnknown {
 			continue
@@ -61,11 +62,33 @@ func (r *Renderer) collectNodeImports(entry frontend.Node) error {
 		if !strings.HasPrefix(strings.TrimSpace(r.prog.Text(stmt)), "import") {
 			continue
 		}
-		if err := r.recordNodeImport(stmt); err != nil {
+		if err := r.recordNodeImport(stmt, internal); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// internalImports returns the set of module specifiers this file statically
+// imports that resolve to another source file in the composed program, the
+// sibling modules the build staged and lowered alongside the entry. A binding
+// imported from one of these resolves to that module's package-level Go
+// declaration, so the import records nothing and each reference lowers to that
+// name directly, the way a reference to a top-level function in the same file
+// does. A relative specifier that resolves to a declaration file or to nothing is
+// not one of these; it stays with the node: and go: paths, which decline it.
+func (r *Renderer) internalImports(file frontend.Node) map[string]bool {
+	out := map[string]bool{}
+	for _, imp := range r.prog.Imports(file.File()) {
+		if imp.Kind != frontend.ImportRelative {
+			continue
+		}
+		if imp.Resolved.Path == "" || imp.Resolved.Kind == frontend.FileDTS {
+			continue
+		}
+		out[imp.Specifier] = true
+	}
+	return out
 }
 
 // recordNodeImport parses one import declaration and records its bindings. The
@@ -76,7 +99,7 @@ func (r *Renderer) collectNodeImports(entry frontend.Node) error {
 // import specifier's identifier children are the exported name and, when the
 // import is aliased, the local binding; the first is the export bento dispatches
 // on and the last is the local name a call site uses.
-func (r *Renderer) recordNodeImport(decl frontend.Node) error {
+func (r *Renderer) recordNodeImport(decl frontend.Node, internal map[string]bool) error {
 	kids := r.prog.Children(decl)
 	var module string
 	var clause frontend.Node
@@ -88,6 +111,13 @@ func (r *Renderer) recordNodeImport(decl frontend.Node) error {
 		case frontend.NodeUnknown:
 			clause, haveClause = k, true
 		}
+	}
+	// A sibling module the build composed into this unit exposes its exports as
+	// package-level Go declarations, so an import of one binds each name to a Go
+	// name already in scope and records nothing here, the way a reference to a
+	// top-level function in the same file needs no recording.
+	if internal[module] {
+		return r.recordInternalImport(module, clause, haveClause)
 	}
 	// A go: specifier is a Go interop import, not a node: builtin, so it routes to
 	// the interop recorder, which maps its bindings to direct Go calls. It is handled
@@ -128,6 +158,33 @@ func (r *Renderer) recordNodeImport(decl frontend.Node) error {
 			return &NotYetLowerable{Reason: "import of " + exported + " from " + module + " is a later slice"}
 		}
 		r.nodeImports[local] = nodeBuiltin{module: module, name: exported}
+	}
+	return nil
+}
+
+// recordInternalImport handles an import from a sibling module the build composed
+// into the same unit. A named import binds each name to the sibling's
+// package-level Go declaration, which carries the same Go spelling the binding
+// takes there, so the import records nothing and each reference lowers to that
+// name directly. The forms this slice does not lower hand back so the whole unit
+// routes to the engine rather than emit a reference with no target: a bare
+// side-effect import (whose module evaluation order the composed unit would have
+// to preserve), a default or namespace import, and an aliased import (whose local
+// name differs from the exported one, so the reference would not spell the
+// declaration's Go name).
+func (r *Renderer) recordInternalImport(module string, clause frontend.Node, haveClause bool) error {
+	if !haveClause {
+		return &NotYetLowerable{Reason: "a bare side-effect import of a sibling module is a later slice"}
+	}
+	named, ok := namedImportsNode(r.prog, clause)
+	if !ok {
+		return &NotYetLowerable{Reason: "a default or namespace import of a sibling module is a later slice"}
+	}
+	for _, spec := range r.prog.Children(named) {
+		names := identChildren(r.prog, spec)
+		if len(names) >= 2 && names[0] != names[len(names)-1] {
+			return &NotYetLowerable{Reason: "an aliased import of a sibling module is a later slice"}
+		}
 	}
 	return nil
 }

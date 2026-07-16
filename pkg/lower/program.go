@@ -42,6 +42,30 @@ type Program struct {
 // slice; today a program whose functions are self-contained (the common shape of
 // the compute workloads, which are a single top-level body) compiles.
 func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
+	return r.RenderProgramModules(entry, nil)
+}
+
+// RenderProgramModules lowers an entry source file together with the sibling
+// modules it imports, which the build composed and staged alongside it, into one
+// runnable Go program. The entry lowers exactly as it does alone: its top-level
+// statements become main's body and its declarations become package-level Go. A
+// sibling contributes its declarations to the same package, so an import of one
+// of its exports resolves to a package-level Go name the entry references
+// directly. This slice composes a sibling's declarations, not its top-level
+// evaluation: a sibling that carries runtime, a variable statement or a
+// side-effecting statement whose order the composed unit would have to preserve,
+// hands back (see collectModules). With no siblings this is exactly the
+// single-file path.
+func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Node) (Program, error) {
+	// The sibling modules register first: their classes, enums, and generic
+	// instantiations join the shared pre-pass state so an entry call site resolves
+	// against them, and their top-level functions come back to emit as package
+	// funcs beside the entry's. A sibling this slice cannot compose hands back here
+	// before the entry lowers.
+	depFuncs, err := r.collectModules(deps)
+	if err != nil {
+		return Program{}, err
+	}
 	// Names that are not Go identifiers mangle through a pure function of the
 	// name (ident.go), so declaration and reference agree with no shared table.
 	// The one spelling that scheme cannot make safe is a module that speaks
@@ -368,8 +392,23 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 	// state, so both main and the functions name the same variable.
 	file.Decls = append(file.Decls, moduleVars...)
 	file.Decls = append(file.Decls, classDecls...)
+	// A composed sibling's functions emit as package funcs before the entry's, the
+	// order a hand-written Go file keeps a dependency above its user.
+	file.Decls = append(file.Decls, depFuncs...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
+
+	// Two composed modules can each declare a binding whose Go name is the same,
+	// distinct TypeScript symbols the checker never compares because they live in
+	// different modules, but one Go identifier the build would reject. Within a
+	// single file the per-file mangle-collision check already proved names unique;
+	// across the composed unit this final scan catches a cross-module clash and
+	// hands the whole unit back rather than emit Go that does not build.
+	if len(deps) > 0 {
+		if err := composedNameCollision(file.Decls); err != nil {
+			return Program{}, err
+		}
+	}
 
 	// Every not-assignable diagnostic the front door admitted (2345 for a call
 	// argument, 2322 for an assignment or initializer) must have flowed through a
