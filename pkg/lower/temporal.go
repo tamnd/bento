@@ -380,14 +380,11 @@ func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argN
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype.equals takes exactly one argument"}
 		}
-		if !r.isInstant(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.Instant.prototype.equals over a non-Instant argument (a string to coerce) is a later slice"}
-		}
-		recv, err := r.lowerExpr(recvNode)
+		other, err := r.coerceInstantArg("Temporal.Instant.prototype.equals", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		other, err := r.lowerExpr(argNodes[0])
+		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
@@ -427,10 +424,7 @@ func (r *Renderer) instantMethodCall(recvNode frontend.Node, method string, argN
 		if len(argNodes) == 0 {
 			return nil, &NotYetLowerable{Reason: what + " takes at least one argument"}
 		}
-		if !r.isInstant(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.Instant is a later slice"}
-		}
-		other, err := r.lowerExpr(argNodes[0])
+		other, err := r.coerceInstantArg(what, argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -558,26 +552,25 @@ func (r *Renderer) instantDifferenceOptions(what string, argNodes []frontend.Nod
 	return largestUnit, smallestUnit, increment, mode, nil
 }
 
-// instantStaticCall lowers a static call on Temporal.Instant. compare lowers to
+// instantStaticCall lowers a static call on Temporal.Instant. compare coerces each argument to an
+// Instant through coerceInstantArg, so a string orders against the instant it names, then lowers to
 // value.InstantCompare; fromEpochMilliseconds and fromEpochNanoseconds lower to the
 // matching value factory over a number or a bigint; from lowers to value.InstantFrom for
 // an Instant argument (the copy the specification makes) and to value.InstantFromString for a
-// string literal. An Instant ignores any calendar the string names, so the literal needs no
-// calendar gate, like PlainTime; only a dynamic string or a non-string argument hands back.
+// string. An Instant ignores any calendar the string names, so the string needs no
+// calendar gate, like PlainTime, and a dynamic string coerces too; only a non-string, non-Instant
+// argument hands back.
 func (r *Renderer) instantStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
 		if len(argNodes) != 2 {
 			return nil, &NotYetLowerable{Reason: "Temporal.Instant.compare takes exactly two arguments"}
 		}
-		if !r.isInstant(argNodes[0]) || !r.isInstant(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.Instant.compare over an argument that is not an Instant (a string to coerce) is a later slice"}
-		}
-		a, err := r.lowerExpr(argNodes[0])
+		a, err := r.coerceInstantArg("Temporal.Instant.compare", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		b, err := r.lowerExpr(argNodes[1])
+		b, err := r.coerceInstantArg("Temporal.Instant.compare", argNodes[1])
 		if err != nil {
 			return nil, err
 		}
@@ -637,6 +630,33 @@ func (r *Renderer) instantStaticCall(method string, argNodes []frontend.Node) (a
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.Instant." + method + " is a later slice"}
 	}
+}
+
+// coerceInstantArg lowers an Instant-like argument to an expression yielding a *value.Instant, the
+// ToTemporalInstant coercion the compare, equals, until, and since methods apply to their argument.
+// It mirrors coercePlainTimeArg over the Instant from machinery: an Instant lowers directly (a
+// comparison reads the operand without a fresh copy), and a string, whether a literal or a
+// string-typed value, parses through value.InstantFromString. An Instant ignores any calendar the
+// string names, so like PlainTime it needs no calendar gate and can coerce a dynamic string too.
+// ToTemporalInstant takes no property bag, so only a value that is neither an Instant nor a string
+// keeps its handback.
+func (r *Renderer) coerceInstantArg(what string, argNode frontend.Node) (ast.Expr, error) {
+	if r.isInstant(argNode) {
+		return r.lowerExpr(argNode)
+	}
+	if lit, ok := r.stringLiteralValue(argNode); ok {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "InstantFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
+	}
+	if r.isString(argNode) {
+		arg, err := r.lowerExpr(argNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "InstantFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a dynamic value that is not a Temporal.Instant is a later slice"}
 }
 
 // newInstant lowers new Temporal.Instant over its single bigint argument, the nanoseconds
