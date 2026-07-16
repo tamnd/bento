@@ -137,6 +137,16 @@ func (r *Renderer) flattenConditionalDecl(n frontend.Node) ([]ast.Stmt, bool, er
 	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false, nil
 	}
+	// A binding the checker types any or unknown stores a boxed value.Value, not the
+	// branches' widened primitive condResultType would give the flattened slot. The
+	// flattened form writes each branch raw, so it would land a value.BStr in a slot a
+	// dynamic use later reads as a box, which go build rejects. Hand the whole decl to
+	// the ordinary path, which lowers the ternary to its IIFE and boxes the one result
+	// through boxStaticToDynamic the same way a plain `const v: any = "s"` boxes its
+	// string, so the dynamic slot holds the value.Value its reads expect.
+	if r.isDynamic(nameNode) {
+		return nil, false, nil
+	}
 	// The temporary takes the branches' widened primitive type, not the checker's
 	// type for the binding: an un-annotated const s = c ? "pos" : "neg" is inferred
 	// as the literal union "pos" | "neg", but the branches lower to value.BStr, so
