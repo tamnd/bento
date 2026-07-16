@@ -354,6 +354,9 @@ func (r *Renderer) defaultFillFor(tok token.Token, name string, nameGo, read, de
 // top-level path. A default fills through the nesting from AtOpt and a trailing rest
 // gathers the tail, the same fill and gather rules the top-level array path applies.
 func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType frontend.Type, tok token.Token) ([]ast.Stmt, error) {
+	if elems, ok := r.prog.TupleElements(patType); ok {
+		return r.bindSubTuple(pat, recv, patType, elems, tok)
+	}
 	elemT, ok := r.prog.ElementType(patType)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "a nested array pattern over a non-array or tuple type is a later slice"}
@@ -430,6 +433,88 @@ func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType fronte
 			return nil, err
 		}
 		out = append(out, bind)
+	}
+	return out, nil
+}
+
+// bindSubTuple binds an array pattern whose source type is a tuple against a receiver
+// that already holds the tuple struct value, reading each name off its positional
+// field: for (const [k, v] of pairs) binds k := e.E0; v := e.E1, and a nested
+// [[a, b]] reads the inner tuple off the outer position it was minted into. It is the
+// tuple arm of bindSubArray, and the for...of and nested-pattern sibling of
+// tupleDestructure: where an ordinary array element reads through the bounds-checked
+// AtI its dynamic length needs, a tuple's positions are fixed and typed, so each read
+// is a plain struct selector. This slice binds plain positional names only. A nested
+// pattern, a default, a rest element, a pattern binding more names than the tuple has,
+// an optional or rest tuple position, and a binding whose declared type differs from
+// the tuple element's Go type each hand back, the same edges tupleDestructure defers,
+// so a form this slice does not yet cover stays a clean handback rather than mislower.
+func (r *Renderer) bindSubTuple(pat frontend.Node, recv ast.Expr, patType frontend.Type, elems []frontend.TupleElem, tok token.Token) ([]ast.Stmt, error) {
+	patElems := r.prog.Children(pat)
+	if len(patElems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty array destructuring pattern binds nothing"}
+	}
+	fixedElems, _, hasRest, err := r.splitArrayRest(patElems)
+	if err != nil {
+		return nil, err
+	}
+	if hasRest {
+		return nil, &NotYetLowerable{Reason: "a tuple destructuring rest element is a later slice"}
+	}
+	if len(fixedElems) > len(elems) {
+		return nil, &NotYetLowerable{Reason: "a tuple destructuring pattern that binds more elements than the tuple has is a later slice"}
+	}
+	// Emit the struct so the field reads name a declared Go type, even where the tuple
+	// type reached the renderer only through this pattern.
+	if _, err := r.decls.internTuple(r, patType, elems); err != nil {
+		return nil, err
+	}
+	var out []ast.Stmt
+	seen := map[string]bool{}
+	for i, el := range fixedElems {
+		info, err := r.classifyArrayElem(el)
+		if err != nil {
+			return nil, err
+		}
+		if info.nested != nil || info.hasDefault {
+			return nil, &NotYetLowerable{Reason: "a tuple destructuring nested pattern or defaulted element is a later slice"}
+		}
+		if elems[i].Optional || elems[i].Rest {
+			return nil, &NotYetLowerable{Reason: "a tuple destructuring bind of an optional or rest element is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(info.nameNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+		}
+		// A `var` pattern may repeat a name, [x, x], which JavaScript binds once with
+		// the last position winning; two `x :=` reads would be no-new-variables in Go,
+		// so a repeated name hands back rather than emit a rejected second declaration.
+		if seen[name] {
+			return nil, &NotYetLowerable{Reason: "a tuple destructuring that repeats a bound name is a later slice"}
+		}
+		seen[name] = true
+		// The binding's declared type must render to the same Go type as the tuple
+		// field it reads, so k := e.E0 is a well-typed assignment. They agree in the
+		// common case, since the checker types the binding off the tuple element; a
+		// case where they diverge hands back rather than emit a mismatched read.
+		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		if err != nil {
+			return nil, err
+		}
+		fieldGo, err := r.typeExpr(elems[i].Type)
+		if err != nil {
+			return nil, err
+		}
+		if same, err := sameGoType(nameGo, fieldGo); err != nil {
+			return nil, err
+		} else if !same {
+			return nil, &NotYetLowerable{Reason: "a tuple destructuring where a binding's type differs from the tuple element type is a later slice"}
+		}
+		out = append(out, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: tok,
+			Rhs: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))}},
+		})
 	}
 	return out, nil
 }
