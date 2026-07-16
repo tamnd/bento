@@ -64,6 +64,48 @@ func TestGeneratorSpreadDrainsCoroutine(t *testing.T) {
 	}
 }
 
+// TestGeneratorSpreadIntoRestParam proves a spread of a generator into a rest
+// parameter drains the same coroutine, so the callee receives the yielded values as
+// the collected rest slice, alone and mixed with fixed arguments.
+func TestGeneratorSpreadIntoRestParam(t *testing.T) {
+	skipIfShort(t)
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"bare",
+			"function sum(...ns: number[]): number { let t = 0; for (const n of ns) t += n; return t; }\n" +
+				"function* g(): Generator<number> { yield 1; yield 2; yield 3; }\n" +
+				"console.log(sum(...g()));\n",
+			"6\n",
+		},
+		{
+			"mixed with fixed args",
+			"function sum(...ns: number[]): number { let t = 0; for (const n of ns) t += n; return t; }\n" +
+				"function* g(): Generator<number> { yield 1; yield 2; yield 3; }\n" +
+				"console.log(sum(10, ...g(), 20));\n",
+			"36\n",
+		},
+		{
+			"string element",
+			"function join(...ss: string[]): string { return ss.join(\"-\"); }\n" +
+				"function* g(): Generator<string> { yield \"a\"; yield \"b\"; }\n" +
+				"console.log(join(\"x\", ...g()));\n",
+			"x-a-b\n",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got := runProgramGo(t, c.src); got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // TestGeneratorSpreadEmitsDrain pins the lowering shape: a spread of a generator
 // pulls its Next(value.Undefined) until done and appends the yields, so the emitted
 // output carries the coroutine pull rather than an Elems splice.
