@@ -755,9 +755,9 @@ func TestPlainTimeHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "until over a string argument",
-			src:  "const a = new Temporal.PlainTime(12, 30);\nconst d = a.until(\"14:00\");\nconsole.log(d.hours);",
-			want: "Temporal.PlainTime.prototype.until over an argument that is not a Temporal.PlainTime is a later slice",
+			name: "until over a dynamic non-string, non-bag argument",
+			src:  "function go(x: any) {\n  const a = new Temporal.PlainTime(12, 30);\n  return a.until(x).hours;\n}\nconsole.log(go(new Temporal.PlainTime(14, 0)));",
+			want: "Temporal.PlainTime.prototype.until over a dynamic value that is not a Temporal.PlainTime is a later slice",
 		},
 		{
 			name: "add over a dynamic string",
@@ -956,6 +956,70 @@ console.log(d.minutes);`
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered program missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// TestPlainTimeComparisonCoercesArg pins the ToTemporalTime coercion the comparison and
+// difference methods apply: compare, equals, until, and since accept a string literal, a
+// string-typed value, or a property bag naming the time and route it through
+// value.PlainTimeFromString or value.PlainTimeFromFields before comparing.
+func TestPlainTimeComparisonCoercesArg(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "compare over string literals",
+			src:   "console.log(Temporal.PlainTime.compare(\"12:30:00\", \"14:00:00\"));",
+			wants: []string{"value.PlainTimeCompare(", "value.PlainTimeFromString(\"12:30:00\")", "value.PlainTimeFromString(\"14:00:00\")"},
+		},
+		{
+			name:  "compare over property bags",
+			src:   "console.log(Temporal.PlainTime.compare({ hour: 12 }, { hour: 13 }));",
+			wants: []string{"value.PlainTimeCompare(", "value.PlainTimeFromFields(", `"constrain"`},
+		},
+		{
+			name:  "equals over a string literal",
+			src:   "const t = new Temporal.PlainTime(12, 30);\nconsole.log(t.equals(\"12:30:00\"));",
+			wants: []string{".Equals(", "value.PlainTimeFromString(\"12:30:00\")"},
+		},
+		{
+			name:  "until over a dynamic string",
+			src:   "function go(s: string) {\n  const t = new Temporal.PlainTime(12, 30);\n  return t.until(s).hours;\n}\nconsole.log(go(\"14:00:00\"));",
+			wants: []string{".Until(", "value.PlainTimeFromString(s.ToGoString())"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainTimeComparisonCoercionRuns builds and runs the coercion end to end, proving a string
+// and a property bag reach the runtime as the times they name: compare orders them, equals
+// compares the wall clock, and until measures the hour span.
+func TestPlainTimeComparisonCoercionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `console.log(Temporal.PlainTime.compare("12:30:00", "14:00:00"));
+console.log(Temporal.PlainTime.compare("14:00:00", "12:30:00"));
+console.log(Temporal.PlainTime.compare({ hour: 12 }, { hour: 13 }));
+const t = new Temporal.PlainTime(12, 30);
+console.log(t.equals("12:30:00"));
+console.log(t.equals({ hour: 13 }));
+const z = new Temporal.PlainTime(0, 0);
+console.log(z.until("10:00:00").hours);
+`
+	got := runProgramGo(t, src)
+	const want = "-1\n1\n-1\ntrue\nfalse\n10\n"
+	if got != want {
+		t.Fatalf("PlainTime comparison coercion printed %q, want %q", got, want)
 	}
 }
 

@@ -2120,14 +2120,11 @@ func (r *Renderer) plainTimeMethodCall(recvNode frontend.Node, method string, ar
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype.equals takes exactly one argument"}
 		}
-		if !r.isPlainTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype.equals over a non-PlainTime argument (a string or bag to coerce) is a later slice"}
-		}
-		recv, err := r.lowerExpr(recvNode)
+		other, err := r.coercePlainTimeArg("Temporal.PlainTime.prototype.equals", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		other, err := r.lowerExpr(argNodes[0])
+		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
@@ -2200,10 +2197,7 @@ func (r *Renderer) plainTimeMethodCall(recvNode frontend.Node, method string, ar
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.prototype." + method + " takes at least one argument"}
 		}
 		what := "Temporal.PlainTime.prototype." + method
-		if !r.isPlainTime(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainTime is a later slice"}
-		}
-		other, err := r.lowerExpr(argNodes[0])
+		other, err := r.coercePlainTimeArg(what, argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -3766,7 +3760,9 @@ func (r *Renderer) zonedDateTimeDifferenceOptions(what string, argNodes []fronte
 }
 
 // plainTimeStaticCall lowers Temporal.PlainTime.compare(a, b) or Temporal.PlainTime.from(x),
-// the mirror of the PlainDate statics. compare lowers to value.PlainTimeCompare; from lowers
+// the mirror of the PlainDate statics. compare coerces each argument to a PlainTime through
+// coercePlainTimeArg, so a PlainTime, a string, or a property bag all order on the wall clock,
+// and lowers to value.PlainTimeCompare; from lowers
 // to value.PlainTimeFrom for a PlainTime argument, value.PlainTimeFromString for a string,
 // and value.PlainTimeFromFields for a property bag with an optional overflow option. A
 // PlainTime carries no calendar, so unlike the PlainDate from there is no calendar gate. A
@@ -3778,14 +3774,11 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 		if len(argNodes) != 2 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.compare takes exactly two arguments"}
 		}
-		if !r.isPlainTime(argNodes[0]) || !r.isPlainTime(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainTime.compare over an argument that is not a PlainTime (a string or bag to coerce) is a later slice"}
-		}
-		a, err := r.lowerExpr(argNodes[0])
+		a, err := r.coercePlainTimeArg("Temporal.PlainTime.compare", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		b, err := r.lowerExpr(argNodes[1])
+		b, err := r.coercePlainTimeArg("Temporal.PlainTime.compare", argNodes[1])
 		if err != nil {
 			return nil, err
 		}
@@ -3837,6 +3830,41 @@ func (r *Renderer) plainTimeStaticCall(method string, argNodes []frontend.Node) 
 	default:
 		return nil, &NotYetLowerable{Reason: "Temporal.PlainTime." + method + " is a later slice"}
 	}
+}
+
+// coercePlainTimeArg lowers a PlainTime-like argument to an expression yielding a *value.PlainTime,
+// the ToTemporalTime coercion the comparison and difference methods apply to their argument. It
+// mirrors coercePlainDateArg over the PlainTime from machinery, and because a PlainTime carries no
+// calendar it needs no calendar gate and can coerce a dynamic string the way PlainTime.from does: a
+// PlainTime lowers directly, a string literal or a string-typed value parses through
+// value.PlainTimeFromString, and an object literal reads its time fields through plainTimeBagFields
+// and builds a value.PlainTimeFromFields call under the default constrain overflow. Only a dynamic
+// value that is neither a PlainTime, a string, nor an object literal hands back.
+func (r *Renderer) coercePlainTimeArg(what string, argNode frontend.Node) (ast.Expr, error) {
+	if r.isPlainTime(argNode) {
+		return r.lowerExpr(argNode)
+	}
+	if lit, ok := r.stringLiteralValue(argNode); ok {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
+	}
+	if r.isString(argNode) {
+		arg, err := r.lowerExpr(argNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromString"), Args: []ast.Expr{goStringOf(arg)}}, nil
+	}
+	if argNode.Kind() == frontend.NodeObjectLiteralExpression {
+		fields, err := r.plainTimeBagFields(what, argNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainTimeFromFields"), Args: append(fields[:], stringLit("constrain"))}, nil
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a dynamic value that is not a Temporal.PlainTime is a later slice"}
 }
 
 // plainDateTimeStaticCall lowers Temporal.PlainDateTime.compare(a, b) or
