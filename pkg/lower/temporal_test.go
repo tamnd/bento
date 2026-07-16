@@ -1624,9 +1624,9 @@ func TestPlainYearMonthHandBacks(t *testing.T) {
 		want string
 	}{
 		{
-			name: "until over a string argument",
-			src:  "const ym = new Temporal.PlainYearMonth(2020, 3);\nconst d = ym.until(\"2020-05\");\nconsole.log(d.months);",
-			want: "Temporal.PlainYearMonth.prototype.until over an argument that is not a Temporal.PlainYearMonth",
+			name: "until over a dynamic non-string, non-bag argument",
+			src:  "function go(x: any) {\n  const ym = new Temporal.PlainYearMonth(2020, 3);\n  return ym.until(x).months;\n}\nconsole.log(go(5));",
+			want: "Temporal.PlainYearMonth.prototype.until over a dynamic value that is not a Temporal.PlainYearMonth is a later slice",
 		},
 		{
 			name: "from a bag with a calendar",
@@ -1678,6 +1678,69 @@ console.log(b.toString());`
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered program missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// TestPlainYearMonthComparisonCoercesArg pins the ToTemporalYearMonth coercion the compare,
+// equals, until, and since methods apply to their argument: an ISO string literal parses through
+// value.PlainYearMonthFromString and a year-month-like bag through value.PlainYearMonthFromFields,
+// so a comparison measures against the year-month the argument names rather than handing back.
+func TestPlainYearMonthComparisonCoercesArg(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "compare over string literals",
+			src:   "console.log(Temporal.PlainYearMonth.compare(\"2020-03\", \"2020-04\"));",
+			wants: []string{"value.PlainYearMonthCompare(", "value.PlainYearMonthFromString(\"2020-03\")", "value.PlainYearMonthFromString(\"2020-04\")"},
+		},
+		{
+			name:  "compare over property bags",
+			src:   "console.log(Temporal.PlainYearMonth.compare({ year: 2020, month: 3 }, { year: 2020, month: 4 }));",
+			wants: []string{"value.PlainYearMonthCompare(", "value.PlainYearMonthFromFields(", `"constrain"`},
+		},
+		{
+			name:  "equals over a string literal",
+			src:   "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym.equals(\"2020-03\"));",
+			wants: []string{".Equals(", "value.PlainYearMonthFromString(\"2020-03\")"},
+		},
+		{
+			name:  "until over a string literal",
+			src:   "const ym = new Temporal.PlainYearMonth(2020, 3);\nconsole.log(ym.until(\"2021-03\", { largestUnit: \"month\" }).months);",
+			wants: []string{".Until(", "value.PlainYearMonthFromString(\"2021-03\")"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainYearMonthComparisonCoercionRuns builds and runs the coercion end to end, proving an ISO
+// string and a year-month-like bag reach the runtime as the year-months they name: compare orders
+// them, equals tests identity, and until measures the month span.
+func TestPlainYearMonthComparisonCoercionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `console.log(Temporal.PlainYearMonth.compare("2020-03", "2020-04"));
+console.log(Temporal.PlainYearMonth.compare("2020-04", "2020-03"));
+console.log(Temporal.PlainYearMonth.compare({ year: 2020, month: 3 }, { year: 2020, month: 4 }));
+const ym = new Temporal.PlainYearMonth(2020, 3);
+console.log(ym.equals("2020-03"));
+console.log(ym.equals({ year: 2020, month: 4 }));
+console.log(ym.until("2021-03", { largestUnit: "month" }).months);
+`
+	got := runProgramGo(t, src)
+	const want = "-1\n1\n-1\ntrue\nfalse\n12\n"
+	if got != want {
+		t.Fatalf("PlainYearMonth comparison coercion printed %q, want %q", got, want)
 	}
 }
 
