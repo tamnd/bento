@@ -1638,12 +1638,28 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	// target reads off that array by index the same way an array source does, so the
 	// bounds-checked AtI read and the whole binding loop below are shared. The element
 	// type is the iterable's yield type.
+	// A generator and a Set are built-in iterables the Symbol.iterator protocol path
+	// skips (symbolIteratorShape rejects their iterator types), so they drain on their
+	// own: a generator through its coroutine, a Set through its Members() snapshot. Each
+	// is collected into a value.Array bound once, indexed the same way an array or a
+	// user-iterable drain is, so only the drained expression differs.
 	iterShape, iterOK := iteratorShape{}, false
+	genOK, setOK := false, false
 	if !ok {
-		if iterShape, iterOK = r.symbolIteratorShape(initType); !iterOK {
+		if iterShape, iterOK = r.symbolIteratorShape(initType); iterOK {
+			elemT = iterShape.elem
+		} else if r.isGeneratorIterable(initNode) && !r.isIterHelperType(initType) {
+			if genElemT, gok := r.generatorElemType(initType); gok {
+				elemT, genOK = genElemT, true
+			}
+		} else if r.isSet(initNode) {
+			if setElemT, sok := r.setElem(initType); sok {
+				elemT, setOK = setElemT, true
+			}
+		}
+		if !iterOK && !genOK && !setOK {
 			return nil, true, &NotYetLowerable{Reason: "array destructuring on a non-array or tuple source is a later slice"}
 		}
-		elemT = iterShape.elem
 	}
 	elemGo, err := r.typeExpr(elemT)
 	if err != nil {
@@ -1699,15 +1715,27 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	}
 	var prefix []ast.Stmt
 	var recv func() (ast.Expr, error)
-	if iterOK {
-		// The iterable is drained into a value.Array bound once, so each index read
-		// selects off the held array and the iterator is walked a single time.
+	if iterOK || genOK || setOK {
+		// The source is drained into a value.Array bound once, so each index read selects
+		// off the held array and the source is walked a single time: a user iterable
+		// through its iterator, a generator through its coroutine, a Set through its typed
+		// Members() snapshot. Only the drained slice differs; the value.Array wrap and the
+		// indexed reads below are shared with the array-source path.
 		src, err := r.lowerExpr(initNode)
 		if err != nil {
 			return nil, true, err
 		}
 		r.requireImport(valuePkg)
-		drained := &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{r.iterableToSliceExpr(src, elemGo, iterShape)}}
+		var slice ast.Expr
+		switch {
+		case iterOK:
+			slice = r.iterableToSliceExpr(src, elemGo, iterShape)
+		case genOK:
+			slice = r.generatorToSliceExpr(src, elemGo)
+		case setOK:
+			slice = &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Members")}}
+		}
+		drained := &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{slice}}
 		tmp := r.freshTemp()
 		prefix = []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{drained}}}
 		recv = func() (ast.Expr, error) { return ident(tmp), nil }
