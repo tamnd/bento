@@ -164,6 +164,52 @@ func TestForOfNestedDestructureRuns(t *testing.T) {
 	}
 }
 
+// TestForOfTupleDestructureBindsFields proves a for...of whose element is a tuple
+// binds each name off its positional struct field, for (const [k, v] of pairs)
+// becoming k := e.E0; v := e.E1, the tuple counterpart of the AtI reads an
+// array-of-arrays element takes (typed/05 T7, delivery slice 5b).
+func TestForOfTupleDestructureBindsFields(t *testing.T) {
+	const src = "const pairs: [string, number][] = [[\"a\", 1]];\nfor (const [k, v] of pairs) {\n  console.log(k + v);\n}\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "range pairs.Elems()") {
+		t.Errorf("loop did not range over the array elements:\n%s", source)
+	}
+	if !strings.Contains(source, "k := ") || !strings.Contains(source, ".E0") {
+		t.Errorf("first name did not read field E0:\n%s", source)
+	}
+	if !strings.Contains(source, "v := ") || !strings.Contains(source, ".E1") {
+		t.Errorf("second name did not read field E1:\n%s", source)
+	}
+	if strings.Contains(source, ".AtI(") {
+		t.Errorf("tuple element read should be a field selector, not a bounds-checked AtI:\n%s", source)
+	}
+}
+
+// TestForOfTupleDestructureRuns builds and runs a for...of over a tuple array so the
+// positional field reads are proven to pick the right element of each pair.
+func TestForOfTupleDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const pairs: [string, number][] = [["a", 1], ["b", 2], ["c", 3]];
+for (const [k, v] of pairs) {
+  console.log(k + "=" + v);
+}
+`
+	if got, want := runProgramGo(t, src), "a=1\nb=2\nc=3\n"; got != want {
+		t.Fatalf("for-of tuple destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestForOfTupleDestructureRepeatedNameHandsBack proves a var pattern that repeats a
+// bound name over a tuple source hands back rather than emit two `x :=` reads Go
+// would reject as no-new-variables, the zero-fail edge the flat array path dedupes.
+func TestForOfTupleDestructureRepeatedNameHandsBack(t *testing.T) {
+	const src = "const pairs: [number, number][] = [[1, 2]];\nfor (var [x, x] of pairs) {\n  console.log(String(x));\n}\n"
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "repeats a bound name") {
+		t.Fatalf("repeated-name tuple for-of handback reason = %q, want a repeated-name reason", reason)
+	}
+}
+
 // TestForOfObjectDestructureUnusedHandsBack proves a for...of object pattern whose
 // bound name the body never reads hands back rather than emit a Go local the compiler
 // rejects as declared-and-not-used, since the shared binder cannot drop it the way the
