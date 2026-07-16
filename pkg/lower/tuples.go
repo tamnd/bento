@@ -350,3 +350,49 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 	}
 	return stmts, nil
 }
+
+// tupleDestructureValues lowers the right side of an assignment-form array destructure
+// whose source is a tuple variable, [a, b] = pair, into one field read per target,
+// pair.E0, pair.E1, ready for the parallel assignment. It is the assignment-form
+// sibling of tupleDestructure, which binds fresh names with :=; here the targets are
+// already-declared locals the caller assigns with =. The source is a plain identifier,
+// so each per-index read re-evaluates it harmlessly the same way the array AtI path
+// does. This is a pure read of the tuple, so it is sound under the value-struct model:
+// nothing is written back through the source. A pattern that binds more elements than
+// the tuple has, an optional or rest tuple position, and a target whose Go type differs
+// from the tuple element's each hand back, matching tupleDestructure's guards.
+func (r *Renderer) tupleDestructureValues(targets []frontend.Node, rhs frontend.Node, elems []frontend.TupleElem) ([]ast.Expr, error) {
+	if len(targets) > len(elems) {
+		return nil, &NotYetLowerable{Reason: "an assignment-form tuple destructure that binds more elements than the tuple has is a later slice"}
+	}
+	// Emit the struct so the field reads name a declared Go type, even where the tuple
+	// type reached the renderer only through this assignment.
+	if _, err := r.decls.internTuple(r, r.prog.TypeAt(rhs), elems); err != nil {
+		return nil, err
+	}
+	values := make([]ast.Expr, 0, len(targets))
+	for i, tgt := range targets {
+		if elems[i].Optional || elems[i].Rest {
+			return nil, &NotYetLowerable{Reason: "an assignment-form tuple destructure of an optional or rest element is a later slice"}
+		}
+		tgtGo, err := r.typeExpr(r.prog.TypeAt(tgt))
+		if err != nil {
+			return nil, err
+		}
+		fieldGo, err := r.typeExpr(elems[i].Type)
+		if err != nil {
+			return nil, err
+		}
+		if same, err := sameGoType(tgtGo, fieldGo); err != nil {
+			return nil, err
+		} else if !same {
+			return nil, &NotYetLowerable{Reason: "an assignment-form tuple destructure where a target's type differs from the tuple element type is a later slice"}
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))})
+	}
+	return values, nil
+}
