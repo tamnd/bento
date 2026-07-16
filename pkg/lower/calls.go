@@ -807,6 +807,22 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 				continue
 			}
 		}
+		// A spread of a Map used directly or of any entries() call into a rest parameter
+		// collects its [key, value] pairs into a fresh []Tuple the append splices, the same
+		// slice the array-literal spread builds. The rest element type must be the matching
+		// two-element tuple, so this is checked before the keys()/values() accessor path,
+		// which an entries() call also matches on receiver.
+		if members, ok, err := r.spreadCollEntries(operand, elemT, true); ok {
+			if err != nil {
+				return nil, err
+			}
+			flush()
+			if acc == nil {
+				acc = &ast.CompositeLit{Type: seedType}
+			}
+			acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
+			continue
+		}
 		// A spread of a Map or Set keys()/values() call into a rest parameter splices the
 		// same insertion-ordered snapshot slice the array-literal spread does: a Map's
 		// keys() and values() splice Keys() and Values(), a Set's keys() and values() both

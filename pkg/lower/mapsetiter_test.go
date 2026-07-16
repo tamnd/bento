@@ -156,3 +156,47 @@ for (const [k, v] of [...m]) {
 		t.Fatalf("map/set entries spread printed %q, want %q", got, want)
 	}
 }
+
+// TestSpreadMapIntoRestBuildsTupleSlice proves a spread of a Map into a rest parameter
+// collects the Keys/Values snapshots into a slice of the interned tuple the append
+// splices, the same collect the array-literal spread takes.
+func TestSpreadMapIntoRestBuildsTupleSlice(t *testing.T) {
+	const src = "function take(...ps: [string, number][]): number { return ps.length; }\n" +
+		"const m = new Map<string, number>();\nm.set(\"a\", 1);\nconsole.log(take(...m));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Keys()") || !strings.Contains(source, ".Values()") {
+		t.Errorf("map rest spread did not collect the Keys/Values snapshots:\n%s", source)
+	}
+	if !strings.Contains(source, "Tuple_str_num{") {
+		t.Errorf("map rest spread did not build the interned tuple:\n%s", source)
+	}
+}
+
+// TestSpreadMapEntriesIntoRestRuns builds and runs the rest-parameter spread forms,
+// including a leading positional element ahead of the spliced pairs, so the collected
+// tuples are proven to interleave and carry the right pairs.
+func TestSpreadMapEntriesIntoRestRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function first(...ps: [string, number][]): string {
+  return ps.length + ":" + ps[0][0] + "=" + ps[0][1];
+}
+function firstNum(...ps: [number, number][]): string {
+  return ps[0][0] + "," + ps[0][1];
+}
+const m = new Map<string, number>();
+m.set("x", 9);
+m.set("y", 8);
+console.log(first(...m));
+console.log(first(...m.entries()));
+const s = new Set<number>();
+s.add(5);
+console.log(firstNum(...s.entries()));
+const lead: [string, number] = ["lead", 0];
+console.log(first(lead, ...m));
+`
+	want := "2:x=9\n2:x=9\n5,5\n3:lead=0\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("map/set entries rest spread printed %q, want %q", got, want)
+	}
+}
