@@ -2148,6 +2148,64 @@ console.log(at("1970-01-01T00:00:00Z"));`
 	}
 }
 
+// TestInstantComparisonCoercesArg pins the ToTemporalInstant coercion the compare, equals, until,
+// and since methods apply to their argument: a string literal parses through
+// value.InstantFromString and a string-typed value through value.InstantFromString over its Go
+// string, so a comparison measures against the instant the argument names rather than handing back.
+func TestInstantComparisonCoercesArg(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "compare over string literals",
+			src:   "console.log(Temporal.Instant.compare(\"1970-01-01T00:00:00Z\", \"1970-01-01T00:00:01Z\"));",
+			wants: []string{"value.InstantCompare(", "value.InstantFromString(\"1970-01-01T00:00:00Z\")", "value.InstantFromString(\"1970-01-01T00:00:01Z\")"},
+		},
+		{
+			name:  "equals over a string literal",
+			src:   "const i = new Temporal.Instant(1000000000n);\nconsole.log(i.equals(\"1970-01-01T00:00:01Z\"));",
+			wants: []string{".Equals(", "value.InstantFromString(\"1970-01-01T00:00:01Z\")"},
+		},
+		{
+			name:  "until over a dynamic string",
+			src:   "function go(s: string) {\n  const i = new Temporal.Instant(0n);\n  return i.until(s, { largestUnit: \"hour\" }).hours;\n}\nconsole.log(go(\"1970-01-01T01:00:00Z\"));",
+			wants: []string{".Until(", "value.InstantFromString(s.ToGoString())"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestInstantComparisonCoercionRuns builds and runs the coercion end to end, proving a string
+// reaches the runtime as the instant it names: compare orders two instants, equals tests identity,
+// and until measures the hour span.
+func TestInstantComparisonCoercionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `console.log(Temporal.Instant.compare("1970-01-01T00:00:00Z", "1970-01-01T00:00:01Z"));
+console.log(Temporal.Instant.compare("1970-01-01T00:00:01Z", "1970-01-01T00:00:00Z"));
+const i = new Temporal.Instant(1000000000n);
+console.log(i.equals("1970-01-01T00:00:01Z"));
+console.log(i.equals("1970-01-01T00:00:00Z"));
+const z = new Temporal.Instant(0n);
+console.log(z.until("1970-01-01T01:00:00Z", { largestUnit: "hour" }).hours);
+`
+	got := runProgramGo(t, src)
+	const want = "-1\n1\ntrue\nfalse\n1\n"
+	if got != want {
+		t.Fatalf("Instant comparison coercion printed %q, want %q", got, want)
+	}
+}
+
 // TestInstantRun builds and runs the generated Go, proving the epoch getters read, the UTC
 // ISO string renders including a fractional second and a negative instant borrowing into
 // the previous day, and compare and equals answer.

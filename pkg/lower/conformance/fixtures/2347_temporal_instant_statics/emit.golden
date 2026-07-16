@@ -19,4 +19,6 @@ func main() {
 	value.ConsoleLog(b.ToString())
 	d := value.InstantFromEpochNanoseconds(big.NewInt(5000000000))
 	value.ConsoleLog(d.ToString())
+	value.ConsoleLog(value.NumberToString(value.InstantCompare(value.InstantFromString("1970-01-01T00:00:00Z"), value.InstantFromString("1970-01-01T00:00:01Z"))))
+	value.ConsoleLog(value.BoolToString(a.Equals(value.InstantFromString("1970-01-01T00:00:01Z"))))
 }
