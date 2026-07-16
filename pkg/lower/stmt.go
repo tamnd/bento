@@ -193,6 +193,15 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	var decls []frontend.Node
 	collectVarDecls(r.prog, kids[0], &decls)
 	if len(decls) != 1 {
+		// A head with no declaration assigns each element to an existing binding,
+		// `for (x of it)`, rather than declaring a fresh loop variable. The common
+		// identifier-target case over a backing-slice iterable lowers; anything else keeps
+		// the hand-back below.
+		if len(decls) == 0 {
+			if stmt, handled, err := r.forOfAssignTarget(kids[0], kids[1], kids[2]); handled || err != nil {
+				return stmt, err
+			}
+		}
 		return nil, &NotYetLowerable{Reason: "for...of with other than a single loop binding is a later slice"}
 	}
 	dkids := r.prog.Children(decls[0])
