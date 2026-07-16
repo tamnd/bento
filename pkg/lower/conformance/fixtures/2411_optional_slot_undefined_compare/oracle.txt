@@ -1,0 +1,7 @@
+== stdout:
+n-defined
+s-undefined
+p-defined
+
+== exit:
+0
