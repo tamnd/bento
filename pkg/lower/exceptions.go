@@ -983,8 +983,8 @@ func (r *Renderer) lowerThrow(n frontend.Node) (ast.Stmt, error) {
 // runtime's Thrown surface, the payload value.Throw and a generator's throw(e) both
 // raise. It is the shared conversion behind a throw statement and a generator throw:
 // a caught error re-raises the exact *value.Error it bound, a new built-in error or a
-// registered error class throws the instance itself, and a thrown string wraps in
-// value.ThrownString. Any other operand hands back until arbitrary thrown values box.
+// registered error class throws the instance itself, a thrown string wraps in
+// value.ThrownString, and any other thrown value boxes into value.NewThrownValue.
 func (r *Renderer) thrownOperand(node frontend.Node) (ast.Expr, error) {
 	// Re-throwing a caught error is the rethrow half of the exception model:
 	// catch (err) { ...; throw err } passes the recovered value straight back up.
@@ -1016,7 +1016,20 @@ func (r *Renderer) thrownOperand(node frontend.Node) (ast.Expr, error) {
 			r.usesThrow = true
 			return &ast.CallExpr{Fun: sel("value", "ThrownString"), Args: []ast.Expr{operand}}, nil
 		} else {
-			return nil, &NotYetLowerable{Reason: "throwing a value that is not a built-in error is a later slice"}
+			// Any other operand is a thrown value JavaScript allows but the runtime
+			// does not model as an error: a number, a boolean, null, undefined, or an
+			// object. It boxes into a value.Value and rides the runtime's ThrownValue
+			// carrier, which panics like every other thrown payload and reports the
+			// value's String form when it escapes every catch. A catch that recovers
+			// one binds the value itself, so `throw 42; ... catch (e) { e === 42 }`
+			// holds. boxOperand hands back on a source it cannot box yet, so a form
+			// still outside the box surface declines with that reason rather than here.
+			operand, err := r.boxOperand(node)
+			if err != nil {
+				return nil, err
+			}
+			r.usesThrow = true
+			return &ast.CallExpr{Fun: sel("value", "NewThrownValue"), Args: []ast.Expr{operand}}, nil
 		}
 	}
 	operand, err := r.lowerExpr(node)
@@ -1031,8 +1044,8 @@ func (r *Renderer) thrownOperand(node frontend.Node) (ast.Expr, error) {
 // can raise and recover. Only a new expression for a built-in error qualifies here;
 // re-throwing a caught error is recognized earlier in lowerThrow, where the binding
 // is known to be a *value.Error. A locally constructed error variable still hands
-// back until its type flows through, and any other operand hands back until
-// arbitrary thrown values are boxed.
+// back until its type flows through, and any other operand boxes into the runtime's
+// ThrownValue carrier through thrownOperand rather than raising a *value.Error here.
 func (r *Renderer) isThrowable(n frontend.Node) bool {
 	if n.Kind() == frontend.NodeNewExpression {
 		kids := r.prog.Children(n)

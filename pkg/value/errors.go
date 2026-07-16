@@ -238,6 +238,18 @@ func Caught(r any) *Error {
 			thrown:    StringValue(BStr(t)),
 			hasThrown: true,
 		}
+	case ThrownValue:
+		// A thrown non-error value binds as the value itself, so the catch reads the
+		// primitive or object the program raised: `throw 42` binds 42 and `e === 42`
+		// holds, `throw {}` binds the object. The runtime keeps the value's String form
+		// as the name so an uncaught rethrow reports it, but ToValue hands back the
+		// value rather than the {name, message} object, the way the string case does.
+		return &Error{
+			name:      FromGoString(t.ErrorName()),
+			message:   FromGoString(t.ErrorMessage()),
+			thrown:    t.Value(),
+			hasThrown: true,
+		}
 	case Thrown:
 		e := &Error{name: FromGoString(t.ErrorName()), message: FromGoString(t.ErrorMessage())}
 		// A boundary failure that wraps a Go error (the GoError a go: call raises)
@@ -299,6 +311,34 @@ func (t ThrownString) ErrorName() string { return BStr(t).ToGoString() }
 
 // ErrorMessage reports an empty message; a thrown primitive has none.
 func (t ThrownString) ErrorMessage() string { return "" }
+
+// ThrownValue is a thrown JavaScript value that is neither a built-in error nor a
+// primitive string: a number, a boolean, null, undefined, or an object the program
+// raised with `throw <expr>`. JavaScript allows any value to be thrown, so the
+// runtime models the general case with one carrier that boxes the raised value and
+// carries the Thrown surface with the value's String coercion as the name and no
+// message, so the uncaught reporter prints it the way the engine spells a thrown
+// value: `throw 7` reports "Uncaught 7" and `throw {}` reports "Uncaught
+// [object Object]". A catch that recovers one binds the value itself, so a dynamic
+// read of the binding sees the original value: throwing 42 and catching it holds
+// `e === 42` and `typeof e === "number"` the way a JavaScript catch binds the value.
+type ThrownValue struct{ v Value }
+
+// NewThrownValue wraps a raised value in the Thrown carrier, the payload a
+// `throw <expr>` over a non-error, non-string value lowers to.
+func NewThrownValue(v Value) ThrownValue { return ThrownValue{v: v} }
+
+// ErrorName reports the value's String coercion, the text the reporter prints
+// after "Uncaught ": a number spells its digits, an object its "[object Object]"
+// tag, null and undefined their literal words.
+func (t ThrownValue) ErrorName() string { return ToString(t.v).ToGoString() }
+
+// ErrorMessage reports an empty message; a thrown value carries none.
+func (t ThrownValue) ErrorMessage() string { return "" }
+
+// Value reports the wrapped value, the primitive or object a catch binds so the
+// binding reads back as the value the program threw.
+func (t ThrownValue) Value() Value { return t.v }
 
 // Throw raises a thrown value so an enclosing catch recovers it or the top-level
 // reporter surfaces it. The payload is anything carrying the Thrown surface: the
