@@ -91,6 +91,71 @@ console.log(c.day);`
 	}
 }
 
+// TestPlainDateComparisonCoercesArg pins the ToTemporalDate coercion the comparison and
+// difference methods apply to an argument that is not already a PlainDate: compare over a
+// string literal parses through PlainDateFromString and over a property bag reads through
+// PlainDateFromFields, equals coerces its one argument the same way, and until routes the
+// coerced date into Until.
+func TestPlainDateComparisonCoercesArg(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		wants []string
+	}{
+		{
+			name:  "compare over string literals",
+			src:   "console.log(Temporal.PlainDate.compare(\"2020-01-01\", \"2021-06-15\"));",
+			wants: []string{"value.PlainDateCompare(", "value.PlainDateFromString(\"2020-01-01\")", "value.PlainDateFromString(\"2021-06-15\")"},
+		},
+		{
+			name:  "compare over property bags",
+			src:   "console.log(Temporal.PlainDate.compare({ year: 2020, month: 1, day: 1 }, { year: 2020, month: 1, day: 2 }));",
+			wants: []string{"value.PlainDateCompare(", "value.PlainDateFromFields(", `"constrain"`},
+		},
+		{
+			name:  "equals over a string literal",
+			src:   "const d = new Temporal.PlainDate(2020, 3, 14);\nconsole.log(d.equals(\"2020-03-14\"));",
+			wants: []string{".Equals(", "value.PlainDateFromString(\"2020-03-14\")"},
+		},
+		{
+			name:  "until over a string literal",
+			src:   "const a = new Temporal.PlainDate(2020, 1, 1);\nconsole.log(a.until(\"2020-01-11\").days);",
+			wants: []string{".Until(", "value.PlainDateFromString(\"2020-01-11\")", `"day"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := renderProgram(t, c.src)
+			for _, want := range c.wants {
+				if !strings.Contains(got, want) {
+					t.Errorf("rendered program missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainDateComparisonCoercionRuns builds and runs the coercion end to end, proving a
+// string and a property bag reach the runtime as the dates they name: compare orders them,
+// equals folds the calendar in, and until measures the day span.
+func TestPlainDateComparisonCoercionRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `console.log(Temporal.PlainDate.compare("2020-01-01", "2021-06-15"));
+console.log(Temporal.PlainDate.compare("2021-06-15", "2020-01-01"));
+console.log(Temporal.PlainDate.compare({ year: 2020, month: 1, day: 1 }, { year: 2020, month: 1, day: 2 }));
+const d = new Temporal.PlainDate(2020, 3, 14);
+console.log(d.equals("2020-03-14"));
+console.log(d.equals({ year: 2020, month: 3, day: 15 }));
+const a = new Temporal.PlainDate(2020, 1, 1);
+console.log(a.until("2020-01-11").days);
+`
+	got := runProgramGo(t, src)
+	const want = "-1\n1\n-1\ntrue\nfalse\n10\n"
+	if got != want {
+		t.Fatalf("PlainDate comparison coercion printed %q, want %q", got, want)
+	}
+}
+
 // TestPlainDateAddSubtract pins the arithmetic: add routes to AddDate with the constrain
 // default carried as a string, subtract negates the Duration first, and an explicit reject
 // overflow rides through as the string argument.

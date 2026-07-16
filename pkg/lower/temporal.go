@@ -1413,14 +1413,11 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 		if len(argNodes) != 1 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype.equals takes exactly one argument"}
 		}
-		if !r.isPlainDate(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype.equals over a non-PlainDate argument (a string or bag to coerce) is a later slice"}
-		}
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
 		}
-		other, err := r.lowerExpr(argNodes[0])
+		other, err := r.coercePlainDateArg("Temporal.PlainDate.prototype.equals", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -1478,10 +1475,7 @@ func (r *Renderer) plainDateMethodCall(recvNode frontend.Node, method string, ar
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.prototype." + method + " takes at least one argument"}
 		}
 		what := "Temporal.PlainDate.prototype." + method
-		if !r.isPlainDate(argNodes[0]) {
-			return nil, &NotYetLowerable{Reason: what + " over an argument that is not a Temporal.PlainDate is a later slice"}
-		}
-		other, err := r.lowerExpr(argNodes[0])
+		other, err := r.coercePlainDateArg(what, argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -3019,23 +3013,21 @@ func (r *Renderer) monthDayFromFields(what string, n frontend.Node) (month, day,
 }
 
 // plainDateStaticCall lowers Temporal.PlainDate.compare(a, b) or Temporal.PlainDate.from(x).
-// compare lowers to value.PlainDateCompare over the two dates; from lowers to
-// value.PlainDateFrom for a PlainDate argument (the copy the specification makes) and hands
-// back for a string or a property bag, which need parsing this slice does not carry.
+// compare coerces each argument to a PlainDate through coercePlainDateArg, so a PlainDate, a
+// string literal, or a property bag all compare; from lowers to value.PlainDateFrom for a
+// PlainDate argument (the copy the specification makes), parses a string literal, and reads a
+// property bag.
 func (r *Renderer) plainDateStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "compare":
 		if len(argNodes) != 2 {
 			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.compare takes exactly two arguments"}
 		}
-		if !r.isPlainDate(argNodes[0]) || !r.isPlainDate(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "Temporal.PlainDate.compare over an argument that is not a PlainDate (a string or bag to coerce) is a later slice"}
-		}
-		a, err := r.lowerExpr(argNodes[0])
+		a, err := r.coercePlainDateArg("Temporal.PlainDate.compare", argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		b, err := r.lowerExpr(argNodes[1])
+		b, err := r.coercePlainDateArg("Temporal.PlainDate.compare", argNodes[1])
 		if err != nil {
 			return nil, err
 		}
@@ -3092,6 +3084,38 @@ func (r *Renderer) plainDateFromBag(what string, bag frontend.Node, optionNodes 
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "PlainDateFromFields"), Args: []ast.Expr{year, month, day, stringLit(cal), stringLit(overflow)}}, nil
+}
+
+// coercePlainDateArg lowers a PlainDate-like argument to an expression yielding a
+// *value.PlainDate, the ToTemporalDate coercion the comparison and difference methods
+// apply to an argument that is not already a Temporal.PlainDate. A PlainDate lowers
+// directly, a string literal naming a hosted calendar parses through PlainDateFromString,
+// and an object literal reads its year, month, and day through PlainDateFromFields under
+// the default constrain overflow. A dynamic string, a bag with a monthCode or a missing
+// field, an unhosted calendar, or any other shape hands back, the same gates
+// Temporal.PlainDate.from applies. Unlike from's PlainDate case, which copies the receiver
+// through PlainDateFrom, a PlainDate here lowers to the value itself, since a comparison
+// reads it without needing a fresh copy.
+func (r *Renderer) coercePlainDateArg(what string, argNode frontend.Node) (ast.Expr, error) {
+	if r.isPlainDate(argNode) {
+		return r.lowerExpr(argNode)
+	}
+	if lit, ok := r.stringLiteralValue(argNode); ok {
+		if !literalCalendarHosted(lit) {
+			return nil, &NotYetLowerable{Reason: what + " over a string naming a calendar bento does not host is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainDateFromString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, nil
+	}
+	if argNode.Kind() == frontend.NodeObjectLiteralExpression {
+		year, month, day, cal, err := r.plainDateFromFields(what, argNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PlainDateFromFields"), Args: []ast.Expr{year, month, day, stringLit(cal), stringLit("constrain")}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: what + " over a dynamic value that is not a Temporal.PlainDate is a later slice"}
 }
 
 // plainDateFromFields reads a PlainDate property bag at compile time into the three required
