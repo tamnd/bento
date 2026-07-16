@@ -28,34 +28,46 @@ type storedCollIter struct {
 // loop name the same object the direct `m.keys()` at the loop would.
 func (r *Renderer) collectStoredCollIters(entry frontend.Node) {
 	r.storedCollIters = map[frontend.Symbol]storedCollIter{}
-	// The symbols a for...of iterable identifier resolves to, so a candidate is kept
-	// only when its one reference is consumed by a loop the see-through path lowers.
-	forOfIterableSyms := map[frontend.Symbol]bool{}
-	var findForOf func(n frontend.Node)
-	findForOf = func(n frontend.Node) {
-		if n.Kind() == frontend.NodeForOfStatement {
+	// The symbols an identifier resolves to where it is consumed as a whole iterable:
+	// the iterable of a for...of, or the operand of a spread. A candidate is recorded
+	// only when its one reference is one of these, so the see-through path that ranges
+	// the receiver's snapshot is the code that handles the reference. A reference in any
+	// other position (a manual next(), an argument) is not a consumer, so the binding
+	// keeps the ordinary path and hands its iterator-object type back.
+	consumerSyms := map[frontend.Symbol]bool{}
+	var findConsumers func(n frontend.Node)
+	findConsumers = func(n frontend.Node) {
+		switch n.Kind() {
+		case frontend.NodeForOfStatement:
 			kids := r.prog.Children(n)
 			if len(kids) >= 2 && kids[1].Kind() == frontend.NodeIdentifier {
 				if sym, ok := r.prog.SymbolAt(kids[1]); ok {
-					forOfIterableSyms[sym] = true
+					consumerSyms[sym] = true
+				}
+			}
+		case frontend.NodeSpreadElement:
+			kids := r.prog.Children(n)
+			if len(kids) == 1 && kids[0].Kind() == frontend.NodeIdentifier {
+				if sym, ok := r.prog.SymbolAt(kids[0]); ok {
+					consumerSyms[sym] = true
 				}
 			}
 		}
 		for _, c := range r.prog.Children(n) {
-			findForOf(c)
+			findConsumers(c)
 		}
 	}
-	findForOf(entry)
+	findConsumers(entry)
 
 	var findDecls func(n frontend.Node)
 	findDecls = func(n frontend.Node) {
 		if n.Kind() == frontend.NodeVariableDeclaration {
-			if sym, ci, ok := r.storedCollIterDecl(n); ok && forOfIterableSyms[sym] {
-				// The binding is read exactly once, and that read is the for...of iterable:
-				// its references past the declaration name nodes total one, which the loop
-				// above proved is the loop. A binding read more than once, reassigned (a
-				// write is another reference), or read somewhere other than the loop fails
-				// this and keeps the ordinary path.
+			if sym, ci, ok := r.storedCollIterDecl(n); ok && consumerSyms[sym] {
+				// The binding is read exactly once, and that read is the consumer above:
+				// its references past the declaration name nodes total one, which the walk
+				// proved is a for...of iterable or a spread operand. A binding read more than
+				// once, reassigned (a write is another reference), or read somewhere other
+				// than the one consumer fails this and keeps the ordinary path.
 				if r.bindingUses[sym]-r.bindingDecls[sym] == 1 {
 					r.storedCollIters[sym] = ci
 				}
@@ -98,10 +110,10 @@ func (r *Renderer) storedCollIterDecl(decl frontend.Node) (frontend.Symbol, stor
 	return sym, storedCollIter{recv: recv, method: method, kind: kind}, true
 }
 
-// storedCollIterOf resolves an iterable node to the receiver and accessor of a stored
-// Map or Set iterator when the node is an identifier bound to one the pre-pass
-// recorded, so the for...of see-through can range the receiver the direct call form
-// ranges. Any other node, or an identifier not recorded, reports ok=false.
+// storedCollIterOf resolves a node to the receiver and accessor of a stored Map or Set
+// iterator when the node is an identifier bound to one the pre-pass recorded, so the
+// for...of and spread see-through can range the receiver the direct call form ranges.
+// Any other node, or an identifier not recorded, reports ok=false.
 func (r *Renderer) storedCollIterOf(iterable frontend.Node) (recv frontend.Node, method, kind string, ok bool) {
 	if iterable.Kind() != frontend.NodeIdentifier {
 		return nil, "", "", false

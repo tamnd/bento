@@ -34,8 +34,8 @@ func collCall(recv ast.Expr, method string) *ast.CallExpr {
 func (r *Renderer) mapSetIterForOfCall(iterable frontend.Node) (recv frontend.Node, method, kind string, ok bool) {
 	// An identifier bound to a stored Map or Set iterator the pre-pass recorded sees
 	// through to the receiver and accessor of the call it was declared from, so the one
-	// for...of that consumes it ranges the receiver's snapshot the direct call form
-	// ranges. The store's single-use guarantee is proven in collectStoredCollIters.
+	// consumer, a for...of or a spread, ranges the receiver's snapshot the direct call
+	// form ranges. The store's single-use guarantee is proven in collectStoredCollIters.
 	if recv, method, kind, ok := r.storedCollIterOf(iterable); ok {
 		return recv, method, kind, true
 	}

@@ -416,15 +416,16 @@ type Renderer struct {
 	// bindingUses in RenderProgram.
 	bindingDecls map[frontend.Symbol]int
 	// storedCollIters records, per binding symbol, a `const it = m.keys()` and its
-	// siblings whose Map or Set iterator the module stores in a local and then drives
-	// with exactly one for...of. Such a binding's type is the iterator object, which
-	// does not lower, so the declaration would hand the whole unit back; instead the
-	// declaration emits nothing and the one for...of ranges the receiver's snapshot the
-	// direct `for (const x of m.keys())` form already lowers to. It is filled once in
-	// RenderProgram and read at the declaration (to suppress it) and at the for...of (to
-	// see through the identifier to the receiver and accessor). A binding referenced more
-	// than once, or read anywhere but that one for...of, is not recorded, so the stored
-	// iterator's single-use semantics are preserved. It is program-scoped.
+	// siblings whose Map or Set iterator the module stores in a local and then consumes
+	// exactly once, as a for...of iterable or a spread operand. Such a binding's type is
+	// the iterator object, which does not lower, so the declaration would hand the whole
+	// unit back; instead the declaration emits nothing and the one consumer ranges the
+	// receiver's snapshot the direct `for (const x of m.keys())` and `[...m.keys()]`
+	// forms already lower to. It is filled once in RenderProgram and read at the
+	// declaration (to suppress it) and at the consumer (to see through the identifier to
+	// the receiver and accessor). A binding referenced more than once, or read anywhere
+	// but that one consumer, is not recorded, so the stored iterator's single-use
+	// semantics are preserved. It is program-scoped.
 	storedCollIters map[frontend.Symbol]storedCollIter
 	// blockDeclared is a stack of the local names already given a Go declaration in
 	// each open block, innermost last. A block is pushed when its statements start
