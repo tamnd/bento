@@ -115,6 +115,13 @@ func compileProgram(entry string) (string, []string, error) {
 	if isJavaScript(entry) {
 		return "", nil, fmt.Errorf("bento build: %s: JavaScript entries are a later slice; the AOT path compiles TypeScript (.ts) today", entry)
 	}
+	// Resolve the entry's symlinks before loading so a build from a symlinked
+	// directory finds its sibling modules. The checker resolves a relative import
+	// against the entry's canonical directory, so an entry named through a symlink
+	// (macOS /tmp and /var link into /private) would look for the sibling beside the
+	// canonical path and miss the one beside the link. Canonicalizing here keeps the
+	// entry and its resolved siblings on one spelling for the whole build.
+	entry = canonicalPath(entry)
 	prog, err := frontend.Load(frontend.LoadOptions{Roots: []string{entry}})
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
@@ -124,11 +131,12 @@ func compileProgram(entry string) (string, []string, error) {
 	}
 
 	// A go: import brings its generated .d.ts into the program as a source file, so
-	// the entry is the single non-declaration file; the declaration files are the
-	// interop surface the checker read, not modules to lower. Selecting the entry
-	// this way is what lets the AOT build compile a program that imports Go, not just
-	// a self-contained one.
-	entryFile, err := entryModule(prog)
+	// the declaration files are the interop surface the checker read, not modules to
+	// lower. The entry is the root the caller named; a module-goal entry also imports
+	// sibling modules the loader resolved, which lower alongside it as one unit.
+	// Selecting the roots this way is what lets the AOT build compile a program that
+	// imports Go or a sibling module, not just a self-contained one.
+	entryFile, deps, err := entryAndDeps(prog, entry)
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
@@ -137,7 +145,7 @@ func compileProgram(entry string) (string, []string, error) {
 	r.SetGoSignatures(goSignatureResolver())
 	r.SetGoConstants(goConstantResolver())
 	r.SetGoErrorVars(goErrorVarResolver())
-	p, err := r.RenderProgram(entryFile)
+	p, err := r.RenderProgramModules(entryFile, deps)
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
@@ -212,28 +220,57 @@ func goErrorVarResolver() func(importPath, name string) bool {
 	}
 }
 
-// entryModule returns the one source file the build lowers: the single module that
-// is not a declaration file. A go: import contributes its generated .d.ts to the
-// program as a source file, which supplies the interop types to the checker but is
-// not itself a module to lower, so declaration files are skipped here. A program
-// with no lowerable module, or with more than one, is outside today's single-entry
-// AOT path and hands back rather than pick one arbitrarily.
-func entryModule(prog *frontend.Program) (frontend.Node, error) {
+// entryAndDeps splits the program's lowerable source files into the entry, the
+// root the caller named, and the sibling modules that lower alongside it. A go:
+// import contributes its generated .d.ts to the program, which supplies the
+// interop types to the checker but is not a module to lower, so declaration files
+// are skipped. The entry is matched by path against the caller's root, resolving
+// the symlinks a temp directory carries so a staged entry under /var matches its
+// /private/var form; every other lowerable file is a dependency the entry
+// imports, which RenderProgramModules composes into one unit. A program with no
+// lowerable module hands back, and a set of lowerable files with no match for the
+// root hands back rather than lower an arbitrary one as the entry.
+func entryAndDeps(prog *frontend.Program, root string) (frontend.Node, []frontend.Node, error) {
+	rootKey := canonicalPath(root)
 	var entry frontend.Node
+	var deps []frontend.Node
 	found := false
 	for _, sf := range prog.SourceFiles() {
 		if sf.File().Kind == frontend.FileDTS {
 			continue
 		}
-		if found {
-			return nil, fmt.Errorf("multi-file programs are a later slice")
+		if !found && canonicalPath(sf.File().Path) == rootKey {
+			entry, found = sf, true
+			continue
 		}
-		entry, found = sf, true
+		deps = append(deps, sf)
 	}
 	if !found {
-		return nil, fmt.Errorf("no lowerable entry module")
+		// A single lowerable file that did not path-match the root is still the entry:
+		// the root names it even when a symlink or a relative form kept the strings
+		// apart. With more than one file and no match, the entry is ambiguous, so the
+		// unit hands back rather than pick one.
+		if len(deps) == 1 {
+			return deps[0], nil, nil
+		}
+		if len(deps) == 0 {
+			return nil, nil, fmt.Errorf("no lowerable entry module")
+		}
+		return nil, nil, fmt.Errorf("cannot identify the entry module among the composed files")
 	}
-	return entry, nil
+	return entry, deps, nil
+}
+
+// canonicalPath resolves a path's symlinks so two spellings of one file compare
+// equal, falling back to the path as written when it cannot be resolved (a
+// virtual file a test feeds through an in-memory FS has no on-disk form). It is
+// how the entry, named by the caller, matches the source file the loader recorded
+// even when a temp directory sits behind a symlink.
+func canonicalPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return p
 }
 
 // isJavaScript reports whether the entry is a JavaScript module by extension, so
