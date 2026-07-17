@@ -1,0 +1,8 @@
+== stdout:
+keep 0
+fallback 1
+0 1
+reached 2
+
+== exit:
+0

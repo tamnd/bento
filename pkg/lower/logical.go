@@ -61,15 +61,11 @@ func (r *Renderer) valueLogical(opText string, left, right frontend.Node) (ast.E
 		return nil, false, nil
 	}
 	// A dynamic operand makes the result dynamic: which operand comes back is a
-	// runtime truthiness question, so both sides box and the value.Or or value.And
-	// helper picks one. The helper takes both operands already evaluated, so the
-	// right side must be effect-free for the evaluation the short-circuit skips to
-	// be unobservable; the left evaluates exactly once either way. The common
-	// shape this serves is a default over a maybe-missing dynamic, message || "".
+	// runtime truthiness question, so both sides box to a value.Value. The left
+	// evaluates exactly once either way; the right evaluates only when the operator
+	// does not short-circuit to the left, so its evaluation is observable and must be
+	// placed where the short-circuit can skip it.
 	if r.isDynamic(left) || r.isDynamic(right) {
-		if !r.repeatableOperand(right) {
-			return nil, false, &NotYetLowerable{Reason: "value-returning " + opText + " on a dynamic operand whose right side has a side effect needs a lazy form, a later slice"}
-		}
 		leftBoxed, err := r.boxOperand(left)
 		if err != nil {
 			return nil, false, err
@@ -78,12 +74,51 @@ func (r *Renderer) valueLogical(opText string, left, right frontend.Node) (ast.E
 		if err != nil {
 			return nil, false, err
 		}
-		helper := "Or"
-		if opText == "&&" {
-			helper = "And"
+		// An effect-free right operand can be evaluated eagerly, since the value the
+		// short-circuit skips is unobservable, so the value.Or or value.And helper picks
+		// the surviving operand from two already-evaluated values. This is the common
+		// shape, a default over a maybe-missing dynamic like message || "", and reads
+		// cleaner than a func.
+		if r.repeatableOperand(right) {
+			helper := "Or"
+			if opText == "&&" {
+				helper = "And"
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", helper), Args: []ast.Expr{leftBoxed, rightBoxed}}, true, nil
 		}
+		// A right operand with a side effect must not run when the left short-circuits,
+		// which the eager helper cannot honor because it takes the right already
+		// evaluated. The lazy form evaluates the left once into a temporary, tests its
+		// truthiness, and returns the left when the operator short-circuits to it,
+		// reaching the right only otherwise: || short-circuits when the left is truthy
+		// and && when it is falsy, so && negates the test. It stands in expression
+		// position as the immediately invoked func the ternary already uses.
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", helper), Args: []ast.Expr{leftBoxed, rightBoxed}}, true, nil
+		tmp := r.freshTemp()
+		guard := ast.Expr(&ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{ident(tmp)}})
+		if opText == "&&" {
+			guard = &ast.UnaryExpr{Op: token.NOT, X: guard}
+		}
+		lit := &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{
+				&ast.AssignStmt{
+					Lhs: []ast.Expr{ident(tmp)},
+					Tok: token.DEFINE,
+					Rhs: []ast.Expr{leftBoxed},
+				},
+				&ast.IfStmt{
+					Cond: guard,
+					Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}}}},
+				},
+				&ast.ReturnStmt{Results: []ast.Expr{rightBoxed}},
+			}},
+		}
+		return &ast.CallExpr{Fun: lit}, true, nil
 	}
 	retType, kind, ok := r.condBranchType(left)
 	_, otherKind, otherOK := r.condBranchType(right)
