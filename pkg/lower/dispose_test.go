@@ -221,11 +221,13 @@ for (let i = 0; i < 2; i = i + 1) {
 	}
 }
 
-// TestUsingInNestedBlockEscapeHandsBack proves the honest leftover: a `using` whose
-// block leaves by a return escaping the block hands back rather than wrap the return
-// in the disposal closure, where a Go return would leave the closure, not the
-// function. The escaping-branch case waits for its own slice.
-func TestUsingInNestedBlockEscapeHandsBack(t *testing.T) {
+// TestUsingInNestedBlockReturnDisposesThenReturns proves the escape-threading form: a
+// `using` whose block leaves by a return releases the resource before the function
+// returns, so the disposal prints before the caller's line and the return still leaves
+// f. The disposal closure carries the return out through its named results, running the
+// defer on the early-return path.
+func TestUsingInNestedBlockReturnDisposesThenReturns(t *testing.T) {
+	skipIfShort(t)
 	const body = `
 function f(cond: boolean): void {
   if (cond) {
@@ -236,10 +238,80 @@ function f(cond: boolean): void {
   console.log("after block");
 }
 f(true);
+console.log("done");
+`
+	src := disposeClass + body
+	if got, want := runProgramGo(t, src), "body\ndispose a\ndone\n"; got != want {
+		t.Fatalf("nested-block return disposal printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingInNestedBlockValueReturnDisposesThenReturns proves the valued mirror: a
+// `using` whose block returns a value releases the resource, then hands the value up as
+// the function's return, so the caller reads the returned value after the disposal ran.
+func TestUsingInNestedBlockValueReturnDisposesThenReturns(t *testing.T) {
+	skipIfShort(t)
+	const body = `
+function f(cond: boolean): string {
+  if (cond) {
+    using r = new R("a");
+    console.log("body");
+    return "early";
+  }
+  return "late";
+}
+console.log(f(true));
+`
+	src := disposeClass + body
+	if got, want := runProgramGo(t, src), "body\ndispose a\nearly\n"; got != want {
+		t.Fatalf("nested-block value-return disposal printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingInNestedBlockFallThroughStillRuns proves the escape form keeps the
+// fall-through path: when the guarded return is not taken, control runs on past the
+// block, disposing at the block exit, and the statement after the block still runs.
+func TestUsingInNestedBlockFallThroughStillRuns(t *testing.T) {
+	skipIfShort(t)
+	const body = `
+function f(cond: boolean): void {
+  if (true) {
+    using r = new R("a");
+    console.log("body");
+    if (cond) {
+      return;
+    }
+  }
+  console.log("after block");
+}
+f(false);
+console.log("done");
+`
+	src := disposeClass + body
+	if got, want := runProgramGo(t, src), "body\ndispose a\nafter block\ndone\n"; got != want {
+		t.Fatalf("nested-block fall-through disposal printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingInNestedBlockBranchHandsBack proves the honest leftover: a `using` whose
+// block leaves by a break targeting the loop enclosing the block hands back, where a Go
+// break inside the disposal closure would leave the closure, not the loop it names. The
+// branch-escape case waits for its own slice, unlike the return case the closure now
+// threads out.
+func TestUsingInNestedBlockBranchHandsBack(t *testing.T) {
+	const body = `
+for (let i = 0; i < 2; i = i + 1) {
+  if (i === 0) {
+    using r = new R("a");
+    console.log("body");
+    break;
+  }
+  console.log("tail");
+}
 `
 	src := disposeClass + body
 	reason := renderProgramHandBack(t, src)
-	if want := "a using declaration whose block exits by return, break, or continue is a later slice"; reason != want {
+	if want := "a using declaration whose block exits by break or continue is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)
 	}
 }

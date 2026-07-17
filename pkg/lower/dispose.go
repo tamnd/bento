@@ -2,16 +2,32 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
-// nestedUsingEscapeReason is the hand-back a nested-block `using` reports when the
-// rest of its block leaves by a return, break, or continue that targets the enclosing
-// function or loop. That branch would lower to a Go return, break, or continue inside
-// the closure the disposal wraps the block in, which leaves the closure, not the
-// scope the branch names, so the case waits for the slice that threads the escape out.
-const nestedUsingEscapeReason = "a using declaration whose block exits by return, break, or continue is a later slice"
+// nestedUsingBranchReason is the hand-back a nested-block `using` reports when the
+// rest of its block leaves by a break or continue that targets a loop or switch
+// enclosing the whole block. That branch would lower to a Go break or continue inside
+// the closure the disposal wraps the block in, which leaves the closure, not the loop
+// the branch names, so the case waits for the slice that threads the branch out.
+const nestedUsingBranchReason = "a using declaration whose block exits by break or continue is a later slice"
+
+// nestedUsingReturnNestReason is the hand-back a returning nested-block `using`
+// reports when it sits inside another escape closure (a returning try, or a catch or
+// finally handler). The return-threading below turns a return in the remainder into
+// the disposal closure's done result, which the call site hands up as the enclosing
+// function's return; threading it further through a second escape closure at the same
+// time is a later slice, so the nested combination hands back rather than mislower.
+const nestedUsingReturnNestReason = "a using declaration that returns inside another escape closure is a later slice"
+
+// nestedUsingRetNameReason is the hand-back a returning nested-block `using` reports
+// when the remainder mentions ret or done, the names the disposal closure's escape
+// results carry. A source binding or reference by either name would resolve to the
+// closure's result rather than its own variable, so the collision hands back the way
+// the try escape's does.
+const nestedUsingRetNameReason = "a using declaration whose block names the escape results (ret, done) is a later slice"
 
 // usingDisposeTarget qualifies a `using` node for disposal lowering, returning the
 // resource's Go name and its declaration. It reports ok=false, leaving the
@@ -90,24 +106,34 @@ func (r *Renderer) lowerUsingDefer(n frontend.Node) ([]ast.Stmt, bool, error) {
 // second `using` among them wraps again inside this closure, so its defer runs first,
 // the reverse declaration order the protocol requires.
 //
-// It hands back through nestedUsingEscapeReason when the remainder leaves by a return,
-// break, or continue that targets a scope outside the block, since that branch would
-// lower inside the closure and leave the closure, not the scope it names. It reports
-// ok=false for a form usingDisposeTarget does not own, leaving it to hand back through
-// lowerVarStatement.
+// When the remainder leaves by a return, the disposal closure carries the escape out:
+// it takes named results (ret T, done bool), a return in the remainder fills them as
+// `return x, true` the way a returning try body does, and the call site turns done
+// back into the enclosing function's return, so the resource still releases through the
+// closure's defer on the early-return path. A break or continue targeting a loop
+// outside the block still hands back through nestedUsingBranchReason, since Go's branch
+// cannot leave the closure. It reports ok=false for a form usingDisposeTarget does not
+// own, leaving it to hand back through lowerVarStatement.
 func (r *Renderer) lowerUsingScope(n frontend.Node, rest []frontend.Node) ([]ast.Stmt, bool, error) {
 	name, decls, ok := r.usingDisposeTarget(n)
 	if !ok {
 		return nil, false, nil
 	}
+	returns := false
 	for _, k := range rest {
-		if r.blockReturns(k) || r.branchEscapesClosure(k) {
-			return nil, false, &NotYetLowerable{Reason: nestedUsingEscapeReason}
+		if r.branchEscapesClosure(k) {
+			return nil, false, &NotYetLowerable{Reason: nestedUsingBranchReason}
+		}
+		if r.blockReturns(k) {
+			returns = true
 		}
 	}
 	bind, err := r.varDeclStmt(decls)
 	if err != nil {
 		return nil, false, err
+	}
+	if returns {
+		return r.lowerUsingScopeReturn(name, bind, rest)
 	}
 	body := []ast.Stmt{bind, r.deferDispose(name)}
 	restStmts, err := r.lowerStatements(rest)
@@ -116,6 +142,72 @@ func (r *Renderer) lowerUsingScope(n frontend.Node, rest []frontend.Node) ([]ast
 	}
 	body = append(body, restStmts...)
 	return []ast.Stmt{&ast.ExprStmt{X: callClosure(body)}}, true, nil
+}
+
+// lowerUsingScopeReturn lowers a nested-block `using` whose remainder returns, the
+// escape form of lowerUsingScope. It reuses the try escape's return threading: the
+// remainder lowers under tryRetBody, so each return becomes `return x, true` (or
+// `return true` for a void function), and the closure declares the matching named
+// results the call site reads. A tail bare return covers the fall-through path, where
+// the closure returns its zero results and the call site runs on past the block.
+//
+// It hands back when the `using` sits inside another escape closure, since threading a
+// return through two at once is a later slice, and when the remainder mentions the ret
+// or done result names, the same shadowing hazard the try escape guards.
+func (r *Renderer) lowerUsingScopeReturn(name string, bind ast.Stmt, rest []frontend.Node) ([]ast.Stmt, bool, error) {
+	if r.tryRet != tryRetNone {
+		return nil, false, &NotYetLowerable{Reason: nestedUsingReturnNestReason}
+	}
+	for _, k := range rest {
+		if r.mentionsName(k, "ret") || r.mentionsName(k, "done") {
+			return nil, false, &NotYetLowerable{Reason: nestedUsingRetNameReason}
+		}
+	}
+	valued := !isVoidReturn(r.retType)
+
+	body := []ast.Stmt{bind, r.deferDispose(name)}
+	prev := r.tryRet
+	r.tryRet = tryRetBody
+	restStmts, err := r.lowerStatements(rest)
+	r.tryRet = prev
+	if err != nil {
+		return nil, false, err
+	}
+	body = append(body, restStmts...)
+	// The closure's fall-through path returns its zero results; a remainder already
+	// ending in a Go return needs no tail return after it.
+	if len(body) == 0 || !isGoReturn(body[len(body)-1]) {
+		body = append(body, &ast.ReturnStmt{})
+	}
+
+	results := &ast.FieldList{}
+	if valued {
+		rt, err := r.typeExpr(r.retType)
+		if err != nil {
+			return nil, false, err
+		}
+		results.List = append(results.List, &ast.Field{Names: []*ast.Ident{ident("ret")}, Type: rt})
+	}
+	results.List = append(results.List, &ast.Field{Names: []*ast.Ident{ident("done")}, Type: ident("bool")})
+	closure := &ast.CallExpr{Fun: &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: results},
+		Body: &ast.BlockStmt{List: body},
+	}}
+
+	var lhs []ast.Expr
+	var thenRet *ast.ReturnStmt
+	if valued {
+		lhs = []ast.Expr{ident("ret"), ident("done")}
+		thenRet = &ast.ReturnStmt{Results: []ast.Expr{ident("ret")}}
+	} else {
+		lhs = []ast.Expr{ident("done")}
+		thenRet = &ast.ReturnStmt{}
+	}
+	return []ast.Stmt{&ast.IfStmt{
+		Init: &ast.AssignStmt{Lhs: lhs, Tok: token.DEFINE, Rhs: []ast.Expr{closure}},
+		Cond: ident("done"),
+		Body: &ast.BlockStmt{List: []ast.Stmt{thenRet}},
+	}}, true, nil
 }
 
 // This file names the well-known dispose symbols a resource class carries, the
