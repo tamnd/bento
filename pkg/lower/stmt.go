@@ -3401,7 +3401,7 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 	var rhs ast.Expr
 	var err error
 	if compound {
-		rhs, err = r.combineBinary(baseOp, parts[0], parts[2])
+		rhs, err = r.combineBinary(nil, baseOp, parts[0], parts[2])
 		if err != nil {
 			return nil, err
 		}

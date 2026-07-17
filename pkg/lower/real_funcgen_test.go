@@ -336,9 +336,6 @@ func TestRenderFuncVoidReturn(t *testing.T) {
 // NotYetLowerable rather than wrong or incomplete Go.
 func TestRenderFuncHandsBack(t *testing.T) {
 	cases := []struct{ name, src string }{
-		// a ternary whose branches are different primitives is a union value, which
-		// needs the tagged union; a same-primitive ternary does lower.
-		{"ternaryMixed", "export function m(c: boolean, n: number, s: string): number { const x = c ? n : s; return n; }"},
 		// a generic function needs monomorphization first.
 		{"generic", "export function id<T>(x: T): T { return x; }"},
 	}

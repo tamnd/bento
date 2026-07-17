@@ -32,7 +32,7 @@ import (
 // && or ||. A same-primitive pair whose left has a side effect hands back with a
 // reason; a mixed or non-primitive pair reports handled=false and hands back
 // through the operator table.
-func (r *Renderer) valueLogical(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+func (r *Renderer) valueLogical(node frontend.Node, opText string, left, right frontend.Node) (ast.Expr, bool, error) {
 	if opText != "&&" && opText != "||" {
 		return nil, false, nil
 	}
@@ -122,8 +122,16 @@ func (r *Renderer) valueLogical(opText string, left, right frontend.Node) (ast.E
 	}
 	retType, kind, ok := r.condBranchType(left)
 	_, otherKind, otherOK := r.condBranchType(right)
-	if !ok || !otherOK || kind != otherKind {
+	if !ok || !otherOK {
 		return nil, false, nil
+	}
+	if kind != otherKind {
+		// The two operands are unlike primitives, a string and a number, so no single
+		// Go type carries both. The checker types the whole expression as their union,
+		// so the value the operator returns boxes into the tagged-sum union and each
+		// operand wraps into its arm. This is the valueLogical half of audit wave W1c;
+		// the compound-assignment callers pass a nil node and keep handing back.
+		return r.logicalUnion(node, opText, left, right)
 	}
 	if !r.repeatableOperand(left) {
 		return nil, false, &NotYetLowerable{Reason: "value-returning " + opText + " whose left operand has a side effect needs a temporary, a later slice"}
@@ -151,6 +159,75 @@ func (r *Renderer) valueLogical(opText string, left, right frontend.Node) (ast.E
 		Type: &ast.FuncType{
 			Params:  &ast.FieldList{},
 			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: guard,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{whenShort}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{whenLong}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, true, nil
+}
+
+// logicalUnion lowers a value-returning && or || whose operands are unlike primitives
+// into an IIFE returning the tagged-sum union the checker types the whole expression
+// as, boxing each operand into its arm. It is the valueLogical half of audit wave
+// W1c, the mixed-primitive construction of section 9 reached through the operator:
+// s || n over a string and a number returns their union, the left wrapped into its
+// arm and returned when truthy, the right wrapped and returned otherwise. The left
+// operand appears in both the truthiness test and its short-circuit return, so it
+// must be repeatable; a side-effecting left hands back for the temporary a later
+// slice hoists. A nil node (the compound-assignment callers), a whole-expression
+// type that is not a tagged-sum union this path can build, or an operand whose source
+// matches no arm reports handled=false or hands back, so the unit stays truthful.
+func (r *Renderer) logicalUnion(node frontend.Node, opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	if node == nil {
+		return nil, false, nil
+	}
+	target := r.prog.TypeAt(node)
+	info, ok := r.unionInfoOrIntern(target)
+	if !ok {
+		return nil, false, nil
+	}
+	if !r.repeatableOperand(left) {
+		return nil, false, &NotYetLowerable{Reason: "value-returning " + opText + " whose left operand has a side effect needs a temporary, a later slice"}
+	}
+	_, kind, ok := r.condBranchType(left)
+	if !ok {
+		return nil, false, nil
+	}
+	guardOperand, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, false, err
+	}
+	// || returns the left operand when it is truthy, && when it is falsy, so && tests
+	// the negated truthiness of the left in its own primitive kind.
+	guard := truthyOfKind(guardOperand, kind)
+	if opText == "&&" {
+		guard = &ast.UnaryExpr{Op: token.NOT, X: guard}
+	}
+	leftExpr, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, false, err
+	}
+	whenShort, _, err := r.wrapToUnion(leftExpr, left, target)
+	if err != nil {
+		return nil, false, err
+	}
+	rightExpr, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, false, err
+	}
+	whenLong, _, err := r.wrapToUnion(rightExpr, right, target)
+	if err != nil {
+		return nil, false, err
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(info.goName)}}},
 		},
 		Body: &ast.BlockStmt{List: []ast.Stmt{
 			&ast.IfStmt{

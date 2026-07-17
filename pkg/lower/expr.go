@@ -377,7 +377,10 @@ func (r *Renderer) conditionalExpr(n frontend.Node) (ast.Expr, error) {
 	retType, kind, ok := r.condBranchType(kids[2])
 	_, otherKind, otherOK := r.condBranchType(kids[4])
 	if !ok || !otherOK || kind != otherKind {
-		return nil, &NotYetLowerable{Reason: "conditional whose branches are not both the same primitive type needs a union, a later slice"}
+		// The branches are unlike primitives, a string and a number, so no single Go
+		// type carries both; the checker types the whole expression as their union, so
+		// the IIFE returns the tagged-sum union and each branch boxes into its arm.
+		return r.conditionalUnion(n, cond, whenTrue, kids[2], whenFalse, kids[4])
 	}
 	lit := &ast.FuncLit{
 		Type: &ast.FuncType{
@@ -390,6 +393,47 @@ func (r *Renderer) conditionalExpr(n frontend.Node) (ast.Expr, error) {
 				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{whenTrue}}}},
 			},
 			&ast.ReturnStmt{Results: []ast.Expr{whenFalse}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
+}
+
+// conditionalUnion lowers a ternary whose branches are unlike primitives into an
+// IIFE returning the tagged-sum union the checker types the whole expression as,
+// boxing each branch into its arm. It is the mixed-primitive construction of section
+// 9 reached through the ternary: cond ? s : n over a string and a number returns a
+// NumOrStr, the true branch wrapped as NumOrStrOfStr and the false as NumOrStrOfNum.
+// A whole-expression type that is not a tagged-sum union this path can build, an
+// object or a literal union whose arms do not widen to base primitives, or a branch
+// whose source matches no arm, hands back with the same reason the same-primitive
+// guard gives, so the unit stays truthful. The condition and both branches are
+// already lowered by the caller; this only wraps each branch and picks the return
+// type.
+func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, trueNode frontend.Node, whenFalse ast.Expr, falseNode frontend.Node) (ast.Expr, error) {
+	target := r.prog.TypeAt(n)
+	info, ok := r.unionInfoOrIntern(target)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "conditional whose branches are not both the same primitive type needs a union, a later slice"}
+	}
+	trueWrapped, _, err := r.wrapToUnion(whenTrue, trueNode, target)
+	if err != nil {
+		return nil, err
+	}
+	falseWrapped, _, err := r.wrapToUnion(whenFalse, falseNode, target)
+	if err != nil {
+		return nil, err
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(info.goName)}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: cond,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{trueWrapped}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{falseWrapped}},
 		}},
 	}
 	return &ast.CallExpr{Fun: lit}, nil
@@ -633,7 +677,7 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 	if _, compound := compoundBaseOp(opText); compound {
 		return r.assignValueCompound(n, left)
 	}
-	return r.combineBinary(opText, left, right)
+	return r.combineBinary(n, opText, left, right)
 }
 
 // commaValue lowers a comma expression (a, b): JavaScript evaluates the left for
@@ -898,8 +942,11 @@ func (r *Renderer) valueClosure(retType ast.Expr, body []ast.Stmt) ast.Expr {
 // nodes to the Go expression with the same meaning. It is the shared core of
 // binaryExpr and of a compound assignment (x += y desugars to x = x + y), so
 // the string, remainder, and bitwise special cases apply the same way whether
-// the operator was written on its own or fused to an assignment.
-func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.Expr, error) {
+// the operator was written on its own or fused to an assignment. The whole node
+// carries the checker's type for the combined expression, which valueLogical needs
+// to build a mixed-primitive union; a compound-assignment caller with no such node
+// passes nil, leaving the mixed-primitive union path off for that form.
+func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right frontend.Node) (ast.Expr, error) {
 	// + where either operand is dynamic (typed any or unknown) cannot pick a Go
 	// operator at compile time, because the operand's runtime kind decides whether
 	// the result is a numeric sum or a string concatenation. It lowers to value.Add,
@@ -989,7 +1036,7 @@ func (r *Renderer) combineBinary(opText string, left, right frontend.Node) (ast.
 	// that shape and leaves the two-boolean case for the operator table below, where
 	// Go's own && and || carry the boolean result with the same short-circuit.
 	if opText == "&&" || opText == "||" {
-		expr, handled, err := r.valueLogical(opText, left, right)
+		expr, handled, err := r.valueLogical(node, opText, left, right)
 		if err != nil {
 			return nil, err
 		}
