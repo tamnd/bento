@@ -78,13 +78,75 @@ func TestManualDisposeDriveRuns(t *testing.T) {
 	}
 }
 
-// TestUsingDeclarationHandsBack proves the honest leftover: a `using` declaration
-// whose scope-exit disposal is not yet lowered hands the unit back rather than lower
-// to a plain binding that would drop the dispose call, keeping the zero-fail
-// invariant. The resource class's dispose method lowers already; only the declaration
-// waits for its slice.
-func TestUsingDeclarationHandsBack(t *testing.T) {
+// TestUsingDisposalLowers proves a `using` at a body top level lowers to its binding
+// plus a Go defer of the resource's SymbolDispose, the call that runs when the
+// enclosing function returns, rather than handing back or dropping the disposal.
+func TestUsingDisposalLowers(t *testing.T) {
 	src := disposeClass + "using r = new R(\"a\");\nconsole.log(\"body\");\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "defer r.SymbolDispose()") {
+		t.Errorf("using declaration did not defer its disposal:\n%s", source)
+	}
+}
+
+// TestUsingDisposalRuns builds and runs a top-level `using`, so the disposal is proven
+// against the JavaScript order: the body runs, then the resource is released at scope
+// exit, printing "body" then "dispose a".
+func TestUsingDisposalRuns(t *testing.T) {
+	skipIfShort(t)
+	src := disposeClass + "console.log(\"before\");\nusing r = new R(\"a\");\nconsole.log(\"body\");\n"
+	if got, want := runProgramGo(t, src), "before\nbody\ndispose a\n"; got != want {
+		t.Fatalf("using disposal printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingReverseDisposalRuns proves two `using` bindings in one block dispose in
+// reverse declaration order, the protocol's rule, which the last-registered-first
+// order of Go defers gives for free: b is released before a.
+func TestUsingReverseDisposalRuns(t *testing.T) {
+	skipIfShort(t)
+	src := disposeClass + "using a = new R(\"a\");\nusing b = new R(\"b\");\nconsole.log(\"body\");\n"
+	if got, want := runProgramGo(t, src), "body\ndispose b\ndispose a\n"; got != want {
+		t.Fatalf("reverse disposal printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingInFunctionDisposesOnReturn proves the defer covers an early return: a
+// `using` in a function body releases the resource when the function returns, before
+// control leaves it, so the release prints between the body and the caller's line.
+func TestUsingInFunctionDisposesOnReturn(t *testing.T) {
+	skipIfShort(t)
+	const body = `
+function f(): void {
+  using r = new R("a");
+  console.log("in f");
+  return;
+}
+f();
+console.log("after f");
+`
+	src := disposeClass + body
+	if got, want := runProgramGo(t, src), "in f\ndispose a\nafter f\n"; got != want {
+		t.Fatalf("using-on-return printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingInNestedBlockHandsBack proves the honest leftover: a `using` in a nested
+// block, not at a function-body top level, hands back rather than defer disposal to
+// the enclosing function, which would release the resource too late. A Go defer runs
+// at function return, not block exit, so the nested case waits for its own slice.
+func TestUsingInNestedBlockHandsBack(t *testing.T) {
+	const body = `
+function f(): void {
+  if (true) {
+    using r = new R("a");
+    console.log("body");
+  }
+  console.log("after block");
+}
+f();
+`
+	src := disposeClass + body
 	reason := renderProgramHandBack(t, src)
 	if want := "the using declaration's scope-exit disposal is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)

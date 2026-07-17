@@ -1,6 +1,50 @@
 package lower
 
-import "github.com/tamnd/bento/pkg/frontend"
+import (
+	"go/ast"
+
+	"github.com/tamnd/bento/pkg/frontend"
+)
+
+// lowerUsingDefer lowers a `using` declaration at a function-body or program-body top
+// level to its binding plus a Go defer of the resource's SymbolDispose, so disposal
+// runs when the enclosing function returns, the scope that coincides with the
+// JavaScript block scope there. Go's defer covers every exit the block scope disposes
+// on, a normal fall-through, a return, and a thrown value unwinding as a panic, and
+// runs multiple defers last-registered-first, which gives the reverse declaration
+// order the protocol requires for two `using` bindings in the same block.
+//
+// It reports ok=false, leaving the declaration to hand back through lowerVarStatement,
+// for every form this slice does not own: an `await using` (its disposal is awaited,
+// gated on the async model), a statement binding more than one resource, a name that
+// is not a Go identifier, or an initializer whose type carries no [Symbol.dispose]
+// method (a nullable or undefined resource, whose disposal must be guarded). A `using`
+// in a nested block never reaches here, since the top-scope flag is false there.
+func (r *Renderer) lowerUsingDefer(n frontend.Node) ([]ast.Stmt, bool, error) {
+	kw, ok := r.usingKeyword(n)
+	if !ok || kw != "using" {
+		return nil, false, nil
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	if len(decls) != 1 {
+		return nil, false, nil
+	}
+	nameNode := r.prog.Children(decls[0])[0]
+	name, ok := localName(r.prog.Text(nameNode))
+	if !ok {
+		return nil, false, nil
+	}
+	if !r.hasSymbolDisposeMember(r.prog.TypeAt(nameNode)) {
+		return nil, false, nil
+	}
+	bind, err := r.varDeclStmt(decls)
+	if err != nil {
+		return nil, false, err
+	}
+	disp := &ast.DeferStmt{Call: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident(symbolDisposeGoName)}}}
+	return []ast.Stmt{bind, disp}, true, nil
+}
 
 // This file names the well-known dispose symbols a resource class carries, the
 // entry points the explicit-resource-management protocol (`using`, `await using`)

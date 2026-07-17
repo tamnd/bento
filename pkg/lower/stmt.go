@@ -30,10 +30,24 @@ func (r *Renderer) lowerBlock(block frontend.Node) (*ast.BlockStmt, error) {
 // block scope for the duration so a `var` that redeclares a name already declared
 // in this block lowers to an assignment rather than a duplicate Go declaration.
 func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
+	// The top-scope flag is a one-shot the function body sets before it lowers, so a
+	// `using` among these statements defers its disposal to the enclosing Go function.
+	// It is read and cleared here, so a nested block this list lowers sees it false and
+	// its own `using` hands back rather than borrow the outer scope's defer.
+	atTop := r.usingTopScope
+	r.usingTopScope = false
 	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
 	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
 	out := make([]ast.Stmt, 0, len(nodes))
 	for _, n := range nodes {
+		if atTop {
+			if stmts, ok, err := r.lowerUsingDefer(n); err != nil {
+				return nil, err
+			} else if ok {
+				out = append(out, stmts...)
+				continue
+			}
+		}
 		stmts, err := r.lowerStatementMulti(n)
 		if err != nil {
 			return nil, err

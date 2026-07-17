@@ -461,6 +461,14 @@ type Renderer struct {
 	// is empty outside a block (a for-loop initializer, say), where no redeclaration
 	// can arise, and that empty case declares normally.
 	blockDeclared []map[string]bool
+	// usingTopScope is a one-shot flag the two top-level statement lists, a function
+	// body and the program main body, set right before they lower their statements, so
+	// a `using` declaration among them lowers its scope-exit disposal to a Go defer,
+	// whose function scope coincides with the JavaScript block scope there. It is
+	// consumed at lowerStatements entry and cleared, so a nested block lowered from
+	// within (an if body, a loop body, a switch case) sees it false and a `using` there
+	// hands back rather than defer disposal to the wrong scope.
+	usingTopScope bool
 	// hoistedVars names the `var` bindings the active scope declared at its top
 	// because a nested block writes one that another block reads. JavaScript scopes
 	// a var to the whole function or module, not the block it sits in, so such a var

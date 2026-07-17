@@ -871,6 +871,11 @@ func (r *Renderer) scopedBlockRange(block frontend.Node, lo, hi int) (*ast.Block
 		return nil, err
 	}
 	defer restoreFwd()
+	// This body is a function scope, so a `using` among its top-level statements defers
+	// its disposal to the Go function return, the scope that matches the JavaScript
+	// block scope. The one-shot flag is read and cleared at the lowerStatements entry
+	// just below, so only this list, not the nested blocks it lowers, sees it set.
+	r.usingTopScope = true
 	stmts, err := r.lowerStatements(bodyStmts)
 	if err != nil {
 		return nil, err
