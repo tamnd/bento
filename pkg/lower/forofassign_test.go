@@ -94,3 +94,60 @@ console.log(joinInto(["a", "b", "c"]));
 		t.Fatalf("for-of assignment target run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestForOfAssignPatternLowers pins that an array-pattern head, `for ([a, b] of pairs)`,
+// ranges the array of tuples and assigns each position to its existing binding at the top
+// of the body, the assignment-form sibling of the const destructure.
+func TestForOfAssignPatternLowers(t *testing.T) {
+	src := `function f(pairs: [number, string][]): void {
+  let a = 0;
+  let b = "";
+  for ([a, b] of pairs) { console.log(a + b); }
+}`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "range pairs.Elems()") {
+		t.Fatalf("for-of assignment pattern did not range the backing slice:\n%s", out)
+	}
+	if !strings.Contains(out, "a, b = ") {
+		t.Fatalf("for-of assignment pattern did not assign the tuple positions to the existing bindings:\n%s", out)
+	}
+}
+
+// TestForOfAssignPatternRefinedHandsBack pins the soundness boundary: a target refined
+// to an int holds a Go type the float64 tuple field does not, so assigning it by name
+// would not compile. The slice hands back rather than miscompile.
+func TestForOfAssignPatternRefinedHandsBack(t *testing.T) {
+	src := `function f(pairs: [number, string][]): void {
+  let a = 0 | 0;
+  let b = "";
+  for ([a, b] of pairs) { console.log(b); a = a | 0; }
+}`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "single loop binding") {
+		t.Fatalf("refined for-of assignment pattern handed back for the wrong reason: %q", reason)
+	}
+}
+
+// TestForOfAssignPatternRuns builds and runs the pattern head end to end: each position
+// carries its tuple field the way a declared binding would, and both keep the last pair's
+// values after the loop, matching JavaScript.
+func TestForOfAssignPatternRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+function run(pairs: [number, string][]): string {
+  let a = 0;
+  let b = "";
+  let out = "";
+  for ([a, b] of pairs) {
+    out = out + b + a;
+  }
+  return out + "|" + a + b;
+}
+console.log(run([[1, "a"], [2, "b"], [3, "c"]]));
+`
+	got := runProgramGo(t, src)
+	want := "a1b2c3|3c\n"
+	if got != want {
+		t.Fatalf("for-of assignment pattern run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
