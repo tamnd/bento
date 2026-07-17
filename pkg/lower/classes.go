@@ -1111,6 +1111,20 @@ func (r *Renderer) classMethodOf(m frontend.Node) (classMethod, error) {
 		// [Symbol.iterator] case.
 		prop = symbolAsyncIteratorProp
 		goName = symbolAsyncIteratorGoName
+	} else if r.isSymbolDisposeName(kids[0]) {
+		// A [Symbol.dispose] member is the explicit-resource-management protocol's
+		// entry point: it lowers to a Go method under the fixed name a `using`
+		// declaration calls to release the resource at scope exit, its well-known
+		// computed name resolving where an ordinary [expr] name would hand back.
+		prop = symbolDisposeProp
+		goName = symbolDisposeGoName
+	} else if r.isSymbolAsyncDisposeName(kids[0]) {
+		// A [Symbol.asyncDispose] member is the async resource-management entry
+		// point: it lowers to a Go method under the fixed name an `await using`
+		// declaration awaits at scope exit, the async mirror of the [Symbol.dispose]
+		// case.
+		prop = symbolAsyncDisposeProp
+		goName = symbolAsyncDisposeGoName
 	} else {
 		prop, ok = r.memberName(kids[0])
 		if !ok {

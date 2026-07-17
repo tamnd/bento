@@ -73,6 +73,15 @@ type Error struct {
 	// error, which has no errors property, and a non-nil slice (empty included) marks
 	// the error as an aggregate, so ToValue exposes an errors array on the boxed object.
 	errors []Value
+	// suppressed and suppressor are the two errors a SuppressedError chains: a throw
+	// during a using declaration's disposal (the suppressor, the error property) that
+	// happened while an earlier error (the suppressed, the suppressed property) was
+	// already propagating. hasSuppressed marks the error a SuppressedError so ToValue
+	// exposes both properties alongside name and message; it is false for every other
+	// error, which carries no suppression chain.
+	suppressed    Value
+	suppressor    Value
+	hasSuppressed bool
 }
 
 // Name reports the error's constructor name as a bento string, the lowering of
@@ -146,6 +155,14 @@ func (e *Error) ToValue() Value {
 		if e.errors != nil {
 			keys = append(keys, FromGoString("errors"))
 			descs = append(descs, defaultDataProperty(NewArrayValue(e.errors)))
+		}
+		// A SuppressedError also exposes the two errors it chains: error, the throw
+		// from disposal that caused the suppression, and suppressed, the error that was
+		// already propagating, so a catch reads err.error and err.suppressed the way it
+		// reads name and message.
+		if e.hasSuppressed {
+			keys = append(keys, FromGoString("error"), FromGoString("suppressed"))
+			descs = append(descs, defaultDataProperty(e.suppressor), defaultDataProperty(e.suppressed))
 		}
 		e.boxed = &Object{kind: KindObject, keys: keys, descs: descs}
 	}
@@ -349,6 +366,69 @@ func (t ThrownValue) Value() Value { return t.v }
 // path.
 func Throw(e Thrown) {
 	panic(e)
+}
+
+// NewSuppressedError constructs the SuppressedError the explicit-resource-management
+// protocol raises when a using declaration's disposal throws while an error is already
+// propagating: suppressor is the disposal's throw, the error property, and suppressed
+// is the error it interrupted, the suppressed property. Both are kept as boxed values
+// so a catch reads err.error and err.suppressed as the JavaScript errors they were,
+// and either can itself be a SuppressedError when a chain of disposals each throw.
+func NewSuppressedError(suppressor, suppressed Thrown) *Error {
+	return &Error{
+		name:          FromGoString("SuppressedError"),
+		message:       FromGoString(""),
+		suppressor:    Caught(suppressor).ToValue(),
+		suppressed:    Caught(suppressed).ToValue(),
+		hasSuppressed: true,
+	}
+}
+
+// Dispose runs a using declaration's release at scope exit and threads the
+// explicit-resource-management error semantics through Go's panic unwinding. It is
+// deferred, so an error unwinding the scope (a throw from the block body or an earlier
+// resource's release) is in flight when it runs. It recovers that pending throw, runs
+// the release, and re-raises the result the protocol requires: a throw from the
+// release wraps the pending throw in a SuppressedError, a clean release re-raises the
+// pending throw unchanged, and with no pending throw a release throw propagates on its
+// own. A pending panic that is not a JavaScript throw is a Go runtime fault, which
+// propagates unchanged rather than fold into an error chain.
+func Dispose(release func()) {
+	pending := recover()
+	thrown, threw := disposeCatch(release)
+	if pending != nil {
+		pt, ok := pending.(Thrown)
+		if !ok {
+			panic(pending)
+		}
+		if threw {
+			panic(NewSuppressedError(thrown, pt))
+		}
+		panic(pt)
+	}
+	if threw {
+		panic(thrown)
+	}
+}
+
+// disposeCatch runs a release and recovers a JavaScript throw it raises, reporting the
+// thrown value and whether it threw. A recovered payload that is not a throw is a Go
+// runtime fault, re-raised to keep its original stack rather than be folded into a
+// suppression chain.
+func disposeCatch(release func()) (thrown Thrown, threw bool) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		t, ok := r.(Thrown)
+		if !ok {
+			panic(r)
+		}
+		thrown, threw = t, true
+	}()
+	release()
+	return nil, false
 }
 
 // ReportUncaught is deferred at the program root to surface a throw that escaped

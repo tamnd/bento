@@ -30,10 +30,35 @@ func (r *Renderer) lowerBlock(block frontend.Node) (*ast.BlockStmt, error) {
 // block scope for the duration so a `var` that redeclares a name already declared
 // in this block lowers to an assignment rather than a duplicate Go declaration.
 func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
+	// The top-scope flag is a one-shot the function body sets before it lowers, so a
+	// `using` among these statements defers its disposal to the enclosing Go function.
+	// It is read and cleared here, so a nested block this list lowers sees it false and
+	// its own `using` hands back rather than borrow the outer scope's defer.
+	atTop := r.usingTopScope
+	r.usingTopScope = false
 	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
 	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
 	out := make([]ast.Stmt, 0, len(nodes))
-	for _, n := range nodes {
+	for i, n := range nodes {
+		if atTop {
+			if stmts, ok, err := r.lowerUsingDefer(n); err != nil {
+				return nil, err
+			} else if ok {
+				out = append(out, stmts...)
+				continue
+			}
+		} else {
+			// A `using` in a nested block disposes at that block's exit, before a Go
+			// function-scoped defer would run, so wrap the binding and the rest of the
+			// block in a closure whose defer releases the resource on the closure's exit.
+			// The wrap consumes the remaining statements, so it ends the loop.
+			if stmts, ok, err := r.lowerUsingScope(n, nodes[i+1:]); err != nil {
+				return nil, err
+			} else if ok {
+				out = append(out, stmts...)
+				return out, nil
+			}
+		}
 		stmts, err := r.lowerStatementMulti(n)
 		if err != nil {
 			return nil, err
@@ -1042,9 +1067,36 @@ func (r *Renderer) deferredReturn(n frontend.Node) ([]ast.Stmt, error) {
 // means float64. A binding with no initializer, or one carrying a type
 // annotation node this slice does not read yet, hands back.
 func (r *Renderer) lowerVarStatement(n frontend.Node) (ast.Stmt, error) {
+	// A `using` or `await using` declaration binds a disposable resource whose
+	// [Symbol.dispose] runs at scope exit, in reverse declaration order and on every
+	// exit path. That disposal is a later slice; the resource class's dispose method
+	// lowers already, but the declaration itself must not silently lower to a plain
+	// binding, which would drop the dispose call and print the wrong result. Hand back
+	// so the whole unit routes to the engine rather than emit a `using` with no
+	// disposal.
+	if kw, ok := r.usingKeyword(n); ok {
+		return nil, &NotYetLowerable{Reason: "the " + kw + " declaration's scope-exit disposal is a later slice"}
+	}
 	var decls []frontend.Node
 	collectVarDecls(r.prog, n, &decls)
 	return r.varDeclStmt(decls)
+}
+
+// usingKeyword reports whether a variable statement is an explicit-resource
+// -management declaration, `using x = ...` or `await using x = ...`, and returns the
+// keyword for the hand-back reason. The kind is read from the statement text, since
+// the using keyword is a leading token bento does not name as its own node, the way
+// isConstStatement reads const. An `await using` leads with await, so it is checked
+// first and reported by its full spelling.
+func (r *Renderer) usingKeyword(n frontend.Node) (string, bool) {
+	text := strings.TrimSpace(r.prog.Text(n))
+	if strings.HasPrefix(text, "await using ") {
+		return "await using", true
+	}
+	if strings.HasPrefix(text, "using ") {
+		return "using", true
+	}
+	return "", false
 }
 
 // lowerVarStatementMulti lowers a variable statement and follows it with a blank

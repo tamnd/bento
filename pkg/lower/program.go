@@ -453,6 +453,16 @@ func (r *Renderer) lowerMainItems(items []mainItem) ([]ast.Stmt, error) {
 			out = append(out, &ast.ExprStmt{X: &ast.CallExpr{Fun: ident(staticInitName(it.initClass))}})
 			continue
 		}
+		// The program body is a top-level scope like a function body, so a `using`
+		// among its statements defers its disposal to main's return, the scope that
+		// matches the JavaScript block scope. A `using` in a nested block hands back
+		// through lowerVarStatement the same way it does inside a function.
+		if stmts, ok, err := r.lowerUsingDefer(it.node); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, stmts...)
+			continue
+		}
 		stmts, err := r.lowerStatementMulti(it.node)
 		if err != nil {
 			return nil, err
