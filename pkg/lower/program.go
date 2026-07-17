@@ -82,6 +82,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	if err := r.collectNodeImports(entry); err != nil {
 		return Program{}, err
 	}
+	// A binding introduced by an awaited static dynamic import, const m = await
+	// import("./mod"), names the same compile-time namespace a static import * as m
+	// does. Recording it in the same pre-pass, before any body lowers, lets a member
+	// call on it resolve to the composed sibling's Go declaration wherever it appears.
+	r.collectDynamicImportNamespaces(entry)
 	// Classes register before any body lowers, the same hoisting the imports get,
 	// so a function above a class can construct its instances.
 	if err := r.collectClasses(entry); err != nil {

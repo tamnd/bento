@@ -1142,6 +1142,12 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 		if !ok {
 			continue
 		}
+		// A binding from an awaited static dynamic import declares no Go var, so it
+		// takes no blank assignment; `_ = m` would name an identifier that does not
+		// exist.
+		if r.dynImportNamespaces[name] {
+			continue
+		}
 		if r.bindingUnused(kids[0]) {
 			out = append(out, &ast.AssignStmt{
 				Lhs: []ast.Expr{ident("_")},
@@ -1173,6 +1179,12 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 				return &ast.EmptyStmt{Implicit: true}, nil
 			}
 		}
+	}
+	// A binding from an awaited static dynamic import carries no runtime value: its
+	// namespace resolves to package-level Go declarations, so the declaration lowers
+	// to the await suspension alone, with no Go var.
+	if stmt, ok, err := r.dynamicImportNamespaceDecl(decls); err != nil || ok {
+		return stmt, err
 	}
 	if stmt, ok, err := r.redeclaredVarAssign(decls); err != nil || ok {
 		return stmt, err
