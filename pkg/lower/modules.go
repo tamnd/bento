@@ -78,6 +78,30 @@ func (r *Renderer) internalNamespaceCall(n, access frontend.Node, argNodes []fro
 // implementation, a monomorphized name, a call-site default fill), which a bare Go
 // name reference does not carry, so any of those hands back. A member that is not an
 // exported function, a const export with no Go value behind it, hands back too.
+// namespaceMemberValue resolves a member of a sibling namespace import read as a
+// value, m.f or m.K, to the Go name its export lowered to. A function member reads
+// as the bare package func name, the same the call form m.f(1) resolves. A const or
+// let member reads as the export's package-level Go var, the value the const-export
+// composition (#589) materializes: an exported literal const or let composes as a
+// package var under its localName, so m.K reads that same localName the way a named
+// import of K does. The variable path spells localName because the composition keeps
+// the variable convention (a function capitalizes, a variable is preserved), and a
+// non-literal const export never reaches here because the sibling hands the whole
+// unit back at moduleFuncs before the entry lowers this read. A member that is
+// neither a plain function nor a composable variable, a class or an export with no
+// Go value behind it, hands back through the function resolver.
+func (r *Renderer) namespaceMemberValue(nameNode frontend.Node) (string, error) {
+	if sym, ok := r.prog.SymbolAt(nameNode); ok {
+		if target := r.derefAlias(sym); target.Flags&frontend.SymbolVariable != 0 && target.Flags&frontend.SymbolFunction == 0 {
+			if goName, ok := localName(target.Name); ok {
+				return goName, nil
+			}
+			return "", &NotYetLowerable{Reason: "a namespace member variable whose name is not a Go identifier is a later slice"}
+		}
+	}
+	return r.namespaceMemberFunc(nameNode)
+}
+
 func (r *Renderer) namespaceMemberFunc(nameNode frontend.Node) (string, error) {
 	sym, ok := r.prog.SymbolAt(nameNode)
 	if !ok {

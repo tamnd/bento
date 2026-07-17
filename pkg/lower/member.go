@@ -122,17 +122,17 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
-	// A member of a sibling namespace import read as a value, m.inc passed as a
-	// callback, resolves to the same package-level Go func the call form m.inc(1)
-	// resolves to, read as a bare func value the way a same-module `const f = inc`
-	// reads a top-level function. A member with no Go value behind it, a const export
-	// the composition does not materialize, or an overloaded, generic, or defaulting
-	// export whose bare name reference cannot stand in for the call bridging, hands
-	// back through the shared resolver so the unit routes to the engine. A call
-	// m.inc(1) is intercepted on the call path before it reaches here, so only a value
-	// read routes through this guard.
+	// A member of a sibling namespace import read as a value resolves to the Go name
+	// its export lowered to: m.inc passed as a callback reads the bare func value the
+	// way a same-module `const f = inc` does, and m.K reads the package-level Go var an
+	// exported const or let composed to (#589). A member with no Go value behind it, a
+	// class export or a non-literal const the composition does not materialize, or an
+	// overloaded, generic, or defaulting export whose bare name reference cannot stand
+	// in for the call bridging, hands back through the resolver so the unit routes to
+	// the engine. A call m.inc(1) is intercepted on the call path before it reaches
+	// here, so only a value read routes through this guard.
 	if obj.Kind() == frontend.NodeIdentifier && r.internalNamespaces[r.prog.Text(obj)] {
-		name, err := r.namespaceMemberFunc(nameNode)
+		name, err := r.namespaceMemberValue(nameNode)
 		if err != nil {
 			return nil, err
 		}
