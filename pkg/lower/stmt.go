@@ -1332,9 +1332,11 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			// first assignment: the Go zero is then never seen as a JavaScript value, so
 			// the binding lowers to a plain `var x T` at the declared type. The
 			// definiteLocals pre-pass carries that proof, reproducing the checker's
-			// guarantee for direct reads and excluding a local a nested closure captures,
-			// the one read shape the checker does not police. A binding the pre-pass did
-			// not clear keeps handing back.
+			// guarantee for direct reads. It also excludes a local a nested closure
+			// captures, the one read shape the checker does not police, except when the
+			// local is assigned before any capturing closure is defined, which the pre-pass
+			// proves is capture-safe and rejoins here. A binding the pre-pass did not clear
+			// keeps handing back.
 			if r.definiteLocals[name] {
 				optGo, err := r.typeExpr(nameType)
 				if err != nil {
@@ -1346,7 +1348,12 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 				})
 				continue
 			}
-			return nil, &NotYetLowerable{Reason: "a statically typed binding with no initializer is a later slice"}
+			// The remaining shape is a closure-captured typed binding the capture-safe
+			// proof cannot clear, whose read from inside a closure may observe undefined
+			// before the first assignment. A plain var would read Go's zero there, so the
+			// sound lowering is a boxed value.Value slot threaded through every use, a
+			// later slice.
+			return nil, &NotYetLowerable{Reason: "a closure-captured typed binding with no initializer that may be read before assignment is a later slice"}
 		}
 		// A local the analysis proved holds only 32-bit integers is declared as a Go
 		// int32 and its initializer is lowered in the int32 domain, so the counter or
