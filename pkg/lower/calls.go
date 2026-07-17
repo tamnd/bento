@@ -1611,6 +1611,25 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: call, Sel: ident("AsString")}}, nil
 	}
+	// valueOf on a boxed receiver dispatches at runtime the way toString does:
+	// Object.prototype.valueOf returns the receiver itself, and the primitive wrappers
+	// return the primitive they box, so recv.ValueOfMethod() answers the receiver value
+	// unchanged and throws on undefined and null the way the language does. It routes
+	// here before the string gate below, which would otherwise reject a boxed receiver.
+	// The result stays boxed: a boxed receiver is typed any (valueOf is any) or symbol
+	// (valueOf is symbol), both of which the consumer takes as a value.Value, so unlike
+	// the toString case there is no known primitive kind to unbox to.
+	if r.isBoxedValue(recvNode) && method == "valueOf" {
+		if len(argNodes) != 0 {
+			return nil, &NotYetLowerable{Reason: "dynamic .valueOf with an argument is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ValueOfMethod")}}, nil
+	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
