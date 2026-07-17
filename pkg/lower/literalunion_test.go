@@ -35,12 +35,19 @@ func TestBooleanLiteralUnionReturnLowers(t *testing.T) {
 	}
 }
 
-// TestMixedUnionReturnHandsBack proves a union that folds nothing (string | number,
-// where the members disagree on their primitive) keeps its own flags and hands the
-// unit back rather than being coerced to one primitive.
-func TestMixedUnionReturnHandsBack(t *testing.T) {
-	const src = "export function m(n: number): string | number { if (n > 0) return \"pos\"; return n; }\nconsole.log(m(1));\n"
-	renderProgramHandBack(t, src)
+// TestMixedUnionReturnRuns proves a union that folds nothing (string | number, where
+// the members disagree on their primitive) keeps its own flags and lowers to the
+// tagged-sum machinery: the function returns the NumOrStr struct, and console.log
+// coerces it through the union's ToString, printing the string arm without quotes and
+// the number arm as its digits, exactly as Node's console does for each primitive.
+func TestMixedUnionReturnRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "export function m(n: number): string | number { if (n > 0) return \"pos\"; return n; }\nconsole.log(m(1));\nconsole.log(m(-3));\n"
+	got := runProgramGo(t, src)
+	want := "pos\n-3\n"
+	if got != want {
+		t.Fatalf("mixed union run mismatch:\n got %q\nwant %q", got, want)
+	}
 }
 
 // TestStringLiteralUnionReturnLowers proves a function whose return type is the
