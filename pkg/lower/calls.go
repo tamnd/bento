@@ -50,6 +50,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if b, ok := r.namespaceGoCall(kids[0]); ok {
 			return r.goImportCall(b, n, kids[1:])
 		}
+		// A call on a namespace import of a composed sibling (m.inc(1) where m is
+		// import * as m) is a direct call to the export's package-level Go func, so it
+		// routes here before the method-call path, which expects a value receiver the
+		// namespace binding has none of.
+		if expr, handled, err := r.internalNamespaceCall(n, kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
 		// A static call on the global Array constructor (Array.of, Array.isArray)
 		// is not a method on a value receiver, so it routes here before methodCall,
 		// which expects a string, array, map, or class receiver. It needs the whole

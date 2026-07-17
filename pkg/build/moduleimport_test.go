@@ -188,15 +188,60 @@ func TestMixedDefaultAndNamedImportComposes(t *testing.T) {
 	}
 }
 
-// TestNamespaceImportHandsBack pins that a namespace import still hands back, since
-// it needs a struct of the module's exports rather than a direct reference, which
-// is a later Group 2 slice.
-func TestNamespaceImportHandsBack(t *testing.T) {
-	_, err := compileModule(t, "main.ts", map[string]string{
+// TestNamespaceImportComposesMemberCall pins that a namespace import of a sibling
+// (import * as m) composes: a member call on the binding, m.inc(1), resolves to the
+// export's package-level Go func and lowers to a direct call, the same Inc the
+// declaration took, with no runtime struct standing behind the namespace.
+func TestNamespaceImportComposesMemberCall(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
 		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
 		"main.ts": "import * as m from \"./m\";\nconsole.log(m.inc(1));\n",
 	})
+	if err != nil {
+		t.Fatalf("a namespace member call should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "func Inc(n float64) float64") {
+		t.Fatalf("expected the export to lower as a package func, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Inc(1)") {
+		t.Fatalf("expected the namespace member call to spell `Inc(1)`, got:\n%s", out)
+	}
+}
+
+// TestNamespaceMemberValueReadHandsBack pins that reading a namespace member as a
+// value rather than calling it hands back: the export has no Go value the namespace
+// materializes, so a value read needs the struct this slice does not build.
+func TestNamespaceMemberValueReadHandsBack(t *testing.T) {
+	_, err := compileModule(t, "main.ts", map[string]string{
+		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
+		"main.ts": "import * as m from \"./m\";\nconst f = m.inc;\nconsole.log(f(1));\n",
+	})
 	if err == nil {
-		t.Fatal("a namespace import should hand back for a later slice, but it lowered")
+		t.Fatal("a namespace member read as a value should hand back, but it lowered")
+	}
+}
+
+// TestNamespaceImportRunsComposed carries the namespace member call through the full
+// build and runs it, proving the resolved Go name agrees at runtime: inc(1) is 2.
+func TestNamespaceImportRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
+		"main.ts": "import * as m from \"./m\";\nconsole.log(m.inc(1));\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "2\n" {
+		t.Fatalf("want 2, got %q", got)
 	}
 }
