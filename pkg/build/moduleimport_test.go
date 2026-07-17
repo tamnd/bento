@@ -368,3 +368,100 @@ func TestNamespaceImportRunsComposed(t *testing.T) {
 		t.Fatalf("want 2, got %q", got)
 	}
 }
+
+// TestReExportNamedComposes pins that a module re-exporting another's binding,
+// `export { inc } from "./leaf"`, composes: the re-export forwards the binding and
+// declares nothing of its own, so an entry importing the name through the middle
+// module resolves the alias chain to the leaf's package-level Go func and calls Inc
+// directly, with the re-export statement itself carrying no code.
+func TestReExportNamedComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
+		"leaf.ts": "export function inc(n: number): number { return n + 1; }\n",
+		"mid.ts":  "export { inc } from \"./leaf\";\n",
+		"main.ts": "import { inc } from \"./mid\";\nconsole.log(inc(1));\n",
+	})
+	if err != nil {
+		t.Fatalf("a named re-export should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "func Inc(n float64) float64") {
+		t.Fatalf("expected the leaf export to lower as a package func, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Inc(1)") {
+		t.Fatalf("expected the re-exported import to call `Inc(1)`, got:\n%s", out)
+	}
+}
+
+// TestReExportAliasedComposes pins that renaming on the way out,
+// `export { inc as bump } from "./leaf"`, composes the same way: the entry imports
+// bump and the alias chain resolves through the rename to the leaf's Inc.
+func TestReExportAliasedComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
+		"leaf.ts": "export function inc(n: number): number { return n + 1; }\n",
+		"mid.ts":  "export { inc as bump } from \"./leaf\";\n",
+		"main.ts": "import { bump } from \"./mid\";\nconsole.log(bump(1));\n",
+	})
+	if err != nil {
+		t.Fatalf("an aliased re-export should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "Inc(1)") {
+		t.Fatalf("expected the aliased re-exported call to spell `Inc(1)`, got:\n%s", out)
+	}
+}
+
+// TestReExportStarComposes pins that a star re-export, `export * from "./leaf"`,
+// forwards the leaf's whole named surface: the entry imports one of those names
+// through the middle module and it resolves to the leaf's Go func.
+func TestReExportStarComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
+		"leaf.ts": "export function inc(n: number): number { return n + 1; }\n",
+		"mid.ts":  "export * from \"./leaf\";\n",
+		"main.ts": "import { inc } from \"./mid\";\nconsole.log(inc(1));\n",
+	})
+	if err != nil {
+		t.Fatalf("a star re-export should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "Inc(1)") {
+		t.Fatalf("expected the star re-exported call to spell `Inc(1)`, got:\n%s", out)
+	}
+}
+
+// TestReExportRunsComposed carries a named re-export through the full build and
+// runs it, proving the forwarded name agrees at runtime: inc(1) through the middle
+// module is 2.
+func TestReExportRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"leaf.ts": "export function inc(n: number): number { return n + 1; }\n",
+		"mid.ts":  "export { inc } from \"./leaf\";\n",
+		"main.ts": "import { inc } from \"./mid\";\nconsole.log(inc(1));\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "2\n" {
+		t.Fatalf("want 2, got %q", got)
+	}
+}
+
+// TestLocalExportListHandsBack pins that a same-module `export { x }` with no `from`
+// clause still hands back: it is not a re-export (it names no module), so the
+// composed unit does not mistake it for a code-free forward. The binding x is a
+// const whose top-level evaluation the composed unit would have to order.
+func TestLocalExportListHandsBack(t *testing.T) {
+	_, err := compileModule(t, "main.ts", map[string]string{
+		"mid.ts":  "const x: number = 1;\nexport { x };\n",
+		"main.ts": "import { x } from \"./mid\";\nconsole.log(x);\n",
+	})
+	if err == nil {
+		t.Fatal("a local export list should hand back for a later slice, but it lowered")
+	}
+}

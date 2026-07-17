@@ -188,18 +188,42 @@ func (r *Renderer) moduleFuncs(dep frontend.Node) ([]ast.Decl, error) {
 			continue
 		case frontend.NodeUnknown:
 			// An import declaration recorded in the pre-pass above and carries no code;
-			// the end-of-file token is empty. Any other unnamed statement (a bare
-			// `export { x }`, an `export default`, a side-effecting expression) is a top
-			// level the composed unit would have to run, so it hands back.
+			// the end-of-file token is empty. A re-export (`export { x } from`, `export *
+			// from`) forwards another module's binding and declares nothing of its own:
+			// the forwarded binding lives in the module the re-export names, which the
+			// build composes separately, so an import of the re-exported name derefs the
+			// alias chain through to that declaration and the re-export statement itself
+			// carries no code. Any other unnamed statement (a bare local `export { x }`, an
+			// `export default`, a side-effecting expression) is a top level the composed
+			// unit would have to run, so it hands back.
 			text := strings.TrimSpace(r.prog.Text(stmt))
-			if text != "" && !strings.HasPrefix(text, "import") {
-				return nil, &NotYetLowerable{Reason: "a top-level statement in a sibling module is a later slice"}
+			if text == "" || strings.HasPrefix(text, "import") || r.isReExport(stmt) {
+				continue
 			}
+			return nil, &NotYetLowerable{Reason: "a top-level statement in a sibling module is a later slice"}
 		default:
 			return nil, &NotYetLowerable{Reason: "a top-level statement in a sibling module is a later slice"}
 		}
 	}
 	return funcs, nil
+}
+
+// isReExport reports whether an unnamed top-level statement forwards another
+// module's binding, `export { x } from "./m"`, `export { x as y } from "./m"`, or
+// `export * from "./m"`. A re-export names a module (a string-literal specifier
+// child) and begins with export, which distinguishes it from a local `export { x }`
+// that re-exports a same-module binding and from an ordinary import. It declares no
+// runtime value of its own, so the composed module skips it.
+func (r *Renderer) isReExport(stmt frontend.Node) bool {
+	if !strings.HasPrefix(strings.TrimSpace(r.prog.Text(stmt)), "export") {
+		return false
+	}
+	for _, k := range r.prog.Children(stmt) {
+		if k.Kind() == frontend.NodeStringLiteral {
+			return true
+		}
+	}
+	return false
 }
 
 // composedNameCollision reports whether two top-level declarations in the
