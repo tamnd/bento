@@ -25,6 +25,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if len(kids) == 0 {
 		return nil, &NotYetLowerable{Reason: "call expression exposed no callee"}
 	}
+	// A dynamic import() is a call whose callee is the import keyword, not a value.
+	// It routes to the dynamic-import classifier before the callee paths below,
+	// which would otherwise treat the keyword as a function value and hand back
+	// with a misleading reason rather than the honest static/computed split.
+	if expr, handled, err := r.dynamicImportCall(n, kids); handled || err != nil {
+		return expr, err
+	}
 	// A callee that is a user-defined callable object, assert(x) where assert holds
 	// an Assert struct, calls through the struct's reserved Call field: assert.Call(x).
 	// It routes before the method and value-callee paths, which would otherwise call
