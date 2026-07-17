@@ -558,12 +558,7 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			// property the shape declares and would otherwise emit a selector on a Go
 			// field that was never declared.
 			if _, present := r.shapeProp(objType, prop); !present {
-				recv, err := r.lowerExpr(obj)
-				if err != nil {
-					return nil, err
-				}
-				r.requireImport(valuePkg)
-				return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, nil
+				return r.missingPropertyFold(n, obj)
 			}
 			fieldName, ok := exportedField(prop)
 			if !ok {
@@ -649,6 +644,32 @@ func (r *Renderer) functionPropertyRead(obj frontend.Node, prop string) (ast.Exp
 		}
 	}
 	return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(sig.MinArgs)}, true, nil
+}
+
+// missingPropertyFold lowers a read of a property an object shape does not declare,
+// n being the whole member or element access and obj its receiver. A read the checker
+// gave the error type (no flags) is a provable miss: the shape's interned struct
+// carries no field that could hold the key, so the language answers undefined and the
+// read folds to value.MissingProperty over the lowered receiver, which evaluates the
+// receiver for its effect and yields the undefined singleton. A read the checker gave a
+// concrete type instead is typed by an index signature on the shape, which the interned
+// struct dropped when it kept only the declared fields, so the key is not provably
+// absent, there is no field to select, and value.MissingProperty would land a
+// value.Value where the concrete type (a number, say) is wanted and fail go build.
+// Lowering that index-signature read against a backing map is a later slice, so it
+// hands back rather than miscompile. The receiver lowers first so a receiver that
+// itself cannot lower, an unmodeled ambient global (RegExp.length) among them, keeps
+// its own more specific handback rather than lose it to the index-signature reason.
+func (r *Renderer) missingPropertyFold(n, obj frontend.Node) (ast.Expr, error) {
+	recv, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, err
+	}
+	if r.prog.TypeAt(n).Flags != 0 {
+		return nil, &NotYetLowerable{Flags: r.prog.TypeAt(n).Flags, Reason: "reading a key typed by an object's index signature is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, nil
 }
 
 // missingPropertyRead reports whether n is a property read that propertyAccess
@@ -907,12 +928,7 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 				// emitting o.K for a field the struct does not carry once the front door
 				// tolerates the checker's index diagnostic for such a read.
 				if _, present := r.shapeProp(objType, key); !present {
-					recv, err := r.lowerExpr(obj)
-					if err != nil {
-						return nil, err
-					}
-					r.requireImport(valuePkg)
-					return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, nil
+					return r.missingPropertyFold(n, obj)
 				}
 				field, ok := exportedField(key)
 				if !ok {
