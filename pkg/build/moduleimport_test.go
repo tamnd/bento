@@ -111,16 +111,92 @@ func TestConstExportHandsBack(t *testing.T) {
 	}
 }
 
-// TestAliasedImportHandsBack pins that renaming an import on the way in hands
-// back, since spelling the local alias in Go is a later slice; the reference must
-// keep taking the exported name until then.
-func TestAliasedImportHandsBack(t *testing.T) {
-	_, err := compileModule(t, "main.ts", map[string]string{
+// TestAliasedImportComposes pins that renaming an import on the way in composes:
+// the local alias f is only a name the entry uses, and both a call and a value read
+// of it deref the alias to the export it names, so the reference spells the exported
+// Go name Area rather than the local f.
+func TestAliasedImportComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
 		"geo.ts":  "export function area(r: number): number { return r * r; }\n",
 		"main.ts": "import { area as f } from \"./geo\";\nconsole.log(f(2));\n",
 	})
-	if err == nil {
-		t.Fatal("an aliased import should hand back for a later slice, but it lowered")
+	if err != nil {
+		t.Fatalf("an aliased import should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "func Area(r float64) float64") {
+		t.Fatalf("expected the export to lower as a package func, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Area(2)") {
+		t.Fatalf("expected the aliased call to spell `Area(2)`, got:\n%s", out)
+	}
+}
+
+// TestAliasedImportRunsComposed carries the aliased program through the full build
+// and runs it, proving the deref agrees at runtime: area(2) is 4.
+func TestAliasedImportRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"geo.ts":  "export function area(r: number): number { return r * r; }\n",
+		"main.ts": "import { area as f } from \"./geo\";\nconsole.log(f(2));\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "4\n" {
+		t.Fatalf("want 4, got %q", got)
+	}
+}
+
+// TestNamedImportFunctionValueReadComposes pins that a named import used as a value
+// rather than called composes: const g = inc reads the imported function as a value,
+// and the value read derefs the import alias to the export's Go name, so the binding
+// spells Inc, not the source inc a plain local read would emit. Without the deref the
+// emitted Go named an undeclared inc and failed to build.
+func TestNamedImportFunctionValueReadComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
+		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
+		"main.ts": "import { inc } from \"./m\";\nconst g = inc;\nconsole.log(g(1));\n",
+	})
+	if err != nil {
+		t.Fatalf("a named import read as a value should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "g := Inc") {
+		t.Fatalf("expected the value read to bind `g := Inc`, got:\n%s", out)
+	}
+}
+
+// TestNamedImportFunctionValueReadRunsComposed carries the value-read program
+// through the full build and runs it, proving the derefed name builds and agrees at
+// runtime: inc(1) read through g is 2.
+func TestNamedImportFunctionValueReadRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
+		"main.ts": "import { inc } from \"./m\";\nconst g = inc;\nconsole.log(g(1));\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "2\n" {
+		t.Fatalf("want 2, got %q", got)
 	}
 }
 

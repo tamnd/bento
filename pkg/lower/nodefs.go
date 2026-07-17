@@ -163,45 +163,35 @@ func (r *Renderer) recordNodeImport(decl frontend.Node, internal map[string]bool
 }
 
 // recordInternalImport handles an import from a sibling module the build composed
-// into the same unit. A named or default import binds each name to the sibling's
-// package-level Go declaration, which carries the same Go spelling the binding
-// takes there, so the import records nothing and each reference lowers to that
-// name directly: a named import spells the exported name, and a default import the
-// Default name bento gives a sibling's default export, both of which the reference
-// recovers from the alias at its site. The forms this slice does not lower hand
-// back so the whole unit routes to the engine rather than emit a reference with no
-// target: a bare side-effect import (whose module evaluation order the composed
-// unit would have to preserve), a namespace import (which needs a struct of the
-// exports), and an aliased import (whose local name differs from the exported one,
-// so the reference would not spell the declaration's Go name).
+// into the same unit. A named, aliased, or default import binds each name to the
+// sibling's package-level Go declaration, which carries the same Go spelling the
+// binding takes there, so the import records nothing and each reference lowers to
+// that name directly: the call path and the value-read path both deref the import
+// alias to the export it names, so a named import spells the exported name, an
+// aliased import (import { area as f }) recovers the same exported Go name from the
+// alias rather than the local f, and a default import the Default name bento gives a
+// sibling's default export. A non-function export a reference cannot spell this way,
+// a const or class, hands back at the export side (its top-level statement is not
+// composed), so the reference never reaches a successful build; recording nothing
+// here is safe for every named form. Only a bare side-effect import, whose module
+// evaluation order the composed unit would have to preserve, hands back, and a
+// namespace import records its binding for member resolution.
 func (r *Renderer) recordInternalImport(module string, clause frontend.Node, haveClause bool) error {
 	if !haveClause {
 		return &NotYetLowerable{Reason: "a bare side-effect import of a sibling module is a later slice"}
 	}
 	// A namespace import binds the sibling's whole exported surface to one name. Each
 	// export is already a package-level Go declaration, so the binding needs no runtime
-	// struct: the name is recorded here, and a member call on it (m.inc(1)) resolves to
-	// the export's Go name at its call site. The binding used as a first-class value,
-	// or a member read of it, still hands back at its site, since a namespace passed
-	// around as a value would need the struct this slice does not build.
+	// struct: the name is recorded here, and a member call on it (m.inc(1)) or a member
+	// value read (const f = m.inc) resolves to the export's Go name at its site. The
+	// binding used as a first-class value still hands back at its site, since a
+	// namespace passed around as a whole would need the struct this slice does not build.
 	if binding, ok := namespaceBinding(r.prog, clause); ok {
 		r.internalNamespaces[binding] = true
 		return nil
 	}
-	// A pure default import carries no named-imports node, only the default binding,
-	// which records nothing; its reference resolves to the sibling's Default
-	// declaration through the alias at the call site. A named or mixed import walks
-	// its specifiers below.
-	named, ok := namedImportsNode(r.prog, clause)
-	if !ok {
-		return nil
-	}
-	for _, spec := range r.prog.Children(named) {
-		names := identChildren(r.prog, spec)
-		if len(names) >= 2 && names[0] != names[len(names)-1] {
-			return &NotYetLowerable{Reason: "an aliased import of a sibling module is a later slice"}
-		}
-	}
+	// A named, aliased, default, or mixed import records nothing; each reference
+	// resolves to the export's Go name by deref-ing the import alias at its site.
 	return nil
 }
 
