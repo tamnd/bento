@@ -14,34 +14,22 @@ import (
 // assigns that temporary to the target at the top of the loop body, so the target
 // carries each element the way a declared binding would.
 //
-// The target must be a plain identifier bound to a widened primitive local whose Go
-// representation already matches the element's, so a bare Go assignment is valid with no
-// coercion: the declared-binding path never runs the assignment machinery, and routing
-// through it here for a refined or crossing target would need it. A member or
-// destructuring target, a dynamic, optional, int32/int64/bigint-refined, or non-primitive
-// target, an element whose primitive category differs, and a Map, Set, generator, or user
-// iterator source all report handled=false so the caller keeps the existing hand-back.
+// The target must be a plain identifier local or a fixed-shape property member whose Go
+// representation is a widened primitive already matching the element's, so a bare Go
+// assignment is valid with no coercion: the declared-binding path never runs the
+// assignment machinery, and routing through it here for a refined or crossing target
+// would need it. A destructuring target, a dynamic, optional, int32/int64/bigint-refined,
+// or non-primitive target, an element whose primitive category differs, and a Map, Set,
+// generator, or user iterator source all report handled=false so the caller keeps the
+// existing hand-back.
 func (r *Renderer) forOfAssignTarget(target, iterable, bodyNode frontend.Node) (ast.Stmt, bool, error) {
 	// An array pattern head, `for ([a, b] of pairs)`, assigns each tuple position to an
 	// existing binding rather than a single whole element, so it takes the pattern path.
 	if target.Kind() == frontend.NodeArrayLiteralExpression {
 		return r.forOfAssignPattern(target, iterable, bodyNode)
 	}
-	if target.Kind() != frontend.NodeIdentifier {
-		return nil, false, nil
-	}
-	name, ok := localName(r.prog.Text(target))
+	targetCat, ok := r.forOfAssignScalarCategory(target)
 	if !ok {
-		return nil, false, nil
-	}
-	// A representation-refined or dynamic target holds a Go type the range element does not,
-	// so assigning the element by name would not compile. Only a plain widened primitive
-	// local is handled; every other shape hands back to the existing later-slice reason.
-	if r.int32Locals[name] || r.int64Locals[name] || r.bigOwned[name] || r.isDynamic(target) {
-		return nil, false, nil
-	}
-	targetCat := plainPrimCategory(r.primitiveFlags(target))
-	if targetCat == "" {
 		return nil, false, nil
 	}
 
@@ -100,6 +88,44 @@ func (r *Renderer) forOfAssignTarget(target, iterable, bodyNode frontend.Node) (
 		Body:  body,
 	}
 	return rng, true, nil
+}
+
+// forOfAssignScalarCategory validates that target is a plain, assignable scalar slot a
+// bare Go assignment can carry a ranged element into, and returns its primitive category.
+// A plain-identifier local and a fixed-shape property member both qualify when their Go
+// representation is a widened primitive; a representation-refined, dynamic, or
+// non-primitive target, and any other target shape, report ok=false so the caller keeps
+// the existing hand-back.
+func (r *Renderer) forOfAssignScalarCategory(target frontend.Node) (string, bool) {
+	switch target.Kind() {
+	case frontend.NodeIdentifier:
+		name, ok := localName(r.prog.Text(target))
+		if !ok {
+			return "", false
+		}
+		// A representation-refined or dynamic target holds a Go type the range element does
+		// not, so assigning the element by name would not compile.
+		if r.int32Locals[name] || r.int64Locals[name] || r.bigOwned[name] || r.isDynamic(target) {
+			return "", false
+		}
+	case frontend.NodePropertyAccessExpression:
+		// A member target `o.f of xs` assigns each element into a struct field. The receiver
+		// must be repeatable, so naming it fresh each iteration is sound, and neither the
+		// receiver nor the member may be dynamic, so the member lowers to a Go field selector
+		// a bare assignment can target rather than a boxed read the assignment machinery would
+		// need. The primitive-category check below still gates a refined or crossing member.
+		kids := r.prog.Children(target)
+		if len(kids) == 0 || !r.repeatableOperand(kids[0]) || r.isDynamic(kids[0]) || r.isDynamic(target) {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	cat := plainPrimCategory(r.primitiveFlags(target))
+	if cat == "" {
+		return "", false
+	}
+	return cat, true
 }
 
 // forOfAssignPattern lowers a for...of whose head is an array pattern that assigns each
