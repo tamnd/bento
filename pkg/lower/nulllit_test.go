@@ -25,14 +25,21 @@ func TestUndefinedLiteralBoxes(t *testing.T) {
 	}
 }
 
-// TestTypedNullUnionStillHandsBack pins that the boxing stays gated to the bare
-// literal: a null inside a T | null union keeps its own representation, so a
-// compare against it is not lowered by this slice and hands back.
-func TestTypedNullUnionStillHandsBack(t *testing.T) {
+// TestTypedNullUnionInternsTaggedSum pins that the bare null literal still boxes to
+// the value.Null singleton, but a null inside a T | null union rides the tagged sum:
+// a string | null interns as StrOrNull and a compare against null narrows to a tag
+// check rather than handing back.
+func TestTypedNullUnionInternsTaggedSum(t *testing.T) {
 	src := "let s: string | null = null;\nconsole.log(s === null);\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "mixed or non-primitive operands") {
-		t.Fatalf("expected the union compare to still hand back, got: %q", reason)
+	out := renderProgram(t, src)
+	for _, want := range []string{
+		"type StrOrNull struct {",
+		"s := StrOrNullOfNull()",
+		"s.tag == StrOrNullNull",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("string | null did not intern as a tagged sum, missing %q:\n%s", want, out)
+		}
 	}
 }
 
