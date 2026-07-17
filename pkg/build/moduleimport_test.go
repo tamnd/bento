@@ -375,17 +375,60 @@ func TestNamespaceMemberValueReadRunsComposed(t *testing.T) {
 	}
 }
 
-// TestNamespaceConstMemberValueReadHandsBack pins that a namespace read of a
-// non-function member still hands back: a const export has no package-level Go value
-// the namespace materializes, so the read routes to the engine rather than emit a
-// selector on a binding with no Go storage.
-func TestNamespaceConstMemberValueReadHandsBack(t *testing.T) {
-	_, err := compileModule(t, "main.ts", map[string]string{
+// TestNamespaceConstMemberValueReadComposes pins that a namespace read of a const
+// member composes now that a literal const export lowers to a package-level Go var
+// (#589): m.pi resolves to that same var under its localName, the way a named import
+// of pi does, with no runtime struct standing behind the namespace.
+func TestNamespaceConstMemberValueReadComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
 		"m.ts":    "export const pi: number = 3;\n",
 		"main.ts": "import * as m from \"./m\";\nconsole.log(m.pi);\n",
 	})
+	if err != nil {
+		t.Fatalf("a namespace const member read should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "var pi float64 = 3") {
+		t.Fatalf("expected the const export to lower as a package var, got:\n%s", out)
+	}
+}
+
+// TestNamespaceConstMemberValueReadRunsComposed carries the const member read through
+// the full build and runs it, proving the resolved Go var agrees at runtime: m.pi
+// reads 3, and a let member a sibling function mutates reads its live value.
+func TestNamespaceConstMemberValueReadRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"m.ts":    "export const pi: number = 3;\nexport let n: number = 0;\nexport function bump(): void { n = n + 1; }\n",
+		"main.ts": "import * as m from \"./m\";\nconsole.log(m.pi);\nm.bump();\nm.bump();\nconsole.log(m.n);\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "3\n2\n" {
+		t.Fatalf("want 3\\n2, got %q", got)
+	}
+}
+
+// TestNamespaceNonLiteralConstMemberReadHandsBack pins that a namespace read of a
+// const whose initializer is not a literal still hands back: the sibling module
+// carrying a call-initialized const hands the whole unit back at moduleFuncs before
+// the entry lowers the read, so no package var stands behind the member.
+func TestNamespaceNonLiteralConstMemberReadHandsBack(t *testing.T) {
+	_, err := compileModule(t, "main.ts", map[string]string{
+		"m.ts":    "function mk(): number { return 3; }\nexport const pi: number = mk();\n",
+		"main.ts": "import * as m from \"./m\";\nconsole.log(m.pi);\n",
+	})
 	if err == nil {
-		t.Fatal("a namespace const member read should hand back, but it lowered")
+		t.Fatal("a namespace non-literal const member read should hand back, but it lowered")
 	}
 }
 
