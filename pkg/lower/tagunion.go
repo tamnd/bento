@@ -881,14 +881,40 @@ func (r *Renderer) inReceiver(right frontend.Node) (ast.Expr, bool, error) {
 	return nil, false, nil
 }
 
-// inStaticShapeRequired folds "key" in obj to the constant true when obj carries a
-// required own property named key on its static object shape. A required property is
-// always present, so the membership test is a compile-time true, the value the boxing
-// InOperator would answer at run time without a box to build. Only that branch folds:
-// every other case returns not-handled so the caller keeps its honest handback, since
-// none of them is a provable present. An optional member may be absent; a member the
-// shape does not declare may still live on Object.prototype, so a false fold would be
-// unsound; a non-literal key is not known here; and a receiver that is not
+// objectPrototypeMembers is the set of string keys Object.prototype carries, the
+// members a `key in obj` check finds on the prototype chain of any ordinary object no
+// matter what its own shape declares. A static object shape written in TypeScript is an
+// ordinary object whose chain ends at Object.prototype, so `"toString" in obj` and its
+// siblings are always present regardless of the own fields, which is what lets the fold
+// answer them a constant true. The list is the enumerable-in-membership own keys of
+// Object.prototype: the four value methods, the four reflection methods, constructor,
+// and the legacy __proto__ accessor and its define/lookup helpers.
+var objectPrototypeMembers = map[string]bool{
+	"constructor":          true,
+	"hasOwnProperty":       true,
+	"isPrototypeOf":        true,
+	"propertyIsEnumerable": true,
+	"toLocaleString":       true,
+	"toString":             true,
+	"valueOf":              true,
+	"__proto__":            true,
+	"__defineGetter__":     true,
+	"__defineSetter__":     true,
+	"__lookupGetter__":     true,
+	"__lookupSetter__":     true,
+}
+
+// inStaticShapeRequired folds "key" in obj to the constant true when the membership is
+// provably present on a static object shape, the value the boxing InOperator would
+// answer at run time without a box to build. Two cases fold. A required own property
+// named key is always present. A key that names an Object.prototype member is present on
+// every ordinary object's prototype chain, so it holds even when the shape declares no
+// such field, or declares one only optionally: the prototype member stands in when the
+// own field is absent. Every other case returns not-handled so the caller keeps its
+// honest handback, since none of them is a provable present. An optional member the
+// shape declares under a non-prototype name may be absent; a member the shape does not
+// declare may still live on Object.prototype under a name not in the set, so a false
+// fold would be unsound; a non-literal key is not known here; and a receiver that is not
 // side-effect-free would lose its effect once the receiver is dropped. The receiver is
 // never dynamic at this point, since inReceiver has already taken the boxed path for a
 // dynamic value, so reading its declared properties is safe.
@@ -899,6 +925,12 @@ func (r *Renderer) inStaticShapeRequired(left, right frontend.Node) (ast.Expr, b
 	}
 	if !r.repeatableOperand(right) {
 		return nil, false
+	}
+	// An Object.prototype member is present on the chain of any ordinary object shape,
+	// so it folds true ahead of the own-property scan, which lets a name like toString
+	// hold even where the shape declares it optionally or not at all.
+	if objectPrototypeMembers[prop] {
+		return ident("true"), true
 	}
 	for _, p := range r.prog.Properties(r.prog.TypeAt(right)) {
 		if p.Name != prop {
