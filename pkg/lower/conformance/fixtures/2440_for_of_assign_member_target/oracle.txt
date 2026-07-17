@@ -1,0 +1,13 @@
+== stdout:
+1
+2
+3
+a
+b
+c
+h
+i
+last 3i
+
+== exit:
+0
