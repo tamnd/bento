@@ -151,16 +151,48 @@ func TestInStaticShapeOptionalHandsBack(t *testing.T) {
 	}
 }
 
-// TestInStaticShapeAbsentHandsBack pins that a member the shape does not declare does not
-// fold to false, since JavaScript may still find it on Object.prototype, so a name like
-// toString keeps the honest handback rather than fold to an unsound false.
+// TestInStaticShapeAbsentHandsBack pins that a member the shape declares under neither an
+// own field nor an Object.prototype name does not fold to false, since an index signature
+// the interned struct dropped could still carry it, so a name like z keeps the honest
+// handback rather than fold to an unsound false.
 func TestInStaticShapeAbsentHandsBack(t *testing.T) {
-	for _, key := range []string{"z", "toString"} {
+	for _, key := range []string{"z", "missing", "nope"} {
 		src := "const o = { a: 1 };\nconsole.log(\"" + key + "\" in o);\n"
 		reason := renderProgramHandBack(t, src)
 		if !strings.Contains(reason, "in operator outside a discriminated-union narrowing") {
 			t.Fatalf("absent-member %q in handed back with %q, want the in-operator reason", key, reason)
 		}
+	}
+}
+
+// TestInStaticShapePrototypeMemberFoldsTrue pins that an Object.prototype member name,
+// present on the prototype chain of every ordinary object shape, folds "key" in obj to
+// the constant true even when the shape declares no such own field, the membership a
+// name like toString always answers.
+func TestInStaticShapePrototypeMemberFoldsTrue(t *testing.T) {
+	skipIfShort(t)
+	for _, key := range []string{"toString", "hasOwnProperty", "valueOf", "constructor"} {
+		src := "const o = { a: 1 };\nconsole.log(\"" + key + "\" in o);\n"
+		want := "true\n"
+		if got := runProgramGo(t, src); got != want {
+			t.Fatalf("prototype-member %q in printed %q, want %q", key, got, want)
+		}
+		source := renderProgram(t, src)
+		if strings.Contains(source, "value.InOperator") {
+			t.Fatalf("prototype-member %q in should fold to a constant, not route through InOperator:\n%s", key, source)
+		}
+	}
+}
+
+// TestInStaticShapeOptionalPrototypeNameFoldsTrue pins that an optional own field whose
+// name is also an Object.prototype member still folds to true: the prototype member
+// stands in for the own field whenever it is absent, so the membership holds either way.
+func TestInStaticShapeOptionalPrototypeNameFoldsTrue(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o: { toString?: () => string } = {};\nconsole.log(\"toString\" in o);\n"
+	want := "true\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("optional-prototype-name in printed %q, want %q", got, want)
 	}
 }
 

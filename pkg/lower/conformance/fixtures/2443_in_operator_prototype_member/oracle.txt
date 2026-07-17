@@ -1,0 +1,6 @@
+== stdout:
+a=true toString=true valueOf=true hasOwnProperty=true constructor=true
+true
+
+== exit:
+0
