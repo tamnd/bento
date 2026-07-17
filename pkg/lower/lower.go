@@ -86,6 +86,14 @@ type Renderer struct {
 	// one of its members hands back, since a namespace bound as a first-class value
 	// needs a struct the slice does not build.
 	internalNamespaces map[string]bool
+	// dynImportNamespaces holds the local names of bindings introduced by a static
+	// dynamic import, const m = await import("./mod"), whose specifier resolves to a
+	// composed sibling. Such a binding names the same compile-time namespace a static
+	// import * as m does, so it also joins internalNamespaces for member resolution;
+	// this set additionally marks its declaration so the statement lowers to the await
+	// suspension alone, with no Go var, the way a namespace binding carries no runtime
+	// value.
+	dynImportNamespaces map[string]bool
 	// goAliases maps a Go import path to the local alias the emitted file imports it
 	// under, assigned on first call into the package so an imported-but-never-called
 	// package emits no import. Every call into one package renders the same alias, so
@@ -562,7 +570,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

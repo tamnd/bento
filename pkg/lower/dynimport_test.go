@@ -40,10 +40,11 @@ f("a");
 	}
 }
 
-// TestDynamicImportStaticSpecifierHandsBack proves a string-literal specifier
-// naming a real sibling module is classified as static: it names a compiled
-// module the loader could resolve, so it takes the static reason marking the
-// compiled-module load as a later slice, not the computed ceiling.
+// TestDynamicImportStaticSpecifierHandsBack proves a bare static import used as a
+// value hands back: the specifier names a compiled sibling, but the promise it
+// returns has no runtime value here, so `const p = import("./mod")` consumed as a
+// value takes the value-use reason rather than the computed ceiling. Only the
+// awaited-and-member-consumed form lowers (the run tests below).
 func TestDynamicImportStaticSpecifierHandsBack(t *testing.T) {
 	prog := compileWithSibling(t,
 		`
@@ -63,6 +64,107 @@ f();
 	if nyl.Reason != dynImportStaticReason {
 		t.Fatalf("reason = %q, want %q", nyl.Reason, dynImportStaticReason)
 	}
+}
+
+// TestStaticDynamicImportAwaitedNamespaceCallRuns is the positive slice: an
+// awaited static dynamic import whose binding is used only through a member call,
+// const m = await import("./mod"); m.inc(1), lowers and runs. The binding carries
+// no Go var; the declaration lowers to the await suspension alone, and m.inc(1)
+// resolves to the composed sibling's package-level Go func, so the program prints
+// the incremented value after the synchronous run drains.
+func TestStaticDynamicImportAwaitedNamespaceCallRuns(t *testing.T) {
+	prog := compileWithSibling(t,
+		`
+async function f(): Promise<number> {
+  const m = await import("./mod");
+  return m.inc(1);
+}
+f().then((v) => console.log("v:" + v));
+console.log("sync");
+`,
+		`export function inc(n: number): number { return n + 1; }`)
+	got := goRunSource(t, renderModulesSource(t, prog, "/m.ts"))
+	want := "sync\nv:2\n"
+	if got != want {
+		t.Fatalf("awaited dynamic-import member call ran wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestStaticDynamicImportAwaitedNamespaceValueReadRuns proves a member value read
+// off the awaited namespace resolves too: const g = m.inc reads the sibling's Go
+// func as a bare value, and calling g runs it, the same resolution a static
+// namespace import gives m.inc.
+func TestStaticDynamicImportAwaitedNamespaceValueReadRuns(t *testing.T) {
+	prog := compileWithSibling(t,
+		`
+async function f(): Promise<number> {
+  const m = await import("./mod");
+  const g = m.inc;
+  return g(41);
+}
+f().then((v) => console.log("v:" + v));
+`,
+		`export function inc(n: number): number { return n + 1; }`)
+	got := goRunSource(t, renderModulesSource(t, prog, "/m.ts"))
+	want := "v:42\n"
+	if got != want {
+		t.Fatalf("awaited dynamic-import member value read ran wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestStaticDynamicImportNamespaceUsedAsValueHandsBack pins the ceiling: the same
+// awaited binding used as a whole value, returned or passed on, has no runtime
+// namespace to stand for, so the unit hands back at the use site rather than
+// miscompile. The declaration recognizer never makes an unbacked value; it only
+// drops the binding for the member-consumed form.
+func TestStaticDynamicImportNamespaceUsedAsValueHandsBack(t *testing.T) {
+	prog := compileWithSibling(t,
+		`
+async function f(): Promise<unknown> {
+  const m = await import("./mod");
+  return m;
+}
+f();
+`,
+		`export function inc(n: number): number { return n + 1; }`)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(rootFile(t, prog, "/m.ts"))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+}
+
+// renderModulesSource assembles the entry source file at entryPath with every
+// other lowerable source as a composed dep, the way the build's entryAndDeps does,
+// and renders them to one Go program. It lets a module test build and run a
+// multi-file program without the single-entry expectation renderProgram carries.
+func renderModulesSource(t *testing.T, prog *frontend.Program, entryPath string) string {
+	t.Helper()
+	var entry frontend.Node
+	var deps []frontend.Node
+	for _, sf := range prog.SourceFiles() {
+		if sf.File().Kind == frontend.FileDTS {
+			continue
+		}
+		if sf.File().Path == entryPath {
+			entry = sf
+			continue
+		}
+		deps = append(deps, sf)
+	}
+	if entry == nil {
+		t.Fatalf("no entry source at %q", entryPath)
+	}
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	r.SetGoConstants(testGoConstants())
+	r.SetGoErrorVars(testGoErrorVars())
+	p, err := r.RenderProgramModules(entry, deps)
+	if err != nil {
+		t.Fatalf("RenderProgramModules: %v", err)
+	}
+	return p.Source
 }
 
 // rootFile returns the loaded source file at path, so a multi-file program can
