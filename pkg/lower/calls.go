@@ -3700,6 +3700,13 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}, nil
 	default:
+		// A tagged-sum union reads its string through the ToString method the renderer
+		// emits for it: the method switches the tag to the active arm's string form, so
+		// String(x) over a number | string | undefined renders the number, the string, or
+		// "undefined" as the arm selects. The union is evaluated once by the method call.
+		if _, ok := r.unionStringValued(arg); ok {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("ToString")}}, nil
+		}
 		return nil, &NotYetLowerable{Reason: "coercing this type to a string is a later slice"}
 	}
 }

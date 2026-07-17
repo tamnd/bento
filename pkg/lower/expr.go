@@ -1750,6 +1750,14 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
 	default:
+		// A tagged-sum union operand reads its string through the ToString method the
+		// renderer emits for it, the same method String(x) and a template substitution
+		// take, so "x" + u over a number | string | undefined concatenates the arm's
+		// string form. It routes before the boxing path since a union is a Go struct with
+		// no dynamic box.
+		if _, ok := r.unionStringValued(n); ok {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToString")}}, nil
+		}
 		// A non-primitive operand coerces through the same value.ToString protocol
 		// the dynamic case uses: ToPrimitive on the object or array, then ToString on
 		// the result, so { a: 1 } becomes "[object Object]" and [1, 2] becomes "1,2"

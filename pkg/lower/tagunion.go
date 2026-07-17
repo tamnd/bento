@@ -120,6 +120,10 @@ type unionInfo struct {
 	// the renderer emits the ToBoolean method that switches the tag to its arm's
 	// JavaScript truthiness. It stays false for a union never tested for truth.
 	needsToBoolean bool
+	// needsToString records that a value of this union was coerced to a string, so the
+	// renderer emits the ToString method that switches the tag to its arm's JavaScript
+	// string form. It stays false for a union never stringified.
+	needsToString bool
 }
 
 // armByDisc returns the object arm a discriminant literal selects, so a compare
@@ -496,6 +500,22 @@ func (r *Renderer) unionInfoOrIntern(t frontend.Type) (*unionInfo, bool) {
 	if err != nil {
 		return nil, false
 	}
+	return info, true
+}
+
+// unionStringValued reports whether an operand being coerced to a string is a
+// tagged-sum union whose string form the ToString method can spell, and marks the
+// union so the renderer emits that method. It fires for a primitive union all of
+// whose arms are a number, string, boolean, or a tag-only sentinel; a union carrying
+// a bigint or object arm has no spelled string form here and reports false, keeping
+// the caller on its handback. An operand whose type is not an interned union reports
+// false too, so an ordinary string, number, or dynamic value keeps its own coercion.
+func (r *Renderer) unionStringValued(n frontend.Node) (*unionInfo, bool) {
+	info, ok := r.unionInfoOrIntern(r.prog.TypeAt(n))
+	if !ok || !unionToStringSupported(info) {
+		return nil, false
+	}
+	info.needsToString = true
 	return info, true
 }
 
@@ -1023,6 +1043,9 @@ func (r *Renderer) renderUnions() []ast.Decl {
 		if info.needsToBoolean {
 			out = append(out, unionToBoolean(info))
 		}
+		if info.needsToString {
+			out = append(out, unionToString(info))
+		}
 	}
 	return out
 }
@@ -1118,6 +1141,88 @@ func unionToBoolean(info *unionInfo) ast.Decl {
 				Body: &ast.BlockStmt{List: cases},
 			},
 			&ast.ReturnStmt{Results: []ast.Expr{ident("false")}},
+		}},
+	}
+}
+
+// unionToStringSupported reports whether every arm of a union has a string form
+// unionToString can spell: a value arm that is a number, string, or boolean, whose
+// ToString is value.NumberToString, the string itself, or value.BoolToString, or a
+// tag-only sentinel (undefined, null), whose string is the literal "undefined" or
+// "null". A bigint or object arm coerces to a string through a path this slice does
+// not spell, so a union carrying one is not supported and its coercion keeps the
+// handback.
+func unionToStringSupported(info *unionInfo) bool {
+	for _, a := range info.arms {
+		if a.tagOnly {
+			continue
+		}
+		if _, ok := armStringExpr(a); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// armStringExpr returns the value.BStr expression an arm's ToString case emits,
+// reading the arm field off the receiver u: a number through value.NumberToString, a
+// string as itself (it is already a value.BStr), a boolean through value.BoolToString,
+// and a tag-only sentinel as the literal string JavaScript reports for it, "undefined"
+// or "null". It returns ok false for a bigint or object arm this slice does not spell.
+func armStringExpr(a unionArm) (ast.Expr, bool) {
+	if a.tagOnly {
+		lit := "undefined"
+		if a.flag == frontend.TypeNull {
+			lit = "null"
+		}
+		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, true
+	}
+	field := &ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)}
+	switch {
+	case a.flag&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{field}}, true
+	case a.flag&frontend.TypeString != 0:
+		return field, true // already a value.BStr, the identity
+	case a.flag&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{field}}, true
+	}
+	return nil, false
+}
+
+// unionToString builds the ToString method a value of this union lowers to when it is
+// coerced to a string, by String(x), a template substitution, or a string
+// concatenation. JavaScript reads a value there through ToString, which for a union is
+// the string form of the arm the tag selects: a number through Number::toString, a
+// string as itself, a boolean as "true" or "false", and the undefined and null
+// sentinels as "undefined" and "null". The method switches on the tag and returns each
+// arm's string; every arm carries a case, including the sentinels, since each has a
+// definite string. It returns a value.BStr, the same string type the other coercions
+// yield, so the result flows on as a plain string, and evaluating the union once
+// through the method call keeps a side-effecting operand's effect.
+func unionToString(info *unionInfo) ast.Decl {
+	cases := make([]ast.Stmt, 0, len(info.arms))
+	for _, a := range info.arms {
+		expr, _ := armStringExpr(a)
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{ident(info.tagConst(a))},
+			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{expr}}},
+		})
+	}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("u")}, Type: ident(info.goName)}}},
+		Name: ident("ToString"),
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "BStr")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.SwitchStmt{
+				Tag:  &ast.SelectorExpr{X: ident("u"), Sel: ident("tag")},
+				Body: &ast.BlockStmt{List: cases},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{
+				&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: `""`}}},
+			}},
 		}},
 	}
 }
