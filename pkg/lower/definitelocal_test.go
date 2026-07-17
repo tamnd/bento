@@ -125,3 +125,90 @@ func TestDefiniteLocalsExcludesCaptured(t *testing.T) {
 		t.Errorf("a closure-captured no-init local was left in the definite set: %v", set2)
 	}
 }
+
+// A closure-captured no-init typed local rejoins the plain-var set when it is assigned
+// by unconditional top-level code before any capturing closure is defined: the closure
+// then cannot run before the slot holds a real value. These tests cover that admission,
+// prove the by-reference capture reads the live value, and pin the two guards that keep
+// the unsound shapes handing back.
+
+// TestCaptureSafeUninitLocalInSet locks the analysis: a captured no-init local assigned
+// before its capturing closure is defined is admitted, while the same local captured
+// before its assignment is not.
+func TestCaptureSafeUninitLocalInSet(t *testing.T) {
+	safe := "function f(): number { let x: number; x = 3; const g = () => x; return g(); }\n"
+	prog := compile(t, safe)
+	r := NewRenderer(prog)
+	body := bodyStatements(t, prog, entryFile(t, prog), "f")
+	set := r.definiteLocalsOf(body)
+	if !set["x"] {
+		t.Errorf("a captured local assigned before its closure was not admitted: %v", set)
+	}
+}
+
+// TestCaptureSafeUninitLocalDeclaresVar proves the admitted local renders as a plain
+// typed var and does not hand back.
+func TestCaptureSafeUninitLocalDeclaresVar(t *testing.T) {
+	const src = "function f(): number {\n  let x: number;\n  x = 3;\n  const g = () => x;\n  return g();\n}\nconsole.log(f());\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "var x float64\n") {
+		t.Errorf("a capture-safe no-init local did not render as a plain typed var:\n%s", source)
+	}
+}
+
+// TestCaptureSafeUninitLocalRuns proves the by-reference capture reads the live value,
+// including a reassignment made after the closure is defined.
+func TestCaptureSafeUninitLocalRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function first(): number {
+  let x: number;
+  x = 3;
+  const g = () => x;
+  return g();
+}
+function latest(): number {
+  let x: number;
+  x = 1;
+  const g = () => x;
+  x = 7;
+  return g();
+}
+console.log(first());
+console.log(latest());
+`
+	if got, want := runProgramGo(t, src), "3\n7\n"; got != want {
+		t.Fatalf("capture-safe no-init local printed %q, want %q", got, want)
+	}
+}
+
+// TestCaptureBeforeAssignHandsBack pins the soundness guard from the other side: a
+// closure defined before the first assignment can run while the slot is still
+// unassigned, so the local must keep handing back rather than admit a zero-valued var.
+func TestCaptureBeforeAssignHandsBack(t *testing.T) {
+	const src = "function f(): number {\n  let x: number;\n  const g = () => x;\n  x = 5;\n  return g();\n}\nconsole.log(f());\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if !strings.Contains(nyl.Reason, "no initializer") {
+		t.Errorf("hand-back reason = %q, want it to mention a no-initializer binding", nyl.Reason)
+	}
+}
+
+// TestCaptureSafeAssignWithClosureRhsHandsBack pins the conservative right-hand-side
+// guard: an assignment whose right side itself holds a function could capture the
+// local, so the proof declines it and the local keeps handing back.
+func TestCaptureSafeAssignWithClosureRhsHandsBack(t *testing.T) {
+	const src = "function f(): number {\n  let x: number;\n  x = (() => 4)();\n  const g = () => x;\n  return g();\n}\nconsole.log(f());\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	body := bodyStatements(t, prog, entryFile(t, prog), "f")
+	set := r.definiteLocalsOf(body)
+	if set["x"] {
+		t.Errorf("a captured local assigned from a closure-bearing right side was admitted: %v", set)
+	}
+}

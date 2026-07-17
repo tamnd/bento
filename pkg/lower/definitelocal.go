@@ -1,6 +1,8 @@
 package lower
 
 import (
+	"strings"
+
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
@@ -18,10 +20,17 @@ import (
 // analysis does not police is a read from inside a closure, `let x: number; const
 // g = () => x`, which it accepts even though g may run while x is still undefined.
 // So the analysis here reproduces the checker's guarantee by exclusion: a
-// no-initializer typed local qualifies unless a nested function captures it, in
-// which case it keeps handing back. The exclusion is conservative, a name spelled
-// the same inside any nested function drops the local whether or not that mention
-// truly aliases it, so a wrong answer only costs a handback, never a wrong value.
+// no-initializer typed local qualifies unless a nested function captures it. The
+// exclusion is conservative, a name spelled the same inside any nested function drops
+// the local whether or not that mention truly aliases it, so a wrong answer only
+// costs a handback, never a wrong value.
+//
+// One captured shape rejoins the plain-var set: a local assigned by unconditional
+// top-level code before any capturing closure is defined. Every such closure then
+// sits after the assignment and cannot run before the slot holds a real value, so
+// Go's by-reference capture reads that value and the zero is never observed as one.
+// assignedBeforeAnyCapture proves that flow shape, again conservatively, so a shape it
+// cannot positively clear keeps handing back.
 //
 // An optional (T | undefined) or dynamic (any, unknown) binding is not this set's
 // concern: its Go zero value already is undefined (value.Opt's None, value.Value's
@@ -49,7 +58,15 @@ func (r *Renderer) definiteLocalsOf(body []frontend.Node) map[string]bool {
 	}
 	out := map[string]bool{}
 	for name := range cand {
-		if declCount[name] == 1 && !captured[name] {
+		if declCount[name] != 1 {
+			continue
+		}
+		// A local no closure captures reproduces the checker's own definite-assignment
+		// guarantee and lowers to a plain var. A captured one normally hands back, since
+		// the checker does not police a closure read, but it is safe all the same when it
+		// is assigned by unconditional top-level code before any capturing closure is even
+		// defined: assignedBeforeAnyCapture proves that shape.
+		if !captured[name] || r.assignedBeforeAnyCapture(name, body) {
 			out[name] = true
 		}
 	}
@@ -57,6 +74,111 @@ func (r *Renderer) definiteLocalsOf(body []frontend.Node) map[string]bool {
 		return nil
 	}
 	return out
+}
+
+// assignedBeforeAnyCapture reports whether a closure-captured no-initializer typed
+// local is assigned by unconditional top-level code before any closure that could
+// capture it is defined, the one flow shape under which a plain `var x T` is sound
+// despite the capture. The checker does not police a read of the local from inside a
+// closure, so a plain var would read Go's zero (0 for a number, "" for a string)
+// where a closure that ran before the first assignment observes JavaScript undefined.
+// When the local is assigned first, every capturing closure sits after that
+// assignment and so cannot run before the slot holds a real value, and Go's
+// by-reference capture reads that value, so the zero is never observed as a value.
+// The scan walks the scope's top-level statement list in order: it skips the
+// declaration, and the first later statement that mentions the name decides it, which
+// must be an unconditional top-level `x = rhs` whose right side neither reads the name
+// nor holds any function. Anything else (a read, a closure, a compound or
+// destructuring write, a conditional assignment) leaves the pre-assignment window open
+// and hands back. The proof is conservative, so a shape it cannot positively clear
+// costs a handback, never a wrong value.
+func (r *Renderer) assignedBeforeAnyCapture(name string, body []frontend.Node) bool {
+	for _, s := range body {
+		// The declaration `let x: T;` mentions the name once, as its own binding, and is
+		// not a read: skip it. A declaration that also reads the name in a sibling
+		// initializer (let x: T, y = x) mentions it more than once, so it is not skipped
+		// and is caught below as a pre-assignment read.
+		if r.isNoInitDeclOf(name, s) {
+			continue
+		}
+		if r.countIdentAnywhere(s, name) == 0 {
+			continue
+		}
+		return r.isCaptureSafeFirstAssign(name, s)
+	}
+	return false
+}
+
+// isNoInitDeclOf reports whether a statement is the variable declaration of name with
+// no initializer and no other mention of the name, the `let x: T;` shape the capture
+// proof skips over on its way to the first assignment. A statement that reads the name
+// in a sibling initializer mentions it more than once and is not this shape.
+func (r *Renderer) isNoInitDeclOf(name string, s frontend.Node) bool {
+	if s.Kind() != frontend.NodeVariableStatement {
+		return false
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, s, &decls)
+	found := false
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier || r.prog.Text(kids[0]) != name {
+			continue
+		}
+		// A binding is [name], [name, type], [name, initializer], or [name, type,
+		// initializer]. An initializer is the last child carrying a real expression kind.
+		if len(kids) >= 2 && kids[len(kids)-1].Kind() != frontend.NodeUnknown {
+			return false
+		}
+		found = true
+	}
+	return found && r.countIdentAnywhere(s, name) == 1
+}
+
+// isCaptureSafeFirstAssign reports whether a statement is an unconditional top-level
+// `name = rhs` whose right side neither reads name nor contains a function, the one
+// first-mention shape that proves name is assigned before any capturing closure is
+// defined. A compound assignment, a destructuring target, or a right side holding a
+// closure or a read of name all fail it, so only the plain store the assignment path
+// already lowers reaches the plain-var admission.
+func (r *Renderer) isCaptureSafeFirstAssign(name string, s frontend.Node) bool {
+	if s.Kind() != frontend.NodeExpressionStatement {
+		return false
+	}
+	kids := r.prog.Children(s)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodeBinaryExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 3 {
+		return false
+	}
+	if parts[0].Kind() != frontend.NodeIdentifier || r.prog.Text(parts[0]) != name {
+		return false
+	}
+	if strings.TrimSpace(r.prog.Text(parts[1])) != "=" {
+		return false
+	}
+	rhs := parts[2]
+	if r.countIdentAnywhere(rhs, name) != 0 {
+		return false
+	}
+	return !subtreeHasFunctionLike(r.prog, rhs)
+}
+
+// subtreeHasFunctionLike reports whether a subtree holds any function-like node, so a
+// right-hand side that could capture a name is kept off the capture-safe assignment
+// path.
+func subtreeHasFunctionLike(prog *frontend.Program, n frontend.Node) bool {
+	if isFunctionLike(n.Kind()) {
+		return true
+	}
+	for _, c := range prog.Children(n) {
+		if subtreeHasFunctionLike(prog, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // collectDefiniteDecls walks one node, recording each variable declaration whose name
