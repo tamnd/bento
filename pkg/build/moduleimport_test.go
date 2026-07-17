@@ -208,16 +208,63 @@ func TestNamespaceImportComposesMemberCall(t *testing.T) {
 	}
 }
 
-// TestNamespaceMemberValueReadHandsBack pins that reading a namespace member as a
-// value rather than calling it hands back: the export has no Go value the namespace
-// materializes, so a value read needs the struct this slice does not build.
-func TestNamespaceMemberValueReadHandsBack(t *testing.T) {
-	_, err := compileModule(t, "main.ts", map[string]string{
+// TestNamespaceMemberValueReadComposes pins that reading a namespace member as a
+// value rather than calling it composes: the export lowers to a package-level Go
+// func, and a value read of the member resolves to that same Go name read as a bare
+// func value, the way a same-module `const f = inc` reads a top-level function. No
+// runtime struct stands behind the namespace; the read spells the exported Go name.
+func TestNamespaceMemberValueReadComposes(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
 		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
 		"main.ts": "import * as m from \"./m\";\nconst f = m.inc;\nconsole.log(f(1));\n",
 	})
+	if err != nil {
+		t.Fatalf("a namespace member value read should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "func Inc(n float64) float64") {
+		t.Fatalf("expected the export to lower as a package func, got:\n%s", out)
+	}
+	if !strings.Contains(out, "f := Inc") {
+		t.Fatalf("expected the namespace member value read to spell `f := Inc`, got:\n%s", out)
+	}
+}
+
+// TestNamespaceMemberValueReadRunsComposed carries the value read through the full
+// build and runs it, proving the bare func value agrees at runtime: f(1) is 2.
+func TestNamespaceMemberValueReadRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"m.ts":    "export function inc(n: number): number { return n + 1; }\n",
+		"main.ts": "import * as m from \"./m\";\nconst f = m.inc;\nconsole.log(f(1));\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "2\n" {
+		t.Fatalf("want 2, got %q", got)
+	}
+}
+
+// TestNamespaceConstMemberValueReadHandsBack pins that a namespace read of a
+// non-function member still hands back: a const export has no package-level Go value
+// the namespace materializes, so the read routes to the engine rather than emit a
+// selector on a binding with no Go storage.
+func TestNamespaceConstMemberValueReadHandsBack(t *testing.T) {
+	_, err := compileModule(t, "main.ts", map[string]string{
+		"m.ts":    "export const pi: number = 3;\n",
+		"main.ts": "import * as m from \"./m\";\nconsole.log(m.pi);\n",
+	})
 	if err == nil {
-		t.Fatal("a namespace member read as a value should hand back, but it lowered")
+		t.Fatal("a namespace const member read should hand back, but it lowered")
 	}
 }
 
