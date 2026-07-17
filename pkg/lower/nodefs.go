@@ -178,8 +178,15 @@ func (r *Renderer) recordInternalImport(module string, clause frontend.Node, hav
 	if !haveClause {
 		return &NotYetLowerable{Reason: "a bare side-effect import of a sibling module is a later slice"}
 	}
-	if internalNamespaceImport(r.prog, clause) {
-		return &NotYetLowerable{Reason: "a namespace import of a sibling module is a later slice"}
+	// A namespace import binds the sibling's whole exported surface to one name. Each
+	// export is already a package-level Go declaration, so the binding needs no runtime
+	// struct: the name is recorded here, and a member call on it (m.inc(1)) resolves to
+	// the export's Go name at its call site. The binding used as a first-class value,
+	// or a member read of it, still hands back at its site, since a namespace passed
+	// around as a value would need the struct this slice does not build.
+	if binding, ok := namespaceBinding(r.prog, clause); ok {
+		r.internalNamespaces[binding] = true
+		return nil
 	}
 	// A pure default import carries no named-imports node, only the default binding,
 	// which records nothing; its reference resolves to the sibling's Default
@@ -196,21 +203,6 @@ func (r *Renderer) recordInternalImport(module string, clause frontend.Node, hav
 		}
 	}
 	return nil
-}
-
-// internalNamespaceImport reports whether a composed sibling's import clause binds
-// a namespace (`import * as ns`), the one form that still hands back because it
-// needs a struct of the module's exports rather than a direct reference. A
-// namespace binding is the clause's `* as name` child, spelled with a leading star;
-// a default binding is a bare identifier and a named list is a brace node, neither
-// of which starts with one.
-func internalNamespaceImport(prog *frontend.Program, clause frontend.Node) bool {
-	for _, c := range prog.Children(clause) {
-		if c.Kind() == frontend.NodeUnknown && strings.HasPrefix(strings.TrimSpace(prog.Text(c)), "*") {
-			return true
-		}
-	}
-	return false
 }
 
 // namedImportsNode descends an import clause to its named-imports node, the brace

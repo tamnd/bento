@@ -37,6 +37,57 @@ func (r *Renderer) derefAlias(sym frontend.Symbol) frontend.Symbol {
 	return sym
 }
 
+// internalNamespaceCall lowers a call whose callee is a member of a sibling
+// namespace import, m.inc(1) where m is import * as m from "./m". The sibling's
+// exports are package-level Go declarations, so the call resolves to the export's
+// Go func and lowers to a direct call, the same spelling a named import of inc
+// would take. It returns handled=false when the object is not a namespace binding,
+// so the caller keeps its other member-callee paths, and a hand-back for a member
+// this slice does not resolve to a plain function call: a member that is not an
+// exported function, an overloaded or generic or defaulting export whose call needs
+// the machinery the bare-identifier path threads, keeps the whole unit truthful by
+// routing to the engine rather than emitting a call the composition cannot back.
+func (r *Renderer) internalNamespaceCall(n, access frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	kids := r.prog.Children(access)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier || kids[1].Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	if !r.internalNamespaces[r.prog.Text(kids[0])] {
+		return nil, false, nil
+	}
+	// The member resolves through the checker to the sibling export it names; the
+	// alias it carries derefs to that export's own symbol, which holds the function
+	// flag and the name the declaration lowered to.
+	sym, ok := r.prog.SymbolAt(kids[1])
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "a namespace member that does not resolve to an export is a later slice"}
+	}
+	sym = r.derefAlias(sym)
+	if sym.Flags&frontend.SymbolFunction == 0 {
+		return nil, true, &NotYetLowerable{Reason: "a namespace member that is not an exported function is a later slice"}
+	}
+	// An overloaded, generic, or defaulting export needs the argument bridging the
+	// bare-identifier call path threads (a boxed all-dynamic implementation, a
+	// monomorphized name, a call-site default fill). This slice resolves only a plain
+	// direct call, so an export carrying any of those hands back rather than emit a
+	// call the namespace path does not build correctly.
+	if _, ok := r.overloadedFuncImpl(sym); ok {
+		return nil, true, &NotYetLowerable{Reason: "a namespace call to an overloaded export is a later slice"}
+	}
+	if len(r.monoSpecs[sym]) > 0 {
+		return nil, true, &NotYetLowerable{Reason: "a namespace call to a generic export is a later slice"}
+	}
+	if r.funcOmittable(sym) {
+		return nil, true, &NotYetLowerable{Reason: "a namespace call to an export with an omittable parameter is a later slice"}
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "a namespace member whose name is not a Go identifier is a later slice"}
+	}
+	expr, err := r.finishCall(n, ident(name), argNodes, nil, false)
+	return expr, true, err
+}
+
 // collectModules registers the composed sibling modules and returns their
 // top-level function declarations. Each sibling runs the same declaration
 // pre-passes the entry does, so its classes, enums, and generic instantiations

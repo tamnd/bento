@@ -122,6 +122,16 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	}
 	obj, nameNode := kids[0], kids[1]
 	prop := r.prog.Text(nameNode)
+	// A member of a sibling namespace import read as a value, m.inc passed as a
+	// callback or m.pi read for its number, has no Go value behind it: the export is a
+	// package-level declaration the call path resolves by name, but a value read would
+	// need the namespace materialized as a struct this slice does not build. It hands
+	// back so the unit routes to the engine rather than emit a selector on a binding
+	// with no Go storage. A call m.inc(1) is intercepted on the call path before it
+	// reaches here, so only a value read routes through this guard.
+	if obj.Kind() == frontend.NodeIdentifier && r.internalNamespaces[r.prog.Text(obj)] {
+		return nil, &NotYetLowerable{Reason: "a namespace member read as a value is a later slice"}
+	}
 	// A read of any member off the ambient Iterator constructor (Iterator.prototype, its
 	// name, its length) reaches for the constructor's reflective identity: the shared
 	// %Iterator.prototype% the helper results inherit and the constructor's own metadata.
