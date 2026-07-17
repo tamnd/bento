@@ -1,0 +1,11 @@
+== stdout:
+6
+null
+undef
+t
+f
+f
+f
+
+== exit:
+0
