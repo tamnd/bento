@@ -131,11 +131,12 @@ console.log("after f");
 	}
 }
 
-// TestUsingInNestedBlockHandsBack proves the honest leftover: a `using` in a nested
-// block, not at a function-body top level, hands back rather than defer disposal to
-// the enclosing function, which would release the resource too late. A Go defer runs
-// at function return, not block exit, so the nested case waits for its own slice.
-func TestUsingInNestedBlockHandsBack(t *testing.T) {
+// TestUsingInNestedBlockDisposesAtBlockExit proves a `using` in a nested block
+// releases the resource at that block's exit, not the function's: the disposal prints
+// between the block body and the statement after the block, so a closure-scoped defer
+// runs at the inner brace, where the JavaScript block scope ends.
+func TestUsingInNestedBlockDisposesAtBlockExit(t *testing.T) {
+	skipIfShort(t)
 	const body = `
 function f(): void {
   if (true) {
@@ -147,8 +148,48 @@ function f(): void {
 f();
 `
 	src := disposeClass + body
+	if got, want := runProgramGo(t, src), "body\ndispose a\nafter block\n"; got != want {
+		t.Fatalf("nested-block disposal printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingInLoopBodyDisposesEachIteration proves a `using` in a loop body releases
+// the resource once per iteration, at the end of each pass, the way the JavaScript
+// block scope re-enters and exits each time: the closure the disposal wraps the body
+// in is invoked and returns every iteration.
+func TestUsingInLoopBodyDisposesEachIteration(t *testing.T) {
+	skipIfShort(t)
+	const body = `
+for (let i = 0; i < 2; i = i + 1) {
+  using r = new R(String(i));
+  console.log("body " + String(i));
+}
+`
+	src := disposeClass + body
+	if got, want := runProgramGo(t, src), "body 0\ndispose 0\nbody 1\ndispose 1\n"; got != want {
+		t.Fatalf("loop-body disposal printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingInNestedBlockEscapeHandsBack proves the honest leftover: a `using` whose
+// block leaves by a return escaping the block hands back rather than wrap the return
+// in the disposal closure, where a Go return would leave the closure, not the
+// function. The escaping-branch case waits for its own slice.
+func TestUsingInNestedBlockEscapeHandsBack(t *testing.T) {
+	const body = `
+function f(cond: boolean): void {
+  if (cond) {
+    using r = new R("a");
+    console.log("body");
+    return;
+  }
+  console.log("after block");
+}
+f(true);
+`
+	src := disposeClass + body
 	reason := renderProgramHandBack(t, src)
-	if want := "the using declaration's scope-exit disposal is a later slice"; reason != want {
+	if want := "a using declaration whose block exits by return, break, or continue is a later slice"; reason != want {
 		t.Fatalf("handback reason = %q, want %q", reason, want)
 	}
 }

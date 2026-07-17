@@ -39,13 +39,24 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
 	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
 	out := make([]ast.Stmt, 0, len(nodes))
-	for _, n := range nodes {
+	for i, n := range nodes {
 		if atTop {
 			if stmts, ok, err := r.lowerUsingDefer(n); err != nil {
 				return nil, err
 			} else if ok {
 				out = append(out, stmts...)
 				continue
+			}
+		} else {
+			// A `using` in a nested block disposes at that block's exit, before a Go
+			// function-scoped defer would run, so wrap the binding and the rest of the
+			// block in a closure whose defer releases the resource on the closure's exit.
+			// The wrap consumes the remaining statements, so it ends the loop.
+			if stmts, ok, err := r.lowerUsingScope(n, nodes[i+1:]); err != nil {
+				return nil, err
+			} else if ok {
+				out = append(out, stmts...)
+				return out, nil
 			}
 		}
 		stmts, err := r.lowerStatementMulti(n)

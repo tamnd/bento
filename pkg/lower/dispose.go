@@ -6,6 +6,48 @@ import (
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
+// nestedUsingEscapeReason is the hand-back a nested-block `using` reports when the
+// rest of its block leaves by a return, break, or continue that targets the enclosing
+// function or loop. That branch would lower to a Go return, break, or continue inside
+// the closure the disposal wraps the block in, which leaves the closure, not the
+// scope the branch names, so the case waits for the slice that threads the escape out.
+const nestedUsingEscapeReason = "a using declaration whose block exits by return, break, or continue is a later slice"
+
+// usingDisposeTarget qualifies a `using` node for disposal lowering, returning the
+// resource's Go name and its declaration. It reports ok=false, leaving the
+// declaration to hand back through lowerVarStatement, for every form the disposal
+// paths do not own: an `await using` (its disposal is awaited, gated on the async
+// model), a statement binding more than one resource, a name that is not a Go
+// identifier, or an initializer whose type carries no [Symbol.dispose] method (a
+// nullable or undefined resource, whose disposal must be guarded).
+func (r *Renderer) usingDisposeTarget(n frontend.Node) (string, []frontend.Node, bool) {
+	kw, ok := r.usingKeyword(n)
+	if !ok || kw != "using" {
+		return "", nil, false
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	if len(decls) != 1 {
+		return "", nil, false
+	}
+	nameNode := r.prog.Children(decls[0])[0]
+	name, ok := localName(r.prog.Text(nameNode))
+	if !ok {
+		return "", nil, false
+	}
+	if !r.hasSymbolDisposeMember(r.prog.TypeAt(nameNode)) {
+		return "", nil, false
+	}
+	return name, decls, true
+}
+
+// deferDispose builds the `defer name.SymbolDispose()` a disposal path registers so
+// the resource releases when its Go scope exits, the closure's for a nested block and
+// the enclosing function's for a top-level `using`.
+func deferDispose(name string) *ast.DeferStmt {
+	return &ast.DeferStmt{Call: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident(symbolDisposeGoName)}}}
+}
+
 // lowerUsingDefer lowers a `using` declaration at a function-body or program-body top
 // level to its binding plus a Go defer of the resource's SymbolDispose, so disposal
 // runs when the enclosing function returns, the scope that coincides with the
@@ -14,36 +56,55 @@ import (
 // runs multiple defers last-registered-first, which gives the reverse declaration
 // order the protocol requires for two `using` bindings in the same block.
 //
-// It reports ok=false, leaving the declaration to hand back through lowerVarStatement,
-// for every form this slice does not own: an `await using` (its disposal is awaited,
-// gated on the async model), a statement binding more than one resource, a name that
-// is not a Go identifier, or an initializer whose type carries no [Symbol.dispose]
-// method (a nullable or undefined resource, whose disposal must be guarded). A `using`
-// in a nested block never reaches here, since the top-scope flag is false there.
+// It reports ok=false for a form usingDisposeTarget does not own, leaving it to hand
+// back through lowerVarStatement. A `using` in a nested block never reaches here,
+// since the top-scope flag is false there; it lowers through lowerUsingScope instead.
 func (r *Renderer) lowerUsingDefer(n frontend.Node) ([]ast.Stmt, bool, error) {
-	kw, ok := r.usingKeyword(n)
-	if !ok || kw != "using" {
-		return nil, false, nil
-	}
-	var decls []frontend.Node
-	collectVarDecls(r.prog, n, &decls)
-	if len(decls) != 1 {
-		return nil, false, nil
-	}
-	nameNode := r.prog.Children(decls[0])[0]
-	name, ok := localName(r.prog.Text(nameNode))
+	name, decls, ok := r.usingDisposeTarget(n)
 	if !ok {
-		return nil, false, nil
-	}
-	if !r.hasSymbolDisposeMember(r.prog.TypeAt(nameNode)) {
 		return nil, false, nil
 	}
 	bind, err := r.varDeclStmt(decls)
 	if err != nil {
 		return nil, false, err
 	}
-	disp := &ast.DeferStmt{Call: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident(symbolDisposeGoName)}}}
-	return []ast.Stmt{bind, disp}, true, nil
+	return []ast.Stmt{bind, deferDispose(name)}, true, nil
+}
+
+// lowerUsingScope lowers a `using` declaration in a nested block, where a
+// function-scoped defer would release the resource too late. It disposes at the
+// block's own exit by wrapping the binding, its defer, and the rest of the block in a
+// closure invoked in place: the defer runs when the closure returns, the point the
+// block scope ends. rest is the statements after the `using` in the same block, and a
+// second `using` among them wraps again inside this closure, so its defer runs first,
+// the reverse declaration order the protocol requires.
+//
+// It hands back through nestedUsingEscapeReason when the remainder leaves by a return,
+// break, or continue that targets a scope outside the block, since that branch would
+// lower inside the closure and leave the closure, not the scope it names. It reports
+// ok=false for a form usingDisposeTarget does not own, leaving it to hand back through
+// lowerVarStatement.
+func (r *Renderer) lowerUsingScope(n frontend.Node, rest []frontend.Node) ([]ast.Stmt, bool, error) {
+	name, decls, ok := r.usingDisposeTarget(n)
+	if !ok {
+		return nil, false, nil
+	}
+	for _, k := range rest {
+		if r.blockReturns(k) || r.branchEscapesClosure(k) {
+			return nil, false, &NotYetLowerable{Reason: nestedUsingEscapeReason}
+		}
+	}
+	bind, err := r.varDeclStmt(decls)
+	if err != nil {
+		return nil, false, err
+	}
+	body := []ast.Stmt{bind, deferDispose(name)}
+	restStmts, err := r.lowerStatements(rest)
+	if err != nil {
+		return nil, false, err
+	}
+	body = append(body, restStmts...)
+	return []ast.Stmt{&ast.ExprStmt{X: callClosure(body)}}, true, nil
 }
 
 // This file names the well-known dispose symbols a resource class carries, the
