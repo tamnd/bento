@@ -106,13 +106,42 @@ func TestValueLogicalDynamicLowersToAnd(t *testing.T) {
 	}
 }
 
-// TestValueLogicalDynamicImpureRightHandsBack pins the eager-argument gate:
-// value.Or takes both operands evaluated, so a right side with a side effect
-// would run even when the short-circuit says it must not, and the form hands
-// back until a lazy right lands.
-func TestValueLogicalDynamicImpureRightHandsBack(t *testing.T) {
+// TestValueLogicalDynamicImpureRightLazy pins the lazy form for a dynamic operand
+// whose right side has a side effect. The eager value.Or takes both operands
+// evaluated, so it cannot skip the right when the left short-circuits; instead the
+// left evaluates once into a temporary, value.ToBoolean tests it, and the right,
+// here a Math.floor call, sits behind the truthiness gate so it runs only when the
+// left is falsy. The whole thing stands as an immediately invoked func returning a
+// value.Value.
+func TestValueLogicalDynamicImpureRightLazy(t *testing.T) {
 	src := "function f(x: any, y: number): any { return x || Math.floor(y); }\nconsole.log(f(1, 2));\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"func() value.Value {",
+		"if value.ToBoolean(",
+		"return value.Number(math.Floor(y))",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("dynamic || with an impure right did not lower to the lazy form (missing %q):\n%s", want, source)
+		}
+	}
+	if strings.Contains(source, "value.Or(") {
+		t.Errorf("an impure right must not use the eager value.Or helper:\n%s", source)
+	}
+}
+
+// TestValueLogicalDynamicImpureRightAndLazy pins the && sibling of the lazy form:
+// && short-circuits to the left when it is falsy, so the truthiness gate is
+// negated and the right runs only when the left is truthy.
+func TestValueLogicalDynamicImpureRightAndLazy(t *testing.T) {
+	src := "function f(x: any, y: number): any { return x && Math.floor(y); }\nconsole.log(f(1, 2));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if !value.ToBoolean(") {
+		t.Errorf("dynamic && with an impure right did not negate the truthiness gate:\n%s", source)
+	}
+	if strings.Contains(source, "value.And(") {
+		t.Errorf("an impure right must not use the eager value.And helper:\n%s", source)
+	}
 }
 
 // TestValueLogicalRuns builds and runs both operators over numbers and strings and
