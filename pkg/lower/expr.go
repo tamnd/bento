@@ -67,6 +67,22 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 				return ident(goName), nil
 			}
 		}
+		// A value read of a const or let a sibling module exports resolves through an
+		// import alias to that binding. The exporter composed it into a package-level Go
+		// var under its localName (moduleFuncs), so the read spells the same name; the
+		// deref is what lets a renamed import, `import { count as c }`, reach the
+		// export's own name rather than the local alias c. A non-alias local binding is
+		// not touched here and reads as its own name through the path below, so a
+		// same-module const still spells its localName on both the declaration and the
+		// read. A function alias already returned above, so this catches the value and
+		// nothing else.
+		if sym, ok := r.prog.SymbolAt(n); ok && sym.Flags&frontend.SymbolAlias != 0 {
+			if target := r.derefAlias(sym); target.Flags&frontend.SymbolVariable != 0 && target.Flags&frontend.SymbolFunction == 0 {
+				if goName, ok := localName(target.Name); ok {
+					return ident(goName), nil
+				}
+			}
+		}
 		// NaN and Infinity are ambient number globals, not user bindings, so they
 		// lower to the doubles they name: math.NaN() and math.Inf(1). A source
 		// binding that shadows either name fails isGlobalRef and stays a local.
