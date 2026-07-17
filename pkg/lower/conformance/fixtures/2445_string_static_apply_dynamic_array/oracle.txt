@@ -1,0 +1,8 @@
+== stdout:
+hi
+AB
+😀💩
+XYZ
+
+== exit:
+0

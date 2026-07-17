@@ -192,6 +192,31 @@ func FromCodePoint(codePoints ...float64) BStr {
 	return BStr{utf16: units, lengthU16: len(units)}
 }
 
+// FromCharCodeValues is String.fromCharCode over already-boxed arguments, the shape
+// String.fromCharCode.apply reaches when the spread array's element type is dynamic:
+// apply coerces each element with ToNumber before the code unit is taken, so a numeric
+// string or a boolean joins a plain number, and the coerced numbers delegate to the
+// variadic FromCharCode that owns the ToUint16 truncation.
+func FromCharCodeValues(args ...Value) BStr {
+	codes := make([]float64, len(args))
+	for i, a := range args {
+		codes[i] = ToNumber(a)
+	}
+	return FromCharCode(codes...)
+}
+
+// FromCodePointValues is the code-point sibling of FromCharCodeValues: apply coerces
+// each boxed element with ToNumber, then FromCodePoint validates and encodes it as a
+// full code point, so String.fromCodePoint.apply over a dynamic array throws the same
+// RangeError on a non-integer or out-of-range element a direct call would.
+func FromCodePointValues(args ...Value) BStr {
+	codePoints := make([]float64, len(args))
+	for i, a := range args {
+		codePoints[i] = ToNumber(a)
+	}
+	return FromCodePoint(codePoints...)
+}
+
 // formatCodePoint renders a rejected code point for the RangeError message the
 // way JavaScript prints it: an integer with no fraction, a fraction as its
 // shortest decimal, so String.fromCodePoint(-1) reports "Invalid code point -1".
