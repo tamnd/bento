@@ -1933,11 +1933,20 @@ func (r *Renderer) stringStaticMethodCall(recvNode frontend.Node, method string,
 		e, err := r.stringStaticCall(static, elems)
 		return e, err == nil, err
 	}
-	// A runtime array must be a number array so its Go form is a *value.Array[float64]
-	// whose Elems slice the variadic value constructor accepts when spread; any other
-	// element type hands back rather than emit a spread of the wrong type.
+	// A runtime array spreads its Elems slice into the variadic value constructor. A
+	// number array's Go form is a *value.Array[float64] whose float64 elements the plain
+	// constructor takes directly. A dynamic array, element type any or unknown, is a
+	// *value.Array[value.Value] whose boxed elements route through the coercing Values
+	// constructor, which runs the ToNumber apply applies to each element before it reads
+	// the code unit; this is the shape regExpUtils.js's buildString reaches when its
+	// code-point array is untyped. A concrete non-number element type hands back rather
+	// than emit a spread of the wrong Go type.
 	elemT, ok := r.prog.ElementType(r.prog.TypeAt(arr))
-	if !ok || elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || elemT.Flags&frontend.TypeNumber == 0 {
+	if !ok {
+		return nil, false, &NotYetLowerable{Reason: "String." + static + " through apply over a non-array value is a later slice"}
+	}
+	dynamicElem := elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	if !dynamicElem && elemT.Flags&frontend.TypeNumber == 0 {
 		return nil, false, &NotYetLowerable{Reason: "String." + static + " through apply over a non-number array is a later slice"}
 	}
 	lowered, err := r.lowerExpr(arr)
@@ -1947,6 +1956,9 @@ func (r *Renderer) stringStaticMethodCall(recvNode frontend.Node, method string,
 	goName := "FromCharCode"
 	if static == "fromCodePoint" {
 		goName = "FromCodePoint"
+	}
+	if dynamicElem {
+		goName += "Values"
 	}
 	r.requireImport(valuePkg)
 	elems := &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("Elems")}}
