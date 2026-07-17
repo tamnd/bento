@@ -55,37 +55,51 @@ func (r *Renderer) internalNamespaceCall(n, access frontend.Node, argNodes []fro
 	if !r.internalNamespaces[r.prog.Text(kids[0])] {
 		return nil, false, nil
 	}
-	// The member resolves through the checker to the sibling export it names; the
-	// alias it carries derefs to that export's own symbol, which holds the function
-	// flag and the name the declaration lowered to.
-	sym, ok := r.prog.SymbolAt(kids[1])
-	if !ok {
-		return nil, true, &NotYetLowerable{Reason: "a namespace member that does not resolve to an export is a later slice"}
-	}
-	sym = r.derefAlias(sym)
-	if sym.Flags&frontend.SymbolFunction == 0 {
-		return nil, true, &NotYetLowerable{Reason: "a namespace member that is not an exported function is a later slice"}
-	}
-	// An overloaded, generic, or defaulting export needs the argument bridging the
-	// bare-identifier call path threads (a boxed all-dynamic implementation, a
-	// monomorphized name, a call-site default fill). This slice resolves only a plain
-	// direct call, so an export carrying any of those hands back rather than emit a
-	// call the namespace path does not build correctly.
-	if _, ok := r.overloadedFuncImpl(sym); ok {
-		return nil, true, &NotYetLowerable{Reason: "a namespace call to an overloaded export is a later slice"}
-	}
-	if len(r.monoSpecs[sym]) > 0 {
-		return nil, true, &NotYetLowerable{Reason: "a namespace call to a generic export is a later slice"}
-	}
-	if r.funcOmittable(sym) {
-		return nil, true, &NotYetLowerable{Reason: "a namespace call to an export with an omittable parameter is a later slice"}
-	}
-	name, ok := exportedField(sym.Name)
-	if !ok {
-		return nil, true, &NotYetLowerable{Reason: "a namespace member whose name is not a Go identifier is a later slice"}
+	name, err := r.namespaceMemberFunc(kids[1])
+	if err != nil {
+		return nil, true, err
 	}
 	expr, err := r.finishCall(n, ident(name), argNodes, nil, false)
 	return expr, true, err
+}
+
+// namespaceMemberFunc resolves the member of a sibling namespace import, the name
+// node of `m.f`, to the Go func name its export lowered to, or a hand-back when the
+// member is not a plain exported function this composition can name. The call form
+// `m.inc(1)` and the value read `const f = m.inc` both resolve to the same
+// package-level Go func, the call spelling `Inc(1)` and the read the bare `Inc`, so
+// both go through here.
+//
+// The member resolves through the checker to the sibling export it names; the alias
+// it carries derefs to that export's own symbol, which holds the function flag and
+// the name the declaration lowered to. An overloaded, generic, or defaulting export
+// needs the argument bridging the bare-identifier path threads (a boxed all-dynamic
+// implementation, a monomorphized name, a call-site default fill), which a bare Go
+// name reference does not carry, so any of those hands back. A member that is not an
+// exported function, a const export with no Go value behind it, hands back too.
+func (r *Renderer) namespaceMemberFunc(nameNode frontend.Node) (string, error) {
+	sym, ok := r.prog.SymbolAt(nameNode)
+	if !ok {
+		return "", &NotYetLowerable{Reason: "a namespace member that does not resolve to an export is a later slice"}
+	}
+	sym = r.derefAlias(sym)
+	if sym.Flags&frontend.SymbolFunction == 0 {
+		return "", &NotYetLowerable{Reason: "a namespace member that is not an exported function is a later slice"}
+	}
+	if _, ok := r.overloadedFuncImpl(sym); ok {
+		return "", &NotYetLowerable{Reason: "a namespace member that is an overloaded export is a later slice"}
+	}
+	if len(r.monoSpecs[sym]) > 0 {
+		return "", &NotYetLowerable{Reason: "a namespace member that is a generic export is a later slice"}
+	}
+	if r.funcOmittable(sym) {
+		return "", &NotYetLowerable{Reason: "a namespace member that is an export with an omittable parameter is a later slice"}
+	}
+	name, ok := exportedField(sym.Name)
+	if !ok {
+		return "", &NotYetLowerable{Reason: "a namespace member whose name is not a Go identifier is a later slice"}
+	}
+	return name, nil
 }
 
 // collectModules registers the composed sibling modules and returns their
