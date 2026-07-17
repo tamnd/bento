@@ -37,6 +37,19 @@ func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
 // primitive facet the same way. typeExpr uses it to pick the Go type of a folded
 // union, and primitiveFlags forwards a node's type to it.
 func (r *Renderer) primitiveFlagsOfType(t frontend.Type) frontend.TypeFlags {
+	// Inside a monomorphized generic body a bare type parameter stands for the
+	// concrete type the call site fixed it to, so its primitive facet is that
+	// concrete type's, not the type parameter's (which carries none). Resolving it
+	// here through the same substitution typeExpr uses lets every coercion predicate
+	// (isNumber, isString, isBool, isBigInt) see the float64 or value.BStr the
+	// specialization actually holds, so a String() or a print of a bare T in a
+	// generic body lowers rather than handing back. The substitution is set only
+	// around a specialization (mono.go); outside one it is nil and this is a no-op.
+	if t.Flags&frontend.TypeTypeParameter != 0 && r.typeSubst != nil {
+		if conc, ok := r.typeSubst[t.Identity()]; ok {
+			t = conc
+		}
+	}
 	f := t.Flags
 	// A registered enum is backed by a primitive (float64 for a numeric enum,
 	// value.BStr for a string enum), so a value of the enum type is that primitive

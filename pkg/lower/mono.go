@@ -252,6 +252,18 @@ func (r *Renderer) unifyGeneric(decl, res frontend.Signature, subst map[int]fron
 			return false
 		}
 	}
+	// A type parameter can be fixed through the rest parameter alone, as in
+	// `logAll<T>(...xs: T[]): void`, where T appears nowhere but the trailing
+	// array and the return is void. The resolved signature keeps the rest as its
+	// own T[] slot, so binding descends its element the way an array parameter
+	// does. When the declaration has a rest but the resolved call collapsed it
+	// away (a call that passed no trailing argument), the parameter is simply not
+	// bound here and the type-parameter completeness check below hands back.
+	if decl.RestParam != nil && res.RestParam != nil {
+		if !r.unifyType(decl.RestParam.Type, res.RestParam.Type, subst) {
+			return false
+		}
+	}
 	if !r.unifyType(decl.Return, res.Return, subst) {
 		return false
 	}
@@ -335,19 +347,23 @@ func (r *Renderer) monoAtom(t frontend.Type) (string, bool) {
 		return "", false
 	}
 	// A type argument inferred as a union of literals (firstOf(10, 20) fixes T to
-	// 10 | 20, firstOf(true, false) to true | false) lowers by the same fold
-	// typeExpr runs: a union all of whose members carry the number or boolean facet
-	// widens to that primitive's Go type. primitiveFlagsOfType folds the facet in
-	// whether or not the union already spells it, so both spellings mangle here.
-	// Only number and boolean fold here; a string-literal union lowers to value.BStr
-	// but is not mangled through this branch, and mixed or nullable unions have their
-	// own Go shape, so both are left to a later slice rather than mangled.
+	// 10 | 20, firstOf(true, false) to true | false, firstOf("a", "b") to
+	// "a" | "b") lowers by the same fold typeExpr runs: a union all of whose members
+	// carry one primitive facet widens to that primitive's Go type.
+	// primitiveFlagsOfType folds the facet in whether or not the union already spells
+	// it, so both spellings mangle here. A closed string-literal union folds to
+	// value.BStr the same way a numeric-literal union folds to float64, so it mangles
+	// to the same str atom a plain string does, the dedup-at-the-lowered-type rule.
+	// A mixed or nullable union folds no single facet and keeps its own Go shape, so
+	// it is left to a later slice rather than mangled.
 	if t.Flags&frontend.TypeUnion != 0 && t.Flags&(frontend.TypeNumber|frontend.TypeBoolean|frontend.TypeString) == 0 {
 		switch pf := r.primitiveFlagsOfType(t); {
 		case pf&frontend.TypeNumber != 0:
 			return "num", true
 		case pf&frontend.TypeBoolean != 0:
 			return "bool", true
+		case pf&frontend.TypeString != 0:
+			return "str", true
 		default:
 			return "", false
 		}
@@ -356,12 +372,10 @@ func (r *Renderer) monoAtom(t frontend.Type) (string, bool) {
 	case t.Flags&frontend.TypeNumber != 0:
 		return "num", true
 	case t.Flags&frontend.TypeString != 0:
-		// Only a type argument that is string (or a lone string literal, which widens
-		// to string) mangles here; a genuine string-literal union, though it lowers to
-		// value.BStr, is caught above and left unmangled as a later slice.
-		if t.Flags&frontend.TypeUnion != 0 {
-			return "", false
-		}
+		// A type argument that is string, a lone string literal (which widens to
+		// string), or a closed string-literal union whose own flags already spell the
+		// String facet all lower to value.BStr, so all mangle to the same str atom; the
+		// union-fold branch above catches the spelling that carries no String bit.
 		return "str", true
 	case t.Flags&frontend.TypeBoolean != 0:
 		return "bool", true
