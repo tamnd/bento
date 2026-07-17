@@ -1068,6 +1068,21 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return nil, &NotYetLowerable{Reason: "a Symbol.asyncIterator reference on a non-user-async-iterable receiver is a later slice"}
 	}
+	// A manual obj[Symbol.dispose] reads the release method a resource class defines,
+	// the Go SymbolDispose method, so a test can invoke disposal by hand:
+	// obj[Symbol.dispose]() runs the release the way a `using` declaration calls it at
+	// scope exit. It is read the same way the disposal path names the method, and only
+	// when the receiver defines [Symbol.dispose] this slice lowers.
+	if r.isSymbolDisposeExpr(idxNode) {
+		if r.hasSymbolDisposeMember(r.prog.TypeAt(obj)) {
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, err
+			}
+			return &ast.SelectorExpr{X: recv, Sel: ident(symbolDisposeGoName)}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "a Symbol.dispose reference on a receiver with no dispose method is a later slice"}
+	}
 	// A bigint typed-array read a[i] returns its element as a *big.Int through the
 	// view's At, the bigint counterpart of the numeric read. A bigint element is not a
 	// Number, so it takes neither the range-proof native-slice path nor the integer-

@@ -1042,9 +1042,36 @@ func (r *Renderer) deferredReturn(n frontend.Node) ([]ast.Stmt, error) {
 // means float64. A binding with no initializer, or one carrying a type
 // annotation node this slice does not read yet, hands back.
 func (r *Renderer) lowerVarStatement(n frontend.Node) (ast.Stmt, error) {
+	// A `using` or `await using` declaration binds a disposable resource whose
+	// [Symbol.dispose] runs at scope exit, in reverse declaration order and on every
+	// exit path. That disposal is a later slice; the resource class's dispose method
+	// lowers already, but the declaration itself must not silently lower to a plain
+	// binding, which would drop the dispose call and print the wrong result. Hand back
+	// so the whole unit routes to the engine rather than emit a `using` with no
+	// disposal.
+	if kw, ok := r.usingKeyword(n); ok {
+		return nil, &NotYetLowerable{Reason: "the " + kw + " declaration's scope-exit disposal is a later slice"}
+	}
 	var decls []frontend.Node
 	collectVarDecls(r.prog, n, &decls)
 	return r.varDeclStmt(decls)
+}
+
+// usingKeyword reports whether a variable statement is an explicit-resource
+// -management declaration, `using x = ...` or `await using x = ...`, and returns the
+// keyword for the hand-back reason. The kind is read from the statement text, since
+// the using keyword is a leading token bento does not name as its own node, the way
+// isConstStatement reads const. An `await using` leads with await, so it is checked
+// first and reported by its full spelling.
+func (r *Renderer) usingKeyword(n frontend.Node) (string, bool) {
+	text := strings.TrimSpace(r.prog.Text(n))
+	if strings.HasPrefix(text, "await using ") {
+		return "await using", true
+	}
+	if strings.HasPrefix(text, "using ") {
+		return "using", true
+	}
+	return "", false
 }
 
 // lowerVarStatementMulti lowers a variable statement and follows it with a blank
