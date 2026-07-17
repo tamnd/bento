@@ -35,7 +35,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// exported Go name its declaration takes, the same name a direct call uses. It
 		// is checked before the local-name path, which would otherwise emit the source
 		// name and miss the exported declaration.
-		if sym, ok := r.prog.SymbolAt(n); ok && sym.Flags&frontend.SymbolFunction != 0 {
+		//
+		// A reference imported from a sibling module resolves to an alias symbol that
+		// carries neither the function flag nor the exported name its declaration took,
+		// so it derefs to the export the way the call path does; without the deref a
+		// value read of a named import (const g = inc) would emit the source name inc
+		// rather than the exported Inc and name a Go symbol the composition never
+		// declared. A non-alias local derefs to itself, so the deref is safe on any
+		// binding.
+		if sym, ok := r.prog.SymbolAt(n); ok && r.derefAlias(sym).Flags&frontend.SymbolFunction != 0 {
+			sym = r.derefAlias(sym)
 			// An ambient global function used as a value (eval, parseInt, isNaN) is not a
 			// user binding and has no generated Go function behind its exported name. The
 			// call path lowers the globals bento models and hands the rest back; a bare
