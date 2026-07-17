@@ -1,0 +1,8 @@
+== stdout:
+truthy
+falsy
+truthy
+falsy
+
+== exit:
+0

@@ -1,0 +1,10 @@
+== stdout:
+kept
+kept
+empty
+on
+off
+off
+
+== exit:
+0

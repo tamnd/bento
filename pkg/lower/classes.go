@@ -3339,7 +3339,7 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	}
 	var rhs ast.Expr
 	if compound {
-		rhs, err = r.combineBinary(baseOp, target, parts[2])
+		rhs, err = r.combineBinary(nil, baseOp, target, parts[2])
 		if err != nil {
 			return nil, false, err
 		}
