@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -182,6 +183,18 @@ func (r *Renderer) moduleFuncs(dep frontend.Node) ([]ast.Decl, error) {
 			if info, ok := r.classInfoForDecl(stmt); ok && len(info.staticInit) > 0 {
 				return nil, &NotYetLowerable{Reason: "a sibling module class with static initialization is a later slice"}
 			}
+		case frontend.NodeVariableStatement:
+			// An exported const or let whose initializer is safe to evaluate at
+			// package-init time composes as a package-level Go var the entry reads
+			// through its import. A literal initializer has no observable evaluation
+			// order, so it composes the way a function does; a non-literal initializer,
+			// a non-exported binding, or a destructuring pattern still hands back, since
+			// running it would need the module top-level order this slice does not thread.
+			decl, err := r.moduleExportVarDecl(stmt)
+			if err != nil {
+				return nil, err
+			}
+			funcs = append(funcs, decl)
 		case frontend.NodeInterfaceDeclaration, frontend.NodeTypeAliasDeclaration, frontend.NodeEnumDeclaration:
 			// Type-level declarations carry no runtime code; a plain enum's const block
 			// renders with the entry's package-level state and a const enum inlines.
@@ -206,6 +219,36 @@ func (r *Renderer) moduleFuncs(dep frontend.Node) ([]ast.Decl, error) {
 		}
 	}
 	return funcs, nil
+}
+
+// moduleExportVarDecl composes a sibling's exported variable statement, `export
+// const K = 7` or `export let total = 3`, into a package-level Go var the entry
+// reads through its import. Every binding must be an exported identifier with a
+// package-init-safe initializer, the same bar the entry's own hoisted module vars
+// meet, so the var evaluates once at package init with no dependence on the module
+// top-level order. The binding takes its localName the way the entry's hoisted vars
+// do, so an import reference derefs to the same Go name (expr.go) and a same-module
+// read spells it unchanged. A non-exported statement, a destructuring pattern, a
+// binding with no initializer, or a non-literal initializer hands the whole unit
+// back, since composing it would need the top-level evaluation this slice omits.
+func (r *Renderer) moduleExportVarDecl(stmt frontend.Node) (ast.Decl, error) {
+	if !strings.HasPrefix(strings.TrimSpace(r.prog.Text(stmt)), "export") {
+		return nil, &NotYetLowerable{Reason: "a non-exported top-level binding in a sibling module is a later slice"}
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, stmt, &decls)
+	if len(decls) == 0 {
+		return nil, &NotYetLowerable{Reason: "an exported binding with no declaration in a sibling module is a later slice"}
+	}
+	specs := make([]ast.Spec, 0, len(decls))
+	for _, d := range decls {
+		spec, err := r.moduleVarSpec(d)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, spec)
+	}
+	return &ast.GenDecl{Tok: token.VAR, Specs: specs}, nil
 }
 
 // isReExport reports whether an unnamed top-level statement forwards another

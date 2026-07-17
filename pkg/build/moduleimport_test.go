@@ -96,18 +96,63 @@ func TestNamedExportCallsAcrossSiblings(t *testing.T) {
 	}
 }
 
-// TestConstExportHandsBack pins that an export this slice does not yet compose
-// hands back rather than miscompiling. A `const` export is a top-level binding
-// whose initializer runs at the module's evaluation position, an order the
-// composed unit would have to preserve, so the whole unit routes to the engine
-// with a NotYetLowerable reason.
-func TestConstExportHandsBack(t *testing.T) {
-	_, err := compileModule(t, "main.ts", map[string]string{
+// TestConstExportComposesAsPackageVar pins that a const export whose initializer
+// is a literal composes into a package-level Go var the entry reads through its
+// import. A literal has no observable evaluation order, so it composes the way a
+// function does: the sibling declares `var K` once and the import reads that same
+// name. A non-literal initializer, whose evaluation the composed unit would have to
+// order, still hands back.
+func TestConstExportComposesAsPackageVar(t *testing.T) {
+	out, err := compileModule(t, "main.ts", map[string]string{
 		"k.ts":    "export const K: number = 7;\n",
 		"main.ts": "import { K } from \"./k\";\nconsole.log(K);\n",
 	})
+	if err != nil {
+		t.Fatalf("a literal const export should compose, got: %v", err)
+	}
+	if !strings.Contains(out, "var K float64 = 7") {
+		t.Fatalf("expected the const export to lower to a package var, got:\n%s", out)
+	}
+}
+
+// TestConstExportRunsComposed carries a const, a let, and a string const across the
+// full build and runs it, so the composed names are proven at runtime: a renamed
+// import derefs to the export's own name, and a `let` a sibling function mutates is
+// a live binding the entry sees change, not a snapshot copy.
+func TestConstExportRunsComposed(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"c.ts":    "export const base: number = 10;\nexport let n = 0;\nexport function bump(): void { n = n + 1; }\n",
+		"main.ts": "import { base as b, n, bump } from \"./c\";\nconsole.log(b);\nconsole.log(n);\nbump();\nbump();\nconsole.log(n);\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	bin := filepath.Join(dir, "prog")
+	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+		t.Fatalf("build composed program: %v", err)
+	}
+	got, err := exec.Command(bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run composed program: %v (%s)", err, got)
+	}
+	if string(got) != "10\n0\n2\n" {
+		t.Fatalf("want 10\\n0\\n2\\n, got %q", got)
+	}
+}
+
+// TestNonLiteralConstExportHandsBack pins the ceiling: a const export whose
+// initializer is a call runs at the module's evaluation position, an order the
+// composed unit would have to preserve, so the whole unit hands back rather than
+// compose a package var that evaluates the call at Go package-init time.
+func TestNonLiteralConstExportHandsBack(t *testing.T) {
+	_, err := compileModule(t, "main.ts", map[string]string{
+		"k.ts":    "export function f(): number { return 1; }\nexport const v = f();\n",
+		"main.ts": "import { v } from \"./k\";\nconsole.log(v);\n",
+	})
 	if err == nil {
-		t.Fatal("a const export should hand back for a later slice, but it lowered")
+		t.Fatal("a call-initialized const export should hand back, but it lowered")
 	}
 }
 
