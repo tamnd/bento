@@ -79,13 +79,63 @@ func TestManualDisposeDriveRuns(t *testing.T) {
 }
 
 // TestUsingDisposalLowers proves a `using` at a body top level lowers to its binding
-// plus a Go defer of the resource's SymbolDispose, the call that runs when the
-// enclosing function returns, rather than handing back or dropping the disposal.
+// plus a deferred disposal that runs when the enclosing function returns, rather than
+// handing back or dropping the disposal. The disposal routes through the runtime's
+// Dispose so a throw from the release chains into a SuppressedError with the pending
+// error, so the emitted defer names value.Dispose over the resource's SymbolDispose.
 func TestUsingDisposalLowers(t *testing.T) {
 	src := disposeClass + "using r = new R(\"a\");\nconsole.log(\"body\");\n"
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "defer r.SymbolDispose()") {
-		t.Errorf("using declaration did not defer its disposal:\n%s", source)
+	if !strings.Contains(source, "defer value.Dispose(func() {") || !strings.Contains(source, "r.SymbolDispose()") {
+		t.Errorf("using declaration did not defer its disposal through value.Dispose:\n%s", source)
+	}
+}
+
+// TestUsingSuppressedErrorChainRuns proves the explicit-resource-management error
+// chain: when the block body throws and the resource's disposal also throws, the
+// disposal's error wraps the body's error in a SuppressedError, so a catch around the
+// scope binds an error named SuppressedError rather than losing one throw to the
+// other the way a plain Go defer would.
+func TestUsingSuppressedErrorChainRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class R {
+  name: string;
+  constructor(n: string) { this.name = n; }
+  [Symbol.dispose]() { throw new Error("dispose " + this.name); }
+}
+try {
+  using r = new R("a");
+  throw new Error("body");
+} catch (e) {
+  if (e instanceof Error) { console.log(e.name); }
+}
+`
+	if got, want := runProgramGo(t, src), "SuppressedError\n"; got != want {
+		t.Fatalf("suppressed-error chain printed %q, want %q", got, want)
+	}
+}
+
+// TestUsingDisposalThrowPropagatesRuns proves the other half: when the block body
+// completes and only the disposal throws, the disposal's error propagates on its own,
+// so a catch around the scope binds that error rather than a suppression chain.
+func TestUsingDisposalThrowPropagatesRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+class R {
+  name: string;
+  constructor(n: string) { this.name = n; }
+  [Symbol.dispose]() { throw new Error("dispose " + this.name); }
+}
+try {
+  using r = new R("a");
+  console.log("body");
+} catch (e) {
+  if (e instanceof Error) { console.log(e.message); }
+}
+`
+	if got, want := runProgramGo(t, src), "body\ndispose a\n"; got != want {
+		t.Fatalf("disposal-throw propagation printed %q, want %q", got, want)
 	}
 }
 

@@ -41,11 +41,22 @@ func (r *Renderer) usingDisposeTarget(n frontend.Node) (string, []frontend.Node,
 	return name, decls, true
 }
 
-// deferDispose builds the `defer name.SymbolDispose()` a disposal path registers so
-// the resource releases when its Go scope exits, the closure's for a nested block and
-// the enclosing function's for a top-level `using`.
-func deferDispose(name string) *ast.DeferStmt {
-	return &ast.DeferStmt{Call: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident(symbolDisposeGoName)}}}
+// deferDispose builds the `defer value.Dispose(func() { name.SymbolDispose() })` a
+// disposal path registers so the resource releases when its Go scope exits, the
+// closure's for a nested block and the enclosing function's for a top-level `using`.
+// It routes the release through the runtime's Dispose rather than defer the method
+// directly so a throw from disposal chains into a SuppressedError with the error the
+// scope was already unwinding, the explicit-resource-management semantics Go's own
+// defer, which would replace the pending panic, does not give.
+func (r *Renderer) deferDispose(name string) *ast.DeferStmt {
+	r.requireImport(valuePkg)
+	release := &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{
+			Fun: &ast.SelectorExpr{X: ident(name), Sel: ident(symbolDisposeGoName)},
+		}}}},
+	}
+	return &ast.DeferStmt{Call: &ast.CallExpr{Fun: sel("value", "Dispose"), Args: []ast.Expr{release}}}
 }
 
 // lowerUsingDefer lowers a `using` declaration at a function-body or program-body top
@@ -68,7 +79,7 @@ func (r *Renderer) lowerUsingDefer(n frontend.Node) ([]ast.Stmt, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	return []ast.Stmt{bind, deferDispose(name)}, true, nil
+	return []ast.Stmt{bind, r.deferDispose(name)}, true, nil
 }
 
 // lowerUsingScope lowers a `using` declaration in a nested block, where a
@@ -98,7 +109,7 @@ func (r *Renderer) lowerUsingScope(n frontend.Node, rest []frontend.Node) ([]ast
 	if err != nil {
 		return nil, false, err
 	}
-	body := []ast.Stmt{bind, deferDispose(name)}
+	body := []ast.Stmt{bind, r.deferDispose(name)}
 	restStmts, err := r.lowerStatements(rest)
 	if err != nil {
 		return nil, false, err
