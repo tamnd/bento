@@ -219,22 +219,40 @@ func (r *Renderer) primUnionArms(t frontend.Type) ([]primArm, bool) {
 		seen[arm.flag] = true
 		arms = append(arms, arm)
 	}
-	// A tag-only sentinel arm rides only alongside two or more value arms. A union with
-	// fewer value arms is a T | undefined optional (value.Opt) or a T | null single-value
-	// shape, each of which keeps its own path rather than the tagged sum; requiring two
-	// value arms here leaves those to their handlers and avoids interning a spurious
-	// tagged union the optional pre-pass would then read as a union local.
+	// A tag-only sentinel arm rides alongside two or more value arms, or beside a single
+	// value arm when that lone companion is the null sentinel. A T | undefined optional
+	// keeps its own value.Opt path, which the optional pre-pass owns, so a single value
+	// arm beside the undefined sentinel still hands back here; but T | null has no
+	// optional wrapper of its own, so it interns as a two-arm tagged sum, a value arm and
+	// the null tag, rather than fall through to the object-union path and hand back.
 	valueArms := 0
 	for _, a := range arms {
 		if !a.tagOnly {
 			valueArms++
 		}
 	}
-	if valueArms < 2 {
+	if valueArms < 2 && !nullOnlySentinelUnion(arms, valueArms) {
 		return nil, false
 	}
 	sortArmsByRank(arms)
 	return arms, true
+}
+
+// nullOnlySentinelUnion reports whether arms is a single value arm beside exactly the
+// null sentinel, the T | null shape. Such a union has no value.Opt wrapper of its own,
+// so it interns as a tagged sum rather than hand back, while a single value arm beside
+// the undefined sentinel (T | undefined) stays with the optional pre-pass and returns
+// false here.
+func nullOnlySentinelUnion(arms []primArm, valueArms int) bool {
+	if valueArms != 1 || len(arms) != 2 {
+		return false
+	}
+	for _, a := range arms {
+		if a.tagOnly && a.flag != frontend.TypeNull {
+			return false
+		}
+	}
+	return true
 }
 
 // memberArm maps one union member's flags to its primitive arm. A member whose
