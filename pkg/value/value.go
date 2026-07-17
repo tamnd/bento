@@ -584,6 +584,24 @@ func (v Value) ToStringMethod() Value {
 	return StringValue(ToString(v))
 }
 
+// ValueOfMethod implements a dynamic x.valueOf() call, the method each prototype
+// installs. Object.prototype.valueOf returns the receiver itself, and the primitive
+// wrappers return the primitive they box, so for every kind that carries a prototype
+// the answer is the receiver value unchanged: a number, string, boolean, bigint, or
+// symbol is its own primitive value, and an object, array, or function is returned by
+// identity. undefined and null carry no prototype, so reading valueOf off them throws a
+// TypeError the way JavaScript does. The result is boxed because the receiver is dynamic
+// and the call site is typed any.
+func (v Value) ValueOfMethod() Value {
+	switch v.kind {
+	case KindUndefined:
+		Throw(NewTypeError(FromGoString("Cannot read properties of undefined (reading 'valueOf')")))
+	case KindNull:
+		Throw(NewTypeError(FromGoString("Cannot read properties of null (reading 'valueOf')")))
+	}
+	return v
+}
+
 // ClassTag implements Object.prototype.toString.call(v), the idiom test262 and
 // much library code reaches for to read a value's internal class as a string of
 // the form "[object Type]". The mapping is the spec's Object.prototype.toString:
