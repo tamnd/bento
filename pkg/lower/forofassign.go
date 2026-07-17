@@ -22,6 +22,11 @@ import (
 // target, an element whose primitive category differs, and a Map, Set, generator, or user
 // iterator source all report handled=false so the caller keeps the existing hand-back.
 func (r *Renderer) forOfAssignTarget(target, iterable, bodyNode frontend.Node) (ast.Stmt, bool, error) {
+	// An array pattern head, `for ([a, b] of pairs)`, assigns each tuple position to an
+	// existing binding rather than a single whole element, so it takes the pattern path.
+	if target.Kind() == frontend.NodeArrayLiteralExpression {
+		return r.forOfAssignPattern(target, iterable, bodyNode)
+	}
 	if target.Kind() != frontend.NodeIdentifier {
 		return nil, false, nil
 	}
@@ -92,6 +97,98 @@ func (r *Renderer) forOfAssignTarget(target, iterable, bodyNode frontend.Node) (
 		Value: ident(tmp),
 		Tok:   token.DEFINE,
 		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident(elemsMethod)}},
+		Body:  body,
+	}
+	return rng, true, nil
+}
+
+// forOfAssignPattern lowers a for...of whose head is an array pattern that assigns each
+// position to an existing binding, `for ([a, b] of pairs)`, the assignment-form sibling
+// of `for (const [a, b] of pairs)`. It ranges the array's Elems into a per-iteration
+// temporary and assigns each tuple field to its target at the top of the loop body, so
+// each target carries its position the way a declared binding would, `a, b = _bt.E0,
+// _bt.E1`.
+//
+// Only a plain-identifier pattern over an array whose element is a tuple is handled, the
+// motivating `[K, V][]` pairs shape, and each target's Go type must match its tuple
+// position's so the parallel assignment is valid with no coercion. A nested, defaulted,
+// or rest pattern position, a member or refined or dynamic target, a target whose type
+// crosses its position's, a pattern binding more names than the tuple has, and a non-tuple
+// or non-array source all report handled=false so the caller keeps the existing hand-back.
+func (r *Renderer) forOfAssignPattern(pattern, iterable, bodyNode frontend.Node) (ast.Stmt, bool, error) {
+	targets := r.prog.Children(pattern)
+	if len(targets) == 0 {
+		return nil, false, nil
+	}
+	if !isArrayElem(r, iterable) {
+		return nil, false, nil
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(iterable))
+	if !ok {
+		return nil, false, nil
+	}
+	tupleElems, ok := r.prog.TupleElements(elem)
+	if !ok || len(targets) > len(tupleElems) {
+		return nil, false, nil
+	}
+	names := make([]ast.Expr, 0, len(targets))
+	for i, tgt := range targets {
+		if tgt.Kind() != frontend.NodeIdentifier {
+			return nil, false, nil
+		}
+		name, ok := localName(r.prog.Text(tgt))
+		if !ok {
+			return nil, false, nil
+		}
+		// A representation-refined or dynamic target holds a Go type the tuple field does
+		// not, so a bare assignment would not compile; only a plain widened primitive local
+		// is handled, matching the identifier path's guard.
+		if r.int32Locals[name] || r.int64Locals[name] || r.bigOwned[name] || r.isDynamic(tgt) {
+			return nil, false, nil
+		}
+		if tupleElems[i].Optional || tupleElems[i].Rest {
+			return nil, false, nil
+		}
+		tgtGo, err := r.typeExpr(r.prog.TypeAt(tgt))
+		if err != nil {
+			return nil, false, err
+		}
+		fieldGo, err := r.typeExpr(tupleElems[i].Type)
+		if err != nil {
+			return nil, false, err
+		}
+		if same, err := sameGoType(tgtGo, fieldGo); err != nil {
+			return nil, false, err
+		} else if !same {
+			return nil, false, nil
+		}
+		names = append(names, ident(name))
+	}
+	// Intern the tuple struct so the field reads name a declared Go type, the same as the
+	// assignment-form statement destructure does.
+	if _, err := r.decls.internTuple(r, elem, tupleElems); err != nil {
+		return nil, false, err
+	}
+	iter, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, false, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, false, err
+	}
+	tmp := r.freshTemp()
+	values := make([]ast.Expr, 0, len(targets))
+	for i := range targets {
+		values = append(values, &ast.SelectorExpr{X: ident(tmp), Sel: ident("E" + itoa(i))})
+	}
+	assign := &ast.AssignStmt{Lhs: names, Tok: token.ASSIGN, Rhs: values}
+	body.List = append([]ast.Stmt{assign}, body.List...)
+	rng := &ast.RangeStmt{
+		Key:   ident("_"),
+		Value: ident(tmp),
+		Tok:   token.DEFINE,
+		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident("Elems")}},
 		Body:  body,
 	}
 	return rng, true, nil
