@@ -1252,6 +1252,11 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 // arity object in the closure the same way a named function does, and a named
 // function expression takes the two-step a self-reference needs.
 func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
+	if r.closureDepth >= maxClosureNestDepth {
+		return nil, &NotYetLowerable{Reason: "function expressions nested past the closure depth the Go toolchain can build without exhausting memory"}
+	}
+	r.closureDepth++
+	defer func() { r.closureDepth-- }()
 	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
 	}
@@ -1441,6 +1446,11 @@ func (r *Renderer) subtreeReferencesSymbol(n frontend.Node, sym frontend.Symbol)
 // anywhere an expression is, but its first consumers are the higher-order array
 // methods and go: callbacks.
 func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
+	if r.closureDepth >= maxClosureNestDepth {
+		return nil, &NotYetLowerable{Reason: "arrow functions nested past the closure depth the Go toolchain can build without exhausting memory"}
+	}
+	r.closureDepth++
+	defer func() { r.closureDepth-- }()
 	kids := r.prog.Children(n)
 	if len(kids) < 2 {
 		return nil, &NotYetLowerable{Reason: "arrow function did not expose parameters and a body"}

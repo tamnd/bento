@@ -552,7 +552,25 @@ type Renderer struct {
 	// rather than ship it (see unguardedNotAssign). It is keyed by span since a span is a
 	// comparable pair of offsets.
 	seenAssign map[frontend.Span]bool
+	// closureDepth is how many function expressions or arrow functions the current
+	// render is nested inside, incremented on entry to each and restored on exit. A
+	// closure lowers to an inline Go func literal, and the Go compiler's escape
+	// analysis over deeply nested func literals is super-linear in the nesting depth:
+	// past roughly twenty levels a single go build grows from hundreds of megabytes to
+	// gigabytes and is killed for want of memory. maxClosureNestDepth caps the depth so
+	// a pathologically nested source (test262's 32-deep IIFE stress tests) hands back
+	// instead of emitting Go that OOMs the toolchain. It is a guard on emit shape, not a
+	// semantic limit, the same reason the typeExpr node budget caps a branching type.
+	closureDepth int
 }
+
+// maxClosureNestDepth is the deepest run of nested function expressions or arrow
+// functions the renderer will emit as inline Go func literals. Beyond it the Go
+// compiler's memory over the nested closures blows up super-linearly (measured: depth
+// 16 builds in ~70MB, 20 in ~310MB, 22 in ~1.2GB, 24 in ~4.3GB, 26+ is OOM-killed), so
+// a deeper nest hands back rather than ship Go the toolchain cannot build. Real code
+// never nests closures this deep; only a stress test does.
+const maxClosureNestDepth = 16
 
 // maxTypeDepth bounds how deep typeExpr renders a nested type before it hands
 // back. A real annotation nests only a handful of levels, so the ceiling sits far
