@@ -9,9 +9,9 @@ import (
 func main() {
 	s := value.StringValue(value.FromGoString("hello"))
 	var i int32 = 1
-	value.ConsoleLog(value.ToString(s.GetIndex(float64(i))))
-	value.ConsoleLog(value.ToString(s.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(s.GetIndex(float64(i))))
+	value.ConsoleLog(value.ConsoleValue(s.GetIndex(0)))
 	k := value.Number(4)
-	value.ConsoleLog(value.ToString(s.GetElem(k)))
-	value.ConsoleLog(value.ToString(s.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(s.GetElem(k)))
+	value.ConsoleLog(value.ConsoleValue(s.Get(value.FromGoString("length"))))
 }

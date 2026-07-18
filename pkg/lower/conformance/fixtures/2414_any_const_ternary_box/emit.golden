@@ -25,9 +25,9 @@ func Show(x float64) {
 		}
 		return false
 	}())
-	value.ConsoleLog(value.ToString(s))
-	value.ConsoleLog(value.ToString(n))
-	value.ConsoleLog(value.ToString(b))
+	value.ConsoleLog(value.ConsoleValue(s))
+	value.ConsoleLog(value.ConsoleValue(n))
+	value.ConsoleLog(value.ConsoleValue(b))
 }
 func main() {
 	Show(1)

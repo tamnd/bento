@@ -12,10 +12,10 @@ func main() {
 	o.Set(value.FromGoString("named"), value.Number(2))
 	key := value.StringValue(value.FromGoString("dyn"))
 	o.SetElem(key, value.Number(3))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("k"))), value.ToString(o.Get(value.FromGoString("named"))), value.ToString(o.GetElem(key)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("k"))), value.ToString(o.Get(value.FromGoString("named"))), value.ToString(o.Get(value.FromGoString("dyn"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("k"))), value.ConsoleValue(o.Get(value.FromGoString("named"))), value.ConsoleValue(o.GetElem(key)))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("k"))), value.ConsoleValue(o.Get(value.FromGoString("named"))), value.ConsoleValue(o.Get(value.FromGoString("dyn"))))
 	a := value.NewArrayValue([]value.Value{})
 	a.SetIndex(0, value.Number(5))
 	a.SetIndex(2, value.Number(9))
-	value.ConsoleLog(value.ToString(a.GetIndex(0)), value.ToString(a.GetIndex(1)), value.ToString(a.GetIndex(2)), value.ToString(a.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(a.GetIndex(0)), value.ConsoleValue(a.GetIndex(1)), value.ConsoleValue(a.GetIndex(2)), value.ConsoleValue(a.Get(value.FromGoString("length"))))
 }

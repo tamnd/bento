@@ -9,9 +9,9 @@ import (
 func main() {
 	o := value.NewObject().Set(value.FromGoString("a"), value.Number(1)).Set(value.FromGoString("b"), value.Number(2))
 	e := o.Entries()
-	value.ConsoleLog(value.ToString(e.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.ToString(e.GetIndex(0).GetIndex(0)))
-	value.ConsoleLog(value.ToString(e.GetIndex(0).GetIndex(1)))
-	value.ConsoleLog(value.ToString(e.GetIndex(1).GetIndex(0)))
-	value.ConsoleLog(value.ToString(e.GetIndex(1).GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(e.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(e.GetIndex(0).GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(e.GetIndex(0).GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(e.GetIndex(1).GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(e.GetIndex(1).GetIndex(1)))
 }

@@ -24,7 +24,7 @@ func main() {
 	sum = Add(value.Number(2), value.Number(3))
 	var joined value.Value
 	joined = Add(value.StringValue(value.FromGoString("a")), value.StringValue(value.FromGoString("b")))
-	value.ConsoleLog(value.ToString(sum))
-	value.ConsoleLog(value.ToString(joined))
+	value.ConsoleLog(value.ConsoleValue(sum))
+	value.ConsoleLog(value.ConsoleValue(joined))
 	value.ConsoleLog(value.NumberToString(NewBox().Twice()))
 }

@@ -10,7 +10,7 @@ func main() {
 	o := value.NewObject()
 	s := value.NewSymbol(value.FromGoString("k"))
 	o.SetElem(s, value.Number(42))
-	value.ConsoleLog(value.ToString(o.GetElem(s)))
+	value.ConsoleLog(value.ConsoleValue(o.GetElem(s)))
 	value.ConsoleLog(value.BoolToString(o.DeleteElem(s)))
-	value.ConsoleLog(value.ToString(o.GetElem(s)))
+	value.ConsoleLog(value.ConsoleValue(o.GetElem(s)))
 }

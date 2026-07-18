@@ -9,8 +9,8 @@ import (
 func main() {
 	proto := value.NewObject()
 	o := value.ObjectCreate(proto).DefineProperties(value.NewObject().Set(value.FromGoString("a"), value.NewObject().Set(value.FromGoString("value"), value.Number(1)).Set(value.FromGoString("enumerable"), value.Bool(true)).Set(value.FromGoString("writable"), value.Bool(true)).Set(value.FromGoString("configurable"), value.Bool(true))).Set(value.FromGoString("b"), value.NewObject().Set(value.FromGoString("value"), value.Number(2)).Set(value.FromGoString("enumerable"), value.Bool(false)).Set(value.FromGoString("writable"), value.Bool(true)).Set(value.FromGoString("configurable"), value.Bool(true))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("b"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("b"))))
 	value.ConsoleLog(o.OwnKeys().Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))

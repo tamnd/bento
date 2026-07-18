@@ -71,6 +71,6 @@ func main() {
 			return n*10 + i
 		})(value.ToNumber(value.Arg(__a, 0)), value.ToNumber(value.Arg(__a, 1))))
 	}))
-	value.ConsoleLog(value.ToString(it.Next().Value))
-	value.ConsoleLog(value.ToString(it.Next().Value))
+	value.ConsoleLog(value.ConsoleValue(it.Next().Value))
+	value.ConsoleLog(value.ConsoleValue(it.Next().Value))
 }

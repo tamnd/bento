@@ -18,37 +18,37 @@ func main() {
 			return value.ToNumber(x) * 2
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(doubled.GetIndex(0)))
-	value.ConsoleLog(value.ToString(doubled.GetIndex(1)))
-	value.ConsoleLog(value.ToString(doubled.GetIndex(2)))
+	value.ConsoleLog(value.ConsoleValue(doubled.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(doubled.GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(doubled.GetIndex(2)))
 	odds := value.GenericFilter(o, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(x value.Value) bool {
 			return math.Mod(value.ToNumber(x), 2) == 1
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(odds.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(odds.Get(value.FromGoString("length"))))
 	anyBig := value.GenericSome(o, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(x value.Value) bool {
 			return value.Greater(x, value.Number(2))
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(anyBig))
+	value.ConsoleLog(value.ConsoleValue(anyBig))
 	allPos := value.GenericEvery(o, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(x value.Value) bool {
 			return value.Greater(x, value.Number(0))
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(allPos))
+	value.ConsoleLog(value.ConsoleValue(allPos))
 	found := value.GenericFind(o, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(x value.Value) bool {
 			return value.StrictEquals(x, value.Number(2))
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(found))
+	value.ConsoleLog(value.ConsoleValue(found))
 	idx := value.GenericFindIndex(o, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(x value.Value) bool {
 			return value.StrictEquals(x, value.Number(3))
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(idx))
+	value.ConsoleLog(value.ConsoleValue(idx))
 }

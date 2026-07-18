@@ -11,5 +11,5 @@ func main() {
 	value.ConsoleLog(value.BoolToString(value.ReflectIsExtensible(o)))
 	value.ConsoleLog(value.BoolToString(value.ReflectPreventExtensions(o)))
 	value.ConsoleLog(value.BoolToString(value.ReflectIsExtensible(o)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
 }

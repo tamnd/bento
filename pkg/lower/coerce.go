@@ -663,6 +663,13 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
 	case r.isBool(src):
 		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	case r.isBigInt(src):
+		// A bigint lowers to a *big.Int on the typed side (a literal to big.NewInt or
+		// an interned BigIntMustParse var, an operator result to a fresh new(big.Int)),
+		// so it boxes through value.BigIntFromBig, the bigint sibling of value.Number.
+		// A bigint is an immutable primitive, so the box carries value semantics with no
+		// identity hazard, the same as a number, string, or boolean.
+		return &ast.CallExpr{Fun: sel("value", "BigIntFromBig"), Args: []ast.Expr{expr}}, nil
 	case r.isSymbolKey(src):
 		// A symbol expression already lowers to a value.Value: Symbol(x) builds one,
 		// a symbol binding stores it, a symbol read off the bag hands one back, and a
@@ -807,6 +814,11 @@ func (r *Renderer) boxStaticToDynamicFlags(expr ast.Expr, flags frontend.TypeFla
 		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{expr}}, nil
 	case flags&frontend.TypeBoolean != 0:
 		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	case flags&frontend.TypeBigInt != 0:
+		// A bigint result rides value.BigIntFromBig, the same box the source-node path
+		// gives a bigint: the typed result is a *big.Int, an immutable primitive with no
+		// identity hazard.
+		return &ast.CallExpr{Fun: sel("value", "BigIntFromBig"), Args: []ast.Expr{expr}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "boxing this static result type into a dynamic value is a later slice"}
 	}

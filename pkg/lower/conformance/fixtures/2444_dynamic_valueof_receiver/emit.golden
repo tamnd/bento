@@ -10,9 +10,9 @@ func main() {
 	n := value.Number(42)
 	b := value.Bool(true)
 	s := value.StringValue(value.FromGoString("hi"))
-	value.ConsoleLog(value.ToString(n.ValueOfMethod()))
-	value.ConsoleLog(value.ToString(b.ValueOfMethod()))
-	value.ConsoleLog(value.ToString(s.ValueOfMethod()))
+	value.ConsoleLog(value.ConsoleValue(n.ValueOfMethod()))
+	value.ConsoleLog(value.ConsoleValue(b.ValueOfMethod()))
+	value.ConsoleLog(value.ConsoleValue(s.ValueOfMethod()))
 	doubled := (value.ToNumber(n.ValueOfMethod())) * 2
 	value.ConsoleLog(value.NumberToString(doubled))
 	u := value.Undefined

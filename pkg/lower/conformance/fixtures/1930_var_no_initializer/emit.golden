@@ -15,8 +15,8 @@ func Check() {
 	value.ConsoleLog(value.BoolToString(actualName.IsUndefined()))
 	expectedName = value.StringValue(value.FromGoString("TypeError"))
 	actualName = value.StringValue(value.FromGoString("RangeError"))
-	value.ConsoleLog(value.ToString(expectedName))
-	value.ConsoleLog(value.ToString(actualName))
+	value.ConsoleLog(value.ConsoleValue(expectedName))
+	value.ConsoleLog(value.ConsoleValue(actualName))
 }
 func main() {
 	Check()

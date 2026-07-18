@@ -8,13 +8,13 @@ import (
 )
 
 func main() {
-	value.ConsoleLog(value.ToString(value.IterToArray(value.IterMap(value.IterFrom(value.NewArrayValue([]value.Value{value.Number(10), value.Number(20), value.Number(30)})).Next, value.NewFunc(func(__a []value.Value) value.Value {
+	value.ConsoleLog(value.ConsoleValue(value.IterToArray(value.IterMap(value.IterFrom(value.NewArrayValue([]value.Value{value.Number(10), value.Number(20), value.Number(30)})).Next, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Number((func(n float64) float64 {
 			return n + 1
 		})(value.ToNumber(value.Arg(__a, 0))))
 	})).Next)))
-	value.ConsoleLog(value.ToString(value.IterToArray(value.IterFrom(value.StringValue(value.FromGoString("abc"))).Next)))
-	value.ConsoleLog(value.ToString(value.IterToArray(value.IterFilter(value.IterFrom(value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3), value.Number(4)})).Next, value.NewFunc(func(__a []value.Value) value.Value {
+	value.ConsoleLog(value.ConsoleValue(value.IterToArray(value.IterFrom(value.StringValue(value.FromGoString("abc"))).Next)))
+	value.ConsoleLog(value.ConsoleValue(value.IterToArray(value.IterFilter(value.IterFrom(value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3), value.Number(4)})).Next, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(n float64) bool {
 			return math.Mod(n, 2) == 0
 		})(value.ToNumber(value.Arg(__a, 0))))

@@ -23,10 +23,10 @@ func main() {
 			return true
 		})(value.Arg(__a, 0), value.ToString(value.Arg(__a, 1)), value.Arg(__a, 2)))
 	})))
-	value.ConsoleLog(value.ToString(p.Get(value.FromGoString("x"))))
-	value.ConsoleLog(value.ToString(p.Get(value.FromGoString("z"))))
+	value.ConsoleLog(value.ConsoleValue(p.Get(value.FromGoString("x"))))
+	value.ConsoleLog(value.ConsoleValue(p.Get(value.FromGoString("z"))))
 	p.Set(value.FromGoString("y"), value.Number(2))
-	value.ConsoleLog(value.ToString(target.Get(value.FromGoString("y"))))
+	value.ConsoleLog(value.ConsoleValue(target.Get(value.FromGoString("y"))))
 	value.ConsoleLog(log.Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))

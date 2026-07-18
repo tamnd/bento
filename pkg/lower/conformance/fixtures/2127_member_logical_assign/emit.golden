@@ -11,19 +11,19 @@ func main() {
 	if obj.Get(value.FromGoString("k")).IsNullish() {
 		obj.Set(value.FromGoString("k"), value.Number(7))
 	}
-	value.ConsoleLog(value.ToString(obj.Get(value.FromGoString("k"))))
+	value.ConsoleLog(value.ConsoleValue(obj.Get(value.FromGoString("k"))))
 	if obj.Get(value.FromGoString("k")).IsNullish() {
 		obj.Set(value.FromGoString("k"), value.Number(9))
 	}
-	value.ConsoleLog(value.ToString(obj.Get(value.FromGoString("k"))))
+	value.ConsoleLog(value.ConsoleValue(obj.Get(value.FromGoString("k"))))
 	a := value.NewObject().Set(value.FromGoString("v"), value.Number(0))
 	if !value.ToBoolean(a.Get(value.FromGoString("v"))) {
 		a.Set(value.FromGoString("v"), value.Number(5))
 	}
-	value.ConsoleLog(value.ToString(a.Get(value.FromGoString("v"))))
+	value.ConsoleLog(value.ConsoleValue(a.Get(value.FromGoString("v"))))
 	b := value.NewObject().Set(value.FromGoString("v"), value.Number(3))
 	if value.ToBoolean(b.Get(value.FromGoString("v"))) {
 		b.Set(value.FromGoString("v"), value.Number(8))
 	}
-	value.ConsoleLog(value.ToString(b.Get(value.FromGoString("v"))))
+	value.ConsoleLog(value.ConsoleValue(b.Get(value.FromGoString("v"))))
 }

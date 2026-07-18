@@ -13,9 +13,9 @@ func main() {
 			return 3
 		})())
 	})).Set(value.FromGoString("enumerable"), value.Bool(true))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("b"))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("c"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("b"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("c"))))
 	value.ConsoleLog(o.OwnEnumerableKeys().Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))

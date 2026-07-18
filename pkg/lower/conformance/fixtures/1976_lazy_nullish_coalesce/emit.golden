@@ -31,6 +31,6 @@ func Dyn(x value.Value, tag value.BStr) value.Value {
 func main() {
 	value.ConsoleLog(value.NumberToString(Opt(value.Some[float64](5), value.FromGoString("a"))))
 	value.ConsoleLog(value.NumberToString(Opt(value.None[float64](), value.FromGoString("b"))))
-	value.ConsoleLog(value.ToString(Dyn(value.Number(0), value.FromGoString("c"))))
-	value.ConsoleLog(value.ToString(Dyn(value.Undefined, value.FromGoString("d"))))
+	value.ConsoleLog(value.ConsoleValue(Dyn(value.Number(0), value.FromGoString("c"))))
+	value.ConsoleLog(value.ConsoleValue(Dyn(value.Undefined, value.FromGoString("d"))))
 }

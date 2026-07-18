@@ -16,5 +16,5 @@ func main() {
 		_bt1 := value.NewArray[value.Value](value.Number(a), value.Number(b))
 		return _bt1.At(0)
 	}
-	value.ConsoleLog(value.ToString(first(9, 8)))
+	value.ConsoleLog(value.ConsoleValue(first(9, 8)))
 }

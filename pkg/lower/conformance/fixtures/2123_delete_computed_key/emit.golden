@@ -10,10 +10,10 @@ func main() {
 	obj := value.NewObject().Set(value.FromGoString("a"), value.Number(1)).Set(value.FromGoString("b"), value.Number(2))
 	g1 := obj.Delete(value.FromGoString("a"))
 	value.ConsoleLog(value.BoolToString(g1))
-	value.ConsoleLog(value.ToString(obj.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(obj.Get(value.FromGoString("a"))))
 	arr := value.NewArrayValue([]value.Value{value.Number(10), value.Number(20), value.Number(30)})
 	g2 := arr.DeleteIndex(1)
 	value.ConsoleLog(value.BoolToString(g2))
-	value.ConsoleLog(value.ToString(arr.GetIndex(1)))
-	value.ConsoleLog(value.ToString(arr.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(arr.GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(arr.Get(value.FromGoString("length"))))
 }

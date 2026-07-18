@@ -16,6 +16,6 @@ func Pick(a float64, b float64, c float64) value.Value {
 	return _bt1.At(float64(i))
 }
 func main() {
-	value.ConsoleLog(value.ToString(First(10, 20)))
-	value.ConsoleLog(value.ToString(Pick(10, 20, 30)))
+	value.ConsoleLog(value.ConsoleValue(First(10, 20)))
+	value.ConsoleLog(value.ConsoleValue(Pick(10, 20, 30)))
 }

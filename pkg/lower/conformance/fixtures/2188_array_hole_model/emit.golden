@@ -9,14 +9,14 @@ import (
 func main() {
 	a := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3)})
 	_ = a.DeleteIndex(1)
-	value.ConsoleLog(value.ToString(a.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(a.Get(value.FromGoString("length"))))
 	value.ConsoleLog(value.NumberToString(a.OwnEnumerableKeys().Len()))
-	value.ConsoleLog(value.ToString(a.GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(a.GetIndex(1)))
 	b := value.NewArrayValue([]value.Value{value.Number(1), value.Undefined, value.Number(3)})
 	value.ConsoleLog(value.NumberToString(b.OwnEnumerableKeys().Len()))
 	c := value.NewArrayValue([]value.Value{value.Number(0)})
 	c.SetIndex(3, value.Number(9))
-	value.ConsoleLog(value.ToString(c.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(c.Get(value.FromGoString("length"))))
 	value.ConsoleLog(value.NumberToString(c.OwnEnumerableKeys().Len()))
 	value.ConsoleLog(value.JSONStringify(a))
 }

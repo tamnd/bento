@@ -10,9 +10,9 @@ func Pick(x value.Value, fb value.Value) value.Value {
 	return value.Coalesce(x, fb)
 }
 func main() {
-	value.ConsoleLog(value.ToString(Pick(value.Number(0), value.Number(99))))
-	value.ConsoleLog(value.ToString(Pick(value.StringValue(value.FromGoString("")), value.StringValue(value.FromGoString("z")))))
-	value.ConsoleLog(value.ToString(Pick(value.Null, value.Number(99))))
-	value.ConsoleLog(value.ToString(Pick(value.Undefined, value.Number(7))))
-	value.ConsoleLog(value.ToString(Pick(value.StringValue(value.FromGoString("kept")), value.StringValue(value.FromGoString("z")))))
+	value.ConsoleLog(value.ConsoleValue(Pick(value.Number(0), value.Number(99))))
+	value.ConsoleLog(value.ConsoleValue(Pick(value.StringValue(value.FromGoString("")), value.StringValue(value.FromGoString("z")))))
+	value.ConsoleLog(value.ConsoleValue(Pick(value.Null, value.Number(99))))
+	value.ConsoleLog(value.ConsoleValue(Pick(value.Undefined, value.Number(7))))
+	value.ConsoleLog(value.ConsoleValue(Pick(value.StringValue(value.FromGoString("kept")), value.StringValue(value.FromGoString("z")))))
 }

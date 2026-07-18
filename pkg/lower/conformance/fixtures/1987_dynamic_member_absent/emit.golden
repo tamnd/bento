@@ -23,10 +23,10 @@ func Make() *ObjA {
 }
 func main() {
 	point := &ObjLabelXY{X: 1, Y: 2, Label: value.FromGoString("p")}
-	value.ConsoleLog(value.ToString(value.MissingProperty(point)))
-	value.ConsoleLog(value.ToString(value.MissingProperty(point)))
+	value.ConsoleLog(value.ConsoleValue(value.MissingProperty(point)))
+	value.ConsoleLog(value.ConsoleValue(value.MissingProperty(point)))
 	value.ConsoleLog(value.NumberToString(point.X))
-	value.ConsoleLog(value.ToString(value.MissingProperty(Make())))
+	value.ConsoleLog(value.ConsoleValue(value.MissingProperty(Make())))
 	value.ConsoleLog(value.NumberToString(calls))
 	value.ConsoleLog(value.ToString(value.MissingProperty(point)))
 }

@@ -17,12 +17,12 @@ func Each(fn value.Value) {
 	fn.Call(value.Number(2))
 }
 func main() {
-	value.ConsoleLog(value.ToString(Apply(value.NewFunc(func(__a []value.Value) value.Value {
+	value.ConsoleLog(value.ConsoleValue(Apply(value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Number((func(y float64) float64 {
 			return y * 2
 		})(value.ToNumber(value.Arg(__a, 0))))
 	}), 21)))
-	value.ConsoleLog(value.ToString(Run(value.NewFunc(func(__a []value.Value) value.Value {
+	value.ConsoleLog(value.ConsoleValue(Run(value.NewFunc(func(__a []value.Value) value.Value {
 		return value.StringValue((func(x float64, y float64) value.BStr {
 			return value.NumberToString(x).ConcatN(value.FromGoString("-"), value.NumberToString(y))
 		})(value.ToNumber(value.Arg(__a, 0)), value.ToNumber(value.Arg(__a, 1))))
@@ -39,7 +39,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				e := value.Caught(rec)
 				_ = e
-				value.ConsoleLog(value.ToString((e.ToValue()).Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue((e.ToValue()).Get(value.FromGoString("name"))))
 			}
 		}()
 		g.Call()

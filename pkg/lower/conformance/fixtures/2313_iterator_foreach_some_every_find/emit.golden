@@ -45,14 +45,14 @@ func main() {
 			return n > 3
 		})(value.ToNumber(value.Arg(__a, 0))))
 	}))))
-	value.ConsoleLog(value.ToString(value.IterFind(value.ArrayIterFromTyped(a, value.ArrayIterValues, func(_bt5 float64) value.Value {
+	value.ConsoleLog(value.ConsoleValue(value.IterFind(value.ArrayIterFromTyped(a, value.ArrayIterValues, func(_bt5 float64) value.Value {
 		return value.Number(_bt5)
 	}).Next, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(n float64) bool {
 			return math.Mod(n, 2) == 0
 		})(value.ToNumber(value.Arg(__a, 0))))
 	}))))
-	value.ConsoleLog(value.ToString(value.IterFind(value.ArrayIterFromTyped(a, value.ArrayIterValues, func(_bt6 float64) value.Value {
+	value.ConsoleLog(value.ConsoleValue(value.IterFind(value.ArrayIterFromTyped(a, value.ArrayIterValues, func(_bt6 float64) value.Value {
 		return value.Number(_bt6)
 	}).Next, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(n float64) bool {

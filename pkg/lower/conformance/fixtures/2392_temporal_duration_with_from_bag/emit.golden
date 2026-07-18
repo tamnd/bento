@@ -20,7 +20,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				value.ConsoleLog(value.ToString(thrown.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(thrown.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		base.With(value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64]())
@@ -31,7 +31,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				value.ConsoleLog(value.ToString(thrown.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(thrown.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		base.With(value.None[float64](), value.Some[float64](1.5), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64]())
@@ -42,7 +42,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				value.ConsoleLog(value.ToString(thrown.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(thrown.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		value.DurationFromFields(value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64]())
@@ -53,7 +53,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				value.ConsoleLog(value.ToString(thrown.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(thrown.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		value.DurationFromFields(value.None[float64](), value.Some[float64](1.5), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64]())

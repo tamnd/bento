@@ -21,7 +21,7 @@ func main() {
 		}
 		return Effect(value.StringValue(value.FromGoString("fallback")))
 	}()
-	value.ConsoleLog(value.ToString(r1), value.NumberToString(calls))
+	value.ConsoleLog(value.ConsoleValue(r1), value.NumberToString(calls))
 	b := value.StringValue(value.FromGoString(""))
 	r2 := func() value.Value {
 		_bt1 := b
@@ -30,7 +30,7 @@ func main() {
 		}
 		return Effect(value.StringValue(value.FromGoString("fallback")))
 	}()
-	value.ConsoleLog(value.ToString(r2), value.NumberToString(calls))
+	value.ConsoleLog(value.ConsoleValue(r2), value.NumberToString(calls))
 	c := value.Number(0)
 	r3 := func() value.Value {
 		_bt2 := c
@@ -39,7 +39,7 @@ func main() {
 		}
 		return Effect(value.StringValue(value.FromGoString("reached")))
 	}()
-	value.ConsoleLog(value.ToString(r3), value.NumberToString(calls))
+	value.ConsoleLog(value.ConsoleValue(r3), value.NumberToString(calls))
 	d := value.StringValue(value.FromGoString("go"))
 	r4 := func() value.Value {
 		_bt3 := d
@@ -48,5 +48,5 @@ func main() {
 		}
 		return Effect(value.StringValue(value.FromGoString("reached")))
 	}()
-	value.ConsoleLog(value.ToString(r4), value.NumberToString(calls))
+	value.ConsoleLog(value.ConsoleValue(r4), value.NumberToString(calls))
 }

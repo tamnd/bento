@@ -49,6 +49,19 @@ func BigIntValue(b *BigInt) Value {
 	return Value{kind: KindBigInt, ref: unsafe.Pointer(b)}
 }
 
+// BigIntFromBig boxes a *big.Int the typed side holds into a bigint value, the
+// crossing a statically typed bigint takes into a dynamic slot: a bigint binding, a
+// bigint literal, and a bigint operator result all lower to *big.Int, and this wraps
+// one into the boxed BigInt the dynamic world reads. It copies the integer into a
+// fresh BigInt rather than aliasing the source pointer, so the box owns its own value
+// independent of the source's later reuse and of the *big.Int and *BigInt layouts
+// staying identical; a JavaScript bigint is immutable, so the copy is the honest shape.
+func BigIntFromBig(b *big.Int) Value {
+	nb := &BigInt{}
+	nb.i.Set(b)
+	return Value{kind: KindBigInt, ref: unsafe.Pointer(nb)}
+}
+
 // bigint returns the *BigInt a bigint box holds.
 func (v Value) bigint() *BigInt { return (*BigInt)(v.ref) }
 
@@ -117,6 +130,19 @@ func BigIntToStringRadix(b *big.Int, radix float64) BStr {
 // which is why it is its own helper and not BigIntToString.
 func BigIntToConsole(b *big.Int) BStr {
 	return FromGoString(b.String() + "n")
+}
+
+// ConsoleValue renders a dynamic value the way console.log inspects it at the top
+// level. It matches ToString for every kind but the bigint: console.log(5n) prints
+// "5n" where String(5n) is "5", so a boxed bigint takes the "n" suffix BigIntToConsole
+// adds while every other kind renders exactly as ToString. It is the boxed sibling of
+// BigIntToConsole, used where console.log takes a value whose kind is known only at run
+// time, such as an any-typed slot that a bigint flowed into.
+func ConsoleValue(v Value) BStr {
+	if v.kind == KindBigInt {
+		return FromGoString(v.bigint().String() + "n")
+	}
+	return ToString(v)
 }
 
 // maxBigIntBits caps how large a bigint an operator may build, the same order of

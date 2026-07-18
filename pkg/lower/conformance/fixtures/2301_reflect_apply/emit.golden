@@ -12,12 +12,12 @@ func main() {
 			return a + b + c
 		})(value.ToNumber(value.Arg(__a, 0)), value.ToNumber(value.Arg(__a, 1)), value.ToNumber(value.Arg(__a, 2))))
 	})
-	value.ConsoleLog(value.ToString(value.ReflectApply(sum, value.Undefined, value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3)}))))
-	value.ConsoleLog(value.ToString(value.ReflectApply(sum, value.Null, value.NewArrayValue([]value.Value{value.Number(10), value.Number(20), value.Number(30)}))))
+	value.ConsoleLog(value.ConsoleValue(value.ReflectApply(sum, value.Undefined, value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3)}))))
+	value.ConsoleLog(value.ConsoleValue(value.ReflectApply(sum, value.Null, value.NewArrayValue([]value.Value{value.Number(10), value.Number(20), value.Number(30)}))))
 	cat := value.NewFunc(func(__a []value.Value) value.Value {
 		return value.StringValue((func(a value.BStr, b value.BStr, c value.BStr) value.BStr {
 			return a.ConcatN(value.FromGoString("-"), b, value.FromGoString("-"), c)
 		})(value.ToString(value.Arg(__a, 0)), value.ToString(value.Arg(__a, 1)), value.ToString(value.Arg(__a, 2))))
 	})
-	value.ConsoleLog(value.ToString(value.ReflectApply(cat, value.Undefined, value.NewArrayValue([]value.Value{value.StringValue(value.FromGoString("x")), value.StringValue(value.FromGoString("y")), value.StringValue(value.FromGoString("z"))}))))
+	value.ConsoleLog(value.ConsoleValue(value.ReflectApply(cat, value.Undefined, value.NewArrayValue([]value.Value{value.StringValue(value.FromGoString("x")), value.StringValue(value.FromGoString("y")), value.StringValue(value.FromGoString("z"))}))))
 }

@@ -13,6 +13,6 @@ func Run(cb func(float64, value.Value)) {
 func main() {
 	Run(func(a float64, b value.Value) {
 		value.ConsoleLog(value.NumberToString(a))
-		value.ConsoleLog(value.ToString(b))
+		value.ConsoleLog(value.ConsoleValue(b))
 	})
 }

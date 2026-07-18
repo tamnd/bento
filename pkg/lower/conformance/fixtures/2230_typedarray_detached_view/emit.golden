@@ -23,7 +23,7 @@ func main() {
 	other.SetAt(0, 1)
 	value.ConsoleLog(value.NumberToString(view.Len()))
 	dyn := view.GetIndex(0)
-	value.ConsoleLog(value.ToString(dyn))
+	value.ConsoleLog(value.ConsoleValue(dyn))
 	dyn2 := other.GetIndex(0)
-	value.ConsoleLog(value.ToString(dyn2))
+	value.ConsoleLog(value.ConsoleValue(dyn2))
 }

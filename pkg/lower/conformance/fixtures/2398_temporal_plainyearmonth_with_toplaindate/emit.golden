@@ -22,7 +22,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				value.ConsoleLog(value.ToString(thrown.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(thrown.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		a.WithFields(value.None[float64](), value.Some[float64](13), "reject")

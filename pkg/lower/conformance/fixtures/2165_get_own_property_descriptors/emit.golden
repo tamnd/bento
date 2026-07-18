@@ -19,8 +19,8 @@ func main() {
 	value.ConsoleLog(all.OwnKeys().Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))
-	value.ConsoleLog(value.ToString(all.Get(value.FromGoString("b")).Get(value.FromGoString("value"))))
-	value.ConsoleLog(value.ToString(all.Get(value.FromGoString("b")).Get(value.FromGoString("writable"))))
-	value.ConsoleLog(value.ToString(all.Get(value.FromGoString("a")).Get(value.FromGoString("value"))))
-	value.ConsoleLog(value.ToString(all.Get(value.FromGoString("a")).Get(value.FromGoString("enumerable"))))
+	value.ConsoleLog(value.ConsoleValue(all.Get(value.FromGoString("b")).Get(value.FromGoString("value"))))
+	value.ConsoleLog(value.ConsoleValue(all.Get(value.FromGoString("b")).Get(value.FromGoString("writable"))))
+	value.ConsoleLog(value.ConsoleValue(all.Get(value.FromGoString("a")).Get(value.FromGoString("value"))))
+	value.ConsoleLog(value.ConsoleValue(all.Get(value.FromGoString("a")).Get(value.FromGoString("enumerable"))))
 }
