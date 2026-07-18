@@ -105,14 +105,29 @@ func TestForNoStepUnusedCounterBlanks(t *testing.T) {
 	}
 }
 
-// TestForDestructuringInitHandsBack proves a destructuring initializer stays a
-// later slice: its binding is a pattern, not a plain counter, so the loop hands
-// back rather than mangling the pattern text into one Go name.
-func TestForDestructuringInitHandsBack(t *testing.T) {
+// TestForDestructuringInitLowersToBlock proves a destructuring initializer binds
+// its pattern once, in the block that wraps the loop, ahead of a for with an empty
+// init clause, so the pattern's element reads run before the loop and the bound
+// names stay in scope for the condition, body, and post clause.
+func TestForDestructuringInitLowersToBlock(t *testing.T) {
 	const src = "let n = 0;\nfor (const [a, b] = [3, 4]; n < 1;) {\n  n = a + b;\n}\nconsole.log(n);\n"
+	source := renderProgram(t, src)
+	for _, want := range []string{"a := ", "b := ", "for n < 1 {"} {
+		if !strings.Contains(source, want) {
+			t.Errorf("for with a destructuring initializer did not lower to a block binding %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestForDestructuringInitUnusedNameHandsBack proves the residual: a bound name the
+// loop never reads would leave a := binding Go rejects as declared-and-unused, and the
+// destructure path mints no blank for it, so such a pattern stays a clean handback
+// rather than emitting unbuildable Go.
+func TestForDestructuringInitUnusedNameHandsBack(t *testing.T) {
+	const src = "for (const [a, b] = [3, 4]; a < 10; ) {\n  console.log(a);\n}\n"
 	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "destructuring initializer") {
-		t.Errorf("for with a destructuring initializer handback reason = %q, want it to name the destructuring initializer", reason)
+	if !strings.Contains(reason, "destructuring initializer binding an unread name") {
+		t.Errorf("for with an unread destructured name handback reason = %q, want it to name the unread bound name", reason)
 	}
 }
 

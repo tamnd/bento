@@ -1748,7 +1748,18 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	if len(decls) != 1 {
 		return nil, false, nil
 	}
-	kids := r.prog.Children(decls[0])
+	return r.arrayDestructureDecl(decls[0])
+}
+
+// arrayDestructureDecl lowers a single declaration whose binding target is an array
+// pattern, `[a, b] = src`, into one indexed read per element. It is the reusable core
+// of flattenArrayDestructure, shared with a for loop's destructuring initializer, and
+// owns the declaration once the target is an array binding pattern: it reports
+// ok=false only for a target that is not an array pattern, so a caller can try the
+// object sibling, and every array shape it cannot yet lower returns ok=true with an
+// error rather than a silent fall-through.
+func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, error) {
+	kids := r.prog.Children(decl)
 	if len(kids) != 2 {
 		return nil, false, nil
 	}
@@ -2062,7 +2073,18 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 	if len(decls) != 1 {
 		return nil, false, nil
 	}
-	kids := r.prog.Children(decls[0])
+	return r.objectDestructureDecl(decls[0])
+}
+
+// objectDestructureDecl lowers a single declaration whose binding target is an object
+// pattern, `{x, y} = src`, into one property read per name. It is the reusable core of
+// flattenObjectDestructure, shared with a for loop's destructuring initializer, and
+// owns the declaration once the target is an object binding pattern: it reports
+// ok=false only for a target that is not an object pattern, so a caller can try the
+// array sibling first, and every object shape it cannot yet lower returns ok=true with
+// an error rather than a silent fall-through.
+func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, error) {
+	kids := r.prog.Children(decl)
 	if len(kids) != 2 {
 		return nil, false, nil
 	}
@@ -3852,6 +3874,8 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 			decls = nil
 		}
 	}
+	var destrStmts []ast.Stmt
+	destructuring := false
 	if fc.HasInit {
 		if len(decls) == 0 && exprInit == nil {
 			// An expression initializer writes to a binding that already exists
@@ -3865,18 +3889,28 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 			}
 			exprInit = s
 		} else {
-			// A destructuring initializer binds a pattern, not a plain name, and the
-			// pattern's own lowering is a separate slice. The binding name of a plain
-			// counter is an identifier node; an array or object pattern is not, so hand
-			// back rather than mangle the pattern text into one Go name.
+			// A destructuring initializer binds a pattern, not a plain name: its
+			// binding target is an array or object pattern node rather than the plain
+			// identifier a counter declares. Such a pattern binds once, before the loop
+			// runs, so it lowers into the block that wraps the loop, the same place a
+			// typed counter's var declaration lands, with the pattern's own element
+			// reads reused from the declaration-statement destructure path.
 			for _, d := range decls {
 				kids := r.prog.Children(d)
 				if len(kids) == 0 {
 					continue
 				}
 				if kids[0].Kind() != frontend.NodeIdentifier {
-					return nil, &NotYetLowerable{Reason: "a for loop with a destructuring initializer is a later slice"}
+					destructuring = true
+					break
 				}
+			}
+			if destructuring {
+				stmts, err := r.forDestructureInit(decls)
+				if err != nil {
+					return nil, err
+				}
+				destrStmts = stmts
 			}
 		}
 	}
@@ -3900,6 +3934,16 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	body, err := r.loopBody(fc.Body)
 	if err != nil {
 		return nil, err
+	}
+
+	// A destructuring initializer already lowered its pattern into destrStmts, which
+	// run once before the loop, so the loop takes an empty init and the block holds the
+	// binding statements ahead of it, the same block shape a typed counter's var
+	// declaration takes below.
+	if destructuring {
+		loop := &ast.ForStmt{Cond: cond, Post: post, Body: body}
+		list := append(append([]ast.Stmt{}, destrStmts...), loop)
+		return &ast.BlockStmt{List: list}, nil
 	}
 
 	// With no declaration to place, the surviving clauses go straight onto the for.
@@ -3936,6 +3980,77 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	list := append([]ast.Stmt{initDecl}, blanks...)
 	list = append(list, loop)
 	return &ast.BlockStmt{List: list}, nil
+}
+
+// forDestructureInit lowers a for loop's destructuring initializer into the
+// statements that run once before the loop. Each declaration lowers by its target:
+// a pattern reuses the declaration-statement array or object destructure, which reads
+// each element off the source into a fresh `:=` binding, and a plain counter alongside
+// a pattern keeps its ordinary var declaration. A bound name the loop never reads would
+// leave a `:=` binding Go rejects as declared-and-unused, and the destructure path,
+// unlike a plain declaration, mints no blank for it, so a pattern with an unused bound
+// name hands back rather than emit unbuildable Go. A pattern shape neither destructure
+// path recognizes hands back too, keeping the whole loop a clean handback to the engine.
+func (r *Renderer) forDestructureInit(decls []frontend.Node) ([]ast.Stmt, error) {
+	var out []ast.Stmt
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		if kids[0].Kind() == frontend.NodeIdentifier {
+			s, err := r.varDeclStmt([]frontend.Node{d})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, s)
+			continue
+		}
+		if r.forPatternHasUnusedName(kids[0]) {
+			return nil, &NotYetLowerable{Reason: "a for loop with a destructuring initializer binding an unread name is a later slice"}
+		}
+		if stmts, ok, err := r.arrayDestructureDecl(d); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, stmts...)
+			continue
+		}
+		if stmts, ok, err := r.objectDestructureDecl(d); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, stmts...)
+			continue
+		}
+		return nil, &NotYetLowerable{Reason: "a for loop with a destructuring initializer is a later slice"}
+	}
+	return out, nil
+}
+
+// forPatternHasUnusedName reports whether a for-loop binding pattern binds a name the
+// loop never reads. It walks the pattern's identifier nodes and asks bindingUnused of
+// each, the same declared-and-never-read test forInitBlanks uses for a plain counter.
+// The destructure emit binds each name with a `:=`, so an unread name would trip Go's
+// declared-and-unused rule; the check is conservative, since a non-binding identifier
+// inside the pattern (a rename's source property, a default value's reference) resolves
+// to a symbol bindingUnused judges used, so at worst a rare shape hands back, never a
+// wrong emit.
+func (r *Renderer) forPatternHasUnusedName(pat frontend.Node) bool {
+	found := false
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if found {
+			return
+		}
+		if n.Kind() == frontend.NodeIdentifier && r.bindingUnused(n) {
+			found = true
+			return
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(pat)
+	return found
 }
 
 // forInitBlanks builds a blank assignment for each for-loop binding no clause of
