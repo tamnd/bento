@@ -305,14 +305,63 @@ console.log(s);`)
 	}
 }
 
-// TestUntypedArrayRestParamHandsBack proves an array rest, whose target the checker types
-// any[] and whose body reads through the typed array's own methods a boxed value does not
-// carry, hands back rather than emit a read the body cannot make.
-func TestUntypedArrayRestParamHandsBack(t *testing.T) {
-	reason := renderUntypedBindingHandBack(t, `function f([a, ...rest]) { return a; }
+// TestUntypedArrayRestParamLowersToDynamicSlot proves an array rest on an untyped
+// pattern gathers the source tail past the fixed slots through IndexRest into a boxed
+// value.Value, the index analog of the object pattern's ObjectRest, so no typed array
+// target is needed.
+func TestUntypedArrayRestParamLowersToDynamicSlot(t *testing.T) {
+	got := renderUntypedBinding(t, `function f([a, ...rest]) { return a; }
 console.log(String(f([1, 2, 3])));`)
-	if !strings.Contains(reason, "array rest") {
-		t.Fatalf("reason %q does not name the array-rest hand-back", reason)
+	for _, want := range []string{
+		"func F(__0 value.Value) value.Value",
+		"a := __0.GetIndex(0)",
+		"rest := __0.IndexRest(1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated Go missing %q\n%s", want, got)
+		}
+	}
+}
+
+// TestUntypedArrayRestParamRuns runs the rest lowering end to end: the boxed tail reads
+// back its length and its positions through the dynamic protocol the marked rest name
+// routes to, so the rest behaves as the array it gathers.
+func TestUntypedArrayRestParamRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function f([a, ...rest]) {
+  return String(a) + "," + String(rest.length) + "," + String(rest[0]) + String(rest[1]);
+}
+console.log(f([1, 2, 3]));`))
+	if got != "1,2,23\n" {
+		t.Fatalf("got %q, want %q", got, "1,2,23\n")
+	}
+}
+
+// TestUntypedArrayRestDeclarationRuns proves the declaration form binds the rest the
+// same boxed way, so a `const [a, ...rest]` off a dynamic any source reads its tail.
+func TestUntypedArrayRestDeclarationRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function g(xs: any) {
+  const [a, ...rest] = xs;
+  return String(a) + "," + String(rest.length);
+}
+console.log(g([9, 8, 7, 6]));`))
+	if got != "9,3\n" {
+		t.Fatalf("got %q, want %q", got, "9,3\n")
+	}
+}
+
+// TestUntypedArrayRestShortSourceRuns proves a rest of a source shorter than the fixed
+// slots yields an empty tail, the JavaScript result IndexRest clamps to.
+func TestUntypedArrayRestShortSourceRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function g(xs: any) {
+  const [a, b, ...rest] = xs;
+  return String(a) + "," + String(b) + "," + String(rest.length);
+}
+console.log(g([1]));`))
+	if got != "1,undefined,0\n" {
+		t.Fatalf("got %q, want %q", got, "1,undefined,0\n")
 	}
 }
 
