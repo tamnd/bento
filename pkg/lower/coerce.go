@@ -1152,45 +1152,83 @@ func (r *Renderer) boxObjectMethodMember(obj ast.Expr, m frontend.Node) (ast.Exp
 	}, nil
 }
 
-// boxMethodClosure lowers a parameterless object method whose body is a single
-// return into a value.NewFunc closure that ignores its arguments and returns the
-// boxed return expression. The receiver scope is cleared before the return
-// expression lowers, so a `this` in the body declines through boxOperand rather
-// than binding to an enclosing class receiver this free closure does not carry;
-// that decline is what keeps a this-reading method out of this slice.
+// boxMethodClosure lowers a parameterless object method into a value.NewFunc
+// closure. A method whose body is a single `return <expr>` takes the compact
+// fast path: the closure ignores its arguments and returns the boxed return
+// expression, which is the shape the coercion methods (valueOf, toString,
+// [Symbol.toPrimitive]) take and the form the goldens pin. A richer body, one
+// with locals, control flow, or more than one return, lowers through the same
+// block-body machinery an arrow or function expression uses and wraps in the
+// callable value box, so a method the object protocol calls behaves as the
+// direct call would. Either way the receiver scope is cleared before the body
+// lowers, so a `this` reference declines rather than binding to an enclosing
+// class receiver this free closure does not carry.
 func (r *Renderer) boxMethodClosure(m frontend.Node) (ast.Expr, error) {
 	block, ok := r.funcBodyBlock(m)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "boxing an object method with no body is a later slice"}
 	}
-	stmts := r.prog.Children(block)
-	if len(stmts) != 1 || stmts[0].Kind() != frontend.NodeReturnStatement {
-		return nil, &NotYetLowerable{Reason: "boxing an object method whose body is not a single return is a later slice"}
+	// A this reference would bind to the object the method sits on, a receiver this
+	// free closure has none of; an arguments reference needs the arguments store the
+	// function-expression path materializes and this box does not. Either hands back
+	// rather than lower a body whose reads have nothing to resolve against.
+	if subtreeHasKind(r.prog, block, frontend.NodeThisKeyword) {
+		return nil, &NotYetLowerable{Reason: "boxing an object method that reads this is a later slice"}
 	}
-	retKids := r.prog.Children(stmts[0])
-	if len(retKids) != 1 {
-		return nil, &NotYetLowerable{Reason: "boxing an object method with a bare or multi-value return is a later slice"}
+	var reads bool
+	supported := true
+	r.scanArguments(block, &reads, &supported)
+	if reads {
+		return nil, &NotYetLowerable{Reason: "boxing an object method that reads arguments is a later slice"}
 	}
+
 	prevClass, prevThis := r.curClass, r.thisName
 	r.curClass, r.thisName = nil, ""
 	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
-	boxed, err := r.boxOperand(retKids[0])
+
+	stmts := r.prog.Children(block)
+	if len(stmts) == 1 && stmts[0].Kind() == frontend.NodeReturnStatement {
+		retKids := r.prog.Children(stmts[0])
+		if len(retKids) != 1 {
+			return nil, &NotYetLowerable{Reason: "boxing an object method with a bare or multi-value return is a later slice"}
+		}
+		boxed, err := r.boxOperand(retKids[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		const argsName = "__a"
+		thunk := &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params: &ast.FieldList{List: []*ast.Field{{
+					Names: []*ast.Ident{ident(argsName)},
+					Type:  &ast.ArrayType{Elt: sel("value", "Value")},
+				}}},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{boxed}}}},
+		}
+		return &ast.CallExpr{Fun: sel("value", "NewFunc"), Args: []ast.Expr{thunk}}, nil
+	}
+
+	// A multi-statement body lowers to a typed Go func literal the same way an arrow's
+	// block body does, then boxFuncToDynamic wraps it in the value.NewFunc closure the
+	// object protocol calls, boxing the result and (a caller guarantees no parameters
+	// here) taking no arguments. The receiver scope is already cleared above, so a
+	// stray this inside the body would have handed back before this point.
+	sig, ok := r.prog.SignatureAt(m)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "boxing an object method with no call signature is a later slice"}
+	}
+	fields, err := r.closureParamFields(m, sig, "method")
 	if err != nil {
 		return nil, err
 	}
-	r.requireImport(valuePkg)
-	const argsName = "__a"
-	thunk := &ast.FuncLit{
-		Type: &ast.FuncType{
-			Params: &ast.FieldList{List: []*ast.Field{{
-				Names: []*ast.Ident{ident(argsName)},
-				Type:  &ast.ArrayType{Elt: sel("value", "Value")},
-			}}},
-			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
-		},
-		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{boxed}}}},
+	fn, err := r.blockBodyArrow(m, fields)
+	if err != nil {
+		return nil, err
 	}
-	return &ast.CallExpr{Fun: sel("value", "NewFunc"), Args: []ast.Expr{thunk}}, nil
+	return r.boxFuncToDynamic(fn, sig)
 }
 
 // coerceDynamicToStatic wraps a boxed dynamic value in the coercion that lands it

@@ -1,0 +1,2 @@
+feature = "coerce.boxmultistmtmethod"
+handback = "boxing an object method that reads this is a later slice"
