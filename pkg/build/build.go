@@ -345,6 +345,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedOverload[d.Code] {
 			continue
 		}
+		if toleratedIterable[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -563,6 +566,35 @@ var toleratedAssignability = map[int]bool{
 // a constructor), so admitting the code never emits Go the toolchain rejects.
 var toleratedOverload = map[int]bool{
 	2769: true, // No overload matches this call.
+}
+
+// toleratedIterable is the set of checker diagnostic codes bento admits because a
+// spread or a for...of over a value the checker types as non-iterable still has
+// defined run-time behavior the runtime reproduces or throws for. 2488 ("Type 'X'
+// must have a '[Symbol.iterator]()' method that returns an iterator") flags a
+// `[...x]`, a `for (const e of x)`, a spread argument, or a destructuring source
+// whose static type is too weak for the checker to see an iterator on, the empty
+// object type `{}` and a union carrying void being the common shapes. The type is a
+// strictness artifact of composing JavaScript as TypeScript, not a test's own
+// expectation: JavaScript looks the iterator up on the value at run time, walking it
+// when it is iterable and throwing a TypeError when it is not, exactly the semantics
+// the engine runs.
+//
+// Tolerating the code never emits Go that fails to compile, because a value the
+// checker calls non-iterable can never reach a lowering path that emits an iteration.
+// Every such path (the for...of loop, the array-literal spread, the spread into a
+// rest parameter, and the array destructuring source) gates on the value being a
+// provable array, string, typed array, or a type carrying a [Symbol.iterator], and a
+// type that satisfies any of those is one the checker already sees as iterable, so it
+// would not draw 2488 in the first place. The two sets are disjoint by construction:
+// a 2488 value always hands back to the engine rather than lowering, and the engine
+// runs the same run-time iterator lookup the language does, so it never turns a wrong
+// result green and a genuinely non-iterable value still throws its TypeError there.
+// The array-type and downlevel-iteration variants (2549, 2569) are the same lookup
+// under a different message and stay deliberately absent until their own slice
+// measures them, so admitting 2488 alone stays attributable to this wave.
+var toleratedIterable = map[int]bool{
+	2488: true, // Type 'X' must have a '[Symbol.iterator]()' method that returns an iterator.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
