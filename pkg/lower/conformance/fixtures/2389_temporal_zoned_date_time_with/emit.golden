@@ -17,7 +17,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				value.ConsoleLog(value.ToString(thrown.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(thrown.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		value.ZonedDateTimeFromString("2024-01-31T12:00:00[America/New_York]").WithFields(value.None[float64](), value.Some[float64](2), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), "reject")

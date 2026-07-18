@@ -17,15 +17,15 @@ func main() {
 			return value.Add(x, i)
 		})(value.Arg(__a, 0), value.Arg(__a, 1))
 	}))
-	value.ConsoleLog(value.ToString(withIndex.GetIndex(0)))
-	value.ConsoleLog(value.ToString(withIndex.GetIndex(1)))
-	value.ConsoleLog(value.ToString(withIndex.GetIndex(2)))
+	value.ConsoleLog(value.ConsoleValue(withIndex.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(withIndex.GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(withIndex.GetIndex(2)))
 	withObject := value.GenericMap(o, value.NewFunc(func(__a []value.Value) value.Value {
 		return (func(x value.Value, i value.Value, arr value.Value) value.Value {
 			return value.Add(x, arr.Get(value.FromGoString("length")))
 		})(value.Arg(__a, 0), value.Arg(__a, 1), value.Arg(__a, 2))
 	}))
-	value.ConsoleLog(value.ToString(withObject.GetIndex(0)))
-	value.ConsoleLog(value.ToString(withObject.GetIndex(1)))
-	value.ConsoleLog(value.ToString(withObject.GetIndex(2)))
+	value.ConsoleLog(value.ConsoleValue(withObject.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(withObject.GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(withObject.GetIndex(2)))
 }

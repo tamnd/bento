@@ -9,9 +9,9 @@ import (
 func main() {
 	target := value.NewObject().Set(value.FromGoString("x"), value.Number(1))
 	p := value.NewProxy(target, value.NewObject())
-	value.ConsoleLog(value.ToString(p.Get(value.FromGoString("x"))))
+	value.ConsoleLog(value.ConsoleValue(p.Get(value.FromGoString("x"))))
 	p.Set(value.FromGoString("y"), value.Number(2))
-	value.ConsoleLog(value.ToString(target.Get(value.FromGoString("y"))))
+	value.ConsoleLog(value.ConsoleValue(target.Get(value.FromGoString("y"))))
 	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("x")), p)))
 	_ = p.Delete(value.FromGoString("x"))
 	value.ConsoleLog(value.BoolToString(value.InOperator(value.StringValue(value.FromGoString("x")), target)))
@@ -21,5 +21,5 @@ func main() {
 		})(value.ToNumber(value.Arg(__a, 0)), value.ToNumber(value.Arg(__a, 1))))
 	})
 	pf := value.NewProxy(fn, value.NewObject())
-	value.ConsoleLog(value.ToString(pf.Call(value.Number(2), value.Number(3))))
+	value.ConsoleLog(value.ConsoleValue(pf.Call(value.Number(2), value.Number(3))))
 }

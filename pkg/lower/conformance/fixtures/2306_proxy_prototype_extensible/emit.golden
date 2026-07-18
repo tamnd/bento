@@ -23,7 +23,7 @@ func main() {
 			return true
 		})(value.Arg(__a, 0)))
 	})))
-	value.ConsoleLog(value.ToString(p.GetPrototype().Get(value.FromGoString("kind"))))
+	value.ConsoleLog(value.ConsoleValue(p.GetPrototype().Get(value.FromGoString("kind"))))
 	value.ConsoleLog(value.BoolToString(p.IsExtensible()))
 	p.PreventExtensions()
 	value.ConsoleLog(value.BoolToString(p.IsExtensible()))
@@ -34,5 +34,5 @@ func main() {
 		})(value.Arg(__a, 0), value.Arg(__a, 1)))
 	})))
 	p2.SetPrototype(proto)
-	value.ConsoleLog(value.ToString(p2.GetPrototype().Get(value.FromGoString("kind"))))
+	value.ConsoleLog(value.ConsoleValue(p2.GetPrototype().Get(value.FromGoString("kind"))))
 }

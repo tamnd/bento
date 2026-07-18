@@ -13,7 +13,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				e := value.Caught(rec)
 				_ = e
-				value.ConsoleLog(value.ToString(e.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(e.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		{
@@ -30,7 +30,7 @@ func main() {
 					break
 				}
 				x := _bt2.Value
-				value.ConsoleLog(value.ToString(x))
+				value.ConsoleLog(value.ConsoleValue(x))
 			}
 		}
 	}()

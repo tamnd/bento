@@ -47,5 +47,5 @@ func main() {
 	o.DefineProperty(value.StringValue(value.FromGoString("hidden")), value.NewObject().Set(value.FromGoString("value"), value.Number(2)).Set(value.FromGoString("writable"), value.Bool(false)).Set(value.FromGoString("enumerable"), value.Bool(false)).Set(value.FromGoString("configurable"), value.Bool(true)))
 	value.ConsoleLog(value.BoolToString(VerifyProperty(o, value.FromGoString("hidden"), value.NewObject().Set(value.FromGoString("value"), value.Number(2)).Set(value.FromGoString("writable"), value.Bool(false)).Set(value.FromGoString("enumerable"), value.Bool(false)).Set(value.FromGoString("configurable"), value.Bool(true)))))
 	value.ConsoleLog(value.BoolToString(VerifyProperty(o, value.FromGoString("a"), value.NewObject().Set(value.FromGoString("value"), value.Number(999)).Set(value.FromGoString("writable"), value.Bool(true)).Set(value.FromGoString("enumerable"), value.Bool(true)).Set(value.FromGoString("configurable"), value.Bool(true)))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
 }

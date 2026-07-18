@@ -372,6 +372,53 @@ func bi(s string) *big.Int {
 	return i
 }
 
+// TestBigIntFromBigBoxes proves BigIntFromBig wraps a *big.Int the typed side holds
+// into a bigint value carrying the same digits, the crossing a statically typed
+// bigint takes into a dynamic slot.
+func TestBigIntFromBigBoxes(t *testing.T) {
+	for _, s := range []string{"0", "5", "-7", "36893488147419103232"} {
+		v := BigIntFromBig(bi(s))
+		if v.Kind() != KindBigInt {
+			t.Fatalf("BigIntFromBig(%s) kind = %v, want KindBigInt", s, v.Kind())
+		}
+		if got := v.bigint().String(); got != s {
+			t.Errorf("BigIntFromBig(%s) = %q, want %q", s, got, s)
+		}
+	}
+}
+
+// TestBigIntFromBigCopies proves the box owns its own integer: mutating the source
+// *big.Int after boxing does not change the boxed value, so a typed-side reuse of the
+// operand pointer can never corrupt a bigint that already crossed into a dynamic slot.
+func TestBigIntFromBigCopies(t *testing.T) {
+	src := bi("5")
+	v := BigIntFromBig(src)
+	src.Add(src, bi("100"))
+	if got := v.bigint().String(); got != "5" {
+		t.Errorf("boxed bigint changed with its source: got %q, want %q", got, "5")
+	}
+}
+
+// TestConsoleValueBigIntSuffix proves ConsoleValue prints the "n" suffix for a boxed
+// bigint the way console.log(5n) shows "5n", where String(5n) is "5", and matches
+// ToString for every other kind, so only a bigint in a dynamic slot changes.
+func TestConsoleValueBigIntSuffix(t *testing.T) {
+	if got := ConsoleValue(BigIntFromBig(bi("5"))).ToGoString(); got != "5n" {
+		t.Errorf("ConsoleValue(5n) = %q, want %q", got, "5n")
+	}
+	for _, v := range []Value{
+		Number(5),
+		StringValue(FromGoString("hi")),
+		Bool(true),
+		Undefined,
+		Null,
+	} {
+		if got, want := ConsoleValue(v).ToGoString(), ToString(v).ToGoString(); got != want {
+			t.Errorf("ConsoleValue(%v) = %q, diverged from ToString = %q", v.Kind(), got, want)
+		}
+	}
+}
+
 // TestBigIntAsUintN proves the unsigned wrap lands in [0, 2^bits): a value that
 // fits passes through, a value past the width wraps down by the modulus, and a
 // negative value wraps up into range, so asUintN(16, -1n) is 65535n.

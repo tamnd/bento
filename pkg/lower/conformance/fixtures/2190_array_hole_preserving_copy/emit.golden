@@ -10,19 +10,19 @@ func main() {
 	a := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3)})
 	_ = a.DeleteIndex(1)
 	s := value.GenericSlice(a)
-	value.ConsoleLog(value.ToString(s.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(s.Get(value.FromGoString("length"))))
 	value.ConsoleLog(value.NumberToString(s.OwnEnumerableKeys().Len()))
 	m := value.GenericMap(a, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Number((func(x value.Value) float64 {
 			return value.ToNumber(x) * 2
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(m.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(m.Get(value.FromGoString("length"))))
 	value.ConsoleLog(value.NumberToString(m.OwnEnumerableKeys().Len()))
-	value.ConsoleLog(value.ToString(m.GetIndex(0)))
-	value.ConsoleLog(value.ToString(m.GetIndex(2)))
+	value.ConsoleLog(value.ConsoleValue(m.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(m.GetIndex(2)))
 	c := value.GenericConcat(a, value.Number(9))
-	value.ConsoleLog(value.ToString(c.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(c.Get(value.FromGoString("length"))))
 	value.ConsoleLog(value.NumberToString(c.OwnEnumerableKeys().Len()))
-	value.ConsoleLog(value.ToString(c.GetIndex(3)))
+	value.ConsoleLog(value.ConsoleValue(c.GetIndex(3)))
 }

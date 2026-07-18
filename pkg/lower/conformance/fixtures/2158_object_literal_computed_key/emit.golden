@@ -10,7 +10,7 @@ func main() {
 	k := value.FromGoString("key")
 	s := value.NewSymbol(value.FromGoString("s"))
 	o := value.NewObject().SetKeyed(value.StringValue(k), value.Number(1)).SetKeyed(s, value.Number(2)).Set(value.FromGoString("plain"), value.Number(3))
-	value.ConsoleLog(value.ToString(o.Get(k)))
-	value.ConsoleLog(value.ToString(o.GetElem(s)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("plain"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(k)))
+	value.ConsoleLog(value.ConsoleValue(o.GetElem(s)))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("plain"))))
 }

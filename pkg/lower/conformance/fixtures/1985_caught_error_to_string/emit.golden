@@ -13,7 +13,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				e := value.Caught(rec)
 				_ = e
-				value.ConsoleLog(value.ToString(value.StringValue(e.ToBStr())))
+				value.ConsoleLog(value.ConsoleValue(value.StringValue(e.ToBStr())))
 			}
 		}()
 		value.Throw(value.NewTypeError(value.FromGoString("boom")))

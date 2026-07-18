@@ -13,7 +13,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				_bt0 := value.Caught(rec).ToValue()
 				code := _bt0.Get(value.FromGoString("code"))
-				value.ConsoleLog(value.ToString(code))
+				value.ConsoleLog(value.ConsoleValue(code))
 			}
 		}()
 		value.Throw(value.NewThrownValue(value.NewObject().Set(value.FromGoString("code"), value.Number(1))))

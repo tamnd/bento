@@ -14,28 +14,28 @@ func main() {
 			return value.Add(acc, x)
 		})(value.Arg(__a, 0), value.Arg(__a, 1))
 	}))
-	value.ConsoleLog(value.ToString(sum))
+	value.ConsoleLog(value.ConsoleValue(sum))
 	count := value.GenericReduce(a, value.NewFunc(func(__a []value.Value) value.Value {
 		return (func(acc value.Value, _x value.Value) value.Value {
 			return value.Add(acc, value.Number(1))
 		})(value.Arg(__a, 0), value.Arg(__a, 1))
 	}), value.Number(0))
-	value.ConsoleLog(value.ToString(count))
+	value.ConsoleLog(value.ConsoleValue(count))
 	b := value.NewArrayValue([]value.Value{value.Number(1), value.Undefined, value.Number(3)})
 	bcount := value.GenericReduce(b, value.NewFunc(func(__a []value.Value) value.Value {
 		return (func(acc value.Value, _x value.Value) value.Value {
 			return value.Add(acc, value.Number(1))
 		})(value.Arg(__a, 0), value.Arg(__a, 1))
 	}), value.Number(0))
-	value.ConsoleLog(value.ToString(bcount))
+	value.ConsoleLog(value.ConsoleValue(bcount))
 	gone := value.GenericIndexOf(a, value.Number(2))
-	value.ConsoleLog(value.ToString(gone))
+	value.ConsoleLog(value.ConsoleValue(gone))
 	kept := value.GenericIndexOf(a, value.Number(3))
-	value.ConsoleLog(value.ToString(kept))
+	value.ConsoleLog(value.ConsoleValue(kept))
 	diff := value.GenericReduceRight(a, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Number((func(acc value.Value, x value.Value) float64 {
 			return value.ToNumber(acc) - value.ToNumber(x)
 		})(value.Arg(__a, 0), value.Arg(__a, 1)))
 	}))
-	value.ConsoleLog(value.ToString(diff))
+	value.ConsoleLog(value.ConsoleValue(diff))
 }

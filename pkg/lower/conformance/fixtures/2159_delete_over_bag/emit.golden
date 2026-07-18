@@ -9,8 +9,8 @@ import (
 func main() {
 	o := value.NewObject().Set(value.FromGoString("a"), value.Number(1)).Set(value.FromGoString("b"), value.Number(2))
 	value.ConsoleLog(value.BoolToString(o.Delete(value.FromGoString("a"))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
 	value.ConsoleLog(value.BoolToString(o.Delete(value.FromGoString("b"))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("b"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("b"))))
 	value.ConsoleLog(value.BoolToString(o.Delete(value.FromGoString("missing"))))
 }

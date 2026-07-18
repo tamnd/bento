@@ -11,7 +11,7 @@ func main() {
 	r := value.ProxyRevocable(target, value.NewObject())
 	p := r.Get(value.FromGoString("proxy"))
 	revoke := r.Get(value.FromGoString("revoke"))
-	value.ConsoleLog(value.ToString(p.Get(value.FromGoString("x"))))
+	value.ConsoleLog(value.ConsoleValue(p.Get(value.FromGoString("x"))))
 	revoke.Call()
 	func() {
 		defer func() {
@@ -21,6 +21,6 @@ func main() {
 				value.ConsoleLog(value.FromGoString("threw"))
 			}
 		}()
-		value.ConsoleLog(value.ToString(p.Get(value.FromGoString("x"))))
+		value.ConsoleLog(value.ConsoleValue(p.Get(value.FromGoString("x"))))
 	}()
 }

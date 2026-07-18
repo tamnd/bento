@@ -81,7 +81,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				e := value.Caught(rec)
 				_ = e
-				value.ConsoleLog(value.ToString(e.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(e.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		value.IterTake(value.ArrayIterFromTyped(a, value.ArrayIterValues, func(_bt15 float64) value.Value {
@@ -93,7 +93,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				e := value.Caught(rec)
 				_ = e
-				value.ConsoleLog(value.ToString(e.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(e.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		value.IterDrop(value.ArrayIterFromTyped(a, value.ArrayIterValues, func(_bt16 float64) value.Value {

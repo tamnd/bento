@@ -10,8 +10,8 @@ func main() {
 	o := value.NewObject()
 	o.DefineProperty(value.StringValue(value.FromGoString("a")), value.NewObject().Set(value.FromGoString("value"), value.Number(1)).Set(value.FromGoString("writable"), value.Bool(true)).Set(value.FromGoString("enumerable"), value.Bool(false)))
 	o.DefineProperty(value.StringValue(value.FromGoString("b")), value.NewObject().Set(value.FromGoString("value"), value.Number(2)).Set(value.FromGoString("enumerable"), value.Bool(true)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("b"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("b"))))
 	value.ConsoleLog(o.OwnEnumerableKeys().Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))
@@ -19,7 +19,7 @@ func main() {
 		return x
 	}))
 	o.DefineProperty(value.StringValue(value.FromGoString("a")), value.NewObject().Set(value.FromGoString("value"), value.Number(3)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
 	value.ConsoleLog(o.OwnEnumerableKeys().Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))
@@ -28,7 +28,7 @@ func main() {
 			return 42
 		})())
 	})).Set(value.FromGoString("enumerable"), value.Bool(true)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("c"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("c"))))
 	value.ConsoleLog(o.OwnEnumerableKeys().Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))

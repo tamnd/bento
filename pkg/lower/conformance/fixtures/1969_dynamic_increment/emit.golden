@@ -19,9 +19,9 @@ func Pre(x value.Value) value.Value {
 	return x
 }
 func main() {
-	value.ConsoleLog(value.ToString(Bump(value.Number(5))))
-	value.ConsoleLog(value.ToString(Drop(value.Number(3))))
-	value.ConsoleLog(value.ToString(Bump(value.StringValue(value.FromGoString("5")))))
-	value.ConsoleLog(value.ToString(Bump(value.Bool(true))))
-	value.ConsoleLog(value.ToString(Pre(value.Number(0))))
+	value.ConsoleLog(value.ConsoleValue(Bump(value.Number(5))))
+	value.ConsoleLog(value.ConsoleValue(Drop(value.Number(3))))
+	value.ConsoleLog(value.ConsoleValue(Bump(value.StringValue(value.FromGoString("5")))))
+	value.ConsoleLog(value.ConsoleValue(Bump(value.Bool(true))))
+	value.ConsoleLog(value.ConsoleValue(Pre(value.Number(0))))
 }

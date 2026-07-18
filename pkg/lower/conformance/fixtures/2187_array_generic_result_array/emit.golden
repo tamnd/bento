@@ -18,24 +18,24 @@ func main() {
 			return value.ToNumber(x) * 2
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(doubled.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.ToString(doubled.GetIndex(0)))
-	value.ConsoleLog(value.ToString(doubled.GetIndex(2)))
+	value.ConsoleLog(value.ConsoleValue(doubled.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(doubled.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(doubled.GetIndex(2)))
 	odds := value.GenericFilter(o, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(x value.Value) bool {
 			return math.Mod(value.ToNumber(x), 2) == 1
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(odds.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.ToString(odds.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(odds.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(odds.GetIndex(0)))
 	mid := value.GenericSlice(o, value.Number(1))
-	value.ConsoleLog(value.ToString(mid.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.ToString(mid.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(mid.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(mid.GetIndex(0)))
 	remapped := value.GenericMap(mid, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Number((func(x value.Value) float64 {
 			return value.ToNumber(x) * 10
 		})(value.Arg(__a, 0)))
 	}))
-	value.ConsoleLog(value.ToString(remapped.GetIndex(0)))
-	value.ConsoleLog(value.ToString(remapped.GetIndex(1)))
+	value.ConsoleLog(value.ConsoleValue(remapped.GetIndex(0)))
+	value.ConsoleLog(value.ConsoleValue(remapped.GetIndex(1)))
 }

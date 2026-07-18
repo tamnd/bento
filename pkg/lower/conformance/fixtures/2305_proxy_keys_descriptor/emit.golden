@@ -32,7 +32,7 @@ func main() {
 		return x
 	}))
 	d := p.GetOwnPropertyDescriptor(value.StringValue(value.FromGoString("a")))
-	value.ConsoleLog(value.ToString(d.Get(value.FromGoString("value"))))
+	value.ConsoleLog(value.ConsoleValue(d.Get(value.FromGoString("value"))))
 	p.DefineProperty(value.StringValue(value.FromGoString("z")), value.NewObject().Set(value.FromGoString("value"), value.Number(1)))
 	value.ConsoleLog(log.Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x

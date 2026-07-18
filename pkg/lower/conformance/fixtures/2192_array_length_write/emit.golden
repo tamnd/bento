@@ -9,11 +9,11 @@ import (
 func main() {
 	a := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3)})
 	a.Set(value.FromGoString("length"), value.Number(5))
-	value.ConsoleLog(value.ToString(a.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(a.Get(value.FromGoString("length"))))
 	value.ConsoleLog(value.NumberToString(a.OwnEnumerableKeys().Len()))
-	value.ConsoleLog(value.ToString(a.GetIndex(4)))
+	value.ConsoleLog(value.ConsoleValue(a.GetIndex(4)))
 	b := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3), value.Number(4), value.Number(5)})
 	b.Set(value.FromGoString("length"), value.Number(2))
-	value.ConsoleLog(value.ToString(b.Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.ConsoleValue(b.Get(value.FromGoString("length"))))
 	value.ConsoleLog(value.NumberToString(b.OwnEnumerableKeys().Len()))
 }

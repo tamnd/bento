@@ -18,7 +18,7 @@ func main() {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				value.ConsoleLog(value.ToString(thrown.Constructor().Get(value.FromGoString("name"))))
+				value.ConsoleLog(value.ConsoleValue(thrown.Constructor().Get(value.FromGoString("name"))))
 			}
 		}()
 		value.DurationCompare(value.DurationFromFields(value.None[float64](), value.Some[float64](1), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64]()), value.DurationFromFields(value.None[float64](), value.None[float64](), value.None[float64](), value.Some[float64](1), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64](), value.None[float64]()), nil)

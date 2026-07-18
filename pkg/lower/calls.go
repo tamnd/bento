@@ -3609,7 +3609,49 @@ func (r *Renderer) consoleStringify(arg frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToConsole"), Args: []ast.Expr{lowered}}, nil
 	}
+	// console.log inspects a value whose kind is known only at run time rather than
+	// coercing it, and a boxed bigint prints with the trailing "n" String drops, so a
+	// value that lowers to a value.Value box renders through value.ConsoleValue, the
+	// console sibling of value.ToString. ConsoleValue matches ToString for every other
+	// kind, so only a bigint in a dynamic slot changes; without this a bigint that flowed
+	// into an any slot would print its digits with no "n".
+	//
+	// The precedence below mirrors stringify exactly so the reroute fires on the same
+	// arguments stringify would have wrapped in value.ToString, and only those. A caught
+	// error is a *value.Error, not a box, so it takes stringify's Error.prototype.toString
+	// path. A read that folds to a concrete Go primitive (a function's .length arity folds
+	// to a float64 constant, yet reads as dynamic) must take stringify's primitive path,
+	// so the primitive checks come before the dynamic one, the order stringify uses;
+	// wrapping that float64 in value.ConsoleValue would not compile. producesBoxedValue
+	// comes first because a call already lowered to a box (an iterator helper, a
+	// descriptor read) is a value.Value whatever concrete type the checker gave it.
+	if r.isCaughtErrorRef(arg) {
+		return r.stringify(arg)
+	}
+	if r.producesBoxedValue(arg) {
+		return r.consoleInspect(arg)
+	}
+	if r.isString(arg) || r.isNumber(arg) || r.isBool(arg) {
+		return r.stringify(arg)
+	}
+	if r.isDynamic(arg) {
+		return r.consoleInspect(arg)
+	}
 	return r.stringify(arg)
+}
+
+// consoleInspect lowers a boxed or dynamic console argument through value.ConsoleValue,
+// the console inspector: it renders a boxed bigint with the "n" suffix and every other
+// kind exactly as value.ToString. The argument lowers to a value.Value here, the
+// invariant its two callers (producesBoxedValue and the terminal isDynamic case) share
+// with stringify's own value.ToString wrapping.
+func (r *Renderer) consoleInspect(arg frontend.Node) (ast.Expr, error) {
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ConsoleValue"), Args: []ast.Expr{lowered}}, nil
 }
 
 // globalFn maps a bare global function name to the value function that implements

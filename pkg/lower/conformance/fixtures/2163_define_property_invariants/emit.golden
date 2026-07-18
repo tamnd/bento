@@ -20,5 +20,5 @@ func main() {
 		o.DefineProperty(value.StringValue(value.FromGoString("a")), value.NewObject().Set(value.FromGoString("value"), value.Number(2)))
 		value.ConsoleLog(value.FromGoString("no throw"))
 	}()
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("a"))))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("a"))))
 }

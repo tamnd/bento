@@ -7,7 +7,7 @@ import (
 )
 
 func __consolePrintHandle__(msg value.Value) {
-	value.ConsoleLog(value.ToString(msg))
+	value.ConsoleLog(value.ConsoleValue(msg))
 }
 func D_DONE(error value.Value) {
 	if value.ToBoolean(error) {

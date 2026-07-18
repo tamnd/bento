@@ -13,8 +13,8 @@ func main() {
 	o.SetElem(a, value.Number(1))
 	o.SetElem(b, value.Number(2))
 	o.SetKey(value.FromGoString("k"), value.Number(3))
-	value.ConsoleLog(value.ToString(o.GetElem(a)))
-	value.ConsoleLog(value.ToString(o.GetElem(b)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("k"))))
+	value.ConsoleLog(value.ConsoleValue(o.GetElem(a)))
+	value.ConsoleLog(value.ConsoleValue(o.GetElem(b)))
+	value.ConsoleLog(value.ConsoleValue(o.Get(value.FromGoString("k"))))
 	value.ConsoleLog(value.BoolToString(value.StrictEquals(a, b)))
 }

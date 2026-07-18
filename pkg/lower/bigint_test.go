@@ -310,6 +310,64 @@ console.log(BigInt(42));
 	}
 }
 
+// TestBigIntBoxesIntoDynamicSlot pins the crossing this slice adds: a statically
+// typed bigint flowing into an any slot boxes through value.BigIntFromBig, the bigint
+// sibling of value.Number and value.StringValue, rather than handing back. Both a
+// bigint binding and a bigint operator result take the box, since each lowers to a
+// *big.Int the boxer wraps.
+func TestBigIntBoxesIntoDynamicSlot(t *testing.T) {
+	const src = `const b: bigint = 5n;
+const d: any = b;
+const e: any = 7n + 3n;
+console.log(d);
+console.log(e);
+`
+	source := renderProgram(t, src)
+	if got := strings.Count(source, "value.BigIntFromBig("); got != 2 {
+		t.Errorf("a bigint into a dynamic slot boxed %d times, want two (binding and operator result):\n%s", got, source)
+	}
+}
+
+// TestBigIntConsoleFromDynamicSlot pins that console.log inspecting a bigint that
+// lives in a dynamic slot keeps the "n" suffix: the argument's kind is known only at
+// run time, so it lowers through value.ConsoleValue, which adds the "n" for a bigint
+// and matches value.ToString for every other kind.
+func TestBigIntConsoleFromDynamicSlot(t *testing.T) {
+	const src = `const b: bigint = 5n;
+const d: any = b;
+console.log(d);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.ConsoleValue(") {
+		t.Errorf("console.log of a dynamic bigint did not lower to value.ConsoleValue:\n%s", source)
+	}
+}
+
+// TestBigIntDynamicSlotRuns proves the box and its console inspection end to end: a
+// bigint binding and a wide literal both survive the round trip through an any slot
+// and print with the "n" console adds, and an any-returning function whose body is a
+// bigint operator prints its result the same way.
+func TestBigIntDynamicSlotRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the bigint test builds and runs generated Go")
+	}
+	const src = `const b: bigint = 5n;
+const d: any = b;
+console.log(d);
+const wide: any = 18446744073709551616n;
+console.log(wide);
+function add(): any { return 7n + 3n; }
+console.log(add());
+console.log(String(d));
+`
+	got := runProgramGo(t, src)
+	want := "5n\n18446744073709551616n\n10n\n5\n"
+	if got != want {
+		t.Fatalf("bigint into a dynamic slot printed %q, want %q", got, want)
+	}
+}
+
 // TestBigIntRuns proves the whole bigint path end to end: an arbitrary-precision
 // sum past the safe-integer range stays exact, the division truncates toward zero
 // the way BigInt / does, a comparison yields a boolean, and console.log adds the

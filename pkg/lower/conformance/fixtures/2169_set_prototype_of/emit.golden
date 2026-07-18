@@ -10,9 +10,9 @@ func main() {
 	a := value.NewObject().Set(value.FromGoString("x"), value.Number(1))
 	b := value.NewObject()
 	b.SetPrototype(a)
-	value.ConsoleLog(value.ToString(b.Get(value.FromGoString("x"))))
+	value.ConsoleLog(value.ConsoleValue(b.Get(value.FromGoString("x"))))
 	value.ConsoleLog(value.BoolToString(value.StrictEquals(b.GetPrototype(), a)))
 	b.SetPrototype(value.Null)
-	value.ConsoleLog(value.ToString(b.Get(value.FromGoString("x"))))
+	value.ConsoleLog(value.ConsoleValue(b.Get(value.FromGoString("x"))))
 	value.ConsoleLog(value.BoolToString(b.GetPrototype().IsNull()))
 }

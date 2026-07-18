@@ -13,11 +13,11 @@ func Fill(v value.Value) value.Value {
 	return v
 }
 func main() {
-	value.ConsoleLog(value.ToString(Fill(value.Undefined)))
-	value.ConsoleLog(value.ToString(Fill(value.Null)))
-	value.ConsoleLog(value.ToString(Fill(value.Number(0))))
-	value.ConsoleLog(value.ToString(Fill(value.StringValue(value.FromGoString("")))))
-	value.ConsoleLog(value.ToString(Fill(value.StringValue(value.FromGoString("set")))))
+	value.ConsoleLog(value.ConsoleValue(Fill(value.Undefined)))
+	value.ConsoleLog(value.ConsoleValue(Fill(value.Null)))
+	value.ConsoleLog(value.ConsoleValue(Fill(value.Number(0))))
+	value.ConsoleLog(value.ConsoleValue(Fill(value.StringValue(value.FromGoString("")))))
+	value.ConsoleLog(value.ConsoleValue(Fill(value.StringValue(value.FromGoString("set")))))
 	a := value.None[float64]()
 	if a.IsUndefined() {
 		a = value.Some[float64](5)

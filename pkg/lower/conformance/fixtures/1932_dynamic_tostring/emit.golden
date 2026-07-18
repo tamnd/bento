@@ -10,7 +10,7 @@ func main() {
 	n := value.Number(42)
 	b := value.Bool(false)
 	s := value.StringValue(value.FromGoString("hi"))
-	value.ConsoleLog(value.ToString(n.ToStringMethod()))
-	value.ConsoleLog(value.ToString(b.ToStringMethod()))
-	value.ConsoleLog(value.ToString(s.ToStringMethod()))
+	value.ConsoleLog(value.ConsoleValue(n.ToStringMethod()))
+	value.ConsoleLog(value.ConsoleValue(b.ToStringMethod()))
+	value.ConsoleLog(value.ConsoleValue(s.ToStringMethod()))
 }

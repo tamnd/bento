@@ -17,7 +17,7 @@ func Count(a float64, b float64, c float64) float64 {
 func Each(a float64, b float64) {
 	_bt1 := value.NewArray[value.Value](value.Number(a), value.Number(b))
 	for _, x := range _bt1.Elems() {
-		value.ConsoleLog(value.ToString(x))
+		value.ConsoleLog(value.ConsoleValue(x))
 	}
 }
 func main() {
