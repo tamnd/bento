@@ -143,6 +143,13 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2683 {
 			continue
 		}
+		// 7009 (a `new` whose target lacks a construct signature) is admitted because
+		// `new f()` over a plain-function value reaches the renderer, which recognizes
+		// only class and built-in constructor targets and hands back the rest, so mirror
+		// the front door (build.go toleratedConstructAny) here too.
+		if d.Code == 7009 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog

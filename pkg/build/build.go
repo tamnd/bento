@@ -351,6 +351,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedImplicitThis[d.Code] {
 			continue
 		}
+		if toleratedConstructAny[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -622,6 +625,30 @@ var toleratedIterable = map[int]bool{
 // turns a wrong result green.
 var toleratedImplicitThis = map[int]bool{
 	2683: true, // 'this' implicitly has type 'any' because it does not have a type annotation.
+}
+
+// toleratedConstructAny is the set of checker diagnostic codes bento admits
+// because a `new` over a target the checker cannot see a construct signature on
+// still has defined run-time behavior the engine reproduces. 7009 ("'new'
+// expression, whose target lacks a construct signature, implicitly has an 'any'
+// type") flags `new f()` where f is typed as a plain function rather than a
+// constructor, the shape a test262 harness helper that constructs through a plain
+// callable takes. The report is a strictness artifact of composing JavaScript as
+// TypeScript, not a test's own expectation: JavaScript builds a fresh object with
+// f as its constructor and runs f's body over it, so the expression has a defined
+// value the checker only warns it cannot name a type for.
+//
+// Tolerating the code never emits Go that fails to compile, because a target the
+// checker calls construct-signature-less can never reach a lowering path that emits
+// a construction. The renderer lowers a `new` only for a target it recognizes as a
+// user class (through the class symbol) or a named built-in constructor, each of
+// which carries a construct signature and so never draws 7009; a `new` over a plain
+// function falls through to the generic "new of a constructor other than a built-in
+// error is a later slice" hand-back. So a 7009 target always routes to the engine
+// rather than lowering, the engine runs the same run-time construct the language
+// does, and admitting the code never turns a wrong result green.
+var toleratedConstructAny = map[int]bool{
+	7009: true, // 'new' expression, whose target lacks a construct signature, implicitly has an 'any' type.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
