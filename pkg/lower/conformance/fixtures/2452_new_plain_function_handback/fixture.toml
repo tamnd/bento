@@ -1,0 +1,2 @@
+feature = "new-plain-function"
+handback = "new of a constructor other than a built-in error is a later slice"
