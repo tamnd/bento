@@ -404,12 +404,13 @@ func TestAsyncHandsBack(t *testing.T) {
 			"an await outside a lowered async body is a later slice",
 		},
 		{
-			// A static async generator method keeps its handback: it is neither the
-			// instance coroutine asyncGeneratorMethodDecl builds nor the settled promise
-			// the static async path returns.
-			"staticAsyncGenerator",
-			"class C { static async *g(): AsyncGenerator<number> { yield 1; } }\nconsole.log(\"x\");\n",
-			"async generator",
+			// A plain static async generator method lowers now (its receiver-less
+			// package function reuses the top-level async generator emitter), but a
+			// generic one keeps its handback on the same type-parameter guard the free
+			// emitter applies, since it needs monomorphization first.
+			"genericStaticGenerator",
+			"class C { static *g<T>(x: T): Generator<T> { yield x; } }\nconsole.log(\"x\");\n",
+			"generic generator",
 		},
 	}
 	for _, tc := range cases {

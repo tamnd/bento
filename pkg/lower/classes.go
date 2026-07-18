@@ -1291,15 +1291,6 @@ func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[st
 		}
 		kids = kids[1:]
 	}
-	if generator {
-		// A static generator (async or plain) is neither the state-machine closure
-		// generatorMethodDecl builds for an instance nor the settled promise the async
-		// path returns; it keeps its own reason.
-		if async {
-			return classMethod{}, &NotYetLowerable{Reason: "a static async generator method is a later slice"}
-		}
-		return classMethod{}, &NotYetLowerable{Reason: "a static generator method is a later slice"}
-	}
 	if len(kids) == 0 {
 		return classMethod{}, &NotYetLowerable{Reason: "a static method without a plain identifier name is a later slice"}
 	}
@@ -1330,7 +1321,7 @@ func (r *Renderer) staticMethodOf(info *classInfo, m frontend.Node, taken map[st
 		return classMethod{}, &NotYetLowerable{Reason: "the module already speaks " + name + ", the name static ." + prop + " needs"}
 	}
 	taken[name] = true
-	return classMethod{prop: prop, goName: name, node: m, async: async}, nil
+	return classMethod{prop: prop, goName: name, node: m, async: async, generator: generator}, nil
 }
 
 // getterOf reads one get accessor into a classMethod; it emits through the
@@ -1791,9 +1782,14 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 	for _, m := range info.staticMethods {
 		var fd ast.Decl
 		var err error
-		if m.async {
+		switch {
+		case m.generator && m.async:
+			fd, err = r.staticAsyncGeneratorFuncDecl(info, m)
+		case m.generator:
+			fd, err = r.staticGeneratorFuncDecl(info, m)
+		case m.async:
 			fd, err = r.asyncStaticFuncDecl(m)
-		} else {
+		default:
 			fd, err = r.staticFuncDecl(info, m)
 		}
 		if err != nil {
@@ -2904,6 +2900,45 @@ func (r *Renderer) asyncStaticFuncDecl(m classMethod) (ast.Decl, error) {
 		Type: &ast.FuncType{Params: params, Results: results},
 		Body: body,
 	}, nil
+}
+
+// staticGeneratorFuncDecl emits a static generator method (static *g()) as the
+// receiver-less package function generatorFuncDecl builds for a top-level generator,
+// named with the class-prefixed goName the static call site resolves to. It is the
+// static mirror of generatorMethodDecl: no receiver, so it lowers under the static
+// class context, where a this reads the class the way an ordinary static method's
+// does and a bare static-member reference resolves through staticClass.
+func (r *Renderer) staticGeneratorFuncDecl(owner *classInfo, m classMethod) (ast.Decl, error) {
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "static method has no call signature"}
+	}
+	if r.closureHasDestructuredParam(m.node) {
+		return nil, &NotYetLowerable{Reason: "a static generator method with a destructured parameter is a later slice"}
+	}
+	prevClass, prevThis, prevStatic := r.curClass, r.thisName, r.staticClass
+	r.curClass, r.thisName, r.staticClass = nil, "", owner
+	defer func() { r.curClass, r.thisName, r.staticClass = prevClass, prevThis, prevStatic }()
+	return r.generatorFuncDecl(m.node, sig, m.goName)
+}
+
+// staticAsyncGeneratorFuncDecl emits a static async generator method (static async
+// *g()) as the receiver-less package function asyncGeneratorFuncDecl builds for a
+// top-level async generator, named with the class-prefixed goName. It is the static
+// mirror of asyncGeneratorMethodDecl, lowering under the static class context the same
+// way staticGeneratorFuncDecl does.
+func (r *Renderer) staticAsyncGeneratorFuncDecl(owner *classInfo, m classMethod) (ast.Decl, error) {
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "static method has no call signature"}
+	}
+	if r.closureHasDestructuredParam(m.node) {
+		return nil, &NotYetLowerable{Reason: "a static async generator method with a destructured parameter is a later slice"}
+	}
+	prevClass, prevThis, prevStatic := r.curClass, r.thisName, r.staticClass
+	r.curClass, r.thisName, r.staticClass = nil, "", owner
+	defer func() { r.curClass, r.thisName, r.staticClass = prevClass, prevThis, prevStatic }()
+	return r.asyncGeneratorFuncDecl(m.node, sig, m.goName)
 }
 
 // asyncBody lowers an async method's body into the single return statement that
