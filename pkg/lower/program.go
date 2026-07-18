@@ -761,6 +761,11 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 					uses[sym]++
 				}
 			}
+			for _, arg := range elidedTemporalStringArgs(r, n) {
+				if sym, ok := prog.SymbolAt(arg); ok {
+					uses[sym]++
+				}
+			}
 		}
 		if arg, ok := elidedTypeofOperand(r, n); ok {
 			if sym, ok := prog.SymbolAt(arg); ok {
@@ -788,6 +793,66 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 	}
 	walk(entry, entry)
 	return uses
+}
+
+// elidedTemporalStringArgs reports the bare-identifier arguments a Temporal call folds to
+// a constant string and drops from the emit. A const of a literal string type passed
+// straight to a Temporal from-string or time-zone lowering (Temporal.PlainDate.from(s),
+// zdt.withTimeZone(tz), and the sibling per-type folds) is read by stringLiteralValue at
+// compile time and emitted as the quoted literal, so the source names the const but the
+// emit never lowers the identifier, leaving it declared and not used. Recording the read
+// lets bindingUnused blank the const the fold orphaned. The match is gated on the callee
+// being a Temporal static (Temporal.<Type>.<method>) or a method on a Temporal-typed
+// receiver, so a user function named from(s) is untouched; within that gate an argument a
+// particular method does not fold lowers and reads the identifier for real, where an
+// over-count only adds a harmless _ = s beside it, and a widened or non-literal argument
+// has no literal type and is skipped.
+func elidedTemporalStringArgs(r *Renderer, n frontend.Node) []frontend.Node {
+	kids := r.prog.Children(n)
+	if len(kids) < 2 {
+		return nil
+	}
+	callee := kids[0]
+	if callee.Kind() != frontend.NodePropertyAccessExpression {
+		return nil
+	}
+	parts := r.prog.Children(callee)
+	if len(parts) < 1 {
+		return nil
+	}
+	recv := parts[0]
+	temporal := false
+	if recv.Kind() == frontend.NodePropertyAccessExpression {
+		// A static call Temporal.<Type>.<method>(...) whose receiver is the two-level
+		// access Temporal.<Type>.
+		if sub := r.prog.Children(recv); len(sub) == 2 && r.isGlobalRef(sub[0], "Temporal") {
+			temporal = true
+		}
+	}
+	if !temporal && r.isTemporalReceiver(recv) {
+		temporal = true
+	}
+	if !temporal {
+		return nil
+	}
+	var out []frontend.Node
+	for _, arg := range kids[1:] {
+		if arg.Kind() != frontend.NodeIdentifier {
+			continue
+		}
+		if _, ok := r.stringLiteralValue(arg); ok {
+			out = append(out, arg)
+		}
+	}
+	return out
+}
+
+// isTemporalReceiver reports whether a node is a value of one of the Temporal wrapper
+// types, the receivers whose methods route to the per-type Temporal method lowerings.
+func (r *Renderer) isTemporalReceiver(n frontend.Node) bool {
+	return r.isPlainDate(n) || r.isPlainTime(n) || r.isPlainDateTime(n) ||
+		r.isDuration(n) || r.isPlainYearMonth(n) || r.isPlainMonthDay(n) ||
+		r.isInstant(n) || r.isZonedDateTime(n)
 }
 
 // elidedComputedKey reports the identifier a static const string key folds away, in the
