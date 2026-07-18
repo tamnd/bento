@@ -127,7 +127,7 @@ func ordinarySet(target Value, o *Object, name BStr, val Value) bool {
 			if d.set.kind != KindFunc {
 				return false
 			}
-			d.set.Call(target, val)
+			d.set.Call(val)
 			return true
 		}
 	}
@@ -137,7 +137,7 @@ func ordinarySet(target Value, o *Object, name BStr, val Value) bool {
 				if d.set.kind != KindFunc {
 					return false
 				}
-				d.set.Call(target, val)
+				d.set.Call(val)
 				return true
 			}
 			if !d.writable {
@@ -341,7 +341,7 @@ func ordinarySetSym(target Value, o *Object, key *Symbol, val Value) bool {
 			if d.set.kind != KindFunc {
 				return false
 			}
-			d.set.Call(target, val)
+			d.set.Call(val)
 			return true
 		}
 	}
@@ -351,7 +351,7 @@ func ordinarySetSym(target Value, o *Object, key *Symbol, val Value) bool {
 				if d.set.kind != KindFunc {
 					return false
 				}
-				d.set.Call(target, val)
+				d.set.Call(val)
 				return true
 			}
 			if !d.writable {

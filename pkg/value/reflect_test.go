@@ -54,12 +54,13 @@ func TestReflectSetRefusals(t *testing.T) {
 }
 
 // TestReflectSetInheritedAccessor pins that Reflect.set runs an inherited setter
-// with the target as its receiver, the ordinary [[Set]] behavior a plain own-only
-// write would miss, and reports success.
+// with the written value as its argument, the ordinary [[Set]] behavior a plain
+// own-only write would miss, and reports success. The setter is a boxed function
+// value, which carries no this slot, so the value it receives is argument zero.
 func TestReflectSetInheritedAccessor(t *testing.T) {
 	var captured Value
 	setter := NewFunc(func(args []Value) Value {
-		captured = Arg(args, 1)
+		captured = Arg(args, 0)
 		return Undefined
 	})
 	proto := NewObject()
