@@ -1,0 +1,6 @@
+== stdout:
+6
+sync
+6
+== exit:
+0

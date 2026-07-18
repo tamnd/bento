@@ -431,3 +431,30 @@ h();
 		t.Fatalf("handback reason = %q, want %q", reason, want)
 	}
 }
+
+// TestStaticGeneratorMethodForOf pins that a static generator method lowers to the
+// receiver-less package function the top-level generator emitter builds, named with
+// the class-prefixed goName, so C.g() drives it through for...of like any generator.
+func TestStaticGeneratorMethodForOf(t *testing.T) {
+	const src = `class C { static *g(n: number): Generator<number> { for (let i = 0; i < n; i++) { yield i; } } }
+let out = "";
+for (const x of C.g(3)) { out += String(x) + " "; }
+console.log(out);
+`
+	if got, want := runProgramGo(t, src), "0 1 2 \n"; got != want {
+		t.Fatalf("static generator method for...of printed %q, want %q", got, want)
+	}
+}
+
+// TestStaticGeneratorMethodShape pins the emitted static generator is a receiver-less
+// func named ClassMethod returning the coroutine *value.Gen the top-level emitter
+// returns, not a method on the class receiver.
+func TestStaticGeneratorMethodShape(t *testing.T) {
+	const src = `class C { static *g(): Generator<number> { yield 1; } }
+console.log("x");
+`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "func CG() *value.Gen[float64]") {
+		t.Fatalf("static generator method did not lower to a receiver-less CG returning *value.Gen, got:\n%s", got)
+	}
+}
