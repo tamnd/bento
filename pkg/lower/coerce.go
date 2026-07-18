@@ -1019,7 +1019,37 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 		default:
 			return nil, &NotYetLowerable{Reason: "boxing an object literal member with an unexpected shape is a later slice"}
 		}
-		if keyNode.Kind() != frontend.NodeIdentifier {
+		// A numeric-literal key { 42: v } names the property ToString(42) gives; boxing
+		// the literal to a value.Number and writing through SetKeyed lets the runtime
+		// resolve that canonical name the same way `o[42] = v` does, so a later o[42] or
+		// o["42"] read lands the same slot. A numeric name is never __proto__, so it
+		// takes no prototype directive.
+		if keyNode.Kind() == frontend.NodeNumericLiteral {
+			boxedKey, err := r.boxOperand(keyNode)
+			if err != nil {
+				return nil, err
+			}
+			boxedVal, err := r.boxOperand(valNode)
+			if err != nil {
+				return nil, err
+			}
+			obj = &ast.CallExpr{Fun: &ast.SelectorExpr{X: obj, Sel: ident("SetKeyed")}, Args: []ast.Expr{boxedKey, boxedVal}}
+			continue
+		}
+		// A string-literal key { "a": v } names the property its decoded content spells,
+		// the same name stringLiteralKey reads for an o["a"] index; a key that decodes to
+		// a lone surrogate, which stringLiteralKey declines, hands back.
+		var keyName string
+		switch keyNode.Kind() {
+		case frontend.NodeIdentifier:
+			keyName = r.prog.Text(keyNode)
+		case frontend.NodeStringLiteral:
+			name, ok := r.stringLiteralKey(keyNode)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "boxing an object literal with a non-identifier key is a later slice"}
+			}
+			keyName = name
+		default:
 			return nil, &NotYetLowerable{Reason: "boxing an object literal with a non-identifier key is a later slice"}
 		}
 		boxedVal, err := r.boxOperand(valNode)
@@ -1028,9 +1058,10 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 		}
 		// The __proto__: v member is a directive on the object's prototype, not an own
 		// property of that name, so it writes the slot rather than a slot Set would land.
-		// Only the colon form is the prototype directive; the { __proto__ } shorthand is
-		// an ordinary own property.
-		if colon && r.prog.Text(keyNode) == "__proto__" {
+		// Both the bare identifier and the quoted "__proto__" colon forms are the
+		// directive; the { __proto__ } shorthand and a computed ["__proto__"] are ordinary
+		// own properties.
+		if colon && keyName == "__proto__" {
 			obj = &ast.CallExpr{Fun: &ast.SelectorExpr{X: obj, Sel: ident("SetProtoAssign")}, Args: []ast.Expr{boxedVal}}
 			continue
 		}
@@ -1038,7 +1069,7 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 			Fun: &ast.SelectorExpr{X: obj, Sel: ident("Set")},
 			Args: []ast.Expr{
 				&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{
-					&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(keyNode))},
+					&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(keyName)},
 				}},
 				boxedVal,
 			},
