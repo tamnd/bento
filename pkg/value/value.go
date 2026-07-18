@@ -560,6 +560,34 @@ func MapCallString(arrayLike Value) *Array[Value] {
 	return NewArray(out...)
 }
 
+// IndexRest gathers the receiver's elements from index from to the end into a fresh
+// boxed array, the tail an array destructuring rest binds: `const [a, ...rest] = xs`
+// fills rest with everything past the fixed slots. It reads the length through the
+// dynamic length property coerced the way ToLength does, a NaN or negative length
+// yielding a zero count, and reads each position through the dynamic index, so a boxed
+// array yields its dense tail and an array-like yields its indexed tail. A from at or
+// past the end yields an empty array, matching JavaScript's rest of a short source.
+// The result is boxed because the source is dynamic and the rest target is typed any[].
+func (v Value) IndexRest(from float64) Value {
+	lenF := ToNumber(v.Get(FromGoString("length")))
+	n := 0
+	if lenF > 0 {
+		n = int(lenF)
+	}
+	start := 0
+	if from > 0 {
+		start = int(from)
+	}
+	if start > n {
+		start = n
+	}
+	out := make([]Value, 0, n-start)
+	for i := start; i < n; i++ {
+		out = append(out, v.GetIndex(float64(i)))
+	}
+	return NewArrayValue(out)
+}
+
 // ToStringMethod implements a dynamic x.toString() call, the method each
 // prototype installs rather than the abstract ToString the operators use. A
 // number spells its digits, a boolean spells true or false, a string is itself,

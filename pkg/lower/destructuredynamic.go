@@ -148,12 +148,12 @@ func (r *Renderer) dynBoundLocalsOf(paramNodes []frontend.Node, sig frontend.Sig
 	return out
 }
 
-// collectDynRestNames records the object rest binding names a dynamic pattern gathers,
+// collectDynRestNames records the rest binding names a dynamic pattern gathers,
 // recursing into a nested pattern so a rest one level down is seen too. Only a rest is
 // recorded: a shorthand or renamed leaf is typed any already, so isDynamic routes its
 // read the boxed way without help, and marking it would risk shadowing a same-named
-// static local later in the body. An array rest hands back at bind time and binds no
-// name, so only nested array positions are followed for a deeper object rest.
+// static local later in the body. An array rest is bound as a boxed value.Value tail, so
+// its name is recorded too, and nested array positions are followed for a deeper rest.
 // collectAssignedNames records every non-blank identifier a dynamic pattern's binding
 // statements assign, so each bound name is marked dynamic before the body that reads it
 // lowers. The names come straight off the emitted binds, which is exact where the pattern
@@ -193,9 +193,14 @@ func (r *Renderer) collectDynRestNames(pat frontend.Node, out map[string]bool) {
 	}
 	if strings.HasPrefix(txt, "[") {
 		elems := r.prog.Children(pat)
-		fixed, _, _, err := r.splitArrayRest(elems)
+		fixed, restNode, hasRest, err := r.splitArrayRest(elems)
 		if err != nil {
 			return
+		}
+		if hasRest {
+			if name, ok := localName(r.prog.Text(restNode)); ok {
+				out[name] = true
+			}
 		}
 		for _, el := range fixed {
 			info, err := r.classifyArrayElem(el)
@@ -245,24 +250,18 @@ func (r *Renderer) blankDynBinding(out []ast.Stmt, bindNode frontend.Node, name 
 // read a dynamic element access lowers to, so an untyped array pattern reads its slots
 // the way a typed one reads them through AtI. A defaulted element fills from its default
 // when the position is undefined, and a nested element binds its inner pattern against
-// the held position. A trailing rest binds a target the checker types any[], whose body
-// reads through the typed array's own methods a boxed value does not carry, so it hands
-// back. A hole is a later slice on this path and hands back.
+// the held position. A trailing rest gathers the source's tail past the fixed slots into
+// a boxed value.Value array through IndexRest, and the rest name is marked dynamic so its
+// body reads dispatch the boxed way rather than through a typed array's own methods. A
+// hole is a later slice on this path and hands back.
 func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.Token) ([]ast.Stmt, error) {
 	elems := r.prog.Children(pat)
 	if len(elems) == 0 {
 		return nil, &NotYetLowerable{Reason: "an empty array destructuring pattern binds nothing"}
 	}
-	fixed, _, hasRest, err := r.splitArrayRest(elems)
+	fixed, restNode, hasRest, err := r.splitArrayRest(elems)
 	if err != nil {
 		return nil, err
-	}
-	// An array rest binds a target the checker types any[], so the body reads it through
-	// the typed array's own methods, which a boxed value.Value does not carry; bridging the
-	// boxed tail into that typed array is a later slice, so it hands back rather than emit a
-	// read the body cannot make.
-	if hasRest {
-		return nil, &NotYetLowerable{Reason: "an array rest on an untyped pattern binds a typed array target the dynamic tail cannot serve, a later slice"}
 	}
 	r.requireImport(valuePkg)
 	var out []ast.Stmt
@@ -297,6 +296,18 @@ func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.
 		}
 		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
 		out = r.blankDynBinding(out, info.nameNode, name, tok)
+	}
+	// A trailing rest gathers the source's tail past the fixed slots into a boxed
+	// value.Value array through IndexRest. The rest name is marked dynamic in
+	// collectDynRestNames before the body lowers, so a body read of it dispatches the
+	// boxed way rather than through a typed array's own methods a value.Value lacks.
+	if hasRest {
+		name, ok := localName(r.prog.Text(restNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "an untyped destructuring rest target is not a Go identifier"}
+		}
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{dynIndexRest(recv, len(fixed))}})
+		out = r.blankDynBinding(out, restNode, name, tok)
 	}
 	return out, nil
 }
@@ -472,6 +483,14 @@ func dynGetElem(recv, key ast.Expr) ast.Expr {
 // untyped integer constant converts to it, so the position is emitted as an int literal.
 func dynIndex(recv ast.Expr, i int) ast.Expr {
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}}}
+}
+
+// dynIndexRest gathers a dynamic receiver's tail from a start index, recv.IndexRest(from),
+// the boxed array an untyped array pattern's trailing rest binds. IndexRest takes a
+// float64, and an untyped integer constant converts to it, so the start is emitted as an
+// int literal the way dynIndex emits a position.
+func dynIndexRest(recv ast.Expr, from int) ast.Expr {
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("IndexRest")}, Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(from)}}}
 }
 
 // dynObjectRest gathers a dynamic receiver's remaining own properties, recv.ObjectRest(keys...),
