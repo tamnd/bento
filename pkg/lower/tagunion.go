@@ -361,6 +361,21 @@ func (r *Renderer) internObjectUnion(t frontend.Type, sig string) (*unionInfo, e
 	if len(members) < 2 {
 		return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union with a non-primitive member needs the object-arm tagged sum, a later slice"}
 	}
+	// A single plain-record object member beside a null sentinel is the nullable-object
+	// shape, the first slice of the mixed object and non-object union: the object lowers
+	// to a pointer field, identity-preserving the way an ordinary object binding is, and
+	// each sentinel is a tag-only arm, so no discriminant is needed to tell the one object
+	// arm from the sentinels. Null forces the tagged sum the way it does for a primitive
+	// value arm (nullSentinelUnion), while a bare object | undefined stays with the
+	// optional pre-pass and its value.Opt. The object arm must be a plain record: a
+	// built-in with its own runtime representation (an array or RegExpExecArray, a Map or
+	// Set, a class instance) carries behavior a plain struct copy would drop, so it stays
+	// the dynamic value.Value the union falls back to below rather than a miscompiled
+	// tagged sum. A primitive (non-sentinel) member still hands back below, and two or
+	// more object members beside a sentinel wait on the discriminated form.
+	if obj, sentinels, ok := nullableObjectMembers(members); ok && r.isPlainRecordType(obj) {
+		return r.internNullableObject(t, sig, obj, sentinels)
+	}
 	for _, m := range members {
 		if m.Flags&frontend.TypeObject == 0 || m.Flags&frontend.TypeUnion != 0 {
 			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union mixing object and non-object members is a later slice"}
@@ -401,6 +416,153 @@ func (r *Renderer) internObjectUnion(t frontend.Type, sig string) (*unionInfo, e
 	r.unions = append(r.unions, info)
 	r.unionBySig[sig] = info
 	return info, nil
+}
+
+// nullableObjectMembers reports whether a union's members are exactly one object type
+// beside one or more null or undefined sentinels, with at least a null among them, the
+// nullable-object shape internNullableObject lowers. It returns the object member and
+// the sentinel members. A union with no object member, more than one object member, a
+// non-sentinel non-object member, or only an undefined sentinel (which the optional
+// pre-pass owns as a value.Opt) is not this shape and returns false, leaving it to the
+// discriminated-object path or the handback. Requiring null mirrors the primitive
+// nullSentinelUnion rule: null has no value.Opt wrapper of its own, so its presence is
+// what forces the tagged-sum representation here.
+func nullableObjectMembers(members []frontend.Type) (frontend.Type, []frontend.Type, bool) {
+	var obj frontend.Type
+	objects := 0
+	var sentinels []frontend.Type
+	hasNull := false
+	for _, m := range members {
+		switch {
+		case m.Flags == frontend.TypeNull:
+			sentinels = append(sentinels, m)
+			hasNull = true
+		case m.Flags == frontend.TypeUndefined:
+			sentinels = append(sentinels, m)
+		case m.Flags&frontend.TypeObject != 0 && m.Flags&frontend.TypeUnion == 0:
+			obj = m
+			objects++
+		default:
+			return frontend.Type{}, nil, false
+		}
+	}
+	if objects != 1 || !hasNull {
+		return frontend.Type{}, nil, false
+	}
+	return obj, sentinels, true
+}
+
+// isPlainRecordType reports whether an object type is a plain data record, the shape
+// renderObject faithfully interns to a named Go struct held by pointer, as opposed to a
+// built-in object with its own runtime representation. It is a frontend-only check, so
+// it never renders the type and so never registers the broken struct that interning a
+// non-plain shape (RegExpExecArray, whose Array-inherited members do not form a fixed
+// field set) would leave in the decl set. A class instance carries methods and identity
+// a struct copy would drop; an array-like type (Array and the lib interfaces that extend
+// it) has an element sequence, not fixed fields; a callable object has a call or
+// construct signature; and a Map, Set, RegExp, typed array, Date, or Temporal type is a
+// method bundle whose behavior lives in its methods, so a property that is itself
+// callable (a method) or a property named by a non-identifier disqualifies the shape.
+// What remains is a record of plain data fields, the only object arm the nullable-object
+// tagged sum lowers in this slice; every other shape stays the dynamic value.Value the
+// union already falls back to.
+func (r *Renderer) isPlainRecordType(t frontend.Type) bool {
+	if _, ok := r.classOfType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	if call, ctor := r.prog.Signatures(t); len(call) > 0 || len(ctor) > 0 {
+		return false
+	}
+	for _, p := range r.prog.Properties(t) {
+		if _, ok := exportedField(p.Name); !ok {
+			return false
+		}
+		if call, _ := r.prog.Signatures(p.Type); len(call) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// sentinelArm returns the tag-only primitive arm a null or undefined sentinel member
+// maps to, reusing the primArms descriptor so the arm's typeof string, singleton, and
+// tag-only flag stay the ones the primitive-union path already uses. A flag that is not
+// exactly a sentinel returns false.
+func sentinelArm(f frontend.TypeFlags) (primArm, bool) {
+	for _, a := range primArms {
+		if a.tagOnly && a.flag == f {
+			return a, true
+		}
+	}
+	return primArm{}, false
+}
+
+// internNullableObject interns a union of one object arm and one or more null or
+// undefined sentinels as a tagged sum: the object arm is a pointer field, so a value of
+// the union carries the same reference an ordinary object binding does and object
+// identity survives the box, and each sentinel is a tag-only arm distinguished by the
+// tag alone. The object arm carries typeof "object", the string JavaScript reports for
+// both an object and null, so a bare typeof over the union answers correctly and the
+// typeof-narrowing guard sees the object and a null sentinel share it. No discriminant
+// is needed, since one object arm is selected by not being a sentinel.
+func (r *Renderer) internNullableObject(t frontend.Type, sig string, obj frontend.Type, sentinels []frontend.Type) (*unionInfo, error) {
+	gt, err := r.renderObject(obj)
+	if err != nil {
+		return nil, err
+	}
+	// renderObject returns *Struct; name the object arm after the struct so the tag and
+	// constructor read as PointOrNullPoint / PointOrNullOfPoint, the discriminated
+	// union's own suffix-from-shape convention, and fall back to a generic Obj if the
+	// pointer shape is ever not a plain named struct.
+	structName := "Obj"
+	if star, ok := gt.(*ast.StarExpr); ok {
+		if id, ok := star.X.(*ast.Ident); ok {
+			structName = id.Name
+		}
+	}
+	props := map[string]bool{}
+	for _, p := range r.prog.Properties(obj) {
+		props[p.Name] = true
+	}
+	arms := []unionArm{{
+		primArm:   primArm{field: unexportedName(structName), suffix: structName, typeof: "object", rank: -1},
+		goType:    gt,
+		isObject:  true,
+		memberSig: structuralKey(r.prog, obj, map[int]int{}),
+		props:     props,
+	}}
+	for _, s := range sentinels {
+		a, ok := sentinelArm(s.Flags)
+		if !ok {
+			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union mixing object and non-object members is a later slice"}
+		}
+		arms = append(arms, unionArm{primArm: a})
+	}
+	sortUnionArmsByRank(arms)
+	suffixes := make([]string, len(arms))
+	for i, a := range arms {
+		suffixes[i] = a.suffix
+	}
+	goName := r.decls.reserveName(strings.Join(suffixes, "Or"))
+	info := &unionInfo{goName: goName, tagType: goName + "Tag", arms: arms}
+	r.unions = append(r.unions, info)
+	r.unionBySig[sig] = info
+	return info, nil
+}
+
+// sortUnionArmsByRank orders interned arms by their fixed rank so the tag assignment
+// and the generated name are independent of the order the checker lists the union
+// members, the same order-independence sortArmsByRank keeps for the primitive arms. The
+// object arm carries rank -1 so it sorts ahead of the sentinels.
+func sortUnionArmsByRank(arms []unionArm) {
+	for i := 1; i < len(arms); i++ {
+		for j := i; j > 0 && arms[j-1].rank > arms[j].rank; j-- {
+			arms[j-1], arms[j] = arms[j], arms[j-1]
+		}
+	}
 }
 
 // discriminant finds the property shared by every member of an object union whose
@@ -635,14 +797,18 @@ func (r *Renderer) typeofUnionCompare(opText string, left, right frontend.Node) 
 		return nil, false, nil
 	}
 	var arm unionArm
-	found := false
+	matches := 0
 	for _, a := range info.arms {
 		if a.typeof == lit {
-			arm, found = a, true
-			break
+			arm = a
+			matches++
 		}
 	}
-	if !found {
+	// A typeof string that names no arm does not narrow. One that names more than one
+	// arm does not either: an object arm and a null sentinel both report "object", so
+	// typeof x === "object" cannot tell them apart and must not fold to a single tag
+	// test. Both leave the compare to the caller, which hands the typeof back.
+	if matches != 1 {
 		return nil, false, nil
 	}
 	cmp := &ast.BinaryExpr{

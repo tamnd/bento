@@ -1,0 +1,11 @@
+== stdout:
+a=1
+1
+none
+cleared
+a=2
+undef
+null
+
+== exit:
+0
