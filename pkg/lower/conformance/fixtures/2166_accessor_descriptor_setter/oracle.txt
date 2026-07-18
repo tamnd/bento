@@ -1,0 +1,6 @@
+== stdout:
+10
+42
+function function
+== exit:
+0

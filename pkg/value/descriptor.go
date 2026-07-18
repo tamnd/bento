@@ -71,14 +71,18 @@ func (d descriptor) isData() bool { return !d.accessor }
 // read returns the value a property read yields for this descriptor, given the
 // receiver the read went through. A data property reads its stored value. An
 // accessor property runs its getter, or reports undefined when it has none, the
-// value a get with no getter gives; the receiver is passed to the getter so a
-// getter that leans on its this argument still sees the object it was read from.
+// value a get with no getter gives. The getter is called with no arguments, the
+// empty list a JavaScript get performs: a boxed function value carries no this
+// slot in its argument vector, so prepending the receiver would land in the
+// getter's first real parameter rather than bind this. A getter that leans on its
+// this is declined when the object literal or function is boxed, so it never
+// reaches here; the receiver is kept in the signature for a future this-aware ABI.
 func (d descriptor) read(receiver Value) Value {
 	if !d.accessor {
 		return d.value
 	}
 	if d.get.kind == KindFunc {
-		return d.get.Call(receiver)
+		return d.get.Call()
 	}
 	return Undefined
 }
@@ -105,18 +109,23 @@ func (d descriptor) toObject() Value {
 
 // write returns the descriptor a plain property write leaves behind, given the
 // receiver the write went through and the assigned value. A data property keeps
-// its flags and takes the new value. An accessor property runs its setter with
-// the receiver and the value and is otherwise unchanged, since an accessor has no
-// stored value to replace; an accessor with no setter drops the write. The
-// writable and extensibility invariants a strict write enforces are layered on at
-// the define path, so this is the ordinary o.k = v store.
+// its flags and takes the new value. An accessor property runs its setter with the
+// value as the sole argument and is otherwise unchanged, since an accessor has no
+// stored value to replace; an accessor with no setter drops the write. The value
+// is the only argument because a boxed function value carries no this slot in its
+// argument vector, so the setter reads its declared parameter from argument zero;
+// prepending the receiver would bind that parameter to the object instead of the
+// assigned value. A setter that leans on its this is declined when it is boxed, so
+// it never reaches here; the receiver is kept in the signature for a future
+// this-aware ABI. The writable and extensibility invariants a strict write
+// enforces are layered on at the define path, so this is the ordinary o.k = v store.
 func (d descriptor) write(receiver, val Value) descriptor {
 	if !d.accessor {
 		d.value = val
 		return d
 	}
 	if d.set.kind == KindFunc {
-		d.set.Call(receiver, val)
+		d.set.Call(val)
 	}
 	return d
 }
