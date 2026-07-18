@@ -1,0 +1,2 @@
+feature = "closures"
+handback = "nested past the closure depth the Go toolchain can build without exhausting memory"
