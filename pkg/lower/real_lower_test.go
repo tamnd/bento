@@ -137,6 +137,12 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2769 {
 			continue
 		}
+		// 2683 (free `this` with no annotation) is admitted because a free `this`
+		// reaches the renderer's this path where thisName is empty and hands back, so
+		// mirror the front door (build.go toleratedImplicitThis) here too.
+		if d.Code == 2683 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog

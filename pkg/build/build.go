@@ -348,6 +348,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedIterable[d.Code] {
 			continue
 		}
+		if toleratedImplicitThis[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -595,6 +598,30 @@ var toleratedOverload = map[int]bool{
 // measures them, so admitting 2488 alone stays attributable to this wave.
 var toleratedIterable = map[int]bool{
 	2488: true, // Type 'X' must have a '[Symbol.iterator]()' method that returns an iterator.
+}
+
+// toleratedImplicitThis is the set of checker diagnostic codes bento admits
+// because a `this` read outside any typed receiver still has defined run-time
+// behavior the lowerer refuses cleanly rather than mislowers. 2683 ("'this'
+// implicitly has type 'any' because it does not have a type annotation") flags a
+// `this` used inside a plain function that carries no `this` parameter, the shape
+// a test262 harness helper written as a free function takes. The read is a
+// strictness artifact of composing JavaScript as TypeScript, not a test's own
+// expectation: at run time the function's `this` binds to the call-site receiver
+// or undefined, and the checker only warns that it cannot name that type.
+//
+// Tolerating the code never emits Go that fails to compile, because a `this` the
+// checker calls implicitly-any can never reach a lowering path that emits a
+// receiver. The renderer lowers `this` only inside a class body it is currently
+// lowering, where thisName names the receiver; a `this` anywhere else, at the top
+// level or inside a plain function nested in a method, finds thisName empty and
+// hands back to a later slice (expr.go), and a plain function declaration nested
+// in a body is itself a handback before its `this` is ever reached. So a 2683
+// value always routes to the engine rather than lowering, the engine binds `this`
+// with the same run-time rule the language does, and admitting the code never
+// turns a wrong result green.
+var toleratedImplicitThis = map[int]bool{
+	2683: true, // 'this' implicitly has type 'any' because it does not have a type annotation.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
