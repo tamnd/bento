@@ -705,12 +705,18 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		default:
 			return nil, &NotYetLowerable{Reason: "object literal member with an unexpected shape is a later slice"}
 		}
-		if keyNode.Kind() != frontend.NodeIdentifier {
-			// A computed [k] key or a string/numeric key does not become a struct
-			// field; it belongs in the object side table, a later slice.
+		// A member name is a plain identifier, a string literal ("a": 1), or a
+		// computed name that folds to a constant string (["a"]: 1); memberName
+		// resolves all three to the property they spell, the same resolver the class
+		// body uses, so a { "a": 1 } fills the same struct field a { a: 1 } does. A
+		// runtime computed key never reaches here, objectLiteralNotFixed having boxed
+		// the literal upstream, and a numeric or non-identifier name resolves to a
+		// property no Go field could carry, so it hands back below.
+		prop, ok := r.memberName(keyNode)
+		if !ok {
 			return nil, &NotYetLowerable{Reason: "object literal with a non-identifier key is a later slice"}
 		}
-		field, ok := exportedField(r.prog.Text(keyNode))
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
 		}
@@ -779,10 +785,13 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 		default:
 			return nil, &NotYetLowerable{Reason: "object literal member with an unexpected shape is a later slice"}
 		}
-		if keyNode.Kind() != frontend.NodeIdentifier {
+		// A plain identifier, a string-literal, or a constant-computed key all
+		// resolve to the property name they spell through memberName, so a contextual
+		// { "a": 1 } fills the same optional-shaped field a { a: 1 } does.
+		srcName, ok := r.memberName(keyNode)
+		if !ok {
 			return nil, &NotYetLowerable{Reason: "object literal with a non-identifier key is a later slice"}
 		}
-		srcName := r.prog.Text(keyNode)
 		field, ok := exportedField(srcName)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
