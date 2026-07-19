@@ -2554,6 +2554,12 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	// before the method body lowers ahead of the entry bindings.
 	defer r.pushDynBound(r.funcParamNodes(m.node), sig)()
 
+	// A function declaration nested in the method body lowers to a Go local closure,
+	// the same way it does in a top-level function; the method's parameters are the
+	// enclosing set its Go name is vetted against, and a nested function that reads the
+	// method's this hands back through the this guard.
+	defer r.pushScopeParams(sig)()
+
 	body, err := r.blockOf(m.node)
 	if err != nil {
 		return nil, err
@@ -2771,6 +2777,10 @@ func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, er
 	// checker did not type any, so its reads route the dynamic way off this set, built
 	// before the static method body lowers ahead of the entry bindings.
 	defer r.pushDynBound(r.funcParamNodes(m.node), sig)()
+
+	// A function declaration nested in the static method body lowers to a Go local
+	// closure, vetted against the method's parameters.
+	defer r.pushScopeParams(sig)()
 
 	body, err := r.blockOf(m.node)
 	if err != nil {
