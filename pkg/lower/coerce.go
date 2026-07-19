@@ -1084,6 +1084,158 @@ func (r *Renderer) dynArrayLiteralContextual(node frontend.Node, target frontend
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "Value")), Args: elems}, true, nil
 }
 
+// coerceFuncValue bridges a function value into a function-typed slot whose Go
+// signature differs only in the return position, the way JavaScript's function
+// bivariance lets a `() => void` fill a `() => any` slot and a `() => T` fill a
+// `() => void` one. Go's func types are invariant, so `func()` is not assignable to
+// `func() value.Value` even though every JavaScript call agrees: a void function
+// called in a value context yields undefined, and a value-returning function called
+// in a void context has its result discarded. The two lower to different Go func
+// types, so passing one straight emits Go the toolchain rejects. The fix wraps the
+// source in an adapter closure at the slot's signature: it binds the target's
+// parameters, calls the source with them, and either discards the result (a void
+// target) or returns value.Undefined after the call (a void source into a dynamic
+// target), the exact value the JavaScript call would produce.
+//
+// It is deliberately narrow. The parameters must lower to identical Go types, so the
+// adapter passes them straight; a parameter that itself needs coercion is a later
+// slice. The only difference it bridges is one side returning void where the other
+// does not, and a void source is bridged only into a dynamic return, the only slot
+// undefined fits. Anything else (matching signatures, two differing concrete returns,
+// a generic, rest, or static-optional signature, an overload set, or a callable
+// object) declines so the ordinary path handles or hands it back. The source must be
+// a bare function literal or a name so embedding it in the adapter body cannot re-run
+// a side-effecting expression per call.
+func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if srcNode == nil {
+		return nil, false, nil
+	}
+	// Read the source's Go parameter types and whether it returns void from the
+	// lowered form. A function literal reports its own emitted signature, which already
+	// carries any parameters the contextual slot padded onto it, so the adapter measures
+	// what was actually written rather than the source's own arity. A name reads its
+	// signature through the type instead.
+	srcParams, srcVoid, ok := r.loweredFuncShape(expr, srcNode)
+	if !ok {
+		return nil, false, nil
+	}
+	tsig, ok := r.plainFuncSignature(target)
+	if !ok {
+		return nil, false, nil
+	}
+	tft, err := r.funcTypeOf(tsig)
+	if err != nil {
+		return nil, false, nil
+	}
+	if len(srcParams) != len(tft.Params.List) {
+		return nil, false, nil
+	}
+	for i := range srcParams {
+		same, err := sameGoType(tft.Params.List[i].Type, srcParams[i])
+		if err != nil || !same {
+			return nil, false, nil
+		}
+	}
+	tgtVoid := tft.Results == nil
+	// Both sides return, or neither does: the only mismatch left is a differing
+	// concrete return, a later slice. When they match, no adapter is needed and the
+	// ordinary path passes the value straight.
+	if tgtVoid == srcVoid {
+		return nil, false, nil
+	}
+	// Bind the target's parameters and forward them to the source; their Go types
+	// match, so they pass straight.
+	var fields []*ast.Field
+	var args []ast.Expr
+	for i := range srcParams {
+		nm := r.freshTemp()
+		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(nm)}, Type: tft.Params.List[i].Type})
+		args = append(args, ident(nm))
+	}
+	call := &ast.CallExpr{Fun: expr, Args: args}
+	adapter := &ast.FuncLit{Type: &ast.FuncType{Params: &ast.FieldList{List: fields}}}
+	if tgtVoid {
+		// A value-returning source into a void slot: call and discard the result.
+		adapter.Body = &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}}
+		return adapter, true, nil
+	}
+	// A void source into a value slot: the JavaScript call yields undefined, which
+	// only a dynamic return can hold, so bridge only there and return value.Undefined
+	// after driving the call for its effects.
+	if tsig.Return.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return nil, false, nil
+	}
+	r.requireImport(valuePkg)
+	adapter.Type.Results = tft.Results
+	adapter.Body = &ast.BlockStmt{List: []ast.Stmt{
+		&ast.ExprStmt{X: call},
+		&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
+	}}
+	return adapter, true, nil
+}
+
+// loweredFuncShape reports a function source's emitted Go parameter types and whether
+// it returns void, the two facts coerceFuncValue's adapter needs. A function literal is
+// read from its own emitted signature, so a parameter the contextual slot padded onto it
+// counts and the adapter measures the arity Go actually sees; a name is read from its
+// type's single call signature instead. It declines for any other source shape, or a
+// name whose type is not a bare function value.
+func (r *Renderer) loweredFuncShape(expr ast.Expr, srcNode frontend.Node) ([]ast.Expr, bool, bool) {
+	switch e := expr.(type) {
+	case *ast.FuncLit:
+		var params []ast.Expr
+		if e.Type.Params != nil {
+			for _, f := range e.Type.Params.List {
+				n := len(f.Names)
+				if n == 0 {
+					n = 1
+				}
+				for i := 0; i < n; i++ {
+					params = append(params, f.Type)
+				}
+			}
+		}
+		return params, e.Type.Results == nil, true
+	case *ast.Ident:
+		sig, ok := r.plainFuncSignature(r.prog.TypeAt(srcNode))
+		if !ok {
+			return nil, false, false
+		}
+		ft, err := r.funcTypeOf(sig)
+		if err != nil {
+			return nil, false, false
+		}
+		var params []ast.Expr
+		for _, f := range ft.Params.List {
+			params = append(params, f.Type)
+		}
+		return params, ft.Results == nil, true
+	default:
+		return nil, false, false
+	}
+}
+
+// plainFuncSignature returns a type's single call signature when it is a bare
+// function value bento lowers to a Go func: exactly one call signature, no construct
+// signature, no properties riding alongside, and no generic, rest, or type-parameter
+// shape the func adapter does not model. It is the guard coerceFuncValue shares for
+// both the source and the target so neither an overload set, a constructor type, nor a
+// callable-object struct is mistaken for a bare func.
+func (r *Renderer) plainFuncSignature(t frontend.Type) (frontend.Signature, bool) {
+	call, construct := r.prog.Signatures(t)
+	if len(call) != 1 || len(construct) != 0 {
+		return frontend.Signature{}, false
+	}
+	if len(r.prog.Properties(t)) != 0 {
+		return frontend.Signature{}, false
+	}
+	sig := call[0]
+	if len(sig.TypeParams) != 0 || sig.RestParam != nil {
+		return frontend.Signature{}, false
+	}
+	return sig, true
+}
+
 // boxObjectLiteral lowers { k: v, ... } into value.NewObject().Set(...) per member,
 // the ordered property map a boxed object keeps, so the keys enumerate in source
 // order the way JavaScript's own property order does. Each value boxes through
@@ -1409,6 +1561,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	} else if ok {
 		return dyn, nil
 	}
+	if fn, ok, err := r.coerceFuncValue(expr, srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return fn, nil
+	}
 	if boxed, ok, err := r.boxToOptional(expr, srcNode, r.retType); err != nil {
 		return nil, err
 	} else if ok {
@@ -1452,6 +1609,11 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 		return nil, err
 	} else if ok {
 		return dyn, nil
+	}
+	if fn, ok, err := r.coerceFuncValue(expr, src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return fn, nil
 	}
 	if boxed, ok, err := r.boxToOptional(expr, src, r.prog.TypeAt(target)); err != nil {
 		return nil, err
