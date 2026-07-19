@@ -545,6 +545,20 @@ func (r *Renderer) generatorCoroutine(fn frontend.Node) (yieldGo ast.Expr, newGe
 	if err != nil {
 		return nil, nil, err
 	}
+	// A destructured parameter reads its bound names out of the synthesized parameter
+	// field at body entry, the same entry bindings the plain function path injects. The
+	// coroutine func closes over the enclosing params (the Go function's for a
+	// declaration, the closure's for an expression), so the bindings sit at the top of
+	// the coroutine body where the yielded statements read the names. nil when no
+	// parameter destructures, so a plain generator body is untouched.
+	sig, _ := r.prog.SignatureAt(fn)
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(fn), sig)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(binds) != 0 {
+		body.List = append(binds, body.List...)
+	}
 	r.requireImport(valuePkg)
 	// A generator that runs off its end completes with undefined, so the coroutine func
 	// returns value.Undefined after the body, the value a { value, done: true } result
