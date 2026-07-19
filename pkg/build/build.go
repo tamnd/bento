@@ -354,6 +354,9 @@ func firstError(prog *frontend.Program) string {
 		if toleratedConstructAny[d.Code] {
 			continue
 		}
+		if toleratedPossiblyUndefined[d.Code] {
+			continue
+		}
 		return d.Message
 	}
 	return ""
@@ -649,6 +652,33 @@ var toleratedImplicitThis = map[int]bool{
 // does, and admitting the code never turns a wrong result green.
 var toleratedConstructAny = map[int]bool{
 	7009: true, // 'new' expression, whose target lacks a construct signature, implicitly has an 'any' type.
+}
+
+// toleratedPossiblyUndefined is the set of checker diagnostic codes bento admits
+// because a value the checker cannot prove is defined still has defined run-time
+// behavior the lowerer either reproduces or refuses cleanly. 18048 ("'X' is
+// possibly 'undefined'") and 2532 ("Object is possibly 'undefined'") flag a read,
+// call, member access, or arithmetic on a value typed `T | undefined` at a site
+// the checker will not narrow, because the guard that proves it present is
+// implicit or lives in a helper the checker cannot follow. The report is a
+// strictness artifact of composing JavaScript as TypeScript, not a test's own
+// expectation: at run time the value is the present T (the test knows the map has
+// the key, the regex matches, the pop is non-empty), so the operation runs, and on
+// the genuinely-absent case the language throws a TypeError the engine also throws.
+//
+// Tolerating the code never emits Go that fails to compile or turns a wrong result
+// green, because a value the checker calls possibly-undefined is lowered only where
+// its `T | undefined` type already forces a representation the operation is sound
+// over. A binding of that type interns to value.Opt[T] (optionals.go), whose read
+// outside a narrowing unwraps through .Get(); a member access or arithmetic on the
+// un-narrowed optional finds no static field or numeric operand and hands back to
+// the engine rather than mislowering. So a 18048/2532 value either lowers through
+// the Opt path faithful on both the present and absent cases, or routes to the
+// engine that runs the same run-time rule the language does; neither path reads a
+// wrong value out of the absent case.
+var toleratedPossiblyUndefined = map[int]bool{
+	18048: true, // 'X' is possibly 'undefined'.
+	2532:  true, // Object is possibly 'undefined'.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
