@@ -464,14 +464,23 @@ func (r *Renderer) forAwaitOfIterator(iterable, bindNode frontend.Node, name str
 		Body: &ast.BlockStmt{List: doneStmts},
 	}
 	loopStmts := []ast.Stmt{pull, brk}
-	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
-		loopStmts = append(loopStmts, &ast.AssignStmt{
-			Lhs: []ast.Expr{ident(name)},
-			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(resName), Sel: ident(shape.valueName)}},
-		})
+	// A braced body that re-declares the loop variable shadows it in its own lexical
+	// scope, so the body lowers into a nested Go block and the loop-variable binding is
+	// dropped: every mention of name in the body reaches the inner declaration, never
+	// the loop variable, which is then unobservable. Without the nested block the inner
+	// `v := ...` would collide with the loop's own `v := res.Value` in one Go scope.
+	if r.bodyBlockShadows(bodyNode, r.prog.Text(bindNode)) {
+		loopStmts = append(loopStmts, &ast.BlockStmt{List: body.List})
+	} else {
+		if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
+			loopStmts = append(loopStmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident(name)},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(resName), Sel: ident(shape.valueName)}},
+			})
+		}
+		loopStmts = append(loopStmts, body.List...)
 	}
-	loopStmts = append(loopStmts, body.List...)
 	block = append(block, &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}})
 	// The early-exit close awaits the promise return() hands back, parking the loop's async
 	// body until the iterator finishes closing, the async mirror of the sync path's bare
@@ -588,14 +597,23 @@ func (r *Renderer) forOfIterator(iterable, bindNode frontend.Node, name string, 
 		Body: &ast.BlockStmt{List: doneStmts},
 	}
 	loopStmts := []ast.Stmt{pull, brk}
-	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
-		loopStmts = append(loopStmts, &ast.AssignStmt{
-			Lhs: []ast.Expr{ident(name)},
-			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(resName), Sel: ident(shape.valueName)}},
-		})
+	// A braced body that re-declares the loop variable shadows it in its own lexical
+	// scope, so the body lowers into a nested Go block and the loop-variable binding is
+	// dropped: every mention of name in the body reaches the inner declaration, never
+	// the loop variable, which is then unobservable. Without the nested block the inner
+	// `v := ...` would collide with the loop's own `v := res.Value` in one Go scope.
+	if r.bodyBlockShadows(bodyNode, r.prog.Text(bindNode)) {
+		loopStmts = append(loopStmts, &ast.BlockStmt{List: body.List})
+	} else {
+		if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) {
+			loopStmts = append(loopStmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident(name)},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(resName), Sel: ident(shape.valueName)}},
+			})
+		}
+		loopStmts = append(loopStmts, body.List...)
 	}
-	loopStmts = append(loopStmts, body.List...)
 	block = append(block, &ast.ForStmt{Body: &ast.BlockStmt{List: loopStmts}})
 	if closes {
 		block = append(block, &ast.IfStmt{

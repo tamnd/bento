@@ -340,7 +340,11 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	// and a `for _, _ := range` with no new variable. When the body reads the
 	// binding it is ranged into the loop variable; when it does not, the loop drops
 	// the binding entirely and ranges only to drive the iteration (`for range xs`).
-	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) {
+	// A braced body that re-declares the loop variable shadows it in its own scope,
+	// so the range stays binding-less and the body's own `v := ...` stands alone
+	// rather than collide with a `for _, v := range` value in the same Go block; the
+	// loop variable is then unobservable, exactly as the inner declaration intends.
+	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) && !r.bodyBlockShadows(kids[2], r.prog.Text(dkids[0])) {
 		rng.Key = ident("_")
 		rng.Value = ident(name)
 		rng.Tok = token.DEFINE
@@ -970,6 +974,32 @@ func (r *Renderer) bodyUsesName(n frontend.Node, name string) bool {
 	for _, c := range r.prog.Children(n) {
 		if r.bodyUsesName(c, name) {
 			return true
+		}
+	}
+	return false
+}
+
+// bodyBlockShadows reports whether a loop body block lexically re-declares name at
+// its own top level, a `let` or `const` of the same spelling as the loop variable.
+// A braced for...of body is its own lexical scope in JavaScript, so an inner
+// `const v` shadows the loop's `v` rather than reusing it; the lowerer must open a
+// fresh Go block for the body so the inner binding does not collide with the loop
+// variable's Go declaration. Only a braced body can shadow: a lexical declaration
+// cannot be the sole unbraced statement of a for, so a non-block body never matches.
+// The scan is the direct statement list only, since a declaration nested in a deeper
+// block already has its own Go scope.
+func (r *Renderer) bodyBlockShadows(bodyNode frontend.Node, name string) bool {
+	if bodyNode.Kind() != frontend.NodeBlock {
+		return false
+	}
+	for _, s := range r.prog.Children(bodyNode) {
+		if s.Kind() != frontend.NodeVariableStatement || r.isVarStatement(s) {
+			continue
+		}
+		for _, nn := range r.varNameNodes(s) {
+			if nm, ok := localName(r.prog.Text(nn)); ok && nm == name {
+				return true
+			}
 		}
 	}
 	return false
