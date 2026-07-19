@@ -45,6 +45,12 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// binding.
 		if sym, ok := r.prog.SymbolAt(n); ok && r.derefAlias(sym).Flags&frontend.SymbolFunction != 0 {
 			sym = r.derefAlias(sym)
+			// A nested function declaration bound to a Go local reads by that local
+			// name, the same routing the call path takes; capitalizing its source name
+			// below would emit the top-level exported spelling the local never took.
+			if goName, ok := r.funcExprSelf[sym]; ok {
+				return ident(goName), nil
+			}
 			// An ambient global function used as a value (eval, parseInt, isNaN) is not a
 			// user binding and has no generated Go function behind its exported name. The
 			// call path lowers the globals bento models and hands the rest back; a bare

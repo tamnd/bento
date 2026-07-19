@@ -24,16 +24,35 @@ func (r *Renderer) newStrBuilder() string {
 	return name
 }
 
-// hoistStrBuilders prepends a var declaration for each builder the body recorded,
-// so every builder is created once above the body's statements and reused on each
-// iteration of any loop it sits in. A body that built no template through a builder
-// prepends nothing and is returned unchanged.
+// hoistStrBuilders prepends a var declaration for each builder the body actually
+// uses, so every builder is created once above the body's statements and reused on
+// each iteration of any loop it sits in. A body that built no template through a
+// builder prepends nothing and is returned unchanged.
+//
+// A builder is declared only when its name appears in the finished body. A lowering
+// that reserved a builder and was then discarded, an operand lowered once as a string
+// and re-lowered coerced to a number, leaves the reservation on the body's list but no
+// statement that reads it, and declaring that name would emit a Go local that is
+// declared and not used. Scanning the emitted statements for each reserved name drops
+// those stranded reservations rather than declare a builder nothing references.
 func (r *Renderer) hoistStrBuilders(stmts []ast.Stmt) []ast.Stmt {
 	if len(r.strBuilders) == 0 {
 		return stmts
 	}
+	used := map[string]bool{}
+	for _, s := range stmts {
+		ast.Inspect(s, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok {
+				used[id.Name] = true
+			}
+			return true
+		})
+	}
 	decls := make([]ast.Stmt, 0, len(r.strBuilders))
 	for _, name := range r.strBuilders {
+		if !used[name] {
+			continue
+		}
 		decls = append(decls, &ast.DeclStmt{Decl: &ast.GenDecl{
 			Tok: token.VAR,
 			Specs: []ast.Spec{&ast.ValueSpec{
@@ -41,6 +60,9 @@ func (r *Renderer) hoistStrBuilders(stmts []ast.Stmt) []ast.Stmt {
 				Type:  sel("value", "StrBuilder"),
 			}},
 		}})
+	}
+	if len(decls) == 0 {
+		return stmts
 	}
 	return append(decls, stmts...)
 }

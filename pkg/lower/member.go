@@ -913,6 +913,16 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.argsObjName), Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
 	}
+	// Foo["X"] with a constant string key on an enum receiver is the bracket spelling
+	// of the dotted member read Foo.X, so it inlines a const enum member the same way
+	// and resolves a plain enum member to its Go constant. It routes before the class
+	// and shape paths, since a const enum leaves no Go type for those to read and its
+	// name would otherwise fall through to a property lookup on an undefined binding.
+	if key, ok := r.constStringKey(idxNode); ok {
+		if expr, ok, err := r.enumMemberRead(obj, key); err != nil || ok {
+			return expr, err
+		}
+	}
 	// C["m"] or c["m"] with a constant string key on a class receiver is the bracket
 	// spelling of the dotted member read, the shape a non-identifier or computed
 	// member name (a string method name, a ["m"] accessor, a [k] name whose k is a

@@ -1883,7 +1883,10 @@ func (r *Renderer) staticInitFuncDecl(info *classInfo) (ast.Decl, error) {
 		if err != nil {
 			return nil, err
 		}
-		stmts = append(stmts, body.List...)
+		// Keep each static block's own Go block so its const and let
+		// declarations get the lexical scope the source gives them; two blocks
+		// each declaring the same name would otherwise redeclare in one func.
+		stmts = append(stmts, body)
 	}
 	return &ast.FuncDecl{
 		Name: ident(staticInitName(info)),
@@ -2574,6 +2577,18 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	if len(binds) != 0 {
 		body.List = append(binds, body.List...)
 	}
+	// A method body that can fall off its end with a dynamic return type runs the
+	// same implicit return undefined a top-level function does, which funcDeclNamed
+	// appends but this path did not, so a method whose Go return type is the value
+	// slot emitted no trailing return and did not compile. The append reuses the
+	// shared helper, which fires only for an any or unknown return and a body that
+	// does not already terminate, so a static or already-returning method is untouched.
+	var bodyStmts []frontend.Node
+	if block, ok := r.funcBodyBlock(m.node); ok {
+		bodyStmts = r.prog.Children(block)
+	}
+	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	r.endThrowTerminatedBody(body, bodyStmts, results)
 	return &ast.FuncDecl{
 		Recv: &ast.FieldList{List: []*ast.Field{{
 			Names: []*ast.Ident{ident(info.recv)},

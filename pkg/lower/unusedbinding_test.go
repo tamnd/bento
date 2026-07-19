@@ -123,3 +123,117 @@ console.log(String(count));
 		t.Fatalf("unused-binding initializer run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestTypeQueryReadBlanked pins that a binding whose only reference past its
+// declaration is a `typeof x` type query gets the blank the emit needs. A type
+// query names the binding to spell a type, never to read its value, so the Go
+// carries no runtime read and the local would be declared and not used without the
+// blank. This is the typeofUsedBeforeBlockScoped shape reduced to its core.
+func TestTypeQueryReadBlanked(t *testing.T) {
+	src := `let o = { n: 12 }; let o2: typeof o;`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "_ = o") {
+		t.Fatalf("binding read only by a typeof type query did not get a blank:\n%s", out)
+	}
+}
+
+// TestTypeQueryDoesNotHideRuntimeRead pins the other side: a binding read at
+// runtime and also named in a `typeof x` type query keeps its value. The type-query
+// skip drops only the type-level reference, so the real read survives and prints.
+func TestTypeQueryDoesNotHideRuntimeRead(t *testing.T) {
+	skipIfShort(t)
+	src := `let o = { n: 12 }; let o2: typeof o; console.log(String(o.n));`
+	got := runProgramGo(t, src)
+	want := "12\n"
+	if got != want {
+		t.Fatalf("binding named in a type query but read at runtime run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestTypeReferenceAnnotationBlanked pins that a binding whose only reference past
+// its declaration is a type reference in its own annotation gets the blank the emit
+// needs. Declaration merging and a same-named type alias let a value binding and a
+// type share a name, so `let baz: baz` names the value binding in a type position;
+// the annotation spells a type and the emit never reads it. This is the
+// resolveTypeAliasWithSameLetDeclarationName1 shape.
+func TestTypeReferenceAnnotationBlanked(t *testing.T) {
+	src := `class C {} type baz = C; let baz: baz;`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "_ = baz") {
+		t.Fatalf("binding read only by a type-reference annotation did not get a blank:\n%s", out)
+	}
+}
+
+// TestDestructuringAssignTargetBlanked pins that a local a destructuring assignment
+// only stores into, `({ value: foo } = obj)`, gets a trailing blank. The pattern
+// write is not a read, so Go rejects the local as declared-and-not-used without it;
+// countWriteUses credits the pattern target the same way it credits a plain `foo = e`.
+func TestDestructuringAssignTargetBlanked(t *testing.T) {
+	src := `let obj = { value: 1 }; let foo: number; ({ value: foo } = obj);`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "_ = foo") {
+		t.Fatalf("destructuring-assignment-only target did not get a blank:\n%s", out)
+	}
+}
+
+// TestDestructuringAssignTargetKeptWhenRead pins that a target a destructuring
+// assignment stores into and the body later reads keeps no spurious blank, so a
+// name the program uses reads as written and the value flows through.
+func TestDestructuringAssignTargetKeptWhenRead(t *testing.T) {
+	src := `let obj = { value: 1 }; let foo = 0; ({ value: foo } = obj); console.log(String(foo));`
+	out := renderProgram(t, src)
+	if strings.Contains(out, "_ = foo") {
+		t.Fatalf("destructuring-assignment target read later gained a spurious blank:\n%s", out)
+	}
+}
+
+// TestDestructurePropertyNamedValueReadsField pins that destructuring a property
+// whose name collides with an emitter package, `value`, reads the struct's real
+// field. The field is named through exportedField ("Value"); routing the source
+// property through localName first would reserve the package name and read a
+// "Value_" field the struct never declares, so the emit would not compile.
+func TestDestructurePropertyNamedValueReadsField(t *testing.T) {
+	skipIfShort(t)
+	src := `let obj = { value: 5 }; let foo = 0; ({ value: foo } = obj); console.log(String(foo));`
+	got := runProgramGo(t, src)
+	want := "5\n"
+	if got != want {
+		t.Fatalf("destructuring a `value` property run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestDestructureDeclPropertyNamedValueReadsField pins the same field-name mapping
+// for the declaration form, `let { value } = obj`, where the source property named
+// value must read the struct's Value field rather than a reserved-name Value_.
+func TestDestructureDeclPropertyNamedValueReadsField(t *testing.T) {
+	skipIfShort(t)
+	src := `let obj = { value: 7 }; let { value: got } = obj; console.log(String(got));`
+	out := runProgramGo(t, src)
+	want := "7\n"
+	if out != want {
+		t.Fatalf("declaration destructure of a `value` property run mismatch:\n got %q\nwant %q", out, want)
+	}
+}
+
+// TestShorthandExportedConstHoistsToPackage pins that a module-level const read by a
+// top-level function only through an object-literal shorthand still hoists to package
+// scope. The shorthand `{ test }` resolves its identifier to the property it declares,
+// not to the outer const, so the cross-boundary walk missed the read and left the const
+// a main local the function could not see, emitting Go that referenced an undefined
+// name. This is the shorthandOfExportedEntity shape.
+func TestShorthandExportedConstHoistsToPackage(t *testing.T) {
+	skipIfShort(t)
+	src := `
+export const test = "hi";
+export function foo(): string {
+  const x = { test };
+  return x.test;
+}
+console.log(foo());
+`
+	got := runProgramGo(t, src)
+	want := "hi\n"
+	if got != want {
+		t.Fatalf("shorthand-read exported const hoist run mismatch:\n got %q\nwant %q", got, want)
+	}
+}

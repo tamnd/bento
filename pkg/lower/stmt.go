@@ -1008,6 +1008,24 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	if r.tryRet == tryRetBody && isVoidReturn(r.retType) {
 		return nil, &NotYetLowerable{Reason: "a value returned from a void function inside a try is a later slice"}
 	}
+	// A void function has no Go result, so a returned value would be one operand too
+	// many for the `return`. Type inference gives a function that returns undefined
+	// (`function f() { return undefined; }`) a void body, so the returned expression is
+	// dropped: a pure operand lowers to a bare return, a call runs for its effect
+	// first, and anything else effectful hands back rather than silently lose it.
+	if isVoidReturn(r.retType) {
+		if r.pureDroppableReturn(kids[0]) {
+			return &ast.ReturnStmt{}, nil
+		}
+		expr, err := r.lowerExpr(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		if call, ok := expr.(*ast.CallExpr); ok {
+			return &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}, &ast.ReturnStmt{}}}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "a void function returning an effectful non-call expression is a later slice"}
+	}
 	// An object literal returned into a declared shape with an optional property
 	// builds at that shape, the same contextual typing a binding applies; a return
 	// type that is itself T | undefined hands back to a later slice.
@@ -1038,6 +1056,36 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 		return &ast.ReturnStmt{Results: []ast.Expr{expr, ident("true")}}, nil
 	}
 	return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
+}
+
+// pureDroppableReturn reports whether a returned expression can be dropped for a
+// bare `return` without losing an observable effect. A void function has no Go
+// result, so the operand cannot ride the return; dropping it is only sound when
+// evaluating it does nothing a reader could see. A literal, a keyword value, or a
+// plain identifier read qualifies: reading a binding has no side effect. A call,
+// a property access that could hit a getter, or any other computed form does not,
+// and those take the evaluate-then-return or handback paths in lowerReturn.
+func (r *Renderer) pureDroppableReturn(n frontend.Node) bool {
+	for n.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(n)
+		if len(kids) != 1 {
+			return false
+		}
+		n = kids[0]
+	}
+	switch n.Kind() {
+	case frontend.NodeIdentifier,
+		frontend.NodeNumericLiteral,
+		frontend.NodeStringLiteral,
+		frontend.NodeBigIntLiteral,
+		frontend.NodeNoSubstitutionTemplateLiteral,
+		frontend.NodeTrueKeyword,
+		frontend.NodeFalseKeyword,
+		frontend.NodeNullKeyword,
+		frontend.NodeThisKeyword:
+		return true
+	}
+	return false
 }
 
 // deferredReturn lowers a return inside a catch or finally body of a try whose
@@ -1774,6 +1822,24 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	return r.arrayDestructureDecl(decls[0])
 }
 
+// patternDeclParts pulls the binding target and the initializer out of a variable
+// declaration's children for the destructuring paths. A declaration is [target,
+// init] without a type annotation and [target, type, init] with one, the same
+// annotation the plain buildVarDecl skips over; both forms carry the initializer
+// last, so this reads the target first and the initializer last and reports the
+// two. It reports ok=false for any other arity, so a `let [x];` with no
+// initializer, which destructuring forbids, takes the ordinary path and hands
+// back rather than reach this path with no source to read.
+func (r *Renderer) patternDeclParts(kids []frontend.Node) (target, init frontend.Node, ok bool) {
+	switch len(kids) {
+	case 2:
+		return kids[0], kids[1], true
+	case 3:
+		return kids[0], kids[2], true
+	}
+	return nil, nil, false
+}
+
 // arrayDestructureDecl lowers a single declaration whose binding target is an array
 // pattern, `[a, b] = src`, into one indexed read per element. It is the reusable core
 // of flattenArrayDestructure, shared with a for loop's destructuring initializer, and
@@ -1782,11 +1848,10 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 // object sibling, and every array shape it cannot yet lower returns ok=true with an
 // error rather than a silent fall-through.
 func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, error) {
-	kids := r.prog.Children(decl)
-	if len(kids) != 2 {
+	patNode, initNode, ok := r.patternDeclParts(r.prog.Children(decl))
+	if !ok {
 		return nil, false, nil
 	}
-	patNode, initNode := kids[0], kids[1]
 	if patNode.Kind() != frontend.NodeUnknown {
 		return nil, false, nil
 	}
@@ -1983,6 +2048,11 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
+		// The element is bound with :=, so a target the body never reads would be
+		// declared and not used in Go, the way `var [a, b] = src` with neither read
+		// leaves a and b unused. bindingUnused only ever withholds the blank, so a
+		// target read elsewhere keeps its use.
+		stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
 	}
 	if hasRest {
 		rc, err := recv()
@@ -1994,6 +2064,11 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 			return nil, true, err
 		}
 		stmts = append(stmts, bind)
+		// The rest gathers into a := binding too, so a rest target the body never reads,
+		// as the b in `var [a, ...b] = src` with b unread, would be declared and not used.
+		if name, ok := localName(r.prog.Text(restNode)); ok {
+			stmts = r.blankUnusedParamBinding(stmts, restNode, name)
+		}
 	}
 	return stmts, true, nil
 }
@@ -2107,11 +2182,10 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 // array sibling first, and every object shape it cannot yet lower returns ok=true with
 // an error rather than a silent fall-through.
 func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, error) {
-	kids := r.prog.Children(decl)
-	if len(kids) != 2 {
+	patNode, initNode, ok := r.patternDeclParts(r.prog.Children(decl))
+	if !ok {
 		return nil, false, nil
 	}
-	patNode, initNode := kids[0], kids[1]
 	if patNode.Kind() != frontend.NodeUnknown {
 		return nil, false, nil
 	}
@@ -2150,6 +2224,7 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 		nested     frontend.Node
 		nestedType frontend.Type
 		rest       bool
+		restNode   frontend.Node
 		restStruct string
 		restType   frontend.Type
 	}
@@ -2181,20 +2256,22 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			if err != nil {
 				return nil, true, err
 			}
-			fields[i] = binding{rest: true, name: name, restStruct: structName, restType: restType}
+			fields[i] = binding{rest: true, name: name, restNode: restIdent, restStruct: structName, restType: restType}
 			continue
 		}
 		// A nested pattern renames a source property into an inner pattern that binds
 		// against the value the property holds; its inner names are validated when the
 		// sub-pattern is bound, so it is routed straight through.
 		if source, sub, ok := r.objectNestedElem(el); ok {
-			prop := r.prog.Text(source)
-			srcName, nok := localName(prop)
+			prop := strings.TrimSpace(r.prog.Text(source))
 			pt, known := propType[prop]
-			if !nok || !known {
+			if !known {
 				return nil, true, &NotYetLowerable{Reason: "a nested object pattern over an unknown property is a later slice"}
 			}
-			field, fok := exportedField(srcName)
+			// exportedField names the field the way internStruct does; localName in
+			// between would reserve an emitter-package name and read a field the struct
+			// never declares, spelling a `value` property as a missing `Value_`.
+			field, fok := exportedField(prop)
 			if !fok {
 				return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 			}
@@ -2206,11 +2283,7 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			return nil, true, err
 		}
 		prop := r.elemSourceProp(info)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 		}
@@ -2244,6 +2317,10 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 				Tok: token.DEFINE,
 				Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(b.restStruct), Elts: elts}}},
 			})
+			// A rest gathered only to be discarded, `const { a, ...rest } = o` where rest is
+			// never read, takes the same blank an ordinary unused binding does so the Go
+			// declaration compiles.
+			stmts = r.blankUnusedParamBinding(stmts, b.restNode, b.name)
 			continue
 		}
 		if b.nested != nil {
@@ -2275,6 +2352,10 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 				return nil, true, err
 			}
 			stmts = append(stmts, r.defaultFillStmts(b.name, nameGo, read, def)...)
+			// The default fill declares `var name T` then assigns it in each branch, so a
+			// name nothing later reads is a declared-and-unused var Go rejects, the same as
+			// the plain read below; it takes the same blank.
+			stmts = r.blankUnusedParamBinding(stmts, b.info.bindNode, b.name)
 			continue
 		}
 		stmts = append(stmts, &ast.AssignStmt{
@@ -2293,7 +2374,69 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			})
 		}
 	}
+	stmts = blankUnusedRecvTemp(prefix, stmts)
 	return stmts, true, nil
+}
+
+// blankUnusedRecvTemp guards the receiver temp destructureSource mints for a
+// non-identifier source. A pattern that reads no field off the receiver, an empty
+// rest `{ ...r }` whose rest struct has no fields to copy, leaves that temp declared
+// and never read, which Go rejects. When the assembled binding statements never name
+// the temp, its declaration takes a trailing blank so the emit compiles; a receiver an
+// ordinary field read names is left untouched. The prefix destructureSource returns is
+// exactly the one temp declaration or empty for an identifier source, so the temp name
+// is read off it and its uses are counted over the statements that follow.
+func blankUnusedRecvTemp(prefix, stmts []ast.Stmt) []ast.Stmt {
+	name, ok := recvTempName(prefix)
+	if !ok {
+		return stmts
+	}
+	if identUsedIn(name, stmts[len(prefix):]) {
+		return stmts
+	}
+	return append(stmts, &ast.AssignStmt{
+		Lhs: []ast.Expr{ident("_")},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{ident(name)},
+	})
+}
+
+// recvTempName returns the identifier destructureSource's prefix declares, or ok=false
+// when the source was a plain identifier and no temp was minted. The prefix is a single
+// `tmp := <source>` define, so the name is the left side of that one statement.
+func recvTempName(prefix []ast.Stmt) (string, bool) {
+	if len(prefix) != 1 {
+		return "", false
+	}
+	assign, ok := prefix[0].(*ast.AssignStmt)
+	if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != 1 {
+		return "", false
+	}
+	id, ok := assign.Lhs[0].(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return id.Name, true
+}
+
+// identUsedIn reports whether name appears as an identifier anywhere in stmts, the
+// check blankUnusedRecvTemp uses to tell a receiver a binding reads from one nothing
+// references.
+func identUsedIn(name string, stmts []ast.Stmt) bool {
+	used := false
+	for _, s := range stmts {
+		ast.Inspect(s, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Name == name {
+				used = true
+				return false
+			}
+			return true
+		})
+		if used {
+			break
+		}
+	}
+	return used
 }
 
 // assignCopy builds target = source for one link of a chained assignment, where
@@ -2834,11 +2977,11 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 			values = append(values, &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(el.restStruct), Elts: elts}})
 			continue
 		}
-		srcName, ok := localName(r.prog.Text(el.nameNode))
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		// The source property maps straight to its Go field through exportedField, the
+		// same mapping internStruct uses to name the field. Routing the name through
+		// localName first would reserve an emitter-package name, spelling a property
+		// named `value` as `value_` and reading a `Value_` field the struct never has.
+		field, ok := exportedField(strings.TrimSpace(r.prog.Text(el.nameNode)))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
 		}
@@ -2874,12 +3017,8 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 func (r *Renderer) objectDestructureAssignDefaults(elems []objectAssignElem, optionalField map[string]bool, rhs frontend.Node) (ast.Stmt, bool, error) {
 	out := make([]ast.Stmt, 0, len(elems))
 	for _, el := range elems {
-		prop := r.prog.Text(el.nameNode)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		prop := strings.TrimSpace(r.prog.Text(el.nameNode))
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
 		}

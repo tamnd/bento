@@ -347,6 +347,13 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident("E" + itoa(i))}},
 		})
+		// The binding is a fresh := that the source may never read, const [x] = pair
+		// with x unused, and Go rejects an unused local. The object-pattern path already
+		// blanks such a member; the tuple path did the same read without the blank, so
+		// an unread element compiled to a declared-and-not-used error. Reuse the shared
+		// blank, which appends _ = name only when the binding's own use count shows no
+		// read survives.
+		stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
 	}
 	return stmts, nil
 }

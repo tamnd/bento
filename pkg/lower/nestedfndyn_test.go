@@ -28,6 +28,25 @@ func TestNestedArrowParamNarrowsAndUnboxes(t *testing.T) {
 	}
 }
 
+// TestNestedFuncReadAsValueUsesLocalName pins that reading a nested function
+// declaration as a value spells the Go local it binds, not the capitalized
+// top-level name; the two routings must agree or the value read names an
+// undefined exported symbol.
+func TestNestedFuncReadAsValueUsesLocalName(t *testing.T) {
+	src := `function foo() {
+  function bar() { }
+  var x = bar;
+  return x;
+}`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "x := bar") {
+		t.Fatalf("nested function read as value did not use its Go local name:\n%s", out)
+	}
+	if strings.Contains(out, "Bar") {
+		t.Fatalf("nested function read as value took the exported name:\n%s", out)
+	}
+}
+
 // TestNestedFnRuns builds and runs the nested-function narrowing end to end and
 // checks each branch reads the unboxed value.
 func TestNestedFnRuns(t *testing.T) {

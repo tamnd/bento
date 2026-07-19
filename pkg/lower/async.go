@@ -21,7 +21,23 @@ import (
 // declaration text rather than a distinct node kind, since the shim folds the
 // modifier into the leading token.
 func (r *Renderer) isAsyncFunc(fn frontend.Node) bool {
-	return firstWord(strings.TrimSpace(r.prog.Text(fn))) == "async"
+	// A function declaration can carry export-related modifiers ahead of the async
+	// keyword, so `export default async function f() {}` leads with export, not async.
+	// The modifiers that may precede async on a function are export, default, and
+	// declare; scanning past them finds the async keyword wherever the grammar allows
+	// it, while a real leading token (function, a name, *, the parameter paren) stops
+	// the scan so a function merely named async does not read as one.
+	for _, word := range strings.Fields(strings.TrimSpace(r.prog.Text(fn))) {
+		switch word {
+		case "async":
+			return true
+		case "export", "default", "declare":
+			continue
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // asyncFuncDecl lowers a top-level async function declaration to a package function

@@ -422,3 +422,28 @@ func TestAsyncHandsBack(t *testing.T) {
 		})
 	}
 }
+
+// TestExportDefaultAsyncFunctionIsAsync pins that an async function declaration
+// carrying export and default modifiers ahead of the async keyword still lowers
+// through the async path. isAsyncFunc reads the modifiers off the declaration text,
+// and `export default async function` leads with export, so a first-word check missed
+// the async keyword and lowered the body as a plain function that returned a promise
+// type with no body, a missing return. This is the exportDefaultAsyncFunction shape.
+func TestExportDefaultAsyncFunctionIsAsync(t *testing.T) {
+	src := `export default async function foo(): Promise<void> {}`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.AsyncVoid") {
+		t.Fatalf("export default async function did not lower through the async path:\n%s", out)
+	}
+}
+
+// TestFunctionNamedAsyncNotAsync pins the negative: a plain function whose name is
+// async is not an async function, so the modifier scan stops at the function keyword
+// rather than read the later name as the async modifier.
+func TestFunctionNamedAsyncNotAsync(t *testing.T) {
+	src := `function async(): number { return 1; }`
+	out := renderProgram(t, src)
+	if strings.Contains(out, "value.Async") {
+		t.Fatalf("a function named async wrongly lowered through the async path:\n%s", out)
+	}
+}

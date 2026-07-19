@@ -84,12 +84,11 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 	var out []ast.Stmt
 	for _, el := range elems {
 		if source, sub, ok := r.objectNestedElem(el); ok {
-			prop := r.prog.Text(source)
-			srcName, ok := localName(prop)
-			if !ok {
-				return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
-			}
-			field, ok := exportedField(srcName)
+			prop := strings.TrimSpace(r.prog.Text(source))
+			// The source property names its Go field through exportedField, the mapping
+			// internStruct uses; routing it through localName first would reserve an
+			// emitter-package name and read a field the struct never declares.
+			field, ok := exportedField(prop)
 			if !ok {
 				return nil, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 			}
@@ -111,11 +110,7 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 			return nil, err
 		}
 		prop := r.elemSourceProp(info)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 		}
@@ -137,6 +132,11 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 			return nil, &NotYetLowerable{Reason: "an optional-field default composed through a nested object pattern needs the nested-object literal coercion of phase 7"}
 		}
 		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
+		// A `:=` leaf the body never reads would trip Go's declared-and-unused rule.
+		// An assignment leaf (`=`) writes an existing binding, so it needs no blank.
+		if tok == token.DEFINE {
+			out = r.blankUnusedParamBinding(out, info.bindNode, name)
+		}
 	}
 	return out, nil
 }
@@ -289,13 +289,15 @@ func (r *Renderer) bindSubObjectAssign(pat frontend.Node, recv ast.Expr, patType
 	var out []ast.Stmt
 	for _, el := range elems {
 		if source, sub, ok := r.objectAssignNestedElem(el); ok {
-			prop := r.prog.Text(source)
-			srcName, nok := localName(prop)
+			prop := strings.TrimSpace(r.prog.Text(source))
 			pt, known := propType[prop]
-			if !nok || !known {
+			if !known {
 				return nil, &NotYetLowerable{Reason: "a nested object assignment over an unknown property is a later slice"}
 			}
-			field, fok := exportedField(srcName)
+			// exportedField maps the source property to its field the same way
+			// internStruct names it; localName in between would misspell an
+			// emitter-package name like `value` as a `Value_` field that does not exist.
+			field, fok := exportedField(prop)
 			if !fok {
 				return nil, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
 			}
@@ -312,12 +314,8 @@ func (r *Renderer) bindSubObjectAssign(pat frontend.Node, recv ast.Expr, patType
 		if err != nil {
 			return nil, err
 		}
-		prop := r.prog.Text(info.nameNode)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		prop := strings.TrimSpace(r.prog.Text(info.nameNode))
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
 		}
@@ -426,6 +424,9 @@ func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType fronte
 			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
 		}
 		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
+		if tok == token.DEFINE {
+			out = r.blankUnusedParamBinding(out, info.nameNode, name)
+		}
 	}
 	if hasRest {
 		bind, err := r.arrayRestBinding(restNode, elemT, recv, len(fixedElems), tok)
@@ -515,6 +516,9 @@ func (r *Renderer) bindSubTuple(pat frontend.Node, recv ast.Expr, patType fronte
 			Tok: tok,
 			Rhs: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))}},
 		})
+		if tok == token.DEFINE {
+			out = r.blankUnusedParamBinding(out, info.nameNode, name)
+		}
 	}
 	return out, nil
 }

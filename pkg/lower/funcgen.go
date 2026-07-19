@@ -294,6 +294,7 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 		body.List = append([]ast.Stmt{argsMat}, body.List...)
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	r.endThrowTerminatedBody(body, bodyStmts, results)
 
 	return &ast.FuncDecl{
 		Name: ident(name),
@@ -314,11 +315,69 @@ func (r *Renderer) endWithImplicitUndefinedReturn(body *ast.BlockStmt, bodyStmts
 	if body == nil || r.bodyTerminates(bodyStmts) {
 		return
 	}
-	if ret.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+	if ret.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		r.requireImport(valuePkg)
+		body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
 		return
 	}
-	r.requireImport(valuePkg)
-	body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
+	// A T | undefined return lowers to a value.Opt[T] slot, the only static return the
+	// checker lets a body fall through under, since fall-through yields undefined and
+	// the type has to admit it. The absent value is value.None[T](), the same None an
+	// explicit `return undefined` produces for that slot, so the trailing return closes
+	// the Go gap without changing what a returning path fills.
+	if r.isOptionalType(ret) {
+		if inner, ok := r.optionalInner(r.prog.UnionMembers(ret)); ok {
+			none, err := r.noneOf(inner)
+			if err == nil {
+				body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{none}})
+			}
+		}
+	}
+}
+
+// endThrowTerminatedBody appends the panic a Go function needs when its body always
+// terminates yet its final Go statement is not one Go accepts as terminating. A
+// JavaScript body that ends by throwing lowers to a value.Throw call, an ordinary
+// call as far as Go is concerned rather than a diverging one, so a value-returning
+// function or method whose last statement is a throw compiled to a missing return.
+// The panic is planted only when the checker proved the body always terminates and
+// the Go tail does not, so it sits on genuinely unreachable ground, the same marker
+// unreachablePanic plants under an exhaustive switch default. A void function needs
+// no terminator, so an empty result list is left alone.
+func (r *Renderer) endThrowTerminatedBody(body *ast.BlockStmt, bodyStmts []frontend.Node, results *ast.FieldList) {
+	if body == nil || results == nil || len(results.List) == 0 {
+		return
+	}
+	if !r.bodyTerminates(bodyStmts) {
+		return
+	}
+	if len(body.List) != 0 && goStmtTerminates(body.List[len(body.List)-1]) {
+		return
+	}
+	body.List = append(body.List, unreachablePanic())
+}
+
+// goStmtTerminates reports whether a Go statement is one the compiler accepts as a
+// function's terminating statement, over the subset the emitter produces: a return, a
+// branch, a panic call, or a block or complete if whose relevant arms all terminate.
+// It is deliberately narrow, a tail that is anything else reads as falling through so
+// endThrowTerminatedBody adds a terminator rather than assume one.
+func goStmtTerminates(s ast.Stmt) bool {
+	switch st := s.(type) {
+	case *ast.ReturnStmt, *ast.BranchStmt:
+		return true
+	case *ast.ExprStmt:
+		if call, ok := st.X.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "panic" {
+				return true
+			}
+		}
+	case *ast.BlockStmt:
+		return len(st.List) != 0 && goStmtTerminates(st.List[len(st.List)-1])
+	case *ast.IfStmt:
+		return st.Else != nil && goStmtTerminates(st.Body) && goStmtTerminates(st.Else)
+	}
+	return false
 }
 
 // paramFields lowers each parameter to a Go field with its lowered type. An
@@ -1081,13 +1140,15 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 		// entry against the value the property holds, the same read-into-a-temp step a
 		// nested declaration element takes.
 		if source, sub, ok := r.objectNestedElem(el); ok {
-			prop := r.prog.Text(source)
-			srcName, nok := localName(prop)
+			prop := strings.TrimSpace(r.prog.Text(source))
 			pt, known := propType[prop]
-			if !nok || !known {
+			if !known {
 				return nil, &NotYetLowerable{Reason: "a nested object-pattern parameter over an unknown property is a later slice"}
 			}
-			field, fok := exportedField(srcName)
+			// exportedField names the field the way internStruct does; localName in
+			// between would reserve an emitter-package name and read a `Value_` field the
+			// struct never declares for a property named `value`.
+			field, fok := exportedField(prop)
 			if !fok {
 				return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
 			}
@@ -1105,11 +1166,7 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 			return nil, err
 		}
 		prop := r.elemSourceProp(info)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
 		}
@@ -1640,6 +1697,7 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 		return nil, err
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	r.endThrowTerminatedBody(body, bodyStmts, results)
 	// A destructured parameter reads its bound names out of the synthesized field at
 	// body entry, the same entry bindings the top-level function path injects; nil when
 	// no parameter destructures, so a plain closure body is untouched.
