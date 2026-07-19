@@ -108,6 +108,9 @@ func (r *Renderer) elementLoadMethod(idxNode frontend.Node) (string, error) {
 // closure returns that box as a value.Value and the whole read coerces down to a
 // static primitive when the expression's context is one.
 func (r *Renderer) assignValueCompound(n, left frontend.Node) (ast.Expr, error) {
+	if left.Kind() == frontend.NodePropertyAccessExpression || left.Kind() == frontend.NodeElementAccessExpression {
+		return r.assignValueMemberCompound(n, left)
+	}
 	if left.Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "compound assignment value on a non-identifier target is a later slice"}
 	}
@@ -142,6 +145,59 @@ func (r *Renderer) assignValueCompound(n, left frontend.Node) (ast.Expr, error) 
 		return nil, err
 	}
 	body := []ast.Stmt{stmt, &ast.ReturnStmt{Results: []ast.Expr{ident(name)}}}
+	return r.valueClosure(retType, body), nil
+}
+
+// assignValueMemberCompound lowers a compound assignment read for its value on a
+// member or element target, (o.k += v) or (o[k] += v) in an expression position.
+// It reuses the statement lowering to build the read-modify-write store, then
+// re-reads the target to yield the updated value the language's compound
+// assignment evaluates to. bento objects carry no getters on these paths, so the
+// re-read returns exactly what the store wrote. The store already evaluates the
+// receiver (and, for an element, the key) once; the re-read evaluates it again, so
+// a side-effecting receiver or key hands back to keep it evaluated once, the same
+// guard the dynamic member and element statement stores use. A static array
+// element compound has no statement lowering yet, so lowerUpdate hands it back and
+// this propagates it. A dynamic target returns a value.Value box that coerces down
+// when the whole expression sits in a static-primitive context.
+func (r *Renderer) assignValueMemberCompound(n, left frontend.Node) (ast.Expr, error) {
+	kids := r.prog.Children(left)
+	if len(kids) < 1 {
+		return nil, &NotYetLowerable{Reason: "compound assignment value target did not expose a receiver"}
+	}
+	if !r.repeatableOperand(kids[0]) {
+		return nil, &NotYetLowerable{Reason: "compound assignment value on a member with a side-effecting receiver is a later slice"}
+	}
+	if left.Kind() == frontend.NodeElementAccessExpression {
+		if len(kids) != 2 {
+			return nil, &NotYetLowerable{Reason: "compound assignment value target did not expose a receiver and a key"}
+		}
+		if !r.repeatableOperand(kids[1]) {
+			return nil, &NotYetLowerable{Reason: "compound assignment value on an element with a side-effecting key is a later slice"}
+		}
+	}
+	stmt, err := r.lowerUpdate(n)
+	if err != nil {
+		return nil, err
+	}
+	read, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, err
+	}
+	if r.isDynamic(left) {
+		r.requireImport(valuePkg)
+		body := []ast.Stmt{stmt, &ast.ReturnStmt{Results: []ast.Expr{read}}}
+		closure := r.valueClosure(sel("value", "Value"), body)
+		if r.isDynamic(n) {
+			return closure, nil
+		}
+		return r.coerceDynamicToStatic(closure, n)
+	}
+	retType, err := r.typeExpr(r.prog.TypeAt(left))
+	if err != nil {
+		return nil, err
+	}
+	body := []ast.Stmt{stmt, &ast.ReturnStmt{Results: []ast.Expr{read}}}
 	return r.valueClosure(retType, body), nil
 }
 
