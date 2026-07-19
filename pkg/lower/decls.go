@@ -392,9 +392,16 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 			// An optional property x?: T types as T | undefined, which lowers to a
 			// value.Opt[T'] field below through the ordinary typeExpr, with the Opt's
 			// zero value standing for the absent member (05_type_lowering section 17).
-			// An optional whose type is not that two-member shape (x?: number | string
-			// adds a third member) needs the tagged sum and stays a later slice.
-			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property outside the T | undefined shape needs the tagged sum, a later slice"}
+			// An optional whose type is a wider union, x?: number | string, types as
+			// number | string | undefined and lowers to the tagged sum instead: its
+			// undefined arm is the absent member, so the field takes the tagged-sum
+			// type below through the ordinary typeExpr and the construction path fills
+			// an omitted or explicit-undefined field with the undefined-arm
+			// constructor (composite.go). A union that does not intern (an object-mixed
+			// one) still hands back.
+			if _, ok := r.optionalUnionInfo(p); !ok {
+				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property outside the T | undefined shape needs the tagged sum, a later slice"}
+			}
 		}
 		field, ok := exportedField(p.Name)
 		if !ok {

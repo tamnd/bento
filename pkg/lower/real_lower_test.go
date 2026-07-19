@@ -443,14 +443,24 @@ func TestRealOptionalPropertyLowers(t *testing.T) {
 	}
 }
 
-// TestRealWideOptionalPropertyHandsBack pins that an optional whose type is not
-// the two-member T | undefined shape (port?: number | string adds a third
-// member) still needs the tagged sum, so the whole object hands back.
-func TestRealWideOptionalPropertyHandsBack(t *testing.T) {
-	_, _, err := renderReal(t, "declare const x: { host: string; port?: number | string };")
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderType(object with wide optional) err = %v, want a *NotYetLowerable", err)
+// TestRealWideOptionalPropertyLowers pins that an optional whose type is not the
+// two-member T | undefined shape (port?: number | string adds a third member)
+// lowers to a tagged-sum field holding a tag-only undefined arm for the absent
+// property, no handback.
+func TestRealWideOptionalPropertyLowers(t *testing.T) {
+	r, got, err := renderReal(t, "declare const x: { host: string; port?: number | string };")
+	if err != nil {
+		t.Fatalf("RenderType(object with wide optional) err = %v, want nil via the tagged sum", err)
+	}
+	if got == "" {
+		t.Fatal("RenderType(object with wide optional) returned an empty type")
+	}
+	var src string
+	for _, d := range r.decls.emit() {
+		src += d.Source + "\n"
+	}
+	if !strings.Contains(src, "NumOrStrOrUndef") {
+		t.Fatalf("struct decls = %q, want a tagged sum with an undefined arm for the wide optional", src)
 	}
 }
 

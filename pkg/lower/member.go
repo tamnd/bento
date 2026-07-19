@@ -594,7 +594,12 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 				return nil, err
 			}
 			field := &ast.SelectorExpr{X: recv, Sel: ident(fieldName)}
-			if sp, ok := r.shapeProp(objType, prop); ok && sp.Optional && !r.isOptionalType(r.prog.TypeAt(n)) {
+			// The .Get() unwrap only applies to a field stored as a value.Opt, the
+			// T | undefined shape. An optional property whose type is a wider union
+			// holds a tagged sum in its field, not an Opt, so a narrowed read reads
+			// the union struct straight and its arms unwrap through the tagged-sum
+			// path, no Get.
+			if sp, ok := r.shapeProp(objType, prop); ok && sp.Optional && r.isOptionalType(sp.Type) && !r.isOptionalType(r.prog.TypeAt(n)) {
 				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: field, Sel: ident("Get")}}, nil
 			}
 			return field, nil
