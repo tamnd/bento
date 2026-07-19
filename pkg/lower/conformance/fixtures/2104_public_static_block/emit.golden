@@ -15,7 +15,9 @@ func NewRegistry() *Registry {
 	return &Registry{}
 }
 func staticInitRegistry() {
-	registryTotal = 15.0
+	{
+		registryTotal = 15.0
+	}
 }
 func main() {
 	staticInitRegistry()

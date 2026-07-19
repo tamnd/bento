@@ -18,8 +18,10 @@ func CounterBump() {
 	counterInstances++
 }
 func staticInitCounter() {
-	CounterBump()
-	CounterBump()
+	{
+		CounterBump()
+		CounterBump()
+	}
 }
 func main() {
 	staticInitCounter()

@@ -16,6 +16,7 @@ func Rank(n float64) value.BStr {
 	default:
 		return value.FromGoString("small")
 	}
+	panic("unreachable")
 }
 func Parity(n float64) value.BStr {
 	even := math.Mod(n, 2) == 0
@@ -25,6 +26,7 @@ func Parity(n float64) value.BStr {
 	default:
 		return value.FromGoString("odd")
 	}
+	panic("unreachable")
 }
 func main() {
 	value.ConsoleLog(Rank(12))

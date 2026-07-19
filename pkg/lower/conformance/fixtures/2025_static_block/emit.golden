@@ -16,9 +16,13 @@ func NewRegistry() *Registry {
 	return &Registry{}
 }
 func staticInitRegistry() {
-	registryCount = 3
-	registryLabel = value.FromGoString("ready")
-	registryCount++
+	{
+		registryCount = 3
+		registryLabel = value.FromGoString("ready")
+	}
+	{
+		registryCount++
+	}
 }
 func main() {
 	staticInitRegistry()

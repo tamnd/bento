@@ -19,7 +19,9 @@ func NewConfig() *Config {
 func staticInitConfig() {
 	configDoubled = Twice(configBase)
 	configTotal = configBase + configDoubled
-	configTotal++
+	{
+		configTotal++
+	}
 }
 func Twice(n float64) float64 {
 	return n * 2

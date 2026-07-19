@@ -19,6 +19,7 @@ func main() {
 	diffCtor := value.StrictEquals(ctor, range_)
 	value.ConsoleLog(value.BoolToString(diffCtor))
 	syntax := value.ErrorConstructor("SyntaxError")
+	_ = syntax
 	tag := syntax.TypeOf()
 	value.ConsoleLog(tag)
 }
