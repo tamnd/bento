@@ -106,6 +106,43 @@ func TestTernaryUnbracedBodyFlattens(t *testing.T) {
 	}
 }
 
+// TestTernaryOptionalWrapsSomeNone pins the T | undefined ternary shape: a ternary
+// whose whole-expression type is a two-member optional lowers to an IIFE returning
+// value.Opt[T], the present branch wrapped in value.Some and the undefined branch in
+// value.None, not the tagged-sum union.
+func TestTernaryOptionalWrapsSomeNone(t *testing.T) {
+	src := "const c = 1 > 0;\nconst x: string | undefined = c ? \"a\" : undefined;\nconsole.log(x !== undefined ? x : \"none\");\n"
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"func() value.Opt[value.BStr]",
+		"return value.Some[value.BStr](value.FromGoString(\"a\"))",
+		"return value.None[value.BStr]()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("optional ternary did not print %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestTernaryOptionalRuns builds and runs the T | undefined ternary end to end: the
+// present branch reads back through the !== undefined guard and the undefined branch
+// takes the fallback, so both the Some and None runtime paths are exercised.
+func TestTernaryOptionalRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const yes = 1 > 0;
+const no = 1 < 0;
+const a: string | undefined = yes ? "present" : undefined;
+const b: string | undefined = no ? "present" : undefined;
+console.log(a !== undefined ? a : "absent");
+console.log(b !== undefined ? b : "absent");
+`
+	got := runProgramGo(t, src)
+	want := "present\nabsent\n"
+	if got != want {
+		t.Fatalf("optional ternary program printed %q, want %q", got, want)
+	}
+}
+
 // TestTernaryRuns builds and runs the flattened forms end to end and matches the
 // Node oracle: a return ternary, a chained binding ternary, and a chained
 // assignment ternary all pick the branch the condition selects.

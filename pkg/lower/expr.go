@@ -411,6 +411,15 @@ func (r *Renderer) conditionalExpr(n frontend.Node) (ast.Expr, error) {
 // type.
 func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, trueNode frontend.Node, whenFalse ast.Expr, falseNode frontend.Node) (ast.Expr, error) {
 	target := r.prog.TypeAt(n)
+	// A ternary whose whole-expression type is a two-member T | undefined optional is
+	// not a tagged sum; it lowers through the value.Opt machinery the binding,
+	// parameter, and object-field forms already use. The present branch wraps as
+	// value.Some[T] and the undefined branch as value.None[T], the same Some and None a
+	// T | undefined slot holds, so a read of the result unwraps through the existing
+	// narrowed-optional path unchanged.
+	if r.isOptionalType(target) {
+		return r.conditionalOptional(cond, whenTrue, trueNode, whenFalse, falseNode, target)
+	}
 	info, ok := r.unionInfoOrIntern(target)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "conditional whose branches are not both the same primitive type needs a union, a later slice"}
@@ -427,6 +436,49 @@ func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, tr
 		Type: &ast.FuncType{
 			Params:  &ast.FieldList{},
 			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(info.goName)}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: cond,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{trueWrapped}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{falseWrapped}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
+}
+
+// conditionalOptional lowers a ternary whose whole-expression type is a two-member
+// T | undefined optional into an IIFE returning value.Opt[T], boxing each branch
+// through boxToOptional: a present branch becomes value.Some[T], the undefined branch
+// value.None[T], and a branch already of the optional shape passes straight through.
+// It is the ternary form of the same Some/None boxing a T | undefined binding gets, so
+// the result plugs into the existing optional-read machinery unchanged. A dynamic
+// present branch hands back through boxToOptional (boxing a dynamic value into an
+// optional slot is a later slice); an inner type value.Opt cannot spell hands back at
+// typeExpr. The condition and both branches are already lowered by the caller.
+func (r *Renderer) conditionalOptional(cond, whenTrue ast.Expr, trueNode frontend.Node, whenFalse ast.Expr, falseNode frontend.Node, target frontend.Type) (ast.Expr, error) {
+	inner, ok := r.optionalInner(r.prog.UnionMembers(target))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "conditional whose branches are not both the same primitive type needs a union, a later slice"}
+	}
+	elemGo, err := r.typeExpr(inner)
+	if err != nil {
+		return nil, err
+	}
+	trueWrapped, _, err := r.boxToOptional(whenTrue, trueNode, target)
+	if err != nil {
+		return nil, err
+	}
+	falseWrapped, _, err := r.boxToOptional(whenFalse, falseNode, target)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: index(sel("value", "Opt"), elemGo)}}},
 		},
 		Body: &ast.BlockStmt{List: []ast.Stmt{
 			&ast.IfStmt{
