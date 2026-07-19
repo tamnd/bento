@@ -121,7 +121,7 @@ func (r *Renderer) asyncArrow(n frontend.Node, fields []*ast.Field) (ast.Expr, e
 	if bodyNode.Kind() == frontend.NodeBlock {
 		body, err = r.asyncBody(sig.Return, n)
 	} else {
-		body, err = r.asyncConciseBody(sig.Return, bodyNode)
+		body, err = r.asyncConciseBody(n, sig, sig.Return, bodyNode)
 	}
 	if err != nil {
 		return nil, err
@@ -317,11 +317,23 @@ func (r *Renderer) isDefiniteNonThenable(t frontend.Type) bool {
 // wraps a block: value.Async(func() T { return <expr> }) for a valued promise, or
 // value.AsyncVoid(func() { <expr> }) for a Promise<void>, where a void body must be a
 // call so it stands in Go statement position. The expression coerces to the promise's
-// element type the same way a block body's return does.
-func (r *Renderer) asyncConciseBody(ret frontend.Type, bodyNode frontend.Node) (*ast.BlockStmt, error) {
+// element type the same way a block body's return does. A destructured parameter's
+// entry bindings are prepended inside the value.Async closure ahead of the single
+// return, the same names the block forms bind at body entry, so the concise expression
+// reads them; fn and sig carry the arrow's parameters for that binding.
+func (r *Renderer) asyncConciseBody(fn frontend.Node, sig frontend.Signature, ret frontend.Type, bodyNode frontend.Node) (*ast.BlockStmt, error) {
 	elem, ok := r.promiseElem(ret)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "an async arrow whose return is not a Promise is a later slice"}
+	}
+	// An object-rest binding a concise arrow's untyped pattern parameter gathers is a
+	// boxed value the checker did not type any, so its reads in the body expression route
+	// the dynamic way off this set, built before the body expression lowers below, the
+	// same as the non-async concise path in arrowFunc.
+	defer r.pushDynBound(r.funcParamNodes(fn), sig)()
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(fn), sig)
+	if err != nil {
+		return nil, err
 	}
 	r.usesPromise = true
 	r.requireImport(valuePkg)
@@ -336,7 +348,7 @@ func (r *Renderer) asyncConciseBody(ret frontend.Type, bodyNode frontend.Node) (
 		}
 		lit := &ast.FuncLit{
 			Type: &ast.FuncType{Params: &ast.FieldList{}},
-			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}},
+			Body: &ast.BlockStmt{List: append(binds, &ast.ExprStmt{X: call})},
 		}
 		wrap := &ast.CallExpr{Fun: sel("value", "AsyncVoid"), Args: []ast.Expr{lit}}
 		return &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{wrap}}}}, nil
@@ -358,7 +370,7 @@ func (r *Renderer) asyncConciseBody(ret frontend.Type, bodyNode frontend.Node) (
 	}
 	lit := &ast.FuncLit{
 		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: et}}}},
-		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{expr}}}},
+		Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{expr}})},
 	}
 	wrap := &ast.CallExpr{Fun: sel("value", "Async"), Args: []ast.Expr{lit}}
 	return &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{wrap}}}}, nil
