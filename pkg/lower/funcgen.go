@@ -1288,15 +1288,13 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	// body entry. The plain closure form injects those entry bindings, and the generator,
 	// async generator, and await-free async forms now inject them at the top of the
 	// coroutine or value.Async body they build (generatorCoroutine, asyncGeneratorCoroutine,
-	// asyncBody). The forms still without an entry-binding hook hand back: an awaiting
-	// async body (asyncCoroutineBody), and a named function expression (its self-reference
-	// two-step wraps the body).
+	// asyncBody). A named function expression lowers through namedFunctionExpr, whose
+	// self-reference two-step wraps the blockBodyArrow closure that injects the same entry
+	// bindings, so a destructured parameter rides along. The one form still without a hook
+	// is an awaiting async body (asyncCoroutineBody), which hands back.
 	if r.closureHasDestructuredParam(n) {
 		if r.isAsyncFunc(n) && !r.isGeneratorFunc(n) && r.bodyHasAwait(n) {
 			return nil, &NotYetLowerable{Reason: "an awaiting async function expression with a destructured parameter is a later slice"}
-		}
-		if _, named := r.funcExprNameNode(n); named {
-			return nil, &NotYetLowerable{Reason: "a named function expression with a destructured parameter is a later slice"}
 		}
 	}
 	// An async function expression returns a promise: its await-free body wraps in
