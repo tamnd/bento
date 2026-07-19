@@ -977,6 +977,41 @@ func (r *Renderer) boxArrayLiteral(n frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{lit}}, nil
 }
 
+// emptyArrayContextual re-emits a bare [] flowing into an array-typed slot at the
+// slot's element type. The checker types a bare [] as never[], which arrayLiteral
+// lowers to value.NewArray[value.Value](), a *value.Array[value.Value] that a
+// *value.Array[float64] parameter, return, or binding rejects at go build. The
+// contextual type is not on the literal node itself, only on the slot, so the fix
+// lives at the coercion boundary: when the source is an empty literal typed never[]
+// and the target is an array whose element type lowers, spell NewArray at that
+// element type, the same contextual typing an object-literal argument already gets.
+// A binding with an annotation (const a: number[] = []) never reaches here because
+// the annotation already gives the literal the target type, so its element is not
+// never. Returns ok=false for a non-empty literal, a non-array target, or a target
+// element that does not lower, leaving the ordinary path to handle or hand back.
+func (r *Renderer) emptyArrayContextual(node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil || node.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false, nil
+	}
+	if len(r.prog.Children(node)) != 0 {
+		return nil, false, nil
+	}
+	srcElem, ok := r.prog.ElementType(r.prog.TypeAt(node))
+	if !ok || srcElem.Flags&frontend.TypeNever == 0 {
+		return nil, false, nil
+	}
+	tgtElem, ok := r.prog.ElementType(target)
+	if !ok {
+		return nil, false, nil
+	}
+	elemGo, err := r.typeExpr(tgtElem)
+	if err != nil {
+		return nil, false, nil
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo)}, true, nil
+}
+
 // boxObjectLiteral lowers { k: v, ... } into value.NewObject().Set(...) per member,
 // the ordered property map a boxed object keeps, so the keys enumerate in source
 // order the way JavaScript's own property order does. Each value boxes through
@@ -1292,6 +1327,11 @@ func (r *Renderer) unboxDynamicRead(read ast.Expr, n frontend.Node) (ast.Expr, e
 // runs the ToNumber family, a static value returned as any boxes, and a return
 // whose value already matches the declared type passes through unchanged.
 func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr, error) {
+	if empty, ok, err := r.emptyArrayContextual(srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return empty, nil
+	}
 	if boxed, ok, err := r.boxToOptional(expr, srcNode, r.retType); err != nil {
 		return nil, err
 	} else if ok {
@@ -1326,6 +1366,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 // coerces through ToNumber and its siblings; a static source into a dynamic target
 // boxes through the value constructors; matching sides pass through unchanged.
 func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast.Expr, error) {
+	if empty, ok, err := r.emptyArrayContextual(src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return empty, nil
+	}
 	if boxed, ok, err := r.boxToOptional(expr, src, r.prog.TypeAt(target)); err != nil {
 		return nil, err
 	} else if ok {
