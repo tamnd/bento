@@ -1285,18 +1285,12 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 		defer r.pushOptParams(set)()
 	}
 	// A destructured parameter reads its bound names out of the synthesized field at
-	// body entry. The plain closure form injects those entry bindings, and the generator,
-	// async generator, and await-free async forms now inject them at the top of the
-	// coroutine or value.Async body they build (generatorCoroutine, asyncGeneratorCoroutine,
-	// asyncBody). A named function expression lowers through namedFunctionExpr, whose
-	// self-reference two-step wraps the blockBodyArrow closure that injects the same entry
-	// bindings, so a destructured parameter rides along. The one form still without a hook
-	// is an awaiting async body (asyncCoroutineBody), which hands back.
-	if r.closureHasDestructuredParam(n) {
-		if r.isAsyncFunc(n) && !r.isGeneratorFunc(n) && r.bodyHasAwait(n) {
-			return nil, &NotYetLowerable{Reason: "an awaiting async function expression with a destructured parameter is a later slice"}
-		}
-	}
+	// body entry, and every function-expression body form now injects those entry
+	// bindings: the plain closure through blockBodyArrow, the generator through
+	// generatorCoroutine, the async generator through asyncGeneratorCoroutine, the
+	// await-free async body through asyncBody, and the awaiting async body through
+	// asyncCoroutineBody. A named function expression rides the blockBodyArrow closure its
+	// self-reference two-step wraps. Nothing left to guard here.
 	// An async function expression returns a promise: its await-free body wraps in
 	// value.Async the same way an async function declaration's does, the closure form
 	// of asyncFuncDecl. An async generator expression takes the async generator closure
@@ -1479,13 +1473,13 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		defer r.pushOptParams(set)()
 	}
 	if r.isAsyncFunc(n) {
-		// A block-body await-free async arrow lowers through asyncBody, which injects the
-		// destructure entry bindings a pattern parameter needs at the top of its value.Async
-		// closure. An awaiting body lowers through asyncCoroutineBody and a concise body
-		// through asyncConciseBody, neither of which has that hook yet, so a destructured
-		// parameter on one of those stays on the handback.
-		if r.closureHasDestructuredParam(n) && (body.Kind() != frontend.NodeBlock || r.bodyHasAwait(n)) {
-			return nil, &NotYetLowerable{Reason: "an awaiting or concise-body async arrow with a destructured parameter is a later slice"}
+		// A block-body async arrow, await-free or awaiting, lowers through asyncBody, which
+		// injects the destructure entry bindings a pattern parameter needs at the top of the
+		// value.Async or coroutine body it builds. A concise body lowers through
+		// asyncConciseBody, which has no block for those bindings to sit above, so a
+		// destructured parameter on a concise async arrow stays on the handback.
+		if r.closureHasDestructuredParam(n) && body.Kind() != frontend.NodeBlock {
+			return nil, &NotYetLowerable{Reason: "a concise-body async arrow with a destructured parameter is a later slice"}
 		}
 		return r.asyncArrow(n, fields)
 	}

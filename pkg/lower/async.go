@@ -202,6 +202,20 @@ func (r *Renderer) asyncCoroutineBody(ret frontend.Type, retNode frontend.Node) 
 	if err != nil {
 		return nil, err
 	}
+	// A destructured parameter reads its bound names out of the synthesized parameter
+	// field at body entry, the same entry bindings the plain and await-free async paths
+	// inject. The RunAsync closure below closes over the enclosing params, so the bindings
+	// sit at the top of the coroutine body where the awaited statements read the names.
+	// nil when no parameter destructures, so a plain awaiting async body is untouched.
+	if sig, ok := r.prog.SignatureAt(retNode); ok {
+		binds, err := r.paramDestructureBindings(r.funcParamNodes(retNode), sig)
+		if err != nil {
+			return nil, err
+		}
+		if len(binds) != 0 {
+			inner.List = append(binds, inner.List...)
+		}
+	}
 	r.usesPromise = true
 	r.requireImport(valuePkg)
 
