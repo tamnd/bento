@@ -156,7 +156,14 @@ func (r *Renderer) nestedFuncLowerable(fn frontend.Node, siblings []frontend.Nod
 	if r.scopeParams[goName] {
 		return frontend.Symbol{}, nil, &NotYetLowerable{Reason: "a nested function whose name collides with an enclosing parameter is a later slice"}
 	}
-	body, _ := r.funcBodyBlock(fn)
+	// A nested function overload signature carries no body block, only a later
+	// implementation does. There is nothing to lower for the signature and its body
+	// scan below would read a nil node, so the whole unit hands back and runs on the
+	// engine where the overload set resolves.
+	body, ok := r.funcBodyBlock(fn)
+	if !ok {
+		return frontend.Symbol{}, nil, &NotYetLowerable{Reason: "a nested function overload signature has no body to lower, a later slice"}
+	}
 	if subtreeHasKind(r.prog, fn, frontend.NodeThisKeyword) {
 		return frontend.Symbol{}, nil, &NotYetLowerable{Reason: "a nested function that reads this needs its own this binding, a later slice"}
 	}
