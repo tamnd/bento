@@ -60,7 +60,15 @@ func (r *Renderer) asyncGeneratorCoroutine(fn frontend.Node) (yieldGo ast.Expr, 
 	prevInAG := r.inAsyncGen
 	r.inAsyncGen = true
 	defer func() { r.inAsyncGen = prevInAG }()
-	elemType, elemGo, err := r.generatorYieldType(block)
+	// A body that yields no typed value takes its element type from the declared
+	// AsyncGenerator<T> return annotation, read here off the signature return, so the
+	// coroutine's Y matches the T the consumer reads it through.
+	var declElem frontend.Type
+	var declOK bool
+	if sig, ok := r.prog.SignatureAt(fn); ok {
+		declElem, declOK = r.asyncGeneratorElemType(sig.Return)
+	}
+	elemType, elemGo, err := r.generatorYieldType(block, declElem, declOK)
 	if err != nil {
 		return nil, nil, err
 	}
