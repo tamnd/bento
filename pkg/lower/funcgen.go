@@ -1019,6 +1019,21 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
 		pi++
 	}
+	// A literal that declares fewer parameters than its callback slot grows the slot's
+	// trailing parameters as blank-named fields, so the emitted func type matches the
+	// slot exactly. lowerArgAt recorded them off the slot's call signature; each renders
+	// through the same typeExpr the slot's own func type uses, so an optional slot
+	// parameter folded to T | undefined pads as the value.Opt[T] the slot carries. The
+	// name is blank because the source function never reads the argument it ignores, and
+	// blank keeps the padded field named alongside the literal's own named parameters,
+	// which Go requires a func literal's parameter list to be uniformly.
+	for _, p := range r.closurePadParams[n] {
+		ptype, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident("_")}, Type: ptype})
+	}
 	return fields, nil
 }
 

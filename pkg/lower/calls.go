@@ -1106,11 +1106,49 @@ func (r *Renderer) lowerArgAt(a frontend.Node, pt frontend.Type) (ast.Expr, erro
 			return r.objectLiteralContextual(a, shape)
 		}
 	}
+	// A function literal is assignable to a callback slot that declares more
+	// parameters than the literal takes, since JavaScript lets a function ignore the
+	// trailing arguments, but the Go func value must carry the slot's exact arity. When
+	// the literal flowing into a func-typed slot declares fewer parameters than the
+	// slot, record the slot's trailing parameters so closureParamFields pads them onto
+	// the emitted func type as blank-named fields. The clear is deferred so a nested
+	// literal in the body lowers against its own slot, not this one.
+	if a.Kind() == frontend.NodeFunctionExpression || a.Kind() == frontend.NodeArrowFunction {
+		if pad, ok := r.closurePadForSlot(a, pt); ok {
+			r.closurePadParams[a] = pad
+			defer delete(r.closurePadParams, a)
+		}
+	}
 	lowered, err := r.lowerExpr(a)
 	if err != nil {
 		return nil, err
 	}
 	return r.bridgeArg(lowered, a, pt)
+}
+
+// closurePadForSlot reports the trailing parameters a lower-arity function literal
+// must grow to match its callback slot's Go func type, and whether such padding is
+// needed. The slot type must carry exactly one call signature (a plain func type or a
+// callback interface); the literal keeps every parameter it declares and gains the
+// slot's remaining ones as unused fields. It declines when the slot has no single call
+// signature, when the literal already declares at least as many parameters as the
+// slot, or when either side takes a rest parameter, whose gathering the plain arity
+// pad does not model. An unused pad parameter never reads its value, so binding one is
+// faithful: the literal ignores the argument exactly as the source function does.
+func (r *Renderer) closurePadForSlot(a frontend.Node, pt frontend.Type) ([]frontend.Param, bool) {
+	call, _ := r.prog.Signatures(pt)
+	if len(call) != 1 {
+		return nil, false
+	}
+	sig := call[0]
+	if sig.RestParam != nil {
+		return nil, false
+	}
+	own := len(r.funcParamNodes(a))
+	if own >= len(sig.Params) {
+		return nil, false
+	}
+	return sig.Params[own:], true
 }
 
 // objectMethodCall lowers a method call whose receiver is a fixed-shape object
