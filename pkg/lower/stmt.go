@@ -3543,18 +3543,20 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 				return nil, err
 			}
 		} else if r.isDynamic(parts[0]) && !r.combineIsDynamic(baseOp, parts[0], parts[2]) {
-			// The target is a boxed dynamic binding but the compound result is static: a +
-			// with a string operand concatenates, and value.Concat returns a bstr rather
-			// than a box, so the bare bstr does not fit the value.Value slot. Wrap it back
-			// into a box so the assignment types. Only + reaches here for a dynamic target,
-			// since combineBinary hands back every other operator on a dynamic operand.
-			// message += ' ' in the test262 prelude takes this shape, message being any and
-			// the right side a string literal.
-			if baseOp != "+" {
-				return nil, &NotYetLowerable{Reason: "compound assignment other than + on a dynamic target is a later slice"}
-			}
+			// The target is a boxed dynamic binding but the compound result is static, so it
+			// does not fit the value.Value slot and must be boxed back. A + with a string
+			// operand concatenates, and value.Concat returns a bstr that StringValue boxes;
+			// message += ' ' in the test262 prelude takes this shape. Every arithmetic and
+			// bitwise operator coerces the boxed target through ToNumber and leaves a float64
+			// that value.Number boxes, so x -= 3 and x <<= 1 on a dynamic x run the operator
+			// and store the boxed result. combineBinary lowered the operand already; only the
+			// re-boxing was missing.
 			r.requireImport(valuePkg)
-			rhs = &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{rhs}}
+			if baseOp == "+" {
+				rhs = &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{rhs}}
+			} else {
+				rhs = &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{rhs}}
+			}
 		} else if !r.combineIsDynamic(baseOp, parts[0], parts[2]) && r.localStorageDynamic(parts[0]) {
 			// The target's Go slot is a boxed value.Value, e.g. `var y;` with no
 			// initializer, but control-flow analysis narrowed the read that combineBinary
