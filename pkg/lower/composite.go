@@ -114,6 +114,13 @@ func (r *Renderer) wrapUnionElem(e ast.Expr, elem frontend.Node, elemT frontend.
 	if ok {
 		return wrapped, nil
 	}
+	// An array whose element type is dynamic, an any[] or unknown[], stores boxed
+	// value.Value elements, so a concrete element, the number an any[] holds after
+	// `[...additional, subcomponent]`, is boxed the same way an assignment into a
+	// dynamic slot is. A dynamic element already reads as a box and passes through.
+	if elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 && !r.isDynamic(elem) {
+		return r.boxStaticToDynamic(e, elem)
+	}
 	return e, nil
 }
 
