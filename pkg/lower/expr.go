@@ -747,7 +747,7 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		if left.Kind() == frontend.NodeElementAccessExpression {
 			return r.assignValueElement(n, left, right)
 		}
-		return r.assignValue(left, right)
+		return r.assignValue(n, left, right)
 	}
 	if opText == "," {
 		return r.commaValue(n, left, right)
@@ -884,10 +884,10 @@ func isSourceAssignOp(op string) bool {
 // lowers to a selector lvalue and a setter, dynamic receiver, or element access
 // hands back. A chained a = b = 5 falls out for free: the inner assignment is the
 // right operand of the outer, so it lowers through this same path.
-func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
+func (r *Renderer) assignValue(n, left, right frontend.Node) (ast.Expr, error) {
 	switch left.Kind() {
 	case frontend.NodeIdentifier:
-		return r.assignValueLocal(left, right)
+		return r.assignValueLocal(n, left, right)
 	case frontend.NodePropertyAccessExpression:
 		return r.assignValueProperty(left, right)
 	default:
@@ -902,7 +902,7 @@ func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
 // initializer, narrowed on read) has a boxed slot the narrowed type would not
 // name, so both hand back to a later slice; a plain number, string, or boolean
 // local passes through.
-func (r *Renderer) assignValueLocal(left, right frontend.Node) (ast.Expr, error) {
+func (r *Renderer) assignValueLocal(n, left, right frontend.Node) (ast.Expr, error) {
 	// An assignment-as-value into an ambient global (const r = (NaN = 12)) has no
 	// user slot to store into and would name an undefined Go symbol; the statement
 	// path hands the same shape back, so mirror it here rather than emit bad Go.
@@ -919,23 +919,60 @@ func (r *Renderer) assignValueLocal(left, right frontend.Node) (ast.Expr, error)
 	if r.isDynamic(left) || r.localStorageDynamic(left) {
 		return nil, &NotYetLowerable{Reason: "assignment value on a dynamic or narrowed-storage local is a later slice"}
 	}
-	retType, err := r.typeExpr(r.prog.TypeAt(left))
-	if err != nil {
-		return nil, err
-	}
+	// JavaScript's assignment expression evaluates to the assigned value, whose type
+	// is the assignment node's own type, not the slot it writes. When the slot is
+	// wider than the assigned value (a string flowing into a string | undefined
+	// local, as in d ?? (d = x ?? "x")) the value the closure yields is the narrow
+	// string while the slot stores the widened form, so returning the slot variable
+	// would yield the wrong Go type. In that widening case a temp carries the narrow
+	// assigned value and the slot receives it widened, so the stored value and the
+	// returned value stay the same object under their two types. When the assignment
+	// type and the slot lower to the same Go type the two coincide, so the plain
+	// assign-then-return the value form has always emitted still holds.
+	slotType := r.prog.TypeAt(left)
+	valTS := r.prog.TypeAt(n)
 	rhs, err := r.lowerExpr(right)
 	if err != nil {
 		return nil, err
 	}
-	rhs, err = r.coerceToTarget(rhs, right, left)
+	if !r.mismatchedLoweredType(valTS, slotType) {
+		retType, err := r.typeExpr(slotType)
+		if err != nil {
+			return nil, err
+		}
+		stored, err := r.coerceToTarget(rhs, right, left)
+		if err != nil {
+			return nil, err
+		}
+		body := []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{stored}},
+			&ast.ReturnStmt{Results: []ast.Expr{ident(name)}},
+		}
+		return r.valueClosure(retType, body), nil
+	}
+	valType, err := r.typeExpr(valTS)
+	if err != nil {
+		return nil, err
+	}
+	val, err := r.coerceToTarget(rhs, right, n)
+	if err != nil {
+		return nil, err
+	}
+	tmp := r.freshTemp()
+	stored, err := r.coerceToTarget(ident(tmp), n, left)
 	if err != nil {
 		return nil, err
 	}
 	body := []ast.Stmt{
-		&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}},
-		&ast.ReturnStmt{Results: []ast.Expr{ident(name)}},
+		&ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+			Names:  []*ast.Ident{ident(tmp)},
+			Type:   valType,
+			Values: []ast.Expr{val},
+		}}}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{stored}},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}},
 	}
-	return r.valueClosure(retType, body), nil
+	return r.valueClosure(valType, body), nil
 }
 
 // assignValueProperty lowers an assignment-as-value whose target is a property.

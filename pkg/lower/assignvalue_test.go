@@ -47,6 +47,34 @@ console.log(a[0], y);
 	}
 }
 
+// TestAssignmentValueWideningYieldsNarrowType proves an assignment whose slot is
+// wider than the assigned value yields the narrow assigned type, not the slot's. The
+// value of d = x ?? "x", where d is string | undefined, is a string, so the closure
+// returns a string while the string | undefined slot receives the widened value. The
+// nullish coalesce d ?? (d = x ?? "x") reads that string branch, so the two arms of
+// the coalesce share one Go type and the whole expression compiles.
+func TestAssignmentValueWideningYieldsNarrowType(t *testing.T) {
+	const src = "let x: string | undefined; let d: string | undefined; const r = d ?? (d = x ?? \"x\"); console.log(r);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "d = value.Some[value.BStr](") {
+		t.Errorf("widening assignment did not store the value widened to the slot:\n%s", source)
+	}
+}
+
+// TestAssignmentValueWideningRuns builds and runs the widening form so the assigned
+// value the expression yields is proven against the JavaScript result.
+func TestAssignmentValueWideningRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `let x: string | undefined;
+let d: string | undefined;
+console.log(d ?? (d = x ?? "x"));
+console.log(d);
+`
+	if got, want := runProgramGo(t, src), "x\nx\n"; got != want {
+		t.Fatalf("widening assignment value form printed %q, want %q", got, want)
+	}
+}
+
 // TestAssignmentValuePropertyLowersToAssignThenReturn proves an assignment into a
 // class or object field, read for its value, lowers to a closure that binds the
 // right-hand side to a typed temp, writes it through the field selector, and
