@@ -899,12 +899,140 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 				uses[sym]++
 			}
 		}
+		for _, arg := range elidedOverriddenSpreadSources(r, n) {
+			if sym, ok := prog.SymbolAt(arg); ok {
+				uses[sym]++
+			}
+		}
 		for i, c := range prog.Children(n) {
 			walk(c, n, i)
 		}
 	}
 	walk(entry, entry, 0)
 	return uses
+}
+
+// elidedOverriddenSpreadSources reports the spread-source identifiers of an object
+// literal every one of whose fields a later member of the same literal overrides,
+// so the spread copies nothing into the emitted struct. objectLiteral resolves the
+// left-to-right override in its field map, and a source all of whose fields a later
+// member re-sets contributes no surviving src.Field to the composite literal, yet
+// the source identifier was still read once by the spread. Recording that read lets
+// bindingUnused blank the source, an ambient `declare const` among them, the
+// override orphaned. A node that is not an object literal, a spread whose source is
+// not a plain identifier, and a literal carrying a member whose field set cannot be
+// resolved statically all return nothing, keeping the match to the case it is sure
+// of, where even a stray over-count only adds a harmless _ = x beside a real read.
+func elidedOverriddenSpreadSources(r *Renderer, n frontend.Node) []frontend.Node {
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil
+	}
+	prog := r.prog
+	members := prog.Children(n)
+	// contributed[i] is the set of Go field names member i sets, left nil when the
+	// member's fields cannot be resolved statically. A nil later member could hide a
+	// field an earlier spread's source still supplies, so it blocks claiming any
+	// earlier spread fully overridden.
+	contributed := make([]map[string]bool, len(members))
+	type spreadRef struct {
+		idx  int
+		src  frontend.Node
+		flds map[string]bool
+	}
+	var spreads []spreadRef
+	for i, p := range members {
+		if p.Kind() != frontend.NodeUnknown {
+			continue
+		}
+		kids := prog.Children(p)
+		switch len(kids) {
+		case 1:
+			if strings.HasPrefix(strings.TrimSpace(prog.Text(p)), "...") {
+				src := kids[0]
+				flds := spreadSourceFields(r, src)
+				contributed[i] = flds
+				if src.Kind() == frontend.NodeIdentifier && flds != nil {
+					spreads = append(spreads, spreadRef{idx: i, src: src, flds: flds})
+				}
+				continue
+			}
+			if f, ok := plainMemberField(r, kids[0]); ok {
+				contributed[i] = map[string]bool{f: true}
+			}
+		case 2:
+			if f, ok := plainMemberField(r, kids[0]); ok {
+				contributed[i] = map[string]bool{f: true}
+			}
+		}
+	}
+	var out []frontend.Node
+	for _, s := range spreads {
+		later := map[string]bool{}
+		unresolved := false
+		for j := s.idx + 1; j < len(members); j++ {
+			if contributed[j] == nil {
+				unresolved = true
+				break
+			}
+			for f := range contributed[j] {
+				later[f] = true
+			}
+		}
+		if unresolved {
+			continue
+		}
+		covered := true
+		for f := range s.flds {
+			if !later[f] {
+				covered = false
+				break
+			}
+		}
+		if covered {
+			out = append(out, s.src)
+		}
+	}
+	return out
+}
+
+// spreadSourceFields reports the Go field names an object spread of src copies,
+// mirroring objectSpread: the source must be a fixed-shape object, not an array,
+// with at least one static property, each of whose names is a Go identifier. It
+// returns nil when any of those fail, the same conditions under which objectSpread
+// hands the literal back rather than emit a field read.
+func spreadSourceFields(r *Renderer, src frontend.Node) map[string]bool {
+	t := r.prog.TypeAt(src)
+	if t.Flags&frontend.TypeObject == 0 {
+		return nil
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return nil
+	}
+	props := r.prog.Properties(t)
+	if len(props) == 0 {
+		return nil
+	}
+	flds := map[string]bool{}
+	for _, p := range props {
+		f, ok := exportedField(p.Name)
+		if !ok {
+			return nil
+		}
+		flds[f] = true
+	}
+	return flds
+}
+
+// plainMemberField resolves the Go field name a plain object-literal member sets,
+// the same memberName then exportedField objectLiteral keys its field map on, so
+// the override check compares names the emit agrees with. It reports false for a
+// key that is not a plain property name.
+func plainMemberField(r *Renderer, keyNode frontend.Node) (string, bool) {
+	prop, ok := r.memberName(keyNode)
+	if !ok {
+		return "", false
+	}
+	return exportedField(prop)
 }
 
 // elidedTemporalStringArgs reports the bare-identifier arguments a Temporal call folds to
