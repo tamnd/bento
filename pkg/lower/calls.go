@@ -1049,6 +1049,11 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	} else if ok {
 		return empty, nil
 	}
+	if dyn, ok, err := r.dynArrayLiteralContextual(node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return dyn, nil
+	}
 	if boxed, ok, err := r.boxToOptional(lowered, node, pt); err != nil {
 		return nil, err
 	} else if ok {

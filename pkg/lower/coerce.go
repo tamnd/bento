@@ -1038,6 +1038,52 @@ func (r *Renderer) emptyArrayContextual(node frontend.Node, target frontend.Type
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo)}, true, nil
 }
 
+// dynArrayLiteralContextual re-emits a non-empty array literal flowing into an any[]
+// slot at the slot's boxed element type. The checker types [1] by its own contents,
+// *value.Array[float64], which a *value.Array[value.Value] parameter, return, or
+// binding rejects at go build, because Go's array header is invariant in its element
+// type where JavaScript's any[] silently boxes. The contextual any[] lives on the slot,
+// not the literal, so the fix sits at the coercion boundary the same way
+// emptyArrayContextual re-spells a bare []: when the source is a non-empty array literal
+// and the target is an array whose element type is dynamic, each element boxes through
+// boxOperand and the literal re-emits as value.NewArray[value.Value] over the boxed
+// elements, the header the slot accepts. It declines when the target element already
+// matches (both dynamic, so the plain path lowers the boxed elements) or the literal
+// carries a spread, whose gather boxArrayLiteral leaves to a later slice; the ordinary
+// coercion then handles or hands back.
+func (r *Renderer) dynArrayLiteralContextual(node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil || node.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(node)
+	if len(kids) == 0 {
+		return nil, false, nil
+	}
+	tgtElem, ok := r.prog.ElementType(target)
+	if !ok || tgtElem.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return nil, false, nil
+	}
+	// A literal the checker already typed any[] rides the plain array path, whose
+	// elements are boxed already; only a concretely-typed literal needs re-boxing here.
+	if srcElem, ok := r.prog.ElementType(r.prog.TypeAt(node)); ok &&
+		srcElem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return nil, false, nil
+	}
+	elems := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeSpreadElement {
+			return nil, false, nil
+		}
+		boxed, err := r.boxOperand(k)
+		if err != nil {
+			return nil, false, err
+		}
+		elems = append(elems, boxed)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "Value")), Args: elems}, true, nil
+}
+
 // boxObjectLiteral lowers { k: v, ... } into value.NewObject().Set(...) per member,
 // the ordered property map a boxed object keeps, so the keys enumerate in source
 // order the way JavaScript's own property order does. Each value boxes through
@@ -1358,6 +1404,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	} else if ok {
 		return empty, nil
 	}
+	if dyn, ok, err := r.dynArrayLiteralContextual(srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return dyn, nil
+	}
 	if boxed, ok, err := r.boxToOptional(expr, srcNode, r.retType); err != nil {
 		return nil, err
 	} else if ok {
@@ -1396,6 +1447,11 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 		return nil, err
 	} else if ok {
 		return empty, nil
+	}
+	if dyn, ok, err := r.dynArrayLiteralContextual(src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return dyn, nil
 	}
 	if boxed, ok, err := r.boxToOptional(expr, src, r.prog.TypeAt(target)); err != nil {
 		return nil, err
