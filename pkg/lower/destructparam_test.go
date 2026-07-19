@@ -294,14 +294,52 @@ console.log(fac([5, 1]));
 	}
 }
 
-// TestAwaitingAsyncExprDestructuredParamHandsBack proves an awaiting async function
-// expression with a destructured parameter hands back: an awaiting body lowers through
-// asyncCoroutineBody, which has no entry-binding hook yet.
-func TestAwaitingAsyncExprDestructuredParamHandsBack(t *testing.T) {
-	const src = `const f = async function ({x}: {x: number}): Promise<number> { return await Promise.resolve(x); };
+// TestAwaitingAsyncExprDestructuredParamRuns proves an awaiting async function
+// expression with a destructured parameter binds its names through asyncCoroutineBody's
+// entry bindings, injected at the top of the coroutine body.
+func TestAwaitingAsyncExprDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const f = async function ({x}: {x: number}): Promise<number> { return await Promise.resolve(x) + 1; };
+f({x: 41}).then((v) => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "42\n"; got != want {
+		t.Fatalf("awaiting async expression destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAwaitingAsyncDeclDestructuredParamRuns proves the awaiting async function
+// declaration form injects the same entry bindings through asyncCoroutineBody.
+func TestAwaitingAsyncDeclDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `async function f([a, b]: number[]): Promise<number> { return a + (await Promise.resolve(b)); }
+f([10, 20]).then((v) => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "30\n"; got != want {
+		t.Fatalf("awaiting async declaration destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAwaitingAsyncArrowDestructuredParamRuns proves an awaiting block-body async arrow
+// with a destructured parameter lowers through asyncBody to asyncCoroutineBody, which now
+// carries the entry-binding hook; a concise async arrow still hands back.
+func TestAwaitingAsyncArrowDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const f = async ({x, y}: {x: number; y: number}): Promise<number> => { return (await Promise.resolve(x)) * y; };
+f({x: 6, y: 7}).then((v) => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "42\n"; got != want {
+		t.Fatalf("awaiting async arrow destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestConciseAsyncArrowDestructuredParamHandsBack proves a concise-body async arrow with
+// a destructured parameter still hands back: asyncConciseBody has no block for the entry
+// bindings to sit above.
+func TestConciseAsyncArrowDestructuredParamHandsBack(t *testing.T) {
+	const src = `const f = async ({x}: {x: number}): Promise<number> => await Promise.resolve(x);
 f({x: 1});
 `
-	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "destructured parameter") {
-		t.Fatalf("awaiting async expression handback reason = %q, want a destructured-parameter reason", reason)
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "concise-body async arrow with a destructured parameter") {
+		t.Fatalf("concise async arrow handback reason = %q, want a concise-body reason", reason)
 	}
 }
