@@ -101,12 +101,12 @@ func (r *Renderer) elementLoadMethod(idxNode frontend.Node) (string, error) {
 // in an expression position, whose result is the updated value the statement path
 // discards. It reuses the statement lowering to build the read-modify-write, then
 // wraps it in a closure that runs the store and returns the target, so the whole
-// expression evaluates to the value JavaScript's compound assignment yields. The
-// target must be a plain static-primitive local: a dynamic or narrowed-storage
-// local keeps its value in a box the returned identifier's narrowed type would not
-// name, and a refined-integer local returns an int a float64 context would
-// mismatch, so both hand back, and a member target hands back inside lowerAssign,
-// each a later slice.
+// expression evaluates to the value JavaScript's compound assignment yields. A
+// refined-integer local returns an int a float64 context would mismatch, so it
+// hands back, and a member target hands back inside lowerAssign, each a later
+// slice. A dynamic or narrowed-storage local keeps its value in a box, so the
+// closure returns that box as a value.Value and the whole read coerces down to a
+// static primitive when the expression's context is one.
 func (r *Renderer) assignValueCompound(n, left frontend.Node) (ast.Expr, error) {
 	if left.Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "compound assignment value on a non-identifier target is a later slice"}
@@ -118,12 +118,24 @@ func (r *Renderer) assignValueCompound(n, left frontend.Node) (ast.Expr, error) 
 	if r.int32Locals[name] || r.int64Locals[name] {
 		return nil, &NotYetLowerable{Reason: "compound assignment value on a refined-integer local is a later slice"}
 	}
-	if r.isDynamic(left) || r.localStorageDynamic(left) {
-		return nil, &NotYetLowerable{Reason: "compound assignment value on a dynamic or narrowed-storage local is a later slice"}
-	}
 	stmt, err := r.lowerAssign(n)
 	if err != nil {
 		return nil, err
+	}
+	// A local whose Go storage is a box (a dynamic local, or one the compiler boxed
+	// to hold a wide type) holds a value.Value, not the narrowed static type the
+	// checker gives the identifier here. The closure returns that box, and when the
+	// whole compound expression sits in a static-primitive context the boxed read
+	// coerces down through the ToNumber family, the same coercion a boxed member read
+	// takes; a dynamic context keeps the box.
+	if r.isDynamic(left) || r.localStorageDynamic(left) {
+		r.requireImport(valuePkg)
+		body := []ast.Stmt{stmt, &ast.ReturnStmt{Results: []ast.Expr{ident(name)}}}
+		closure := r.valueClosure(sel("value", "Value"), body)
+		if r.isDynamic(n) {
+			return closure, nil
+		}
+		return r.coerceDynamicToStatic(closure, n)
 	}
 	retType, err := r.typeExpr(r.prog.TypeAt(left))
 	if err != nil {

@@ -89,11 +89,24 @@ func TestCompoundValueRuns(t *testing.T) {
 	}
 }
 
-func TestCompoundValueOnDynamicHandsBack(t *testing.T) {
-	const src = `let x: any = 1; let r = (x += 1); console.log(r);`
-	reason := renderProgramTolerantHandBack(t, src)
-	if !strings.Contains(reason, "dynamic or narrowed-storage local") {
-		t.Fatalf("reason = %q, want a dynamic-local handback", reason)
+func TestCompoundValueOnDynamicRuns(t *testing.T) {
+	// The target local is stored as a box, so the read-modify-write runs in a closure
+	// that returns the box; a dynamic-context use keeps it.
+	const src = `let x: any = 1; let r: any = (x += 1); console.log(r); console.log(x);`
+	if got, want := runProgramGoTolerant(t, src), "2\n2\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestCompoundValueOnDynamicCoercesToStatic(t *testing.T) {
+	// A static-primitive context coerces the returned box down through ToNumber.
+	const src = `let x: any = 1; let n: number = (x += 4); console.log(n);`
+	out := renderProgramTolerant(t, src)
+	if !strings.Contains(out, "value.ToNumber(") {
+		t.Fatalf("want a ToNumber coercion of the closure result, got:\n%s", out)
+	}
+	if got, want := runProgramGoTolerant(t, src), "5\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
 	}
 }
 
