@@ -134,18 +134,16 @@ func (r *Renderer) collectYields(n frontend.Node, out *[]frontend.Node) {
 // yield has no operand to read a type off, so a body whose only yields are those keeps
 // its own precise reason rather than the generic no-element-type one. A body whose
 // yields disagree in Go type hands back rather than pick one.
-func (r *Renderer) generatorYieldType(block frontend.Node) (frontend.Type, ast.Expr, error) {
+func (r *Renderer) generatorYieldType(block frontend.Node, declElem frontend.Type, declOK bool) (frontend.Type, ast.Expr, error) {
 	var yields []frontend.Node
 	r.collectYields(block, &yields)
 	var elemGo ast.Expr
 	var elemType frontend.Type
-	sawValueless := false
 	for _, y := range yields {
 		kids := r.prog.Children(y)
 		var t frontend.Type
 		switch {
 		case len(kids) == 0:
-			sawValueless = true
 			continue
 		case len(kids) > 1:
 			// yield* delegates to a sub-iterable, whose element type joins the channel's
@@ -179,10 +177,34 @@ func (r *Renderer) generatorYieldType(block frontend.Node) (frontend.Type, ast.E
 		}
 	}
 	if elemGo == nil {
-		if sawValueless {
-			return frontend.Type{}, nil, &NotYetLowerable{Reason: "a valueless yield is a later slice"}
+		// A generator whose body yields no typed value, either empty (function* g() {})
+		// or with only valueless yields (yield;), takes its element type from its declared
+		// return annotation Generator<T>, the same type the consumer reads it through: a
+		// for...of binding or a .next() mapper is typed off that declared T, so decl-side
+		// Y and consumption-side T must agree or the emitted Go will not compile. An empty
+		// Generator<number> is a Gen[float64] the consumer maps with func(float64); a
+		// valueless Generator<undefined> is a Gen[value.Value] the consumer maps with
+		// func(value.Value), and value.Undefined the valueless yield sends is a value.Value.
+		if declOK {
+			g, err := r.typeExpr(declElem)
+			if err != nil {
+				return frontend.Type{}, nil, err
+			}
+			return declElem, g, nil
 		}
-		return frontend.Type{}, nil, &NotYetLowerable{Reason: "a generator with no yielded value has no element type here, a later slice"}
+		// With no readable declared element (an untyped generator), the element type is the
+		// dynamic value.Value box: value.Undefined the valueless yield sends is a value.Value,
+		// and an empty generator yields nothing at all. yieldExpr reads this element type to
+		// admit the valueless yield. A generator that mixes a valueless and a typed yield
+		// keeps the concrete elemGo the typed yield set above, so its Y stays that Go type
+		// and its valueless yield stays on the handback rather than send an undefined into a
+		// typed channel.
+		dyn := frontend.Type{Flags: frontend.TypeAny}
+		g, err := r.typeExpr(dyn)
+		if err != nil {
+			return frontend.Type{}, nil, err
+		}
+		return dyn, g, nil
 	}
 	return elemType, elemGo, nil
 }
@@ -385,7 +407,19 @@ func (r *Renderer) yieldExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	kids := r.prog.Children(n)
 	if len(kids) == 0 {
-		return nil, &NotYetLowerable{Reason: "a valueless yield is a later slice"}
+		// A valueless yield sends value.Undefined, valid only when the channel's Y is the
+		// boxed value.Value: the dynamic box of an untyped generator, or a declared element
+		// type that itself lowers to value.Value (undefined, null, void, never, any, unknown),
+		// as in a Generator<undefined>. A generator whose Y is a concrete Go type no undefined
+		// fits (a typed yield fixed it, or the declared element is a real type) stays a later
+		// slice rather than send an undefined into a typed channel.
+		const boxFlags = frontend.TypeAny | frontend.TypeUnknown | frontend.TypeUndefined |
+			frontend.TypeNull | frontend.TypeVoid | frontend.TypeNever
+		if r.genYieldType.Flags&boxFlags == 0 {
+			return nil, &NotYetLowerable{Reason: "a valueless yield in a generator that also yields a typed value is a later slice"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.genCo), Sel: ident("Yield")}, Args: []ast.Expr{sel("value", "Undefined")}}, nil
 	}
 	var call ast.Expr
 	if len(kids) > 1 {
@@ -471,7 +505,17 @@ func (r *Renderer) generatorCoroutine(fn frontend.Node) (yieldGo ast.Expr, newGe
 	if !ok {
 		return nil, nil, &NotYetLowerable{Reason: "a generator without a body is a later slice"}
 	}
-	elemType, elemGo, err := r.generatorYieldType(block)
+	// A body that yields no typed value takes its element type from the declared
+	// Generator<T> return annotation so the coroutine's Y matches the T the consumer
+	// reads it through. Read that declared element off the signature return here, where
+	// the function node is in hand, and pass it as the fallback generatorYieldType uses
+	// only when the body itself fixes no element type.
+	var declElem frontend.Type
+	var declOK bool
+	if sig, ok := r.prog.SignatureAt(fn); ok {
+		declElem, declOK = r.generatorElemType(sig.Return)
+	}
+	elemType, elemGo, err := r.generatorYieldType(block, declElem, declOK)
 	if err != nil {
 		return nil, nil, err
 	}

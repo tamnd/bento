@@ -145,14 +145,18 @@ func TestGeneratorYieldTypedNextCoerces(t *testing.T) {
 	}
 }
 
-// TestGeneratorEmptyHandsBack pins that a generator with no yielded value has no
-// element type to name yet and hands back with that reason.
-func TestGeneratorEmptyHandsBack(t *testing.T) {
+// TestGeneratorEmptyTakesDeclaredElemType pins that a generator whose body yields no
+// value takes its element type from the declared Generator<T> return annotation, so
+// the coroutine's Y matches the T the consumer reads it through. An empty
+// Generator<number> renders a *value.Gen[float64], not a dynamic box, keeping the
+// decl-side Y and any consumption-side mapper in agreement.
+func TestGeneratorEmptyTakesDeclaredElemType(t *testing.T) {
 	const src = `function* g(): Generator<number> { return; }
 g();
 `
-	if reason, want := renderProgramHandBack(t, src), "a generator with no yielded value has no element type here, a later slice"; reason != want {
-		t.Fatalf("handback reason = %q, want %q", reason, want)
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "*value.Gen[float64]") {
+		t.Fatalf("empty generator did not take its declared element type:\n%s", got)
 	}
 }
 
