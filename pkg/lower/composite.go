@@ -814,6 +814,14 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 		// the lowered undefined would store the boxed Undefined in a typed slot,
 		// which does not compile, so this case is handled before the general path.
 		if hasProp && sp.Optional && r.prog.TypeAt(valNode).Flags == frontend.TypeUndefined {
+			// An explicit undefined filling an optional tagged-sum union field is the
+			// undefined arm, the same value an omitted field takes; a value.Opt field
+			// takes value.None.
+			if info, ok := r.optionalUnionInfo(sp); ok {
+				elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: r.unionUndefValue(info)})
+				seen[field] = true
+				continue
+			}
 			inner, ok := r.optionalInner(r.prog.UnionMembers(sp.Type))
 			if !ok {
 				return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}
@@ -851,13 +859,23 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 		// the value.Opt slot the field became, unless the member is already an optional
 		// of that type, which passes through as the Opt it is.
 		if hasProp && sp.Optional && !r.isOptional(valNode) {
-			inner, ok := r.optionalInner(r.prog.UnionMembers(sp.Type))
-			if !ok {
-				return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}
-			}
-			val, err = r.someWrap(val, inner)
-			if err != nil {
-				return nil, err
+			// A present value filling an optional tagged-sum union field wraps into its
+			// number or string arm constructor, the same coercion a required union field
+			// applies; a value.Opt field wraps in value.Some.
+			if _, ok := r.optionalUnionInfo(sp); ok {
+				val, err = r.coerceToType(val, valNode, sp.Type)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				inner, ok := r.optionalInner(r.prog.UnionMembers(sp.Type))
+				if !ok {
+					return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}
+				}
+				val, err = r.someWrap(val, inner)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
@@ -876,6 +894,12 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 		}
 		if !tp.Optional {
 			return nil, &NotYetLowerable{Reason: "object literal missing a required field is a later slice"}
+		}
+		// An omitted optional tagged-sum union field takes its undefined arm; a
+		// value.Opt field takes the empty value.None.
+		if info, ok := r.optionalUnionInfo(tp); ok {
+			elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: r.unionUndefValue(info)})
+			continue
 		}
 		inner, ok := r.optionalInner(r.prog.UnionMembers(tp.Type))
 		if !ok {

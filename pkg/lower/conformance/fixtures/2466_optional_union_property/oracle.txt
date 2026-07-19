@@ -1,0 +1,8 @@
+== stdout:
+1:none
+2:num:42
+3:str:hi
+4:none
+
+== exit:
+0

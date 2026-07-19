@@ -192,6 +192,60 @@ func (u *unionInfo) armForFlags(f frontend.TypeFlags) (unionArm, bool) {
 	return unionArm{}, false
 }
 
+// undefArm returns the union's tag-only undefined arm, the arm an absent optional
+// property constructs. A union without an undefined member (a required union, or one
+// whose only sentinel is null) returns false.
+func (u *unionInfo) undefArm() (unionArm, bool) {
+	for _, a := range u.arms {
+		if a.flag == frontend.TypeUndefined {
+			return a, true
+		}
+	}
+	return unionArm{}, false
+}
+
+// optionalUnionInfo returns the interned tagged-sum descriptor for an optional
+// property whose type is a multi-member union rather than the two-member T | undefined
+// shape (which lowers to value.Opt). The union must carry an undefined arm, because
+// that arm is how an absent property is constructed and read: a tag?: number | string
+// types as number | string | undefined, and the undefined arm stands for the omitted
+// member. A property that is not optional, that is the value.Opt shape, or whose union
+// does not intern (an object-mixed union) returns false so the caller keeps the
+// value.Opt path or hands back.
+func (r *Renderer) optionalUnionInfo(p frontend.Property) (*unionInfo, bool) {
+	if !p.Optional || r.isOptionalType(p.Type) {
+		return nil, false
+	}
+	if p.Type.Flags&frontend.TypeUnion == 0 {
+		return nil, false
+	}
+	hasUndef := false
+	for _, m := range r.prog.UnionMembers(p.Type) {
+		if m.Flags == frontend.TypeUndefined {
+			hasUndef = true
+			break
+		}
+	}
+	if !hasUndef {
+		return nil, false
+	}
+	info, err := r.internUnion(p.Type)
+	if err != nil {
+		return nil, false
+	}
+	if _, ok := info.undefArm(); !ok {
+		return nil, false
+	}
+	return info, true
+}
+
+// unionUndefValue is the no-argument undefined-arm constructor call, the value an
+// omitted or explicitly-undefined optional union property takes in a struct literal.
+func (r *Renderer) unionUndefValue(info *unionInfo) ast.Expr {
+	arm, _ := info.undefArm()
+	return &ast.CallExpr{Fun: ident(info.ctorName(arm))}
+}
+
 // primUnionArms classifies each member of a union to a primitive arm, returning the
 // arms in canonical rank order. It returns false when any member is not a supported
 // primitive, so the caller can tell a lowerable primitive union from one that still
