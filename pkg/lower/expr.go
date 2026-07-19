@@ -328,6 +328,26 @@ func (r *Renderer) castExpr(n frontend.Node, innerIdx int) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "cast expression did not expose an inner expression"}
 	}
 	inner := kids[innerIdx]
+	// An object literal asserted to a fixed shape, `<{ id: number }>({})` or `({}) as
+	// { id: number }`, builds at the asserted shape rather than the literal's own
+	// fresh type, which would intern a different Go struct the coercion below cannot
+	// bridge. The assertion trusts the literal for the shape, so a required field the
+	// literal omits is zero-filled by Go. Parentheses the assertion source carries are
+	// seen through to reach the literal.
+	lit := inner
+	for lit.Kind() == frontend.NodeParenthesizedExpression {
+		if kids := r.prog.Children(lit); len(kids) == 1 {
+			lit = kids[0]
+		} else {
+			break
+		}
+	}
+	if lit.Kind() == frontend.NodeObjectLiteralExpression {
+		target := r.prog.TypeAt(n)
+		if r.isPlainShape(target) {
+			return r.objectLiteralContextualFill(lit, target, true)
+		}
+	}
 	expr, err := r.lowerExpr(inner)
 	if err != nil {
 		return nil, err

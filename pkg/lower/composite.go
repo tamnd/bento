@@ -761,7 +761,19 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 // value.None, which have no effect to order. A required field left unfilled, a
 // spread member, and a computed or non-identifier key each hand back to a later
 // slice, keeping this slice to the plain contextual build.
+//
+// zeroFill lifts the missing-required handback for a build under an explicit type
+// assertion, `<{ id: number }>({})`, where the programmer overrides the checker
+// and the empty literal is trusted to stand for the asserted shape. A required
+// field the members omit is then left off the composite literal, so Go fills it
+// with the field type's zero, the faithful lowering of an asserted value whose
+// runtime shape is narrower than its static type. Every ordinary contextual build
+// passes zeroFill false and keeps handing back on a missing required field.
 func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type) (ast.Expr, error) {
+	return r.objectLiteralContextualFill(n, shape, false)
+}
+
+func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.Type, zeroFill bool) (ast.Expr, error) {
 	name, err := r.decls.internStruct(r, shape)
 	if err != nil {
 		return nil, err
@@ -839,8 +851,9 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 			// A nested object literal builds at the field's declared shape, not its own
 			// fresh required shape, so an inner optional property interns the same
 			// struct the field type does and the value lands in the field without a
-			// shape mismatch.
-			val, err = r.objectLiteralContextual(valNode, fieldShape)
+			// shape mismatch. A build under an assertion carries the zero-fill down, so a
+			// nested empty literal the assertion covers zero-fills too.
+			val, err = r.objectLiteralContextualFill(valNode, fieldShape, zeroFill)
 		} else {
 			val, err = r.lowerExpr(valNode)
 			if err == nil && haveFieldShape && fieldShape.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
@@ -893,6 +906,13 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 			continue
 		}
 		if !tp.Optional {
+			// Under an assertion the omitted required field is left off the composite
+			// literal so Go zero-fills it; without one it hands back, since a required
+			// field with no value would otherwise silently take a zero the source never
+			// wrote.
+			if zeroFill {
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "object literal missing a required field is a later slice"}
 		}
 		// An omitted optional tagged-sum union field takes its undefined arm; a
