@@ -1654,7 +1654,44 @@ func (r *Renderer) arrayCallbackMethod(recvNode frontend.Node, goMethod string, 
 	if err != nil {
 		return nil, err
 	}
+	// forEach discards its callback's result, so ForEach's Go parameter is a func(T)
+	// with no result. A callback with an expression body, match => "".replace(...),
+	// lowers to a func that returns that body's value and does not fit, so it is wrapped
+	// to drive the call for effect and drop the result, the way forEach ignores it. some
+	// and every keep their func(T) bool result, so only forEach adapts.
+	if goMethod == "ForEach" {
+		if lit, ok := fn.(*ast.FuncLit); ok && lit.Type.Results != nil {
+			fn = r.dropFuncResult(lit)
+		}
+	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// dropFuncResult wraps a function literal that returns a value in an adapter that
+// calls it for effect and discards the result, so a value-returning callback fits a
+// void func(T) slot the way a forEach callback does. The adapter binds the literal's
+// own parameter types under fresh names and forwards them, so the call is by position
+// and the literal's value, which has no creation side effect, is embedded directly.
+func (r *Renderer) dropFuncResult(lit *ast.FuncLit) *ast.FuncLit {
+	var fields []*ast.Field
+	var args []ast.Expr
+	if lit.Type.Params != nil {
+		for _, f := range lit.Type.Params.List {
+			n := len(f.Names)
+			if n == 0 {
+				n = 1
+			}
+			for i := 0; i < n; i++ {
+				nm := r.freshTemp()
+				fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(nm)}, Type: f.Type})
+				args = append(args, ident(nm))
+			}
+		}
+	}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{Fun: lit, Args: args}}}},
+	}
 }
 
 // arrowParamCount reports how many parameters an arrow declares, the count the
