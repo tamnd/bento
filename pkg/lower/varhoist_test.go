@@ -131,3 +131,33 @@ console.log(outcome);
 		t.Fatalf("var-hoist program printed %q, want %q", got, want)
 	}
 }
+
+// TestSelfReferentialVarHoists pins that a var whose own initializer reads its
+// name is declared at the scope top so the initializer reads the undefined the
+// var holds before assignment, matching JavaScript, rather than emitting a Go
+// short declaration that reads a name it is still declaring.
+func TestSelfReferentialVarHoists(t *testing.T) {
+	const src = `var a: any = { f: a };`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var a value.Value") {
+		t.Fatalf("self-referential var did not pre-declare its slot:\n%s", out)
+	}
+	if strings.Contains(out, "a :=") {
+		t.Fatalf("self-referential var kept a short declaration Go rejects:\n%s", out)
+	}
+}
+
+// TestSelfReferentialVarRuns builds and runs the self-reference so the undefined
+// read is proven by the result: a.f is the undefined the var held while its
+// object literal was built.
+func TestSelfReferentialVarRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `var a: any = { f: a };
+console.log(typeof a.f);
+console.log(typeof a);`
+	got := runProgramGo(t, src)
+	want := "undefined\nobject\n"
+	if got != want {
+		t.Fatalf("self-referential var run mismatch:\n got %q\nwant %q", got, want)
+	}
+}

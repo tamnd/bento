@@ -104,7 +104,53 @@ func (r *Renderer) varHoists(topStmts []frontend.Node) []frontend.Node {
 	for _, s := range topStmts {
 		r.collectForInitHoists(s, topStmts, topNames, seen, &out)
 	}
+	// A `var` whose own initializer reads its name, `var a = { f: a }`, needs the
+	// same top-of-scope declaration even though no block encloses it: JavaScript
+	// reads the var as undefined while its initializer runs, then assigns, so the
+	// object's f is undefined. Go cannot read a name in the `:=` that declares it, so
+	// the binding pre-declares and its site becomes an assignment, and the undefined
+	// zero of the declared slot is what the initializer reads.
+	r.collectSelfRefVarHoists(topStmts, topNames, seen, &out)
 	return out
+}
+
+// collectSelfRefVarHoists records each scope-level `var` whose initializer reads
+// the binding's own name, the self-reference a block-crossing hoist does not see
+// because the binding and its use sit in one statement. Only a `var` qualifies: a
+// let or const self-reference is a temporal-dead-zone error the source would not
+// carry. A binding whose declared type does not render to a Go type is left off,
+// since its pre-declaration would have no slot to name.
+func (r *Renderer) collectSelfRefVarHoists(topStmts []frontend.Node, topNames, seen map[string]bool, out *[]frontend.Node) {
+	for _, s := range topStmts {
+		if !r.isVarStatement(s) {
+			continue
+		}
+		var decls []frontend.Node
+		collectVarDecls(r.prog, s, &decls)
+		for _, d := range decls {
+			kids := r.prog.Children(d)
+			if len(kids) < 2 {
+				continue
+			}
+			nn := kids[0]
+			name, ok := localName(r.prog.Text(nn))
+			if !ok || seen[name] {
+				continue
+			}
+			init := kids[len(kids)-1]
+			if init.Kind() == frontend.NodeUnknown {
+				continue
+			}
+			if r.countIdentSkipFuncs(init, name) == 0 {
+				continue
+			}
+			if _, err := r.typeExpr(r.prog.TypeAt(nn)); err != nil {
+				continue
+			}
+			seen[name] = true
+			*out = append(*out, nn)
+		}
+	}
 }
 
 // isForInitVar reports whether a for loop's init clause declares its counter with
