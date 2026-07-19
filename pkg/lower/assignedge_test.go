@@ -149,3 +149,45 @@ func TestMemberLogicalSideEffectHandsBack(t *testing.T) {
 		t.Fatalf("reason = %q, want a side-effecting-receiver handback", reason)
 	}
 }
+
+func TestMemberCompoundValueRuns(t *testing.T) {
+	// (o.k += v), (o[k] += v), and a class field compound all evaluate to the updated
+	// value, the same as the store the statement form performs.
+	cases := map[string]string{
+		"dynamic-dot":  `const o: any = { k: 10 }; const r: number = (o.k += 5); console.log(r); console.log(o.k);`,
+		"dynamic-idx":  `const o: any = { k: 10 }; const key = "k"; const r: number = (o[key] += 5); console.log(r); console.log(o[key]);`,
+		"objlit-dot":   `const o = { k: 10 }; const r = (o.k += 5); console.log(r); console.log(o.k);`,
+		"class-field":  `class C { x = 10; } const c = new C(); const r = (c.x += 5); console.log(r); console.log(c.x);`,
+	}
+	for name, src := range cases {
+		if got, want := runProgramGoTolerant(t, src), "15\n15\n"; got != want {
+			t.Errorf("%s: got %q want %q", name, got, want)
+		}
+	}
+}
+
+func TestMemberCompoundValueDynamicEmitsReadBack(t *testing.T) {
+	// A dynamic member compound read builds an immediately-called closure that stores
+	// the fused value and returns the re-read box, coercing down for a number context.
+	const src = `const o: any = { k: 10 }; const r: number = (o.k += 5); console.log(r);`
+	got := renderProgramTolerant(t, src)
+	if !strings.Contains(got, "o.Set(value.FromGoString(\"k\"), value.Add(o.Get(value.FromGoString(\"k\")), value.Number(5)))") {
+		t.Fatalf("missing fused store, got:\n%s", got)
+	}
+	if !strings.Contains(got, "return o.Get(value.FromGoString(\"k\"))") {
+		t.Fatalf("missing read-back return, got:\n%s", got)
+	}
+	if !strings.Contains(got, "value.ToNumber(") {
+		t.Fatalf("missing static coercion, got:\n%s", got)
+	}
+}
+
+func TestMemberCompoundValueSideEffectHandsBack(t *testing.T) {
+	// The store and the read-back both evaluate the receiver, so a side-effecting one
+	// hands back rather than run twice.
+	const src = `function mk(){ return { k: 1 }; } const r = (mk().k += 5); console.log(r);`
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "side-effecting receiver") {
+		t.Fatalf("reason = %q, want a side-effecting-receiver handback", reason)
+	}
+}
