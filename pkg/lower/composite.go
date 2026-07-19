@@ -1548,6 +1548,24 @@ func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNode
 // introduce a new type parameter, so the value.Array.Map method can only return
 // the element type; when the callback's result type matches the element the map
 // lowers to that method, and when it differs (number[].map(n => n.toString()) is
+// padArrayCallbackElem records the element parameter a zero-parameter array-method
+// callback must grow to match the method's func(T) U callback type, and returns the
+// cleanup that drops the record after the callback lowers. It reports nil when the
+// arrow already declares a parameter or the receiver's element type is unknown, so a
+// normal element-taking callback is untouched. The padded parameter is unread, exactly
+// as the source callback ignores the element it does not name.
+func (r *Renderer) padArrayCallbackElem(arrow, recvNode frontend.Node) func() {
+	if len(r.funcParamNodes(arrow)) != 0 {
+		return nil
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil
+	}
+	r.closurePadParams[arrow] = []frontend.Param{{Type: elem}}
+	return func() { delete(r.closurePadParams, arrow) }
+}
+
 // string[]) it lowers to the free function value.MapArray[T, U] with both type
 // arguments spelled out. The result type is read straight off the arrow's body,
 // which the checker has already inferred, compared against the array's element
@@ -1556,6 +1574,15 @@ func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNode
 func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNodes []frontend.Node, restrictToElem bool) (ast.Expr, error) {
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
+	}
+	// A callback that ignores its element, () => expr, lowers to a zero-parameter func
+	// literal, but the array method and the value.MapArray free function both take a
+	// func(T) U over the element type. Pad the missing element parameter off the
+	// receiver's element type so the emitted func value carries the arity the method's
+	// callback field declares, the same growth a lower-arity callback takes at a call
+	// site. The clear is deferred so a nested callback lowers against its own slot.
+	if defer_ := r.padArrayCallbackElem(argNodes[0], recvNode); defer_ != nil {
+		defer defer_()
 	}
 	if restrictToElem {
 		elemType, ok := r.arrayElem(recvNode)
