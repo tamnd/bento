@@ -218,3 +218,63 @@ func TestAsyncMethodDestructuredParamHandsBack(t *testing.T) {
 		t.Fatalf("async method handback reason = %q, want a destructured-parameter reason", reason)
 	}
 }
+
+// TestGeneratorFuncExprDestructuredParamRuns proves a generator function expression
+// reads its destructured parameter's bound names at the top of the coroutine body.
+func TestGeneratorFuncExprDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const g = function* ({a, b}: {a: number; b: number}) { yield a; yield b; };
+for (const v of g({a: 1, b: 2})) { console.log(v); }
+`
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("generator expression destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncFuncExprDestructuredParamRuns proves an await-free async function
+// expression binds its destructured parameter at the top of the value.Async body.
+func TestAsyncFuncExprDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const f = async function ({x}: {x: number}): Promise<number> { return x * 2; };
+f({x: 5}).then((v) => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "10\n"; got != want {
+		t.Fatalf("async expression destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncArrowDestructuredParamRuns proves a block-body await-free async arrow binds
+// its destructured parameter through the same asyncBody entry bindings.
+func TestAsyncArrowDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const f = async ({y}: {y: number}): Promise<number> => { return y + 1; };
+f({y: 10}).then((v) => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "11\n"; got != want {
+		t.Fatalf("async arrow destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestAsyncGeneratorExprDestructuredParamHandsBack proves an async generator function
+// expression with a destructured parameter still hands back: its coroutine body is a
+// separate builder without the entry-binding hook.
+func TestAsyncGeneratorExprDestructuredParamHandsBack(t *testing.T) {
+	const src = `const g = async function* ({a}: {a: number}) { yield a; };
+g({a: 1});
+`
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "destructured parameter") {
+		t.Fatalf("async generator expression handback reason = %q, want a destructured-parameter reason", reason)
+	}
+}
+
+// TestAwaitingAsyncExprDestructuredParamHandsBack proves an awaiting async function
+// expression with a destructured parameter hands back: an awaiting body lowers through
+// asyncCoroutineBody, which has no entry-binding hook yet.
+func TestAwaitingAsyncExprDestructuredParamHandsBack(t *testing.T) {
+	const src = `const f = async function ({x}: {x: number}): Promise<number> { return await Promise.resolve(x); };
+f({x: 1});
+`
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "destructured parameter") {
+		t.Fatalf("awaiting async expression handback reason = %q, want a destructured-parameter reason", reason)
+	}
+}

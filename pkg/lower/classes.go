@@ -2980,6 +2980,22 @@ func (r *Renderer) asyncBody(ret frontend.Type, retNode frontend.Node) (*ast.Blo
 	if err != nil {
 		return nil, err
 	}
+	// A destructured parameter reads its bound names out of the synthesized parameter
+	// field at body entry, the same entry bindings the plain function path injects. The
+	// value.Async closure below closes over the enclosing params, so the bindings sit at
+	// the top of its body where the wrapped statements read the names. nil when no
+	// parameter destructures, so a plain async body is untouched. This runs on the
+	// await-free path only; an awaiting body lowers through asyncCoroutineBody, where a
+	// destructured parameter stays on the handback.
+	if sig, ok := r.prog.SignatureAt(retNode); ok {
+		binds, err := r.paramDestructureBindings(r.funcParamNodes(retNode), sig)
+		if err != nil {
+			return nil, err
+		}
+		if len(binds) != 0 {
+			inner.List = append(binds, inner.List...)
+		}
+	}
 	r.usesPromise = true
 	r.requireImport(valuePkg)
 	if isVoidReturn(elem) {
