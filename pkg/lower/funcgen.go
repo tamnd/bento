@@ -1285,17 +1285,14 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 		defer r.pushOptParams(set)()
 	}
 	// A destructured parameter reads its bound names out of the synthesized field at
-	// body entry. The plain closure form injects those entry bindings, and the generator
-	// and await-free async forms now inject them at the top of the coroutine or
-	// value.Async body they build (generatorCoroutine, asyncBody). The forms still
-	// without an entry-binding hook hand back: an async generator (its coroutine body is
-	// a separate builder), an awaiting async body (asyncCoroutineBody), and a named
-	// function expression (its self-reference two-step wraps the body).
+	// body entry. The plain closure form injects those entry bindings, and the generator,
+	// async generator, and await-free async forms now inject them at the top of the
+	// coroutine or value.Async body they build (generatorCoroutine, asyncGeneratorCoroutine,
+	// asyncBody). The forms still without an entry-binding hook hand back: an awaiting
+	// async body (asyncCoroutineBody), and a named function expression (its self-reference
+	// two-step wraps the body).
 	if r.closureHasDestructuredParam(n) {
-		if r.isAsyncFunc(n) && r.isGeneratorFunc(n) {
-			return nil, &NotYetLowerable{Reason: "an async generator function expression with a destructured parameter is a later slice"}
-		}
-		if r.isAsyncFunc(n) && r.bodyHasAwait(n) {
+		if r.isAsyncFunc(n) && !r.isGeneratorFunc(n) && r.bodyHasAwait(n) {
 			return nil, &NotYetLowerable{Reason: "an awaiting async function expression with a destructured parameter is a later slice"}
 		}
 		if _, named := r.funcExprNameNode(n); named {

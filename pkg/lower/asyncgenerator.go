@@ -100,6 +100,20 @@ func (r *Renderer) asyncGeneratorCoroutine(fn frontend.Node) (yieldGo ast.Expr, 
 	if err != nil {
 		return nil, nil, err
 	}
+	// A destructured parameter reads its bound names out of the synthesized parameter
+	// field at body entry, the same entry bindings the plain and generator paths inject.
+	// The coroutine func closes over the enclosing params (the Go function's for a
+	// declaration, the closure's for an expression), so the bindings sit at the top of
+	// the coroutine body where the awaited and yielded statements read the names. nil
+	// when no parameter destructures, so a plain async generator body is untouched.
+	bindSig, _ := r.prog.SignatureAt(fn)
+	binds, err := r.paramDestructureBindings(r.funcParamNodes(fn), bindSig)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(binds) != 0 {
+		body.List = append(binds, body.List...)
+	}
 	r.requireImport(valuePkg)
 	if n := len(body.List); n == 0 || !isGoReturn(body.List[n-1]) {
 		body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
