@@ -847,7 +847,33 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// overload's return, a concrete type the primitive box path would try to construct, so
 	// recognizing the call here lets a slot, a stringify, or a console.log take the box
 	// straight through the same as any other boxed result.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src)
+}
+
+// isBoxedStaticFieldRead reports whether src reads a private static field, C.#x,
+// whose package var is a boxed value.Value (staticVarDecl boxes a private static
+// because its C.#x accesses type as dynamic). The checker still types the read by
+// the field's declared type, a number for #x = 123, so a stringify or a slot that
+// judges on that static type would hand the box to a primitive coercer it cannot
+// take; recognizing the read here routes it through the value model the same way
+// any other boxed result goes.
+func (r *Renderer) isBoxedStaticFieldRead(src frontend.Node) bool {
+	if src.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(src)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	info, ok := r.classNameRef(kids[0])
+	if !ok {
+		return false
+	}
+	f, ok := info.staticByName(strings.TrimSpace(r.prog.Text(kids[1])))
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(f.prop, "#")
 }
 
 // isIterTerminalBoxedCall reports whether src is a terminal iterator helper whose

@@ -82,3 +82,25 @@ func TestStaticBlockHandsBack(t *testing.T) {
 		})
 	}
 }
+
+// TestBoxedPrivateStaticReadStringifies pins that stringifying a private static
+// field read routes through the value model, not the number coercer. A private
+// static is boxed to value.Value, so console.log(C.#x) must reach value.ToString
+// rather than value.NumberToString, which would type-error on the box.
+func TestBoxedPrivateStaticReadStringifies(t *testing.T) {
+	skipIfShort(t)
+	const src = `class C {
+  static #x = 123;
+  static { console.log(C.#x); }
+  foo() { return C.#x; }
+}
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, "value.NumberToString") {
+		t.Errorf("boxed private static read took the number coercer:\n%s", source)
+	}
+	got := runProgramGo(t, src)
+	if got != "123\n" {
+		t.Errorf("boxed private static stringify wrong\n got: %q\nwant: %q", got, "123\n")
+	}
+}
