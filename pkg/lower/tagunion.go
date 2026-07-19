@@ -212,13 +212,15 @@ func (r *Renderer) primUnionArms(t frontend.Type) ([]primArm, bool) {
 			return nil, false
 		}
 		if seen[arm.flag] {
-			// A repeated boolean arm is the true|false expansion collapsing back to
-			// one boolean; a repeat of any other arm is a literal enum this path
-			// leaves alone.
-			if arm.flag == frontend.TypeBoolean {
-				continue
-			}
-			return nil, false
+			// A repeat is either the boolean true|false expansion collapsing back to one
+			// boolean, or two literals of the same base widened to one arm (the "" and "x"
+			// inside "" | "x" | 0 | 1, or a pure "a" | "b"). The checker dedupes identical
+			// members, so a non-boolean repeat is only ever same-base literals, which
+			// collapse to their single arm the way the booleans do. A shape that collapses
+			// to fewer than two value arms (a pure single-base literal enum) still fails the
+			// valueArms check below and falls to the string-enum lowering, so only a
+			// genuinely mixed union reaches the inline tagged sum.
+			continue
 		}
 		seen[arm.flag] = true
 		arms = append(arms, arm)
@@ -284,6 +286,24 @@ func memberArm(f frontend.TypeFlags) (primArm, bool) {
 	if f&frontend.TypeBoolean != 0 {
 		for _, a := range primArms {
 			if a.flag == frontend.TypeBoolean {
+				return a, true
+			}
+		}
+	}
+	// A literal member (a string, number, or bigint literal type like "a", 1, or 1n)
+	// carries the TypeLiteral bit alongside its base primitive, so it fails the exact
+	// base match above; it widens to that base arm so a mixed union of unlike literals,
+	// "a" | 1, interns the same NumOrStr a string | number does. This is sound because
+	// the value flowing into the arm is the plain boxed primitive the literal produces,
+	// value.BStr or float64, so the tagged sum carries and narrows it the ordinary way,
+	// the literal-ness being a static fact with no runtime representation. Two literals
+	// of one base ("a" | "b") both widen to the same arm and so collide in primUnionArms,
+	// which falls that shape to the string-enum lowering, so only a genuinely mixed union
+	// reaches an inline tagged sum here.
+	if f&frontend.TypeLiteral != 0 {
+		const litBase = frontend.TypeNumber | frontend.TypeString | frontend.TypeBigInt
+		for _, a := range primArms {
+			if a.flag&litBase != 0 && f&a.flag != 0 {
 				return a, true
 			}
 		}
