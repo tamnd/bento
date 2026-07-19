@@ -1473,14 +1473,11 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		defer r.pushOptParams(set)()
 	}
 	if r.isAsyncFunc(n) {
-		// A block-body async arrow, await-free or awaiting, lowers through asyncBody, which
-		// injects the destructure entry bindings a pattern parameter needs at the top of the
-		// value.Async or coroutine body it builds. A concise body lowers through
-		// asyncConciseBody, which has no block for those bindings to sit above, so a
-		// destructured parameter on a concise async arrow stays on the handback.
-		if r.closureHasDestructuredParam(n) && body.Kind() != frontend.NodeBlock {
-			return nil, &NotYetLowerable{Reason: "a concise-body async arrow with a destructured parameter is a later slice"}
-		}
+		// Every async arrow body form now injects the destructure entry bindings a pattern
+		// parameter needs: a block body, await-free or awaiting, through asyncBody, and a
+		// concise body through asyncConciseBody, which prepends them inside its value.Async
+		// closure ahead of the single return. An await in a concise body still hands back at
+		// the await site, since a concise body sets up no coroutine handle to park on.
 		return r.asyncArrow(n, fields)
 	}
 	if body.Kind() == frontend.NodeBlock {

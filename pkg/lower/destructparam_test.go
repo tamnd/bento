@@ -332,14 +332,39 @@ f({x: 6, y: 7}).then((v) => console.log(v));
 	}
 }
 
-// TestConciseAsyncArrowDestructuredParamHandsBack proves a concise-body async arrow with
-// a destructured parameter still hands back: asyncConciseBody has no block for the entry
-// bindings to sit above.
-func TestConciseAsyncArrowDestructuredParamHandsBack(t *testing.T) {
+// TestConciseAsyncArrowDestructuredParamRuns proves an await-free concise-body async arrow
+// with a destructured parameter binds its names through asyncConciseBody, which now prepends
+// the entry bindings inside the value.Async closure ahead of its single return.
+func TestConciseAsyncArrowObjectDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const f = async ({x}: {x: number}): Promise<number> => x + 1;
+f({x: 41}).then((v) => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "42\n"; got != want {
+		t.Fatalf("concise async arrow object-pattern parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestConciseAsyncArrowArrayDestructuredParamRuns proves the array-pattern form of the
+// same concise-body async arrow, its entry bindings read out of the synthesized array field.
+func TestConciseAsyncArrowArrayDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const f = async ([a, b]: number[]): Promise<number> => a * b;
+f([6, 7]).then((v) => console.log(v));
+`
+	if got, want := runProgramGo(t, src), "42\n"; got != want {
+		t.Fatalf("concise async arrow array-pattern parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestConciseAsyncArrowAwaitingDestructuredParamHandsBack proves the one residual: a
+// concise async arrow whose body awaits still hands back at the await site, since a concise
+// body sets up no coroutine handle to park on.
+func TestConciseAsyncArrowAwaitingDestructuredParamHandsBack(t *testing.T) {
 	const src = `const f = async ({x}: {x: number}): Promise<number> => await Promise.resolve(x);
 f({x: 1});
 `
-	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "concise-body async arrow with a destructured parameter") {
-		t.Fatalf("concise async arrow handback reason = %q, want a concise-body reason", reason)
+	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "await") {
+		t.Fatalf("awaiting concise async arrow handback reason = %q, want an await reason", reason)
 	}
 }
