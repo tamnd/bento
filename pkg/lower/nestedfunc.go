@@ -52,6 +52,16 @@ func (r *Renderer) paramNameSet(sig frontend.Signature) map[string]bool {
 	return set
 }
 
+// pushScopeParams sets the enclosing-parameter name set for a body about to lower
+// and returns a restore, so a nested function declaration inside it can vet its Go
+// name against the parameters and the pass switches on for the body. It mirrors
+// pushOptParams and pushDynBound so a body-entry site reads uniformly.
+func (r *Renderer) pushScopeParams(sig frontend.Signature) func() {
+	prev := r.scopeParams
+	r.scopeParams = r.paramNameSet(sig)
+	return func() { r.scopeParams = prev }
+}
+
 // enterNestedFuncScope registers every nested function declaration among a block's
 // statements before any of them lowers, so a sibling call resolves to the Go local
 // the declaration binds wherever in the block it sits. It mirrors the forward-hoist
