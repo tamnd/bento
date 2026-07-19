@@ -2375,6 +2375,21 @@ func (r *Renderer) superCtorArgs(info *classInfo) ([]ast.Expr, error) {
 // because a pure expression's evaluation cannot be observed out of order or
 // skipped. Anything else reports ok=false and the general form runs.
 func (r *Renderer) ctorCompositeFold(info *classInfo) (ast.Expr, bool, error) {
+	// A super() argument that captures the instance, an arrow closing over `this`
+	// passed into the base constructor, reads the receiver the folded one-line
+	// literal has not bound: the fold emits a bare `return &B{A: *NewA(arg)}` with
+	// no receiver in scope for the arrow's `this` to lower against. The general form
+	// binds the receiver before it lowers the super arguments, so decline the fold
+	// and let it run, where the captured `this` reaches the receiver already
+	// allocated. TypeScript allows this capture since the arrow only closes over
+	// `this` lazily and does not read it before the base constructor returns.
+	if info.base != nil {
+		for _, a := range info.superArgs {
+			if subtreeHasKind(r.prog, a, frontend.NodeThisKeyword) {
+				return nil, false, nil
+			}
+		}
+	}
 	values := map[string]frontend.Node{}
 	for _, f := range info.fields {
 		if f.init == nil {
