@@ -120,6 +120,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if _, isErrCtor := r.errorConstructorRef(n); !isErrCtor && r.isAmbientGlobal(n) {
 			return nil, &NotYetLowerable{Reason: "the ambient global " + r.prog.Text(n) + " read as a value is a later slice"}
 		}
+		// A bare reference to a registered enum used as a value (var x = e) reifies the
+		// enum object as a composite literal of its interned Go struct, since the enum
+		// name has no plain local slot behind it. A member read E.M was intercepted on
+		// the member path, so only a whole-enum value reference reaches here.
+		if expr, handled, err := r.enumValueRef(n); err != nil {
+			return nil, err
+		} else if handled {
+			return expr, nil
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}

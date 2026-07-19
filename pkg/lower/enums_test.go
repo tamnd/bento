@@ -236,6 +236,31 @@ console.log(Foo["Y"].toString());
 	}
 }
 
+// TestEnumUsedAsValueReifiesObject pins that a bare enum reference in value position,
+// var x = Color, lowers to a composite literal of the enum object's Go struct rather
+// than an undefined name. TypeScript reifies the enum as an object of its forward
+// members, so the literal fills each member field with the member's Go constant.
+func TestEnumUsedAsValueReifiesObject(t *testing.T) {
+	const src = "enum Color { Red, Green = 5, Blue }\nconst o = Color;\nconsole.log(o.Green);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "&ObjBlueGreenRed{Red: ColorRed, Green: ColorGreen, Blue: ColorBlue}") {
+		t.Errorf("enum used as a value did not reify its object struct:\n%s", source)
+	}
+}
+
+// TestEnumUsedAsValueRuns proves the reified enum object reads back its members, so a
+// value-position enum reference behaves like the object TypeScript builds.
+func TestEnumUsedAsValueRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `enum Color { Red, Green = 5, Blue }
+const o = Color;
+console.log(o.Red, o.Green, o.Blue);
+`
+	if got, want := runProgramGo(t, src), "0 5 6\n"; got != want {
+		t.Fatalf("enum-as-value run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestPlainEnumBracketReadResolvesConstant pins the plain-enum arm: a bracket read
 // Color["Green"] resolves to the member's Go constant, the same binding the dotted
 // read Color.Green selects, so the two spellings agree.

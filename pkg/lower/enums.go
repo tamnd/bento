@@ -334,6 +334,52 @@ func (r *Renderer) enumMemberRead(obj frontend.Node, prop string) (ast.Expr, boo
 	return ident(member.goConst), true, nil
 }
 
+// enumValueRef lowers a bare reference to a registered enum used as a value, the e
+// in var x = e, to a composite literal of the enum object's Go struct. TypeScript
+// reifies an enum as an object whose forward keys map each member name to its value,
+// and the struct interned for typeof e carries exactly those member fields, so the
+// literal fills each field with the member's lowered value: a numeric member's Go
+// constant, a string member's Go var, or, for a const enum whose members emit no
+// symbols, the member value inlined the way a member read inlines it. It reports
+// ok=false for an identifier that is not an enum value reference, so the caller falls
+// through to its other identifier paths, and it routes only where the identifier's
+// own type is the enum object shape the struct is interned from, since a member read
+// E.M is handled on the member path and never reaches a bare identifier here.
+func (r *Renderer) enumValueRef(n frontend.Node) (ast.Expr, bool, error) {
+	sym, ok := r.prog.SymbolAt(n)
+	if !ok || sym.Flags&frontend.SymbolEnum == 0 {
+		return nil, false, nil
+	}
+	info, ok := r.enums[sym.Name]
+	if !ok {
+		return nil, false, nil
+	}
+	name, err := r.decls.internStruct(r, r.prog.TypeAt(n))
+	if err != nil {
+		return nil, false, err
+	}
+	elts := make([]ast.Expr, 0, len(info.members))
+	for _, m := range info.members {
+		field, ok := exportedField(m.name)
+		if !ok {
+			return nil, false, &NotYetLowerable{Reason: "enum " + info.name + " member " + m.name + " has no Go field name"}
+		}
+		var val ast.Expr
+		switch {
+		case info.isString && info.isConst:
+			val = r.bstrLit(m.strUnits)
+		case info.isString:
+			val = ident(m.goConst)
+		case info.isConst:
+			val = enumValueLit(m.value)
+		default:
+			val = ident(m.goConst)
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: val})
+	}
+	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, true, nil
+}
+
 // renderEnums emits the package-level block for each plain enum in source order. A
 // const enum emits nothing: its members were inlined at every use site. A numeric
 // enum reads like a hand-written Go enum, a float64-typed constant per member; a
