@@ -1,0 +1,2 @@
+feature = "possibly-undefined-member"
+handback = "method call on a non-string receiver"

@@ -150,6 +150,12 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 7009 {
 			continue
 		}
+		// 18048/2532 (a value the checker cannot prove is defined) are admitted because
+		// a `T | undefined` binding lowers through the Opt path or hands back, so mirror
+		// the front door (build.go toleratedPossiblyUndefined) here too.
+		if d.Code == 18048 || d.Code == 2532 {
+			continue
+		}
 		t.Fatalf("unexpected type error in snippet: %s", d.Message)
 	}
 	return prog
