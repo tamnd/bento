@@ -1110,6 +1110,16 @@ func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target 
 	if srcNode == nil {
 		return nil, false, nil
 	}
+	// A source written with grouping parentheses, `super((() => this))`, lowers with
+	// the parentheses preserved; peel them so the shape check reads the func literal
+	// underneath rather than declining on the wrapper.
+	for {
+		p, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = p.X
+	}
 	// Read the source's Go parameter types and whether it returns void from the
 	// lowered form. A function literal reports its own emitted signature, which already
 	// carries any parameters the contextual slot padded onto it, so the adapter measures
@@ -1137,12 +1147,30 @@ func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target 
 		}
 	}
 	tgtVoid := tft.Results == nil
-	// Both sides return, or neither does: the only mismatch left is a differing
-	// concrete return, a later slice. When they match, no adapter is needed and the
-	// ordinary path passes the value straight.
-	if tgtVoid == srcVoid {
+
+	// Decide what the adapter must do, and decline, before minting any parameter names,
+	// so a call that hands the value back consumes no fresh temps and leaves the temp
+	// counter where the ordinary path expects it. Both sides return, or neither does.
+	// Neither returning leaves no mismatch, so the ordinary path passes the value
+	// straight. Both returning leaves a class-covariant return the adapter can bridge only
+	// when the source's return class strictly derives from the target's; any other
+	// differing return is a later slice. A void mismatch always adapts, except a void
+	// source into a static value slot, which has no undefined to yield and hands back.
+	var tgtClass *classInfo
+	switch {
+	case tgtVoid && srcVoid:
+		return nil, false, nil
+	case tgtVoid == srcVoid:
+		srcClass, ok1 := r.funcSourceClass(expr, srcNode)
+		var ok2 bool
+		tgtClass, ok2 = r.classOfType(tsig.Return)
+		if !ok1 || !ok2 || !classReaches(srcClass, tgtClass) {
+			return nil, false, nil
+		}
+	case !tgtVoid && tsig.Return.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0:
 		return nil, false, nil
 	}
+
 	// Bind the target's parameters and forward them to the source; their Go types
 	// match, so they pass straight.
 	var fields []*ast.Field
@@ -1154,6 +1182,18 @@ func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target 
 	}
 	call := &ast.CallExpr{Fun: expr, Args: args}
 	adapter := &ast.FuncLit{Type: &ast.FuncType{Params: &ast.FieldList{List: fields}}}
+
+	if tgtClass != nil {
+		// A class-covariant return: call the source and return the address of the
+		// promoted base field, `func() *Base { return &src().Base }`. Go promotes an
+		// embedded base through any depth, so &call().Base reaches a base several levels
+		// up the chain without spelling the intermediates.
+		adapter.Type.Results = tft.Results
+		adapter.Body = &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.UnaryExpr{Op: token.AND, X: &ast.SelectorExpr{X: call, Sel: ident(tgtClass.goName)}},
+		}}}}
+		return adapter, true, nil
+	}
 	if tgtVoid {
 		// A value-returning source into a void slot: call and discard the result.
 		adapter.Body = &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}}
@@ -1162,9 +1202,6 @@ func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target 
 	// A void source into a value slot: the JavaScript call yields undefined, which
 	// only a dynamic return can hold, so bridge only there and return value.Undefined
 	// after driving the call for its effects.
-	if tsig.Return.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
-		return nil, false, nil
-	}
 	r.requireImport(valuePkg)
 	adapter.Type.Results = tft.Results
 	adapter.Body = &ast.BlockStmt{List: []ast.Stmt{
@@ -1172,6 +1209,70 @@ func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target 
 		&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
 	}}
 	return adapter, true, nil
+}
+
+// funcSourceClass resolves the class a function source returns. A function literal
+// already committed to a concrete Go result type, so it reads the class from the emitted
+// `*Name` result: that resolves a `this`-returning closure, which the frontend types as
+// the polymorphic this type rather than a class, to the class the closure lives in. A
+// name falls back to its declared return type, resolved through classOfType.
+func (r *Renderer) funcSourceClass(expr ast.Expr, srcNode frontend.Node) (*classInfo, bool) {
+	if lit, ok := expr.(*ast.FuncLit); ok {
+		if name, ok := starResultIdent(lit.Type.Results); ok {
+			if info, ok := r.classByGoName(name); ok {
+				return info, true
+			}
+		}
+	}
+	if sig, ok := r.prog.SignatureAt(srcNode); ok {
+		return r.classOfType(sig.Return)
+	}
+	if sig, ok := r.plainFuncSignature(r.prog.TypeAt(srcNode)); ok {
+		return r.classOfType(sig.Return)
+	}
+	return nil, false
+}
+
+// starResultIdent reads the type name from a func result list of the form `*Name`, the
+// single-pointer result a class-returning function lowers to. It declines any other
+// shape, so a multi-value, value, or non-pointer result is not mistaken for a class.
+func starResultIdent(results *ast.FieldList) (string, bool) {
+	if results == nil || len(results.List) != 1 {
+		return "", false
+	}
+	star, ok := results.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return "", false
+	}
+	id, ok := star.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return id.Name, true
+}
+
+// classByGoName finds a registered class by its emitted Go type name, the reverse of the
+// source-name keying r.classes uses, so a lowered result type spelled in Go resolves back
+// to the class it names.
+func (r *Renderer) classByGoName(goName string) (*classInfo, bool) {
+	for _, info := range r.classes {
+		if info.goName == goName {
+			return info, true
+		}
+	}
+	return nil, false
+}
+
+// classReaches reports whether one class strictly derives from another, walking the
+// embedding chain from the derived class's base upward. It starts at the base so a class
+// never reaches itself, since an identical return needs no upcast.
+func classReaches(from, to *classInfo) bool {
+	for c := from.base; c != nil; c = c.base {
+		if c == to {
+			return true
+		}
+	}
+	return false
 }
 
 // loweredFuncShape reports a function source's emitted Go parameter types and whether
