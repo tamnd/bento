@@ -38,6 +38,14 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 	r.usingTopScope = false
 	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
 	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
+	// A function declaration nested among these statements is hoisted in the source,
+	// so its Go local is registered for the whole block before any statement lowers,
+	// which lets a sibling call resolve to it. The scope restores when the block ends.
+	restoreNested, err := r.enterNestedFuncScope(nodes)
+	if err != nil {
+		return nil, err
+	}
+	defer restoreNested()
 	out := make([]ast.Stmt, 0, len(nodes))
 	for i, n := range nodes {
 		if atTop {
@@ -103,6 +111,16 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	// expands to no Go statements at all rather than an empty Go statement.
 	if r.isNoopStatement(n) {
 		return nil, nil
+	}
+	// A nested function declaration the hoisting pass registered emits its closure
+	// bound to the Go local here, at its textual position; an unregistered one reports
+	// ok false and falls to the statement-kind handback below.
+	if n.Kind() == frontend.NodeFunctionDeclaration {
+		if stmts, ok, err := r.lowerNestedFuncDecl(n); err != nil {
+			return nil, err
+		} else if ok {
+			return stmts, nil
+		}
 	}
 	if stmts, ok, err := r.flattenCallableBinding(n); err != nil {
 		return nil, err

@@ -1,0 +1,6 @@
+== stdout:
+nonnegative in 3 steps
+negative in 2 steps
+
+== exit:
+0

@@ -268,6 +268,21 @@ type Renderer struct {
 	// does not exist. It is set around the body of a named function expression and
 	// cleared after, so the self name does not leak past the expression.
 	funcExprSelf map[frontend.Symbol]string
+	// scopeParams is the set of Go parameter names bound by the function whose body is
+	// currently being lowered. A nested function declaration binds a Go local at the
+	// top of that body, so its Go name must not collide with an enclosing parameter's;
+	// the nested-function pass consults this set to hand back on a collision rather than
+	// emit a Go redeclaration. A nil map also switches the nested-function pass off, so
+	// a body type that does not populate it (a method, generator, async, or constructor)
+	// keeps the older handback for a nested declaration rather than emit one this guard
+	// did not vet. It is saved and restored around each body like retType.
+	scopeParams map[string]bool
+	// nestedFuncPlans holds the emission plan for each nested function declaration the
+	// current block registered, keyed by its node, so lowerNestedFuncDecl emits the
+	// closure the enterNestedFuncScope pass already vetted. An entry is added when a
+	// block enters and removed when it restores, so a declaration outside the current
+	// block is not in the map and falls to the older handback.
+	nestedFuncPlans map[frontend.Node]*nestedFuncPlan
 	// arrowDropDefaults marks an arrow-function node whose defaulted parameters lower
 	// as plain Go fields with no default, because collectArrowDefaults proved the
 	// const binding the arrow initializes never escapes as a value: every call to it is
