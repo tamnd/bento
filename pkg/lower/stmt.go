@@ -4413,6 +4413,13 @@ func (r *Renderer) foldFloatDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if err != nil || !isFloat64Ident(typ) {
 		return nil, false
 	}
+	// A binding with a type annotation but no initializer, var x: number, carries the
+	// annotation as its trailing NodeUnknown child, not an expression. Folding it would
+	// lower that annotation as if it were an initializer, so decline and leave the
+	// uninitialized zero-value declaration to buildVarDecl.
+	if r.bindingTrailingIsAnnotation(decls[0]) {
+		return nil, false
+	}
 	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 	if err != nil {
 		return nil, false
@@ -4450,6 +4457,14 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false
 	}
+	// A binding with a type annotation but no initializer, var x: typeof undefined,
+	// carries the annotation as its trailing NodeUnknown child, not an expression.
+	// Folding it would lower that annotation as if it were an initializer (typeof
+	// undefined lowering to the string "undefined"), so decline and leave the
+	// uninitialized zero-value declaration to buildVarDecl.
+	if r.bindingTrailingIsAnnotation(decls[0]) {
+		return nil, false
+	}
 	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 	if err != nil {
 		return nil, false
@@ -4458,6 +4473,34 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 		return nil, false
 	}
 	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{init}}, true
+}
+
+// bindingTrailingIsAnnotation reports whether a variable binding's trailing child is a
+// type annotation rather than an initializer, so the readability folds decline a binding
+// that has no value to fold. Both a lone annotation of an unspelled type (var x: typeof
+// undefined) and an initializer that is a delete or typeof expression (const b = delete 0)
+// surface their trailing node as an unclassified NodeUnknown, so the node kind alone cannot
+// tell an uninitialized binding from one whose initializer is such an expression. The source
+// separates them: an initializer follows '=', an annotation follows ':'. The gap between the
+// name's end and the trailing node's start carries exactly that token (the annotation's own
+// text, which may hold '=>', stays outside the gap), so an absent '=' means the trailing node
+// is an annotation and the binding carries no initializer to fold.
+func (r *Renderer) bindingTrailingIsAnnotation(decl frontend.Node) bool {
+	kids := r.prog.Children(decl)
+	if len(kids) < 2 {
+		return false
+	}
+	last := kids[len(kids)-1]
+	if last.Kind() != frontend.NodeUnknown {
+		return false
+	}
+	declText := r.prog.Text(decl)
+	gapStart := int(kids[0].End() - decl.Pos())
+	gapEnd := int(last.Pos() - decl.Pos())
+	if gapStart < 0 || gapEnd > len(declText) || gapStart > gapEnd {
+		return false
+	}
+	return !strings.Contains(declText[gapStart:gapEnd], "=")
 }
 
 // isFloat64Ident reports whether a lowered type expression is the bare float64 type,
