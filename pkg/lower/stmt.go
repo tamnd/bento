@@ -3194,33 +3194,64 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	// and a nested dynamic passes through. This routes before the static-shape gate
 	// below, which expects a receiver whose object type the checker pinned down.
 	if r.isDynamic(obj) {
-		if compound {
-			return nil, false, &NotYetLowerable{Reason: "a compound write o.k <op>= v on a dynamic receiver is a later slice"}
-		}
-		recv, err := r.lowerExpr(obj)
-		if err != nil {
-			return nil, false, err
-		}
-		val, err := r.boxOperand(parts[2])
-		if err != nil {
-			return nil, false, err
-		}
+		propName := r.prog.Text(tParts[1])
 		r.requireImport(valuePkg)
-		// A write o.__proto__ = v is the legacy prototype accessor, not an own property
-		// of that name: an object or null retargets the slot honoring extensibility, and
-		// any other value is left alone. It routes to SetProtoAssign rather than Set.
-		if r.prog.Text(tParts[1]) == "__proto__" {
+		keyExpr := func() ast.Expr {
+			return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{
+				&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(propName)},
+			}}
+		}
+		if !compound {
+			recv, err := r.lowerExpr(obj)
+			if err != nil {
+				return nil, false, err
+			}
+			val, err := r.boxOperand(parts[2])
+			if err != nil {
+				return nil, false, err
+			}
+			// A write o.__proto__ = v is the legacy prototype accessor, not an own property
+			// of that name: an object or null retargets the slot honoring extensibility, and
+			// any other value is left alone. It routes to SetProtoAssign rather than Set.
+			if propName == "__proto__" {
+				return &ast.ExprStmt{X: &ast.CallExpr{
+					Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetProtoAssign")},
+					Args: []ast.Expr{val},
+				}}, true, nil
+			}
 			return &ast.ExprStmt{X: &ast.CallExpr{
-				Fun:  &ast.SelectorExpr{X: recv, Sel: ident("SetProtoAssign")},
-				Args: []ast.Expr{val},
+				Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
+				Args: []ast.Expr{keyExpr(), val},
 			}}, true, nil
 		}
-		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{
-			&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(tParts[1]))},
-		}}
+		// A compound write o.k <op>= v on a dynamic receiver loads the property through
+		// Get, runs the boxed arithmetic dynamicCompoundResult builds, and stores the
+		// result back through Set, the mirror of the dynamic bracket compound
+		// dynamicElementAssign lowers. The receiver is read on both the load and the
+		// store, so a side-effecting receiver hands back to keep it evaluated once. A
+		// __proto__ compound is not a plain own-property write, so it hands back too.
+		if propName == "__proto__" {
+			return nil, false, &NotYetLowerable{Reason: "a compound write o.__proto__ <op>= v is a later slice"}
+		}
+		if !r.repeatableOperand(obj) {
+			return nil, false, &NotYetLowerable{Reason: "a compound write o.k <op>= v on a dynamic receiver with a side-effecting receiver is a later slice"}
+		}
+		recvLoad, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, false, err
+		}
+		old := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recvLoad, Sel: ident("Get")}, Args: []ast.Expr{keyExpr()}}
+		result, err := r.dynamicCompoundResult(baseOp, old, parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		recvStore, err := r.lowerExpr(obj)
+		if err != nil {
+			return nil, false, err
+		}
 		return &ast.ExprStmt{X: &ast.CallExpr{
-			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
-			Args: []ast.Expr{key, val},
+			Fun:  &ast.SelectorExpr{X: recvStore, Sel: ident("Set")},
+			Args: []ast.Expr{keyExpr(), result},
 		}}, true, nil
 	}
 	objType := r.prog.TypeAt(obj)

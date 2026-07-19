@@ -33,14 +33,19 @@ o.n += 1;
 	}
 }
 
-// TestCompoundDynamicMemberAssignHandsBack proves a compound write on a dynamic
-// receiver still hands back with its own narrower reason: the runtime load-and-store
-// path is a later slice.
-func TestCompoundDynamicMemberAssignHandsBack(t *testing.T) {
-	const src = `const o: any = { n: 1 };
-o.n += 1;
+// TestCompoundDynamicMemberAssignRuns proves a compound write o.k <op>= v on a
+// dynamic receiver loads the property through Get, runs the boxed arithmetic, and
+// stores the result back through Set.
+func TestCompoundDynamicMemberAssignRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const o: any = { n: 10, s: "a" };
+o.n += 5;
+o.n *= 2;
+o.s += "b";
+console.log(o.n);
+console.log(o.s);
 `
-	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "dynamic receiver") {
-		t.Fatalf("dynamic compound member handback reason = %q, want a dynamic-receiver reason", reason)
+	if got, want := runProgramGo(t, src), "30\na" + "b\n"; got != want {
+		t.Fatalf("dynamic compound member assignment printed %q, want %q", got, want)
 	}
 }
