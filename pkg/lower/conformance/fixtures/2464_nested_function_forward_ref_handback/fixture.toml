@@ -1,0 +1,2 @@
+feature = "functions.nested-declaration"
+handback = "a nested function called before its declaration needs hoisting, a later slice"

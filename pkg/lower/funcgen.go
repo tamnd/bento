@@ -256,6 +256,15 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	}
 	defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
 
+	// The enclosing-parameter name set is set for this body so a nested function
+	// declaration lowered inside it can hand back on a Go-name collision with a
+	// parameter rather than emit a redeclaration. A non-nil set also switches the
+	// nested-function pass on for this body; it is saved and restored so an outer
+	// function's parameters do not vet an inner body's nested declarations.
+	prevScope := r.scopeParams
+	r.scopeParams = r.paramNameSet(sig)
+	defer func() { r.scopeParams = prevScope }()
+
 	body, err := r.blockOf(fn)
 	if err != nil {
 		return nil, err
@@ -1628,6 +1637,13 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	// checker did not type any, so its property reads route the dynamic way off this set,
 	// built before the closure body lowers ahead of the entry bindings.
 	defer r.pushDynBound(r.funcParamNodes(n), sig)()
+
+	// A nested function declaration inside this closure body vets its Go name against
+	// this closure's parameters, the same guard the named path sets, and a non-nil set
+	// switches the nested-function pass on for the body.
+	prevScope := r.scopeParams
+	r.scopeParams = r.paramNameSet(sig)
+	defer func() { r.scopeParams = prevScope }()
 
 	body, err := r.blockOf(n)
 	if err != nil {
