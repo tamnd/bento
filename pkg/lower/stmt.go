@@ -99,6 +99,11 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	if (r.tryRet == tryRetDefer || r.tryRet == tryRetDeferPlain) && n.Kind() == frontend.NodeReturnStatement {
 		return r.deferredReturn(n)
 	}
+	// An empty statement or a debugger statement carries no runtime effect, so it
+	// expands to no Go statements at all rather than an empty Go statement.
+	if r.isNoopStatement(n) {
+		return nil, nil
+	}
 	if stmts, ok, err := r.flattenCallableBinding(n); err != nil {
 		return nil, err
 	} else if ok {
