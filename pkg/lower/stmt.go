@@ -3137,12 +3137,19 @@ func (r *Renderer) arrayElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 // class instance is claimed by classFieldAssign before this and is excluded again
 // here for good measure, and an array, a byte buffer, a Map, and a Set are not
 // plain objects, so none of them reach the field store. The value coerces to the
-// field type the same way a local assignment coerces to its target. Only a plain
-// "=" is covered: a compound write o.k += v is a later slice, so it hands back
-// rather than emitting a store that skips the read.
+// field type the same way a local assignment coerces to its target. A compound
+// write o.k += v on a fixed-shape object is covered too: the property read lowers
+// to the field selector, so combineBinary builds o.K <op> v the same way the class
+// field compound store does, and the self-referential collapse turns it back into
+// Go's o.K += v. A compound write on a dynamic receiver is a later slice.
 func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	parts := r.prog.Children(bin)
-	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+	if len(parts) != 3 {
+		return nil, false, nil
+	}
+	opText := r.prog.Text(parts[1])
+	baseOp, compound := compoundBaseOp(opText)
+	if opText != "=" && !compound {
 		return nil, false, nil
 	}
 	target := parts[0]
@@ -3160,7 +3167,7 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	// dynamic and fixed-shape gates below, which would box the receiver or fail to find
 	// a field of that name on a shape a RegExp is not. The value coerces to the number
 	// the property holds, the same float64 a read reports.
-	if r.prog.Text(tParts[1]) == "lastIndex" && r.isRegExp(obj) {
+	if !compound && r.prog.Text(tParts[1]) == "lastIndex" && r.isRegExp(obj) {
 		recv, err := r.lowerExpr(obj)
 		if err != nil {
 			return nil, false, err
@@ -3187,6 +3194,9 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	// and a nested dynamic passes through. This routes before the static-shape gate
 	// below, which expects a receiver whose object type the checker pinned down.
 	if r.isDynamic(obj) {
+		if compound {
+			return nil, false, &NotYetLowerable{Reason: "a compound write o.k <op>= v on a dynamic receiver is a later slice"}
+		}
 		recv, err := r.lowerExpr(obj)
 		if err != nil {
 			return nil, false, err
@@ -3240,15 +3250,49 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	if err != nil {
 		return nil, false, err
 	}
-	rhs, err := r.lowerExpr(parts[2])
+	if !compound {
+		rhs, err := r.lowerExpr(parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		rhs, err = r.coerceToTarget(rhs, parts[2], target)
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}}, true, nil
+	}
+	// A compound write o.k <op>= v reads the property on both the load and the store.
+	// For a fixed-shape object that read lowers to the field selector, which is
+	// side-effect-free, so only a side-effecting receiver would double an effect; that
+	// hands back to keep the receiver evaluated once. combineBinary builds o.K <op> v,
+	// coerceDynamicToStatic pulls a boxed result back to the field type when the operand
+	// was dynamic, and the self-referential collapse below rewrites o.K = o.K <op> v
+	// into Go's o.K <op>= v, or o.K++ for a step of one.
+	if !r.repeatableOperand(obj) {
+		return nil, false, &NotYetLowerable{Reason: "a compound write o.k <op>= v with a side-effecting receiver is a later slice"}
+	}
+	rhs, err := r.combineBinary(nil, baseOp, target, parts[2])
 	if err != nil {
 		return nil, false, err
 	}
-	rhs, err = r.coerceToTarget(rhs, parts[2], target)
-	if err != nil {
-		return nil, false, err
+	if r.combineIsDynamic(baseOp, target, parts[2]) && !r.isDynamic(target) {
+		rhs, err = r.coerceDynamicToStatic(rhs, target)
+		if err != nil {
+			return nil, false, err
+		}
 	}
-	return &ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}}, true, nil
+	tok := token.ASSIGN
+	if b, ok := rhs.(*ast.BinaryExpr); ok {
+		if ctok, ok := compoundAssignToken(b.Op); ok && sameStoreTarget(b.X, lhs) {
+			tok = ctok
+			rhs = b.Y
+		}
+	}
+	assign := &ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: tok, Rhs: []ast.Expr{rhs}}
+	if inc, ok := incDecFromStep(assign); ok {
+		return inc, true, nil
+	}
+	return assign, true, nil
 }
 
 // dynamicElementAssign lowers a bracket write o[k] = v on a dynamic receiver (one

@@ -45,13 +45,19 @@ run();
 	runProgramGo(t, src)
 }
 
-// TestObjectCompoundFieldWriteHandsBack proves a compound object field write
-// o.k += v hands back rather than dropping the read half the compound needs.
-func TestObjectCompoundFieldWriteHandsBack(t *testing.T) {
-	const src = "export function add(o: { x: number }, v: number): void { o.x += v; }\n"
-	reason := renderProgramHandBack(t, src)
-	if reason == "" {
-		t.Fatal("expected a compound object field write to hand back")
+// TestObjectCompoundFieldWriteMutatesThroughParameter proves a compound object
+// field write o.k += v on a fixed-shape parameter lowers to the Go compound
+// assignment on the field selector and mutates through the object's pointer, so a
+// caller sees the updated field.
+func TestObjectCompoundFieldWriteMutatesThroughParameter(t *testing.T) {
+	skipIfShort(t)
+	const src = `function add(o: { x: number }, v: number): void { o.x += v; }
+const o = { x: 10 };
+add(o, 5);
+console.log(String(o.x));
+`
+	if got, want := runProgramGo(t, src), "15\n"; got != want {
+		t.Fatalf("compound field write through a parameter printed %q, want %q", got, want)
 	}
 }
 
