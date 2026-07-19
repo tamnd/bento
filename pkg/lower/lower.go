@@ -507,6 +507,15 @@ type Renderer struct {
 	// binding's own site lowers to a plain assignment. It is set per scope and
 	// restored on exit, so one scope's forward hoists do not leak into another.
 	fwdHoisted map[string]bool
+	// fwdHoistedFunc names the plain function-valued bindings the active scope
+	// declared at its top for the same reason fwdHoisted does, an earlier
+	// statement's closure captures the name, but which lower to a bare Go func type
+	// rather than a callable-object pointer. The pre-declaration is a `var name
+	// func(...)...` and the binding's own site takes the ordinary var path, where
+	// redeclaredVarAssign turns it into a plain assignment. Kept separate from
+	// fwdHoisted because the two pre-declare different Go types and the callable
+	// binding is intercepted earlier by flattenCallableBinding.
+	fwdHoistedFunc map[string]bool
 	// moduleAssignVars names the module-level bindings hoisted to a package-level var
 	// whose initializer is not safe to evaluate at package-init time (a call, or an
 	// expression over other module state). The binding is declared zero-valued at
