@@ -115,3 +115,44 @@ console.log(drop(3));
 		t.Fatalf("dynamic update program printed %q, want %q", got, want)
 	}
 }
+
+// TestDynamicNonPlusCompoundEmits pins the shape of a compound assignment other
+// than + on a dynamic target: combineBinary coerces the boxed target through
+// ToNumber and runs the native operator, and value.Number boxes the float64 result
+// back into the value.Value slot.
+func TestDynamicNonPlusCompoundEmits(t *testing.T) {
+	const src = `let x: any = 10;
+x -= 3;
+console.log(x);
+`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "value.Number(value.ToNumber(x) - 3)") {
+		t.Fatalf("want a boxed ToNumber subtraction, got:\n%s", got)
+	}
+}
+
+// TestDynamicNonPlusCompoundRuns runs every arithmetic and bitwise compound on a
+// dynamic local end to end, including a value-position use that coerces down.
+func TestDynamicNonPlusCompoundRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `let x: any = 12;
+x -= 3;
+x *= 2;
+x /= 2;
+x %= 4;
+x **= 5;
+console.log(x);
+let y: any = 6;
+y &= 3;
+y |= 8;
+y ^= 1;
+y <<= 2;
+y >>= 1;
+const r: number = (y -= 2);
+console.log(r);
+console.log(y);
+`
+	if got, want := runProgramGo(t, src), "1\n20\n20\n"; got != want {
+		t.Fatalf("dynamic non-plus compound printed %q, want %q", got, want)
+	}
+}
