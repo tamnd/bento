@@ -132,3 +132,52 @@ console.log("sync");
 		t.Fatalf("yield* delegation = %q, want %q", got, want)
 	}
 }
+
+func TestAsyncGenExprDestructuredParamRuns(t *testing.T) {
+	// An async generator function expression with a destructured parameter injects the
+	// entry bindings at the top of the coroutine body, so the pattern names read inside.
+	const src = `const g = async function*([a, b]: number[]) { yield a; yield b; };
+async function main(): Promise<void> {
+  const it = g([10, 20]);
+  console.log((await it.next()).value);
+  console.log((await it.next()).value);
+}
+main();`
+	if got, want := runProgramGo(t, src), "10\n20\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestAsyncGenObjectPatternWithAwaitRuns(t *testing.T) {
+	// An object-pattern parameter and an await between yields share the one coroutine
+	// handle, so the destructure bindings coexist with AsyncGenAwait.
+	const src = `const g = async function*({ p, q }: { p: number; q: number }) {
+  yield p;
+  await Promise.resolve(0);
+  yield q;
+};
+async function main(): Promise<void> {
+  const it = g({ p: 5, q: 6 });
+  console.log((await it.next()).value);
+  console.log((await it.next()).value);
+}
+main();`
+	if got, want := runProgramGo(t, src), "5\n6\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestAsyncGenDeclDestructuredParamRuns(t *testing.T) {
+	// The declaration form shares the same coroutine builder, so the entry bindings land
+	// there too.
+	const src = `async function* g([a, b]: number[]) { yield a; yield b; }
+async function main(): Promise<void> {
+  const it = g([7, 8]);
+  console.log((await it.next()).value);
+  console.log((await it.next()).value);
+}
+main();`
+	if got, want := runProgramGo(t, src), "7\n8\n"; got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}

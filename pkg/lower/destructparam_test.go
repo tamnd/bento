@@ -255,15 +255,16 @@ f({y: 10}).then((v) => console.log(v));
 	}
 }
 
-// TestAsyncGeneratorExprDestructuredParamHandsBack proves an async generator function
-// expression with a destructured parameter still hands back: its coroutine body is a
-// separate builder without the entry-binding hook.
-func TestAsyncGeneratorExprDestructuredParamHandsBack(t *testing.T) {
+// TestAsyncGeneratorExprDestructuredParamRuns proves an async generator function
+// expression with a destructured parameter binds its names through the same coroutine
+// entry-binding hook the declaration form uses.
+func TestAsyncGeneratorExprDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = `const g = async function* ({a}: {a: number}) { yield a; };
-g({a: 1});
+(async () => { const it = g({a: 1}); console.log((await it.next()).value); })();
 `
-	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "destructured parameter") {
-		t.Fatalf("async generator expression handback reason = %q, want a destructured-parameter reason", reason)
+	if got, want := runProgramGo(t, src), "1\n"; got != want {
+		t.Fatalf("async generator expression destructured parameter printed %q, want %q", got, want)
 	}
 }
 
