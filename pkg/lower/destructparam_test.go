@@ -268,6 +268,32 @@ func TestAsyncGeneratorExprDestructuredParamRuns(t *testing.T) {
 	}
 }
 
+// TestNamedFuncExprDestructuredParamRuns proves a named function expression with a
+// destructured parameter binds its names through blockBodyArrow's entry bindings, which
+// the self-reference two-step wraps.
+func TestNamedFuncExprDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const g = function h({x, y}: {x: number; y: number}): number { return x + y; };
+console.log(g({x: 3, y: 4}));
+`
+	if got, want := runProgramGo(t, src), "7\n"; got != want {
+		t.Fatalf("named function expression destructured parameter printed %q, want %q", got, want)
+	}
+}
+
+// TestNamedFuncExprRecursiveDestructuredParamRuns proves the self-reference two-step
+// still resolves a recursive call inside a named function expression whose parameter is
+// an array pattern, the name bound to the Go local wrapping the entry-binding closure.
+func TestNamedFuncExprRecursiveDestructuredParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `const fac = function f([n, acc]: number[]): number { return n <= 1 ? acc : f([n - 1, acc * n]); };
+console.log(fac([5, 1]));
+`
+	if got, want := runProgramGo(t, src), "120\n"; got != want {
+		t.Fatalf("recursive named function expression destructured parameter printed %q, want %q", got, want)
+	}
+}
+
 // TestAwaitingAsyncExprDestructuredParamHandsBack proves an awaiting async function
 // expression with a destructured parameter hands back: an awaiting body lowers through
 // asyncCoroutineBody, which has no entry-binding hook yet.
