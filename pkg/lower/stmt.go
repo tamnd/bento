@@ -412,6 +412,22 @@ func (r *Renderer) lowerForIn(n frontend.Node) (ast.Stmt, error) {
 		rng.Value = ident(name)
 		rng.Tok = token.DEFINE
 	}
+	// A for...in whose iterable references the loop variable itself,
+	// `for (var of in of)`, enumerates the binding's hoisted value: a `var` binding is
+	// initialized to undefined before the head is evaluated, so the object read is
+	// undefined and yields no keys. The binding is otherwise only the range key, never a
+	// standalone Go variable, so the self-reference in the iterable would name an
+	// undeclared identifier. Declare it undefined ahead of the loop and wrap the two in a
+	// block, so the iterable reads the hoisted undefined and the loop runs zero turns.
+	if r.countIdentSkipFuncs(kids[1], r.prog.Text(dkids[0])) > 0 {
+		r.requireImport(valuePkg)
+		decl := &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+			Names:  []*ast.Ident{ident(name)},
+			Type:   sel("value", "Value"),
+			Values: []ast.Expr{sel("value", "Undefined")},
+		}}}}
+		return &ast.BlockStmt{List: []ast.Stmt{decl, rng}}, nil
+	}
 	return rng, nil
 }
 
