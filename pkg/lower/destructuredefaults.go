@@ -302,6 +302,58 @@ func (r *Renderer) defaultFillAssign(target ast.Expr, read ast.Expr, def ast.Exp
 	}
 }
 
+// defaultFillUnionStmts emits the lazy default fill for a binding whose optional
+// property is a multi-member tagged-sum union (number | string | undefined) rather
+// than a value.Opt. Such a field carries the union struct directly, its undefined arm
+// standing for the absent member, so the Opt protocol defaultFillStmts reads
+// (IsUndefined, Get) does not exist on it. The fill switches the read's discriminant
+// instead: the undefined arm takes the default, and each value arm rebuilds the
+// binding's undefined-stripped union from that arm's own field. The binding type is
+// the source union without its undefined arm, itself a tagged sum, so each value arm
+// maps to the target union's matching arm constructor. The default is placed only on
+// the undefined case, so it evaluates at most once and only when the slot is missing,
+// the order JavaScript's default fill takes.
+func (r *Renderer) defaultFillUnionStmts(name string, nameGo, read, def ast.Expr, src, tgt *unionInfo) []ast.Stmt {
+	decl := &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+		Names: []*ast.Ident{ident(name)},
+		Type:  nameGo,
+	}}}}
+	tmp := r.freshTemp()
+	var cases []ast.Stmt
+	for _, a := range src.arms {
+		var rhs ast.Expr
+		switch {
+		case a.flag == frontend.TypeUndefined:
+			rhs = def
+		case a.tagOnly:
+			// A tag-only sentinel that is not the undefined member (a null arm) has no
+			// field to carry over, so the target's matching arm takes its no-argument
+			// constructor.
+			ta, ok := tgt.armForFlags(a.flag)
+			if !ok {
+				continue
+			}
+			rhs = &ast.CallExpr{Fun: ident(tgt.ctorName(ta))}
+		default:
+			ta, ok := tgt.armForFlags(a.flag)
+			if !ok {
+				continue
+			}
+			rhs = &ast.CallExpr{Fun: ident(tgt.ctorName(ta)), Args: []ast.Expr{&ast.SelectorExpr{X: ident(tmp), Sel: ident(a.field)}}}
+		}
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{ident(src.tagConst(a))},
+			Body: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}}},
+		})
+	}
+	sw := &ast.SwitchStmt{
+		Init: &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{read}},
+		Tag:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("tag")},
+		Body: &ast.BlockStmt{List: cases},
+	}
+	return []ast.Stmt{decl, sw}
+}
+
 // arrayOptRead builds the bounds-aware read for a defaulted array element,
 // recv.AtOpt(i), whose Opt is undefined exactly when the source has no element at
 // that index. It is the read defaultFillStmts tests, the optional sibling of the

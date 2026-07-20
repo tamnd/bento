@@ -2381,6 +2381,18 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			if err != nil {
 				return nil, true, err
 			}
+			// An optional property whose type is a multi-member union carries the tagged
+			// sum directly, not a value.Opt, so its undefined member is the union's
+			// undefined arm rather than an Opt's absent state. The union fill switches
+			// that arm instead of reading the Opt protocol the field does not carry,
+			// rebuilding the binding's undefined-stripped union from each value arm.
+			srcInfo, srcUnion := r.optionalUnionInfo(frontend.Property{Name: r.elemSourceProp(b.info), Type: propType[r.elemSourceProp(b.info)], Optional: true})
+			tgtInfo, tgtUnion := r.unionInfoOrIntern(r.prog.TypeAt(b.info.bindNode))
+			if srcUnion && tgtUnion {
+				stmts = append(stmts, r.defaultFillUnionStmts(b.name, nameGo, read, def, srcInfo, tgtInfo)...)
+				stmts = r.blankUnusedParamBinding(stmts, b.info.bindNode, b.name)
+				continue
+			}
 			stmts = append(stmts, r.defaultFillStmts(b.name, nameGo, read, def)...)
 			// The default fill declares `var name T` then assigns it in each branch, so a
 			// name nothing later reads is a declared-and-unused var Go rejects, the same as
