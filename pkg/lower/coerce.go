@@ -1113,13 +1113,7 @@ func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target 
 	// A source written with grouping parentheses, `super((() => this))`, lowers with
 	// the parentheses preserved; peel them so the shape check reads the func literal
 	// underneath rather than declining on the wrapper.
-	for {
-		p, ok := expr.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		expr = p.X
-	}
+	expr = unparen(expr)
 	// Read the source's Go parameter types and whether it returns void from the
 	// lowered form. A function literal reports its own emitted signature, which already
 	// carries any parameters the contextual slot padded onto it, so the adapter measures
@@ -1261,6 +1255,43 @@ func (r *Renderer) classByGoName(goName string) (*classInfo, bool) {
 		}
 	}
 	return nil, false
+}
+
+// unparen peels grouping parentheses off an expression, so a shape check reads the node
+// underneath rather than declining on the wrapper. A source written super((() => this))
+// lowers with its parentheses preserved, so the func literal or invoking call sits under
+// one or more ParenExpr layers.
+func unparen(expr ast.Expr) ast.Expr {
+	for {
+		p, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = p.X
+	}
+}
+
+// exprStaticClass resolves the class an emitted value expression statically yields, read
+// from the Go it already committed to rather than the frontend type of its source. A
+// super call invoking a this-returning arrow, super((() => this)()), lowers to a call of
+// a function literal whose result is *Super; the frontend types the invoked this as a
+// type parameter, not a class, so only the emitted *Super names the class. It reads that
+// result through the invoked function literal, peeling grouping parentheses, and declines
+// any other shape.
+func (r *Renderer) exprStaticClass(expr ast.Expr) (*classInfo, bool) {
+	call, ok := unparen(expr).(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	lit, ok := unparen(call.Fun).(*ast.FuncLit)
+	if !ok {
+		return nil, false
+	}
+	name, ok := starResultIdent(lit.Type.Results)
+	if !ok {
+		return nil, false
+	}
+	return r.classByGoName(name)
 }
 
 // classReaches reports whether one class strictly derives from another, walking the
@@ -1968,12 +1999,21 @@ func (r *Renderer) mismatchedLoweredType(a, b frontend.Type) bool {
 // Any other cross-class binding (a downcast, structural twins) hands back;
 // matching classes and non-class sides pass through untouched.
 func (r *Renderer) bridgeClassBinding(expr ast.Expr, src frontend.Node, target frontend.Type) (ast.Expr, error) {
-	srcInfo, ok := r.classOfNode(src)
+	tgtInfo, ok := r.classOfType(target)
 	if !ok {
 		return expr, nil
 	}
-	tgtInfo, ok := r.classOfType(target)
-	if !ok || tgtInfo == srcInfo {
+	srcInfo, ok := r.classOfNode(src)
+	if !ok {
+		// The source node may carry a polymorphic type the checker types as a type
+		// parameter rather than a class: a super call invoking a this-returning arrow,
+		// super((() => this)()), passes a value the frontend types as this. The emitted
+		// value already committed to a concrete class, so read it from the lowered Go.
+		if srcInfo, ok = r.exprStaticClass(expr); !ok {
+			return expr, nil
+		}
+	}
+	if tgtInfo == srcInfo {
 		return expr, nil
 	}
 	if srcInfo.descendsFrom(tgtInfo) {
