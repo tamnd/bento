@@ -2119,6 +2119,10 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 		}
 	}
 
+	if err := r.assignParamAliases(info); err != nil {
+		return nil, err
+	}
+
 	params, err := r.ctorParamFields(info)
 	if err != nil {
 		return nil, err
@@ -2158,6 +2162,98 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 // not fold or a defaulted parameter, hands back for want of that call-site fill. A
 // dynamic optional is fine, an omitted slot holds the undefined its value.Value
 // already models.
+// assignParamAliases renames a constructor parameter whose Go name would shadow an outer
+// binding a field initializer reads. A field initializer runs outside the constructor's
+// parameter scope, so `const x = 1; class C { p = x; constructor(x: string) {} }` reads
+// the outer x, but the emitted constructor puts a parameter x in scope that would shadow
+// the package-level x and emit Go the toolchain rejects (or, worse, silently read the
+// parameter). It scans each field initializer for a reference to a binding that is not a
+// parameter and whose Go name matches a parameter's, and gives that parameter a fresh Go
+// name recorded in paramAliases; every reference to the parameter then resolves through
+// the alias while the field initializer's reference to the outer binding stays untouched,
+// since the two carry different symbols. Only a declared constructor is handled; a
+// synthesized one passes its base parameters straight through and declares no field the
+// parameter scope shadows.
+func (r *Renderer) assignParamAliases(info *classInfo) error {
+	if info.ctor == nil {
+		return nil
+	}
+	paramSyms := map[frontend.Symbol]bool{}
+	symByGoName := map[string]frontend.Symbol{}
+	taken := map[string]bool{}
+	for _, p := range info.ctorParams {
+		nameNode := r.paramNameNode(p)
+		goName, ok := localName(r.prog.Text(nameNode))
+		if !ok {
+			continue
+		}
+		taken[goName] = true
+		if sym, ok := r.prog.SymbolAt(nameNode); ok {
+			paramSyms[sym] = true
+			symByGoName[goName] = sym
+		}
+	}
+	if len(symByGoName) == 0 {
+		return nil
+	}
+	collide := map[frontend.Symbol]bool{}
+	for _, f := range info.fields {
+		if f.init == nil {
+			continue
+		}
+		r.walkIdents(f.init, func(id frontend.Node) {
+			sym, ok := r.prog.SymbolAt(id)
+			if !ok || paramSyms[sym] || sym.Flags&frontend.SymbolProperty != 0 {
+				return
+			}
+			goName, ok := localName(sym.Name)
+			if !ok {
+				return
+			}
+			taken[goName] = true
+			if psym, ok := symByGoName[goName]; ok {
+				collide[psym] = true
+			}
+		})
+	}
+	for psym := range collide {
+		alias := freshAlias(psym.Name, taken)
+		taken[alias] = true
+		r.paramAliases[psym] = alias
+	}
+	return nil
+}
+
+// walkIdents visits every identifier node in a subtree, the scan assignParamAliases uses
+// to find a field initializer's outer references.
+func (r *Renderer) walkIdents(n frontend.Node, visit func(frontend.Node)) {
+	if n.Kind() == frontend.NodeIdentifier {
+		visit(n)
+	}
+	for _, c := range r.prog.Children(n) {
+		r.walkIdents(c, visit)
+	}
+}
+
+// freshAlias returns a Go name derived from base that is not already taken, appending an
+// underscore and, if that is taken too, a numeric suffix.
+func freshAlias(base string, taken map[string]bool) string {
+	name, ok := localName(base)
+	if !ok {
+		name = base
+	}
+	cand := name + "_"
+	if !taken[cand] {
+		return cand
+	}
+	for i := 2; ; i++ {
+		next := name + "_" + itoa(i)
+		if !taken[next] {
+			return next
+		}
+	}
+}
+
 func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 	var sig frontend.Signature
 	haveSig := false
@@ -2172,6 +2268,11 @@ func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 		pname, ok := localName(r.prog.Text(nameNode))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "constructor parameter name is not a Go identifier"}
+		}
+		if sym, ok := r.prog.SymbolAt(nameNode); ok {
+			if alias, ok := r.paramAliases[sym]; ok {
+				pname = alias
+			}
 		}
 		pt := r.prog.TypeAt(nameNode)
 		if haveSig && i >= sig.MinArgs && pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 && !r.optParams[pname] {

@@ -133,6 +133,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
 		}
+		// A constructor parameter whose Go name would shadow an outer binding a field
+		// initializer reads is renamed, so a reference to that parameter (a parameter
+		// property store, a read in the constructor body) resolves to the renamed name.
+		// The keyed symbol is the parameter's own, so a same-named reference to the outer
+		// binding, which carries a different symbol, is untouched and reads the outer name.
+		if sym, ok := r.prog.SymbolAt(n); ok {
+			if alias, ok := r.paramAliases[sym]; ok {
+				return ident(alias), nil
+			}
+		}
 		// A catch binding used as a plain value, not through one of the typed reads
 		// the paths above intercept (.message, .name, .constructor, instanceof,
 		// typeof, a null compare, a string coercion, or a rethrow), boxes to the
