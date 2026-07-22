@@ -987,6 +987,23 @@ func (r *Renderer) bodyUsesName(n frontend.Node, name string) bool {
 	if n.Kind() == frontend.NodeIdentifier {
 		return r.prog.Text(n) == name
 	}
+	// A nested variable declaration's binding name is not a read of name: a body
+	// that only re-declares the same spelling, `for (var x in ...)` inside a loop
+	// over x, never reads the loop's binding, so the binding drops to the blank.
+	// Skip the declaration's name child but still scan its initializer, which can
+	// reference name for real.
+	if n.Kind() == frontend.NodeVariableDeclaration {
+		kids := r.prog.Children(n)
+		for i, c := range kids {
+			if i == 0 && c.Kind() == frontend.NodeIdentifier {
+				continue
+			}
+			if r.bodyUsesName(c, name) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, c := range r.prog.Children(n) {
 		if r.bodyUsesName(c, name) {
 			return true

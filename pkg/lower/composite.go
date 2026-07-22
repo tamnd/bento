@@ -794,6 +794,18 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 }
 
 func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.Type, zeroFill bool) (ast.Expr, error) {
+	// A pure string-index dictionary shape, `{ [k: string]: string }`, names no
+	// fields: it models dynamic keyed access, and a literal asserted to it, `({ "1":
+	// "one" } as { [k: string]: string })[x]`, reads its members through a runtime
+	// key, not a Go struct field. Interning it would give an empty struct whose
+	// members have no field to land in and whose keyed read finds no method, so a
+	// literal that carries members hands back rather than build that struct; the
+	// dynamic dictionary it wants is a later slice.
+	if len(r.prog.Children(n)) > 0 {
+		if _, ok := r.prog.StringIndexType(shape); ok && len(r.prog.Properties(shape)) == 0 {
+			return nil, &NotYetLowerable{Reason: "object literal asserted to a string-index dictionary is a later slice"}
+		}
+	}
 	name, err := r.decls.internStruct(r, shape)
 	if err != nil {
 		return nil, err
@@ -829,6 +841,17 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
 		}
 		sp, hasProp := r.shapeProp(shape, srcName)
+		// A member the target shape does not carry is an excess property: an
+		// assertion or a contextual annotation narrower than the literal, `<{ id }>{
+		// id, name }`, keeps only the fields the shape names, so the value's Go type
+		// is the struct built at that shape and the extra member has no field to fill.
+		// Emitting it would name a struct field that does not exist, so it is left off
+		// the composite the way the asserted type drops it. A shape with no named
+		// properties at all is a dictionary or box handled on the paths above, not an
+		// excess-property drop, so only skip when the shape does carry properties.
+		if !hasProp && len(r.prog.Properties(shape)) > 0 {
+			continue
+		}
 		// The field's declared shape is the type the member must build at, unwrapping
 		// an optional T | undefined to T so a nested literal and a present optional
 		// both target the concrete field type.

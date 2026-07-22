@@ -2346,7 +2346,16 @@ func (r *Renderer) bridgeClassBinding(expr ast.Expr, src frontend.Node, target f
 	// typeof A a subclass B is assigned to) as itself, the class object, the same
 	// value TypeScript assigns. classOfNode below would read the source's typeof B
 	// as the class B and drive the upcast, so the class-value case is caught first.
-	if _, ok := r.classNameRef(src); ok {
+	if sInfo, ok := r.classNameRef(src); ok {
+		// The class value binds as itself to a slot of its own class value, or of a
+		// base whose static side it is assignable to. A different, unrelated class
+		// value, `let a = Foo; a = Bar`, is a distinct Go static-side struct type that
+		// does not assign across, and bento does not model class-value assignability
+		// between unrelated classes, so it hands back rather than emit a cross-type
+		// assignment Go rejects.
+		if sInfo != tgtInfo && !sInfo.descendsFrom(tgtInfo) {
+			return nil, &NotYetLowerable{Reason: "assigning one class value to a slot typed for another class is a later slice"}
+		}
 		return expr, nil
 	}
 	srcInfo, ok := r.classOfNode(src)
