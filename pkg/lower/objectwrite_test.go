@@ -77,14 +77,14 @@ func TestObjectUndeclaredFieldWriteHandsBack(t *testing.T) {
 	}
 }
 
-// TestObjectFieldWriteToEmptyShapeHandsBack pins the case the test262 compareArray
-// harness hit: a write to any property of an empty-shape object o = {} has no
-// declared field to land in, so it hands back instead of emitting the
-// non-addressable value.MissingProperty(o) = v.
-func TestObjectFieldWriteToEmptyShapeHandsBack(t *testing.T) {
+// TestObjectFieldWriteToEmptyShapeEmits pins the case the test262 compareArray harness
+// hit: an empty-shape object o = {} boxes into a dynamic value.Object, so a write to any
+// property lands through Set on the box rather than a non-addressable struct field, now
+// that the empty object top type boxes.
+func TestObjectFieldWriteToEmptyShapeEmits(t *testing.T) {
 	const src = "const o = {};\no.prop = 42;\n"
-	reason := renderProgramTolerantHandBack(t, src)
-	if reason == "" {
-		t.Fatal("expected a write to a property of an empty-shape object to hand back")
+	source := renderProgramTolerant(t, src)
+	if !strings.Contains(source, `o.Set(value.FromGoString("prop"), value.Number(42))`) {
+		t.Fatalf("empty-shape object write did not land through Set on the box:\n%s", source)
 	}
 }

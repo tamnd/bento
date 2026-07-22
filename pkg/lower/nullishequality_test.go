@@ -70,13 +70,14 @@ func TestNullEqualsRoutesThroughLooseEquals(t *testing.T) {
 	}
 }
 
-// TestNullEqualsStaticObjectHandsBack pins that a static fixed-shape object binding,
-// which has no dynamic box yet, hands the whole compare back rather than emit Go
-// that cannot box it, keeping the zero-fail invariant until object boxing lands.
-func TestNullEqualsStaticObjectHandsBack(t *testing.T) {
+// TestNullEqualsStaticObjectEmits pins that a static fixed-shape object binding boxes
+// through value.ObjectFromStruct into the loose compare now that object boxing lands:
+// an object is never nullish, so the runtime answers false, but the route is the same
+// value.LooseEquals a dynamic operand takes.
+func TestNullEqualsStaticObjectEmits(t *testing.T) {
 	const src = "const o = { a: 1 };\nconsole.log(o == null);\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "boxing this static type into a dynamic value") {
-		t.Fatalf("static object == null handed back with %q, want the boxing reason", reason)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.LooseEquals(value.ObjectFromStruct(o), value.Null)") {
+		t.Fatalf("static object == null did not box through ObjectFromStruct into LooseEquals:\n%s", source)
 	}
 }
