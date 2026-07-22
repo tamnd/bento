@@ -1,0 +1,6 @@
+== stdout:
+7
+ababab
+only
+== exit:
+0

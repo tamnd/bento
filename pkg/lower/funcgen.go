@@ -1155,6 +1155,13 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 // so a tuple whose positions differ hands back, a defaulted element fills when the
 // slot is undefined, and a hole, rest, or nested element is a later slice.
 func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrType frontend.Type) ([]ast.Stmt, error) {
+	// A tuple parameter holds a positional struct, not one homogeneous element type, so
+	// its names read off the E<i> fields the struct carries rather than through AtI. It
+	// takes the same positional binder the const [a, b] = pair declaration does, reading
+	// off the parameter's Go local instead of a destructured source.
+	if elems, ok := r.prog.TupleElements(arrType); ok {
+		return r.tupleParamBindings(pat, goName, arrType, elems)
+	}
 	elemT, ok := r.prog.ElementType(arrType)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "an array-pattern parameter on a non-array or tuple type is a later slice"}
@@ -1245,6 +1252,79 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 			return nil, err
 		}
 		out = append(out, bind)
+	}
+	return out, nil
+}
+
+// tupleParamBindings binds each name of an array-pattern parameter whose declared type
+// is a tuple, function f([a, b]: [number, string]), from the matching positional field
+// of the parameter's held struct: a := __0.E0, b := __0.E1. It is the parameter sibling
+// of tupleDestructure, which binds a const [a, b] = pair declaration; there the source is
+// destructured into a temporary, here the source is already the parameter's Go local. The
+// same edges tupleDestructure defers hand back rather than mislower: a rest element, a
+// pattern binding more names than the tuple has, a nested pattern, a default, an optional
+// or rest tuple position, and a binding whose declared Go type differs from the tuple
+// element's. Each bound name is blanked when unused, the same declared-and-not-used guard
+// the array-pattern binder applies.
+func (r *Renderer) tupleParamBindings(pat frontend.Node, goName string, tupleType frontend.Type, elems []frontend.TupleElem) ([]ast.Stmt, error) {
+	patElems := r.prog.Children(pat)
+	if len(patElems) == 0 {
+		return nil, &NotYetLowerable{Reason: "an empty array-pattern parameter binds nothing"}
+	}
+	fixedElems, _, hasRest, err := r.splitArrayRest(patElems)
+	if err != nil {
+		return nil, err
+	}
+	if hasRest {
+		return nil, &NotYetLowerable{Reason: "a tuple-parameter destructuring rest element is a later slice"}
+	}
+	if len(fixedElems) > len(elems) {
+		return nil, &NotYetLowerable{Reason: "a tuple-parameter pattern that binds more elements than the tuple has is a later slice"}
+	}
+	// Emit the struct so the field reads name a declared Go type, even where the tuple
+	// type reached the renderer only through this parameter.
+	if _, err := r.decls.internTuple(r, tupleType, elems); err != nil {
+		return nil, err
+	}
+	var out []ast.Stmt
+	for i, el := range fixedElems {
+		info, err := r.classifyArrayElem(el)
+		if err != nil {
+			return nil, err
+		}
+		if info.nested != nil || info.hasDefault {
+			return nil, &NotYetLowerable{Reason: "a tuple-parameter nested pattern or defaulted element is a later slice"}
+		}
+		if elems[i].Optional || elems[i].Rest {
+			return nil, &NotYetLowerable{Reason: "a tuple-parameter bind of an optional or rest element is a later slice"}
+		}
+		name, ok := localName(r.prog.Text(info.nameNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
+		}
+		// The binding's declared type must render to the same Go type as the tuple field
+		// it reads, so a := __0.E0 is a well-typed assignment. They agree in the common
+		// case, since the checker types the binding off the tuple element; a case where
+		// they diverge hands back rather than emit a mismatched read.
+		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		if err != nil {
+			return nil, err
+		}
+		fieldGo, err := r.typeExpr(elems[i].Type)
+		if err != nil {
+			return nil, err
+		}
+		if same, err := sameGoType(nameGo, fieldGo); err != nil {
+			return nil, err
+		} else if !same {
+			return nil, &NotYetLowerable{Reason: "a tuple-parameter binding whose type differs from the tuple element type is a later slice"}
+		}
+		out = append(out, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(goName), Sel: ident("E" + strconv.Itoa(i))}},
+		})
+		out = r.blankUnusedParamBinding(out, info.nameNode, name)
 	}
 	return out, nil
 }

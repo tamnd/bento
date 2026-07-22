@@ -227,3 +227,54 @@ want(pair);
 		t.Fatalf("shape-mismatch handback reason = %q, want an optional-element reason", reason)
 	}
 }
+
+// TestTupleParamDestructure proves an array-pattern parameter whose declared type is a
+// tuple binds each name off the positional field of the held struct rather than through
+// AtI: function f([a, b]: [number, string]) lowers a and b to __0.E0 and __0.E1.
+func TestTupleParamDestructure(t *testing.T) {
+	const src = `export function f([a, b]: [number, string]): string {
+  return b + ":" + a;
+}
+`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, ".E0") || !strings.Contains(got, ".E1") {
+		t.Errorf("tuple-parameter destructure did not read positional fields:\n%s", got)
+	}
+	if strings.Contains(got, ".AtI(") {
+		t.Errorf("tuple-parameter destructure should read fields, not array positions:\n%s", got)
+	}
+}
+
+// TestTupleParamDestructureRuns builds and runs a tuple-parameter destructure, covering
+// a heterogeneous tuple and a pattern that binds fewer names than the tuple has.
+func TestTupleParamDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function f([a, b]: [number, string]): string {
+  return b + ":" + a;
+}
+console.log(f([7, "x"]));
+function g([first]: [string, boolean]): string {
+  return first;
+}
+console.log(g(["y", true]));
+`
+	want := "x:7\ny\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("tuple-parameter destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestTupleParamDestructureHandsBackOptional pins the zero-fail edge: a tuple-parameter
+// bind of an optional position, whose field is a value.Opt the plain read would not peel,
+// hands back rather than mislower.
+func TestTupleParamDestructureHandsBackOptional(t *testing.T) {
+	const src = `export function f([a, b]: [number, string?]): number {
+  return a;
+}
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "optional or rest element") {
+		t.Fatalf("optional tuple-parameter handback reason = %q, want an optional-element reason", reason)
+	}
+}
