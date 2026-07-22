@@ -129,6 +129,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		} else if handled {
 			return expr, nil
 		}
+		// A bare reference to a class used as a value, the class object itself rather
+		// than a construction or a static-member read, lowers to the class's
+		// static-side singleton. new C() is lowered on the new path, a static access
+		// C.m or C.x on the member path through classKeyRead, and instanceof, extends,
+		// and a throw each ask classNameRef before the receiver would lower, so only a
+		// whole-class value reference, a `return C` or a `const k = C`, reaches here.
+		if info, ok := r.classNameRef(n); ok {
+			return r.classValueExpr(info), nil
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}

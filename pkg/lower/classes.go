@@ -104,6 +104,16 @@ type classInfo struct {
 	// methods that satisfy value.Thrown (set by lowerThrow, read by
 	// renderClass).
 	thrownAsError bool
+	// valueUsed marks a class referenced as a value, the class object itself
+	// rather than a construction or a static-member read (a `return C` or a
+	// `const k = C`). Such a reference lowers to the class's static-side
+	// singleton, so renderClass emits the static-side struct type and its var
+	// only for a class that is actually used this way; staticGoName names that
+	// struct and staticVarName the singleton, both reserved package-uniquely the
+	// first time classValueNames is asked.
+	valueUsed     bool
+	staticGoName  string
+	staticVarName string
 }
 
 // classField is one instance field, in declaration order.
@@ -1670,6 +1680,37 @@ func (r *Renderer) classNameRef(nameNode frontend.Node) (*classInfo, bool) {
 	return nil, false
 }
 
+// classValueNames lazily assigns and returns the Go names for a class's
+// static-side type and its singleton value, the pair a bare class reference used
+// as a value lowers to. It marks the class value-used so renderClass emits the
+// pair, and it draws both names from the declaration name set so they never
+// collide with an interned struct, an enum, or another generated name. The names
+// are minted once and cached, so every use site and the class's own emission
+// agree on the spelling.
+func (r *Renderer) classValueNames(info *classInfo) (typeName, varName string) {
+	if !info.valueUsed {
+		info.valueUsed = true
+		info.staticGoName = r.decls.reserveName(info.goName + "Class")
+		info.staticVarName = r.decls.reserveName(info.goName + "ClassValue")
+	}
+	return info.staticGoName, info.staticVarName
+}
+
+// classValueExpr is the Go expression a class used as a value lowers to: the
+// class's static-side singleton.
+func (r *Renderer) classValueExpr(info *classInfo) ast.Expr {
+	_, varName := r.classValueNames(info)
+	return ident(varName)
+}
+
+// classValueType is the Go type of a class used as a value, the static side, a
+// struct distinct from the *C instance pointer so a slot typed typeof C stays
+// distinct from one typed C.
+func (r *Renderer) classValueType(info *classInfo) ast.Expr {
+	typeName, _ := r.classValueNames(info)
+	return ident(typeName)
+}
+
 // renderClasses emits the declarations of every registered class in source
 // order: the struct, the static vars, the constructor, the methods, the
 // accessors, then the static functions, the order a hand-written Go file keeps
@@ -1876,7 +1917,36 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 	if info.thrownAsError {
 		out = append(out, r.thrownMethodDecls(info)...)
 	}
+	// A class used as a value carries a static-side struct and a singleton of it,
+	// the value a bare class reference lowers to. The struct is empty this slice,
+	// which stands the class object as an assignable, identity-free token, enough
+	// for a class value that flows into a slot and is never constructed through;
+	// a class never used as a value emits neither.
+	if info.valueUsed {
+		out = append(out, r.classValueDecls(info)...)
+	}
 	return out, nil
+}
+
+// classValueDecls emits a value-used class's static-side struct type and its
+// singleton var, the pair classValueNames reserved.
+func (r *Renderer) classValueDecls(info *classInfo) []ast.Decl {
+	return []ast.Decl{
+		&ast.GenDecl{
+			Tok: token.TYPE,
+			Specs: []ast.Spec{&ast.TypeSpec{
+				Name: ident(info.staticGoName),
+				Type: &ast.StructType{Fields: &ast.FieldList{}},
+			}},
+		},
+		&ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names:  []*ast.Ident{ident(info.staticVarName)},
+				Values: []ast.Expr{&ast.CompositeLit{Type: ident(info.staticGoName)}},
+			}},
+		},
+	}
 }
 
 // staticInitName is the name of the package function a class's static

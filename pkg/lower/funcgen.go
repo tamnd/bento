@@ -1588,7 +1588,7 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 			Body: &ast.BlockStmt{List: append(binds, &ast.ExprStmt{X: call})},
 		}, nil
 	}
-	retType, err := r.typeExpr(bodyType)
+	retType, err := r.conciseResultType(body, bodyType)
 	if err != nil {
 		return nil, err
 	}
@@ -1599,6 +1599,21 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		},
 		Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{loweredBody}})},
 	}, nil
+}
+
+// conciseResultType is the Go result type of a concise arrow whose body is the
+// expression node. It is the body's checker type through typeExpr, except a body
+// that is a class used as a value, whose type the checker gives the class's own
+// type indistinguishable from the instance type, takes the class's static-side
+// struct so the arrow returns the static singleton's type rather than the *C
+// instance pointer the plain type path would emit.
+func (r *Renderer) conciseResultType(body frontend.Node, bodyType frontend.Type) (ast.Expr, error) {
+	if body.Kind() == frontend.NodeIdentifier {
+		if info, ok := r.classNameRef(body); ok {
+			return r.classValueType(info), nil
+		}
+	}
+	return r.typeExpr(bodyType)
 }
 
 // arrowResultType is the Go type an arrow returns, wherever a caller needs it
