@@ -108,3 +108,32 @@ func TestAllowUnreachableCodeGates(t *testing.T) {
 		t.Fatalf("hand-back reason = %q, want the checker's unreachable-code message", err.Error())
 	}
 }
+
+// TestConstructSignatureArityGates proves an assignability error whose
+// elaboration is a signature arity mismatch hands back rather than lowering under
+// the assignability toleration. Assigning a class to a construct-signature type
+// that supplies fewer constructor arguments than the class requires is a TS2322
+// the checker elaborates with TS2849 ("Target signature provides too few
+// arguments"); unlike the widened-literal and cross-primitive coercions the
+// toleration admits, a signature-arity mismatch has no value to land, so emitting
+// Go for it would ship a program TypeScript rejects with no run-time coercion to
+// stand behind. Honoring the arity report is what keeps the toleration matched to
+// real value coercions.
+func TestConstructSignatureArityGates(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "arity.ts")
+	// Foo's constructor needs an argument the target construct signature never
+	// passes, the TS2322 + TS2849 shape.
+	src := "class Foo {\n  constructor(x: number) {}\n}\nconst foo: { new(): Foo } = Foo;\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatalf("write entry: %v", err)
+	}
+
+	_, err := EmitGo(entry, "test")
+	if err == nil {
+		t.Fatal("construct-signature arity mismatch lowered, want a hand-back")
+	}
+	if !strings.Contains(err.Error(), "not assignable") {
+		t.Fatalf("hand-back reason = %q, want the checker's not-assignable message", err.Error())
+	}
+}
