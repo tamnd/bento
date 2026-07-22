@@ -841,6 +841,27 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 			}
 			haveFieldShape = true
 		}
+		// A field whose declared type is a bare value.Value box, an empty top type { },
+		// a string-index dictionary, or an optional over either, takes a boxed member
+		// rather than a struct built at a shape. The optional over a box collapsed to the
+		// bare box, so it carries no value.Some wrap and no value.None the optional paths
+		// below would apply; the member simply boxes into value.Value the way a value
+		// flowing into an any slot does, and an already-dynamic member passes through.
+		if hasProp && r.isNarrowableBoxType(sp.Type) {
+			v, err := r.lowerExpr(valNode)
+			if err != nil {
+				return nil, err
+			}
+			if !r.isDynamic(valNode) {
+				v, err = r.boxStaticToDynamic(v, valNode)
+				if err != nil {
+					return nil, err
+				}
+			}
+			elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: v})
+			seen[field] = true
+			continue
+		}
 		// An explicit undefined filling an optional field is the empty optional,
 		// value.None, the same value an omitted optional field takes; someWrap over
 		// the lowered undefined would store the boxed Undefined in a typed slot,
