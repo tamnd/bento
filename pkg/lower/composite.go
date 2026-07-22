@@ -687,6 +687,10 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		}
 		values[field] = val
 	}
+	get := func(field string) (ast.Expr, bool) {
+		v, ok := values[field]
+		return v, ok
+	}
 	for _, p := range r.prog.Children(n) {
 		if p.Kind() != frontend.NodeUnknown {
 			// A method, getter, or setter member is a function property, which the
@@ -701,7 +705,7 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 			// value reference. A spread { ...o } is also a single-child member, but
 			// its text opens with the spread token, so it routes to the spread copy.
 			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
-				if err := r.objectSpread(kids[0], set); err != nil {
+				if err := r.objectSpread(kids[0], t, set, get); err != nil {
 					return nil, err
 				}
 				continue
@@ -948,7 +952,7 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 // plain identifier so its fields can be read one at a time without re-evaluating
 // a side-effecting expression, and it must be a fixed-shape object, not an array
 // or a map-shaped object, which spread by copying elements rather than fields.
-func (r *Renderer) objectSpread(srcNode frontend.Node, set func(string, ast.Expr)) error {
+func (r *Renderer) objectSpread(srcNode frontend.Node, target frontend.Type, set func(string, ast.Expr), get func(string) (ast.Expr, bool)) error {
 	if srcNode.Kind() != frontend.NodeIdentifier {
 		return &NotYetLowerable{Reason: "object spread of an expression that is not a plain identifier is a later slice"}
 	}
@@ -978,7 +982,34 @@ func (r *Renderer) objectSpread(srcNode frontend.Node, set func(string, ast.Expr
 		if !ok {
 			return &NotYetLowerable{Reason: "object spread source has a field name that is not a Go identifier"}
 		}
-		set(field, &ast.SelectorExpr{X: src, Sel: ident(field)})
+		read := &ast.SelectorExpr{X: src, Sel: ident(field)}
+		// An optional source field lowers to a value.Opt slot, but the target field it
+		// fills may be required: when a later spread whose member is optional overrides
+		// an earlier value, the merged property is present whenever the source has it
+		// and falls back to the earlier value otherwise, which is exactly what spread
+		// evaluates. A required target then takes src.Field.Or(prev), unwrapping the
+		// optional to the concrete field type, and an optional target takes
+		// src.Field.OrOpt(prev), keeping the value.Opt slot. Without a prior value there
+		// is nothing to fall back to, so a required target hands back rather than drop a
+		// bare optional into a concrete field.
+		if sp.Optional {
+			tp, hasTarget := r.shapeProp(target, sp.Name)
+			if hasTarget && !tp.Optional {
+				prev, ok := get(field)
+				if !ok {
+					return &NotYetLowerable{Reason: "object spread of an optional member into a required field with no prior value is a later slice"}
+				}
+				set(field, &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident("Or")}, Args: []ast.Expr{prev}})
+				continue
+			}
+			if hasTarget && tp.Optional {
+				if prev, ok := get(field); ok {
+					set(field, &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident("OrOpt")}, Args: []ast.Expr{prev}})
+					continue
+				}
+			}
+		}
+		set(field, read)
 	}
 	return nil
 }
