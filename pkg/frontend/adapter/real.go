@@ -115,7 +115,13 @@ func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Ho
 	}
 
 	shimRoots := append([]string(nil), roots...)
-	shimOpts := shim.Options{RootFiles: shimRoots, Loose: !opts.Strict}
+	shimOpts := shim.Options{
+		RootFiles:            shimRoots,
+		Loose:                !opts.Strict,
+		Target:               opts.Target,
+		ImportHelpers:        opts.ImportHelpers,
+		AllowUnreachableCode: opts.AllowUnreachableCode,
+	}
 
 	for {
 		p := shim.Compile(files, shimOpts)
