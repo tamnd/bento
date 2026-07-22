@@ -1127,6 +1127,17 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return sel("value", "Value"), nil
 		}
+		if r.isEmptyObjectTopType(t) {
+			// The empty object type { } carries no declared members and no index
+			// signature, so it is not a shape: structurally it is the top type that
+			// accepts any non-null value, and a user type guard narrows it to a shape
+			// the empty struct could never hold. Interning it to an empty struct drops
+			// the value and leaves narrowed member reads dangling, so it lowers to the
+			// dynamic value.Value box, where the value survives narrowing and a keyed
+			// read dispatches on the boxed kind at runtime.
+			r.requireImport(valuePkg)
+			return sel("value", "Value"), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -1344,6 +1355,61 @@ func (r *Renderer) isStringIndexDict(t frontend.Type) bool {
 	}
 	_, ok := r.prog.StringIndexType(t)
 	return ok
+}
+
+// isEmptyObjectTopType reports whether a type is the empty object type { }, an object
+// with no declared members, no string index signature, and no call signature. This is
+// the structural top type that accepts any non-null value, not a fixed shape, so typeExpr
+// lowers it to a dynamic value.Value rather than an empty interned struct. It excludes a
+// string-index dictionary (which isStringIndexDict already routes to value.Value), and it
+// excludes an array, a tuple, and a callable, which have their own lowerings. isDynamic
+// and typeExpr both consult it so the "is a boxed value.Value" decision and the emitted Go
+// type for the slot never disagree.
+func (r *Renderer) isEmptyObjectTopType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if len(r.prog.Properties(t)) != 0 {
+		return false
+	}
+	if _, ok := r.prog.StringIndexType(t); ok {
+		return false
+	}
+	if _, ok := r.classOfType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.TupleElements(t); ok {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	// A construct-signature type { new(): T } carries no declared property either, but
+	// it is a constructor value, not the { } top type, so a call or construct signature
+	// of any kind keeps it off the dynamic-box path and on its own lowering.
+	if calls, constructs := r.prog.Signatures(t); len(calls) > 0 || len(constructs) > 0 {
+		return false
+	}
+	return true
+}
+
+// isNarrowableBoxType reports whether a type lowers to the dynamic value.Value box and
+// so survives a user type guard narrowing it to a shape at a use site: the empty object
+// top type { }, a string-index dictionary, or an optional over either ({ } | undefined
+// being the motivating case). It deliberately excludes bare any and unknown, whose
+// narrowing already has its own established lowering, keeping this path to the structural
+// box types the { } work introduced. isDynamic consults it on a receiver's declared type
+// so a narrowed member read still dispatches through the box the Go variable holds.
+func (r *Renderer) isNarrowableBoxType(t frontend.Type) bool {
+	if r.isEmptyObjectTopType(t) || r.isStringIndexDict(t) {
+		return true
+	}
+	if t.Flags&frontend.TypeUnion != 0 {
+		if inner, ok := r.optionalInner(r.prog.UnionMembers(t)); ok {
+			return r.isNarrowableBoxType(inner)
+		}
+	}
+	return false
 }
 
 func (r *Renderer) renderObject(t frontend.Type) (ast.Expr, error) {

@@ -429,6 +429,22 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.isStringIndexDict(r.prog.TypeAt(n)) {
 		return true
 	}
+	// The empty object type { } lowers to a boxed value.Value too (lower.go
+	// isEmptyObjectTopType): it is the structural top type, not a shape, so a value of
+	// it is dynamic and a narrowed member read dispatches off the box at runtime.
+	if r.isEmptyObjectTopType(r.prog.TypeAt(n)) {
+		return true
+	}
+	// A user type guard narrows a { } binding to a concrete shape at a use site, so
+	// TypeAt reports that shape while the Go variable still holds the value.Value its
+	// declared { } type lowered to. The read must dispatch off the box, so it is dynamic
+	// by its declared type even where the checker narrowed it: a value.Value carries no
+	// Go field for the narrowed shape's members, and the surrounding coercion unboxes
+	// the keyed read down to the slot it flows into. The declared { } | undefined arrives
+	// as a union, so the check unwraps the optional to its box-backed inner.
+	if decl, _, ok := r.prog.DeclaredTypeAt(n); ok && r.isNarrowableBoxType(decl) {
+		return true
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 
@@ -1957,7 +1973,7 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 		return nil, err
 	}
 	srcDyn := r.isDynamic(srcNode)
-	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(r.retType)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStaticFlags(expr, r.retType.Flags)

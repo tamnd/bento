@@ -667,6 +667,15 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	if _, ok := r.prog.ElementType(t); ok {
 		return nil, &NotYetLowerable{Reason: "object literal typed as an array is a later slice"}
 	}
+	// An empty literal { } typed as the empty object top type is not a fixed shape but
+	// the dynamic property bag: interning it would give an empty struct no read or write
+	// dispatches over, so it lowers to the boxed value.NewObject the top type holds, the
+	// same runtime object new Object() and a spread build. A literal contextually typed at
+	// a fixed shape keeps its members and does not reach here, so only a genuine { } does.
+	if r.isEmptyObjectTopType(t) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NewObject")}, nil
+	}
 	// internStruct registers the struct and reports the name; a shape that does
 	// not lower (an optional property, a non-identifier field) hands back here, so
 	// the literal never builds a struct the type side would refuse to declare.

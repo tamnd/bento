@@ -19,11 +19,23 @@ import (
 // double-wrapped. It returns (expr, false, nil) when the target is not an optional
 // or the source is already one, leaving the caller on its existing path.
 func (r *Renderer) boxToOptional(expr ast.Expr, src frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
-	if !r.isOptionalType(target) || r.isOptional(src) {
+	// A source already of the optional shape is the same Opt and passes through, but
+	// only when it is a static optional: a dynamic source the checker types
+	// T | undefined is a boxed value.Value, not an Opt[T], so it still needs the
+	// unboxing coercion below rather than passing straight into the slot.
+	if !r.isOptionalType(target) || (r.isOptional(src) && !r.isDynamic(src)) {
 		return expr, false, nil
 	}
 	inner, ok := r.optionalInner(r.prog.UnionMembers(target))
 	if !ok {
+		return expr, false, nil
+	}
+	// An optional whose inner lowers to the dynamic value.Value box does not become an
+	// Opt[value.Value] slot: the box already carries undefined, so renderUnion collapses
+	// { } | undefined to a bare value.Value. Wrapping such a value in Some or None would
+	// spell an Opt the Go slot never has, so it declines here and the plain dynamic bridge
+	// boxes or passes the value the way any other box move does.
+	if inner.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(inner) {
 		return expr, false, nil
 	}
 	elem, err := r.typeExpr(inner)
@@ -36,10 +48,24 @@ func (r *Renderer) boxToOptional(expr ast.Expr, src frontend.Node, target fronte
 	if r.prog.TypeAt(src).Flags == frontend.TypeUndefined {
 		return &ast.CallExpr{Fun: index(sel("value", "None"), elem)}, true, nil
 	}
-	// A dynamic source has no static T to store in the slot; boxing it needs the
-	// dynamic-to-static coercion a later slice adds, so it hands back.
+	// A dynamic source, a boxed value.Value, unboxes into the optional through the
+	// value model's dynamic-to-optional coercers: undefined lands as the empty optional
+	// and any other value coerces to the element primitive, the same ToNumber the
+	// non-optional dynamic coercion runs, wrapped so a miss stays undefined. A member
+	// read off a { } value narrowed by a user type guard returning into a
+	// number | undefined slot is the motivating case. A non-primitive element has no
+	// such coercer yet and hands back.
 	if r.isDynamic(src) {
-		return nil, false, &NotYetLowerable{Reason: "boxing a dynamic value into an optional slot is a later slice"}
+		r.requireImport(valuePkg)
+		switch {
+		case inner.Flags&frontend.TypeNumber != 0:
+			return &ast.CallExpr{Fun: sel("value", "ToOptNumber"), Args: []ast.Expr{expr}}, true, nil
+		case inner.Flags&frontend.TypeString != 0:
+			return &ast.CallExpr{Fun: sel("value", "ToOptString"), Args: []ast.Expr{expr}}, true, nil
+		case inner.Flags&frontend.TypeBoolean != 0:
+			return &ast.CallExpr{Fun: sel("value", "ToOptBoolean"), Args: []ast.Expr{expr}}, true, nil
+		}
+		return nil, false, &NotYetLowerable{Reason: "boxing a dynamic value into a non-primitive optional slot is a later slice"}
 	}
 	// The source is a present value. Bridge it to the element type first so a
 	// derived instance upcasts to the base the optional declares, then wrap it.
@@ -269,6 +295,14 @@ func (r *Renderer) optParamsOf(fn frontend.Node, sig frontend.Signature) map[str
 	var opt map[string]bool
 	for i, p := range sig.Params {
 		if !r.isOptionalType(p.Type) {
+			continue
+		}
+		// An optional whose inner lowers to the dynamic value.Value box, { } | undefined
+		// the motivating case, binds a bare value.Value the box holds undefined in
+		// natively (renderUnion collapses it), not a value.Opt[T]. A narrowed read of it
+		// dispatches through the box, not an Opt unwrap, so it is excluded here the same as
+		// a dynamic any or unknown optional is.
+		if r.isNarrowableBoxType(p.Type) {
 			continue
 		}
 		// A defaulted optional binds the plain T the default fills, so its field is

@@ -1093,7 +1093,7 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	// static parameter coerces, so a string passed for a message?: any lands as
 	// the boxed string the body reads.
 	srcDyn := r.isDynamic(node)
-	tgtDyn := pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isStringIndexDict(pt)
+	tgtDyn := pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(pt)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStaticFlags(lowered, pt.Flags)
@@ -1118,7 +1118,7 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 // emit Go that does not compile. Every other argument lowers at its own type and
 // bridges to the parameter the ordinary way.
 func (r *Renderer) lowerArgAt(a frontend.Node, pt frontend.Type) (ast.Expr, error) {
-	if a.Kind() == frontend.NodeObjectLiteralExpression && !r.isStringIndexDict(pt) {
+	if a.Kind() == frontend.NodeObjectLiteralExpression && !r.isNarrowableBoxType(pt) {
 		// An object literal argument to a string-index dictionary parameter boxes into a
 		// value.Value bag rather than building at a fixed shape, so it skips the
 		// contextual-shape path and falls to the boxing bridge below the way a literal
