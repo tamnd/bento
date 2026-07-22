@@ -1641,6 +1641,14 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 			return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType)}, nil
 		}
 	}
+	// A concise arrow assigned to a function slot whose return type is wider than the
+	// body's own returns at the slot's type, so the variable takes that Go func type and
+	// a later assignment of a sibling arrow returning the other union arm fits it. The
+	// contextual return rides down to arrowFunc, which coerces the body into it.
+	if rt, ok := r.contextualArrowRet(r.prog.TypeAt(nameNode), initNode); ok {
+		r.pendingArrowRet = &rt
+		return r.lowerExpr(initNode)
+	}
 	init, err := r.lowerExpr(initNode)
 	if err != nil {
 		return nil, err
@@ -3822,6 +3830,13 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 			return nil, err
 		}
 	} else {
+		// A concise arrow assigned to a slot whose type is a union of call signatures
+		// takes the union's return type, the same way its var initializer would, so a
+		// later `f = a => a` fits the same Go function type the first assignment gave
+		// f rather than emitting its own body-typed signature that no longer matches.
+		if rt, ok := r.contextualArrowRet(r.prog.TypeAt(parts[0]), parts[2]); ok {
+			r.pendingArrowRet = &rt
+		}
 		rhs, err = r.lowerExpr(parts[2])
 		if err != nil {
 			return nil, err

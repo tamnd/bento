@@ -604,6 +604,14 @@ type Renderer struct {
 	// instead of emitting Go that OOMs the toolchain. It is a guard on emit shape, not a
 	// semantic limit, the same reason the typeExpr node budget caps a branching type.
 	closureDepth int
+	// pendingArrowRet carries a contextual return type down to the very next arrow the
+	// renderer lowers, so a concise arrow assigned to a function slot whose return type
+	// is wider than the body's own (a union of the return types of a union-of-call-
+	// signatures target) returns at the slot's type, coercing the body into it. arrowFunc
+	// reads and clears it on entry so it applies to exactly the one arrow it was set for
+	// and never leaks into a nested arrow in that arrow's body. It is nil for every arrow
+	// lowered without a contextual function slot, the whole existing set.
+	pendingArrowRet *frontend.Type
 }
 
 // maxClosureNestDepth is the deepest run of nested function expressions or arrow
