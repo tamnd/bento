@@ -2236,9 +2236,9 @@ func (r *Renderer) assign2322At(node frontend.Node) bool {
 	return false
 }
 
-// ensureNotAssignSpans collects the program's code 2345 and 2322 spans once and caches
-// them, so both the per-site guards and the end-of-render reconciliation read the same
-// sets without re-querying the checker.
+// ensureNotAssignSpans collects the program's code 2345, 2322, 2769, 2362, and 2363
+// spans once and caches them, so both the per-site guards and the end-of-render
+// reconciliation read the same sets without re-querying the checker.
 func (r *Renderer) ensureNotAssignSpans() {
 	if r.notAssignReady {
 		return
@@ -2251,6 +2251,8 @@ func (r *Renderer) ensureNotAssignSpans() {
 			r.assign2322Spans = append(r.assign2322Spans, d.Span)
 		case 2769:
 			r.overload2769Spans = append(r.overload2769Spans, d.Span)
+		case 2362, 2363:
+			r.arithOperandSpans = append(r.arithOperandSpans, d.Span)
 		}
 	}
 	r.notAssignReady = true
@@ -2272,7 +2274,9 @@ func (r *Renderer) markOverloadCallSeen(call frontend.Node) {
 }
 
 // unguardedNotAssign reports the first tolerated-code site (2345, 2322, or 2769) no
-// guarded path inspected, or nil if every one the front door tolerated flowed through the
+// guarded path inspected, or, for the arithmetic-operand codes 2362 and 2363 that no
+// path can lower soundly, the first such site present at all. It returns nil if every one
+// the front door tolerated flowed through the
 // argument, constructor, or binding bridge that either lowered it safely or handed it
 // back. A site left unseen was lowered by a path with no representation guard, a builtin
 // higher-order method callback, a builtin element-slot argument, or an assignment
@@ -2298,6 +2302,9 @@ func (r *Renderer) unguardedNotAssign() error {
 		if !r.seenAssign[s] {
 			return &NotYetLowerable{Reason: "a call with no matching overload reaches a path with no overloaded-call guard, so the unit routes to the interpreter until that path grows one"}
 		}
+	}
+	if len(r.arithOperandSpans) > 0 {
+		return &NotYetLowerable{Reason: "an arithmetic operator has a string or boolean operand the checker rejects with 2362 or 2363, a program TypeScript does not accept, so the unit routes to the interpreter rather than emit its ToNumber coercion"}
 	}
 	return nil
 }

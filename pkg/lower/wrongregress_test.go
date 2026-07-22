@@ -28,6 +28,37 @@ func TestRegExpInitializerHandsBackWholeDecl(t *testing.T) {
 	}
 }
 
+// TestArithmeticOnStringOperandHandsBack proves an arithmetic operator with a
+// statically string operand, `1 * `abc${1}def``, hands the whole file back rather
+// than emit the ToNumber coercion (`1 * value.StringToNumber(...)`) the runtime
+// runs. TypeScript rejects the program with 2363 (a string is not a valid
+// arithmetic operand), so emitting a running Go program for it is unsound: the
+// checker refused it. A .js source, which carries no such diagnostic, keeps its
+// coercion; the handback fires on the checker's 2362/2363 span, not on the shape.
+func TestArithmeticOnStringOperandHandsBack(t *testing.T) {
+	const src = "var x = 1 * `abc${ 1 }def`;\n"
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	_, err := r.RenderProgram(entryFile(t, prog))
+	if err == nil {
+		t.Fatalf("arithmetic on a string operand lowered, want a hand-back:\n%s", src)
+	}
+}
+
+// TestNumericArithmeticStillLowers proves the arithmetic-operand handback fires only
+// on a checker-rejected operand: a valid two-number multiply keeps lowering, so the
+// 2362/2363 guard does not swallow sound arithmetic.
+func TestNumericArithmeticStillLowers(t *testing.T) {
+	const src = "var x = 3 * 4;\n"
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	if _, err := r.RenderProgram(entryFile(t, prog)); err != nil {
+		t.Fatalf("a valid numeric multiply handed back, want a lowering: %v", err)
+	}
+}
+
 // TestForInNestedRedeclareNoUnusedBinding proves a for...in whose body only
 // re-declares the same var name, never reading the loop key, drops the binding to
 // the blank identifier. A nested `for (var x in {})` inside a loop over x is not a
