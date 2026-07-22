@@ -403,6 +403,20 @@ func firstError(prog *frontend.Program, opts EmitOptions) string {
 			continue
 		}
 		if toleratedAssignability[d.Code] {
+			// A not-assignable report whose elaboration bottoms out in a signature
+			// arity mismatch is not the value coercion the assignability toleration
+			// admits: it flags that the source's call or construct signature takes
+			// more arguments than the target signature supplies, a `const c: { new():
+			// Foo } = Foo` where Foo's constructor needs an argument the target
+			// signature never passes. There is no widened literal or cross-primitive
+			// value to land here, only two signatures of incompatible arity, so the
+			// bridges the toleration leans on have nothing to reconcile and the honest
+			// outcome is a handback, not a lowering. The checker nests the arity report
+			// (2849) under the 2322/2345, so its presence in the message chain gates
+			// the case here ahead of the tolerated skip.
+			if hasArityMismatch(d) {
+				return d.Message
+			}
 			continue
 		}
 		if toleratedOverload[d.Code] {
@@ -432,6 +446,24 @@ func firstError(prog *frontend.Program, opts EmitOptions) string {
 // missing property ("Property 'b' ...") is not private and stays tolerated.
 func isPrivateNameMiss(d frontend.Diagnostic) bool {
 	return (d.Code == 2339 || d.Code == 2551) && strings.HasPrefix(d.Message, "Property '#")
+}
+
+// hasArityMismatch reports whether a diagnostic's elaboration chain carries a
+// signature arity mismatch, the 2849 "Target signature provides too few
+// arguments" report the checker nests under an assignability error when a source
+// call or construct signature is assigned to a target signature that supplies
+// fewer arguments. The report lives in the diagnostic's Related chain rather than
+// its top message, and the chain can nest, so the search walks it in full. A
+// caller uses this to separate a signature-shape mismatch, which has no run-time
+// value coercion to reproduce, from the value coercions the assignability
+// toleration otherwise admits.
+func hasArityMismatch(d frontend.Diagnostic) bool {
+	for _, r := range d.Related {
+		if r.Code == 2849 || hasArityMismatch(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // toleratedImplicitAny is the set of checker diagnostic codes bento admits by
