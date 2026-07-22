@@ -2005,6 +2005,8 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 	// The pattern is validated before the source is lowered, so an unsupported shape
 	// hands back before a temporary is minted for the source.
 	infos := make([]arrayDefaultElem, len(fixedElems))
+	coerceSrc := make([]frontend.Node, len(fixedElems))
+	defaultAlways := make([]bool, len(fixedElems))
 	for i, el := range fixedElems {
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
@@ -2020,21 +2022,56 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
-		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		// The binding takes its declared type, not the flow-narrowed one: let [y]:
+		// (string | undefined)[] = [""] narrows y to string at its use while the source
+		// annotation types y the whole string | undefined, so comparing the narrowed type
+		// would see a spurious divergence and hand back a binding that in fact agrees.
+		nameGo, err := r.typeExpr(r.bindingDeclaredType(info.nameNode))
 		if err != nil {
 			return nil, true, err
 		}
-		// A defaulted element fills from its default when the slot is undefined, so
-		// its binding type is the element type the source read yields, the same match
-		// a plain element needs; an optional-element source, whose read is an Opt the
-		// default would have to peel, is a later slice.
+		if info.hasDefault {
+			// A defaulted element whose source element is statically undefined always takes
+			// the default, let [z = ""]: (string | undefined)[] = [undefined] binding z the ""
+			// the annotation strips the undefined off of, so the read is dead and the fill
+			// folds to the default alone.
+			if elemT.Flags == frontend.TypeUndefined {
+				info.name = name
+				infos[i] = info
+				defaultAlways[i] = true
+				continue
+			}
+			// A default over a present-typed element fills from the bounds-aware read when
+			// the slot is missing, so its binding must render to the element type the read
+			// yields, the same match a plain element needs; an optional-element source, whose
+			// read is an Opt the default would have to peel, is a later slice.
+			narrowGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			if same, err := sameGoType(narrowGo, elemGo); err != nil {
+				return nil, true, err
+			} else if !same {
+				return nil, true, &NotYetLowerable{Reason: "an array destructuring default over an optional-element source is a later slice"}
+			}
+			info.name = name
+			infos[i] = info
+			continue
+		}
 		if same, err := sameGoType(nameGo, elemGo); err != nil {
 			return nil, true, err
 		} else if !same {
-			if info.hasDefault {
-				return nil, true, &NotYetLowerable{Reason: "an array destructuring default over an optional-element source is a later slice"}
+			// The element read yields the source's element type, narrower than the binding's
+			// declared type where the initializer literal minted a specific value the
+			// annotation widens, let [x]: (string | number)[] = [1] reading a float64 into the
+			// string | number x. The read wraps into the declared type through the initializer
+			// element as the coercion source; a non-literal source has no element node to read
+			// the source type from, so a genuine widening there stays a handback.
+			src, ok := r.initElemSource(initNode, i)
+			if !ok {
+				return nil, true, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
 			}
-			return nil, true, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
+			coerceSrc[i] = src
 		}
 		info.name = name
 		infos[i] = info
@@ -2074,13 +2111,56 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 		prefix = []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{drained}}}
 		recv = func() (ast.Expr, error) { return ident(tmp), nil }
 	} else {
-		prefix, recv, err = r.destructureSource(initNode)
-		if err != nil {
-			return nil, true, err
+		anyRead := hasRest
+		for i := range infos {
+			if !defaultAlways[i] {
+				anyRead = true
+				break
+			}
+		}
+		if anyRead {
+			prefix, recv, err = r.destructureSource(initNode)
+			if err != nil {
+				return nil, true, err
+			}
+		} else {
+			// Every fixed element took its always-undefined default, so no slot is read, yet
+			// the source may hold side effects, let [z = ""] = [f()] still calling f. Evaluate
+			// it once to the blank so the effect survives without a temp Go would flag unused;
+			// a plain variable source has no effect to keep, so it needs no draw at all.
+			if initNode.Kind() != frontend.NodeIdentifier {
+				lowered, lerr := r.lowerExpr(initNode)
+				if lerr != nil {
+					return nil, true, lerr
+				}
+				prefix = []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{lowered}}}
+			}
+			recv = func() (ast.Expr, error) {
+				return nil, &NotYetLowerable{Reason: "an array destructuring drew its source with no read"}
+			}
 		}
 	}
 	stmts := prefix
 	for i, info := range infos {
+		if defaultAlways[i] {
+			// The always-undefined element makes the read dead, so the source is not drawn
+			// for this position and the binding takes the default directly.
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, true, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident(info.name)},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{def},
+			})
+			stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
+			continue
+		}
 		rc, err := recv()
 		if err != nil {
 			return nil, true, err
@@ -2115,9 +2195,15 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 			stmts = append(stmts, r.defaultFillStmts(info.name, nameGo, arrayOptRead(rc, i), def)...)
 			continue
 		}
-		read := &ast.CallExpr{
+		var read ast.Expr = &ast.CallExpr{
 			Fun:  &ast.SelectorExpr{X: rc, Sel: ident("AtI")},
 			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
+		if coerceSrc[i] != nil {
+			read, err = r.coerceToType(read, coerceSrc[i], r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
 		}
 		stmts = append(stmts, &ast.AssignStmt{
 			Lhs: []ast.Expr{ident(info.name)},

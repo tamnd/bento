@@ -395,7 +395,10 @@ func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType fronte
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
-		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		// The declared type, not the flow-narrowed one, is what the read binds to: an
+		// initializer narrows the binding at its use while the element still carries the
+		// whole union, so comparing the narrowed type would see a spurious divergence.
+		nameGo, err := r.typeExpr(r.bindingDeclaredType(info.nameNode))
 		if err != nil {
 			return nil, err
 		}
@@ -497,8 +500,11 @@ func (r *Renderer) bindSubTuple(pat frontend.Node, recv ast.Expr, patType fronte
 		// The binding's declared type must render to the same Go type as the tuple
 		// field it reads, so k := e.E0 is a well-typed assignment. They agree in the
 		// common case, since the checker types the binding off the tuple element; a
-		// case where they diverge hands back rather than emit a mismatched read.
-		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		// case where they diverge hands back rather than emit a mismatched read. The
+		// declared type, not the flow-narrowed one, is what the read binds to: an
+		// initializer narrows the binding at its use while the field still carries the
+		// whole union, so comparing the narrowed type would see a spurious divergence.
+		nameGo, err := r.typeExpr(r.bindingDeclaredType(info.nameNode))
 		if err != nil {
 			return nil, err
 		}

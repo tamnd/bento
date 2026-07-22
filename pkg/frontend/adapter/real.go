@@ -219,7 +219,16 @@ func (a *RealAdapter) WidenType(p ProgramHandle, t TypeHandle) TypeHandle {
 func (a *RealAdapter) DeclaredTypeOfNode(p ProgramHandle, n NodeHandle) (TypeHandle, bool) {
 	c, release := prog(p).checker()
 	defer release()
-	sym := c.GetSymbolAtLocation(nodeOf(n))
+	node := nodeOf(n)
+	sym := c.GetSymbolAtLocation(node)
+	if sym == nil {
+		// A binding declaration node (the name in let [x] or let { x }) is not a
+		// reference the checker resolves by location, so it falls back to the symbol
+		// bound to the declaration, the same fallback SymbolOfNode takes. This yields
+		// the binding's declared type off its annotation rather than the type narrowed
+		// by the initializer at that position.
+		sym = node.Symbol()
+	}
 	if sym == nil {
 		return nil, false
 	}

@@ -378,6 +378,33 @@ func (r *Renderer) tupleElementRead(obj, idxNode frontend.Node, elems []frontend
 // than the tuple has, an optional or rest tuple position, and a binding whose
 // declared type differs from the tuple element's Go type each hand back, deferring
 // those forms to a later sub-slice rather than mislower.
+// bindingDeclaredType returns the un-narrowed declared type of a destructured
+// binding name, falling back to the type at the node when no declared type is
+// available. The declared type carries a widening the narrowed initializer type
+// drops, let [x]: [string | number] = [1] declaring x the union though the field
+// holds only the number the literal minted.
+func (r *Renderer) bindingDeclaredType(nameNode frontend.Node) frontend.Type {
+	if decl, _, ok := r.prog.DeclaredTypeAt(nameNode); ok {
+		return decl
+	}
+	return r.prog.TypeAt(nameNode)
+}
+
+// initElemSource returns the i-th element node of an array-literal initializer,
+// the source whose type a widened field read coerces from. A non-array-literal
+// initializer, or an index past its elements, has no such node, so the widening
+// stays a handback rather than a guess.
+func (r *Renderer) initElemSource(initNode frontend.Node, i int) (frontend.Node, bool) {
+	if initNode == nil || initNode.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(initNode)
+	if i < 0 || i >= len(kids) {
+		return nil, false
+	}
+	return kids[i], true
+}
+
 func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []frontend.TupleElem) ([]ast.Stmt, error) {
 	patElems := r.prog.Children(patNode)
 	if len(patElems) == 0 {
@@ -394,13 +421,42 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		return nil, &NotYetLowerable{Reason: "a tuple destructuring pattern that binds more elements than the tuple has is a later slice"}
 	}
 	infos := make([]arrayDefaultElem, len(fixedElems))
+	coerceSrc := make([]frontend.Node, len(fixedElems))
+	defaultVal := make([]ast.Expr, len(fixedElems))
 	for i, el := range fixedElems {
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, err
 		}
-		if info.nested != nil || info.hasDefault {
-			return nil, &NotYetLowerable{Reason: "a tuple destructuring nested pattern or defaulted element is a later slice"}
+		if info.nested != nil {
+			return nil, &NotYetLowerable{Reason: "a tuple destructuring nested pattern is a later slice"}
+		}
+		if info.hasDefault {
+			// A defaulted element whose field is statically undefined always takes the
+			// default, let [z = ""]: [string | undefined] = [undefined] binding z the "" the
+			// annotation strips the undefined off of, so the read is dead and the fill folds to
+			// the default alone. The default lowers to the binding's declared type. A defaulted
+			// element over a field that can carry a present value still hands back, since that
+			// needs the runtime undefined test this always-default fold skips.
+			if elems[i].Type.Flags != frontend.TypeUndefined {
+				return nil, &NotYetLowerable{Reason: "a tuple destructuring defaulted element over a possibly-present field is a later slice"}
+			}
+			name, ok := localName(r.prog.Text(info.nameNode))
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+			}
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+			info.name = name
+			infos[i] = info
+			defaultVal[i] = def
+			continue
 		}
 		if elems[i].Optional || elems[i].Rest {
 			return nil, &NotYetLowerable{Reason: "a tuple destructuring bind of an optional or rest element is a later slice"}
@@ -409,12 +465,15 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
-		// The binding's declared type must render to the same Go type as the tuple
-		// field it reads, so a := pair.E0 is a well-typed assignment. They agree in
-		// the common case, since the checker types the binding off the tuple element;
-		// a case where they diverge (a widening the field does not carry) hands back
-		// rather than emit a mismatched read.
-		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		// The binding takes its declared type, which the read must render into. In the
+		// common case the checker types the binding off the tuple element and the two
+		// Go types agree, so a := pair.E0 is a bare assignment. Where the declared type is
+		// wider than the field the initializer built, let [x]: [string | number] = [1]
+		// declaring x the union while the field carries only the number the literal minted,
+		// the read wraps into the binding's type through the initializer element as the
+		// coercion source. A non-literal initializer has no element node to read the source
+		// type from, so a genuine widening there stays a handback rather than a guess.
+		nameGo, err := r.typeExpr(r.bindingDeclaredType(info.nameNode))
 		if err != nil {
 			return nil, err
 		}
@@ -425,30 +484,77 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		if same, err := sameGoType(nameGo, fieldGo); err != nil {
 			return nil, err
 		} else if !same {
-			return nil, &NotYetLowerable{Reason: "a tuple destructuring where a binding's type differs from the tuple element type is a later slice"}
+			src, ok := r.initElemSource(initNode, i)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "a tuple destructuring where a binding's type differs from the tuple element type is a later slice"}
+			}
+			coerceSrc[i] = src
 		}
 		info.name = name
 		infos[i] = info
+	}
+	anyRead := false
+	for i := range infos {
+		if defaultVal[i] == nil {
+			anyRead = true
+			break
+		}
 	}
 	// Emit the struct so the field reads name a declared Go type, even where the
 	// tuple type reached the renderer only through this binding.
 	if _, err := r.decls.internTuple(r, r.prog.TypeAt(initNode), elems); err != nil {
 		return nil, err
 	}
-	prefix, recv, err := r.destructureSource(initNode)
-	if err != nil {
-		return nil, err
-	}
-	stmts := prefix
-	for i, info := range infos {
-		rc, err := recv()
+	var stmts []ast.Stmt
+	recv := func() (ast.Expr, error) { return nil, &NotYetLowerable{Reason: "a tuple destructuring drew its source with no read"} }
+	if anyRead {
+		prefix, r2, err := r.destructureSource(initNode)
+		if err != nil {
+			return nil, err
+		}
+		stmts = prefix
+		recv = r2
+	} else if initNode.Kind() != frontend.NodeIdentifier {
+		// Every position took its default, so no field is read, yet the source may hold
+		// side effects, let [z = ""] = [f()] still calling f. Evaluate it once to the blank
+		// so the effect survives without a declared temp Go would flag unused.
+		lowered, err := r.lowerExpr(initNode)
 		if err != nil {
 			return nil, err
 		}
 		stmts = append(stmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident("_")},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{lowered},
+		})
+	}
+	for i, info := range infos {
+		if defaultVal[i] != nil {
+			// The always-undefined field makes the read dead, so the source struct is not
+			// drawn for this position and the binding takes the default directly.
+			stmts = append(stmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident(info.name)},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{defaultVal[i]},
+			})
+			stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
+			continue
+		}
+		rc, err := recv()
+		if err != nil {
+			return nil, err
+		}
+		var read ast.Expr = &ast.SelectorExpr{X: rc, Sel: ident("E" + itoa(i))}
+		if coerceSrc[i] != nil {
+			read, err = r.coerceToType(read, coerceSrc[i], r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+		}
+		stmts = append(stmts, &ast.AssignStmt{
 			Lhs: []ast.Expr{ident(info.name)},
 			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident("E" + itoa(i))}},
+			Rhs: []ast.Expr{read},
 		})
 		// The binding is a fresh := that the source may never read, const [x] = pair
 		// with x unused, and Go rejects an unused local. The object-pattern path already
