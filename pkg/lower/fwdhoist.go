@@ -74,6 +74,41 @@ func (r *Renderer) countIdentAnywhere(n frontend.Node, name string) int {
 	return c
 }
 
+// singleFuncValueBindingName returns the binding-name node of a statement that
+// declares exactly one plain function-valued local, a const or let bound to a
+// function whose type renders as a bare Go func. A callable object, a function
+// that also carries properties, is excluded: flattenCallableBinding hoists that
+// shape through its own pointer path. Anything else reports ok=false.
+func (r *Renderer) singleFuncValueBindingName(n frontend.Node) (frontend.Node, bool) {
+	if n.Kind() != frontend.NodeVariableStatement {
+		return n, false
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, n, &decls)
+	if len(decls) != 1 {
+		return n, false
+	}
+	kids := r.prog.Children(decls[0])
+	if len(kids) != 2 && len(kids) != 3 {
+		return n, false
+	}
+	nameNode := kids[0]
+	if nameNode.Kind() != frontend.NodeIdentifier {
+		return n, false
+	}
+	t := r.prog.TypeAt(nameNode)
+	if r.isCallableObject(t) {
+		return n, false
+	}
+	// A bare function value renders through renderFuncType with ok true and no
+	// error; a generic or overloaded signature hands back and is left off the
+	// plain-func hoist, taking whatever path it already took.
+	if _, ok, err := r.renderFuncType(t); err != nil || !ok {
+		return n, false
+	}
+	return nameNode, true
+}
+
 // callableFwdHoists returns the binding-name nodes of the callable-object
 // declarations in a scope's top-level statement list that a statement above them
 // captures in a closure. topStmts is the scope's statement list, the module body
@@ -108,6 +143,64 @@ func (r *Renderer) callableFwdHoists(topStmts []frontend.Node) []frontend.Node {
 	return out
 }
 
+// funcFwdHoists returns the binding-name nodes of the plain function-valued
+// declarations in a scope's top-level statement list that a statement above them
+// captures in a closure, the bare-func counterpart to callableFwdHoists.
+func (r *Renderer) funcFwdHoists(topStmts []frontend.Node) []frontend.Node {
+	type binding struct {
+		nameNode frontend.Node
+		name     string
+		idx      int
+	}
+	var bindings []binding
+	for i, s := range topStmts {
+		nn, ok := r.singleFuncValueBindingName(s)
+		if !ok {
+			continue
+		}
+		name, ok := localName(r.prog.Text(nn))
+		if !ok {
+			continue
+		}
+		bindings = append(bindings, binding{nn, name, i})
+	}
+	var out []frontend.Node
+	for _, b := range bindings {
+		for i := 0; i < b.idx; i++ {
+			if r.countIdentInClosures(topStmts[i], b.name) > 0 {
+				out = append(out, b.nameNode)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// buildFuncFwdHoistDecls builds the `var name func(...)...` declarations that go
+// at a scope's top for its forward-captured plain function bindings, each at the
+// func type the binding's own signature renders, so the site below lowers through
+// redeclaredVarAssign to a plain assignment into a variable already in scope.
+func (r *Renderer) buildFuncFwdHoistDecls(nameNodes []frontend.Node) ([]ast.Stmt, error) {
+	var out []ast.Stmt
+	for _, nn := range nameNodes {
+		name, ok := localName(r.prog.Text(nn))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a forward-hoisted function binding name is not a Go identifier"}
+		}
+		ft, ok, err := r.renderFuncType(r.prog.TypeAt(nn))
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a forward-hoisted function binding has no bare func type"}
+		}
+		out = append(out, &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{
+			&ast.ValueSpec{Names: []*ast.Ident{ident(name)}, Type: ft},
+		}}})
+	}
+	return out, nil
+}
+
 // buildFwdHoistDecls builds the `var name *Struct` declarations that go at a
 // scope's top for its forward-captured callable bindings, each at the pointer
 // type flattenCallableBinding assigns the binding, so the site below lowers to a
@@ -136,24 +229,42 @@ func (r *Renderer) buildFwdHoistDecls(nameNodes []frontend.Node) ([]ast.Stmt, er
 // declarations to prepend along with a restore for the previous scope's set. The
 // caller prepends the returned statements to the lowered body.
 func (r *Renderer) enterFwdHoistScope(topStmts []frontend.Node) ([]ast.Stmt, func(), error) {
-	prev := r.fwdHoisted
-	restore := func() { r.fwdHoisted = prev }
-	nameNodes := r.callableFwdHoists(topStmts)
-	if len(nameNodes) == 0 {
-		r.fwdHoisted = nil
+	prev, prevFunc := r.fwdHoisted, r.fwdHoistedFunc
+	restore := func() { r.fwdHoisted, r.fwdHoistedFunc = prev, prevFunc }
+
+	callableNodes := r.callableFwdHoists(topStmts)
+	funcNodes := r.funcFwdHoists(topStmts)
+	if len(callableNodes) == 0 && len(funcNodes) == 0 {
+		r.fwdHoisted, r.fwdHoistedFunc = nil, nil
 		return nil, restore, nil
 	}
-	set := map[string]bool{}
-	for _, nn := range nameNodes {
+
+	callableSet := map[string]bool{}
+	for _, nn := range callableNodes {
 		if name, ok := localName(r.prog.Text(nn)); ok {
-			set[name] = true
+			callableSet[name] = true
 		}
 	}
-	r.fwdHoisted = set
-	decls, err := r.buildFwdHoistDecls(nameNodes)
+	funcSet := map[string]bool{}
+	for _, nn := range funcNodes {
+		if name, ok := localName(r.prog.Text(nn)); ok {
+			funcSet[name] = true
+		}
+	}
+	r.fwdHoisted, r.fwdHoistedFunc = callableSet, funcSet
+
+	var decls []ast.Stmt
+	callDecls, err := r.buildFwdHoistDecls(callableNodes)
 	if err != nil {
 		restore()
 		return nil, restore, err
 	}
+	decls = append(decls, callDecls...)
+	funcDecls, err := r.buildFuncFwdHoistDecls(funcNodes)
+	if err != nil {
+		restore()
+		return nil, restore, err
+	}
+	decls = append(decls, funcDecls...)
 	return decls, restore, nil
 }

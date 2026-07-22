@@ -416,9 +416,24 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 			// an honest reason rather than shadowing the call slot.
 			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "a callable object with a property named call collides with the reserved Call field, a later slice"}
 		}
-		goType, err := r.typeExpr(p.Type)
-		if err != nil {
-			return nil, err
+		// A divergent accessor, get and set at different types, cannot be one Go
+		// field at its read type: a write carries the wider set type and would not
+		// fit. The object is a plain data record at runtime (the source only ever
+		// reaches this through {} as T, an interface or type-literal with no
+		// accessor bodies), so the field holds the boxed value.Value a write stores
+		// and a read unboxes back to the read type it flows into, the same dynamic
+		// slot an index-signature member takes. member.go routes a read of such a
+		// member through the dynamic path and stmt.go boxes a write into it.
+		var goType ast.Expr
+		if p.DivergentAccessor {
+			r.requireImport(valuePkg)
+			goType = sel("value", "Value")
+		} else {
+			var err error
+			goType, err = r.typeExpr(p.Type)
+			if err != nil {
+				return nil, err
+			}
 		}
 		// The field carries the original JavaScript property name in a json struct
 		// tag, so a reflection walk (JSON.stringify) recovers the exact key rather

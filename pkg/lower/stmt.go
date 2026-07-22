@@ -340,7 +340,11 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	// and a `for _, _ := range` with no new variable. When the body reads the
 	// binding it is ranged into the loop variable; when it does not, the loop drops
 	// the binding entirely and ranges only to drive the iteration (`for range xs`).
-	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) {
+	// A braced body that re-declares the loop variable shadows it in its own scope,
+	// so the range stays binding-less and the body's own `v := ...` stands alone
+	// rather than collide with a `for _, v := range` value in the same Go block; the
+	// loop variable is then unobservable, exactly as the inner declaration intends.
+	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) && !r.bodyBlockShadows(kids[2], r.prog.Text(dkids[0])) {
 		rng.Key = ident("_")
 		rng.Value = ident(name)
 		rng.Tok = token.DEFINE
@@ -407,6 +411,22 @@ func (r *Renderer) lowerForIn(n frontend.Node) (ast.Stmt, error) {
 		rng.Key = ident("_")
 		rng.Value = ident(name)
 		rng.Tok = token.DEFINE
+	}
+	// A for...in whose iterable references the loop variable itself,
+	// `for (var of in of)`, enumerates the binding's hoisted value: a `var` binding is
+	// initialized to undefined before the head is evaluated, so the object read is
+	// undefined and yields no keys. The binding is otherwise only the range key, never a
+	// standalone Go variable, so the self-reference in the iterable would name an
+	// undeclared identifier. Declare it undefined ahead of the loop and wrap the two in a
+	// block, so the iterable reads the hoisted undefined and the loop runs zero turns.
+	if r.countIdentSkipFuncs(kids[1], r.prog.Text(dkids[0])) > 0 {
+		r.requireImport(valuePkg)
+		decl := &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+			Names:  []*ast.Ident{ident(name)},
+			Type:   sel("value", "Value"),
+			Values: []ast.Expr{sel("value", "Undefined")},
+		}}}}
+		return &ast.BlockStmt{List: []ast.Stmt{decl, rng}}, nil
 	}
 	return rng, nil
 }
@@ -975,6 +995,32 @@ func (r *Renderer) bodyUsesName(n frontend.Node, name string) bool {
 	return false
 }
 
+// bodyBlockShadows reports whether a loop body block lexically re-declares name at
+// its own top level, a `let` or `const` of the same spelling as the loop variable.
+// A braced for...of body is its own lexical scope in JavaScript, so an inner
+// `const v` shadows the loop's `v` rather than reusing it; the lowerer must open a
+// fresh Go block for the body so the inner binding does not collide with the loop
+// variable's Go declaration. Only a braced body can shadow: a lexical declaration
+// cannot be the sole unbraced statement of a for, so a non-block body never matches.
+// The scan is the direct statement list only, since a declaration nested in a deeper
+// block already has its own Go scope.
+func (r *Renderer) bodyBlockShadows(bodyNode frontend.Node, name string) bool {
+	if bodyNode.Kind() != frontend.NodeBlock {
+		return false
+	}
+	for _, s := range r.prog.Children(bodyNode) {
+		if s.Kind() != frontend.NodeVariableStatement || r.isVarStatement(s) {
+			continue
+		}
+		for _, nn := range r.varNameNodes(s) {
+			if nm, ok := localName(r.prog.Text(nn)); ok && nm == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // lowerReturn lowers a return, with or without a value.
 func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	kids := r.prog.Children(n)
@@ -1008,6 +1054,24 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 	if r.tryRet == tryRetBody && isVoidReturn(r.retType) {
 		return nil, &NotYetLowerable{Reason: "a value returned from a void function inside a try is a later slice"}
 	}
+	// A void function has no Go result, so a returned value would be one operand too
+	// many for the `return`. Type inference gives a function that returns undefined
+	// (`function f() { return undefined; }`) a void body, so the returned expression is
+	// dropped: a pure operand lowers to a bare return, a call runs for its effect
+	// first, and anything else effectful hands back rather than silently lose it.
+	if isVoidReturn(r.retType) {
+		if r.pureDroppableReturn(kids[0]) {
+			return &ast.ReturnStmt{}, nil
+		}
+		expr, err := r.lowerExpr(kids[0])
+		if err != nil {
+			return nil, err
+		}
+		if call, ok := expr.(*ast.CallExpr); ok {
+			return &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}, &ast.ReturnStmt{}}}, nil
+		}
+		return nil, &NotYetLowerable{Reason: "a void function returning an effectful non-call expression is a later slice"}
+	}
 	// An object literal returned into a declared shape with an optional property
 	// builds at that shape, the same contextual typing a binding applies; a return
 	// type that is itself T | undefined hands back to a later slice.
@@ -1038,6 +1102,36 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 		return &ast.ReturnStmt{Results: []ast.Expr{expr, ident("true")}}, nil
 	}
 	return &ast.ReturnStmt{Results: []ast.Expr{expr}}, nil
+}
+
+// pureDroppableReturn reports whether a returned expression can be dropped for a
+// bare `return` without losing an observable effect. A void function has no Go
+// result, so the operand cannot ride the return; dropping it is only sound when
+// evaluating it does nothing a reader could see. A literal, a keyword value, or a
+// plain identifier read qualifies: reading a binding has no side effect. A call,
+// a property access that could hit a getter, or any other computed form does not,
+// and those take the evaluate-then-return or handback paths in lowerReturn.
+func (r *Renderer) pureDroppableReturn(n frontend.Node) bool {
+	for n.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(n)
+		if len(kids) != 1 {
+			return false
+		}
+		n = kids[0]
+	}
+	switch n.Kind() {
+	case frontend.NodeIdentifier,
+		frontend.NodeNumericLiteral,
+		frontend.NodeStringLiteral,
+		frontend.NodeBigIntLiteral,
+		frontend.NodeNoSubstitutionTemplateLiteral,
+		frontend.NodeTrueKeyword,
+		frontend.NodeFalseKeyword,
+		frontend.NodeNullKeyword,
+		frontend.NodeThisKeyword:
+		return true
+	}
+	return false
 }
 
 // deferredReturn lowers a return inside a catch or finally body of a try whose
@@ -1145,7 +1239,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 			continue
 		}
 		if name, ok := localName(r.prog.Text(kids[0])); ok {
-			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name]
+			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name]
 		}
 	}
 	s, err := r.lowerVarStatement(n)
@@ -1246,7 +1340,7 @@ func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, e
 		if !ok {
 			return nil, false, nil
 		}
-		if r.blockDeclares(name) || r.hoistedVars[name] || r.moduleAssignVars[name] {
+		if r.blockDeclares(name) || r.hoistedVars[name] || r.moduleAssignVars[name] || r.fwdHoistedFunc[name] {
 			redeclared++
 		}
 	}
@@ -1430,6 +1524,28 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding initialized by a divergent accessor read holds the boxed
+		// value.Value the field carries (decls.go). When the binding's inferred type
+		// is a clean primitive the box coerces down to it through bindingInit below,
+		// the same as any other dynamic read. When it is a union or object shape, the
+		// box has no single Go value to coerce to and the primitive coercer hands
+		// back, so the binding lands in a value.Value slot and is marked dynamic,
+		// exactly the regExpBoxedResultCall sibling above.
+		if r.divergentAccessorRead(kids[initIdx]) &&
+			r.prog.TypeAt(kids[0]).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+			boxInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{boxInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err
@@ -1534,6 +1650,14 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemType)}, nil
 		}
+	}
+	// A concise arrow assigned to a function slot whose return type is wider than the
+	// body's own returns at the slot's type, so the variable takes that Go func type and
+	// a later assignment of a sibling arrow returning the other union arm fits it. The
+	// contextual return rides down to arrowFunc, which coerces the body into it.
+	if rt, ok := r.contextualArrowRet(r.prog.TypeAt(nameNode), initNode); ok {
+		r.pendingArrowRet = &rt
+		return r.lowerExpr(initNode)
 	}
 	init, err := r.lowerExpr(initNode)
 	if err != nil {
@@ -1784,6 +1908,24 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 	return r.arrayDestructureDecl(decls[0])
 }
 
+// patternDeclParts pulls the binding target and the initializer out of a variable
+// declaration's children for the destructuring paths. A declaration is [target,
+// init] without a type annotation and [target, type, init] with one, the same
+// annotation the plain buildVarDecl skips over; both forms carry the initializer
+// last, so this reads the target first and the initializer last and reports the
+// two. It reports ok=false for any other arity, so a `let [x];` with no
+// initializer, which destructuring forbids, takes the ordinary path and hands
+// back rather than reach this path with no source to read.
+func (r *Renderer) patternDeclParts(kids []frontend.Node) (target, init frontend.Node, ok bool) {
+	switch len(kids) {
+	case 2:
+		return kids[0], kids[1], true
+	case 3:
+		return kids[0], kids[2], true
+	}
+	return nil, nil, false
+}
+
 // arrayDestructureDecl lowers a single declaration whose binding target is an array
 // pattern, `[a, b] = src`, into one indexed read per element. It is the reusable core
 // of flattenArrayDestructure, shared with a for loop's destructuring initializer, and
@@ -1792,11 +1934,10 @@ func (r *Renderer) flattenArrayDestructure(n frontend.Node) ([]ast.Stmt, bool, e
 // object sibling, and every array shape it cannot yet lower returns ok=true with an
 // error rather than a silent fall-through.
 func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, error) {
-	kids := r.prog.Children(decl)
-	if len(kids) != 2 {
+	patNode, initNode, ok := r.patternDeclParts(r.prog.Children(decl))
+	if !ok {
 		return nil, false, nil
 	}
-	patNode, initNode := kids[0], kids[1]
 	if patNode.Kind() != frontend.NodeUnknown {
 		return nil, false, nil
 	}
@@ -1874,6 +2015,8 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 	// The pattern is validated before the source is lowered, so an unsupported shape
 	// hands back before a temporary is minted for the source.
 	infos := make([]arrayDefaultElem, len(fixedElems))
+	coerceSrc := make([]frontend.Node, len(fixedElems))
+	defaultAlways := make([]bool, len(fixedElems))
 	for i, el := range fixedElems {
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
@@ -1889,21 +2032,56 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
-		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		// The binding takes its declared type, not the flow-narrowed one: let [y]:
+		// (string | undefined)[] = [""] narrows y to string at its use while the source
+		// annotation types y the whole string | undefined, so comparing the narrowed type
+		// would see a spurious divergence and hand back a binding that in fact agrees.
+		nameGo, err := r.typeExpr(r.bindingDeclaredType(info.nameNode))
 		if err != nil {
 			return nil, true, err
 		}
-		// A defaulted element fills from its default when the slot is undefined, so
-		// its binding type is the element type the source read yields, the same match
-		// a plain element needs; an optional-element source, whose read is an Opt the
-		// default would have to peel, is a later slice.
+		if info.hasDefault {
+			// A defaulted element whose source element is statically undefined always takes
+			// the default, let [z = ""]: (string | undefined)[] = [undefined] binding z the ""
+			// the annotation strips the undefined off of, so the read is dead and the fill
+			// folds to the default alone.
+			if elemT.Flags == frontend.TypeUndefined {
+				info.name = name
+				infos[i] = info
+				defaultAlways[i] = true
+				continue
+			}
+			// A default over a present-typed element fills from the bounds-aware read when
+			// the slot is missing, so its binding must render to the element type the read
+			// yields, the same match a plain element needs; an optional-element source, whose
+			// read is an Opt the default would have to peel, is a later slice.
+			narrowGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			if same, err := sameGoType(narrowGo, elemGo); err != nil {
+				return nil, true, err
+			} else if !same {
+				return nil, true, &NotYetLowerable{Reason: "an array destructuring default over an optional-element source is a later slice"}
+			}
+			info.name = name
+			infos[i] = info
+			continue
+		}
 		if same, err := sameGoType(nameGo, elemGo); err != nil {
 			return nil, true, err
 		} else if !same {
-			if info.hasDefault {
-				return nil, true, &NotYetLowerable{Reason: "an array destructuring default over an optional-element source is a later slice"}
+			// The element read yields the source's element type, narrower than the binding's
+			// declared type where the initializer literal minted a specific value the
+			// annotation widens, let [x]: (string | number)[] = [1] reading a float64 into the
+			// string | number x. The read wraps into the declared type through the initializer
+			// element as the coercion source; a non-literal source has no element node to read
+			// the source type from, so a genuine widening there stays a handback.
+			src, ok := r.initElemSource(initNode, i)
+			if !ok {
+				return nil, true, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
 			}
-			return nil, true, &NotYetLowerable{Reason: "array destructuring where an element's type differs from the array element type is a later slice"}
+			coerceSrc[i] = src
 		}
 		info.name = name
 		infos[i] = info
@@ -1943,13 +2121,56 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 		prefix = []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{drained}}}
 		recv = func() (ast.Expr, error) { return ident(tmp), nil }
 	} else {
-		prefix, recv, err = r.destructureSource(initNode)
-		if err != nil {
-			return nil, true, err
+		anyRead := hasRest
+		for i := range infos {
+			if !defaultAlways[i] {
+				anyRead = true
+				break
+			}
+		}
+		if anyRead {
+			prefix, recv, err = r.destructureSource(initNode)
+			if err != nil {
+				return nil, true, err
+			}
+		} else {
+			// Every fixed element took its always-undefined default, so no slot is read, yet
+			// the source may hold side effects, let [z = ""] = [f()] still calling f. Evaluate
+			// it once to the blank so the effect survives without a temp Go would flag unused;
+			// a plain variable source has no effect to keep, so it needs no draw at all.
+			if initNode.Kind() != frontend.NodeIdentifier {
+				lowered, lerr := r.lowerExpr(initNode)
+				if lerr != nil {
+					return nil, true, lerr
+				}
+				prefix = []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{lowered}}}
+			}
+			recv = func() (ast.Expr, error) {
+				return nil, &NotYetLowerable{Reason: "an array destructuring drew its source with no read"}
+			}
 		}
 	}
 	stmts := prefix
 	for i, info := range infos {
+		if defaultAlways[i] {
+			// The always-undefined element makes the read dead, so the source is not drawn
+			// for this position and the binding takes the default directly.
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, true, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
+			stmts = append(stmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident(info.name)},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{def},
+			})
+			stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
+			continue
+		}
 		rc, err := recv()
 		if err != nil {
 			return nil, true, err
@@ -1984,15 +2205,26 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 			stmts = append(stmts, r.defaultFillStmts(info.name, nameGo, arrayOptRead(rc, i), def)...)
 			continue
 		}
-		read := &ast.CallExpr{
+		var read ast.Expr = &ast.CallExpr{
 			Fun:  &ast.SelectorExpr{X: rc, Sel: ident("AtI")},
 			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
+		if coerceSrc[i] != nil {
+			read, err = r.coerceToType(read, coerceSrc[i], r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, true, err
+			}
 		}
 		stmts = append(stmts, &ast.AssignStmt{
 			Lhs: []ast.Expr{ident(info.name)},
 			Tok: token.DEFINE,
 			Rhs: []ast.Expr{read},
 		})
+		// The element is bound with :=, so a target the body never reads would be
+		// declared and not used in Go, the way `var [a, b] = src` with neither read
+		// leaves a and b unused. bindingUnused only ever withholds the blank, so a
+		// target read elsewhere keeps its use.
+		stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
 	}
 	if hasRest {
 		rc, err := recv()
@@ -2004,6 +2236,11 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 			return nil, true, err
 		}
 		stmts = append(stmts, bind)
+		// The rest gathers into a := binding too, so a rest target the body never reads,
+		// as the b in `var [a, ...b] = src` with b unread, would be declared and not used.
+		if name, ok := localName(r.prog.Text(restNode)); ok {
+			stmts = r.blankUnusedParamBinding(stmts, restNode, name)
+		}
 	}
 	return stmts, true, nil
 }
@@ -2117,11 +2354,10 @@ func (r *Renderer) flattenObjectDestructure(n frontend.Node) ([]ast.Stmt, bool, 
 // array sibling first, and every object shape it cannot yet lower returns ok=true with
 // an error rather than a silent fall-through.
 func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, error) {
-	kids := r.prog.Children(decl)
-	if len(kids) != 2 {
+	patNode, initNode, ok := r.patternDeclParts(r.prog.Children(decl))
+	if !ok {
 		return nil, false, nil
 	}
-	patNode, initNode := kids[0], kids[1]
 	if patNode.Kind() != frontend.NodeUnknown {
 		return nil, false, nil
 	}
@@ -2160,6 +2396,7 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 		nested     frontend.Node
 		nestedType frontend.Type
 		rest       bool
+		restNode   frontend.Node
 		restStruct string
 		restType   frontend.Type
 	}
@@ -2191,20 +2428,22 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			if err != nil {
 				return nil, true, err
 			}
-			fields[i] = binding{rest: true, name: name, restStruct: structName, restType: restType}
+			fields[i] = binding{rest: true, name: name, restNode: restIdent, restStruct: structName, restType: restType}
 			continue
 		}
 		// A nested pattern renames a source property into an inner pattern that binds
 		// against the value the property holds; its inner names are validated when the
 		// sub-pattern is bound, so it is routed straight through.
 		if source, sub, ok := r.objectNestedElem(el); ok {
-			prop := r.prog.Text(source)
-			srcName, nok := localName(prop)
+			prop := strings.TrimSpace(r.prog.Text(source))
 			pt, known := propType[prop]
-			if !nok || !known {
+			if !known {
 				return nil, true, &NotYetLowerable{Reason: "a nested object pattern over an unknown property is a later slice"}
 			}
-			field, fok := exportedField(srcName)
+			// exportedField names the field the way internStruct does; localName in
+			// between would reserve an emitter-package name and read a field the struct
+			// never declares, spelling a `value` property as a missing `Value_`.
+			field, fok := exportedField(prop)
 			if !fok {
 				return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 			}
@@ -2216,11 +2455,7 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			return nil, true, err
 		}
 		prop := r.elemSourceProp(info)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "destructured property is not a Go field name"}
 		}
@@ -2254,6 +2489,10 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 				Tok: token.DEFINE,
 				Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(b.restStruct), Elts: elts}}},
 			})
+			// A rest gathered only to be discarded, `const { a, ...rest } = o` where rest is
+			// never read, takes the same blank an ordinary unused binding does so the Go
+			// declaration compiles.
+			stmts = r.blankUnusedParamBinding(stmts, b.restNode, b.name)
 			continue
 		}
 		if b.nested != nil {
@@ -2284,7 +2523,23 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			if err != nil {
 				return nil, true, err
 			}
+			// An optional property whose type is a multi-member union carries the tagged
+			// sum directly, not a value.Opt, so its undefined member is the union's
+			// undefined arm rather than an Opt's absent state. The union fill switches
+			// that arm instead of reading the Opt protocol the field does not carry,
+			// rebuilding the binding's undefined-stripped union from each value arm.
+			srcInfo, srcUnion := r.optionalUnionInfo(frontend.Property{Name: r.elemSourceProp(b.info), Type: propType[r.elemSourceProp(b.info)], Optional: true})
+			tgtInfo, tgtUnion := r.unionInfoOrIntern(r.prog.TypeAt(b.info.bindNode))
+			if srcUnion && tgtUnion {
+				stmts = append(stmts, r.defaultFillUnionStmts(b.name, nameGo, read, def, srcInfo, tgtInfo)...)
+				stmts = r.blankUnusedParamBinding(stmts, b.info.bindNode, b.name)
+				continue
+			}
 			stmts = append(stmts, r.defaultFillStmts(b.name, nameGo, read, def)...)
+			// The default fill declares `var name T` then assigns it in each branch, so a
+			// name nothing later reads is a declared-and-unused var Go rejects, the same as
+			// the plain read below; it takes the same blank.
+			stmts = r.blankUnusedParamBinding(stmts, b.info.bindNode, b.name)
 			continue
 		}
 		stmts = append(stmts, &ast.AssignStmt{
@@ -2303,7 +2558,69 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			})
 		}
 	}
+	stmts = blankUnusedRecvTemp(prefix, stmts)
 	return stmts, true, nil
+}
+
+// blankUnusedRecvTemp guards the receiver temp destructureSource mints for a
+// non-identifier source. A pattern that reads no field off the receiver, an empty
+// rest `{ ...r }` whose rest struct has no fields to copy, leaves that temp declared
+// and never read, which Go rejects. When the assembled binding statements never name
+// the temp, its declaration takes a trailing blank so the emit compiles; a receiver an
+// ordinary field read names is left untouched. The prefix destructureSource returns is
+// exactly the one temp declaration or empty for an identifier source, so the temp name
+// is read off it and its uses are counted over the statements that follow.
+func blankUnusedRecvTemp(prefix, stmts []ast.Stmt) []ast.Stmt {
+	name, ok := recvTempName(prefix)
+	if !ok {
+		return stmts
+	}
+	if identUsedIn(name, stmts[len(prefix):]) {
+		return stmts
+	}
+	return append(stmts, &ast.AssignStmt{
+		Lhs: []ast.Expr{ident("_")},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{ident(name)},
+	})
+}
+
+// recvTempName returns the identifier destructureSource's prefix declares, or ok=false
+// when the source was a plain identifier and no temp was minted. The prefix is a single
+// `tmp := <source>` define, so the name is the left side of that one statement.
+func recvTempName(prefix []ast.Stmt) (string, bool) {
+	if len(prefix) != 1 {
+		return "", false
+	}
+	assign, ok := prefix[0].(*ast.AssignStmt)
+	if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != 1 {
+		return "", false
+	}
+	id, ok := assign.Lhs[0].(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return id.Name, true
+}
+
+// identUsedIn reports whether name appears as an identifier anywhere in stmts, the
+// check blankUnusedRecvTemp uses to tell a receiver a binding reads from one nothing
+// references.
+func identUsedIn(name string, stmts []ast.Stmt) bool {
+	used := false
+	for _, s := range stmts {
+		ast.Inspect(s, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Name == name {
+				used = true
+				return false
+			}
+			return true
+		})
+		if used {
+			break
+		}
+	}
+	return used
 }
 
 // assignCopy builds target = source for one link of a chained assignment, where
@@ -2844,11 +3161,11 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 			values = append(values, &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(el.restStruct), Elts: elts}})
 			continue
 		}
-		srcName, ok := localName(r.prog.Text(el.nameNode))
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		// The source property maps straight to its Go field through exportedField, the
+		// same mapping internStruct uses to name the field. Routing the name through
+		// localName first would reserve an emitter-package name, spelling a property
+		// named `value` as `value_` and reading a `Value_` field the struct never has.
+		field, ok := exportedField(strings.TrimSpace(r.prog.Text(el.nameNode)))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
 		}
@@ -2884,12 +3201,8 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 func (r *Renderer) objectDestructureAssignDefaults(elems []objectAssignElem, optionalField map[string]bool, rhs frontend.Node) (ast.Stmt, bool, error) {
 	out := make([]ast.Stmt, 0, len(elems))
 	for _, el := range elems {
-		prop := r.prog.Text(el.nameNode)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		prop := strings.TrimSpace(r.prog.Text(el.nameNode))
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "object assignment property is not a Go field name"}
 		}
@@ -3291,6 +3604,18 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	if err != nil {
 		return nil, false, err
 	}
+	// A write into a divergent accessor member lands in the field's boxed
+	// value.Value slot (decls.go), so the value boxes through boxOperand the same
+	// way a write to a dynamic receiver does, rather than coercing to the set type
+	// and dropping a concrete Go value into the interface-free box struct. A read
+	// of the member unboxes back on the dynamic path (coerce.go).
+	if sp, ok := r.shapeProp(objType, r.prog.Text(tParts[1])); ok && sp.DivergentAccessor && !compound {
+		val, err := r.boxOperand(parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: token.ASSIGN, Rhs: []ast.Expr{val}}, true, nil
+	}
 	if !compound {
 		rhs, err := r.lowerExpr(parts[2])
 		if err != nil {
@@ -3601,6 +3926,13 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 			return nil, err
 		}
 	} else {
+		// A concise arrow assigned to a slot whose type is a union of call signatures
+		// takes the union's return type, the same way its var initializer would, so a
+		// later `f = a => a` fits the same Go function type the first assignment gave
+		// f rather than emitting its own body-typed signature that no longer matches.
+		if rt, ok := r.contextualArrowRet(r.prog.TypeAt(parts[0]), parts[2]); ok {
+			r.pendingArrowRet = &rt
+		}
 		rhs, err = r.lowerExpr(parts[2])
 		if err != nil {
 			return nil, err
@@ -4254,6 +4586,13 @@ func (r *Renderer) foldFloatDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if err != nil || !isFloat64Ident(typ) {
 		return nil, false
 	}
+	// A binding with a type annotation but no initializer, var x: number, carries the
+	// annotation as its trailing NodeUnknown child, not an expression. Folding it would
+	// lower that annotation as if it were an initializer, so decline and leave the
+	// uninitialized zero-value declaration to buildVarDecl.
+	if r.bindingTrailingIsAnnotation(decls[0]) {
+		return nil, false
+	}
 	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 	if err != nil {
 		return nil, false
@@ -4291,6 +4630,14 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false
 	}
+	// A binding with a type annotation but no initializer, var x: typeof undefined,
+	// carries the annotation as its trailing NodeUnknown child, not an expression.
+	// Folding it would lower that annotation as if it were an initializer (typeof
+	// undefined lowering to the string "undefined"), so decline and leave the
+	// uninitialized zero-value declaration to buildVarDecl.
+	if r.bindingTrailingIsAnnotation(decls[0]) {
+		return nil, false
+	}
 	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 	if err != nil {
 		return nil, false
@@ -4299,6 +4646,34 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 		return nil, false
 	}
 	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{init}}, true
+}
+
+// bindingTrailingIsAnnotation reports whether a variable binding's trailing child is a
+// type annotation rather than an initializer, so the readability folds decline a binding
+// that has no value to fold. Both a lone annotation of an unspelled type (var x: typeof
+// undefined) and an initializer that is a delete or typeof expression (const b = delete 0)
+// surface their trailing node as an unclassified NodeUnknown, so the node kind alone cannot
+// tell an uninitialized binding from one whose initializer is such an expression. The source
+// separates them: an initializer follows '=', an annotation follows ':'. The gap between the
+// name's end and the trailing node's start carries exactly that token (the annotation's own
+// text, which may hold '=>', stays outside the gap), so an absent '=' means the trailing node
+// is an annotation and the binding carries no initializer to fold.
+func (r *Renderer) bindingTrailingIsAnnotation(decl frontend.Node) bool {
+	kids := r.prog.Children(decl)
+	if len(kids) < 2 {
+		return false
+	}
+	last := kids[len(kids)-1]
+	if last.Kind() != frontend.NodeUnknown {
+		return false
+	}
+	declText := r.prog.Text(decl)
+	gapStart := int(kids[0].End() - decl.Pos())
+	gapEnd := int(last.Pos() - decl.Pos())
+	if gapStart < 0 || gapEnd > len(declText) || gapStart > gapEnd {
+		return false
+	}
+	return !strings.Contains(declText[gapStart:gapEnd], "=")
 }
 
 // isFloat64Ident reports whether a lowered type expression is the bare float64 type,

@@ -15,6 +15,7 @@ func Pick(s value.BStr) value.BStr {
 	default:
 		return value.FromGoString("other")
 	}
+	panic("unreachable")
 }
 func Tag(value_ value.Value) value.BStr {
 	switch func() value.BStr {

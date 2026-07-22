@@ -54,3 +54,19 @@ console.log(` + "`${m.a},${m.b},${m.c}`" + `);
 		t.Errorf("object spread program printed %q, want %q", got, want)
 	}
 }
+
+// TestObjectSpreadOptionalOverRequiredMerges pins the union-spread merge: when a
+// later spread's member is optional but the earlier one supplies the same field as
+// required, the merged property is required and takes src.Field.Or(prev), the
+// present-else-fallback spread evaluates, rather than dropping a bare value.Opt
+// into the concrete field, which would not build.
+func TestObjectSpreadOptionalOverRequiredMerges(t *testing.T) {
+	const src = `declare const a: { x: number };
+declare const b: { x?: number };
+const c = { ...a, ...b };
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Or(a.X)") {
+		t.Errorf("optional-over-required spread did not merge with .Or(a.X):\n%s", source)
+	}
+}

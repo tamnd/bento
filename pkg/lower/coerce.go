@@ -334,6 +334,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.missingPropertyRead(n) {
 		return true
 	}
+	// A read of a divergent accessor member lowers to the field's boxed value.Value
+	// (decls.go), so it is a dynamic value even though the checker types it by the
+	// narrower get type. Routing it here unboxes the read down to whatever static
+	// slot it flows into, the same as any other boxed member read.
+	if r.divergentAccessorRead(n) {
+		return true
+	}
 	// A call whose callee is a binding stored as a boxed value.Value returns a box:
 	// the runtime Call always yields a value.Value. Control-flow analysis may have
 	// evolved an implicit-any callee to a concrete return type at the call site,
@@ -414,7 +421,63 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 			}
 		}
 	}
+	// A pure string-index dictionary, { [x: string]: string }, lowers to a boxed
+	// value.Value (lower.go isStringIndexDict), so a value of it is dynamic even
+	// though the checker types it object, not any. Routing it here boxes a fixed
+	// object flowing into such a slot and dispatches a keyed read or write off it
+	// through the value model, the same as any other boxed object.
+	if r.isStringIndexDict(r.prog.TypeAt(n)) {
+		return true
+	}
+	// The empty object type { } lowers to a boxed value.Value too (lower.go
+	// isEmptyObjectTopType): it is the structural top type, not a shape, so a value of
+	// it is dynamic and a narrowed member read dispatches off the box at runtime.
+	if r.isEmptyObjectTopType(r.prog.TypeAt(n)) {
+		return true
+	}
+	// A user type guard narrows a { } binding to a concrete shape at a use site, so
+	// TypeAt reports that shape while the Go variable still holds the value.Value its
+	// declared { } type lowered to. The read must dispatch off the box, so it is dynamic
+	// by its declared type even where the checker narrowed it: a value.Value carries no
+	// Go field for the narrowed shape's members, and the surrounding coercion unboxes
+	// the keyed read down to the slot it flows into. The declared { } | undefined arrives
+	// as a union, so the check unwraps the optional to its box-backed inner.
+	if decl, _, ok := r.prog.DeclaredTypeAt(n); ok && r.isNarrowableBoxType(decl) {
+		return true
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
+// divergentAccessorRead reports whether n reads a member whose get and set types
+// diverge, so its Go field is a boxed value.Value (decls.go renderStructBody). The
+// checker types the read by the get type, a clean primitive or union the static
+// coercer would drive over the box and mistype, so recognizing the read here keeps
+// it on the dynamic path where the surrounding coercion unboxes it to the slot it
+// flows into. Only a dotted read off a fixed-shape object routes here; a class
+// receiver keeps its accessor-method read and an array or built-in its own path.
+func (r *Renderer) divergentAccessorRead(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return false
+	}
+	// A class receiver keeps its accessor-method read, c.Foo(), whose getter method
+	// already returns the get type and whose setter takes the set type, so its
+	// divergent accessor never lands in a boxed field and must stay off this path.
+	if _, ok := r.classReceiver(kids[0]); ok {
+		return false
+	}
+	objType := r.prog.TypeAt(kids[0])
+	if objType.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return false
+	}
+	sp, ok := r.shapeProp(objType, strings.TrimSpace(r.prog.Text(kids[1])))
+	return ok && sp.DivergentAccessor
 }
 
 // objectBoxedResultCall reports whether n is a call to Object.fromEntries or
@@ -625,6 +688,17 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	// non-primitive box would otherwise fall past to the handback.
 	if r.producesBoxedValue(src) {
 		return expr, nil
+	}
+	// A value whose Go shape is a fixed-object struct, a { x: string } binding flowing
+	// into a dynamic slot (an any, an index-signature dictionary), boxes into a live
+	// value.Object copying its fields, so the box carries the same properties the struct
+	// held. value.ObjectFromStruct reuses the reflection the JSON walk already uses, so
+	// the two agree on which fields a shape contributes. It routes here for a struct
+	// value the boxLiteralToDynamic case above does not catch, which handles only a
+	// literal written at the boxing site, not an already-bound struct.
+	if r.isFixedObjectShape(r.prog.TypeAt(src)) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{expr}}, nil
 	}
 	// A typed-array element read flowing into a dynamic slot boxes through GetIndex,
 	// the read that answers the undefined an out-of-range or non-canonical index
@@ -847,7 +921,33 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// overload's return, a concrete type the primitive box path would try to construct, so
 	// recognizing the call here lets a slot, a stringify, or a console.log take the box
 	// straight through the same as any other boxed result.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src)
+}
+
+// isBoxedStaticFieldRead reports whether src reads a private static field, C.#x,
+// whose package var is a boxed value.Value (staticVarDecl boxes a private static
+// because its C.#x accesses type as dynamic). The checker still types the read by
+// the field's declared type, a number for #x = 123, so a stringify or a slot that
+// judges on that static type would hand the box to a primitive coercer it cannot
+// take; recognizing the read here routes it through the value model the same way
+// any other boxed result goes.
+func (r *Renderer) isBoxedStaticFieldRead(src frontend.Node) bool {
+	if src.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(src)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	info, ok := r.classNameRef(kids[0])
+	if !ok {
+		return false
+	}
+	f, ok := info.staticByName(strings.TrimSpace(r.prog.Text(kids[1])))
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(f.prop, "#")
 }
 
 // isIterTerminalBoxedCall reports whether src is a terminal iterator helper whose
@@ -1010,6 +1110,579 @@ func (r *Renderer) emptyArrayContextual(node frontend.Node, target frontend.Type
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo)}, true, nil
+}
+
+// arrayToLengthShape bridges an array argument into a parameter typed { length:
+// number }, the one object shape an array structurally satisfies through its length
+// alone. TypeScript accepts isEmpty([]) against isEmpty(list: {length:number}), since
+// an array carries a length, but the array's Go representation (*value.Array) is not
+// the shape's (*ObjLength). The array adapts by reading its length into a fresh
+// struct, &ObjLength{Length: arr.Len()}, which is lossless for this shape: length is
+// the only member the parameter observes. It declines for any richer shape (more
+// properties, an index signature, a method, an optional length), whose members an
+// array does not all provide, so those still hand back rather than build a struct
+// missing a field.
+func (r *Renderer) arrayToLengthShape(lowered ast.Expr, node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil {
+		return nil, false, nil
+	}
+	if _, ok := r.prog.ElementType(r.prog.TypeAt(node)); !ok {
+		return nil, false, nil
+	}
+	if !r.isArrayLengthShape(target) {
+		return nil, false, nil
+	}
+	name, err := r.decls.internStruct(r, target)
+	if err != nil {
+		return nil, false, err
+	}
+	field, ok := exportedField("length")
+	if !ok {
+		return nil, false, nil
+	}
+	return &ast.UnaryExpr{
+		Op: token.AND,
+		X: &ast.CompositeLit{
+			Type: ident(name),
+			Elts: []ast.Expr{&ast.KeyValueExpr{
+				Key:   ident(field),
+				Value: &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("Len")}},
+			}},
+		},
+	}, true, nil
+}
+
+// isArrayLengthShape reports whether t is exactly the object shape { length: number },
+// the only fixed shape arrayToLengthShape adapts an array into. It is an object with a
+// single required number-typed length property and nothing else, no array or tuple
+// element type, no string index signature, and no call or construct signature, so a
+// richer shape an array cannot fully provide is rejected here.
+func (r *Renderer) isArrayLengthShape(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.TupleElements(t); ok {
+		return false
+	}
+	if _, ok := r.prog.StringIndexType(t); ok {
+		return false
+	}
+	if calls, constructs := r.prog.Signatures(t); len(calls) > 0 || len(constructs) > 0 {
+		return false
+	}
+	props := r.prog.Properties(t)
+	if len(props) != 1 {
+		return false
+	}
+	p := props[0]
+	return p.Name == "length" && !p.Optional && p.Type.Flags&frontend.TypeNumber != 0
+}
+
+// dynArrayLiteralContextual re-emits a non-empty array literal flowing into an any[]
+// slot at the slot's boxed element type. The checker types [1] by its own contents,
+// *value.Array[float64], which a *value.Array[value.Value] parameter, return, or
+// binding rejects at go build, because Go's array header is invariant in its element
+// type where JavaScript's any[] silently boxes. The contextual any[] lives on the slot,
+// not the literal, so the fix sits at the coercion boundary the same way
+// emptyArrayContextual re-spells a bare []: when the source is a non-empty array literal
+// and the target is an array whose element type is dynamic, each element boxes through
+// boxOperand and the literal re-emits as value.NewArray[value.Value] over the boxed
+// elements, the header the slot accepts. It declines when the target element already
+// matches (both dynamic, so the plain path lowers the boxed elements) or the literal
+// carries a spread, whose gather boxArrayLiteral leaves to a later slice; the ordinary
+// coercion then handles or hands back.
+func (r *Renderer) dynArrayLiteralContextual(node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil || node.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(node)
+	if len(kids) == 0 {
+		return nil, false, nil
+	}
+	tgtElem, ok := r.prog.ElementType(target)
+	if !ok || tgtElem.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return nil, false, nil
+	}
+	// A literal the checker already typed any[] rides the plain array path, whose
+	// elements are boxed already; only a concretely-typed literal needs re-boxing here.
+	if srcElem, ok := r.prog.ElementType(r.prog.TypeAt(node)); ok &&
+		srcElem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return nil, false, nil
+	}
+	elems := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeSpreadElement {
+			return nil, false, nil
+		}
+		boxed, err := r.boxOperand(k)
+		if err != nil {
+			return nil, false, err
+		}
+		elems = append(elems, boxed)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "Value")), Args: elems}, true, nil
+}
+
+// optArrayLiteralContextual re-emits a non-empty array literal flowing into a slot
+// whose element type is optional, T | undefined that lowers to value.Opt[T], at that
+// optional element type: each present element wraps in value.Some[T] and the literal
+// re-emits as value.NewArray[value.Opt[T]]. The checker types [1, 2, 3] by its own
+// contents, *value.Array[float64], which a *value.Array[value.Opt[float64]] slot
+// rejects at go build the way an any[] slot rejects a concretely-typed literal, since
+// Go's array header is invariant in its element type where JavaScript boxes silently.
+// The contextual optional-element type lives on the slot, not the literal, so like
+// emptyArrayContextual and dynArrayLiteralContextual the fix sits at the coercion
+// boundary. A slot spelled (number | undefined)[] | undefined carries the array under
+// an outer optional, so the outer optional is stripped first and the rebuilt array
+// re-wrapped in value.Some to match the slot. It declines a target that is not an
+// array with an optional element, a literal the checker already typed with an optional
+// element (whose plain path boxes the elements already), and a literal carrying a
+// spread, leaving the ordinary path to box or hand back.
+func (r *Renderer) optArrayLiteralContextual(node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil || node.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(node)
+	if len(kids) == 0 {
+		return nil, false, nil
+	}
+	arrType := target
+	wrapSome := false
+	if inner, ok := r.optionalInner(r.prog.UnionMembers(target)); ok {
+		arrType, wrapSome = inner, true
+	}
+	tgtElem, ok := r.prog.ElementType(arrType)
+	if !ok || !r.isOptionalType(tgtElem) {
+		return nil, false, nil
+	}
+	if srcElem, ok := r.prog.ElementType(r.prog.TypeAt(node)); ok && r.isOptionalType(srcElem) {
+		return nil, false, nil
+	}
+	elemGo, err := r.typeExpr(tgtElem)
+	if err != nil {
+		return nil, false, nil
+	}
+	elems := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeSpreadElement {
+			return nil, false, nil
+		}
+		lowered, err := r.lowerExpr(k)
+		if err != nil {
+			return nil, false, err
+		}
+		boxed, ok, err := r.boxToOptional(lowered, k, tgtElem)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
+			boxed = lowered
+		}
+		elems = append(elems, boxed)
+	}
+	r.requireImport(valuePkg)
+	arr := &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: elems}
+	if !wrapSome {
+		return arr, true, nil
+	}
+	wrapped, err := r.someWrap(arr, arrType)
+	if err != nil {
+		return nil, false, err
+	}
+	return wrapped, true, nil
+}
+
+// assertionOperand returns the value expression a type assertion wraps, seeing
+// through the grouping parentheses the source carries. `arr as T` leads with the
+// value, `<T>arr` leads with the type, so the operand is the first child of an as
+// expression and the second of a type assertion. A node that is neither is returned
+// unchanged, so a caller can peel unconditionally.
+func (r *Renderer) assertionOperand(n frontend.Node) frontend.Node {
+	var inner frontend.Node
+	switch n.Kind() {
+	case frontend.NodeAsExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 0 {
+			return n
+		}
+		inner = kids[0]
+	case frontend.NodeTypeAssertion:
+		kids := r.prog.Children(n)
+		if len(kids) < 2 {
+			return n
+		}
+		inner = kids[1]
+	default:
+		return n
+	}
+	for inner.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(inner)
+		if len(kids) != 1 {
+			break
+		}
+		inner = kids[0]
+	}
+	return inner
+}
+
+// arrayAssertedToTuple bridges an array value asserted to a tuple type, the
+// `<[any, any, any]>result` a function whose declared return is a tuple casts its
+// working array with, into the positional struct the tuple slot spells. TypeScript's
+// tuple assertion reinterprets the array as a fixed-arity tuple, but bento models an
+// array as a value.Array and a tuple as a positional struct, two unrelated Go types,
+// so the value is rebuilt: an IIFE binds the array once and reads its leading
+// positions through AtI into the tuple's fields, coercing each read to the field's
+// declared type where the array holds value.Value.
+//
+// It fires only on an assertion node, `arr as T` or `<T>arr`, whose operand's own
+// value is an array, so the assertion's own lowering, which returns the array
+// unchanged, has left it for this bridge to consume. A plain array flowing into a
+// tuple slot without an assertion, which TypeScript itself rejects, and a source that
+// is already a tuple both decline to the ordinary path. A rest or optional tuple
+// element declines, since its arity no longer lines up one-to-one with the array's
+// leading positions.
+func (r *Renderer) arrayAssertedToTuple(expr ast.Expr, srcNode frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if srcNode == nil {
+		return nil, false, nil
+	}
+	if srcNode.Kind() != frontend.NodeAsExpression && srcNode.Kind() != frontend.NodeTypeAssertion {
+		return nil, false, nil
+	}
+	elems, ok := r.prog.TupleElements(target)
+	if !ok {
+		return nil, false, nil
+	}
+	for _, el := range elems {
+		if el.Optional || el.Rest {
+			return nil, false, nil
+		}
+	}
+	operand := r.assertionOperand(srcNode)
+	arrType := r.prog.TypeAt(operand)
+	arrElem, isArr := r.prog.ElementType(arrType)
+	if !isArr {
+		return nil, false, nil
+	}
+	arrGo, err := r.typeExpr(arrType)
+	if err != nil {
+		return nil, false, nil
+	}
+	name, err := r.decls.internTuple(r, target, elems)
+	if err != nil {
+		return nil, false, err
+	}
+	dynElem := arrElem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	fields := make([]ast.Expr, 0, len(elems))
+	for i, el := range elems {
+		var read ast.Expr = &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident("_a"), Sel: ident("AtI")},
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
+		if dynElem {
+			c, err := r.coerceDynamicToStaticFlags(read, el.Type.Flags)
+			if err != nil {
+				return nil, false, err
+			}
+			read = c
+		}
+		fields = append(fields, &ast.KeyValueExpr{Key: ident("E" + strconv.Itoa(i)), Value: read})
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("_a")}, Type: arrGo}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(name)}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{&ast.CompositeLit{Type: ident(name), Elts: fields}}}}},
+	}
+	return &ast.CallExpr{Fun: lit, Args: []ast.Expr{expr}}, true, nil
+}
+
+// coerceFuncValue bridges a function value into a function-typed slot whose Go
+// signature differs only in the return position, the way JavaScript's function
+// bivariance lets a `() => void` fill a `() => any` slot and a `() => T` fill a
+// `() => void` one. Go's func types are invariant, so `func()` is not assignable to
+// `func() value.Value` even though every JavaScript call agrees: a void function
+// called in a value context yields undefined, and a value-returning function called
+// in a void context has its result discarded. The two lower to different Go func
+// types, so passing one straight emits Go the toolchain rejects. The fix wraps the
+// source in an adapter closure at the slot's signature: it binds the target's
+// parameters, calls the source with them, and either discards the result (a void
+// target) or returns value.Undefined after the call (a void source into a dynamic
+// target), the exact value the JavaScript call would produce.
+//
+// It is deliberately narrow. The parameters must lower to identical Go types, so the
+// adapter passes them straight; a parameter that itself needs coercion is a later
+// slice. The only difference it bridges is one side returning void where the other
+// does not, and a void source is bridged only into a dynamic return, the only slot
+// undefined fits. Anything else (matching signatures, two differing concrete returns,
+// a generic, rest, or static-optional signature, an overload set, or a callable
+// object) declines so the ordinary path handles or hands it back. The source must be
+// a bare function literal or a name so embedding it in the adapter body cannot re-run
+// a side-effecting expression per call.
+func (r *Renderer) coerceFuncValue(expr ast.Expr, srcNode frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if srcNode == nil {
+		return nil, false, nil
+	}
+	// A source written with grouping parentheses, `super((() => this))`, lowers with
+	// the parentheses preserved; peel them so the shape check reads the func literal
+	// underneath rather than declining on the wrapper.
+	expr = unparen(expr)
+	// Read the source's Go parameter types and whether it returns void from the
+	// lowered form. A function literal reports its own emitted signature, which already
+	// carries any parameters the contextual slot padded onto it, so the adapter measures
+	// what was actually written rather than the source's own arity. A name reads its
+	// signature through the type instead.
+	srcParams, srcVoid, ok := r.loweredFuncShape(expr, srcNode)
+	if !ok {
+		return nil, false, nil
+	}
+	tsig, ok := r.plainFuncSignature(target)
+	if !ok {
+		return nil, false, nil
+	}
+	tft, err := r.funcTypeOf(tsig)
+	if err != nil {
+		return nil, false, nil
+	}
+	if len(srcParams) != len(tft.Params.List) {
+		return nil, false, nil
+	}
+	for i := range srcParams {
+		same, err := sameGoType(tft.Params.List[i].Type, srcParams[i])
+		if err != nil || !same {
+			return nil, false, nil
+		}
+	}
+	tgtVoid := tft.Results == nil
+
+	// Decide what the adapter must do, and decline, before minting any parameter names,
+	// so a call that hands the value back consumes no fresh temps and leaves the temp
+	// counter where the ordinary path expects it. Both sides return, or neither does.
+	// Neither returning leaves no mismatch, so the ordinary path passes the value
+	// straight. Both returning leaves a class-covariant return the adapter can bridge only
+	// when the source's return class strictly derives from the target's; any other
+	// differing return is a later slice. A void mismatch always adapts, except a void
+	// source into a static value slot, which has no undefined to yield and hands back.
+	var tgtClass *classInfo
+	switch {
+	case tgtVoid && srcVoid:
+		return nil, false, nil
+	case tgtVoid == srcVoid:
+		srcClass, ok1 := r.funcSourceClass(expr, srcNode)
+		var ok2 bool
+		tgtClass, ok2 = r.classOfType(tsig.Return)
+		if !ok1 || !ok2 || !classReaches(srcClass, tgtClass) {
+			return nil, false, nil
+		}
+	case !tgtVoid && tsig.Return.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0:
+		return nil, false, nil
+	}
+
+	// Bind the target's parameters and forward them to the source; their Go types
+	// match, so they pass straight.
+	var fields []*ast.Field
+	var args []ast.Expr
+	for i := range srcParams {
+		nm := r.freshTemp()
+		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(nm)}, Type: tft.Params.List[i].Type})
+		args = append(args, ident(nm))
+	}
+	call := &ast.CallExpr{Fun: expr, Args: args}
+	adapter := &ast.FuncLit{Type: &ast.FuncType{Params: &ast.FieldList{List: fields}}}
+
+	if tgtClass != nil {
+		// A class-covariant return: call the source and return the address of the
+		// promoted base field, `func() *Base { return &src().Base }`. Go promotes an
+		// embedded base through any depth, so &call().Base reaches a base several levels
+		// up the chain without spelling the intermediates.
+		adapter.Type.Results = tft.Results
+		adapter.Body = &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.UnaryExpr{Op: token.AND, X: &ast.SelectorExpr{X: call, Sel: ident(tgtClass.goName)}},
+		}}}}
+		return adapter, true, nil
+	}
+	if tgtVoid {
+		// A value-returning source into a void slot: call and discard the result.
+		adapter.Body = &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: call}}}
+		return adapter, true, nil
+	}
+	// A void source into a value slot: the JavaScript call yields undefined, which
+	// only a dynamic return can hold, so bridge only there and return value.Undefined
+	// after driving the call for its effects.
+	r.requireImport(valuePkg)
+	adapter.Type.Results = tft.Results
+	adapter.Body = &ast.BlockStmt{List: []ast.Stmt{
+		&ast.ExprStmt{X: call},
+		&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
+	}}
+	return adapter, true, nil
+}
+
+// funcSourceClass resolves the class a function source returns. A function literal
+// already committed to a concrete Go result type, so it reads the class from the emitted
+// `*Name` result: that resolves a `this`-returning closure, which the frontend types as
+// the polymorphic this type rather than a class, to the class the closure lives in. A
+// name falls back to its declared return type, resolved through classOfType.
+func (r *Renderer) funcSourceClass(expr ast.Expr, srcNode frontend.Node) (*classInfo, bool) {
+	if lit, ok := expr.(*ast.FuncLit); ok {
+		if name, ok := starResultIdent(lit.Type.Results); ok {
+			if info, ok := r.classByGoName(name); ok {
+				return info, true
+			}
+		}
+	}
+	if sig, ok := r.prog.SignatureAt(srcNode); ok {
+		return r.classOfType(sig.Return)
+	}
+	if sig, ok := r.plainFuncSignature(r.prog.TypeAt(srcNode)); ok {
+		return r.classOfType(sig.Return)
+	}
+	return nil, false
+}
+
+// starResultIdent reads the type name from a func result list of the form `*Name`, the
+// single-pointer result a class-returning function lowers to. It declines any other
+// shape, so a multi-value, value, or non-pointer result is not mistaken for a class.
+func starResultIdent(results *ast.FieldList) (string, bool) {
+	if results == nil || len(results.List) != 1 {
+		return "", false
+	}
+	star, ok := results.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return "", false
+	}
+	id, ok := star.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return id.Name, true
+}
+
+// classByGoName finds a registered class by its emitted Go type name, the reverse of the
+// source-name keying r.classes uses, so a lowered result type spelled in Go resolves back
+// to the class it names.
+func (r *Renderer) classByGoName(goName string) (*classInfo, bool) {
+	for _, info := range r.classes {
+		if info.goName == goName {
+			return info, true
+		}
+	}
+	return nil, false
+}
+
+// unparen peels grouping parentheses off an expression, so a shape check reads the node
+// underneath rather than declining on the wrapper. A source written super((() => this))
+// lowers with its parentheses preserved, so the func literal or invoking call sits under
+// one or more ParenExpr layers.
+func unparen(expr ast.Expr) ast.Expr {
+	for {
+		p, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = p.X
+	}
+}
+
+// exprStaticClass resolves the class an emitted value expression statically yields, read
+// from the Go it already committed to rather than the frontend type of its source. A
+// super call invoking a this-returning arrow, super((() => this)()), lowers to a call of
+// a function literal whose result is *Super; the frontend types the invoked this as a
+// type parameter, not a class, so only the emitted *Super names the class. It reads that
+// result through the invoked function literal, peeling grouping parentheses, and declines
+// any other shape.
+func (r *Renderer) exprStaticClass(expr ast.Expr) (*classInfo, bool) {
+	call, ok := unparen(expr).(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	lit, ok := unparen(call.Fun).(*ast.FuncLit)
+	if !ok {
+		return nil, false
+	}
+	name, ok := starResultIdent(lit.Type.Results)
+	if !ok {
+		return nil, false
+	}
+	return r.classByGoName(name)
+}
+
+// classReaches reports whether one class strictly derives from another, walking the
+// embedding chain from the derived class's base upward. It starts at the base so a class
+// never reaches itself, since an identical return needs no upcast.
+func classReaches(from, to *classInfo) bool {
+	for c := from.base; c != nil; c = c.base {
+		if c == to {
+			return true
+		}
+	}
+	return false
+}
+
+// loweredFuncShape reports a function source's emitted Go parameter types and whether
+// it returns void, the two facts coerceFuncValue's adapter needs. A function literal is
+// read from its own emitted signature, so a parameter the contextual slot padded onto it
+// counts and the adapter measures the arity Go actually sees; a name is read from its
+// type's single call signature instead. It declines for any other source shape, or a
+// name whose type is not a bare function value.
+func (r *Renderer) loweredFuncShape(expr ast.Expr, srcNode frontend.Node) ([]ast.Expr, bool, bool) {
+	switch e := expr.(type) {
+	case *ast.FuncLit:
+		var params []ast.Expr
+		if e.Type.Params != nil {
+			for _, f := range e.Type.Params.List {
+				n := len(f.Names)
+				if n == 0 {
+					n = 1
+				}
+				for i := 0; i < n; i++ {
+					params = append(params, f.Type)
+				}
+			}
+		}
+		return params, e.Type.Results == nil, true
+	case *ast.Ident:
+		sig, ok := r.plainFuncSignature(r.prog.TypeAt(srcNode))
+		if !ok {
+			return nil, false, false
+		}
+		ft, err := r.funcTypeOf(sig)
+		if err != nil {
+			return nil, false, false
+		}
+		var params []ast.Expr
+		for _, f := range ft.Params.List {
+			params = append(params, f.Type)
+		}
+		return params, ft.Results == nil, true
+	default:
+		return nil, false, false
+	}
+}
+
+// plainFuncSignature returns a type's single call signature when it is a bare
+// function value bento lowers to a Go func: exactly one call signature, no construct
+// signature, no properties riding alongside, and no generic, rest, or type-parameter
+// shape the func adapter does not model. It is the guard coerceFuncValue shares for
+// both the source and the target so neither an overload set, a constructor type, nor a
+// callable-object struct is mistaken for a bare func.
+func (r *Renderer) plainFuncSignature(t frontend.Type) (frontend.Signature, bool) {
+	call, construct := r.prog.Signatures(t)
+	if len(call) != 1 || len(construct) != 0 {
+		return frontend.Signature{}, false
+	}
+	if len(r.prog.Properties(t)) != 0 {
+		return frontend.Signature{}, false
+	}
+	sig := call[0]
+	if len(sig.TypeParams) != 0 || sig.RestParam != nil {
+		return frontend.Signature{}, false
+	}
+	return sig, true
 }
 
 // boxObjectLiteral lowers { k: v, ... } into value.NewObject().Set(...) per member,
@@ -1327,10 +2000,30 @@ func (r *Renderer) unboxDynamicRead(read ast.Expr, n frontend.Node) (ast.Expr, e
 // runs the ToNumber family, a static value returned as any boxes, and a return
 // whose value already matches the declared type passes through unchanged.
 func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr, error) {
+	if tup, ok, err := r.arrayAssertedToTuple(expr, srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return tup, nil
+	}
 	if empty, ok, err := r.emptyArrayContextual(srcNode, r.retType); err != nil {
 		return nil, err
 	} else if ok {
 		return empty, nil
+	}
+	if dyn, ok, err := r.dynArrayLiteralContextual(srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return dyn, nil
+	}
+	if opt, ok, err := r.optArrayLiteralContextual(srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return opt, nil
+	}
+	if fn, ok, err := r.coerceFuncValue(expr, srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return fn, nil
 	}
 	if boxed, ok, err := r.boxToOptional(expr, srcNode, r.retType); err != nil {
 		return nil, err
@@ -1349,7 +2042,7 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 		return nil, err
 	}
 	srcDyn := r.isDynamic(srcNode)
-	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(r.retType)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStaticFlags(expr, r.retType.Flags)
@@ -1366,10 +2059,30 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 // coerces through ToNumber and its siblings; a static source into a dynamic target
 // boxes through the value constructors; matching sides pass through unchanged.
 func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast.Expr, error) {
+	if tup, ok, err := r.arrayAssertedToTuple(expr, src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return tup, nil
+	}
 	if empty, ok, err := r.emptyArrayContextual(src, r.prog.TypeAt(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return empty, nil
+	}
+	if dyn, ok, err := r.dynArrayLiteralContextual(src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return dyn, nil
+	}
+	if opt, ok, err := r.optArrayLiteralContextual(src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return opt, nil
+	}
+	if fn, ok, err := r.coerceFuncValue(expr, src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return fn, nil
 	}
 	if boxed, ok, err := r.boxToOptional(expr, src, r.prog.TypeAt(target)); err != nil {
 		return nil, err
@@ -1623,12 +2336,30 @@ func (r *Renderer) mismatchedLoweredType(a, b frontend.Type) bool {
 // Any other cross-class binding (a downcast, structural twins) hands back;
 // matching classes and non-class sides pass through untouched.
 func (r *Renderer) bridgeClassBinding(expr ast.Expr, src frontend.Node, target frontend.Type) (ast.Expr, error) {
-	srcInfo, ok := r.classOfNode(src)
+	tgtInfo, ok := r.classOfType(target)
 	if !ok {
 		return expr, nil
 	}
-	tgtInfo, ok := r.classOfType(target)
-	if !ok || tgtInfo == srcInfo {
+	// A class used as a value is the static-side singleton, not an instance, so the
+	// instance-to-base upcast below does not apply: the singleton carries no
+	// embedded base to select through. It binds to a base-class-typed slot (a
+	// typeof A a subclass B is assigned to) as itself, the class object, the same
+	// value TypeScript assigns. classOfNode below would read the source's typeof B
+	// as the class B and drive the upcast, so the class-value case is caught first.
+	if _, ok := r.classNameRef(src); ok {
+		return expr, nil
+	}
+	srcInfo, ok := r.classOfNode(src)
+	if !ok {
+		// The source node may carry a polymorphic type the checker types as a type
+		// parameter rather than a class: a super call invoking a this-returning arrow,
+		// super((() => this)()), passes a value the frontend types as this. The emitted
+		// value already committed to a concrete class, so read it from the lowered Go.
+		if srcInfo, ok = r.exprStaticClass(expr); !ok {
+			return expr, nil
+		}
+	}
+	if tgtInfo == srcInfo {
 		return expr, nil
 	}
 	if srcInfo.descendsFrom(tgtInfo) {

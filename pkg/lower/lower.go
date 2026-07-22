@@ -268,6 +268,15 @@ type Renderer struct {
 	// does not exist. It is set around the body of a named function expression and
 	// cleared after, so the self name does not leak past the expression.
 	funcExprSelf map[frontend.Symbol]string
+	// paramAliases maps a constructor parameter symbol to a renamed Go name given when
+	// the parameter's own Go name would shadow an outer binding a field initializer
+	// reads. A field initializer runs outside the constructor's parameter scope, so its
+	// reference to an outer const or var must reach that binding, not the parameter of
+	// the same name the emitted constructor puts in scope; the parameter is renamed and
+	// every reference to it, its signature, a parameter-property store, its body reads,
+	// resolves through this map. It is set around the constructor whose parameters
+	// collide and keyed by the unique parameter symbol, so an entry never leaks.
+	paramAliases map[frontend.Symbol]string
 	// scopeParams is the set of Go parameter names bound by the function whose body is
 	// currently being lowered. A nested function declaration binds a Go local at the
 	// top of that body, so its Go name must not collide with an enclosing parameter's;
@@ -297,6 +306,15 @@ type Renderer struct {
 	// explicit-undefined trailing argument at the call site, exactly as calleeDefaults
 	// serves a top-level function. It is filled alongside arrowDropDefaults.
 	arrowCallDefaults map[frontend.Symbol][]frontend.Node
+	// closurePadParams maps a function-literal argument node to the contextual target
+	// signature's parameters when the literal declares fewer parameters than the func
+	// type it flows into. JavaScript lets a callback ignore trailing arguments, so a
+	// zero-parameter literal is assignable to a one-parameter callback type, but Go
+	// requires the func value's type to match the slot exactly. closureParamFields
+	// reads this to append the missing trailing parameters as blank-named fields of the
+	// target's Go types, so the emitted literal's func type equals the slot's. It is set
+	// by lowerArgAt around the literal's lowering and cleared after.
+	closurePadParams map[frontend.Node][]frontend.Param
 	// promiseSettleParams maps a Promise executor's resolve and reject parameter names
 	// to how each settles the promise while that executor body lowers. A call to one
 	// is not a plain function-value call: resolve carries a value of the element type
@@ -507,6 +525,15 @@ type Renderer struct {
 	// binding's own site lowers to a plain assignment. It is set per scope and
 	// restored on exit, so one scope's forward hoists do not leak into another.
 	fwdHoisted map[string]bool
+	// fwdHoistedFunc names the plain function-valued bindings the active scope
+	// declared at its top for the same reason fwdHoisted does, an earlier
+	// statement's closure captures the name, but which lower to a bare Go func type
+	// rather than a callable-object pointer. The pre-declaration is a `var name
+	// func(...)...` and the binding's own site takes the ordinary var path, where
+	// redeclaredVarAssign turns it into a plain assignment. Kept separate from
+	// fwdHoisted because the two pre-declare different Go types and the callable
+	// binding is intercepted earlier by flattenCallableBinding.
+	fwdHoistedFunc map[string]bool
 	// moduleAssignVars names the module-level bindings hoisted to a package-level var
 	// whose initializer is not safe to evaluate at package-init time (a call, or an
 	// expression over other module state). The binding is declared zero-valued at
@@ -577,6 +604,14 @@ type Renderer struct {
 	// instead of emitting Go that OOMs the toolchain. It is a guard on emit shape, not a
 	// semantic limit, the same reason the typeExpr node budget caps a branching type.
 	closureDepth int
+	// pendingArrowRet carries a contextual return type down to the very next arrow the
+	// renderer lowers, so a concise arrow assigned to a function slot whose return type
+	// is wider than the body's own (a union of the return types of a union-of-call-
+	// signatures target) returns at the slot's type, coercing the body into it. arrowFunc
+	// reads and clears it on entry so it applies to exactly the one arrow it was set for
+	// and never leaks into a nested arrow in that arrow's body. It is nil for every arrow
+	// lowered without a contextual function slot, the whole existing set.
+	pendingArrowRet *frontend.Type
 }
 
 // maxClosureNestDepth is the deepest run of nested function expressions or arrow
@@ -603,7 +638,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a
@@ -1080,6 +1115,29 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "ZonedDateTime")), nil
 		}
+		if r.isStringIndexDict(t) {
+			// A pure string-index dictionary, { [x: string]: string } with no declared
+			// members, is a bag keyed by arbitrary strings, not a fixed shape. Interning
+			// it to a struct would drop the signature and leave an empty struct no other
+			// object assigns to, so it lowers to the dynamic value.Value the property bag
+			// uses: any object flows into it by boxing, and a keyed read or write
+			// dispatches on the boxed kind at runtime. A shape that carries declared
+			// members beside its index signature keeps the struct below, where its known
+			// fields still lower.
+			r.requireImport(valuePkg)
+			return sel("value", "Value"), nil
+		}
+		if r.isEmptyObjectTopType(t) {
+			// The empty object type { } carries no declared members and no index
+			// signature, so it is not a shape: structurally it is the top type that
+			// accepts any non-null value, and a user type guard narrows it to a shape
+			// the empty struct could never hold. Interning it to an empty struct drops
+			// the value and leaves narrowed member reads dangling, so it lowers to the
+			// dynamic value.Value box, where the value survives narrowing and a keyed
+			// read dispatches on the boxed kind at runtime.
+			r.requireImport(valuePkg)
+			return sel("value", "Value"), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -1280,12 +1338,126 @@ func (r *Renderer) renderMap(t frontend.Type) (ast.Expr, error) {
 // reference identity and === is reference equality, which Go pointer identity
 // gives exactly. The struct itself is registered in the decl set, interned by
 // the type's structural identity so the same shape yields the same Go type.
+// isStringIndexDict reports whether a type is a pure string-index dictionary, an
+// object with a string index signature and no declared members, the shape typeExpr
+// lowers to a dynamic value.Value rather than a fixed struct. The no-declared-members
+// gate keeps every other object out: an array, a tuple, a Map, a class, and a
+// record with named fields all carry properties, so only a bare { [x: string]: T }
+// matches, and the empty object { } (no index signature) does not. isDynamic and
+// typeExpr both consult it so the "is a boxed value.Value" decision and the Go type
+// they emit for the slot never disagree.
+func (r *Renderer) isStringIndexDict(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if len(r.prog.Properties(t)) != 0 {
+		return false
+	}
+	_, ok := r.prog.StringIndexType(t)
+	return ok
+}
+
+// isEmptyObjectTopType reports whether a type is the empty object type { }, an object
+// with no declared members, no string index signature, and no call signature. This is
+// the structural top type that accepts any non-null value, not a fixed shape, so typeExpr
+// lowers it to a dynamic value.Value rather than an empty interned struct. It excludes a
+// string-index dictionary (which isStringIndexDict already routes to value.Value), and it
+// excludes an array, a tuple, and a callable, which have their own lowerings. isDynamic
+// and typeExpr both consult it so the "is a boxed value.Value" decision and the emitted Go
+// type for the slot never disagree.
+func (r *Renderer) isEmptyObjectTopType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if len(r.prog.Properties(t)) != 0 {
+		return false
+	}
+	if _, ok := r.prog.StringIndexType(t); ok {
+		return false
+	}
+	if _, ok := r.classOfType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.TupleElements(t); ok {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	// A construct-signature type { new(): T } carries no declared property either, but
+	// it is a constructor value, not the { } top type, so a call or construct signature
+	// of any kind keeps it off the dynamic-box path and on its own lowering.
+	if calls, constructs := r.prog.Signatures(t); len(calls) > 0 || len(constructs) > 0 {
+		return false
+	}
+	return true
+}
+
+// isNarrowableBoxType reports whether a type lowers to the dynamic value.Value box and
+// so survives a user type guard narrowing it to a shape at a use site: the empty object
+// top type { }, a string-index dictionary, or an optional over either ({ } | undefined
+// being the motivating case). It deliberately excludes bare any and unknown, whose
+// narrowing already has its own established lowering, keeping this path to the structural
+// box types the { } work introduced. isDynamic consults it on a receiver's declared type
+// so a narrowed member read still dispatches through the box the Go variable holds.
+func (r *Renderer) isNarrowableBoxType(t frontend.Type) bool {
+	if r.isEmptyObjectTopType(t) || r.isStringIndexDict(t) {
+		return true
+	}
+	if t.Flags&frontend.TypeUnion != 0 {
+		if inner, ok := r.optionalInner(r.prog.UnionMembers(t)); ok {
+			return r.isNarrowableBoxType(inner)
+		}
+	}
+	return false
+}
+
 func (r *Renderer) renderObject(t frontend.Type) (ast.Expr, error) {
 	name, err := r.decls.internStruct(r, t)
 	if err != nil {
 		return nil, err
 	}
 	return star(ident(name)), nil
+}
+
+// isFixedObjectShape reports whether a type's Go representation is a plain interned
+// object struct, the { x: string } a binding or a return holds by pointer, so a value
+// of it can be boxed into a value.Object by copying its fields. It requires the type to
+// carry declared members and to lower to a bare pointer-to-struct, and it excludes a
+// class instance (also a pointer to a struct, but with identity and methods a field
+// copy would drop), a tuple, an array, and a callable, whose own paths lower them to
+// something other than an object struct. The special runtime object types (Map, Set,
+// Promise, a typed array) lower to a value.X pointer, a selector rather than a bare
+// identifier, so the final shape check rules them out too.
+func (r *Renderer) isFixedObjectShape(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if len(r.prog.Properties(t)) == 0 {
+		return false
+	}
+	if _, ok := r.classOfType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.TupleElements(t); ok {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	if calls, _ := r.prog.Signatures(t); len(calls) > 0 {
+		return false
+	}
+	ge, err := r.typeExpr(t)
+	if err != nil {
+		return false
+	}
+	st, ok := ge.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	_, ok = st.X.(*ast.Ident)
+	return ok
 }
 
 // isGoOpaqueType reports whether an object type is a go: opaque handle, the

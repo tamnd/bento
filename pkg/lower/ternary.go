@@ -168,7 +168,12 @@ func (r *Renderer) flattenConditionalDecl(n frontend.Node) ([]ast.Stmt, bool, er
 	decl := &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{
 		&ast.ValueSpec{Names: []*ast.Ident{ident(name)}, Type: typ},
 	}}}
-	return []ast.Stmt{decl, assign}, true, nil
+	// The flattened form declares `var name T` and fills it in each branch, so a binding
+	// nothing later reads is a declared-and-unused var Go rejects, unlike the inline `name
+	// := ternary` the ordinary path would have produced. It takes the same blank the plain
+	// variable path gives an unused declaration.
+	out := r.blankUnusedParamBinding([]ast.Stmt{decl, assign}, nameNode, name)
+	return out, true, nil
 }
 
 // flattenConditionalAssign lowers a plain assignment x = c ? a : b to an if that

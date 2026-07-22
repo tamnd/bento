@@ -913,6 +913,16 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(r.argsObjName), Sel: ident("At")}, Args: []ast.Expr{idx}}, nil
 	}
+	// Foo["X"] with a constant string key on an enum receiver is the bracket spelling
+	// of the dotted member read Foo.X, so it inlines a const enum member the same way
+	// and resolves a plain enum member to its Go constant. It routes before the class
+	// and shape paths, since a const enum leaves no Go type for those to read and its
+	// name would otherwise fall through to a property lookup on an undefined binding.
+	if key, ok := r.constStringKey(idxNode); ok {
+		if expr, ok, err := r.enumMemberRead(obj, key); err != nil || ok {
+			return expr, err
+		}
+	}
 	// C["m"] or c["m"] with a constant string key on a class receiver is the bracket
 	// spelling of the dotted member read, the shape a non-identifier or computed
 	// member name (a string method name, a ["m"] accessor, a [k] name whose k is a
@@ -1146,11 +1156,17 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// whose element type is already static reads the primitive directly and takes no
 	// unbox.
 	unbox := func(read ast.Expr) ast.Expr {
-		acc, ok := r.dynamicArrayElemUnbox(obj, n)
-		if !ok {
-			return read
+		if acc, ok := r.dynamicArrayElemUnbox(obj, n); ok {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident(acc)}}
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident(acc)}}
+		// An array whose element type is optional, value.Opt[T], answers each read as the
+		// stored Opt, so a read the checker narrowed to the non-optional T, the shape a
+		// control-flow guard foo[i] !== undefined leaves, unwraps with .Get() to match the
+		// T the narrowed use sees, the optional counterpart of the evolving-array unbox.
+		if r.optArrayElemNarrowed(obj, n) {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident("Get")}}
+		}
+		return read
 	}
 	// A proven-integer loop index reads through AtI, which takes the index already
 	// narrowed to a Go int, so the counter stays in a register and the float
@@ -1219,6 +1235,21 @@ func (r *Renderer) typedArrayBoxedRead(src frontend.Node) (ast.Expr, bool, error
 // (At returns the primitive itself) or the read stays dynamic (the box is what the
 // use wants). The array's element type is read from its symbol, not the narrowed
 // read node, since only the symbol carries the any[] the store was built at.
+// optArrayElemNarrowed reports whether obj is an array whose element type is optional,
+// value.Opt[T], but the checker narrowed this read n to the non-optional T. That is the
+// disagreement a control-flow guard leaves: after foo[i] !== undefined the read's type
+// is T, yet the backing array still stores value.Opt, so the read answers the Opt and a
+// narrowed use of it needs the value unwrapped with .Get(). The receiver's own narrowed
+// type carries the element type, so a foo whose outer T[] | undefined has been narrowed
+// to T[] still reports the optional element here.
+func (r *Renderer) optArrayElemNarrowed(obj, n frontend.Node) bool {
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(obj))
+	if !ok || !r.isOptionalType(elem) {
+		return false
+	}
+	return !r.isOptionalType(r.prog.TypeAt(n))
+}
+
 func (r *Renderer) dynamicArrayElemUnbox(obj, n frontend.Node) (string, bool) {
 	acc, ok := dynAccessor(r.primitiveFlags(n))
 	if !ok {

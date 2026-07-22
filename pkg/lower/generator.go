@@ -385,7 +385,7 @@ func (r *Renderer) coerceToType(expr ast.Expr, src frontend.Node, target fronten
 		return nil, &NotYetLowerable{Reason: "a tuple with an optional element built at a different arity or shape than the slot declares is a later slice"}
 	}
 	srcDyn := r.isDynamic(src)
-	tgtDyn := target.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	tgtDyn := target.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(target)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStaticFlags(expr, target.Flags)

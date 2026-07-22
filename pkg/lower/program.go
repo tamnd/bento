@@ -378,9 +378,6 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	}
 
 	file := &ast.File{Name: ident("main")}
-	if specs := r.importSpecs(); len(specs) > 0 {
-		file.Decls = append(file.Decls, importDecl(specs))
-	}
 	// The generated struct types the functions and the main body referred to are
 	// collected after lowering, since interning happens as a use is lowered, and
 	// emitted before the functions, the conventional Go order of types then code.
@@ -406,6 +403,17 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	file.Decls = append(file.Decls, depFuncs...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
+
+	// The value runtime import is decided from the finished declarations rather than
+	// the requireImport calls scattered through lowering. A type or expression that
+	// reaches value.X without its path having flagged the import would otherwise name
+	// an unimported package, and a requireImport a later-discarded lowering left behind
+	// would import a package no statement references; both emit Go that does not build.
+	// Reading the flag off the assembled AST closes each.
+	r.reconcileValueImport(file.Decls)
+	if specs := r.importSpecs(); len(specs) > 0 {
+		file.Decls = append([]ast.Decl{importDecl(specs)}, file.Decls...)
+	}
 
 	// Two composed modules can each declare a binding whose Go name is the same,
 	// distinct TypeScript symbols the checker never compares because they live in
@@ -435,6 +443,37 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 		return Program{}, err
 	}
 	return Program{Source: src}, nil
+}
+
+// reconcileValueImport sets the value runtime import from whether the finished
+// declarations actually name the value package. The import is aliased value on every
+// path, so a selector whose qualifier is the identifier value is a reference to it;
+// bento never emits a local named value, so no user binding shadows the qualifier.
+// Deriving the flag here, rather than trusting the requireImport calls a lowering makes
+// as it interns a use, imports the package exactly when a statement reads it: a path
+// that reached value.X without flagging the import still imports it, and a flag a
+// discarded lowering left behind no longer imports a package nothing references.
+func (r *Renderer) reconcileValueImport(decls []ast.Decl) {
+	used := false
+	for _, d := range decls {
+		ast.Inspect(d, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "value" {
+					used = true
+					return false
+				}
+			}
+			return true
+		})
+		if used {
+			break
+		}
+	}
+	if used {
+		r.imports[valuePkg] = true
+	} else {
+		delete(r.imports, valuePkg)
+	}
 }
 
 // mainItem is one entry of the main body in source order: either a top-level
@@ -629,6 +668,16 @@ func collectModuleRefs(prog *frontend.Program, n frontend.Node, module map[front
 		}
 		return
 	}
+	// An object-literal shorthand `{ x }` reads the outer binding x, but its identifier
+	// resolves to the property the shorthand declares rather than to x, so SymbolAt above
+	// would miss the read. Resolving the shorthand's value symbol credits it, so a module
+	// binding a function reads only through a shorthand still crosses the boundary and
+	// hoists to package scope instead of staying a main local the function cannot see.
+	if sym, ok := shorthandValueSymbol(prog, n); ok {
+		if name, ok := module[sym]; ok {
+			out[name] = true
+		}
+	}
 	for _, c := range prog.Children(n) {
 		collectModuleRefs(prog, c, module, out)
 	}
@@ -647,8 +696,11 @@ func collectModuleRefs(prog *frontend.Program, n frontend.Node, module map[front
 // the emit for `{ x }` reads `x` without a redundant blank beside it.
 func countBindingUses(prog *frontend.Program, entry frontend.Node) map[frontend.Symbol]int {
 	uses := map[frontend.Symbol]int{}
-	var walk func(n frontend.Node)
-	walk = func(n frontend.Node) {
+	var walk func(n, parent frontend.Node, idx int)
+	walk = func(n, parent frontend.Node, idx int) {
+		if skipAsTypePosition(prog, n, parent, idx) {
+			return
+		}
 		if n.Kind() == frontend.NodeIdentifier {
 			if sym, ok := prog.SymbolAt(n); ok {
 				uses[sym]++
@@ -661,12 +713,65 @@ func countBindingUses(prog *frontend.Program, entry frontend.Node) map[frontend.
 				}
 			}
 		}
-		for _, c := range prog.Children(n) {
-			walk(c)
+		for i, c := range prog.Children(n) {
+			walk(c, n, i)
 		}
 	}
-	walk(entry)
+	walk(entry, frontend.Node(nil), 0)
 	return uses
+}
+
+// skipAsTypePosition reports whether a walk that counts runtime references should
+// prune n and its subtree because n is a type-level construct the emit never lowers.
+// It fires on a type alias or interface, whose whole body renderTopLevel drops; on a
+// `typeof x` type query, the unnamed type node the parser produces for the annotation
+// in `let a: typeof o`; and on the type annotation of a declaration, the unnamed type
+// node that follows a binding's name, as the `baz` in `let baz: baz` or the `I` in
+// `var k: I`. Each names a binding only to spell a type, so counting the reference
+// would keep a binding the runtime never touches alive and leave a real local declared
+// and not used in the Go. Pruning a type position can only ever drop a reference the
+// emit does not make, so at worst it adds a harmless `_ = x` beside a real read; it
+// never hides one the emit does read.
+func skipAsTypePosition(prog *frontend.Program, n, parent frontend.Node, idx int) bool {
+	switch n.Kind() {
+	case frontend.NodeTypeAliasDeclaration, frontend.NodeInterfaceDeclaration:
+		return true
+	}
+	if isTypeQuery(prog, n) {
+		return true
+	}
+	return isDeclTypeAnnotation(n, parent, idx)
+}
+
+// isDeclTypeAnnotation reports whether n is the type-annotation child of a variable
+// declaration, parameter, or property declaration. The parser wraps a type node in an
+// unnamed node, and it also wraps a destructuring binding pattern in one, but the
+// binding target is always the first child while the annotation follows it, so an
+// unnamed child past the first is the type annotation and nothing else. An initializer
+// is a named expression, never unnamed, so it is never mistaken for the annotation.
+func isDeclTypeAnnotation(n, parent frontend.Node, idx int) bool {
+	if parent == nil || idx == 0 || n.Kind() != frontend.NodeUnknown {
+		return false
+	}
+	switch parent.Kind() {
+	case frontend.NodeVariableDeclaration, frontend.NodeParameter, frontend.NodePropertyDeclaration:
+		return true
+	}
+	return false
+}
+
+// isTypeQuery reports whether n is a `typeof x` type-query node in a type position,
+// the unnamed type node the parser produces for the annotation in `let a: typeof o`
+// or a `typeof o` operand inside a larger type. It never fires on a value-position
+// `typeof x`, which parses as a named prefix-unary expression, so a walk can drop the
+// type-level reference without touching the runtime one. The match is the unnamed
+// node whose own token range opens with the `typeof` keyword.
+func isTypeQuery(prog *frontend.Program, n frontend.Node) bool {
+	if n.Kind() != frontend.NodeUnknown {
+		return false
+	}
+	text := strings.TrimSpace(prog.Text(n))
+	return text == "typeof" || strings.HasPrefix(text, "typeof ")
 }
 
 // shorthandValueSymbol returns the outer binding an object-literal member reads when
@@ -753,8 +858,15 @@ func countBindingDecls(prog *frontend.Program, entry frontend.Node) map[frontend
 func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int {
 	uses := map[frontend.Symbol]int{}
 	prog := r.prog
-	var walk func(n, parent frontend.Node)
-	walk = func(n, parent frontend.Node) {
+	var walk func(n, parent frontend.Node, idx int)
+	walk = func(n, parent frontend.Node, idx int) {
+		// Stay in step with countBindingUses: a type position carries no runtime
+		// code, so it counts no read inside one. Crediting an elided read here that
+		// it never counted would subtract below a real binding's baseline and leave
+		// a live local unblanked.
+		if skipAsTypePosition(prog, n, parent, idx) {
+			return
+		}
 		if n.Kind() == frontend.NodeCallExpression {
 			if arg, ok := elidedObjectReceiver(r, n); ok {
 				if sym, ok := prog.SymbolAt(arg); ok {
@@ -787,12 +899,140 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 				uses[sym]++
 			}
 		}
-		for _, c := range prog.Children(n) {
-			walk(c, n)
+		for _, arg := range elidedOverriddenSpreadSources(r, n) {
+			if sym, ok := prog.SymbolAt(arg); ok {
+				uses[sym]++
+			}
+		}
+		for i, c := range prog.Children(n) {
+			walk(c, n, i)
 		}
 	}
-	walk(entry, entry)
+	walk(entry, entry, 0)
 	return uses
+}
+
+// elidedOverriddenSpreadSources reports the spread-source identifiers of an object
+// literal every one of whose fields a later member of the same literal overrides,
+// so the spread copies nothing into the emitted struct. objectLiteral resolves the
+// left-to-right override in its field map, and a source all of whose fields a later
+// member re-sets contributes no surviving src.Field to the composite literal, yet
+// the source identifier was still read once by the spread. Recording that read lets
+// bindingUnused blank the source, an ambient `declare const` among them, the
+// override orphaned. A node that is not an object literal, a spread whose source is
+// not a plain identifier, and a literal carrying a member whose field set cannot be
+// resolved statically all return nothing, keeping the match to the case it is sure
+// of, where even a stray over-count only adds a harmless _ = x beside a real read.
+func elidedOverriddenSpreadSources(r *Renderer, n frontend.Node) []frontend.Node {
+	if n.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil
+	}
+	prog := r.prog
+	members := prog.Children(n)
+	// contributed[i] is the set of Go field names member i sets, left nil when the
+	// member's fields cannot be resolved statically. A nil later member could hide a
+	// field an earlier spread's source still supplies, so it blocks claiming any
+	// earlier spread fully overridden.
+	contributed := make([]map[string]bool, len(members))
+	type spreadRef struct {
+		idx  int
+		src  frontend.Node
+		flds map[string]bool
+	}
+	var spreads []spreadRef
+	for i, p := range members {
+		if p.Kind() != frontend.NodeUnknown {
+			continue
+		}
+		kids := prog.Children(p)
+		switch len(kids) {
+		case 1:
+			if strings.HasPrefix(strings.TrimSpace(prog.Text(p)), "...") {
+				src := kids[0]
+				flds := spreadSourceFields(r, src)
+				contributed[i] = flds
+				if src.Kind() == frontend.NodeIdentifier && flds != nil {
+					spreads = append(spreads, spreadRef{idx: i, src: src, flds: flds})
+				}
+				continue
+			}
+			if f, ok := plainMemberField(r, kids[0]); ok {
+				contributed[i] = map[string]bool{f: true}
+			}
+		case 2:
+			if f, ok := plainMemberField(r, kids[0]); ok {
+				contributed[i] = map[string]bool{f: true}
+			}
+		}
+	}
+	var out []frontend.Node
+	for _, s := range spreads {
+		later := map[string]bool{}
+		unresolved := false
+		for j := s.idx + 1; j < len(members); j++ {
+			if contributed[j] == nil {
+				unresolved = true
+				break
+			}
+			for f := range contributed[j] {
+				later[f] = true
+			}
+		}
+		if unresolved {
+			continue
+		}
+		covered := true
+		for f := range s.flds {
+			if !later[f] {
+				covered = false
+				break
+			}
+		}
+		if covered {
+			out = append(out, s.src)
+		}
+	}
+	return out
+}
+
+// spreadSourceFields reports the Go field names an object spread of src copies,
+// mirroring objectSpread: the source must be a fixed-shape object, not an array,
+// with at least one static property, each of whose names is a Go identifier. It
+// returns nil when any of those fail, the same conditions under which objectSpread
+// hands the literal back rather than emit a field read.
+func spreadSourceFields(r *Renderer, src frontend.Node) map[string]bool {
+	t := r.prog.TypeAt(src)
+	if t.Flags&frontend.TypeObject == 0 {
+		return nil
+	}
+	if _, isArray := r.prog.ElementType(t); isArray {
+		return nil
+	}
+	props := r.prog.Properties(t)
+	if len(props) == 0 {
+		return nil
+	}
+	flds := map[string]bool{}
+	for _, p := range props {
+		f, ok := exportedField(p.Name)
+		if !ok {
+			return nil
+		}
+		flds[f] = true
+	}
+	return flds
+}
+
+// plainMemberField resolves the Go field name a plain object-literal member sets,
+// the same memberName then exportedField objectLiteral keys its field map on, so
+// the override check compares names the emit agrees with. It reports false for a
+// key that is not a plain property name.
+func plainMemberField(r *Renderer, keyNode frontend.Node) (string, bool) {
+	prop, ok := r.memberName(keyNode)
+	if !ok {
+		return "", false
+	}
+	return exportedField(prop)
 }
 
 // elidedTemporalStringArgs reports the bare-identifier arguments a Temporal call folds to
@@ -981,12 +1221,58 @@ func elidedTypeofOperand(r *Renderer, n frontend.Node) (frontend.Node, bool) {
 // written.
 func countWriteUses(prog *frontend.Program, entry frontend.Node) map[frontend.Symbol]int {
 	uses := map[frontend.Symbol]int{}
+	creditIdent := func(target frontend.Node) {
+		if target == nil || target.Kind() != frontend.NodeIdentifier {
+			return
+		}
+		if sym, ok := prog.SymbolAt(target); ok {
+			uses[sym]++
+		}
+	}
 	var walk func(n frontend.Node)
 	walk = func(n frontend.Node) {
-		if n.Kind() == frontend.NodeExpressionStatement {
+		switch n.Kind() {
+		case frontend.NodeExpressionStatement:
 			kids := prog.Children(n)
 			if len(kids) == 1 {
 				if sym, ok := plainAssignTarget(prog, kids[0]); ok {
+					uses[sym]++
+				}
+				// A destructuring assignment standing alone, `({ p: x } = o)` or
+				// `([a] = pair)`, writes each pattern target and discards the result, so
+				// a name it only stores into is write-only the same way a plain `x = e`
+				// is. Crediting each bare-identifier target here lets bindingUnused blank
+				// a `let x` a later pattern assignment stores into but nothing reads,
+				// which Go otherwise rejects as declared-and-not-used.
+				if lhs, ok := destructureAssignPattern(prog, kids[0]); ok {
+					var creditTargets func(p frontend.Node)
+					creditTargets = func(p frontend.Node) {
+						for _, c := range prog.Children(p) {
+							if c.Kind() == frontend.NodeIdentifier {
+								creditIdent(c)
+							} else {
+								creditTargets(c)
+							}
+						}
+					}
+					creditTargets(lhs)
+				}
+			}
+		case frontend.NodeForOfStatement, frontend.NodeForInStatement:
+			// A head that assigns each element to an existing binding, `for (v of it)`,
+			// writes v every iteration without reading it, the same write-only shape a
+			// standalone `v = e` is. A declaring head, `for (const v of it)`, is a fresh
+			// binding whose head child is a declaration list, not a bare name, so it does
+			// not match here and is not miscounted as a write of an outer v.
+			if kids := prog.Children(n); len(kids) >= 1 {
+				creditIdent(kids[0])
+			}
+		case frontend.NodeForStatement:
+			// A for loop's incrementor, `for (...; ...; n = c)`, writes n once per step and
+			// never reads it back, so a counter the loop only advances is write-only the
+			// same way a discarded assignment is.
+			if fc := prog.ForClauses(n); fc.HasIncr {
+				if sym, ok := plainAssignTarget(prog, fc.Incr); ok {
 					uses[sym]++
 				}
 			}
@@ -1013,6 +1299,35 @@ func plainAssignTarget(prog *frontend.Program, n frontend.Node) (frontend.Symbol
 		return frontend.Symbol{}, false
 	}
 	return prog.SymbolAt(kids[0])
+}
+
+// destructureAssignPattern reports the left pattern of a destructuring assignment
+// expression, `({ p: x } = o)` or `([a] = pair)`, and false for anything else. An
+// assignment target parses as an expression, so the pattern is an object or array
+// literal on the left of a `=` binary; the statement may wrap the whole thing in a
+// parenthesized expression, which an object-literal target always needs to parse as
+// an assignment rather than a block. The caller credits each bare identifier under
+// the returned pattern as a write-only target.
+func destructureAssignPattern(prog *frontend.Program, n frontend.Node) (frontend.Node, bool) {
+	if n.Kind() == frontend.NodeParenthesizedExpression {
+		kids := prog.Children(n)
+		if len(kids) == 1 {
+			return destructureAssignPattern(prog, kids[0])
+		}
+		return frontend.Node(nil), false
+	}
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return frontend.Node(nil), false
+	}
+	kids := prog.Children(n)
+	if len(kids) != 3 || strings.TrimSpace(prog.Text(kids[1])) != "=" {
+		return frontend.Node(nil), false
+	}
+	switch kids[0].Kind() {
+	case frontend.NodeObjectLiteralExpression, frontend.NodeArrayLiteralExpression:
+		return kids[0], true
+	}
+	return frontend.Node(nil), false
 }
 
 // elidedObjectReceiver reports the bare-identifier receiver of an Object static call

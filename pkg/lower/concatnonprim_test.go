@@ -1,7 +1,6 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -34,20 +33,14 @@ console.log([10, 20] + "!");
 	}
 }
 
-// TestConcatStructVarHandsBack pins the remaining boundary: a non-primitive operand
-// whose only form is a Go struct (an object-typed variable, not a literal) has no
-// box constructor yet, so it hands back rather than emitting a coercion that does
-// not exist.
-func TestConcatStructVarHandsBack(t *testing.T) {
+// TestConcatStructVarEmits pins that a non-primitive operand whose only form is a Go
+// struct (an object-typed variable, not a literal) boxes through value.ObjectFromStruct
+// and coerces with value.ToString, the same object concat protocol a literal operand
+// takes now that the struct box constructor lands.
+func TestConcatStructVarEmits(t *testing.T) {
 	const src = "function f(o: { a: number }): string { return \"x\" + o; }\nconsole.log(f({ a: 1 }));\n"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
-	}
-	if !strings.Contains(nyl.Reason, "boxing this static type") {
-		t.Errorf("hand-back reason = %q, want it to mention boxing a static type", nyl.Reason)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.ToString(value.ObjectFromStruct(o))") {
+		t.Errorf("struct concat operand did not box through ObjectFromStruct + ToString:\n%s", source)
 	}
 }

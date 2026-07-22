@@ -28,6 +28,16 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 	// (null is a distinct value, not absence), so it falls through to the general
 	// paths and hands back until the tagged sum lands.
 	if inner, ok := r.optionalInner(members); ok {
+		// An inner that itself lowers to the dynamic value.Value box already carries
+		// undefined as a first-class value, so the optional collapses to the bare box
+		// rather than value.Opt[value.Value]: wrapping it would leave a redundant present
+		// flag and force every read to unwrap the Opt before the box, which the dynamic
+		// member and element paths do not do. The empty object top type { } is the
+		// motivating case, as { } | undefined.
+		if inner.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isEmptyObjectTopType(inner) || r.isStringIndexDict(inner) {
+			r.requireImport(valuePkg)
+			return sel("value", "Value"), nil
+		}
 		elem, err := r.typeExpr(inner)
 		if err != nil {
 			return nil, err

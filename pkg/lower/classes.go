@@ -104,6 +104,16 @@ type classInfo struct {
 	// methods that satisfy value.Thrown (set by lowerThrow, read by
 	// renderClass).
 	thrownAsError bool
+	// valueUsed marks a class referenced as a value, the class object itself
+	// rather than a construction or a static-member read (a `return C` or a
+	// `const k = C`). Such a reference lowers to the class's static-side
+	// singleton, so renderClass emits the static-side struct type and its var
+	// only for a class that is actually used this way; staticGoName names that
+	// struct and staticVarName the singleton, both reserved package-uniquely the
+	// first time classValueNames is asked.
+	valueUsed     bool
+	staticGoName  string
+	staticVarName string
 }
 
 // classField is one instance field, in declaration order.
@@ -477,6 +487,7 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 		}
 	}
 	info.fields = append(paramProps, info.fields...)
+	r.disambiguateFieldGoNames(info)
 	// An abstract method is virtual by declaration: it claims its vtable slot
 	// here, before any subclass registers, so the vtable exists even when no
 	// override is in this module. Only the root may declare one; an abstract
@@ -515,6 +526,51 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 	r.classes[name] = info
 	r.classOrder = append(r.classOrder, name)
 	return nil
+}
+
+// disambiguateFieldGoNames renames an instance field whose exported Go name
+// collides with a getter, method, or setter Go name. TypeScript member names are
+// case sensitive, so a field x and a getter X are distinct properties, yet both
+// export to the Go name X, which would give the struct a field and a method of
+// the same name, a shape Go rejects. The field is the internal backing store,
+// reached only through its classField.goName, since every this.x read resolves
+// the field through lookupField and every write and the constructor fold read the
+// same goName, so renaming the field alone threads through every access without
+// touching the getter the property's public reads call. Only a field colliding
+// with this class's own non-field member is renamed; two fields sharing a Go name
+// stay a later slice, since both are storage and neither is merely a backing store
+// to move, and a field colliding with a base member keeps its existing handback,
+// which reserves the base's namespace rather than shadowing it.
+func (r *Renderer) disambiguateFieldGoNames(info *classInfo) {
+	// Names this class's own instance namespace spends on non-field members.
+	taken := map[string]bool{}
+	for _, m := range info.methods {
+		taken[m.goName] = true
+	}
+	for _, g := range info.getters {
+		taken[g.goName] = true
+	}
+	for _, s := range info.setters {
+		taken[s.goName] = true
+	}
+	// Every field's Go name, so a rename lands on a spelling no field already holds.
+	fieldNames := map[string]bool{}
+	for _, f := range info.fields {
+		fieldNames[f.goName] = true
+	}
+	for i := range info.fields {
+		f := &info.fields[i]
+		if !taken[f.goName] {
+			continue
+		}
+		delete(fieldNames, f.goName)
+		name := f.goName + "_"
+		for taken[name] || fieldNames[name] {
+			name += "_"
+		}
+		f.goName = name
+		fieldNames[name] = true
+	}
 }
 
 // checkAccessorClashes rejects a class whose accessors collide with the names
@@ -1624,6 +1680,37 @@ func (r *Renderer) classNameRef(nameNode frontend.Node) (*classInfo, bool) {
 	return nil, false
 }
 
+// classValueNames lazily assigns and returns the Go names for a class's
+// static-side type and its singleton value, the pair a bare class reference used
+// as a value lowers to. It marks the class value-used so renderClass emits the
+// pair, and it draws both names from the declaration name set so they never
+// collide with an interned struct, an enum, or another generated name. The names
+// are minted once and cached, so every use site and the class's own emission
+// agree on the spelling.
+func (r *Renderer) classValueNames(info *classInfo) (typeName, varName string) {
+	if !info.valueUsed {
+		info.valueUsed = true
+		info.staticGoName = r.decls.reserveName(info.goName + "Class")
+		info.staticVarName = r.decls.reserveName(info.goName + "ClassValue")
+	}
+	return info.staticGoName, info.staticVarName
+}
+
+// classValueExpr is the Go expression a class used as a value lowers to: the
+// class's static-side singleton.
+func (r *Renderer) classValueExpr(info *classInfo) ast.Expr {
+	_, varName := r.classValueNames(info)
+	return ident(varName)
+}
+
+// classValueType is the Go type of a class used as a value, the static side, a
+// struct distinct from the *C instance pointer so a slot typed typeof C stays
+// distinct from one typed C.
+func (r *Renderer) classValueType(info *classInfo) ast.Expr {
+	typeName, _ := r.classValueNames(info)
+	return ident(typeName)
+}
+
 // renderClasses emits the declarations of every registered class in source
 // order: the struct, the static vars, the constructor, the methods, the
 // accessors, then the static functions, the order a hand-written Go file keeps
@@ -1830,7 +1917,36 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 	if info.thrownAsError {
 		out = append(out, r.thrownMethodDecls(info)...)
 	}
+	// A class used as a value carries a static-side struct and a singleton of it,
+	// the value a bare class reference lowers to. The struct is empty this slice,
+	// which stands the class object as an assignable, identity-free token, enough
+	// for a class value that flows into a slot and is never constructed through;
+	// a class never used as a value emits neither.
+	if info.valueUsed {
+		out = append(out, r.classValueDecls(info)...)
+	}
 	return out, nil
+}
+
+// classValueDecls emits a value-used class's static-side struct type and its
+// singleton var, the pair classValueNames reserved.
+func (r *Renderer) classValueDecls(info *classInfo) []ast.Decl {
+	return []ast.Decl{
+		&ast.GenDecl{
+			Tok: token.TYPE,
+			Specs: []ast.Spec{&ast.TypeSpec{
+				Name: ident(info.staticGoName),
+				Type: &ast.StructType{Fields: &ast.FieldList{}},
+			}},
+		},
+		&ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names:  []*ast.Ident{ident(info.staticVarName)},
+				Values: []ast.Expr{&ast.CompositeLit{Type: ident(info.staticGoName)}},
+			}},
+		},
+	}
 }
 
 // staticInitName is the name of the package function a class's static
@@ -1883,7 +1999,10 @@ func (r *Renderer) staticInitFuncDecl(info *classInfo) (ast.Decl, error) {
 		if err != nil {
 			return nil, err
 		}
-		stmts = append(stmts, body.List...)
+		// Keep each static block's own Go block so its const and let
+		// declarations get the lexical scope the source gives them; two blocks
+		// each declaring the same name would otherwise redeclare in one func.
+		stmts = append(stmts, body)
 	}
 	return &ast.FuncDecl{
 		Name: ident(staticInitName(info)),
@@ -2116,6 +2235,10 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 		}
 	}
 
+	if err := r.assignParamAliases(info); err != nil {
+		return nil, err
+	}
+
 	params, err := r.ctorParamFields(info)
 	if err != nil {
 		return nil, err
@@ -2155,6 +2278,98 @@ func (r *Renderer) classCtor(info *classInfo) ([]ast.Decl, error) {
 // not fold or a defaulted parameter, hands back for want of that call-site fill. A
 // dynamic optional is fine, an omitted slot holds the undefined its value.Value
 // already models.
+// assignParamAliases renames a constructor parameter whose Go name would shadow an outer
+// binding a field initializer reads. A field initializer runs outside the constructor's
+// parameter scope, so `const x = 1; class C { p = x; constructor(x: string) {} }` reads
+// the outer x, but the emitted constructor puts a parameter x in scope that would shadow
+// the package-level x and emit Go the toolchain rejects (or, worse, silently read the
+// parameter). It scans each field initializer for a reference to a binding that is not a
+// parameter and whose Go name matches a parameter's, and gives that parameter a fresh Go
+// name recorded in paramAliases; every reference to the parameter then resolves through
+// the alias while the field initializer's reference to the outer binding stays untouched,
+// since the two carry different symbols. Only a declared constructor is handled; a
+// synthesized one passes its base parameters straight through and declares no field the
+// parameter scope shadows.
+func (r *Renderer) assignParamAliases(info *classInfo) error {
+	if info.ctor == nil {
+		return nil
+	}
+	paramSyms := map[frontend.Symbol]bool{}
+	symByGoName := map[string]frontend.Symbol{}
+	taken := map[string]bool{}
+	for _, p := range info.ctorParams {
+		nameNode := r.paramNameNode(p)
+		goName, ok := localName(r.prog.Text(nameNode))
+		if !ok {
+			continue
+		}
+		taken[goName] = true
+		if sym, ok := r.prog.SymbolAt(nameNode); ok {
+			paramSyms[sym] = true
+			symByGoName[goName] = sym
+		}
+	}
+	if len(symByGoName) == 0 {
+		return nil
+	}
+	collide := map[frontend.Symbol]bool{}
+	for _, f := range info.fields {
+		if f.init == nil {
+			continue
+		}
+		r.walkIdents(f.init, func(id frontend.Node) {
+			sym, ok := r.prog.SymbolAt(id)
+			if !ok || paramSyms[sym] || sym.Flags&frontend.SymbolProperty != 0 {
+				return
+			}
+			goName, ok := localName(sym.Name)
+			if !ok {
+				return
+			}
+			taken[goName] = true
+			if psym, ok := symByGoName[goName]; ok {
+				collide[psym] = true
+			}
+		})
+	}
+	for psym := range collide {
+		alias := freshAlias(psym.Name, taken)
+		taken[alias] = true
+		r.paramAliases[psym] = alias
+	}
+	return nil
+}
+
+// walkIdents visits every identifier node in a subtree, the scan assignParamAliases uses
+// to find a field initializer's outer references.
+func (r *Renderer) walkIdents(n frontend.Node, visit func(frontend.Node)) {
+	if n.Kind() == frontend.NodeIdentifier {
+		visit(n)
+	}
+	for _, c := range r.prog.Children(n) {
+		r.walkIdents(c, visit)
+	}
+}
+
+// freshAlias returns a Go name derived from base that is not already taken, appending an
+// underscore and, if that is taken too, a numeric suffix.
+func freshAlias(base string, taken map[string]bool) string {
+	name, ok := localName(base)
+	if !ok {
+		name = base
+	}
+	cand := name + "_"
+	if !taken[cand] {
+		return cand
+	}
+	for i := 2; ; i++ {
+		next := name + "_" + itoa(i)
+		if !taken[next] {
+			return next
+		}
+	}
+}
+
 func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 	var sig frontend.Signature
 	haveSig := false
@@ -2169,6 +2384,11 @@ func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 		pname, ok := localName(r.prog.Text(nameNode))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "constructor parameter name is not a Go identifier"}
+		}
+		if sym, ok := r.prog.SymbolAt(nameNode); ok {
+			if alias, ok := r.paramAliases[sym]; ok {
+				pname = alias
+			}
 		}
 		pt := r.prog.TypeAt(nameNode)
 		if haveSig && i >= sig.MinArgs && pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 && !r.optParams[pname] {
@@ -2372,6 +2592,21 @@ func (r *Renderer) superCtorArgs(info *classInfo) ([]ast.Expr, error) {
 // because a pure expression's evaluation cannot be observed out of order or
 // skipped. Anything else reports ok=false and the general form runs.
 func (r *Renderer) ctorCompositeFold(info *classInfo) (ast.Expr, bool, error) {
+	// A super() argument that captures the instance, an arrow closing over `this`
+	// passed into the base constructor, reads the receiver the folded one-line
+	// literal has not bound: the fold emits a bare `return &B{A: *NewA(arg)}` with
+	// no receiver in scope for the arrow's `this` to lower against. The general form
+	// binds the receiver before it lowers the super arguments, so decline the fold
+	// and let it run, where the captured `this` reaches the receiver already
+	// allocated. TypeScript allows this capture since the arrow only closes over
+	// `this` lazily and does not read it before the base constructor returns.
+	if info.base != nil {
+		for _, a := range info.superArgs {
+			if subtreeHasKind(r.prog, a, frontend.NodeThisKeyword) {
+				return nil, false, nil
+			}
+		}
+	}
 	values := map[string]frontend.Node{}
 	for _, f := range info.fields {
 		if f.init == nil {
@@ -2574,6 +2809,18 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	if len(binds) != 0 {
 		body.List = append(binds, body.List...)
 	}
+	// A method body that can fall off its end with a dynamic return type runs the
+	// same implicit return undefined a top-level function does, which funcDeclNamed
+	// appends but this path did not, so a method whose Go return type is the value
+	// slot emitted no trailing return and did not compile. The append reuses the
+	// shared helper, which fires only for an any or unknown return and a body that
+	// does not already terminate, so a static or already-returning method is untouched.
+	var bodyStmts []frontend.Node
+	if block, ok := r.funcBodyBlock(m.node); ok {
+		bodyStmts = r.prog.Children(block)
+	}
+	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	r.endThrowTerminatedBody(body, bodyStmts, results)
 	return &ast.FuncDecl{
 		Recv: &ast.FieldList{List: []*ast.Field{{
 			Names: []*ast.Ident{ident(info.recv)},

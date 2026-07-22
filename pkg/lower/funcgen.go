@@ -294,6 +294,7 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 		body.List = append([]ast.Stmt{argsMat}, body.List...)
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	r.endThrowTerminatedBody(body, bodyStmts, results)
 
 	return &ast.FuncDecl{
 		Name: ident(name),
@@ -314,11 +315,69 @@ func (r *Renderer) endWithImplicitUndefinedReturn(body *ast.BlockStmt, bodyStmts
 	if body == nil || r.bodyTerminates(bodyStmts) {
 		return
 	}
-	if ret.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+	if ret.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		r.requireImport(valuePkg)
+		body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
 		return
 	}
-	r.requireImport(valuePkg)
-	body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}})
+	// A T | undefined return lowers to a value.Opt[T] slot, the only static return the
+	// checker lets a body fall through under, since fall-through yields undefined and
+	// the type has to admit it. The absent value is value.None[T](), the same None an
+	// explicit `return undefined` produces for that slot, so the trailing return closes
+	// the Go gap without changing what a returning path fills.
+	if r.isOptionalType(ret) {
+		if inner, ok := r.optionalInner(r.prog.UnionMembers(ret)); ok {
+			none, err := r.noneOf(inner)
+			if err == nil {
+				body.List = append(body.List, &ast.ReturnStmt{Results: []ast.Expr{none}})
+			}
+		}
+	}
+}
+
+// endThrowTerminatedBody appends the panic a Go function needs when its body always
+// terminates yet its final Go statement is not one Go accepts as terminating. A
+// JavaScript body that ends by throwing lowers to a value.Throw call, an ordinary
+// call as far as Go is concerned rather than a diverging one, so a value-returning
+// function or method whose last statement is a throw compiled to a missing return.
+// The panic is planted only when the checker proved the body always terminates and
+// the Go tail does not, so it sits on genuinely unreachable ground, the same marker
+// unreachablePanic plants under an exhaustive switch default. A void function needs
+// no terminator, so an empty result list is left alone.
+func (r *Renderer) endThrowTerminatedBody(body *ast.BlockStmt, bodyStmts []frontend.Node, results *ast.FieldList) {
+	if body == nil || results == nil || len(results.List) == 0 {
+		return
+	}
+	if !r.bodyTerminates(bodyStmts) {
+		return
+	}
+	if len(body.List) != 0 && goStmtTerminates(body.List[len(body.List)-1]) {
+		return
+	}
+	body.List = append(body.List, unreachablePanic())
+}
+
+// goStmtTerminates reports whether a Go statement is one the compiler accepts as a
+// function's terminating statement, over the subset the emitter produces: a return, a
+// branch, a panic call, or a block or complete if whose relevant arms all terminate.
+// It is deliberately narrow, a tail that is anything else reads as falling through so
+// endThrowTerminatedBody adds a terminator rather than assume one.
+func goStmtTerminates(s ast.Stmt) bool {
+	switch st := s.(type) {
+	case *ast.ReturnStmt, *ast.BranchStmt:
+		return true
+	case *ast.ExprStmt:
+		if call, ok := st.X.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "panic" {
+				return true
+			}
+		}
+	case *ast.BlockStmt:
+		return len(st.List) != 0 && goStmtTerminates(st.List[len(st.List)-1])
+	case *ast.IfStmt:
+		return st.Else != nil && goStmtTerminates(st.Body) && goStmtTerminates(st.Else)
+	}
+	return false
 }
 
 // paramFields lowers each parameter to a Go field with its lowered type. An
@@ -960,6 +1019,21 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: ptype})
 		pi++
 	}
+	// A literal that declares fewer parameters than its callback slot grows the slot's
+	// trailing parameters as blank-named fields, so the emitted func type matches the
+	// slot exactly. lowerArgAt recorded them off the slot's call signature; each renders
+	// through the same typeExpr the slot's own func type uses, so an optional slot
+	// parameter folded to T | undefined pads as the value.Opt[T] the slot carries. The
+	// name is blank because the source function never reads the argument it ignores, and
+	// blank keeps the padded field named alongside the literal's own named parameters,
+	// which Go requires a func literal's parameter list to be uniformly.
+	for _, p := range r.closurePadParams[n] {
+		ptype, err := r.typeExpr(p.Type)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, &ast.Field{Names: []*ast.Ident{ident("_")}, Type: ptype})
+	}
 	return fields, nil
 }
 
@@ -1081,13 +1155,15 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 		// entry against the value the property holds, the same read-into-a-temp step a
 		// nested declaration element takes.
 		if source, sub, ok := r.objectNestedElem(el); ok {
-			prop := r.prog.Text(source)
-			srcName, nok := localName(prop)
+			prop := strings.TrimSpace(r.prog.Text(source))
 			pt, known := propType[prop]
-			if !nok || !known {
+			if !known {
 				return nil, &NotYetLowerable{Reason: "a nested object-pattern parameter over an unknown property is a later slice"}
 			}
-			field, fok := exportedField(srcName)
+			// exportedField names the field the way internStruct does; localName in
+			// between would reserve an emitter-package name and read a `Value_` field the
+			// struct never declares for a property named `value`.
+			field, fok := exportedField(prop)
 			if !fok {
 				return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
 			}
@@ -1105,11 +1181,7 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 			return nil, err
 		}
 		prop := r.elemSourceProp(info)
-		srcName, ok := localName(prop)
-		if !ok {
-			return nil, &NotYetLowerable{Reason: "a destructured parameter name is not a Go identifier"}
-		}
-		field, ok := exportedField(srcName)
+		field, ok := exportedField(prop)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a destructured parameter property is not a Go field name"}
 		}
@@ -1134,7 +1206,15 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, r.defaultFillStmts(name, nameGo, read, def)...)
+			// An optional narrowable-box field ({} or a string-index dictionary) collapses
+			// its optional into a bare value.Value rather than a value.Opt, so its present
+			// branch takes the read directly; the Opt peel defaultFillStmts emits would call
+			// the two-argument property getter with no arguments and not build.
+			if r.isNarrowableBoxType(propType[prop]) {
+				out = append(out, r.defaultFillBoxStmts(name, nameGo, read, def)...)
+			} else {
+				out = append(out, r.defaultFillStmts(name, nameGo, read, def)...)
+			}
 			out = r.blankUnusedParamBinding(out, info.bindNode, name)
 			continue
 		}
@@ -1552,6 +1632,12 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	}
 	r.closureDepth++
 	defer func() { r.closureDepth-- }()
+	// A contextual return type set by the slot this arrow flows into applies to this
+	// arrow alone; take it and clear the field before the body lowers, so a nested arrow
+	// in the body does not inherit it. It is consulted only on the concise-body path
+	// below, the shape the union-of-call-signatures slot reaches.
+	ctxRet := r.pendingArrowRet
+	r.pendingArrowRet = nil
 	kids := r.prog.Children(n)
 	if len(kids) < 2 {
 		return nil, &NotYetLowerable{Reason: "arrow function did not expose parameters and a body"}
@@ -1616,7 +1702,30 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 			Body: &ast.BlockStmt{List: append(binds, &ast.ExprStmt{X: call})},
 		}, nil
 	}
-	retType, err := r.typeExpr(bodyType)
+	// A contextual return type wider than the body's own coerces the body into it and
+	// spells the func literal's result at the slot's type, so an arrow whose body is a
+	// string assigned to a slot returning string | number returns the NumOrStr union its
+	// sibling assignment also returns. The body coerces through the same union wrap an
+	// argument crossing into the slot would take. Without a contextual type the arrow
+	// keeps returning its body's own inferred type, every arrow lowered so far.
+	if ctxRet != nil {
+		retType, err := r.typeExpr(*ctxRet)
+		if err != nil {
+			return nil, err
+		}
+		coerced, err := r.coerceToType(loweredBody, body, *ctxRet)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{List: fields},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+			},
+			Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{coerced}})},
+		}, nil
+	}
+	retType, err := r.conciseResultType(body, bodyType)
 	if err != nil {
 		return nil, err
 	}
@@ -1627,6 +1736,95 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		},
 		Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{loweredBody}})},
 	}, nil
+}
+
+// contextualArrowRet reports the return type a concise arrow should adopt from the
+// function slot it flows into, when that slot's return type is wider than the arrow's
+// own body type. A union of interfaces whose call signatures agree on parameters but
+// differ on return types has a single call signature whose return is the union of
+// those returns (contextualTypeWithUnionTypeCallSignatures); an arrow assigned to such
+// a slot must return that union so a sibling assignment returning the other arm fits
+// the same variable. It applies only to a concise, non-async arrow whose slot has one
+// plain call signature (no overloads, no properties) with a return type that lowers to
+// a different Go type than the body's own, so an arrow whose body already matches the
+// slot, and every arrow with no such slot, is untouched.
+func (r *Renderer) contextualArrowRet(target frontend.Type, arrow frontend.Node) (frontend.Type, bool) {
+	if arrow.Kind() != frontend.NodeArrowFunction || r.isAsyncFunc(arrow) {
+		return frontend.Type{}, false
+	}
+	kids := r.prog.Children(arrow)
+	if len(kids) < 2 || kids[len(kids)-1].Kind() == frontend.NodeBlock {
+		return frontend.Type{}, false
+	}
+	sig, ok := r.plainFuncSignature(target)
+	if !ok {
+		return frontend.Type{}, false
+	}
+	body := kids[len(kids)-1]
+	if isVoidReturn(r.prog.TypeAt(body)) || isVoidReturn(sig.Return) {
+		return frontend.Type{}, false
+	}
+	// The slot's signature must be one the arrow was actually typed at: its parameters
+	// have to match the arrow's own. A union whose members' call signatures differ on
+	// parameters (not just return types) still yields a signature, but with parameters
+	// that are the intersection of the members' (number & string collapses to never),
+	// which the arrow was not typed at; TypeScript types such an arrow's parameter any
+	// instead, so adopting the slot's return here would coerce a body the arrow never
+	// returns at. Comparing the arrow's own signature parameters to the slot's rejects
+	// that case and keeps this to the identical-parameters union the rule covers.
+	own, ok := r.prog.SignatureAt(arrow)
+	if !ok || len(own.Params) != len(sig.Params) {
+		return frontend.Type{}, false
+	}
+	for i := range own.Params {
+		// The parameters must agree by checker type, not just by lowered Go type: a
+		// never parameter (the collapsed intersection of mismatched member parameters)
+		// and an any parameter both lower to value.Value, so a Go-type compare alone
+		// would accept the never-parameter union this rule must reject. The flag compare
+		// separates them; the Go-type compare then rejects two distinct object parameters
+		// that happen to share the object flag.
+		if own.Params[i].Type.Flags != sig.Params[i].Type.Flags {
+			return frontend.Type{}, false
+		}
+		ownGo, err := r.typeExpr(own.Params[i].Type)
+		if err != nil {
+			return frontend.Type{}, false
+		}
+		slotParamGo, err := r.typeExpr(sig.Params[i].Type)
+		if err != nil {
+			return frontend.Type{}, false
+		}
+		if same, err := sameGoType(ownGo, slotParamGo); err != nil || !same {
+			return frontend.Type{}, false
+		}
+	}
+	slotGo, err := r.typeExpr(sig.Return)
+	if err != nil {
+		return frontend.Type{}, false
+	}
+	bodyGo, err := r.typeExpr(r.prog.TypeAt(body))
+	if err != nil {
+		return frontend.Type{}, false
+	}
+	if same, err := sameGoType(slotGo, bodyGo); err != nil || same {
+		return frontend.Type{}, false
+	}
+	return sig.Return, true
+}
+
+// conciseResultType is the Go result type of a concise arrow whose body is the
+// expression node. It is the body's checker type through typeExpr, except a body
+// that is a class used as a value, whose type the checker gives the class's own
+// type indistinguishable from the instance type, takes the class's static-side
+// struct so the arrow returns the static singleton's type rather than the *C
+// instance pointer the plain type path would emit.
+func (r *Renderer) conciseResultType(body frontend.Node, bodyType frontend.Type) (ast.Expr, error) {
+	if body.Kind() == frontend.NodeIdentifier {
+		if info, ok := r.classNameRef(body); ok {
+			return r.classValueType(info), nil
+		}
+	}
+	return r.typeExpr(bodyType)
 }
 
 // arrowResultType is the Go type an arrow returns, wherever a caller needs it
@@ -1740,6 +1938,7 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 		return nil, err
 	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
+	r.endThrowTerminatedBody(body, bodyStmts, results)
 	// A destructured parameter reads its bound names out of the synthesized field at
 	// body entry, the same entry bindings the top-level function path injects; nil when
 	// no parameter destructures, so a plain closure body is untouched.

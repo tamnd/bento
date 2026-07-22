@@ -86,6 +86,36 @@ func OptMap[T, U any](o Opt[T], f func(T) U) Opt[U] {
 	return None[U]()
 }
 
+// ToOptNumber coerces a dynamic Value into an optional number, the unboxing a
+// value.Value flowing into a number | undefined slot needs: undefined stays the empty
+// optional, and any other value coerces through ToNumber the way a bare number slot
+// does. It is the dynamic-to-optional mirror of ToNumber, used when a boxed member read
+// off a { } value narrowed by a type guard returns into an optional primitive slot.
+func ToOptNumber(v Value) Opt[float64] {
+	if v.IsUndefined() {
+		return None[float64]()
+	}
+	return Some(ToNumber(v))
+}
+
+// ToOptString coerces a dynamic Value into an optional string, undefined to the empty
+// optional and any other value through ToString. See ToOptNumber.
+func ToOptString(v Value) Opt[BStr] {
+	if v.IsUndefined() {
+		return None[BStr]()
+	}
+	return Some(ToString(v))
+}
+
+// ToOptBoolean coerces a dynamic Value into an optional boolean, undefined to the empty
+// optional and any other value through ToBoolean. See ToOptNumber.
+func ToOptBoolean(v Value) Opt[bool] {
+	if v.IsUndefined() {
+		return None[bool]()
+	}
+	return Some(ToBoolean(v))
+}
+
 // OptToValue boxes an optional into the dynamic Value the language sees when a
 // T | undefined result flows into an any slot, the lowering of an optional passed
 // where a boxed value is wanted (console.log of an array's at or pop, a member read

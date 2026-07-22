@@ -21,8 +21,6 @@ type ObjANested struct {
 type ObjB struct {
 	B float64 `json:"b"`
 }
-type ObjEmpty struct {
-}
 
 func main() {
 	obj := &ObjABC{A: 1, B: value.NewArray[float64](2, 3), C: &ObjD{D: 4}}
@@ -31,6 +29,6 @@ func main() {
 	value.ConsoleLog(value.JSONStringifyIndentNum(arr, 2))
 	tab := &ObjANested{A: 1, Nested: &ObjB{B: 2}}
 	value.ConsoleLog(value.JSONStringifyIndentStr(tab, value.FromGoString("\t")))
-	empty := &ObjEmpty{}
+	empty := value.NewObject()
 	value.ConsoleLog(value.JSONStringifyIndentNum(empty, 4))
 }

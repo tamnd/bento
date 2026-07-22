@@ -30,6 +30,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		} else if handled {
 			return expr, nil
 		}
+		// A compile-time namespace binding (a composed module's import * as m, or the
+		// awaited static dynamic import const m = await import("./mod")) carries no
+		// runtime value: member reads resolve to the sibling's package-level Go names and
+		// the declaration lowers to nothing. Reaching a bare identifier read here means the
+		// namespace is used as a whole value (returned, passed on), which has no Go object
+		// to stand for, so it hands back rather than name an undeclared m. The member path
+		// intercepts m.x before this point, so only the value use lands here.
+		if name := r.prog.Text(n); r.internalNamespaces[name] || r.dynImportNamespaces[name] {
+			return nil, &NotYetLowerable{Reason: "a module namespace used as a whole value is a later slice"}
+		}
 		// A bare reference to a top-level function used as a value (passed as a
 		// callback, stored in a variable) is the function itself, so it lowers to the
 		// exported Go name its declaration takes, the same name a direct call uses. It
@@ -45,6 +55,12 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// binding.
 		if sym, ok := r.prog.SymbolAt(n); ok && r.derefAlias(sym).Flags&frontend.SymbolFunction != 0 {
 			sym = r.derefAlias(sym)
+			// A nested function declaration bound to a Go local reads by that local
+			// name, the same routing the call path takes; capitalizing its source name
+			// below would emit the top-level exported spelling the local never took.
+			if goName, ok := r.funcExprSelf[sym]; ok {
+				return ident(goName), nil
+			}
 			// An ambient global function used as a value (eval, parseInt, isNaN) is not a
 			// user binding and has no generated Go function behind its exported name. The
 			// call path lowers the globals bento models and hands the rest back; a bare
@@ -114,9 +130,37 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if _, isErrCtor := r.errorConstructorRef(n); !isErrCtor && r.isAmbientGlobal(n) {
 			return nil, &NotYetLowerable{Reason: "the ambient global " + r.prog.Text(n) + " read as a value is a later slice"}
 		}
+		// A bare reference to a registered enum used as a value (var x = e) reifies the
+		// enum object as a composite literal of its interned Go struct, since the enum
+		// name has no plain local slot behind it. A member read E.M was intercepted on
+		// the member path, so only a whole-enum value reference reaches here.
+		if expr, handled, err := r.enumValueRef(n); err != nil {
+			return nil, err
+		} else if handled {
+			return expr, nil
+		}
+		// A bare reference to a class used as a value, the class object itself rather
+		// than a construction or a static-member read, lowers to the class's
+		// static-side singleton. new C() is lowered on the new path, a static access
+		// C.m or C.x on the member path through classKeyRead, and instanceof, extends,
+		// and a throw each ask classNameRef before the receiver would lower, so only a
+		// whole-class value reference, a `return C` or a `const k = C`, reaches here.
+		if info, ok := r.classNameRef(n); ok {
+			return r.classValueExpr(info), nil
+		}
 		name, ok := localName(r.prog.Text(n))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "identifier is not a Go identifier"}
+		}
+		// A constructor parameter whose Go name would shadow an outer binding a field
+		// initializer reads is renamed, so a reference to that parameter (a parameter
+		// property store, a read in the constructor body) resolves to the renamed name.
+		// The keyed symbol is the parameter's own, so a same-named reference to the outer
+		// binding, which carries a different symbol, is untouched and reads the outer name.
+		if sym, ok := r.prog.SymbolAt(n); ok {
+			if alias, ok := r.paramAliases[sym]; ok {
+				return ident(alias), nil
+			}
 		}
 		// A catch binding used as a plain value, not through one of the typed reads
 		// the paths above intercept (.message, .name, .constructor, instanceof,
@@ -322,6 +366,26 @@ func (r *Renderer) castExpr(n frontend.Node, innerIdx int) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "cast expression did not expose an inner expression"}
 	}
 	inner := kids[innerIdx]
+	// An object literal asserted to a fixed shape, `<{ id: number }>({})` or `({}) as
+	// { id: number }`, builds at the asserted shape rather than the literal's own
+	// fresh type, which would intern a different Go struct the coercion below cannot
+	// bridge. The assertion trusts the literal for the shape, so a required field the
+	// literal omits is zero-filled by Go. Parentheses the assertion source carries are
+	// seen through to reach the literal.
+	lit := inner
+	for lit.Kind() == frontend.NodeParenthesizedExpression {
+		if kids := r.prog.Children(lit); len(kids) == 1 {
+			lit = kids[0]
+		} else {
+			break
+		}
+	}
+	if lit.Kind() == frontend.NodeObjectLiteralExpression {
+		target := r.prog.TypeAt(n)
+		if r.isPlainShape(target) {
+			return r.objectLiteralContextualFill(lit, target, true)
+		}
+	}
 	expr, err := r.lowerExpr(inner)
 	if err != nil {
 		return nil, err
@@ -721,7 +785,7 @@ func (r *Renderer) binaryExpr(n frontend.Node) (ast.Expr, error) {
 		if left.Kind() == frontend.NodeElementAccessExpression {
 			return r.assignValueElement(n, left, right)
 		}
-		return r.assignValue(left, right)
+		return r.assignValue(n, left, right)
 	}
 	if opText == "," {
 		return r.commaValue(n, left, right)
@@ -858,10 +922,10 @@ func isSourceAssignOp(op string) bool {
 // lowers to a selector lvalue and a setter, dynamic receiver, or element access
 // hands back. A chained a = b = 5 falls out for free: the inner assignment is the
 // right operand of the outer, so it lowers through this same path.
-func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
+func (r *Renderer) assignValue(n, left, right frontend.Node) (ast.Expr, error) {
 	switch left.Kind() {
 	case frontend.NodeIdentifier:
-		return r.assignValueLocal(left, right)
+		return r.assignValueLocal(n, left, right)
 	case frontend.NodePropertyAccessExpression:
 		return r.assignValueProperty(left, right)
 	default:
@@ -876,7 +940,7 @@ func (r *Renderer) assignValue(left, right frontend.Node) (ast.Expr, error) {
 // initializer, narrowed on read) has a boxed slot the narrowed type would not
 // name, so both hand back to a later slice; a plain number, string, or boolean
 // local passes through.
-func (r *Renderer) assignValueLocal(left, right frontend.Node) (ast.Expr, error) {
+func (r *Renderer) assignValueLocal(n, left, right frontend.Node) (ast.Expr, error) {
 	// An assignment-as-value into an ambient global (const r = (NaN = 12)) has no
 	// user slot to store into and would name an undefined Go symbol; the statement
 	// path hands the same shape back, so mirror it here rather than emit bad Go.
@@ -893,23 +957,60 @@ func (r *Renderer) assignValueLocal(left, right frontend.Node) (ast.Expr, error)
 	if r.isDynamic(left) || r.localStorageDynamic(left) {
 		return nil, &NotYetLowerable{Reason: "assignment value on a dynamic or narrowed-storage local is a later slice"}
 	}
-	retType, err := r.typeExpr(r.prog.TypeAt(left))
-	if err != nil {
-		return nil, err
-	}
+	// JavaScript's assignment expression evaluates to the assigned value, whose type
+	// is the assignment node's own type, not the slot it writes. When the slot is
+	// wider than the assigned value (a string flowing into a string | undefined
+	// local, as in d ?? (d = x ?? "x")) the value the closure yields is the narrow
+	// string while the slot stores the widened form, so returning the slot variable
+	// would yield the wrong Go type. In that widening case a temp carries the narrow
+	// assigned value and the slot receives it widened, so the stored value and the
+	// returned value stay the same object under their two types. When the assignment
+	// type and the slot lower to the same Go type the two coincide, so the plain
+	// assign-then-return the value form has always emitted still holds.
+	slotType := r.prog.TypeAt(left)
+	valTS := r.prog.TypeAt(n)
 	rhs, err := r.lowerExpr(right)
 	if err != nil {
 		return nil, err
 	}
-	rhs, err = r.coerceToTarget(rhs, right, left)
+	if !r.mismatchedLoweredType(valTS, slotType) {
+		retType, err := r.typeExpr(slotType)
+		if err != nil {
+			return nil, err
+		}
+		stored, err := r.coerceToTarget(rhs, right, left)
+		if err != nil {
+			return nil, err
+		}
+		body := []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{stored}},
+			&ast.ReturnStmt{Results: []ast.Expr{ident(name)}},
+		}
+		return r.valueClosure(retType, body), nil
+	}
+	valType, err := r.typeExpr(valTS)
+	if err != nil {
+		return nil, err
+	}
+	val, err := r.coerceToTarget(rhs, right, n)
+	if err != nil {
+		return nil, err
+	}
+	tmp := r.freshTemp()
+	stored, err := r.coerceToTarget(ident(tmp), n, left)
 	if err != nil {
 		return nil, err
 	}
 	body := []ast.Stmt{
-		&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{rhs}},
-		&ast.ReturnStmt{Results: []ast.Expr{ident(name)}},
+		&ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+			Names:  []*ast.Ident{ident(tmp)},
+			Type:   valType,
+			Values: []ast.Expr{val},
+		}}}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{stored}},
+		&ast.ReturnStmt{Results: []ast.Expr{ident(tmp)}},
 	}
-	return r.valueClosure(retType, body), nil
+	return r.valueClosure(valType, body), nil
 }
 
 // assignValueProperty lowers an assignment-as-value whose target is a property.

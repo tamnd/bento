@@ -325,6 +325,27 @@ func (r *Renderer) bodyTerminates(stmts []frontend.Node) bool {
 	if len(stmts) == 0 {
 		return false
 	}
+	// An unconditional return or throw anywhere in the list ends control flow, so
+	// every statement past it is unreachable: TypeScript still emits that dead tail
+	// (a hoisted `var` after a throw), and looking only at the last statement would
+	// miss the throw and read the body as falling through. Scanning the top level
+	// catches it, and the trailing branch and block checks below still handle a body
+	// whose terminator is its final if or switch rather than a bare return or throw.
+	for _, s := range stmts {
+		switch s.Kind() {
+		case frontend.NodeReturnStatement, frontend.NodeThrowStatement:
+			return true
+		case frontend.NodeSwitchStatement:
+			// An exhaustive switch whose every clause returns or throws cannot complete
+			// normally, so like a return or throw it makes the rest of the list dead. The
+			// checker still emits that dead tail (the `x;` after a switch over typeof x that
+			// covers every case), and reading only the last statement would miss the switch
+			// and read the body as falling through.
+			if r.switchDiverges(s) {
+				return true
+			}
+		}
+	}
 	last := stmts[len(stmts)-1]
 	if _, ok := r.lowerBranch(last); ok {
 		return true
@@ -334,9 +355,63 @@ func (r *Renderer) bodyTerminates(stmts []frontend.Node) bool {
 		return true
 	case frontend.NodeBlock:
 		return r.bodyTerminates(r.prog.Children(last))
+	case frontend.NodeTryStatement:
+		return r.tryTerminates(last)
 	default:
 		return false
 	}
+}
+
+// tryTerminates reports whether a try statement cannot fall through to the code
+// after it. A finally block that always terminates runs on every exit path and
+// never falls through, so the whole try terminates however the protected body
+// exits. With no terminating finally, the try terminates only when the protected
+// block terminates and every catch does too, so no path reaches the end. The
+// checker uses the same reasoning to prove a `finally { return }` body exhaustive,
+// which lowers to an `if done { return ret }` tail Go does not accept as terminating,
+// so recognizing it here lets endThrowTerminatedBody plant the unreachable panic.
+func (r *Renderer) tryTerminates(n frontend.Node) bool {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeBlock {
+		return false
+	}
+	tryBlock := kids[0]
+	var catchClause, finallyBlock frontend.Node
+	var hasCatch, hasFinally bool
+	for _, k := range kids[1:] {
+		if k.Kind() == frontend.NodeBlock {
+			finallyBlock, hasFinally = k, true
+		} else {
+			catchClause, hasCatch = k, true
+		}
+	}
+	if hasFinally && r.bodyTerminates(r.prog.Children(finallyBlock)) {
+		return true
+	}
+	if !r.bodyTerminates(r.prog.Children(tryBlock)) {
+		return false
+	}
+	if hasCatch {
+		catchBlock, ok := r.catchClauseBlock(catchClause)
+		if !ok || !r.bodyTerminates(r.prog.Children(catchBlock)) {
+			return false
+		}
+	}
+	return true
+}
+
+// catchClauseBlock returns the block body of a catch clause, `catch (e) { ... }`,
+// the last block child past its optional binding. It reports false for a clause that
+// exposes no block, so a caller reading it for termination treats the missing body as
+// falling through rather than assume it terminates.
+func (r *Renderer) catchClauseBlock(clause frontend.Node) (frontend.Node, bool) {
+	kids := r.prog.Children(clause)
+	for i := len(kids) - 1; i >= 0; i-- {
+		if kids[i].Kind() == frontend.NodeBlock {
+			return kids[i], true
+		}
+	}
+	return frontend.Node(nil), false
 }
 
 // isBreakStatement reports whether a statement is a bare break. The frontend does
@@ -349,4 +424,120 @@ func (r *Renderer) isBreakStatement(n frontend.Node) bool {
 	}
 	text := strings.TrimSpace(r.prog.Text(n))
 	return text == "break;" || text == "break"
+}
+
+// isContinueStatement reports whether a statement is a bare continue, read the same
+// text-and-shape way isBreakStatement reads a break. A continue leaves the enclosing
+// switch to jump to its loop, so recognizing it keeps a clause that continues from
+// counting as one that diverges.
+func (r *Renderer) isContinueStatement(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeUnknown {
+		return false
+	}
+	text := strings.TrimSpace(r.prog.Text(n))
+	return text == "continue;" || text == "continue"
+}
+
+// typeofResultStrings is the complete set of strings the typeof operator yields, so a
+// switch over typeof x whose case labels cover all of them can match nothing else and
+// its fall-out is unreachable, the exhaustiveness the checker proves for it.
+var typeofResultStrings = []string{
+	"string", "number", "bigint", "boolean", "symbol", "undefined", "object", "function",
+}
+
+// switchDiverges reports whether a switch statement cannot complete normally: it is
+// exhaustive and every clause diverges by returning or throwing rather than breaking
+// out. TypeScript types the fall-out of such a switch as never, so a function may end
+// in it, or in the unreachable code the checker still emits after it, with no trailing
+// return; recognizing it lets endThrowTerminatedBody plant the unreachable panic Go
+// needs. A default clause makes a switch exhaustive, and so does a switch over typeof x
+// whose labels cover every string typeof can yield.
+func (r *Renderer) switchDiverges(n frontend.Node) bool {
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return false
+	}
+	disc, caseBlock := kids[0], kids[1]
+	clauses := r.prog.Children(caseBlock)
+	if len(clauses) == 0 {
+		return false
+	}
+	for _, c := range clauses {
+		if !r.clauseDiverges(c) {
+			return false
+		}
+	}
+	if r.hasDefaultClause(clauses) {
+		return true
+	}
+	return r.typeofSwitchExhaustive(disc, clauses)
+}
+
+// clauseDiverges reports whether one switch clause cannot complete normally. Its body
+// must terminate, and no break or continue in it may target the switch, since either
+// leaves the switch on a path that reaches the code after. An empty clause shares the
+// next clause's body rather than diverge on its own, so it reports false and holds the
+// whole switch back from reading as exhaustive-terminating.
+func (r *Renderer) clauseDiverges(clause frontend.Node) bool {
+	_, stmts := r.splitCaseClause(clause, r.isDefaultClause(clause))
+	if len(stmts) == 0 {
+		return false
+	}
+	if r.clauseBreaksOut(clause) {
+		return false
+	}
+	return r.bodyTerminates(stmts)
+}
+
+// clauseBreaksOut reports whether the subtree carries a break or continue that targets
+// the switch this clause belongs to. The walk stops at a nested loop, switch, or
+// function, whose own break or continue binds to that inner construct rather than the
+// outer switch, so only a jump that would leave this switch counts. A do/while carries
+// no distinct node here, so a break inside one is treated as targeting the switch: a
+// false positive that only makes the analysis more conservative, never less sound.
+func (r *Renderer) clauseBreaksOut(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeForStatement, frontend.NodeForOfStatement, frontend.NodeForInStatement,
+		frontend.NodeWhileStatement, frontend.NodeSwitchStatement,
+		frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction:
+		return false
+	}
+	if r.isBreakStatement(n) || r.isContinueStatement(n) {
+		return true
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.clauseBreaksOut(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// typeofSwitchExhaustive reports whether a default-less switch over typeof x covers
+// every string typeof can yield, which makes it exhaustive: no runtime value produces a
+// typeof result outside the eight, so a switch that names all eight leaves nothing to
+// fall through. A discriminant that is not a typeof, or a label set that misses one of
+// the eight, is not proven exhaustive and reports false.
+func (r *Renderer) typeofSwitchExhaustive(disc frontend.Node, clauses []frontend.Node) bool {
+	if !r.isTypeofExpr(r.unwrapParens(disc)) {
+		return false
+	}
+	covered := map[string]bool{}
+	for _, c := range clauses {
+		if r.isDefaultClause(c) {
+			continue
+		}
+		exprs, _ := r.splitCaseClause(c, false)
+		for _, e := range exprs {
+			if lit, ok := r.stringLiteralValue(e); ok {
+				covered[lit] = true
+			}
+		}
+	}
+	for _, s := range typeofResultStrings {
+		if !covered[s] {
+			return false
+		}
+	}
+	return true
 }

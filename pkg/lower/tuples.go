@@ -338,6 +338,109 @@ func (r *Renderer) tupleLiteralAt(n frontend.Node, t frontend.Type, elems []fron
 	return &ast.CompositeLit{Type: ident(name), Elts: elts}, nil
 }
 
+// tupleArrayMethodCall lowers an array method borrowed on a tuple receiver. A tuple
+// is an array subtype in TypeScript, so numTuple.map(f) is legal even though the
+// tuple's Go representation is a positional struct that carries no such method. The
+// tuple is materialized as a value.Array over its element union (the checker's
+// numeric index type) and the array method dispatches on that materialized array.
+// handled is false for a method this slice does not cover, so the caller falls
+// through to its existing dispatch rather than mislower a method the tuple path does
+// not host.
+func (r *Renderer) tupleArrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node, elems []frontend.TupleElem) (ast.Expr, bool, error) {
+	switch method {
+	case "map":
+		e, err := r.tupleMapCall(recvNode, argNodes, elems)
+		return e, true, err
+	default:
+		return nil, false, nil
+	}
+}
+
+// tupleMapCall lowers tuple.map(cb) to value.MapArray over the array the tuple
+// materializes to. map always builds a fresh array whose element type is the
+// callback's result, so it takes the free-function form value.MapArray[T, U] the way
+// a type-changing array map does, with T the tuple's element union and U the
+// callback's result. Only an inline arrow callback is covered; a named callback needs
+// the reference resolved to a func value first, a later slice.
+func (r *Renderer) tupleMapCall(recvNode frontend.Node, argNodes []frontend.Node, elems []frontend.TupleElem) (ast.Expr, error) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "a tuple map whose callback is not an inline arrow function is a later slice"}
+	}
+	arr, elemGo, err := r.materializeTupleArray(recvNode, elems)
+	if err != nil {
+		return nil, err
+	}
+	bodyType, err := r.arrowResultType(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  &ast.IndexListExpr{X: sel("value", "MapArray"), Indices: []ast.Expr{elemGo, bodyType}},
+		Args: []ast.Expr{arr, fn},
+	}, nil
+}
+
+// materializeTupleArray builds the value.Array a tuple materializes to when an array
+// method is borrowed on it, value.NewArray[T](t.E0, t.E1, ...), and returns the array
+// expression and its element Go type. T is the checker's numeric index type for the
+// tuple, the union of its positions viewed as an array, so a heterogeneous tuple
+// wraps each field into the arm its position selects and a homogeneous one passes its
+// fields through. The receiver must be repeatable, since each field read re-evaluates
+// it; a side-effecting source hands back rather than run its effect once per element.
+func (r *Renderer) materializeTupleArray(recvNode frontend.Node, elems []frontend.TupleElem) (ast.Expr, ast.Expr, error) {
+	if !r.repeatableOperand(recvNode) {
+		return nil, nil, &NotYetLowerable{Reason: "materializing a side-effecting tuple source as an array is a later slice"}
+	}
+	elemT, ok := r.prog.NumberIndexType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, nil, &NotYetLowerable{Reason: "a tuple whose array element type the checker does not expose is a later slice"}
+	}
+	elemGo, err := r.typeExpr(elemT)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, isUnion := r.unionInfoOrIntern(elemT)
+	elts := make([]ast.Expr, 0, len(elems))
+	for i, e := range elems {
+		if e.Optional || e.Rest {
+			return nil, nil, &NotYetLowerable{Reason: "materializing a tuple with an optional or rest element as an array is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, nil, err
+		}
+		field := &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))}
+		switch {
+		case isUnion:
+			// A heterogeneous tuple materializes to a tagged-sum array, so each field is
+			// wrapped into the arm its own position type selects, the same construction an
+			// array literal of a union element type takes.
+			arm, ok := info.armForFlags(e.Type.Flags)
+			if !ok {
+				return nil, nil, &NotYetLowerable{Reason: "a tuple element whose type does not select a union arm is a later slice"}
+			}
+			elts = append(elts, &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{field}})
+		case elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+			// An any[]/unknown[] element type stores boxed values, so a concrete field is
+			// boxed into value.Value the way an element of a dynamic array is.
+			boxed, err := r.boxStaticToDynamicFlags(field, e.Type.Flags)
+			if err != nil {
+				return nil, nil, err
+			}
+			elts = append(elts, boxed)
+		default:
+			elts = append(elts, field)
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: elts}, elemGo, nil
+}
+
 // tupleLiteralIndex reads a tuple element access index t[i] as a compile-time
 // position, returning the integer and true only when i is a numeric literal whose
 // value is a non-negative integer inside the tuple's arity. A non-literal index (a
@@ -401,6 +504,33 @@ func (r *Renderer) tupleElementRead(n, obj, idxNode frontend.Node, elems []front
 // than the tuple has, an optional or rest tuple position, and a binding whose
 // declared type differs from the tuple element's Go type each hand back, deferring
 // those forms to a later sub-slice rather than mislower.
+// bindingDeclaredType returns the un-narrowed declared type of a destructured
+// binding name, falling back to the type at the node when no declared type is
+// available. The declared type carries a widening the narrowed initializer type
+// drops, let [x]: [string | number] = [1] declaring x the union though the field
+// holds only the number the literal minted.
+func (r *Renderer) bindingDeclaredType(nameNode frontend.Node) frontend.Type {
+	if decl, _, ok := r.prog.DeclaredTypeAt(nameNode); ok {
+		return decl
+	}
+	return r.prog.TypeAt(nameNode)
+}
+
+// initElemSource returns the i-th element node of an array-literal initializer,
+// the source whose type a widened field read coerces from. A non-array-literal
+// initializer, or an index past its elements, has no such node, so the widening
+// stays a handback rather than a guess.
+func (r *Renderer) initElemSource(initNode frontend.Node, i int) (frontend.Node, bool) {
+	if initNode == nil || initNode.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(initNode)
+	if i < 0 || i >= len(kids) {
+		return nil, false
+	}
+	return kids[i], true
+}
+
 func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []frontend.TupleElem) ([]ast.Stmt, error) {
 	patElems := r.prog.Children(patNode)
 	if len(patElems) == 0 {
@@ -417,13 +547,42 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		return nil, &NotYetLowerable{Reason: "a tuple destructuring pattern that binds more elements than the tuple has is a later slice"}
 	}
 	infos := make([]arrayDefaultElem, len(fixedElems))
+	coerceSrc := make([]frontend.Node, len(fixedElems))
+	defaultVal := make([]ast.Expr, len(fixedElems))
 	for i, el := range fixedElems {
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, err
 		}
-		if info.nested != nil || info.hasDefault {
-			return nil, &NotYetLowerable{Reason: "a tuple destructuring nested pattern or defaulted element is a later slice"}
+		if info.nested != nil {
+			return nil, &NotYetLowerable{Reason: "a tuple destructuring nested pattern is a later slice"}
+		}
+		if info.hasDefault {
+			// A defaulted element whose field is statically undefined always takes the
+			// default, let [z = ""]: [string | undefined] = [undefined] binding z the "" the
+			// annotation strips the undefined off of, so the read is dead and the fill folds to
+			// the default alone. The default lowers to the binding's declared type. A defaulted
+			// element over a field that can carry a present value still hands back, since that
+			// needs the runtime undefined test this always-default fold skips.
+			if elems[i].Type.Flags != frontend.TypeUndefined {
+				return nil, &NotYetLowerable{Reason: "a tuple destructuring defaulted element over a possibly-present field is a later slice"}
+			}
+			name, ok := localName(r.prog.Text(info.nameNode))
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
+			}
+			def, err := r.lowerExpr(info.defNode)
+			if err != nil {
+				return nil, err
+			}
+			def, err = r.coerceToType(def, info.defNode, r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+			info.name = name
+			infos[i] = info
+			defaultVal[i] = def
+			continue
 		}
 		if elems[i].Optional || elems[i].Rest {
 			return nil, &NotYetLowerable{Reason: "a tuple destructuring bind of an optional or rest element is a later slice"}
@@ -432,12 +591,15 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "destructured name is not a Go identifier"}
 		}
-		// The binding's declared type must render to the same Go type as the tuple
-		// field it reads, so a := pair.E0 is a well-typed assignment. They agree in
-		// the common case, since the checker types the binding off the tuple element;
-		// a case where they diverge (a widening the field does not carry) hands back
-		// rather than emit a mismatched read.
-		nameGo, err := r.typeExpr(r.prog.TypeAt(info.nameNode))
+		// The binding takes its declared type, which the read must render into. In the
+		// common case the checker types the binding off the tuple element and the two
+		// Go types agree, so a := pair.E0 is a bare assignment. Where the declared type is
+		// wider than the field the initializer built, let [x]: [string | number] = [1]
+		// declaring x the union while the field carries only the number the literal minted,
+		// the read wraps into the binding's type through the initializer element as the
+		// coercion source. A non-literal initializer has no element node to read the source
+		// type from, so a genuine widening there stays a handback rather than a guess.
+		nameGo, err := r.typeExpr(r.bindingDeclaredType(info.nameNode))
 		if err != nil {
 			return nil, err
 		}
@@ -448,31 +610,85 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		if same, err := sameGoType(nameGo, fieldGo); err != nil {
 			return nil, err
 		} else if !same {
-			return nil, &NotYetLowerable{Reason: "a tuple destructuring where a binding's type differs from the tuple element type is a later slice"}
+			src, ok := r.initElemSource(initNode, i)
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "a tuple destructuring where a binding's type differs from the tuple element type is a later slice"}
+			}
+			coerceSrc[i] = src
 		}
 		info.name = name
 		infos[i] = info
+	}
+	anyRead := false
+	for i := range infos {
+		if defaultVal[i] == nil {
+			anyRead = true
+			break
+		}
 	}
 	// Emit the struct so the field reads name a declared Go type, even where the
 	// tuple type reached the renderer only through this binding.
 	if _, err := r.decls.internTuple(r, r.prog.TypeAt(initNode), elems); err != nil {
 		return nil, err
 	}
-	prefix, recv, err := r.destructureSource(initNode)
-	if err != nil {
-		return nil, err
-	}
-	stmts := prefix
-	for i, info := range infos {
-		rc, err := recv()
+	var stmts []ast.Stmt
+	recv := func() (ast.Expr, error) { return nil, &NotYetLowerable{Reason: "a tuple destructuring drew its source with no read"} }
+	if anyRead {
+		prefix, r2, err := r.destructureSource(initNode)
+		if err != nil {
+			return nil, err
+		}
+		stmts = prefix
+		recv = r2
+	} else if initNode.Kind() != frontend.NodeIdentifier {
+		// Every position took its default, so no field is read, yet the source may hold
+		// side effects, let [z = ""] = [f()] still calling f. Evaluate it once to the blank
+		// so the effect survives without a declared temp Go would flag unused.
+		lowered, err := r.lowerExpr(initNode)
 		if err != nil {
 			return nil, err
 		}
 		stmts = append(stmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ident("_")},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{lowered},
+		})
+	}
+	for i, info := range infos {
+		if defaultVal[i] != nil {
+			// The always-undefined field makes the read dead, so the source struct is not
+			// drawn for this position and the binding takes the default directly.
+			stmts = append(stmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ident(info.name)},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{defaultVal[i]},
+			})
+			stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
+			continue
+		}
+		rc, err := recv()
+		if err != nil {
+			return nil, err
+		}
+		var read ast.Expr = &ast.SelectorExpr{X: rc, Sel: ident("E" + itoa(i))}
+		if coerceSrc[i] != nil {
+			read, err = r.coerceToType(read, coerceSrc[i], r.bindingDeclaredType(info.nameNode))
+			if err != nil {
+				return nil, err
+			}
+		}
+		stmts = append(stmts, &ast.AssignStmt{
 			Lhs: []ast.Expr{ident(info.name)},
 			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: rc, Sel: ident("E" + itoa(i))}},
+			Rhs: []ast.Expr{read},
 		})
+		// The binding is a fresh := that the source may never read, const [x] = pair
+		// with x unused, and Go rejects an unused local. The object-pattern path already
+		// blanks such a member; the tuple path did the same read without the blank, so
+		// an unread element compiled to a declared-and-not-used error. Reuse the shared
+		// blank, which appends _ = name only when the binding's own use count shows no
+		// read survives.
+		stmts = r.blankUnusedParamBinding(stmts, info.nameNode, info.name)
 	}
 	return stmts, nil
 }

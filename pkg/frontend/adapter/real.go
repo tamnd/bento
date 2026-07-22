@@ -219,7 +219,16 @@ func (a *RealAdapter) WidenType(p ProgramHandle, t TypeHandle) TypeHandle {
 func (a *RealAdapter) DeclaredTypeOfNode(p ProgramHandle, n NodeHandle) (TypeHandle, bool) {
 	c, release := prog(p).checker()
 	defer release()
-	sym := c.GetSymbolAtLocation(nodeOf(n))
+	node := nodeOf(n)
+	sym := c.GetSymbolAtLocation(node)
+	if sym == nil {
+		// A binding declaration node (the name in let [x] or let { x }) is not a
+		// reference the checker resolves by location, so it falls back to the symbol
+		// bound to the declaration, the same fallback SymbolOfNode takes. This yields
+		// the binding's declared type off its annotation rather than the type narrowed
+		// by the initializer at that position.
+		sym = node.Symbol()
+	}
 	if sym == nil {
 		return nil, false
 	}
@@ -430,10 +439,14 @@ func (a *RealAdapter) PropertiesOf(p ProgramHandle, t TypeHandle) []PropertyInfo
 	props := c.GetPropertiesOfType(typeOfHandle(t))
 	out := make([]PropertyInfo, 0, len(props))
 	for _, sym := range props {
+		readT := c.GetTypeOfSymbol(sym)
+		writeT := c.GetWriteTypeOfSymbol(sym)
 		out = append(out, PropertyInfo{
-			Name:     sym.Name,
-			Type:     wrapType(c.GetTypeOfSymbol(sym)),
-			Optional: sym.Flags&shim.SymbolFlagsOptional != 0,
+			Name:              sym.Name,
+			Type:              wrapType(readT),
+			Optional:          sym.Flags&shim.SymbolFlagsOptional != 0,
+			WriteType:         wrapType(writeT),
+			DivergentAccessor: writeT != nil && writeT != readT,
 		})
 	}
 	return out
@@ -510,6 +523,53 @@ func (a *RealAdapter) TupleElemsOf(p ProgramHandle, t TypeHandle) ([]TupleElem, 
 		}
 	}
 	return out, true
+}
+
+// StringIndexOf returns the value type of an object type's string index signature,
+// the string in { [x: string]: string }, and false for a type with no string
+// indexer. It reads the checker's own index infos and keeps the one keyed by string,
+// so a dictionary shape is told from a fixed one by the signature the checker
+// resolved rather than by a name convention.
+func (a *RealAdapter) StringIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool) {
+	c, release := prog(p).checker()
+	defer release()
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return nil, false
+	}
+	for _, info := range c.GetIndexInfosOfType(ty) {
+		if info == nil {
+			continue
+		}
+		key := info.KeyType()
+		val := info.ValueType()
+		if key == nil || val == nil {
+			continue
+		}
+		if key.Flags()&shim.TypeFlagsString != 0 {
+			return wrapType(val), true
+		}
+	}
+	return nil, false
+}
+
+// NumberIndexOf returns the value type of a type's numeric index signature, the
+// element union the checker computes for an array or tuple viewed as an array. It
+// reads the checker's numeric index type, which is defined for a tuple (the union
+// of its positions) where GetElementTypeOfArrayType is not, so a tuple borrowing an
+// array method can be materialized as a value.Array over this element type.
+func (a *RealAdapter) NumberIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool) {
+	c, release := prog(p).checker()
+	defer release()
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return nil, false
+	}
+	elem := c.GetNumberIndexType(ty)
+	if elem == nil {
+		return nil, false
+	}
+	return wrapType(elem), true
 }
 
 func (a *RealAdapter) LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool) {

@@ -238,6 +238,12 @@ type Property struct {
 	Type     Type
 	Optional bool
 	Readonly bool
+	// WriteType is the type a write to the member accepts. It equals Type for a
+	// plain property and widens to the setter type for a divergent accessor.
+	WriteType Type
+	// DivergentAccessor is true when the member is a get/set accessor pair whose
+	// write type differs from its read type.
+	DivergentAccessor bool
 }
 
 // Param is one parameter of a signature.

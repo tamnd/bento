@@ -23,5 +23,6 @@ func main() {
 	o.Set(value.FromGoString("x"), value.Number(21))
 	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("x"))))
 	d := o.GetOwnPropertyDescriptor(value.StringValue(value.FromGoString("x")))
+	_ = d
 	value.ConsoleLog(d.Get(value.FromGoString("get")).TypeOf(), d.Get(value.FromGoString("set")).TypeOf())
 }

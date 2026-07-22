@@ -294,6 +294,47 @@ func TestArrayDestructureTupleSourceRuns(t *testing.T) {
 	}
 }
 
+// TestAnnotatedArrayDestructureRuns proves a type annotation on the binding does
+// not derail the destructure: `let [x]: [number] = [1]` still binds x by a
+// positional read the way the unannotated form does, rather than fall to the
+// plain path that would take the pattern text as a Go variable name.
+func TestAnnotatedArrayDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function f(): number {
+  let [x]: [number] = [7];
+  return x;
+}
+console.log(f());
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, "U5B_") {
+		t.Fatalf("annotated array destructure took the pattern text as a name:\n%s", source)
+	}
+	if got, want := runProgramGo(t, src), "7\n"; got != want {
+		t.Fatalf("annotated array destructure printed %q, want %q", got, want)
+	}
+}
+
+// TestAnnotatedObjectDestructureRuns proves the same for an object pattern: the
+// type annotation between the pattern and the initializer does not stop the
+// destructure from reading each shorthand property.
+func TestAnnotatedObjectDestructureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function f(): number {
+  let { y }: { y: number } = { y: 9 };
+  return y;
+}
+console.log(f());
+`
+	source := renderProgram(t, src)
+	if strings.Contains(source, "U7B_") {
+		t.Fatalf("annotated object destructure took the pattern text as a name:\n%s", source)
+	}
+	if got, want := runProgramGo(t, src), "9\n"; got != want {
+		t.Fatalf("annotated object destructure printed %q, want %q", got, want)
+	}
+}
+
 // TestArrayDestructureMemberSourceLowersToTemp proves a member-read array source is
 // held in a generated temporary read once, extending the call-source case in #258 to
 // a property access.

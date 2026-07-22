@@ -343,13 +343,41 @@ func (p *Program) Properties(t Type) []Property {
 	out := make([]Property, len(infos))
 	for i, pi := range infos {
 		out[i] = Property{
-			Name:     pi.Name,
-			Type:     p.wrapType(pi.Type),
-			Optional: pi.Optional,
-			Readonly: pi.Readonly,
+			Name:              pi.Name,
+			Type:              p.wrapType(pi.Type),
+			Optional:          pi.Optional,
+			Readonly:          pi.Readonly,
+			WriteType:         p.wrapType(pi.WriteType),
+			DivergentAccessor: pi.DivergentAccessor,
 		}
 	}
 	return out
+}
+
+// StringIndexType returns the value type of a type's string index signature, the
+// string in { [x: string]: string }, and ok=false for a type with no string
+// indexer. It lets lowering tell a dictionary shape from a fixed one so an
+// index-signature object lowers to a dynamic bag rather than a struct that would
+// drop the signature.
+func (p *Program) StringIndexType(t Type) (Type, bool) {
+	h, ok := p.adapter.StringIndexOf(p.handle, p.typeHandle(t))
+	if !ok {
+		return Type{}, false
+	}
+	return p.wrapType(h), true
+}
+
+// NumberIndexType returns the value type of a type's numeric index signature, the
+// element union the checker gives an array or tuple viewed as an array, and ok=false
+// for a type with no numeric indexer. Unlike ElementType it answers for a tuple, so
+// lowering can materialize a tuple as a value.Array when an array method is borrowed
+// on it.
+func (p *Program) NumberIndexType(t Type) (Type, bool) {
+	h, ok := p.adapter.NumberIndexOf(p.handle, p.typeHandle(t))
+	if !ok {
+		return Type{}, false
+	}
+	return p.wrapType(h), true
 }
 
 // ElementType returns the element type of an array or tuple type, and ok=false

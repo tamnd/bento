@@ -50,6 +50,14 @@ type PropertyInfo struct {
 	Type     TypeHandle
 	Optional bool
 	Readonly bool
+	// WriteType is the type a write to the member accepts. For a plain property
+	// it is the same as Type; for a set accessor whose parameter type differs
+	// from the get accessor's return type it is the wider setter type.
+	WriteType TypeHandle
+	// DivergentAccessor is true when the member is a get/set accessor pair whose
+	// write type differs from its read type, so a struct field at the read type
+	// cannot hold every legal write.
+	DivergentAccessor bool
 }
 
 // ParamInfo is one parameter of a signature.
@@ -192,6 +200,18 @@ type TSAdapter interface {
 	// a non-tuple. Each element carries its element type, optional and rest flags,
 	// and label, so lowering can spell the positional struct a tuple maps to.
 	TupleElemsOf(p ProgramHandle, t TypeHandle) ([]TupleElem, bool)
+	// StringIndexOf returns the value type of an object type's string index
+	// signature, the string in { [x: string]: string }, and false for a type
+	// with no string indexer. It lets lowering tell a dictionary shape from a
+	// fixed one so an index-signature object lowers to a dynamic bag rather than
+	// an empty struct that drops the signature.
+	StringIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
+	// NumberIndexOf returns the value type of a type's numeric index signature, the
+	// element union the checker gives an array or tuple viewed as an array, and false
+	// for a type with no numeric indexer. Unlike ElementOf, which answers only for a
+	// true array, this answers for a tuple too, so lowering can materialize a tuple as
+	// an array when an array method is borrowed on it.
+	NumberIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
 	LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool)
 
 	// Module graph.

@@ -114,6 +114,13 @@ func (r *Renderer) wrapUnionElem(e ast.Expr, elem frontend.Node, elemT frontend.
 	if ok {
 		return wrapped, nil
 	}
+	// An array whose element type is dynamic, an any[] or unknown[], stores boxed
+	// value.Value elements, so a concrete element, the number an any[] holds after
+	// `[...additional, subcomponent]`, is boxed the same way an assignment into a
+	// dynamic slot is. A dynamic element already reads as a box and passes through.
+	if elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 && !r.isDynamic(elem) {
+		return r.boxStaticToDynamic(e, elem)
+	}
 	return e, nil
 }
 
@@ -660,6 +667,15 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	if _, ok := r.prog.ElementType(t); ok {
 		return nil, &NotYetLowerable{Reason: "object literal typed as an array is a later slice"}
 	}
+	// An empty literal { } typed as the empty object top type is not a fixed shape but
+	// the dynamic property bag: interning it would give an empty struct no read or write
+	// dispatches over, so it lowers to the boxed value.NewObject the top type holds, the
+	// same runtime object new Object() and a spread build. A literal contextually typed at
+	// a fixed shape keeps its members and does not reach here, so only a genuine { } does.
+	if r.isEmptyObjectTopType(t) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NewObject")}, nil
+	}
 	// internStruct registers the struct and reports the name; a shape that does
 	// not lower (an optional property, a non-identifier field) hands back here, so
 	// the literal never builds a struct the type side would refuse to declare.
@@ -680,6 +696,10 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		}
 		values[field] = val
 	}
+	get := func(field string) (ast.Expr, bool) {
+		v, ok := values[field]
+		return v, ok
+	}
 	for _, p := range r.prog.Children(n) {
 		if p.Kind() != frontend.NodeUnknown {
 			// A method, getter, or setter member is a function property, which the
@@ -694,7 +714,7 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 			// value reference. A spread { ...o } is also a single-child member, but
 			// its text opens with the spread token, so it routes to the spread copy.
 			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
-				if err := r.objectSpread(kids[0], set); err != nil {
+				if err := r.objectSpread(kids[0], t, set, get); err != nil {
 					return nil, err
 				}
 				continue
@@ -761,7 +781,19 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 // value.None, which have no effect to order. A required field left unfilled, a
 // spread member, and a computed or non-identifier key each hand back to a later
 // slice, keeping this slice to the plain contextual build.
+//
+// zeroFill lifts the missing-required handback for a build under an explicit type
+// assertion, `<{ id: number }>({})`, where the programmer overrides the checker
+// and the empty literal is trusted to stand for the asserted shape. A required
+// field the members omit is then left off the composite literal, so Go fills it
+// with the field type's zero, the faithful lowering of an asserted value whose
+// runtime shape is narrower than its static type. Every ordinary contextual build
+// passes zeroFill false and keeps handing back on a missing required field.
 func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type) (ast.Expr, error) {
+	return r.objectLiteralContextualFill(n, shape, false)
+}
+
+func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.Type, zeroFill bool) (ast.Expr, error) {
 	name, err := r.decls.internStruct(r, shape)
 	if err != nil {
 		return nil, err
@@ -809,6 +841,27 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 			}
 			haveFieldShape = true
 		}
+		// A field whose declared type is a bare value.Value box, an empty top type { },
+		// a string-index dictionary, or an optional over either, takes a boxed member
+		// rather than a struct built at a shape. The optional over a box collapsed to the
+		// bare box, so it carries no value.Some wrap and no value.None the optional paths
+		// below would apply; the member simply boxes into value.Value the way a value
+		// flowing into an any slot does, and an already-dynamic member passes through.
+		if hasProp && r.isNarrowableBoxType(sp.Type) {
+			v, err := r.lowerExpr(valNode)
+			if err != nil {
+				return nil, err
+			}
+			if !r.isDynamic(valNode) {
+				v, err = r.boxStaticToDynamic(v, valNode)
+				if err != nil {
+					return nil, err
+				}
+			}
+			elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: v})
+			seen[field] = true
+			continue
+		}
 		// An explicit undefined filling an optional field is the empty optional,
 		// value.None, the same value an omitted optional field takes; someWrap over
 		// the lowered undefined would store the boxed Undefined in a typed slot,
@@ -839,8 +892,9 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 			// A nested object literal builds at the field's declared shape, not its own
 			// fresh required shape, so an inner optional property interns the same
 			// struct the field type does and the value lands in the field without a
-			// shape mismatch.
-			val, err = r.objectLiteralContextual(valNode, fieldShape)
+			// shape mismatch. A build under an assertion carries the zero-fill down, so a
+			// nested empty literal the assertion covers zero-fills too.
+			val, err = r.objectLiteralContextualFill(valNode, fieldShape, zeroFill)
 		} else {
 			val, err = r.lowerExpr(valNode)
 			if err == nil && haveFieldShape && fieldShape.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
@@ -893,6 +947,13 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 			continue
 		}
 		if !tp.Optional {
+			// Under an assertion the omitted required field is left off the composite
+			// literal so Go zero-fills it; without one it hands back, since a required
+			// field with no value would otherwise silently take a zero the source never
+			// wrote.
+			if zeroFill {
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "object literal missing a required field is a later slice"}
 		}
 		// An omitted optional tagged-sum union field takes its undefined arm; a
@@ -921,7 +982,7 @@ func (r *Renderer) objectLiteralContextual(n frontend.Node, shape frontend.Type)
 // plain identifier so its fields can be read one at a time without re-evaluating
 // a side-effecting expression, and it must be a fixed-shape object, not an array
 // or a map-shaped object, which spread by copying elements rather than fields.
-func (r *Renderer) objectSpread(srcNode frontend.Node, set func(string, ast.Expr)) error {
+func (r *Renderer) objectSpread(srcNode frontend.Node, target frontend.Type, set func(string, ast.Expr), get func(string) (ast.Expr, bool)) error {
 	if srcNode.Kind() != frontend.NodeIdentifier {
 		return &NotYetLowerable{Reason: "object spread of an expression that is not a plain identifier is a later slice"}
 	}
@@ -951,7 +1012,34 @@ func (r *Renderer) objectSpread(srcNode frontend.Node, set func(string, ast.Expr
 		if !ok {
 			return &NotYetLowerable{Reason: "object spread source has a field name that is not a Go identifier"}
 		}
-		set(field, &ast.SelectorExpr{X: src, Sel: ident(field)})
+		read := &ast.SelectorExpr{X: src, Sel: ident(field)}
+		// An optional source field lowers to a value.Opt slot, but the target field it
+		// fills may be required: when a later spread whose member is optional overrides
+		// an earlier value, the merged property is present whenever the source has it
+		// and falls back to the earlier value otherwise, which is exactly what spread
+		// evaluates. A required target then takes src.Field.Or(prev), unwrapping the
+		// optional to the concrete field type, and an optional target takes
+		// src.Field.OrOpt(prev), keeping the value.Opt slot. Without a prior value there
+		// is nothing to fall back to, so a required target hands back rather than drop a
+		// bare optional into a concrete field.
+		if sp.Optional {
+			tp, hasTarget := r.shapeProp(target, sp.Name)
+			if hasTarget && !tp.Optional {
+				prev, ok := get(field)
+				if !ok {
+					return &NotYetLowerable{Reason: "object spread of an optional member into a required field with no prior value is a later slice"}
+				}
+				set(field, &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident("Or")}, Args: []ast.Expr{prev}})
+				continue
+			}
+			if hasTarget && tp.Optional {
+				if prev, ok := get(field); ok {
+					set(field, &ast.CallExpr{Fun: &ast.SelectorExpr{X: read, Sel: ident("OrOpt")}, Args: []ast.Expr{prev}})
+					continue
+				}
+			}
+		}
+		set(field, read)
 	}
 	return nil
 }
@@ -1521,6 +1609,24 @@ func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNode
 // introduce a new type parameter, so the value.Array.Map method can only return
 // the element type; when the callback's result type matches the element the map
 // lowers to that method, and when it differs (number[].map(n => n.toString()) is
+// padArrayCallbackElem records the element parameter a zero-parameter array-method
+// callback must grow to match the method's func(T) U callback type, and returns the
+// cleanup that drops the record after the callback lowers. It reports nil when the
+// arrow already declares a parameter or the receiver's element type is unknown, so a
+// normal element-taking callback is untouched. The padded parameter is unread, exactly
+// as the source callback ignores the element it does not name.
+func (r *Renderer) padArrayCallbackElem(arrow, recvNode frontend.Node) func() {
+	if len(r.funcParamNodes(arrow)) != 0 {
+		return nil
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil
+	}
+	r.closurePadParams[arrow] = []frontend.Param{{Type: elem}}
+	return func() { delete(r.closurePadParams, arrow) }
+}
+
 // string[]) it lowers to the free function value.MapArray[T, U] with both type
 // arguments spelled out. The result type is read straight off the arrow's body,
 // which the checker has already inferred, compared against the array's element
@@ -1529,6 +1635,15 @@ func (r *Renderer) setAlgebraCall(recvNode frontend.Node, goName string, argNode
 func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNodes []frontend.Node, restrictToElem bool) (ast.Expr, error) {
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
+	}
+	// A callback that ignores its element, () => expr, lowers to a zero-parameter func
+	// literal, but the array method and the value.MapArray free function both take a
+	// func(T) U over the element type. Pad the missing element parameter off the
+	// receiver's element type so the emitted func value carries the arity the method's
+	// callback field declares, the same growth a lower-arity callback takes at a call
+	// site. The clear is deferred so a nested callback lowers against its own slot.
+	if defer_ := r.padArrayCallbackElem(argNodes[0], recvNode); defer_ != nil {
+		defer defer_()
 	}
 	if restrictToElem {
 		elemType, ok := r.arrayElem(recvNode)
@@ -1600,7 +1715,44 @@ func (r *Renderer) arrayCallbackMethod(recvNode frontend.Node, goMethod string, 
 	if err != nil {
 		return nil, err
 	}
+	// forEach discards its callback's result, so ForEach's Go parameter is a func(T)
+	// with no result. A callback with an expression body, match => "".replace(...),
+	// lowers to a func that returns that body's value and does not fit, so it is wrapped
+	// to drive the call for effect and drop the result, the way forEach ignores it. some
+	// and every keep their func(T) bool result, so only forEach adapts.
+	if goMethod == "ForEach" {
+		if lit, ok := fn.(*ast.FuncLit); ok && lit.Type.Results != nil {
+			fn = r.dropFuncResult(lit)
+		}
+	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// dropFuncResult wraps a function literal that returns a value in an adapter that
+// calls it for effect and discards the result, so a value-returning callback fits a
+// void func(T) slot the way a forEach callback does. The adapter binds the literal's
+// own parameter types under fresh names and forwards them, so the call is by position
+// and the literal's value, which has no creation side effect, is embedded directly.
+func (r *Renderer) dropFuncResult(lit *ast.FuncLit) *ast.FuncLit {
+	var fields []*ast.Field
+	var args []ast.Expr
+	if lit.Type.Params != nil {
+		for _, f := range lit.Type.Params.List {
+			n := len(f.Names)
+			if n == 0 {
+				n = 1
+			}
+			for i := 0; i < n; i++ {
+				nm := r.freshTemp()
+				fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(nm)}, Type: f.Type})
+				args = append(args, ident(nm))
+			}
+		}
+	}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{List: fields}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{Fun: lit, Args: args}}}},
+	}
 }
 
 // arrowParamCount reports how many parameters an arrow declares, the count the

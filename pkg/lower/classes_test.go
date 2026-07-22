@@ -675,6 +675,33 @@ console.log(A.total);
 	}
 }
 
+// TestTwoStaticBlocksScopeSeparately pins that each static block keeps its own
+// Go block, so two blocks each declaring const a compile instead of colliding
+// as a redeclaration in the shared static init function.
+func TestTwoStaticBlocksScopeSeparately(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the class test builds and runs generated Go")
+	}
+	const src = `class C {
+  static a: number = 0;
+  static {
+    const a = 11;
+    C.a = a;
+  }
+  static {
+    const a = 22;
+    C.a = C.a + a;
+  }
+}
+console.log(C.a);
+`
+	got := runProgramGo(t, src)
+	if got != "33\n" {
+		t.Fatalf("two static blocks printed %q, want %q", got, "33\n")
+	}
+}
+
 // TestClassParamPropsRun builds and runs the parameter property slice end to
 // end: folded construction from parameters, a private readonly field read
 // through a method, and a parameter property mixing with a declared field,

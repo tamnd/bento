@@ -1044,10 +1044,35 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 // shared by a provided argument and a default filled into an omitted slot, so both
 // cross the parameter boundary by the same rule.
 func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.Type) (ast.Expr, error) {
+	if tup, ok, err := r.arrayAssertedToTuple(lowered, node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return tup, nil
+	}
 	if empty, ok, err := r.emptyArrayContextual(node, pt); err != nil {
 		return nil, err
 	} else if ok {
 		return empty, nil
+	}
+	if adapted, ok, err := r.arrayToLengthShape(lowered, node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return adapted, nil
+	}
+	if dyn, ok, err := r.dynArrayLiteralContextual(node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return dyn, nil
+	}
+	if opt, ok, err := r.optArrayLiteralContextual(node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return opt, nil
+	}
+	if fn, ok, err := r.coerceFuncValue(lowered, node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return fn, nil
 	}
 	if boxed, ok, err := r.boxToOptional(lowered, node, pt); err != nil {
 		return nil, err
@@ -1081,7 +1106,7 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	// static parameter coerces, so a string passed for a message?: any lands as
 	// the boxed string the body reads.
 	srcDyn := r.isDynamic(node)
-	tgtDyn := pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	tgtDyn := pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(pt)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStaticFlags(lowered, pt.Flags)
@@ -1106,12 +1131,29 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 // emit Go that does not compile. Every other argument lowers at its own type and
 // bridges to the parameter the ordinary way.
 func (r *Renderer) lowerArgAt(a frontend.Node, pt frontend.Type) (ast.Expr, error) {
-	if a.Kind() == frontend.NodeObjectLiteralExpression {
+	if a.Kind() == frontend.NodeObjectLiteralExpression && !r.isNarrowableBoxType(pt) {
+		// An object literal argument to a string-index dictionary parameter boxes into a
+		// value.Value bag rather than building at a fixed shape, so it skips the
+		// contextual-shape path and falls to the boxing bridge below the way a literal
+		// into an any slot does.
 		if shape, wrap, ok := r.contextualObjectShape(pt); ok {
 			if wrap {
 				return nil, &NotYetLowerable{Reason: "an object literal argument in a T | undefined optional slot is a later slice"}
 			}
 			return r.objectLiteralContextual(a, shape)
+		}
+	}
+	// A function literal is assignable to a callback slot that declares more
+	// parameters than the literal takes, since JavaScript lets a function ignore the
+	// trailing arguments, but the Go func value must carry the slot's exact arity. When
+	// the literal flowing into a func-typed slot declares fewer parameters than the
+	// slot, record the slot's trailing parameters so closureParamFields pads them onto
+	// the emitted func type as blank-named fields. The clear is deferred so a nested
+	// literal in the body lowers against its own slot, not this one.
+	if a.Kind() == frontend.NodeFunctionExpression || a.Kind() == frontend.NodeArrowFunction {
+		if pad, ok := r.closurePadForSlot(a, pt); ok {
+			r.closurePadParams[a] = pad
+			defer delete(r.closurePadParams, a)
 		}
 	}
 	// A tuple literal passed where the parameter declares a tuple with an optional
@@ -1128,6 +1170,31 @@ func (r *Renderer) lowerArgAt(a frontend.Node, pt frontend.Type) (ast.Expr, erro
 		return nil, err
 	}
 	return r.bridgeArg(lowered, a, pt)
+}
+
+// closurePadForSlot reports the trailing parameters a lower-arity function literal
+// must grow to match its callback slot's Go func type, and whether such padding is
+// needed. The slot type must carry exactly one call signature (a plain func type or a
+// callback interface); the literal keeps every parameter it declares and gains the
+// slot's remaining ones as unused fields. It declines when the slot has no single call
+// signature, when the literal already declares at least as many parameters as the
+// slot, or when either side takes a rest parameter, whose gathering the plain arity
+// pad does not model. An unused pad parameter never reads its value, so binding one is
+// faithful: the literal ignores the argument exactly as the source function does.
+func (r *Renderer) closurePadForSlot(a frontend.Node, pt frontend.Type) ([]frontend.Param, bool) {
+	call, _ := r.prog.Signatures(pt)
+	if len(call) != 1 {
+		return nil, false
+	}
+	sig := call[0]
+	if sig.RestParam != nil {
+		return nil, false
+	}
+	own := len(r.funcParamNodes(a))
+	if own >= len(sig.Params) {
+		return nil, false
+	}
+	return sig.Params[own:], true
 }
 
 // objectMethodCall lowers a method call whose receiver is a fixed-shape object
@@ -1385,6 +1452,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 			return nil, err
 		}
 		return r.classMethodCall(info, recv, method, argNodes, recvNode.Kind() == frontend.NodeSuperKeyword)
+	}
+	// A method on a tuple receiver: a tuple is an array subtype, so an array method
+	// like map borrowed on it materializes the tuple as a value.Array over its element
+	// union and dispatches the array method on that. It routes before the array path,
+	// whose arrayElem check answers false for a tuple (the checker reports a tuple's
+	// positions through TupleElements, not one array element type). A method the tuple
+	// path does not host reports handled=false and falls through unchanged.
+	if elems, ok := r.prog.TupleElements(r.prog.TypeAt(recvNode)); ok {
+		if expr, handled, err := r.tupleArrayMethodCall(recvNode, method, argNodes, elems); handled || err != nil {
+			return expr, err
+		}
 	}
 	// A method on an array receiver lowers to a value.Array method. This routes
 	// before the primitive and string paths, which expect a number, boolean, or
