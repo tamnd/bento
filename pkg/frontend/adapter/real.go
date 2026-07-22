@@ -544,6 +544,25 @@ func (a *RealAdapter) StringIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, 
 	return nil, false
 }
 
+// NumberIndexOf returns the value type of a type's numeric index signature, the
+// element union the checker computes for an array or tuple viewed as an array. It
+// reads the checker's numeric index type, which is defined for a tuple (the union
+// of its positions) where GetElementTypeOfArrayType is not, so a tuple borrowing an
+// array method can be materialized as a value.Array over this element type.
+func (a *RealAdapter) NumberIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool) {
+	c, release := prog(p).checker()
+	defer release()
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return nil, false
+	}
+	elem := c.GetNumberIndexType(ty)
+	if elem == nil {
+		return nil, false
+	}
+	return wrapType(elem), true
+}
+
 func (a *RealAdapter) LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool) {
 	ty := typeOfHandle(t)
 	if ty == nil {

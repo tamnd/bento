@@ -223,6 +223,109 @@ func (r *Renderer) tupleLiteral(n frontend.Node, elems []frontend.TupleElem) (as
 	return &ast.CompositeLit{Type: ident(name), Elts: elts}, nil
 }
 
+// tupleArrayMethodCall lowers an array method borrowed on a tuple receiver. A tuple
+// is an array subtype in TypeScript, so numTuple.map(f) is legal even though the
+// tuple's Go representation is a positional struct that carries no such method. The
+// tuple is materialized as a value.Array over its element union (the checker's
+// numeric index type) and the array method dispatches on that materialized array.
+// handled is false for a method this slice does not cover, so the caller falls
+// through to its existing dispatch rather than mislower a method the tuple path does
+// not host.
+func (r *Renderer) tupleArrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node, elems []frontend.TupleElem) (ast.Expr, bool, error) {
+	switch method {
+	case "map":
+		e, err := r.tupleMapCall(recvNode, argNodes, elems)
+		return e, true, err
+	default:
+		return nil, false, nil
+	}
+}
+
+// tupleMapCall lowers tuple.map(cb) to value.MapArray over the array the tuple
+// materializes to. map always builds a fresh array whose element type is the
+// callback's result, so it takes the free-function form value.MapArray[T, U] the way
+// a type-changing array map does, with T the tuple's element union and U the
+// callback's result. Only an inline arrow callback is covered; a named callback needs
+// the reference resolved to a func value first, a later slice.
+func (r *Renderer) tupleMapCall(recvNode frontend.Node, argNodes []frontend.Node, elems []frontend.TupleElem) (ast.Expr, error) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
+		return nil, &NotYetLowerable{Reason: "a tuple map whose callback is not an inline arrow function is a later slice"}
+	}
+	arr, elemGo, err := r.materializeTupleArray(recvNode, elems)
+	if err != nil {
+		return nil, err
+	}
+	bodyType, err := r.arrowResultType(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	fn, err := r.lowerExpr(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  &ast.IndexListExpr{X: sel("value", "MapArray"), Indices: []ast.Expr{elemGo, bodyType}},
+		Args: []ast.Expr{arr, fn},
+	}, nil
+}
+
+// materializeTupleArray builds the value.Array a tuple materializes to when an array
+// method is borrowed on it, value.NewArray[T](t.E0, t.E1, ...), and returns the array
+// expression and its element Go type. T is the checker's numeric index type for the
+// tuple, the union of its positions viewed as an array, so a heterogeneous tuple
+// wraps each field into the arm its position selects and a homogeneous one passes its
+// fields through. The receiver must be repeatable, since each field read re-evaluates
+// it; a side-effecting source hands back rather than run its effect once per element.
+func (r *Renderer) materializeTupleArray(recvNode frontend.Node, elems []frontend.TupleElem) (ast.Expr, ast.Expr, error) {
+	if !r.repeatableOperand(recvNode) {
+		return nil, nil, &NotYetLowerable{Reason: "materializing a side-effecting tuple source as an array is a later slice"}
+	}
+	elemT, ok := r.prog.NumberIndexType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, nil, &NotYetLowerable{Reason: "a tuple whose array element type the checker does not expose is a later slice"}
+	}
+	elemGo, err := r.typeExpr(elemT)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, isUnion := r.unionInfoOrIntern(elemT)
+	elts := make([]ast.Expr, 0, len(elems))
+	for i, e := range elems {
+		if e.Optional || e.Rest {
+			return nil, nil, &NotYetLowerable{Reason: "materializing a tuple with an optional or rest element as an array is a later slice"}
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, nil, err
+		}
+		field := &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))}
+		switch {
+		case isUnion:
+			// A heterogeneous tuple materializes to a tagged-sum array, so each field is
+			// wrapped into the arm its own position type selects, the same construction an
+			// array literal of a union element type takes.
+			arm, ok := info.armForFlags(e.Type.Flags)
+			if !ok {
+				return nil, nil, &NotYetLowerable{Reason: "a tuple element whose type does not select a union arm is a later slice"}
+			}
+			elts = append(elts, &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{field}})
+		case elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+			// An any[]/unknown[] element type stores boxed values, so a concrete field is
+			// boxed into value.Value the way an element of a dynamic array is.
+			boxed, err := r.boxStaticToDynamicFlags(field, e.Type.Flags)
+			if err != nil {
+				return nil, nil, err
+			}
+			elts = append(elts, boxed)
+		default:
+			elts = append(elts, field)
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: elts}, elemGo, nil
+}
+
 // tupleLiteralIndex reads a tuple element access index t[i] as a compile-time
 // position, returning the integer and true only when i is a numeric literal whose
 // value is a non-negative integer inside the tuple's arity. A non-literal index (a

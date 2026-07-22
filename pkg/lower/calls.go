@@ -1431,6 +1431,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		}
 		return r.classMethodCall(info, recv, method, argNodes, recvNode.Kind() == frontend.NodeSuperKeyword)
 	}
+	// A method on a tuple receiver: a tuple is an array subtype, so an array method
+	// like map borrowed on it materializes the tuple as a value.Array over its element
+	// union and dispatches the array method on that. It routes before the array path,
+	// whose arrayElem check answers false for a tuple (the checker reports a tuple's
+	// positions through TupleElements, not one array element type). A method the tuple
+	// path does not host reports handled=false and falls through unchanged.
+	if elems, ok := r.prog.TupleElements(r.prog.TypeAt(recvNode)); ok {
+		if expr, handled, err := r.tupleArrayMethodCall(recvNode, method, argNodes, elems); handled || err != nil {
+			return expr, err
+		}
+	}
 	// A method on an array receiver lowers to a value.Array method. This routes
 	// before the primitive and string paths, which expect a number, boolean, or
 	// string receiver an array is not.

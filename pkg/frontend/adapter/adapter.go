@@ -206,6 +206,12 @@ type TSAdapter interface {
 	// fixed one so an index-signature object lowers to a dynamic bag rather than
 	// an empty struct that drops the signature.
 	StringIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
+	// NumberIndexOf returns the value type of a type's numeric index signature, the
+	// element union the checker gives an array or tuple viewed as an array, and false
+	// for a type with no numeric indexer. Unlike ElementOf, which answers only for a
+	// true array, this answers for a tuple too, so lowering can materialize a tuple as
+	// an array when an array method is borrowed on it.
+	NumberIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
 	LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool)
 
 	// Module graph.

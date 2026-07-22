@@ -367,6 +367,19 @@ func (p *Program) StringIndexType(t Type) (Type, bool) {
 	return p.wrapType(h), true
 }
 
+// NumberIndexType returns the value type of a type's numeric index signature, the
+// element union the checker gives an array or tuple viewed as an array, and ok=false
+// for a type with no numeric indexer. Unlike ElementType it answers for a tuple, so
+// lowering can materialize a tuple as a value.Array when an array method is borrowed
+// on it.
+func (p *Program) NumberIndexType(t Type) (Type, bool) {
+	h, ok := p.adapter.NumberIndexOf(p.handle, p.typeHandle(t))
+	if !ok {
+		return Type{}, false
+	}
+	return p.wrapType(h), true
+}
+
 // ElementType returns the element type of an array or tuple type, and ok=false
 // for a non-array.
 func (p *Program) ElementType(t Type) (Type, bool) {
