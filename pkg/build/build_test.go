@@ -137,3 +137,34 @@ func TestConstructSignatureArityGates(t *testing.T) {
 		t.Fatalf("hand-back reason = %q, want the checker's not-assignable message", err.Error())
 	}
 }
+
+// TestStrictOffNoImplicitAnyWidensToAny proves bento reproduces a project that
+// turned strict off while keeping noImplicitAny on. A destructuring binding from
+// an all-undefined-and-null initializer, var [a, b] = [undefined, null], is legal
+// under bento's forced-strict default: strictNullChecks keeps undefined and null
+// their own types, so the binding elements are not implicitly any and the case
+// lowers. Under the project's real options the two widen to any and the binding
+// elements are implicitly any, the TS7031 the checker masks when strict null
+// checking is on. Setting Strict false with NoImplicitAny keeps the checker
+// matched to the project so the masked report surfaces and the unit hands back
+// rather than running a program TypeScript rejects.
+func TestStrictOffNoImplicitAnyWidensToAny(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "widen.ts")
+	if err := os.WriteFile(entry, []byte("var [a, b] = [undefined, null];\n"), 0o644); err != nil {
+		t.Fatalf("write entry: %v", err)
+	}
+
+	if _, err := EmitGo(entry, "test"); err != nil {
+		t.Fatalf("widened binding handed back under the strict default, want a lowering: %v", err)
+	}
+
+	off := false
+	_, err := EmitGoWithOptions(entry, "test", EmitOptions{Strict: &off, NoImplicitAny: true})
+	if err == nil {
+		t.Fatal("widened binding lowered under strict-off noImplicitAny, want a hand-back")
+	}
+	if !strings.Contains(err.Error(), "implicitly has an 'any' type") {
+		t.Fatalf("hand-back reason = %q, want the checker's implicit-any message", err.Error())
+	}
+}

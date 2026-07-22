@@ -69,6 +69,17 @@ type EmitOptions struct {
 	// is what makes an unreachable statement a build-stopping error rather than
 	// dead code the lowerer would emit.
 	AllowUnreachableCode *bool
+	// Strict, when non-nil, overrides bento's default of checking strictly. bento
+	// checks strict by default to get the most precise types it can, which is sound
+	// because strict checking only ever rejects more than a project's own options
+	// would. The one exception is a project that turned strict off while keeping
+	// noImplicitAny on: forced-strict keeps strictNullChecks on, under which
+	// undefined and null stay their own types instead of widening to any, so a
+	// noImplicitAny error the project's real options would raise on a widened form is
+	// masked. Setting Strict false for exactly that pair reproduces the project's
+	// options in the checker so the masked report surfaces and the unit hands back.
+	// A nil pointer keeps the strict default.
+	Strict *bool
 }
 
 // Build type-checks the entry module, lowers it to a Go program, and compiles
@@ -162,10 +173,19 @@ func overridesFor(opts EmitOptions) frontend.ConfigOverrides {
 	ov := frontend.ConfigOverrides{
 		Target:               opts.Target,
 		AllowUnreachableCode: opts.AllowUnreachableCode,
+		Strict:               opts.Strict,
 	}
 	if opts.ImportHelpers {
 		t := true
 		ov.ImportHelpers = &t
+	}
+	// When strict is overridden off the checker no longer implies noImplicitAny, so
+	// the project's setting is carried explicitly. The adapter reads it only on the
+	// loose path, so passing it here is inert under the strict default and turns the
+	// flag on for the strict-off-but-noImplicitAny pair that needs it.
+	if opts.Strict != nil {
+		nia := opts.NoImplicitAny
+		ov.NoImplicitAny = &nia
 	}
 	return ov
 }

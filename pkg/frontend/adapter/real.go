@@ -122,6 +122,17 @@ func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Ho
 		ImportHelpers:        opts.ImportHelpers,
 		AllowUnreachableCode: opts.AllowUnreachableCode,
 	}
+	// A loose program that still asked for noImplicitAny gets the flag set directly:
+	// strict is what usually implies noImplicitAny, so with strict off the shim would
+	// leave it off unless told. This reproduces a project that turned strict off but
+	// kept noImplicitAny on, where the checker widens undefined and null to any and
+	// reports the untyped forms strict null checking would otherwise mask. When strict
+	// is on it already implies the flag, so the pointer stays nil and the behavior is
+	// unchanged.
+	if !opts.Strict && opts.NoImplicitAny {
+		noImplicitAny := true
+		shimOpts.NoImplicitAny = &noImplicitAny
+	}
 
 	for {
 		p := shim.Compile(files, shimOpts)
