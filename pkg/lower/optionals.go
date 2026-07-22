@@ -62,6 +62,9 @@ func (r *Renderer) isPlainShape(t frontend.Type) bool {
 	if _, isArray := r.prog.ElementType(t); isArray {
 		return false
 	}
+	if _, isTuple := r.prog.TupleElements(t); isTuple {
+		return false
+	}
 	if _, isClass := r.classOfType(t); isClass {
 		return false
 	}

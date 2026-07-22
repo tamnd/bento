@@ -77,14 +77,15 @@ func TestTupleReadonlyEmitsSameStruct(t *testing.T) {
 	}
 }
 
-// TestTupleHandsBackOptional pins the zero-fail edge for the element forms this
-// slice defers: an optional element lowers through value.Opt in a later sub-slice,
-// so a tuple carrying one hands back rather than emit a partial struct.
-func TestTupleHandsBackOptional(t *testing.T) {
+// TestTupleOptionalElementInterns pins that a tuple carrying an optional element now
+// interns to a struct whose optional position is a value.Opt field, so a required
+// read off it (pair[0]) lowers rather than hands back. The value.Opt lowering of the
+// optional element replaced this slice's earlier handback.
+func TestTupleOptionalElementInterns(t *testing.T) {
 	const src = "export function f(pair: [string, number?]): number { return pair[0].length; }\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "optional tuple element") {
-		t.Fatalf("optional-element tuple handback reason = %q, want an optional-element reason", reason)
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "E1 value.Opt[float64]") {
+		t.Errorf("optional tuple element did not emit a value.Opt field:\n%s", got)
 	}
 }
 
@@ -175,5 +176,54 @@ func TestTupleAssignDestructureHandsBackTypeMismatch(t *testing.T) {
 	reason := renderProgramHandBack(t, src)
 	if !strings.Contains(reason, "target's type differs from the tuple element type") {
 		t.Fatalf("type-mismatch handback reason = %q, want a target-type-differs reason", reason)
+	}
+}
+
+// TestTupleOptionalElementStruct pins the struct shape for a tuple carrying an
+// optional element: the optional position emits a value.Opt[T] field, the required
+// position stays its bare Go type, and the whole tuple no longer hands back.
+func TestTupleOptionalElementStruct(t *testing.T) {
+	const src = `const a: [number, string?] = [1, "x"];
+console.log(a[0] + "");
+`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "E1 value.Opt[value.BStr]") {
+		t.Errorf("optional tuple element did not emit a value.Opt field:\n%s", got)
+	}
+	if !strings.Contains(got, "E0 float64") {
+		t.Errorf("required tuple element should stay its bare type:\n%s", got)
+	}
+}
+
+// TestTupleOptionalElementRuns builds and runs a tuple with an optional element,
+// covering a present value (someWrap), an omitted trailing optional (noneOf), a
+// presence test t[i] !== undefined that reads the Opt, and a narrowed read past the
+// guard that unwraps with .Get().
+func TestTupleOptionalElementRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+const a: [number, string?] = [1, "x"];
+const b: [number, string?] = [2];
+console.log(a[0] + "");
+console.log(a[1] !== undefined ? a[1] : "none");
+console.log(b[1] !== undefined ? b[1] : "none");
+`
+	want := "1\nx\nnone\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("optional tuple element printed %q, want %q", got, want)
+	}
+}
+
+// TestTupleOptionalShapeMismatchHandsBack pins the zero-fail edge: a literal built at
+// its own required arity flowing into a slot whose declared tuple carries an optional
+// element at a different signature hands back rather than emit a mismatched struct.
+func TestTupleOptionalShapeMismatchHandsBack(t *testing.T) {
+	const src = `function want(t: [number, string?]): void {}
+const pair: [number, string] = [1, "x"];
+want(pair);
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "optional element") {
+		t.Fatalf("shape-mismatch handback reason = %q, want an optional-element reason", reason)
 	}
 }
