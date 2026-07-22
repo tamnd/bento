@@ -1206,7 +1206,15 @@ func (r *Renderer) objectPatternBindings(pat frontend.Node, goName string, objTy
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, r.defaultFillStmts(name, nameGo, read, def)...)
+			// An optional narrowable-box field ({} or a string-index dictionary) collapses
+			// its optional into a bare value.Value rather than a value.Opt, so its present
+			// branch takes the read directly; the Opt peel defaultFillStmts emits would call
+			// the two-argument property getter with no arguments and not build.
+			if r.isNarrowableBoxType(propType[prop]) {
+				out = append(out, r.defaultFillBoxStmts(name, nameGo, read, def)...)
+			} else {
+				out = append(out, r.defaultFillStmts(name, nameGo, read, def)...)
+			}
 			out = r.blankUnusedParamBinding(out, info.bindNode, name)
 			continue
 		}

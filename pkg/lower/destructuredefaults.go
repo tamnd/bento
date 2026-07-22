@@ -302,6 +302,29 @@ func (r *Renderer) defaultFillAssign(target ast.Expr, read ast.Expr, def ast.Exp
 	}
 }
 
+// defaultFillBoxStmts is the bare-box sibling of defaultFillStmts: the source slot is a
+// dynamic value.Value that carries its own undefined rather than a value.Opt, so the
+// present branch takes the read value directly instead of peeling it with Get. It serves
+// an optional narrowable-box field ({} or a string-index dictionary), whose optional
+// collapses into the box rather than wrapping it in an Opt, so the read is a value.Value
+// on which IsUndefined answers but Get is the two-argument property getter, not the
+// no-argument Opt unwrap. The default rides the undefined branch and evaluates at most
+// once, the same order defaultFillStmts takes.
+func (r *Renderer) defaultFillBoxStmts(name string, nameGo, read, def ast.Expr) []ast.Stmt {
+	decl := &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+		Names: []*ast.Ident{ident(name)},
+		Type:  nameGo,
+	}}}}
+	tmp := r.freshTemp()
+	fill := &ast.IfStmt{
+		Init: &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{read}},
+		Cond: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(tmp), Sel: ident("IsUndefined")}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{def}}}},
+		Else: &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{ident(tmp)}}}},
+	}
+	return []ast.Stmt{decl, fill}
+}
+
 // defaultFillUnionStmts emits the lazy default fill for a binding whose optional
 // property is a multi-member tagged-sum union (number | string | undefined) rather
 // than a value.Opt. Such a field carries the union struct directly, its undefined arm
