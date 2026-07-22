@@ -1054,6 +1054,11 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	} else if ok {
 		return empty, nil
 	}
+	if adapted, ok, err := r.arrayToLengthShape(lowered, node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return adapted, nil
+	}
 	if dyn, ok, err := r.dynArrayLiteralContextual(node, pt); err != nil {
 		return nil, err
 	} else if ok {

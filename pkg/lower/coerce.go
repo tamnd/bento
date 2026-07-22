@@ -1112,6 +1112,75 @@ func (r *Renderer) emptyArrayContextual(node frontend.Node, target frontend.Type
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo)}, true, nil
 }
 
+// arrayToLengthShape bridges an array argument into a parameter typed { length:
+// number }, the one object shape an array structurally satisfies through its length
+// alone. TypeScript accepts isEmpty([]) against isEmpty(list: {length:number}), since
+// an array carries a length, but the array's Go representation (*value.Array) is not
+// the shape's (*ObjLength). The array adapts by reading its length into a fresh
+// struct, &ObjLength{Length: arr.Len()}, which is lossless for this shape: length is
+// the only member the parameter observes. It declines for any richer shape (more
+// properties, an index signature, a method, an optional length), whose members an
+// array does not all provide, so those still hand back rather than build a struct
+// missing a field.
+func (r *Renderer) arrayToLengthShape(lowered ast.Expr, node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil {
+		return nil, false, nil
+	}
+	if _, ok := r.prog.ElementType(r.prog.TypeAt(node)); !ok {
+		return nil, false, nil
+	}
+	if !r.isArrayLengthShape(target) {
+		return nil, false, nil
+	}
+	name, err := r.decls.internStruct(r, target)
+	if err != nil {
+		return nil, false, err
+	}
+	field, ok := exportedField("length")
+	if !ok {
+		return nil, false, nil
+	}
+	return &ast.UnaryExpr{
+		Op: token.AND,
+		X: &ast.CompositeLit{
+			Type: ident(name),
+			Elts: []ast.Expr{&ast.KeyValueExpr{
+				Key:   ident(field),
+				Value: &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("Len")}},
+			}},
+		},
+	}, true, nil
+}
+
+// isArrayLengthShape reports whether t is exactly the object shape { length: number },
+// the only fixed shape arrayToLengthShape adapts an array into. It is an object with a
+// single required number-typed length property and nothing else, no array or tuple
+// element type, no string index signature, and no call or construct signature, so a
+// richer shape an array cannot fully provide is rejected here.
+func (r *Renderer) isArrayLengthShape(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.TupleElements(t); ok {
+		return false
+	}
+	if _, ok := r.prog.StringIndexType(t); ok {
+		return false
+	}
+	if calls, constructs := r.prog.Signatures(t); len(calls) > 0 || len(constructs) > 0 {
+		return false
+	}
+	props := r.prog.Properties(t)
+	if len(props) != 1 {
+		return false
+	}
+	p := props[0]
+	return p.Name == "length" && !p.Optional && p.Type.Flags&frontend.TypeNumber != 0
+}
+
 // dynArrayLiteralContextual re-emits a non-empty array literal flowing into an any[]
 // slot at the slot's boxed element type. The checker types [1] by its own contents,
 // *value.Array[float64], which a *value.Array[value.Value] parameter, return, or
