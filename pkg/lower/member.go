@@ -973,7 +973,7 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// fails on a tuple (it answers TupleElements, not ElementType) and would hand the
 	// read back. A non-literal or out-of-range index hands back inside.
 	if elems, ok := r.prog.TupleElements(r.prog.TypeAt(obj)); ok {
-		return r.tupleElementRead(obj, idxNode, elems)
+		return r.tupleElementRead(n, obj, idxNode, elems)
 	}
 	// A string read s[i] is the code-unit index read: the one-code-unit string at
 	// index i through BStr.CharAt, the bracket spelling of charAt. The divergence

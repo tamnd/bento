@@ -1068,6 +1068,14 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	if err := r.guardOptionalShapeCross(node, pt); err != nil {
 		return nil, err
 	}
+	// The tuple twin of the object guard: a tuple value of one fixed signature passed
+	// where the parameter declares a tuple whose optional element gives it a different
+	// signature cannot compile as one Go struct passed for another. A tuple literal
+	// argument builds at the parameter's shape before it reaches here (see lowerArgAt),
+	// so this fires only for a non-literal source of a fresh required shape.
+	if r.tupleShapeMismatch(r.prog.TypeAt(node), pt) {
+		return nil, &NotYetLowerable{Reason: "a tuple with an optional element passed where a different tuple shape is declared is a later slice"}
+	}
 	// An argument crosses the dynamic boundary the way an assignment does: a
 	// static value into a dynamic parameter boxes, and a dynamic value into a
 	// static parameter coerces, so a string passed for a message?: any lands as
@@ -1104,6 +1112,15 @@ func (r *Renderer) lowerArgAt(a frontend.Node, pt frontend.Type) (ast.Expr, erro
 				return nil, &NotYetLowerable{Reason: "an object literal argument in a T | undefined optional slot is a later slice"}
 			}
 			return r.objectLiteralContextual(a, shape)
+		}
+	}
+	// A tuple literal passed where the parameter declares a tuple with an optional
+	// element builds at that declared shape, not its own all-required twin, the same
+	// contextual build a declaration and an object-literal argument apply: the two
+	// intern different Go structs, so passing the literal's own would not compile.
+	if a.Kind() == frontend.NodeArrayLiteralExpression {
+		if t, elems, ok := r.contextualTupleElems(pt); ok {
+			return r.tupleLiteralAt(a, t, elems)
 		}
 	}
 	lowered, err := r.lowerExpr(a)
