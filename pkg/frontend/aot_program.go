@@ -35,8 +35,15 @@ type interner[H comparable] struct {
 	items []H
 }
 
+// newInterner reserves id 0 for the zero handle, so a zero Type (the no-answer
+// value wrapType returns for a nil handle) resolves back to a nil handle rather
+// than colliding with the first real type interned at index 0. An unresolved
+// query, an error-typed node like a computed key over an unknown symbol, yields
+// that zero Type; without the reserved slot typeHandle(zeroType) would index an
+// empty or wrong-typed slice, panicking or handing back the wrong handle.
 func newInterner[H comparable]() *interner[H] {
-	return &interner[H]{ids: map[H]int{}}
+	var zero H
+	return &interner[H]{ids: map[H]int{}, items: []H{zero}}
 }
 
 func (in *interner[H]) intern(h H) int {
