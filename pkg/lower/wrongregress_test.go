@@ -10,6 +10,24 @@ import (
 // honest outcome is a clean lowering or a hand-back. Each one built wrong Go
 // before the fix and must not again.
 
+// TestRegExpInitializerHandsBackWholeDecl proves a var declaration whose
+// initializer is a regexp literal the RE2 host cannot yet model, `var re = /x/m`
+// (a multiline literal a later slice owns), hands the whole file back rather than
+// emit a bare `var re *value.RegExp` nil placeholder a later re.test(...) would
+// dereference at runtime. A regexp literal is the catch-all NodeUnknown a type
+// annotation also wears, so the initializer detection must read the '=' from the
+// source, not the node kind, to see it is an initializer at all.
+func TestRegExpInitializerHandsBackWholeDecl(t *testing.T) {
+	const src = "var re = /.es$/m;\nvar x = re.test(\"nes\");\n"
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	p, err := r.RenderProgram(entryFile(t, prog))
+	if err == nil {
+		t.Fatalf("handing-back regexp initializer lowered, want a whole-file hand-back:\n%s", p.Source)
+	}
+}
+
 // TestForInNestedRedeclareNoUnusedBinding proves a for...in whose body only
 // re-declares the same var name, never reading the loop key, drops the binding to
 // the blank identifier. A nested `for (var x in {})` inside a loop over x is not a

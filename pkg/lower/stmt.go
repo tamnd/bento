@@ -1371,10 +1371,7 @@ func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, e
 	for _, d := range decls {
 		kids := r.prog.Children(d)
 		name, _ := localName(r.prog.Text(kids[0]))
-		initIdx := -1
-		if len(kids) >= 2 && kids[len(kids)-1].Kind() != frontend.NodeUnknown {
-			initIdx = len(kids) - 1
-		}
+		initIdx := r.bindingInitIdx(d)
 		if initIdx < 0 {
 			continue
 		}
@@ -1389,6 +1386,25 @@ func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, e
 		return &ast.EmptyStmt{Implicit: true}, true, nil
 	}
 	return &ast.AssignStmt{Lhs: lhs, Tok: token.ASSIGN, Rhs: rhs}, true, nil
+}
+
+// bindingInitIdx reports the index of a binding's initializer child, or -1 when the
+// binding carries only a name and an optional type annotation. The initializer is the
+// last child, but a regexp literal (like a delete or typeof initializer) wears the same
+// unclassified NodeUnknown a type annotation does, so the node kind alone cannot tell an
+// initialized binding from an annotated one. bindingTrailingIsAnnotation reads the '='
+// from the source to separate them: an absent '=' before the trailing node means it is
+// an annotation and the binding has no initializer. Without this, `var x = /re/g` reads
+// as a bare `var x` and emits a nil zero-value placeholder a later use dereferences.
+func (r *Renderer) bindingInitIdx(decl frontend.Node) int {
+	kids := r.prog.Children(decl)
+	if len(kids) < 2 {
+		return -1
+	}
+	if r.bindingTrailingIsAnnotation(decl) {
+		return -1
+	}
+	return len(kids) - 1
 }
 
 // buildVarDecl builds a Go var declaration statement from a set of variable
@@ -1425,10 +1441,7 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "variable name is not a Go identifier"}
 		}
-		initIdx := -1
-		if len(kids) >= 2 && kids[len(kids)-1].Kind() != frontend.NodeUnknown {
-			initIdx = len(kids) - 1
-		}
+		initIdx := r.bindingInitIdx(d)
 		// A binding with no initializer holds undefined until its first assignment, the
 		// way `var x;` reads undefined in JavaScript. A dynamic binding (any or unknown)
 		// lowers to value.Value, whose Go zero value is exactly that undefined, so a
