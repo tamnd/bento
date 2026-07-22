@@ -222,3 +222,30 @@ console.log("sync");
 		t.Fatalf("for await...of array of values = %q, want %q", got, want)
 	}
 }
+
+// TestForAwaitOfDestructurePromises checks that a for await...of with an array-destructuring
+// loop variable over an array of promises awaits each to its fulfilled tuple, then binds the
+// pattern against the awaited inner type. The element is a promise, so each awaits through
+// value.Await and the pattern binds against the promise's inner tuple.
+func TestForAwaitOfDestructurePromises(t *testing.T) {
+	src := `
+async function run(): Promise<void> {
+  console.log("start");
+  const pairs: Promise<[number, string]>[] = [
+    Promise.resolve([1, "a"] as [number, string]),
+    Promise.resolve([2, "b"] as [number, string]),
+  ];
+  for await (const [n, s] of pairs) {
+    console.log(n + ":" + s);
+  }
+  console.log("end");
+}
+run();
+console.log("sync");
+`
+	got := runProgramGo(t, src)
+	want := "start\nsync\n1:a\n2:b\nend\n"
+	if got != want {
+		t.Fatalf("for await...of destructure of promises = %q, want %q", got, want)
+	}
+}

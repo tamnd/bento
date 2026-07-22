@@ -1631,6 +1631,16 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 			return r.objectLiteralContextual(initNode, shape)
 		}
 	}
+	// An array literal in a slot whose declared tuple carries an optional element builds
+	// at the declared tuple rather than its own all-required type, so the binding's Go type
+	// is the value.Opt-carrying struct its later reads select through. The literal's own
+	// TupleElements path would build the required twin and leave the binding a mismatched
+	// struct, so the contextual build routes ahead of it.
+	if initNode.Kind() == frontend.NodeArrayLiteralExpression {
+		if t, elems, ok := r.contextualTupleElems(r.prog.TypeAt(nameNode)); ok {
+			return r.tupleLiteralAt(initNode, t, elems)
+		}
+	}
 	if initNode.Kind() == frontend.NodeArrayLiteralExpression && len(r.prog.Children(initNode)) == 0 {
 		if elem, ok := r.prog.ElementType(r.prog.TypeAt(nameNode)); ok {
 			elemType, err := r.typeExpr(elem)

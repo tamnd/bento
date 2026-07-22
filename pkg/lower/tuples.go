@@ -159,14 +159,91 @@ func tupleElemMnemonic(prog *frontend.Program, t frontend.Type) string {
 // optional element (value.Opt[T]) and a rest tail (a slice field) are later
 // sub-slices, so each hands back here, which rolls internTuple's reservation back
 // and leaves the whole tuple a clean handback rather than a partial struct.
+// contextualTupleElems reports the declared tuple type and elements an array literal in
+// this slot must build at, and true, only when the declared type is a tuple that carries an
+// optional element. That is the one case where the literal's own all-required type interns a
+// different struct than the slot declares (a value.Opt field versus a bare one), so the
+// literal must build at the declared tuple the way a contextual object literal builds at its
+// declared shape. A required-only tuple, a non-tuple, or an optional-wrapped tuple slot
+// reports false, leaving the literal to build at its own type unchanged.
+func (r *Renderer) contextualTupleElems(declared frontend.Type) (frontend.Type, []frontend.TupleElem, bool) {
+	elems, ok := r.prog.TupleElements(declared)
+	if !ok {
+		return frontend.Type{}, nil, false
+	}
+	for _, e := range elems {
+		if e.Optional {
+			return declared, elems, true
+		}
+	}
+	return frontend.Type{}, nil, false
+}
+
+// tupleShapeMismatch reports whether a value of tuple type src flows into a tuple slot
+// target that carries an optional element and whose structural signature differs, the cross
+// that would assign one interned tuple struct to a Go variable of another. Enabling the
+// optional-element struct made such a target nameable, so a required-only literal (its own
+// all-required twin) flowing into an optional slot at a site the contextual build does not
+// cover, an argument, a return, a reassignment, must hand back rather than emit a mismatched
+// struct assignment. Two tuples with the same signature share one struct and do not mismatch,
+// and a target with no optional element keeps its pre-optional behavior untouched.
+func (r *Renderer) tupleShapeMismatch(src, target frontend.Type) bool {
+	tElems, tOk := r.prog.TupleElements(target)
+	if !tOk {
+		return false
+	}
+	sElems, sOk := r.prog.TupleElements(src)
+	if !sOk {
+		return false
+	}
+	hasOpt := false
+	for _, e := range tElems {
+		if e.Optional {
+			hasOpt = true
+			break
+		}
+	}
+	if !hasOpt {
+		return false
+	}
+	n1, n2 := 0, 0
+	return tupleKey(r.prog, tElems, map[int]int{}, &n1) != tupleKey(r.prog, sElems, map[int]int{}, &n2)
+}
+
+// tupleElemInner is the value type an optional tuple element's value.Opt wraps: the
+// checker may already widen an optional element to T | undefined, so a two-member
+// optional element type unwraps to its present member, and a bare element type is its
+// own inner. It is the T a value.Some[T]/value.None[T]/value.Opt[T] the optional element
+// lowers through is parameterized on.
+func (r *Renderer) tupleElemInner(e frontend.TupleElem) frontend.Type {
+	if inner, ok := r.optionalInner(r.prog.UnionMembers(e.Type)); ok {
+		return inner
+	}
+	return e.Type
+}
+
 func renderTupleBody(r *Renderer, name string, elems []frontend.TupleElem) (*ast.GenDecl, error) {
 	fields := &ast.FieldList{}
 	for i, e := range elems {
-		if e.Optional {
-			return nil, &NotYetLowerable{Flags: e.Type.Flags, Reason: "an optional tuple element lowers through value.Opt, a later slice"}
-		}
 		if e.Rest {
 			return nil, &NotYetLowerable{Flags: e.Type.Flags, Reason: "a tuple rest tail lowers to a slice field, a later slice"}
+		}
+		// An optional element holds a value.Opt[T] the same way a T | undefined binding or
+		// object field does, so a position the literal supplies boxes to value.Some and one
+		// it omits fills value.None, and a t[i] read hands back the Opt the presence-test and
+		// narrowed-read machinery already unwraps.
+		if e.Optional {
+			inner := r.tupleElemInner(e)
+			innerGo, err := r.typeExpr(inner)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			fields.List = append(fields.List, &ast.Field{
+				Names: []*ast.Ident{ident("E" + itoa(i))},
+				Type:  index(sel("value", "Opt"), innerGo),
+			})
+			continue
 		}
 		goType, err := r.typeExpr(e.Type)
 		if err != nil {
@@ -194,31 +271,69 @@ func renderTupleBody(r *Renderer, name string, elems []frontend.TupleElem) (*ast
 // type, so a literal element that flows across the static/dynamic boundary or into a
 // union field is bridged the same way an array element or an assignment is. A spread
 // or a hole in the literal hands back, since its arity no longer lines up one-to-one
-// with the tuple positions.
+// with the tuple positions. A literal shorter than the arity is admitted only when every
+// missing position is a trailing optional element: each supplied position boxes to
+// value.Some if its element is optional, and each omitted trailing optional fills
+// value.None, the same present/absent boxing a contextual object literal applies.
 func (r *Renderer) tupleLiteral(n frontend.Node, elems []frontend.TupleElem) (ast.Expr, error) {
-	t := r.prog.TypeAt(n)
+	return r.tupleLiteralAt(n, r.prog.TypeAt(n), elems)
+}
+
+// tupleLiteralAt lowers a tuple literal to build at a given tuple type and its elements,
+// rather than the literal's own inferred type. The plain tupleLiteral passes the literal's
+// checker type; a contextual slot whose declared tuple carries an optional element passes
+// the declared type instead, so `const a: [number, string?] = [1, "x"]` builds the
+// value.Opt-carrying declared struct the binding's Go type expects rather than the literal's
+// all-required twin, the same contextual build objectLiteralContextual applies to objects.
+func (r *Renderer) tupleLiteralAt(n frontend.Node, t frontend.Type, elems []frontend.TupleElem) (ast.Expr, error) {
 	name, err := r.decls.internTuple(r, t, elems)
 	if err != nil {
 		return nil, err
 	}
 	kids := r.prog.Children(n)
-	if len(kids) != len(elems) {
+	if len(kids) > len(elems) {
 		return nil, &NotYetLowerable{Reason: "a tuple literal whose element count does not match the tuple arity (a spread or a hole) is a later slice"}
 	}
-	elts := make([]ast.Expr, 0, len(kids))
+	// A shorter literal is only sound when every position past its end is an optional
+	// element value.None can fill; a missing required or rest position hands back.
+	for i := len(kids); i < len(elems); i++ {
+		if !elems[i].Optional {
+			return nil, &NotYetLowerable{Reason: "a tuple literal shorter than the tuple arity that omits a required or rest position is a later slice"}
+		}
+	}
+	elts := make([]ast.Expr, 0, len(elems))
 	for i, k := range kids {
 		if k.Kind() == frontend.NodeSpreadElement {
 			return nil, &NotYetLowerable{Reason: "a tuple literal spread element is a later slice"}
+		}
+		inner := elems[i].Type
+		if elems[i].Optional {
+			inner = r.tupleElemInner(elems[i])
 		}
 		v, err := r.lowerExpr(k)
 		if err != nil {
 			return nil, err
 		}
-		v, err = r.coerceToType(v, k, elems[i].Type)
+		v, err = r.coerceToType(v, k, inner)
 		if err != nil {
 			return nil, err
 		}
+		if elems[i].Optional {
+			v, err = r.someWrap(v, inner)
+			if err != nil {
+				return nil, err
+			}
+		}
 		elts = append(elts, &ast.KeyValueExpr{Key: ident("E" + itoa(i)), Value: v})
+	}
+	// Each omitted trailing optional position carries an explicit value.None so the
+	// composite names every field and the struct value is fully initialized.
+	for i := len(kids); i < len(elems); i++ {
+		none, err := r.noneOf(r.tupleElemInner(elems[i]))
+		if err != nil {
+			return nil, err
+		}
+		elts = append(elts, &ast.KeyValueExpr{Key: ident("E" + itoa(i)), Value: none})
 	}
 	return &ast.CompositeLit{Type: ident(name), Elts: elts}, nil
 }
@@ -349,24 +464,35 @@ func (r *Renderer) tupleLiteralIndex(idxNode frontend.Node, arity int) (int, boo
 }
 
 // tupleElementRead lowers a tuple element access t[i] with a literal index to the Go
-// field read t.E<i>. A non-literal or out-of-range index, and an access on an
-// optional or rest element whose field this slice does not emit, each hand back. It
-// is the tuple counterpart of the array At read: where an array reads a[i] through a
-// bounds-checked At because its length is dynamic, a tuple's positions are fixed and
+// field read t.E<i>. A non-literal or out-of-range index, and an access on a rest
+// element whose slice field this slice does not emit, each hand back; an optional
+// element reads its value.Opt field, unwrapping with .Get() where the checker narrowed
+// the access past a presence guard. It is the tuple counterpart of the array At read:
+// where an array reads a[i] through a bounds-checked At because its length is dynamic,
+// a tuple's positions are fixed and
 // typed, so the read is a plain, statically sound struct selector.
-func (r *Renderer) tupleElementRead(obj, idxNode frontend.Node, elems []frontend.TupleElem) (ast.Expr, error) {
+func (r *Renderer) tupleElementRead(n, obj, idxNode frontend.Node, elems []frontend.TupleElem) (ast.Expr, error) {
 	idx, ok := r.tupleLiteralIndex(idxNode, len(elems))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "a tuple element access with a non-literal or out-of-range index is a later slice"}
 	}
-	if elems[idx].Optional || elems[idx].Rest {
-		return nil, &NotYetLowerable{Reason: "a tuple element access on an optional or rest element is a later slice"}
+	if elems[idx].Rest {
+		return nil, &NotYetLowerable{Reason: "a tuple element access on a rest element is a later slice"}
 	}
 	recv, err := r.lowerExpr(obj)
 	if err != nil {
 		return nil, err
 	}
-	return &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(idx))}, nil
+	field := &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(idx))}
+	// An optional position stores value.Opt[T]. A read the checker narrowed to T,
+	// past a presence guard like t[i] !== undefined, unwraps with .Get(); a read
+	// where the type still carries undefined keeps the bare Opt, which is what the
+	// presence test and an Opt-to-Opt assignment want. This mirrors the identifier
+	// read side's isOptBinding && !isOptional unwrap.
+	if elems[idx].Optional && !r.isOptional(n) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: field, Sel: ident("Get")}}, nil
+	}
+	return field, nil
 }
 
 // tupleDestructure lowers a variable-declaration array destructure whose source is a

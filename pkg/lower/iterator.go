@@ -309,8 +309,22 @@ func (r *Renderer) lowerForAwaitOf(declNode, iterable, bodyNode frontend.Node) (
 		return nil, &NotYetLowerable{Reason: "for await...of with other than a single loop binding is a later slice"}
 	}
 	dkids := r.prog.Children(decls[0])
+	// A destructuring loop variable, `for await (const [a, b] of pairs)`, binds each
+	// awaited element through the shared pattern binder against a per-iteration temporary,
+	// the async mirror of the sync path's forOfDestructure. Only the sync-array fallback is
+	// driven; a user async iterable with a pattern keeps the iterator-close bookkeeping the
+	// single-variable path already carries, so it hands back inside the destructure builder.
+	if len(dkids) == 1 && dkids[0].Kind() == frontend.NodeUnknown && r.patternNode(dkids[0]) {
+		if _, ok := r.asyncIteratorShape(r.prog.TypeAt(iterable)); ok {
+			return nil, &NotYetLowerable{Reason: "for await...of over an async iterable with a destructuring loop variable is a later slice"}
+		}
+		if elemT, ok := r.prog.ElementType(r.prog.TypeAt(iterable)); ok {
+			return r.forAwaitOfSyncArrayDestructure(iterable, dkids[0], bodyNode, elemT)
+		}
+		return nil, &NotYetLowerable{Reason: "for await...of destructuring over this iterable is a later slice"}
+	}
 	if len(dkids) != 1 || dkids[0].Kind() != frontend.NodeIdentifier {
-		return nil, &NotYetLowerable{Reason: "for await...of with a destructuring or annotated loop variable is a later slice"}
+		return nil, &NotYetLowerable{Reason: "for await...of with an annotated loop variable is a later slice"}
 	}
 	name, ok := localName(r.prog.Text(dkids[0]))
 	if !ok {
@@ -368,6 +382,80 @@ func (r *Renderer) forAwaitOfSyncArray(iterable, bindNode frontend.Node, name st
 		// as an expression statement that discards its result rather than binding it.
 		loopStmts = append(loopStmts, &ast.ExprStmt{X: awaitCall})
 	}
+	loopStmts = append(loopStmts, body.List...)
+	return &ast.RangeStmt{
+		Key:   ident("_"),
+		Value: ident(elemName),
+		Tok:   token.DEFINE,
+		X:     &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Elems")}},
+		Body:  &ast.BlockStmt{List: loopStmts},
+	}, nil
+}
+
+// forAwaitOfSyncArrayDestructure lowers a for await...of with a destructuring loop
+// variable over an array, the async mirror of the sync forOfDestructure: it ranges the
+// backing slice, awaits each element, then binds the pattern against a per-iteration
+// temporary through the shared recursive binder. The await form follows the element type
+// the same way forAwaitOfSyncArray draws it, a promise element awaited to its inner value
+// and a plain non-thenable element awaited to itself, and the pattern binds against that
+// awaited type, since it is what the loop variable's checker type resolves against. The
+// same shape guards the single-variable and sync destructuring paths draw hold here: a
+// dynamic source, a dynamic awaited element, a thenable-or-dynamic element, and an unused
+// bound name each hand back rather than mislower.
+func (r *Renderer) forAwaitOfSyncArrayDestructure(iterable, pattern, bodyNode frontend.Node, elemT frontend.Type) (ast.Stmt, error) {
+	var awaitFn string
+	var boundT frontend.Type
+	switch {
+	case r.isPromiseElem(elemT):
+		inner, _ := r.promiseElem(elemT)
+		awaitFn = "Await"
+		boundT = inner
+	case r.isDefiniteNonThenable(elemT):
+		awaitFn = "AwaitValue"
+		boundT = elemT
+	default:
+		return nil, &NotYetLowerable{Reason: "for await...of over a sync iterable whose element may be a thenable or is dynamic is a later slice"}
+	}
+	// A boxed source carries no Go .Elems() slice to range, and a dynamic awaited element
+	// has no static shape for the typed binder, the same two boundaries forOfDestructure
+	// draws before it binds a pattern against a shaped element.
+	if r.isDynamic(iterable) {
+		return nil, &NotYetLowerable{Reason: "a destructuring for await...of over an iterable that lowers to a boxed value is a later slice"}
+	}
+	if boundT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return nil, &NotYetLowerable{Reason: "a destructuring for await...of whose awaited element is dynamic is a later slice"}
+	}
+	// The shared binder declares each bound name with :=, which Go rejects if the body
+	// never reads it, so a pattern with an unused bound name hands back the same way the
+	// sync destructuring path does.
+	for _, nm := range r.patternBoundNames(pattern) {
+		if !r.bodyUsesName(bodyNode, nm) {
+			return nil, &NotYetLowerable{Reason: "a for await...of destructuring with an unused bound name is a later slice"}
+		}
+	}
+	src, err := r.lowerExpr(iterable)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.loopBody(bodyNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	elemName := r.freshTemp()
+	awaitCall := &ast.CallExpr{
+		Fun:  sel("value", awaitFn),
+		Args: []ast.Expr{ident(r.asyncCo), ident(elemName)},
+	}
+	// The awaited value is bound to a fresh temporary each iteration, then the pattern
+	// binds against it the same way forOfDestructure binds against its range temporary.
+	tmp := r.freshTemp()
+	binds, err := r.bindSubPattern(pattern, ident(tmp), boundT, token.DEFINE)
+	if err != nil {
+		return nil, err
+	}
+	loopStmts := []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{awaitCall}}}
+	loopStmts = append(loopStmts, binds...)
 	loopStmts = append(loopStmts, body.List...)
 	return &ast.RangeStmt{
 		Key:   ident("_"),

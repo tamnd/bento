@@ -381,6 +381,9 @@ func (r *Renderer) coerceToType(expr ast.Expr, src frontend.Node, target fronten
 	if err := r.guardOptionalShapeCrossTypes(r.prog.TypeAt(src), target); err != nil {
 		return nil, err
 	}
+	if r.tupleShapeMismatch(r.prog.TypeAt(src), target) {
+		return nil, &NotYetLowerable{Reason: "a tuple with an optional element built at a different arity or shape than the slot declares is a later slice"}
+	}
 	srcDyn := r.isDynamic(src)
 	tgtDyn := target.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(target)
 	switch {
