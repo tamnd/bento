@@ -1,1 +1,2 @@
 feature = "string-bool-arithmetic"
+handback = "an arithmetic operator has a string or boolean operand the checker rejects with 2362 or 2363"

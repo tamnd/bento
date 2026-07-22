@@ -581,9 +581,20 @@ type Renderer struct {
 	// spans to mark a checker-rejected call it lowered as seen. It is built lazily
 	// alongside notAssignSpans.
 	overload2769Spans []frontend.Span
-	// notAssignReady marks notAssignSpans, assign2322Spans, and overload2769Spans as
-	// built, so the empty slices are not rebuilt on every bridge. It stays false until the
-	// first lookup collects the 2345, 2322, and 2769 spans.
+	// arithOperandSpans holds the byte spans of the program's code 2362 and 2363
+	// diagnostics, the "left-hand side" and "right-hand side of an arithmetic operation
+	// must be of type number, bigint, or any" errors. A string or boolean operand to a
+	// numeric operator (1 * `x`) is one JavaScript runs by coercing through ToNumber, so
+	// the emit path lowers it to a running program, but TypeScript rejects it. No lowering
+	// can make that program one TypeScript accepts, so the mere presence of such a span
+	// hands the whole unit back rather than emit Go for a program the checker refuses. A
+	// .js source carries no such diagnostic, so its coercion is left alone. It is built
+	// lazily alongside notAssignSpans.
+	arithOperandSpans []frontend.Span
+	// notAssignReady marks notAssignSpans, assign2322Spans, overload2769Spans, and
+	// arithOperandSpans as built, so the empty slices are not rebuilt on every bridge. It
+	// stays false until the first lookup collects the 2345, 2322, 2769, 2362, and 2363
+	// spans.
 	notAssignReady bool
 	// seenAssign records the not-assignable spans (2345 and 2322) a guarded bridge
 	// inspected, the argument, constructor, and binding sites where the representation

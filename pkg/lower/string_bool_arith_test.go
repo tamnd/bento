@@ -1,130 +1,78 @@
 package lower
 
 import (
-	"bytes"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// runTolerantGo renders src through the tolerant front door, the path a program
-// with a string or boolean arithmetic operand takes because the strict compile
-// helper would reject the 2362/2363 diagnostic, then builds and runs the emitted
-// Go and returns its standard output. It mirrors runProgramGo for the tolerant
-// front door.
-func runTolerantGo(t *testing.T, src string) string {
-	t.Helper()
-	source := renderTolerant(t, src)
-	return cachedGoRun(t, source, func() string {
-		dir, err := os.MkdirTemp(repoRoot(t), "arithrun-")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = os.RemoveAll(dir) }()
-		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(source), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command("go", "run", ".")
-		cmd.Dir = dir
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("go run failed: %v\n--- program ---\n%s\n--- stderr ---\n%s", err, source, stderr.String())
-		}
-		return stdout.String()
-	})
-}
+// A string or boolean operand of an arithmetic operator, `"5" - 1` or `true * 3`, is
+// one JavaScript runs by coercing through ToNumber but TypeScript rejects with 2362
+// (left-hand side) or 2363 (right-hand side): the operand is not a number, bigint, or
+// any. The ahead-of-time path compiles TypeScript, so the checker's rejection stands
+// and the honest outcome is a hand-back, not the running ToNumber coercion the earlier
+// tolerant slice emitted. The hand-back keys on the checker's 2362/2363 span, so it
+// fires only where the checker actually reported the error: a .js source, which the
+// checker does not flag, would keep the coercion once the AOT path admits .js.
 
-// TestStringOperandSubtracts pins that a numeric string subtracted from a number
-// coerces through ToNumber and runs: "5" - 1 is 4, exactly as JavaScript
-// evaluates it, even though the checker rejects the string operand with 2362.
-func TestStringOperandSubtracts(t *testing.T) {
+// TestStringOperandArithHandsBack pins that a numeric string subtracted from a number,
+// `"5" - 1`, hands the whole file back rather than emit the ToNumber coercion, since
+// the checker rejects the string operand with 2362.
+func TestStringOperandArithHandsBack(t *testing.T) {
 	const src = `let s = "5";
 let n = 1;
-console.log(s - n);
+let r = s - n;
 `
-	got := runTolerantGo(t, src)
-	if got != "4\n" {
-		t.Errorf("string minus number ran wrong\n got: %q\nwant: %q", got, "4\n")
-	}
+	assertArithHandsBack(t, src)
 }
 
-// TestBooleanOperandMultiplies pins that a boolean arithmetic operand coerces
-// through ToNumber: true is 1 and false is 0, so true * 3 is 3 and false * 3 is 0.
-func TestBooleanOperandMultiplies(t *testing.T) {
+// TestBooleanOperandArithHandsBack pins that a boolean arithmetic operand, `true * 3`,
+// hands back the same way: a boolean is not a number-typed operand the checker accepts
+// in an arithmetic operation.
+func TestBooleanOperandArithHandsBack(t *testing.T) {
 	const src = `let t = true;
-let f = false;
 let n = 3;
-console.log(t * n);
-console.log(f * n);
+let r = t * n;
 `
-	got := runTolerantGo(t, src)
-	if got != "3\n0\n" {
-		t.Errorf("boolean times number ran wrong\n got: %q\nwant: %q", got, "3\n0\n")
-	}
+	assertArithHandsBack(t, src)
 }
 
-// TestNonNumericStringIsNaN pins the coercion's edge: a string ToNumber cannot
-// parse is NaN, so "x" * 2 is NaN and prints as NaN, not a parse crash.
-func TestNonNumericStringIsNaN(t *testing.T) {
-	const src = `let s = "x";
-console.log(s * 2);
-`
-	got := runTolerantGo(t, src)
-	if got != "NaN\n" {
-		t.Errorf("non-numeric string arithmetic ran wrong\n got: %q\nwant: %q", got, "NaN\n")
-	}
-}
-
-// TestStringRemainderAndExponent pins that % and ** reach the coercion too, since
-// they lower to math.Mod and value.Pow rather than a plain Go operator: "7" % 3
-// is 1 and "2" ** 3 is 8.
-func TestStringRemainderAndExponent(t *testing.T) {
+// TestStringRemainderExponentHandsBack pins that % and **, the operators that lower to
+// math.Mod and value.Pow rather than a plain Go operator, hand back on a string operand
+// too, so no arithmetic operator slips a checker-rejected string operand through.
+func TestStringRemainderExponentHandsBack(t *testing.T) {
 	const src = `let a = "7";
-let b = "2";
-console.log(a % 3);
-console.log(b ** 3);
+let r = a % 3;
+let s = a ** 3;
 `
-	got := runTolerantGo(t, src)
-	if got != "1\n8\n" {
-		t.Errorf("string remainder or exponent ran wrong\n got: %q\nwant: %q", got, "1\n8\n")
-	}
+	assertArithHandsBack(t, src)
 }
 
-// TestStringBitwiseCoerces pins that a bitwise operator coerces a string operand
-// to int32 the same way a number operand does: "6" & 3 is 2 and "1" << 4 is 16.
-func TestStringBitwiseCoerces(t *testing.T) {
+// TestStringBitwiseHandsBack pins that a bitwise operator, which coerces its operands
+// to int32, hands back on a string operand as well: `"6" & 3` is a 2363 the checker
+// rejects, so it does not emit the int32 coercion.
+func TestStringBitwiseHandsBack(t *testing.T) {
 	const src = `let a = "6";
-let b = "1";
-console.log(a & 3);
-console.log(b << 4);
+let r = a & 3;
 `
-	got := runTolerantGo(t, src)
-	if got != "2\n16\n" {
-		t.Errorf("string bitwise ran wrong\n got: %q\nwant: %q", got, "2\n16\n")
+	assertArithHandsBack(t, src)
+}
+
+// assertArithHandsBack renders src through the tolerant front door and fails unless the
+// whole unit hands back, the outcome an arithmetic operator with a string or boolean
+// operand must take now the checker's 2362/2363 rejection is honored.
+func assertArithHandsBack(t *testing.T, src string) {
+	t.Helper()
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
+		t.Fatalf("arithmetic on a string or boolean operand lowered, want a hand-back:\n%s", src)
 	}
 }
 
-// TestStringArithLowersToStringToNumber pins the emit shape: a string operand of
-// an arithmetic operator lowers through value.StringToNumber, not a bare string
-// the Go operator would reject.
-func TestStringArithLowersToStringToNumber(t *testing.T) {
-	const src = `let s = "5";
-console.log(s - 1);
-`
-	source := renderTolerant(t, src)
-	if !strings.Contains(source, "value.StringToNumber") {
-		t.Errorf("string operand was not coerced through value.StringToNumber:\n%s", source)
-	}
-}
-
-// TestPureNumberArithNotCoerced pins that the coercion path does not over-fire: a
-// plain two-number subtraction stays the direct Go operator and never routes
-// through value.StringToNumber, so the string and boolean case is the only one
-// this slice changes.
+// TestPureNumberArithNotCoerced pins that the hand-back does not over-fire: a plain
+// two-number subtraction carries no 2362/2363, so it stays the direct Go operator, never
+// routes through value.StringToNumber, and never hands back.
 func TestPureNumberArithNotCoerced(t *testing.T) {
 	const src = `let a = 5;
 let b = 1;
@@ -136,14 +84,15 @@ console.log(a - b);
 	}
 }
 
-// TestObjectOperandArithHandsBack pins the zero-fail boundary: an object operand of
-// an arithmetic operator is not a number-coercible primitive, so the operator is
-// not folded into the string and boolean coercion and hands back rather than
-// emitting Go the operator cannot take on a struct pointer.
+// TestObjectOperandArithHandsBack pins the zero-fail boundary: an object operand of an
+// arithmetic operator is not a number-coercible primitive, so the operator hands back
+// rather than emit Go the operator cannot take on a struct pointer. It hands back
+// whether or not the checker also reported a 2362/2363, so the boundary holds
+// independently of the diagnostic-driven arithmetic guard.
 func TestObjectOperandArithHandsBack(t *testing.T) {
 	const src = `let o = { v: 1 };
 let s = "5";
-console.log(s * o);
+let r = s * o;
 `
 	prog := compileTolerant(t, src)
 	r := NewRenderer(prog)
