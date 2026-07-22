@@ -477,6 +477,7 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 		}
 	}
 	info.fields = append(paramProps, info.fields...)
+	r.disambiguateFieldGoNames(info)
 	// An abstract method is virtual by declaration: it claims its vtable slot
 	// here, before any subclass registers, so the vtable exists even when no
 	// override is in this module. Only the root may declare one; an abstract
@@ -515,6 +516,51 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 	r.classes[name] = info
 	r.classOrder = append(r.classOrder, name)
 	return nil
+}
+
+// disambiguateFieldGoNames renames an instance field whose exported Go name
+// collides with a getter, method, or setter Go name. TypeScript member names are
+// case sensitive, so a field x and a getter X are distinct properties, yet both
+// export to the Go name X, which would give the struct a field and a method of
+// the same name, a shape Go rejects. The field is the internal backing store,
+// reached only through its classField.goName, since every this.x read resolves
+// the field through lookupField and every write and the constructor fold read the
+// same goName, so renaming the field alone threads through every access without
+// touching the getter the property's public reads call. Only a field colliding
+// with this class's own non-field member is renamed; two fields sharing a Go name
+// stay a later slice, since both are storage and neither is merely a backing store
+// to move, and a field colliding with a base member keeps its existing handback,
+// which reserves the base's namespace rather than shadowing it.
+func (r *Renderer) disambiguateFieldGoNames(info *classInfo) {
+	// Names this class's own instance namespace spends on non-field members.
+	taken := map[string]bool{}
+	for _, m := range info.methods {
+		taken[m.goName] = true
+	}
+	for _, g := range info.getters {
+		taken[g.goName] = true
+	}
+	for _, s := range info.setters {
+		taken[s.goName] = true
+	}
+	// Every field's Go name, so a rename lands on a spelling no field already holds.
+	fieldNames := map[string]bool{}
+	for _, f := range info.fields {
+		fieldNames[f.goName] = true
+	}
+	for i := range info.fields {
+		f := &info.fields[i]
+		if !taken[f.goName] {
+			continue
+		}
+		delete(fieldNames, f.goName)
+		name := f.goName + "_"
+		for taken[name] || fieldNames[name] {
+			name += "_"
+		}
+		f.goName = name
+		fieldNames[name] = true
+	}
 }
 
 // checkAccessorClashes rejects a class whose accessors collide with the names
