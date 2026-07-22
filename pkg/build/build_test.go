@@ -67,3 +67,44 @@ func TestNoImplicitAnyGatesUnderProjectSetting(t *testing.T) {
 		t.Fatalf("hand-back reason = %q, want the checker's implicit-any message", err.Error())
 	}
 }
+
+// TestAllowUnreachableCodeGates proves the project's allowUnreachableCode setting
+// reaches the checker: an exhaustive switch that leaves a trailing statement
+// unreachable lowers under bento's default, where reachability is not a build
+// error, but hands back once the project set allowUnreachableCode false, where
+// the checker reports the dead statement. Emitting Go for a program the project
+// rejects would be unsound, so threading the option is what matches the AOT gate
+// to the checker.
+func TestAllowUnreachableCodeGates(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "unreachable.ts")
+	src := "const f = (x: any): number => {\n" +
+		"  switch (typeof x) {\n" +
+		"    case 'string': return 0\n" +
+		"    case 'number': return 0\n" +
+		"    case 'bigint': return 0\n" +
+		"    case 'boolean': return 0\n" +
+		"    case 'symbol': return 0\n" +
+		"    case 'undefined': return 0\n" +
+		"    case 'object': return 0\n" +
+		"    case 'function': return 0\n" +
+		"  }\n" +
+		"  x;\n" +
+		"}\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatalf("write entry: %v", err)
+	}
+
+	if _, err := EmitGo(entry, "test"); err != nil {
+		t.Fatalf("unreachable statement handed back under the default project, want a lowering: %v", err)
+	}
+
+	deny := false
+	_, err := EmitGoWithOptions(entry, "test", EmitOptions{AllowUnreachableCode: &deny})
+	if err == nil {
+		t.Fatal("unreachable statement lowered under allowUnreachableCode:false, want a hand-back")
+	}
+	if !strings.Contains(err.Error(), "Unreachable code") {
+		t.Fatalf("hand-back reason = %q, want the checker's unreachable-code message", err.Error())
+	}
+}

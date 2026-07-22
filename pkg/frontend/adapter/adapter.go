@@ -111,10 +111,12 @@ type DiagnosticInfo struct {
 // that pkg/frontend hands the adapter to build a program. Emit options are
 // absent because bento does not emit JavaScript.
 type CompilerOptions struct {
-	Strict           bool
-	StrictNullChecks bool
-	NoImplicitAny    bool
-	Target           string
+	Strict               bool
+	StrictNullChecks     bool
+	NoImplicitAny        bool
+	AllowUnreachableCode *bool
+	ImportHelpers        bool
+	Target               string
 	Lib              []string
 	Module           string
 	ModuleResolution string

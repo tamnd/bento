@@ -51,11 +51,14 @@ type LoadOptions struct {
 // ConfigOverrides are compiler-option overrides applied on top of the resolved
 // tsconfig. Zero-valued fields leave the tsconfig value in place.
 type ConfigOverrides struct {
-	Strict       *bool
-	SkipLibCheck *bool
-	AllowJS      *bool
-	CheckJS      *bool
-	Paths        map[string][]string
+	Strict               *bool
+	SkipLibCheck         *bool
+	AllowJS              *bool
+	CheckJS              *bool
+	AllowUnreachableCode *bool
+	ImportHelpers        *bool
+	Target               string
+	Paths                map[string][]string
 }
 
 // Load discovers or reads the tsconfig, constructs the compiler host, builds the
@@ -133,6 +136,15 @@ func applyOverrides(co *adapter.CompilerOptions, ov ConfigOverrides) {
 	}
 	if ov.CheckJS != nil {
 		co.CheckJS = *ov.CheckJS
+	}
+	if ov.AllowUnreachableCode != nil {
+		co.AllowUnreachableCode = ov.AllowUnreachableCode
+	}
+	if ov.ImportHelpers != nil {
+		co.ImportHelpers = *ov.ImportHelpers
+	}
+	if ov.Target != "" {
+		co.Target = ov.Target
 	}
 	if ov.Paths != nil {
 		co.Paths = ov.Paths

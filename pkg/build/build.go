@@ -55,6 +55,20 @@ type EmitOptions struct {
 	// to a dynamic value. When it did not, the report is bento's own added
 	// strictness and the form lowers as before.
 	NoImplicitAny bool
+	// Target names the emit target the checker resolves against, for example
+	// "es2015". An empty string keeps bento's esnext default. It matters for the
+	// diagnostics that depend on downleveling, such as the helper a pre-es2017
+	// async function needs under ImportHelpers.
+	Target string
+	// ImportHelpers reproduces a project built with the tslib helper library, so
+	// the checker reports the helper a downlevel construct would need but the
+	// program does not import.
+	ImportHelpers bool
+	// AllowUnreachableCode, when non-nil, sets allowUnreachableCode. A nil pointer
+	// keeps the checker's default of reporting unreachable code; setting it false
+	// is what makes an unreachable statement a build-stopping error rather than
+	// dead code the lowerer would emit.
+	AllowUnreachableCode *bool
 }
 
 // Build type-checks the entry module, lowers it to a Go program, and compiles
@@ -137,6 +151,25 @@ func Compile(entry string) (string, error) {
 // paths the program reaches through a go: call. Build consults those paths to
 // detect cgo before it runs the toolchain (section 9.5); Compile and EmitGo, which
 // stop before the toolchain, ignore them.
+// overridesFor maps the project settings a caller supplies onto the frontend's
+// config overrides, so the checker resolves the case under the same options
+// TypeScript did rather than bento's fixed defaults. Only the settings a case
+// actually changes are folded on; bento keeps strict checking and its esnext
+// default for everything a case leaves unset. NoImplicitAny is not folded here:
+// bento already checks strictly, so the checker reports the untyped form
+// regardless, and whether that report gates is decided in firstError.
+func overridesFor(opts EmitOptions) frontend.ConfigOverrides {
+	ov := frontend.ConfigOverrides{
+		Target:               opts.Target,
+		AllowUnreachableCode: opts.AllowUnreachableCode,
+	}
+	if opts.ImportHelpers {
+		t := true
+		ov.ImportHelpers = &t
+	}
+	return ov
+}
+
 func compileProgram(entry string, opts EmitOptions) (string, []string, error) {
 	if isJavaScript(entry) {
 		return "", nil, fmt.Errorf("bento build: %s: JavaScript entries are a later slice; the AOT path compiles TypeScript (.ts) today", entry)
@@ -148,7 +181,7 @@ func compileProgram(entry string, opts EmitOptions) (string, []string, error) {
 	// canonical path and miss the one beside the link. Canonicalizing here keeps the
 	// entry and its resolved siblings on one spelling for the whole build.
 	entry = canonicalPath(entry)
-	prog, err := frontend.Load(frontend.LoadOptions{Roots: []string{entry}})
+	prog, err := frontend.Load(frontend.LoadOptions{Roots: []string{entry}, Overrides: overridesFor(opts)})
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
