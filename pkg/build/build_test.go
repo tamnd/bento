@@ -38,3 +38,32 @@ func TestEmitGoStampsAndParses(t *testing.T) {
 		t.Fatalf("emitted source does not parse as Go: %v", err)
 	}
 }
+
+// TestNoImplicitAnyGatesUnderProjectSetting proves the implicit-any toleration is
+// scoped to the default project: an untyped parameter lowers under bento's
+// default, where noImplicitAny is off and the checker's report is bento's own
+// added strictness, but hands back once the project asked for noImplicitAny,
+// where the same report is a rejection TypeScript stands behind. Emitting running
+// Go for a program noImplicitAny refused would be unsound, so honoring the
+// project setting is what keeps the AOT gate matched to the checker.
+func TestNoImplicitAnyGatesUnderProjectSetting(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "untyped.ts")
+	// A parameter with no annotation is the untyped form the checker reports as
+	// 7006 under noImplicitAny; it resolves to `any` either way.
+	if err := os.WriteFile(entry, []byte("function id(x) { return x; }\nconsole.log(id(1));\n"), 0o644); err != nil {
+		t.Fatalf("write entry: %v", err)
+	}
+
+	if _, err := EmitGo(entry, "test"); err != nil {
+		t.Fatalf("untyped parameter handed back under the default project, want a lowering: %v", err)
+	}
+
+	_, err := EmitGoWithOptions(entry, "test", EmitOptions{NoImplicitAny: true})
+	if err == nil {
+		t.Fatal("untyped parameter lowered under noImplicitAny, want a hand-back")
+	}
+	if !strings.Contains(err.Error(), "implicitly has an 'any' type") {
+		t.Fatalf("hand-back reason = %q, want the checker's implicit-any message", err.Error())
+	}
+}

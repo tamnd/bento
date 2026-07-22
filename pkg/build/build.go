@@ -39,6 +39,24 @@ type Options struct {
 	AllowCgo bool
 }
 
+// EmitOptions carries the case-level compiler settings bento honors when it
+// checks and gates a program, the parts of a tsconfig that change whether the
+// checker's rejection stands. A zero value is bento's default project, which
+// the CLI uses until tsconfig discovery lands; the AOT conformance harness
+// supplies them per case so bento checks a case under the same options
+// TypeScript did.
+type EmitOptions struct {
+	// NoImplicitAny is the project's effective noImplicitAny setting, set
+	// directly or implied by strict. bento always checks strictly to get the
+	// most precise types it can, so the checker reports an untyped form whether
+	// or not the project asked for it; this flag records whether the project
+	// actually asked. When it did, the report is a rejection TypeScript stands
+	// behind, so bento hands the unit back rather than lowering the untyped form
+	// to a dynamic value. When it did not, the report is bento's own added
+	// strictness and the form lowers as before.
+	NoImplicitAny bool
+}
+
 // Build type-checks the entry module, lowers it to a Go program, and compiles
 // that program to a native binary at Options.Output. A type error in the entry,
 // a construct the lowerer does not yet cover, or a Go toolchain failure is
@@ -63,7 +81,7 @@ func Build(opts Options) error {
 		return fmt.Errorf("bento build: output %s: %w", opts.Output, err)
 	}
 
-	source, goPaths, err := compileProgram(entry)
+	source, goPaths, err := compileProgram(entry, EmitOptions{})
 	if err != nil {
 		return err
 	}
@@ -83,6 +101,14 @@ func Build(opts Options) error {
 // the standard "Code generated ... DO NOT EDIT." marker, so Go tooling treats a
 // golden as generated and never reformats or vets it as hand-written source.
 func EmitGo(entry, stamp string) (string, error) {
+	return EmitGoWithOptions(entry, stamp, EmitOptions{})
+}
+
+// EmitGoWithOptions is EmitGo under an explicit project configuration. It lets a
+// caller that knows the case's compiler options, the AOT conformance harness,
+// check and gate the case the way TypeScript would rather than under bento's
+// fixed defaults; EmitGo is the same call with the default project.
+func EmitGoWithOptions(entry, stamp string, opts EmitOptions) (string, error) {
 	abs, err := filepath.Abs(entry)
 	if err != nil {
 		return "", fmt.Errorf("bento build: %s: %w", entry, err)
@@ -90,7 +116,7 @@ func EmitGo(entry, stamp string) (string, error) {
 	if _, err := os.Stat(abs); err != nil {
 		return "", fmt.Errorf("bento build: %s: %w", entry, err)
 	}
-	source, _, err := compileProgram(abs)
+	source, _, err := compileProgram(abs, opts)
 	if err != nil {
 		return "", err
 	}
@@ -102,7 +128,7 @@ func EmitGo(entry, stamp string) (string, error) {
 // it lowers to. It is the front half of Build, split out so a caller can inspect
 // or golden the generated Go without running the toolchain.
 func Compile(entry string) (string, error) {
-	source, _, err := compileProgram(entry)
+	source, _, err := compileProgram(entry, EmitOptions{})
 	return source, err
 }
 
@@ -111,7 +137,7 @@ func Compile(entry string) (string, error) {
 // paths the program reaches through a go: call. Build consults those paths to
 // detect cgo before it runs the toolchain (section 9.5); Compile and EmitGo, which
 // stop before the toolchain, ignore them.
-func compileProgram(entry string) (string, []string, error) {
+func compileProgram(entry string, opts EmitOptions) (string, []string, error) {
 	if isJavaScript(entry) {
 		return "", nil, fmt.Errorf("bento build: %s: JavaScript entries are a later slice; the AOT path compiles TypeScript (.ts) today", entry)
 	}
@@ -126,7 +152,7 @@ func compileProgram(entry string) (string, []string, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
-	if diag := firstError(prog); diag != "" {
+	if diag := firstError(prog, opts); diag != "" {
 		return "", nil, fmt.Errorf("bento build: %s: %s", entry, diag)
 	}
 
@@ -288,16 +314,20 @@ func isJavaScript(entry string) bool {
 // firstError returns the message of the first type error in the program, or the
 // empty string when it type-checks cleanly. A build stops on the first error so
 // its message is the one the user sees, the same contract the CLI type-checker
-// keeps. An implicit-any diagnostic is skipped rather than treated as fatal:
-// bento checks strictly to get the most precise types it can, but noImplicitAny
-// only reports that a form was left untyped, it does not change the resolved
-// type, which is already `any`. The lowerer runs `any` through its dynamic value
-// path (the same path an explicit `x: any` takes), so an untyped parameter,
-// variable, binding element, or member lowers to a dynamic slot instead of being
-// refused. Skipping the diagnostic here is equivalent to a noImplicitAny:false
-// project for these forms, but scoped to bento's AOT gate and kept per-family so
-// only the untyped-form codes are tolerated; every other error still gates.
-func firstError(prog *frontend.Program) string {
+// keeps. An implicit-any diagnostic is skipped rather than treated as fatal when
+// the project did not ask for noImplicitAny: bento checks strictly to get the
+// most precise types it can, but noImplicitAny only reports that a form was left
+// untyped, it does not change the resolved type, which is already `any`. The
+// lowerer runs `any` through its dynamic value path (the same path an explicit
+// `x: any` takes), so an untyped parameter, variable, binding element, or member
+// lowers to a dynamic slot instead of being refused. Skipping the diagnostic is
+// equivalent to a noImplicitAny:false project for these forms, but scoped to
+// bento's AOT gate and kept per-family so only the untyped-form codes are
+// tolerated; every other error still gates. When the project did ask for
+// noImplicitAny (opts.NoImplicitAny, set directly or through strict), the report
+// is a rejection TypeScript stands behind rather than bento's added strictness,
+// so it gates like any other error and the unit hands back.
+func firstError(prog *frontend.Program, opts EmitOptions) string {
 	for _, d := range prog.Diagnostics() {
 		if d.Category != frontend.CategoryError {
 			continue
@@ -312,7 +342,7 @@ func firstError(prog *frontend.Program) string {
 		if isPrivateNameMiss(d) {
 			return d.Message
 		}
-		if toleratedImplicitAny[d.Code] {
+		if !opts.NoImplicitAny && toleratedImplicitAny[d.Code] {
 			continue
 		}
 		if toleratedDynamicMember[d.Code] {
@@ -387,6 +417,14 @@ func isPrivateNameMiss(d frontend.Diagnostic) bool {
 // serve yet (an array pattern, a rename, a default, a nested element) hands back
 // cleanly rather than emitting broken Go, so tolerating the code never produces Go
 // that does not compile.
+//
+// The circular self-reference reports (7022, 7023, 7024) are deliberately not
+// here. They do not name an untyped form that resolves to `any`; they name a
+// declaration whose type the checker could not compute at all because it
+// references itself, `var a = { f: a }` being the small case. There is no dynamic
+// slot that stands in for a type the checker never formed, so the honest outcome
+// is a handback, not a lowering. Their absence gates every such case rather than
+// emitting Go for a program TypeScript rejects outright.
 var toleratedImplicitAny = map[int]bool{
 	7005: true, // Variable 'X' implicitly has an 'any' type.
 	7006: true, // Parameter 'X' implicitly has an 'any' type.
@@ -395,7 +433,6 @@ var toleratedImplicitAny = map[int]bool{
 	7011: true, // Function expression, which lacks return-type annotation, implicitly has an 'any' return type.
 	7018: true, // Object literal's property 'X' implicitly has an 'any' type.
 	7019: true, // Rest parameter 'X' implicitly has an 'any[]' type.
-	7022: true, // 'X' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
 	7031: true, // Binding element 'X' implicitly has an 'any' type.
 	7032: true, // Property 'X' implicitly has type 'any', because its set accessor lacks a parameter type annotation.
 	7033: true, // Property 'X' implicitly has type 'any', because its get accessor lacks a return type annotation.
