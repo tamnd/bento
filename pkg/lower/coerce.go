@@ -1084,6 +1084,75 @@ func (r *Renderer) dynArrayLiteralContextual(node frontend.Node, target frontend
 	return &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "Value")), Args: elems}, true, nil
 }
 
+// optArrayLiteralContextual re-emits a non-empty array literal flowing into a slot
+// whose element type is optional, T | undefined that lowers to value.Opt[T], at that
+// optional element type: each present element wraps in value.Some[T] and the literal
+// re-emits as value.NewArray[value.Opt[T]]. The checker types [1, 2, 3] by its own
+// contents, *value.Array[float64], which a *value.Array[value.Opt[float64]] slot
+// rejects at go build the way an any[] slot rejects a concretely-typed literal, since
+// Go's array header is invariant in its element type where JavaScript boxes silently.
+// The contextual optional-element type lives on the slot, not the literal, so like
+// emptyArrayContextual and dynArrayLiteralContextual the fix sits at the coercion
+// boundary. A slot spelled (number | undefined)[] | undefined carries the array under
+// an outer optional, so the outer optional is stripped first and the rebuilt array
+// re-wrapped in value.Some to match the slot. It declines a target that is not an
+// array with an optional element, a literal the checker already typed with an optional
+// element (whose plain path boxes the elements already), and a literal carrying a
+// spread, leaving the ordinary path to box or hand back.
+func (r *Renderer) optArrayLiteralContextual(node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil || node.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(node)
+	if len(kids) == 0 {
+		return nil, false, nil
+	}
+	arrType := target
+	wrapSome := false
+	if inner, ok := r.optionalInner(r.prog.UnionMembers(target)); ok {
+		arrType, wrapSome = inner, true
+	}
+	tgtElem, ok := r.prog.ElementType(arrType)
+	if !ok || !r.isOptionalType(tgtElem) {
+		return nil, false, nil
+	}
+	if srcElem, ok := r.prog.ElementType(r.prog.TypeAt(node)); ok && r.isOptionalType(srcElem) {
+		return nil, false, nil
+	}
+	elemGo, err := r.typeExpr(tgtElem)
+	if err != nil {
+		return nil, false, nil
+	}
+	elems := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
+		if k.Kind() == frontend.NodeSpreadElement {
+			return nil, false, nil
+		}
+		lowered, err := r.lowerExpr(k)
+		if err != nil {
+			return nil, false, err
+		}
+		boxed, ok, err := r.boxToOptional(lowered, k, tgtElem)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
+			boxed = lowered
+		}
+		elems = append(elems, boxed)
+	}
+	r.requireImport(valuePkg)
+	arr := &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: elems}
+	if !wrapSome {
+		return arr, true, nil
+	}
+	wrapped, err := r.someWrap(arr, arrType)
+	if err != nil {
+		return nil, false, err
+	}
+	return wrapped, true, nil
+}
+
 // coerceFuncValue bridges a function value into a function-typed slot whose Go
 // signature differs only in the return position, the way JavaScript's function
 // bivariance lets a `() => void` fill a `() => any` slot and a `() => T` fill a
@@ -1693,6 +1762,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	} else if ok {
 		return dyn, nil
 	}
+	if opt, ok, err := r.optArrayLiteralContextual(srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return opt, nil
+	}
 	if fn, ok, err := r.coerceFuncValue(expr, srcNode, r.retType); err != nil {
 		return nil, err
 	} else if ok {
@@ -1741,6 +1815,11 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 		return nil, err
 	} else if ok {
 		return dyn, nil
+	}
+	if opt, ok, err := r.optArrayLiteralContextual(src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return opt, nil
 	}
 	if fn, ok, err := r.coerceFuncValue(expr, src, r.prog.TypeAt(target)); err != nil {
 		return nil, err

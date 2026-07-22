@@ -1054,6 +1054,11 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	} else if ok {
 		return dyn, nil
 	}
+	if opt, ok, err := r.optArrayLiteralContextual(node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return opt, nil
+	}
 	if fn, ok, err := r.coerceFuncValue(lowered, node, pt); err != nil {
 		return nil, err
 	} else if ok {
