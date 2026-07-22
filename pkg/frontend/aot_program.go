@@ -35,15 +35,8 @@ type interner[H comparable] struct {
 	items []H
 }
 
-// newInterner reserves id 0 for the zero handle, so a zero Type (the no-answer
-// value wrapType returns for a nil handle) resolves back to a nil handle rather
-// than colliding with the first real type interned at index 0. An unresolved
-// query, an error-typed node like a computed key over an unknown symbol, yields
-// that zero Type; without the reserved slot typeHandle(zeroType) would index an
-// empty or wrong-typed slice, panicking or handing back the wrong handle.
 func newInterner[H comparable]() *interner[H] {
-	var zero H
-	return &interner[H]{ids: map[H]int{}, items: []H{zero}}
+	return &interner[H]{ids: map[H]int{}}
 }
 
 func (in *interner[H]) intern(h H) int {
@@ -438,8 +431,14 @@ func (p *Program) TupleElements(t Type) ([]TupleElem, bool) {
 }
 
 // LiteralValue returns the literal value of a literal type, so lowering can fold
-// closed unions into integer tags and refine integers.
+// closed unions into integer tags and refine integers. The no-answer zero Type
+// (Flags 0, the value wrapType returns for a nil handle, as from an error-typed
+// node like a computed key over an unresolved symbol) has no literal and no
+// handle to resolve; folding it must decline, not index the type interner.
 func (p *Program) LiteralValue(t Type) (LiteralValue, bool) {
+	if t == (Type{}) {
+		return LiteralValue{}, false
+	}
 	return p.adapter.LiteralOf(p.handle, p.typeHandle(t))
 }
 
