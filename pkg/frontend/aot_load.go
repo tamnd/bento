@@ -52,6 +52,7 @@ type LoadOptions struct {
 // tsconfig. Zero-valued fields leave the tsconfig value in place.
 type ConfigOverrides struct {
 	Strict               *bool
+	NoImplicitAny        *bool
 	SkipLibCheck         *bool
 	AllowJS              *bool
 	CheckJS              *bool
@@ -127,6 +128,9 @@ func Load(opts LoadOptions) (*Program, error) {
 func applyOverrides(co *adapter.CompilerOptions, ov ConfigOverrides) {
 	if ov.Strict != nil {
 		co.Strict = *ov.Strict
+	}
+	if ov.NoImplicitAny != nil {
+		co.NoImplicitAny = *ov.NoImplicitAny
 	}
 	if ov.SkipLibCheck != nil {
 		co.SkipLibCheck = *ov.SkipLibCheck
