@@ -2003,6 +2003,15 @@ func (r *Renderer) bridgeClassBinding(expr ast.Expr, src frontend.Node, target f
 	if !ok {
 		return expr, nil
 	}
+	// A class used as a value is the static-side singleton, not an instance, so the
+	// instance-to-base upcast below does not apply: the singleton carries no
+	// embedded base to select through. It binds to a base-class-typed slot (a
+	// typeof A a subclass B is assigned to) as itself, the class object, the same
+	// value TypeScript assigns. classOfNode below would read the source's typeof B
+	// as the class B and drive the upcast, so the class-value case is caught first.
+	if _, ok := r.classNameRef(src); ok {
+		return expr, nil
+	}
 	srcInfo, ok := r.classOfNode(src)
 	if !ok {
 		// The source node may carry a polymorphic type the checker types as a type

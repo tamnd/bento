@@ -61,3 +61,45 @@ var f = () => _this;
 		t.Fatalf("class-as-value run mismatch:\n got %q\nwant %q", got, "")
 	}
 }
+
+// TestSubclassValueToBaseTypedSlot pins that a subclass used as a value bound to a
+// base-class-typed slot, a typeof A slot a B is assigned into, coerces as the
+// static-side singleton rather than through the instance-to-base embedding upcast,
+// which would select a base the empty static struct does not embed and fail to
+// build.
+func TestSubclassValueToBaseTypedSlot(t *testing.T) {
+	src := `abstract class A {}
+class B extends A {
+    constructor(x: number) {
+        super();
+    }
+}
+const b: typeof A = B;
+`
+	out := renderProgramTolerant(t, src)
+	if !strings.Contains(out, "b := BClassValue") {
+		t.Fatalf("subclass value did not bind as the singleton:\n%s", out)
+	}
+	if strings.Contains(out, "BClassValue.A") {
+		t.Fatalf("instance upcast wrongly selected an embedded base off the static struct:\n%s", out)
+	}
+}
+
+// TestSubclassValueToBaseTypedSlotRuns builds and runs the shape to prove the
+// subclass value binds to the base-typed slot and the program completes with no
+// output.
+func TestSubclassValueToBaseTypedSlotRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `class A {
+    constructor(public x: string) {}
+}
+class C extends A {
+    constructor(x: string) { super(x); }
+}
+var r3: typeof A = C;
+`
+	out := renderProgram(t, src)
+	if got := goRunSource(t, out); got != "" {
+		t.Fatalf("subclass-to-base run mismatch:\n got %q\nwant %q", got, "")
+	}
+}
