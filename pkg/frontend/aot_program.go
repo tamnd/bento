@@ -343,10 +343,12 @@ func (p *Program) Properties(t Type) []Property {
 	out := make([]Property, len(infos))
 	for i, pi := range infos {
 		out[i] = Property{
-			Name:     pi.Name,
-			Type:     p.wrapType(pi.Type),
-			Optional: pi.Optional,
-			Readonly: pi.Readonly,
+			Name:              pi.Name,
+			Type:              p.wrapType(pi.Type),
+			Optional:          pi.Optional,
+			Readonly:          pi.Readonly,
+			WriteType:         p.wrapType(pi.WriteType),
+			DivergentAccessor: pi.DivergentAccessor,
 		}
 	}
 	return out

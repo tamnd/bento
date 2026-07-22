@@ -334,6 +334,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.missingPropertyRead(n) {
 		return true
 	}
+	// A read of a divergent accessor member lowers to the field's boxed value.Value
+	// (decls.go), so it is a dynamic value even though the checker types it by the
+	// narrower get type. Routing it here unboxes the read down to whatever static
+	// slot it flows into, the same as any other boxed member read.
+	if r.divergentAccessorRead(n) {
+		return true
+	}
 	// A call whose callee is a binding stored as a boxed value.Value returns a box:
 	// the runtime Call always yields a value.Value. Control-flow analysis may have
 	// evolved an implicit-any callee to a concrete return type at the call site,
@@ -415,6 +422,38 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 		}
 	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
+// divergentAccessorRead reports whether n reads a member whose get and set types
+// diverge, so its Go field is a boxed value.Value (decls.go renderStructBody). The
+// checker types the read by the get type, a clean primitive or union the static
+// coercer would drive over the box and mistype, so recognizing the read here keeps
+// it on the dynamic path where the surrounding coercion unboxes it to the slot it
+// flows into. Only a dotted read off a fixed-shape object routes here; a class
+// receiver keeps its accessor-method read and an array or built-in its own path.
+func (r *Renderer) divergentAccessorRead(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return false
+	}
+	// A class receiver keeps its accessor-method read, c.Foo(), whose getter method
+	// already returns the get type and whose setter takes the set type, so its
+	// divergent accessor never lands in a boxed field and must stay off this path.
+	if _, ok := r.classReceiver(kids[0]); ok {
+		return false
+	}
+	objType := r.prog.TypeAt(kids[0])
+	if objType.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, isArray := r.prog.ElementType(objType); isArray {
+		return false
+	}
+	sp, ok := r.shapeProp(objType, strings.TrimSpace(r.prog.Text(kids[1])))
+	return ok && sp.DivergentAccessor
 }
 
 // objectBoxedResultCall reports whether n is a call to Object.fromEntries or

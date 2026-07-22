@@ -430,10 +430,14 @@ func (a *RealAdapter) PropertiesOf(p ProgramHandle, t TypeHandle) []PropertyInfo
 	props := c.GetPropertiesOfType(typeOfHandle(t))
 	out := make([]PropertyInfo, 0, len(props))
 	for _, sym := range props {
+		readT := c.GetTypeOfSymbol(sym)
+		writeT := c.GetWriteTypeOfSymbol(sym)
 		out = append(out, PropertyInfo{
-			Name:     sym.Name,
-			Type:     wrapType(c.GetTypeOfSymbol(sym)),
-			Optional: sym.Flags&shim.SymbolFlagsOptional != 0,
+			Name:              sym.Name,
+			Type:              wrapType(readT),
+			Optional:          sym.Flags&shim.SymbolFlagsOptional != 0,
+			WriteType:         wrapType(writeT),
+			DivergentAccessor: writeT != nil && writeT != readT,
 		})
 	}
 	return out

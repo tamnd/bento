@@ -1524,6 +1524,28 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding initialized by a divergent accessor read holds the boxed
+		// value.Value the field carries (decls.go). When the binding's inferred type
+		// is a clean primitive the box coerces down to it through bindingInit below,
+		// the same as any other dynamic read. When it is a union or object shape, the
+		// box has no single Go value to coerce to and the primitive coercer hands
+		// back, so the binding lands in a value.Value slot and is marked dynamic,
+		// exactly the regExpBoxedResultCall sibling above.
+		if r.divergentAccessorRead(kids[initIdx]) &&
+			r.prog.TypeAt(kids[0]).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+			boxInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{boxInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err
@@ -3477,6 +3499,18 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	lhs, err := r.lowerExpr(target)
 	if err != nil {
 		return nil, false, err
+	}
+	// A write into a divergent accessor member lands in the field's boxed
+	// value.Value slot (decls.go), so the value boxes through boxOperand the same
+	// way a write to a dynamic receiver does, rather than coercing to the set type
+	// and dropping a concrete Go value into the interface-free box struct. A read
+	// of the member unboxes back on the dynamic path (coerce.go).
+	if sp, ok := r.shapeProp(objType, r.prog.Text(tParts[1])); ok && sp.DivergentAccessor && !compound {
+		val, err := r.boxOperand(parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.AssignStmt{Lhs: []ast.Expr{lhs}, Tok: token.ASSIGN, Rhs: []ast.Expr{val}}, true, nil
 	}
 	if !compound {
 		rhs, err := r.lowerExpr(parts[2])

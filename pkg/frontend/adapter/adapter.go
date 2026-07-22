@@ -50,6 +50,14 @@ type PropertyInfo struct {
 	Type     TypeHandle
 	Optional bool
 	Readonly bool
+	// WriteType is the type a write to the member accepts. For a plain property
+	// it is the same as Type; for a set accessor whose parameter type differs
+	// from the get accessor's return type it is the wider setter type.
+	WriteType TypeHandle
+	// DivergentAccessor is true when the member is a get/set accessor pair whose
+	// write type differs from its read type, so a struct field at the read type
+	// cannot hold every legal write.
+	DivergentAccessor bool
 }
 
 // ParamInfo is one parameter of a signature.
