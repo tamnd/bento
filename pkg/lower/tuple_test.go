@@ -278,3 +278,38 @@ func TestTupleParamDestructureHandsBackOptional(t *testing.T) {
 		t.Fatalf("optional tuple-parameter handback reason = %q, want an optional-element reason", reason)
 	}
 }
+
+// TestTupleParamNestedPattern proves a nested array pattern in a tuple parameter binds
+// its inner names off the position the outer element selects: [[a, b], c]: [[number,
+// string], boolean] reads the inner tuple field into a temporary, then binds a and b off
+// it, the same read-into-a-temp the array-pattern binder takes.
+func TestTupleParamNestedPattern(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function f([[a, b], c]: [[number, string], boolean]): string {
+  return a + b + c;
+}
+console.log(f([[1, "x"], true]));
+`
+	want := "1xtrue\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("nested tuple-parameter pattern printed %q, want %q", got, want)
+	}
+}
+
+// TestTupleParamDeadDefault proves a default over a required tuple position is dead, since
+// the field is always present, so the binding reads the field directly and the default
+// never fires.
+func TestTupleParamDeadDefault(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function g([p, q = 9]: [number, number]): number {
+  return p + q;
+}
+console.log(g([3, 4]) + "");
+`
+	want := "7\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("dead-default tuple parameter printed %q, want %q", got, want)
+	}
+}

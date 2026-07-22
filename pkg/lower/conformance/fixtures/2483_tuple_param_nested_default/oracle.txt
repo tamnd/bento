@@ -1,0 +1,6 @@
+== stdout:
+1:x:true
+7
+ab2
+== exit:
+0
