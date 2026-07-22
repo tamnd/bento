@@ -1,0 +1,6 @@
+== stdout:
+1:a
+2:b
+done
+== exit:
+0
