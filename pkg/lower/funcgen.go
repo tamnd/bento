@@ -1260,11 +1260,13 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 // is a tuple, function f([a, b]: [number, string]), from the matching positional field
 // of the parameter's held struct: a := __0.E0, b := __0.E1. It is the parameter sibling
 // of tupleDestructure, which binds a const [a, b] = pair declaration; there the source is
-// destructured into a temporary, here the source is already the parameter's Go local. The
-// same edges tupleDestructure defers hand back rather than mislower: a rest element, a
-// pattern binding more names than the tuple has, a nested pattern, a default, an optional
-// or rest tuple position, and a binding whose declared Go type differs from the tuple
-// element's. Each bound name is blanked when unused, the same declared-and-not-used guard
+// destructured into a temporary, here the source is already the parameter's Go local. A
+// nested pattern over a required position binds its inner tree through bindSubPattern the
+// same way the array-pattern binder does, and a default over a required position is dead
+// (the field is always present) so it binds the read directly. A rest element, a pattern
+// binding more names than the tuple has, an optional or rest tuple position, and a binding
+// whose declared Go type differs from the tuple element's each hand back rather than
+// mislower. Each bound name is blanked when unused, the same declared-and-not-used guard
 // the array-pattern binder applies.
 func (r *Renderer) tupleParamBindings(pat frontend.Node, goName string, tupleType frontend.Type, elems []frontend.TupleElem) ([]ast.Stmt, error) {
 	patElems := r.prog.Children(pat)
@@ -1292,11 +1294,24 @@ func (r *Renderer) tupleParamBindings(pat frontend.Node, goName string, tupleTyp
 		if err != nil {
 			return nil, err
 		}
-		if info.nested != nil || info.hasDefault {
-			return nil, &NotYetLowerable{Reason: "a tuple-parameter nested pattern or defaulted element is a later slice"}
-		}
+		// An optional or rest position holds a value.Opt or slice field a plain read, a
+		// nested bind, or a default fill would each have to peel; that stays a later slice.
 		if elems[i].Optional || elems[i].Rest {
 			return nil, &NotYetLowerable{Reason: "a tuple-parameter bind of an optional or rest element is a later slice"}
+		}
+		read := &ast.SelectorExpr{X: ident(goName), Sel: ident("E" + strconv.Itoa(i))}
+		// A nested pattern binds the whole inner tree at body entry against the field the
+		// position selects, held in a temporary the inner pattern reads off, the same
+		// read-into-a-temp step the array-pattern binder and the const tuple destructure take.
+		if info.nested != nil {
+			tmp := r.freshTemp()
+			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{read}})
+			inner, err := r.bindSubPattern(info.nested, ident(tmp), elems[i].Type, token.DEFINE)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, inner...)
+			continue
 		}
 		name, ok := localName(r.prog.Text(info.nameNode))
 		if !ok {
@@ -1319,10 +1334,15 @@ func (r *Renderer) tupleParamBindings(pat frontend.Node, goName string, tupleTyp
 		} else if !same {
 			return nil, &NotYetLowerable{Reason: "a tuple-parameter binding whose type differs from the tuple element type is a later slice"}
 		}
+		// A default over a required position can never fire: the field is always present,
+		// never undefined, so the default is dead and the read binds directly. This mirrors
+		// the object-pattern binder's dead-default-over-a-required-field case. A default over
+		// an optional position, whose field is a value.Opt the fill would peel, is a later
+		// slice the optional-position guard above already hands back.
 		out = append(out, &ast.AssignStmt{
 			Lhs: []ast.Expr{ident(name)},
 			Tok: token.DEFINE,
-			Rhs: []ast.Expr{&ast.SelectorExpr{X: ident(goName), Sel: ident("E" + strconv.Itoa(i))}},
+			Rhs: []ast.Expr{read},
 		})
 		out = r.blankUnusedParamBinding(out, info.nameNode, name)
 	}
