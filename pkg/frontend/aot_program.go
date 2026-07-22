@@ -354,6 +354,19 @@ func (p *Program) Properties(t Type) []Property {
 	return out
 }
 
+// StringIndexType returns the value type of a type's string index signature, the
+// string in { [x: string]: string }, and ok=false for a type with no string
+// indexer. It lets lowering tell a dictionary shape from a fixed one so an
+// index-signature object lowers to a dynamic bag rather than a struct that would
+// drop the signature.
+func (p *Program) StringIndexType(t Type) (Type, bool) {
+	h, ok := p.adapter.StringIndexOf(p.handle, p.typeHandle(t))
+	if !ok {
+		return Type{}, false
+	}
+	return p.wrapType(h), true
+}
+
 // ElementType returns the element type of an array or tuple type, and ok=false
 // for a non-array.
 func (p *Program) ElementType(t Type) (Type, bool) {

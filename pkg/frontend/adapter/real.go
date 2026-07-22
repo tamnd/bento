@@ -516,6 +516,34 @@ func (a *RealAdapter) TupleElemsOf(p ProgramHandle, t TypeHandle) ([]TupleElem, 
 	return out, true
 }
 
+// StringIndexOf returns the value type of an object type's string index signature,
+// the string in { [x: string]: string }, and false for a type with no string
+// indexer. It reads the checker's own index infos and keeps the one keyed by string,
+// so a dictionary shape is told from a fixed one by the signature the checker
+// resolved rather than by a name convention.
+func (a *RealAdapter) StringIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool) {
+	c, release := prog(p).checker()
+	defer release()
+	ty := typeOfHandle(t)
+	if ty == nil {
+		return nil, false
+	}
+	for _, info := range c.GetIndexInfosOfType(ty) {
+		if info == nil {
+			continue
+		}
+		key := info.KeyType()
+		val := info.ValueType()
+		if key == nil || val == nil {
+			continue
+		}
+		if key.Flags()&shim.TypeFlagsString != 0 {
+			return wrapType(val), true
+		}
+	}
+	return nil, false
+}
+
 func (a *RealAdapter) LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool) {
 	ty := typeOfHandle(t)
 	if ty == nil {

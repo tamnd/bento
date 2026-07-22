@@ -8,7 +8,10 @@
 
 package value
 
-import "sort"
+import (
+	"reflect"
+	"sort"
+)
 
 // Object is the storage behind a KindObject or KindArray value. A plain object
 // keeps its properties in insertion order as parallel key and value slices, the
@@ -83,6 +86,18 @@ func Arg(args []Value, i int) Value {
 // key at a time as it reads an object literal.
 func NewObject() Value {
 	return objectValue(&Object{kind: KindObject})
+}
+
+// ObjectFromStruct boxes a generated fixed-shape object struct into a live plain
+// object Value, one property per exported field named by its json tag, so a value
+// whose Go representation is a concrete struct can flow into a dynamic slot (an
+// index-signature dictionary, an any, a JS object parameter) the same way an object
+// literal boxed straight to a Value does. An absent optional field is dropped and an
+// embedded struct flattens its fields in, matching how the JSON walk reads the shape.
+// It reuses the same reflection the JSON replacer already uses to turn a struct into
+// a Value object, so the two never disagree on which fields a shape contributes.
+func ObjectFromStruct(v any) Value {
+	return jsonStructToValue(reflect.ValueOf(v))
 }
 
 // NewArrayValue returns an array value holding the given elements, the target

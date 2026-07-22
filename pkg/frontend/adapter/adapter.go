@@ -200,6 +200,12 @@ type TSAdapter interface {
 	// a non-tuple. Each element carries its element type, optional and rest flags,
 	// and label, so lowering can spell the positional struct a tuple maps to.
 	TupleElemsOf(p ProgramHandle, t TypeHandle) ([]TupleElem, bool)
+	// StringIndexOf returns the value type of an object type's string index
+	// signature, the string in { [x: string]: string }, and false for a type
+	// with no string indexer. It lets lowering tell a dictionary shape from a
+	// fixed one so an index-signature object lowers to a dynamic bag rather than
+	// an empty struct that drops the signature.
+	StringIndexOf(p ProgramHandle, t TypeHandle) (TypeHandle, bool)
 	LiteralOf(p ProgramHandle, t TypeHandle) (LiteralValue, bool)
 
 	// Module graph.

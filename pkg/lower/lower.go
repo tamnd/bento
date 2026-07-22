@@ -1115,6 +1115,18 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "ZonedDateTime")), nil
 		}
+		if r.isStringIndexDict(t) {
+			// A pure string-index dictionary, { [x: string]: string } with no declared
+			// members, is a bag keyed by arbitrary strings, not a fixed shape. Interning
+			// it to a struct would drop the signature and leave an empty struct no other
+			// object assigns to, so it lowers to the dynamic value.Value the property bag
+			// uses: any object flows into it by boxing, and a keyed read or write
+			// dispatches on the boxed kind at runtime. A shape that carries declared
+			// members beside its index signature keeps the struct below, where its known
+			// fields still lower.
+			r.requireImport(valuePkg)
+			return sel("value", "Value"), nil
+		}
 		return r.renderObject(t)
 
 	case t.Flags&frontend.TypeUnion != 0:
@@ -1315,12 +1327,71 @@ func (r *Renderer) renderMap(t frontend.Type) (ast.Expr, error) {
 // reference identity and === is reference equality, which Go pointer identity
 // gives exactly. The struct itself is registered in the decl set, interned by
 // the type's structural identity so the same shape yields the same Go type.
+// isStringIndexDict reports whether a type is a pure string-index dictionary, an
+// object with a string index signature and no declared members, the shape typeExpr
+// lowers to a dynamic value.Value rather than a fixed struct. The no-declared-members
+// gate keeps every other object out: an array, a tuple, a Map, a class, and a
+// record with named fields all carry properties, so only a bare { [x: string]: T }
+// matches, and the empty object { } (no index signature) does not. isDynamic and
+// typeExpr both consult it so the "is a boxed value.Value" decision and the Go type
+// they emit for the slot never disagree.
+func (r *Renderer) isStringIndexDict(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if len(r.prog.Properties(t)) != 0 {
+		return false
+	}
+	_, ok := r.prog.StringIndexType(t)
+	return ok
+}
+
 func (r *Renderer) renderObject(t frontend.Type) (ast.Expr, error) {
 	name, err := r.decls.internStruct(r, t)
 	if err != nil {
 		return nil, err
 	}
 	return star(ident(name)), nil
+}
+
+// isFixedObjectShape reports whether a type's Go representation is a plain interned
+// object struct, the { x: string } a binding or a return holds by pointer, so a value
+// of it can be boxed into a value.Object by copying its fields. It requires the type to
+// carry declared members and to lower to a bare pointer-to-struct, and it excludes a
+// class instance (also a pointer to a struct, but with identity and methods a field
+// copy would drop), a tuple, an array, and a callable, whose own paths lower them to
+// something other than an object struct. The special runtime object types (Map, Set,
+// Promise, a typed array) lower to a value.X pointer, a selector rather than a bare
+// identifier, so the final shape check rules them out too.
+func (r *Renderer) isFixedObjectShape(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if len(r.prog.Properties(t)) == 0 {
+		return false
+	}
+	if _, ok := r.classOfType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.TupleElements(t); ok {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	if calls, _ := r.prog.Signatures(t); len(calls) > 0 {
+		return false
+	}
+	ge, err := r.typeExpr(t)
+	if err != nil {
+		return false
+	}
+	st, ok := ge.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	_, ok = st.X.(*ast.Ident)
+	return ok
 }
 
 // isGoOpaqueType reports whether an object type is a go: opaque handle, the

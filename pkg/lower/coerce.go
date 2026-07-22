@@ -421,6 +421,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 			}
 		}
 	}
+	// A pure string-index dictionary, { [x: string]: string }, lowers to a boxed
+	// value.Value (lower.go isStringIndexDict), so a value of it is dynamic even
+	// though the checker types it object, not any. Routing it here boxes a fixed
+	// object flowing into such a slot and dispatches a keyed read or write off it
+	// through the value model, the same as any other boxed object.
+	if r.isStringIndexDict(r.prog.TypeAt(n)) {
+		return true
+	}
 	return r.prog.TypeAt(n).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 }
 
@@ -664,6 +672,17 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	// non-primitive box would otherwise fall past to the handback.
 	if r.producesBoxedValue(src) {
 		return expr, nil
+	}
+	// A value whose Go shape is a fixed-object struct, a { x: string } binding flowing
+	// into a dynamic slot (an any, an index-signature dictionary), boxes into a live
+	// value.Object copying its fields, so the box carries the same properties the struct
+	// held. value.ObjectFromStruct reuses the reflection the JSON walk already uses, so
+	// the two agree on which fields a shape contributes. It routes here for a struct
+	// value the boxLiteralToDynamic case above does not catch, which handles only a
+	// literal written at the boxing site, not an already-bound struct.
+	if r.isFixedObjectShape(r.prog.TypeAt(src)) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{expr}}, nil
 	}
 	// A typed-array element read flowing into a dynamic slot boxes through GetIndex,
 	// the read that answers the undefined an out-of-range or non-canonical index
