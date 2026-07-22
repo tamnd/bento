@@ -30,6 +30,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		} else if handled {
 			return expr, nil
 		}
+		// A compile-time namespace binding (a composed module's import * as m, or the
+		// awaited static dynamic import const m = await import("./mod")) carries no
+		// runtime value: member reads resolve to the sibling's package-level Go names and
+		// the declaration lowers to nothing. Reaching a bare identifier read here means the
+		// namespace is used as a whole value (returned, passed on), which has no Go object
+		// to stand for, so it hands back rather than name an undeclared m. The member path
+		// intercepts m.x before this point, so only the value use lands here.
+		if name := r.prog.Text(n); r.internalNamespaces[name] || r.dynImportNamespaces[name] {
+			return nil, &NotYetLowerable{Reason: "a module namespace used as a whole value is a later slice"}
+		}
 		// A bare reference to a top-level function used as a value (passed as a
 		// callback, stored in a variable) is the function itself, so it lowers to the
 		// exported Go name its declaration takes, the same name a direct call uses. It
