@@ -1044,6 +1044,11 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 // shared by a provided argument and a default filled into an omitted slot, so both
 // cross the parameter boundary by the same rule.
 func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.Type) (ast.Expr, error) {
+	if tup, ok, err := r.arrayAssertedToTuple(lowered, node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return tup, nil
+	}
 	if empty, ok, err := r.emptyArrayContextual(node, pt); err != nil {
 		return nil, err
 	} else if ok {

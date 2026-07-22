@@ -1153,6 +1153,111 @@ func (r *Renderer) optArrayLiteralContextual(node frontend.Node, target frontend
 	return wrapped, true, nil
 }
 
+// assertionOperand returns the value expression a type assertion wraps, seeing
+// through the grouping parentheses the source carries. `arr as T` leads with the
+// value, `<T>arr` leads with the type, so the operand is the first child of an as
+// expression and the second of a type assertion. A node that is neither is returned
+// unchanged, so a caller can peel unconditionally.
+func (r *Renderer) assertionOperand(n frontend.Node) frontend.Node {
+	var inner frontend.Node
+	switch n.Kind() {
+	case frontend.NodeAsExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 0 {
+			return n
+		}
+		inner = kids[0]
+	case frontend.NodeTypeAssertion:
+		kids := r.prog.Children(n)
+		if len(kids) < 2 {
+			return n
+		}
+		inner = kids[1]
+	default:
+		return n
+	}
+	for inner.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(inner)
+		if len(kids) != 1 {
+			break
+		}
+		inner = kids[0]
+	}
+	return inner
+}
+
+// arrayAssertedToTuple bridges an array value asserted to a tuple type, the
+// `<[any, any, any]>result` a function whose declared return is a tuple casts its
+// working array with, into the positional struct the tuple slot spells. TypeScript's
+// tuple assertion reinterprets the array as a fixed-arity tuple, but bento models an
+// array as a value.Array and a tuple as a positional struct, two unrelated Go types,
+// so the value is rebuilt: an IIFE binds the array once and reads its leading
+// positions through AtI into the tuple's fields, coercing each read to the field's
+// declared type where the array holds value.Value.
+//
+// It fires only on an assertion node, `arr as T` or `<T>arr`, whose operand's own
+// value is an array, so the assertion's own lowering, which returns the array
+// unchanged, has left it for this bridge to consume. A plain array flowing into a
+// tuple slot without an assertion, which TypeScript itself rejects, and a source that
+// is already a tuple both decline to the ordinary path. A rest or optional tuple
+// element declines, since its arity no longer lines up one-to-one with the array's
+// leading positions.
+func (r *Renderer) arrayAssertedToTuple(expr ast.Expr, srcNode frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if srcNode == nil {
+		return nil, false, nil
+	}
+	if srcNode.Kind() != frontend.NodeAsExpression && srcNode.Kind() != frontend.NodeTypeAssertion {
+		return nil, false, nil
+	}
+	elems, ok := r.prog.TupleElements(target)
+	if !ok {
+		return nil, false, nil
+	}
+	for _, el := range elems {
+		if el.Optional || el.Rest {
+			return nil, false, nil
+		}
+	}
+	operand := r.assertionOperand(srcNode)
+	arrType := r.prog.TypeAt(operand)
+	arrElem, isArr := r.prog.ElementType(arrType)
+	if !isArr {
+		return nil, false, nil
+	}
+	arrGo, err := r.typeExpr(arrType)
+	if err != nil {
+		return nil, false, nil
+	}
+	name, err := r.decls.internTuple(r, target, elems)
+	if err != nil {
+		return nil, false, err
+	}
+	dynElem := arrElem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+	fields := make([]ast.Expr, 0, len(elems))
+	for i, el := range elems {
+		var read ast.Expr = &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: ident("_a"), Sel: ident("AtI")},
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}},
+		}
+		if dynElem {
+			c, err := r.coerceDynamicToStaticFlags(read, el.Type.Flags)
+			if err != nil {
+				return nil, false, err
+			}
+			read = c
+		}
+		fields = append(fields, &ast.KeyValueExpr{Key: ident("E" + strconv.Itoa(i)), Value: read})
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("_a")}, Type: arrGo}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(name)}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{&ast.CompositeLit{Type: ident(name), Elts: fields}}}}},
+	}
+	return &ast.CallExpr{Fun: lit, Args: []ast.Expr{expr}}, true, nil
+}
+
 // coerceFuncValue bridges a function value into a function-typed slot whose Go
 // signature differs only in the return position, the way JavaScript's function
 // bivariance lets a `() => void` fill a `() => any` slot and a `() => T` fill a
@@ -1752,6 +1857,11 @@ func (r *Renderer) unboxDynamicRead(read ast.Expr, n frontend.Node) (ast.Expr, e
 // runs the ToNumber family, a static value returned as any boxes, and a return
 // whose value already matches the declared type passes through unchanged.
 func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr, error) {
+	if tup, ok, err := r.arrayAssertedToTuple(expr, srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return tup, nil
+	}
 	if empty, ok, err := r.emptyArrayContextual(srcNode, r.retType); err != nil {
 		return nil, err
 	} else if ok {
@@ -1806,6 +1916,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 // coerces through ToNumber and its siblings; a static source into a dynamic target
 // boxes through the value constructors; matching sides pass through unchanged.
 func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast.Expr, error) {
+	if tup, ok, err := r.arrayAssertedToTuple(expr, src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return tup, nil
+	}
 	if empty, ok, err := r.emptyArrayContextual(src, r.prog.TypeAt(target)); err != nil {
 		return nil, err
 	} else if ok {
