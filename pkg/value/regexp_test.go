@@ -68,7 +68,8 @@ func TestTranslateRegExp(t *testing.T) {
 		{`^foo`, "m"},    // multiline anchor needs the ECMAScript terminator set
 		{`a(?m:b)c`, ""}, // inline multiline modifier, a later slice
 		{`a(?i)b`, ""},   // bare inline modifier, a later slice
-		{`a(?x:b)c`, ""}, // inline modifier with an unsupported flag
+		{`a(?x:b)c`, ""},   // inline modifier with an unsupported flag
+		{`(?s-:.es$)`, ""}, // empty-remove inline modifier RE2 cannot compile, caught by the trial gate
 	}
 	for _, c := range handback {
 		fl, _ := parseRegExpFlags(c.flags)

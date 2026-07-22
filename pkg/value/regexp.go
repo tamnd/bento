@@ -568,6 +568,14 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	if (fl.global || fl.sticky) && patternHasAnchor(pattern) {
 		return "", false, "a global or sticky regexp with an anchor or word boundary resumes from a sliced offset RE2 cannot host faithfully, a later slice"
 	}
+	// A final trial compile is the honest backstop: the rewrites above translate the
+	// constructs bento models, but a scoped inline modifier RE2 spells differently (an
+	// empty-remove group like (?s-:...) among them) can still leave a source RE2 rejects.
+	// Returning ok=true for it would emit a NewRegExpLiteral that throws at runtime; the
+	// zero-fail invariant forbids that, so a source RE2 cannot compile hands back instead.
+	if _, err := regexp.Compile(src); err != nil {
+		return "", false, "a regexp whose translation RE2 cannot compile is a later slice"
+	}
 	return src, true, ""
 }
 
