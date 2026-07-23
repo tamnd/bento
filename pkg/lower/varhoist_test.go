@@ -132,6 +132,51 @@ console.log(outcome);
 	}
 }
 
+// TestForwardCapturedVarHoists pins that a var a closure declared earlier in the
+// same scope reads is pre-declared at the scope top, above the closure, and its own
+// site lowers to an assignment. Without the hoist the closure would close over a
+// name declared below it, which Go rejects with an undefined reference.
+func TestForwardCapturedVarHoists(t *testing.T) {
+	const src = `function f1(): number {
+  function f2(): number { return x; }
+  var x = 1;
+  return f2();
+}
+console.log(f1());
+`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var x float64") {
+		t.Fatalf("forward-captured var was not pre-declared at the scope top:\n%s", out)
+	}
+	if strings.Contains(out, "x :=") {
+		t.Fatalf("forward-captured var kept a short declaration below its closure:\n%s", out)
+	}
+	if !strings.Contains(out, "x = 1") {
+		t.Fatalf("forward-captured var did not lower its site to an assignment:\n%s", out)
+	}
+}
+
+// TestForwardCapturedVarRuns proves the scope chain: an inner function reads a var
+// its enclosing function declares after the inner function, and a mutation through a
+// second inner function is visible, because all three share the one hoisted binding.
+func TestForwardCapturedVarRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function f(): number {
+  function get(): number { return z; }
+  function inc(): void { z = z + 1; }
+  var z = 10;
+  inc();
+  return get();
+}
+console.log(f());
+`
+	got := runProgramGo(t, src)
+	want := "11\n"
+	if got != want {
+		t.Fatalf("forward-captured var run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestSelfReferentialVarHoists pins that a var whose own initializer reads its
 // name is declared at the scope top so the initializer reads the undefined the
 // var holds before assignment, matching JavaScript, rather than emitting a Go
