@@ -887,6 +887,24 @@ func numberConstant(prop string) (ast.Expr, bool) {
 	return nil, false
 }
 
+// isDynBoundReceiver reports whether n is an identifier bound to a value forced into
+// the dynamic bag, a boxed value.Value the surrounding body marked dynBound. The
+// object-literal case is the motivating one: a literal with a computed runtime key
+// builds as value.NewObject().SetKeyed(...) and its binding is marked dynBound, so the
+// checker's named-struct type for the binding no longer describes the Go value, and a
+// string-key read off it must dispatch through the runtime Get rather than a struct
+// field the box does not carry. It mirrors the dynBoundLocals check isDynamic makes,
+// but stays narrow: only a dynBound binding routes the const-string-key read to the
+// dynamic path, so a string-index dictionary or any other boxed receiver keeps its own
+// handling.
+func (r *Renderer) isDynBoundReceiver(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name, ok := localName(r.prog.Text(n))
+	return ok && r.dynBoundLocals[name]
+}
+
 // elementAccess lowers an index expression a[i] to the receiver's index read: the
 // array's At method, the typed array's At, or the string's CharAt code-unit read.
 // arrayElem confirms an array receiver's element type lowers, and the index must
@@ -947,7 +965,17 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// a symbol) has no static field to select and stays a later slice. An array or typed
 	// array, which is also a TypeObject, is excluded so its numeric index still routes to
 	// the At read below.
-	if key, ok := r.pureConstStringKey(idxNode); ok {
+	// A receiver whose object literal was forced to build as the dynamic bag (a
+	// computed runtime key, so bindingInit boxed it and marked its binding dynBound) is
+	// a value.Value at run time, not the named struct the checker still gives it, so a
+	// string-key read must go through the runtime Get on the dynamic path below rather
+	// than select a Go field the box does not carry. object[Infinity] already lowers
+	// dynamically; this keeps object["1.2"] consistent with it. The guard is the
+	// dynBound binding specifically, not every dynamic receiver: a string-index
+	// dictionary is also boxed but keeps its own index-signature handback below, so
+	// widening to isDynamic would swallow that. A genuinely static literal, whose
+	// binding was never boxed, still takes the struct-field selector here.
+	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {
