@@ -1663,6 +1663,19 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	}
 	body := kids[len(kids)-1]
 	sig, _ := r.prog.SignatureAt(n)
+	// A concise body that is a bare local forced dynamic by a computed key returns the
+	// boxed value.Value the local was stored as, while the checker still types the body
+	// the object shape. Spelling that struct as the result type does not build, and
+	// spelling value.Value builds but leaves every consumer of the call's result keyed to
+	// the checker shape, so it re-boxes the already-boxed value with ObjectFromStruct and
+	// breaks object identity: g() === o returns false where the runtime returns true.
+	// Threading the box through call sites so consumers read it as dynamic is a dataflow
+	// slice of its own; until then this hands back. A handback is always safe.
+	if body.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(body)); ok && r.dynBoundLocals[name] {
+			return nil, &NotYetLowerable{Reason: "a concise arrow returning a binding forced dynamic by a computed key is a later slice"}
+		}
+	}
 	fields, err := r.closureParamFields(n, sig, "arrow")
 	if err != nil {
 		return nil, err
