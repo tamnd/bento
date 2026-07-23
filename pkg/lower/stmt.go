@@ -1760,11 +1760,14 @@ func (r *Renderer) flattenCallableBinding(n frontend.Node) ([]ast.Stmt, bool, er
 		return nil, true, err
 	}
 	// Step one declares the pointer, so the closure below and every later member
-	// assignment reach the same object. A binding an earlier statement captures in a
-	// closure has its pointer declared at the scope top instead, so its site here is
-	// a plain assignment into the already-declared variable.
+	// assignment reach the same object. A binding whose pointer is already declared
+	// at the scope top has its site here lower to a plain assignment into that
+	// variable instead: fwdHoisted covers a closure above the binding capturing its
+	// name, and moduleAssignVars covers a module binding hoisted to a package-level
+	// var so a top-level function can read it. In both the var exists already, and a
+	// short declaration here would shadow it and leave the outer one nil.
 	declTok := token.DEFINE
-	if r.fwdHoisted[name] {
+	if r.fwdHoisted[name] || r.moduleAssignVars[name] || r.hoistedVars[name] {
 		declTok = token.ASSIGN
 	}
 	declStmt := &ast.AssignStmt{
