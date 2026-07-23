@@ -1467,6 +1467,24 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 		r.dynBoundLocals = m
 		defer func() { r.dynBoundLocals = prevDyn }()
 	}
+	// A let or const in the catch block that reuses the name of an outer dynamic
+	// local shadows it with its own Go binding of the declared static type. That
+	// inner binding is not a boxed value, so a read of it inside the catch block
+	// must not take the dynamic-local accessor the outer name carries. The outer
+	// binding stays in dynLocals for the code around the try, so the shadow is
+	// dropped only while the catch block lowers, then restored. scope-catch-block-lex-close
+	// is the shape: catch (_) { let x = 'inside'; ... } around an outer var x.
+	if shadowed := r.catchBlockLexicalShadows(catchBlock); len(shadowed) > 0 {
+		prev := r.dynLocals
+		next := map[string]bool{}
+		for name := range prev {
+			if !shadowed[name] {
+				next[name] = true
+			}
+		}
+		r.dynLocals = next
+		defer func() { r.dynLocals = prev }()
+	}
 	catchStmts, err := r.lowerBlock(catchBlock)
 	if err != nil {
 		return nil, err
@@ -1497,6 +1515,27 @@ func (r *Renderer) catchDefer(catchClause frontend.Node, allowReturns bool) (ast
 		Body: &ast.BlockStmt{List: body},
 	}
 	return &ast.DeferStmt{Call: callClosure([]ast.Stmt{guard})}, nil
+}
+
+// catchBlockLexicalShadows returns the dynamic-local names a let or const in the
+// catch block redeclares as its own block-scoped Go binding. Only a lexical
+// statement directly in the block contributes: a var hoists to the function scope
+// and keeps the outer binding, and a lexical binding in a deeper nested block is
+// left to its own scope. The result is intersected with the current dynLocals, so
+// a name the outer scope never boxed does not need dropping.
+func (r *Renderer) catchBlockLexicalShadows(catchBlock frontend.Node) map[string]bool {
+	out := map[string]bool{}
+	for _, s := range r.prog.Children(catchBlock) {
+		if s.Kind() != frontend.NodeVariableStatement || r.isVarStatement(s) {
+			continue
+		}
+		for _, nn := range r.varNameNodes(s) {
+			if name, ok := localName(r.prog.Text(nn)); ok && r.dynLocals[name] {
+				out[name] = true
+			}
+		}
+	}
+	return out
 }
 
 // nameReboundOrShadowed reports whether the name is assigned to or re-declared
