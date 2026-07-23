@@ -231,6 +231,32 @@ func (r *Renderer) bindDynamicPattern(pat frontend.Node, recv ast.Expr, tok toke
 	return nil, &NotYetLowerable{Reason: "an untyped destructuring pattern that is neither an object nor an array is a later slice"}
 }
 
+// throwIfNullish emits `if recv.IsNullish() { value.Throw(value.NewTypeError(...)) }`,
+// the guard destructuring a nested sub-pattern against a nullish element needs.
+// JavaScript reaches for the element's iterator when the sub-pattern is an array and
+// coerces it to an object when the sub-pattern is an object, and both operations throw
+// a TypeError on null or undefined before any name binds. The index-based dynamic read
+// would instead yield undefined and silently bind past the error, so a nested element
+// guards its held value first, matching node, which throws at that point. The message
+// is not observed by the parity tests, which check the error's type alone.
+func (r *Renderer) throwIfNullish(recv ast.Expr, msg string) ast.Stmt {
+	r.usesThrow = true
+	r.requireImport(valuePkg)
+	typeErr := &ast.CallExpr{
+		Fun: sel("value", "NewTypeError"),
+		Args: []ast.Expr{&ast.CallExpr{
+			Fun:  sel("value", "FromGoString"),
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(msg)}},
+		}},
+	}
+	return &ast.IfStmt{
+		Cond: &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("IsNullish")}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "Throw"), Args: []ast.Expr{typeErr}}},
+		}},
+	}
+}
+
 // blankDynBinding appends `_ = name` when the dynamic pattern member bound as name is
 // a fresh declaration the body never reads. bindDynamicPattern reaches this binder only
 // from a destructured parameter or a destructured catch clause, both of which introduce
@@ -274,6 +300,7 @@ func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.
 		if info.nested != nil {
 			tmp := r.freshTemp()
 			out = append(out, define(tmp, read))
+			out = append(out, r.throwIfNullish(ident(tmp), "Cannot destructure a null or undefined array element"))
 			inner, err := r.bindDynamicPattern(info.nested, ident(tmp), tok)
 			if err != nil {
 				return nil, err
@@ -351,6 +378,7 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 			prop := strings.TrimSpace(r.prog.Text(source))
 			tmp := r.freshTemp()
 			out = append(out, define(tmp, dynGet(recv, prop)))
+			out = append(out, r.throwIfNullish(ident(tmp), "Cannot destructure a null or undefined object property"))
 			omit = append(omit, dynKey(prop))
 			inner, err := r.bindDynamicPattern(sub, ident(tmp), tok)
 			if err != nil {

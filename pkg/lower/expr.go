@@ -1212,14 +1212,18 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 		return nil, &NotYetLowerable{Reason: "a binary expression whose left operand reads a variable the right operand assigns needs operand sequencing, a later slice"}
 	}
 
-	// An equality between a caught error and the null or undefined literal folds to
-	// a constant: the runtime holds a caught value as a non-nil *value.Error, so it
-	// is never null or undefined, and throwing null or undefined hands back, so no
-	// caught binding is ever one of them. It routes before the dynamic path, which
-	// would box the binding and hand back, since the binding has no general value
-	// form. Only a null or undefined literal on the other side is folded; a compare
-	// against another value stays a real comparison and is not this case.
-	if expr, handled := r.caughtErrorNullCompare(opText, left, right); handled {
+	// An equality with a caught error on one side routes through a runtime compare
+	// over the boxed value the binding presents, before any typed path keyed on the
+	// checker's static view of the binding. A caught binding's Go form is always a
+	// boxed value.Value regardless of the concrete type the checker infers, so the
+	// two-string fast path below (which emits value.BStr.Equal) and the undefined
+	// fold both misfire on it: the string path calls a method the box lacks, and the
+	// fold assumes a caught value is never nullish, which throwing null or undefined
+	// breaks. Routing here first keeps the boxed compare correct for a caught error
+	// against a string, a number, undefined, or null.
+	if expr, handled, err := r.caughtErrorEquality(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
 		return expr, nil
 	}
 

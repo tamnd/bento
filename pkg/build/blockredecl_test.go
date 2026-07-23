@@ -52,6 +52,22 @@ func TestCatchParamLexicalRedeclarationRejected(t *testing.T) {
 	}
 }
 
+// TestOptionalCatchBindingStillLowers pins that an optional catch binding, a catch
+// clause with no parameter, does not trip the catch early-error check. There are no
+// BoundNames to collide, so the check must read past the missing parameter node
+// without dereferencing it and let the program lower.
+func TestOptionalCatchBindingStillLowers(t *testing.T) {
+	for _, src := range []string{
+		"try {} catch {}\n",
+		"try { throw 1; } catch { }\n",
+		"function f() { try {} catch { function g() {} } } f();\n",
+	} {
+		if _, err := compileSource(t, src); err != nil {
+			t.Fatalf("optional catch binding should lower, got: %v (src %q)", err, src)
+		}
+	}
+}
+
 // TestBlockScopeFnVarRedeclarationNestedBlockRejected pins the same collision when
 // the var sits in a nested plain block inside the function's block: a var is
 // function-scoped, so the inner block's `var f` is one of the outer block's

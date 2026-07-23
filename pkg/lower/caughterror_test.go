@@ -16,27 +16,28 @@ func TestTypeofCaughtErrorFolds(t *testing.T) {
 	}
 }
 
-// TestCaughtErrorEqualsNullFolds pins that a caught error compared to null folds
-// to a Go constant, false for === and true for !==, since a caught value is a
-// non-nil error and never null.
-func TestCaughtErrorEqualsNullFolds(t *testing.T) {
+// TestCaughtErrorEqualsNullRuntimeCompares pins that a caught error compared to
+// null lowers to a runtime StrictEquals over the boxed value the binding presents,
+// not a constant fold: a caught binding can wrap a thrown null or undefined (those
+// throws box the primitive, they no longer hand back), so the compare must test the
+// box's kind at runtime. For a thrown error object the answer is false for === and
+// true for !==, which the boxed compare gives just as the old fold did.
+func TestCaughtErrorEqualsNullRuntimeCompares(t *testing.T) {
 	src := "try { throw new TypeError(\"x\"); } catch (e: any) { let a: boolean = e === null; let b: boolean = e !== null; console.log(a); console.log(b); }"
 	out := renderProgram(t, src)
-	if !strings.Contains(out, "a := false") {
-		t.Fatalf("caught error === null did not fold to false:\n%s", out)
-	}
-	if !strings.Contains(out, "b := true") {
-		t.Fatalf("caught error !== null did not fold to true:\n%s", out)
+	if !strings.Contains(out, "value.StrictEquals(e.ToValue(), value.Null)") {
+		t.Fatalf("caught error === null did not lower to a boxed StrictEquals over Null:\n%s", out)
 	}
 }
 
-// TestCaughtErrorEqualsUndefinedFolds pins the same fold against undefined, which
-// a caught value also never is.
-func TestCaughtErrorEqualsUndefinedFolds(t *testing.T) {
+// TestCaughtErrorEqualsUndefinedRuntimeCompares pins the same boxed compare against
+// undefined, so a caught binding wrapping a thrown undefined answers correctly at
+// runtime rather than folding on the false premise a caught value is never nullish.
+func TestCaughtErrorEqualsUndefinedRuntimeCompares(t *testing.T) {
 	src := "try { throw new TypeError(\"x\"); } catch (e: any) { let a: boolean = e === undefined; console.log(a); }"
 	out := renderProgram(t, src)
-	if !strings.Contains(out, "a := false") {
-		t.Fatalf("caught error === undefined did not fold to false:\n%s", out)
+	if !strings.Contains(out, "value.StrictEquals(e.ToValue(), value.Undefined)") {
+		t.Fatalf("caught error === undefined did not lower to a boxed StrictEquals over Undefined:\n%s", out)
 	}
 }
 
