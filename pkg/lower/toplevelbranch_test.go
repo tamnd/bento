@@ -12,15 +12,16 @@ import (
 // function.
 
 // TestTopLevelDoWhileLowers proves a top-level do...while assembles into main as
-// the Go do-while idiom, a bare for whose condition is checked at the bottom.
+// the Go do-while idiom, a for whose condition rides the post clause behind a flag
+// seeded true so the body runs once before the test.
 func TestTopLevelDoWhileLowers(t *testing.T) {
 	const src = "let i = 0; let n = 0; do { n = n + 1; i = i + 1; } while (i < 3);\n"
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "for {") {
-		t.Errorf("top-level do...while did not lower to a bare for:\n%s", source)
+	if !strings.Contains(source, ":= true;") {
+		t.Errorf("top-level do...while did not seed a flag true in the for init:\n%s", source)
 	}
-	if !strings.Contains(source, "break") {
-		t.Errorf("top-level do...while did not emit the bottom-of-loop break:\n%s", source)
+	if !strings.Contains(source, "= i < 3 {") {
+		t.Errorf("top-level do...while did not put the condition in the for post clause:\n%s", source)
 	}
 }
 
