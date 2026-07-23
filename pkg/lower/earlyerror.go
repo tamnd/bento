@@ -2,6 +2,7 @@ package lower
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -43,8 +44,104 @@ func (r *Renderer) CheckBlockScopeEarlyErrors(roots ...frontend.Node) error {
 		if err := r.checkBlockRedecl(root, false); err != nil {
 			return err
 		}
+		if err := r.checkCatchRedecl(root); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// checkCatchRedecl walks a subtree for the ES2015 catch early error (spec 13.15.1
+// Static Semantics: Early Errors): it is a Syntax Error if any element of the
+// BoundNames of a CatchParameter also occurs in the LexicallyDeclaredNames of the
+// catch Block. A block-level function declaration and a let or const directly in
+// the catch block are its lexically-declared names, so a catch (e) whose block
+// declares function e, let e, or const e collides and node throws SyntaxError at
+// parse time. TypeScript permits the merge and reports nothing, so without this
+// check bento lowers `e := value.Caught(rec)` and `e := func(){}` into one Go
+// scope and the build fails as a redeclaration. The check is narrow: it fires only
+// on a catch parameter name a directly-nested lexical declaration reuses, the shape
+// early-catch-function exercises, and leaves the wider BoundNames matrix to a
+// handback.
+func (r *Renderer) checkCatchRedecl(n frontend.Node) error {
+	if n.Kind() == frontend.NodeTryStatement {
+		if name, ok := r.catchParamLexCollision(n); ok {
+			return fmt.Errorf("SyntaxError: redeclaration of catch parameter '%s' by a lexical declaration in the catch block", name)
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		if err := r.checkCatchRedecl(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// catchParamLexCollision reports a catch parameter name that a directly-nested
+// lexical declaration in the catch block redeclares, and whether there was one. The
+// catch clause is the try statement's non-block child; its parameter's bound names
+// are read off the parameter binding, and the block's lexically-declared names are
+// its direct-child function declarations and let or const statements. A var in the
+// block hoists to the function scope and is not a lexical name, so it does not
+// collide here. A name in both sets is the early error.
+func (r *Renderer) catchParamLexCollision(tryNode frontend.Node) (string, bool) {
+	kids := r.prog.Children(tryNode)
+	if len(kids) == 0 {
+		return "", false
+	}
+	var catchClause frontend.Node
+	for _, k := range kids[1:] {
+		if k.Kind() != frontend.NodeBlock {
+			catchClause = k
+			break
+		}
+	}
+	if catchClause.Kind() == frontend.NodeUnknown && len(r.prog.Children(catchClause)) == 0 {
+		return "", false
+	}
+	var paramNode, catchBlock frontend.Node
+	for _, k := range r.prog.Children(catchClause) {
+		switch k.Kind() {
+		case frontend.NodeBlock:
+			catchBlock = k
+		case frontend.NodeVariableDeclaration:
+			paramNode = k
+		}
+	}
+	if paramNode.Kind() != frontend.NodeVariableDeclaration || catchBlock.Kind() != frontend.NodeBlock {
+		return "", false
+	}
+	// Only a simple `catch (e)` binding is checked. A destructuring catch parameter
+	// carries a wider BoundNames set whose exact leaves the pattern shape decides, so
+	// that case is left to a handback rather than risk a false rejection.
+	pk := r.prog.Children(paramNode)
+	if len(pk) == 0 || pk[0].Kind() != frontend.NodeIdentifier {
+		return "", false
+	}
+	paramName, ok := localName(r.prog.Text(pk[0]))
+	if !ok {
+		return "", false
+	}
+	paramNames := map[string]bool{paramName: true}
+	var hit string
+	for _, s := range r.prog.Children(catchBlock) {
+		switch {
+		case s.Kind() == frontend.NodeFunctionDeclaration:
+			if nameNode, ok := r.funcExprNameNode(s); ok && paramNames[r.prog.Text(nameNode)] {
+				hit = r.prog.Text(nameNode)
+			}
+		case s.Kind() == frontend.NodeVariableStatement && !r.isVarStatement(s):
+			for _, nn := range r.varNameNodes(s) {
+				if paramNames[strings.TrimSpace(r.prog.Text(nn))] {
+					hit = strings.TrimSpace(r.prog.Text(nn))
+				}
+			}
+		}
+		if hit != "" {
+			return hit, true
+		}
+	}
+	return "", false
 }
 
 // checkBlockRedecl walks a subtree, running the collision check on each
