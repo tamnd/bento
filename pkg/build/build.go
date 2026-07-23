@@ -437,6 +437,18 @@ func firstError(prog *frontend.Program, opts EmitOptions) string {
 			if hasArityMismatch(d) {
 				return d.Message
 			}
+			// A not-assignable report whose elaboration bottoms out in a property
+			// whose target type is a method the source does not provide as a function,
+			// the `{ toString: number }` assigned to a type whose `toString` is `() =>
+			// string`, is likewise not a value coercion. A number cannot stand in for a
+			// method, so there is no widened literal or cross-primitive value to land,
+			// only a structural incompatibility, and the honest outcome is a handback.
+			// The checker nests the property incompatibility (2326) under the 2322 and
+			// the function-typed target under that, so the presence of the shape in the
+			// message chain gates the case here ahead of the tolerated skip.
+			if hasMethodShapeMismatch(d) {
+				return d.Message
+			}
 			continue
 		}
 		if toleratedOverload[d.Code] {
@@ -484,6 +496,64 @@ func hasArityMismatch(d frontend.Diagnostic) bool {
 		}
 	}
 	return false
+}
+
+// hasMethodShapeMismatch reports whether an assignability error's elaboration
+// carries a property whose types are incompatible (2326) because the target
+// property is a function type the source does not satisfy with a function, the
+// `{ toString: number }` assigned to a slot whose `toString` is `() => string`.
+// The property incompatibility alone is not the tell: a `{ x: number }` assigned
+// to `{ x: 0 }` is also a 2326, and there the toleration's widened-literal bridge
+// has a value to land. The tell is that the incompatibility bottoms out in a
+// function-typed target, `not assignable to type '() => ...'`, where the source is
+// not a function and no run-time value can stand in for a method. Walking the full
+// chain, a 2326 whose sub-chain reaches such a target gates the case.
+func hasMethodShapeMismatch(d frontend.Diagnostic) bool {
+	for _, r := range d.Related {
+		if r.Code == 2326 && reachesFunctionTarget(r) {
+			return true
+		}
+		if hasMethodShapeMismatch(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// reachesFunctionTarget reports whether a diagnostic or its Related chain carries
+// a not-assignable report whose target type is a function type, spelled with an
+// arrow in the quoted target, `not assignable to type '() => string'` or
+// `... '(x: number) => void'`. It reads the target token out of the message rather
+// than the whole message so a function-typed source assigned to a non-function
+// target, whose arrow sits on the source side, does not match.
+func reachesFunctionTarget(d frontend.Diagnostic) bool {
+	if target, ok := notAssignableTarget(d.Message); ok && strings.Contains(target, "=>") {
+		return true
+	}
+	for _, r := range d.Related {
+		if reachesFunctionTarget(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// notAssignableTarget returns the quoted target type of a "Type 'X' is not
+// assignable to type 'Y'" message, the Y token, and whether the message had that
+// shape. It keys on the target clause so a caller can inspect the target type
+// alone, not the source type that also rides in the message.
+func notAssignableTarget(msg string) (string, bool) {
+	const marker = "is not assignable to type '"
+	i := strings.LastIndex(msg, marker)
+	if i < 0 {
+		return "", false
+	}
+	rest := msg[i+len(marker):]
+	j := strings.IndexByte(rest, '\'')
+	if j < 0 {
+		return "", false
+	}
+	return rest[:j], true
 }
 
 // toleratedImplicitAny is the set of checker diagnostic codes bento admits by

@@ -151,7 +151,12 @@ func TestConstructSignatureArityGates(t *testing.T) {
 func TestObjectTypeWithSymbolMemberDoesNotPanic(t *testing.T) {
 	dir := t.TempDir()
 	entry := filepath.Join(dir, "objsym.ts")
-	src := "var a = { toString: 5 };\nvar c: Object = a;\n"
+	// A number assigned to Object is a valid assignment, so the checker raises no
+	// error and the case reaches lowering, where interning the global Object type
+	// walks its symbol-keyed members. That is the path the panic lived on, so this
+	// exercises the fix; the incompatible `{ toString: number }` shape is gated
+	// earlier and covered by TestNonFunctionToMethodSlotGates instead.
+	src := "var x: number = 5;\nvar c: Object = x;\n"
 	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
 		t.Fatalf("write entry: %v", err)
 	}
@@ -163,6 +168,32 @@ func TestObjectTypeWithSymbolMemberDoesNotPanic(t *testing.T) {
 	}()
 	if _, err := EmitGoWithOptions(entry, "test", EmitOptions{Target: "es2015"}); err != nil {
 		t.Fatalf("Object-typed binding handed back under es2015, want a lowering: %v", err)
+	}
+}
+
+// TestNonFunctionToMethodSlotGates proves an assignment whose only error is a
+// property incompatible because its target type is a method the source does not
+// provide as a function hands back rather than lowering under the assignability
+// toleration. Assigning `{ toString: 5 }` to Object is a TS2322 the checker
+// elaborates with TS2326 ("Types of property 'toString' are incompatible") over a
+// `() => string` target: a number cannot stand in for a method, so there is no
+// value coercion to land and emitting Go would run a program TypeScript rejects.
+// Honoring the mismatch is what keeps the toleration matched to real value
+// coercions, the sibling of the construct-signature arity gate.
+func TestNonFunctionToMethodSlotGates(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "methodslot.ts")
+	src := "var a = { toString: 5 };\nvar c: Object = a;\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatalf("write entry: %v", err)
+	}
+
+	_, err := EmitGoWithOptions(entry, "test", EmitOptions{Target: "es2015"})
+	if err == nil {
+		t.Fatal("number-typed property assigned to a method slot lowered, want a hand-back")
+	}
+	if !strings.Contains(err.Error(), "not assignable") {
+		t.Fatalf("hand-back reason = %q, want the checker's not-assignable message", err.Error())
 	}
 }
 
