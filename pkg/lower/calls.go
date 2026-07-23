@@ -46,7 +46,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.finishCall(n, &ast.SelectorExpr{X: recv, Sel: ident("Call")}, kids[1:], nil, false)
+		return r.finishCall(n, &ast.SelectorExpr{X: recv, Sel: ident("Call")}, kids[1:], nil, false, false)
 	}
 	// A member callee (s.charCodeAt(...)) is a method call, not a plain function
 	// call; the string methods are the only ones covered so far. A call on a
@@ -121,7 +121,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.finishCall(n, callee, kids[1:], nil, false)
+		return r.finishCall(n, callee, kids[1:], nil, false, false)
 	}
 	// A call to a Promise executor's resolve or reject parameter settles the promise
 	// rather than calling a plain function value: the callback's lib.d.ts signature
@@ -241,6 +241,12 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	var callee ast.Expr
 	var defaults []frontend.Node
 	var variadicTail bool
+	// A callee whose body reads its arguments object through the parameter snapshot
+	// (argumentsPlan) needs the call to pass exactly one argument per parameter, so
+	// buildCall hands a mismatched arity back rather than drop or fill against the
+	// snapshot. It is resolved once here from the callee symbol, before the branches
+	// pick the Go spelling, and forwarded through finishCall to that guard.
+	calleeReadsArgs := r.funcSymReadsArguments(sym)
 	if goName, ok := r.funcExprSelf[sym]; ok {
 		// The callee is a named function expression calling itself. Its two-step
 		// lowering bound the closure to a Go local, so the recursive call is a plain
@@ -310,7 +316,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			defaults = defs
 		}
 	}
-	return r.finishCall(n, callee, kids[1:], defaults, variadicTail)
+	return r.finishCall(n, callee, kids[1:], defaults, variadicTail, calleeReadsArgs)
 }
 
 // finishCall lowers the argument list of call n against its signature and builds
@@ -320,14 +326,14 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 // positionally, each bridged against its declared parameter, so a derived instance
 // passed for a base parameter upcasts to the embedded base the same way an
 // assignment would.
-func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node, variadicTail bool) (ast.Expr, error) {
+func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool) (ast.Expr, error) {
 	var params []frontend.Param
 	var rest *frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
 		params = sig.Params
 		rest = sig.RestParam
 	}
-	return r.buildCall(callee, argNodes, params, rest, defaults, variadicTail)
+	return r.buildCall(callee, argNodes, params, rest, defaults, variadicTail, calleeReadsArgs)
 }
 
 // buildFixedTupleSpreadCall lowers a call whose argument list contains a spread of a
@@ -466,13 +472,185 @@ func (r *Renderer) calleeFillsInBody(sym frontend.Symbol) (bool, error) {
 	return false, nil
 }
 
+// funcSymReadsArguments reports whether the function a symbol names reads its
+// arguments object through the parameter snapshot argumentsPlan materializes. A
+// call that reaches such a function must pass exactly one argument per parameter
+// for the snapshot to stand in for the passed arguments, so the arity guard in
+// buildCall consults this. Only a declaration whose signature is the all-required,
+// rest-free shape the snapshot backs is considered: argumentsPlan hands a rest or
+// omittable-arity function back on its own, so a mismatched call to one never
+// reaches emission and needs no guard here. The body is scanned with the same
+// scanArguments machinery the plan uses so the two agree on what a read is.
+func (r *Renderer) funcSymReadsArguments(sym frontend.Symbol) bool {
+	for _, fn := range r.symFuncNodes(sym) {
+		if r.funcNodeReadsArguments(fn) {
+			return true
+		}
+	}
+	return false
+}
+
+// funcNodeReadsArguments reports whether one function node reads its arguments
+// object through the parameter snapshot argumentsPlan materializes. Only a
+// signature the snapshot backs is at issue: argumentsPlan hands a rest or
+// omittable-arity function back on its own, so one is never emitted to be called
+// wrong. The body is scanned with the same scanArguments machinery the plan uses so
+// the two agree on what a read is.
+func (r *Renderer) funcNodeReadsArguments(fn frontend.Node) bool {
+	sig, ok := r.prog.SignatureAt(fn)
+	if !ok {
+		return false
+	}
+	if sig.RestParam != nil || sig.MinArgs != len(sig.Params) {
+		return false
+	}
+	block, ok := r.funcBodyBlock(fn)
+	if !ok {
+		return false
+	}
+	reads, supported := false, true
+	for _, stmt := range r.prog.Children(block) {
+		r.scanArguments(stmt, &reads, &supported)
+	}
+	return reads
+}
+
+// boxedFuncReadsArguments reports whether the function value flowing into a dynamic
+// slot reads its arguments object through the parameter snapshot. It covers a
+// function expression boxed directly (myAny = function(){...}) and a named function
+// or binding boxed by reference (myAny = f), so either boxing hands back rather than
+// emit a snapshot the dynamic call convention cannot keep in step with the real
+// argument count. An arrow carries no arguments of its own, so it is not a case here.
+func (r *Renderer) boxedFuncReadsArguments(src frontend.Node) bool {
+	if src.Kind() == frontend.NodeFunctionExpression {
+		return r.funcNodeReadsArguments(src)
+	}
+	if src.Kind() == frontend.NodeIdentifier {
+		if sym, ok := r.prog.SymbolAt(src); ok {
+			return r.funcSymReadsArguments(r.derefAlias(sym))
+		}
+	}
+	return false
+}
+
+// symFuncNodes returns the function declaration or expression nodes that stand
+// behind a called symbol, whose body the arity guard scans for a read of
+// arguments. A top-level function is its own declaration; a value binding holds its
+// function as an initializer (const f = function(){...}) or takes it from a later
+// assignment (var ref; ref = function(){...}). An arrow is not returned: it has no
+// arguments object of its own and reads the enclosing function's, so a call to an
+// arrow-bound value carries no snapshot to guard. The later-assignment scan runs
+// only for a binding whose declaration holds no function-like value at all, so a
+// plain call to a function or an arrow pays no scan.
+func (r *Renderer) symFuncNodes(sym frontend.Symbol) []frontend.Node {
+	var out []frontend.Node
+	sawFuncLike := false
+	for _, d := range r.prog.Declarations(sym) {
+		fn, ok := r.declValueFunc(d)
+		if !ok {
+			continue
+		}
+		sawFuncLike = true
+		if k := fn.Kind(); k == frontend.NodeFunctionDeclaration || k == frontend.NodeFunctionExpression {
+			out = append(out, fn)
+		}
+	}
+	if !sawFuncLike {
+		if fn, ok := r.assignedFuncExpr(sym); ok {
+			out = append(out, fn)
+		}
+	}
+	return out
+}
+
+// declValueFunc returns the function-like node a declaration binds as its value:
+// the declaration itself for a function declaration, or the function or arrow
+// expression a value binding holds as its initializer. A pre-order walk finds the
+// binding's own function before any it nests. The bool reports whether any
+// function-like initializer was found, so the caller can tell a binding whose value
+// is a known arrow apart from a bare declaration whose function arrives in a later
+// assignment.
+func (r *Renderer) declValueFunc(d frontend.Node) (frontend.Node, bool) {
+	var found frontend.Node
+	var ok bool
+	var walk func(frontend.Node)
+	walk = func(node frontend.Node) {
+		if ok {
+			return
+		}
+		if isFunctionLike(node.Kind()) {
+			found, ok = node, true
+			return
+		}
+		for _, c := range r.prog.Children(node) {
+			walk(c)
+		}
+	}
+	walk(d)
+	return found, ok
+}
+
+// assignedFuncExpr finds the function expression a bare-declared binding takes from
+// a later assignment, ref = function(){...} for a var ref with no initializer. It
+// scans the source files for the first assignment whose target resolves to the
+// symbol and whose value is a function expression, the shape a function-valued
+// binding written in two steps takes. It reports ok=false when no such assignment
+// exists, leaving the binding uncovered rather than guessing.
+func (r *Renderer) assignedFuncExpr(sym frontend.Symbol) (frontend.Node, bool) {
+	var found frontend.Node
+	var ok bool
+	var walk func(frontend.Node)
+	walk = func(node frontend.Node) {
+		if ok {
+			return
+		}
+		if node.Kind() == frontend.NodeBinaryExpression {
+			kids := r.prog.Children(node)
+			if len(kids) == 3 && r.prog.Text(kids[1]) == "=" &&
+				kids[0].Kind() == frontend.NodeIdentifier &&
+				kids[2].Kind() == frontend.NodeFunctionExpression {
+				if s, has := r.prog.SymbolAt(kids[0]); has && s == sym {
+					found, ok = kids[2], true
+					return
+				}
+			}
+		}
+		for _, c := range r.prog.Children(node) {
+			walk(c)
+		}
+	}
+	for _, f := range r.prog.SourceFiles() {
+		walk(f)
+		if ok {
+			break
+		}
+	}
+	return found, ok
+}
+
 // buildCall lowers the argument list against a known parameter list and builds
 // the Go call on the already-lowered callee. It is the body finishCall reaches
 // through the call node's signature, split out so a member call whose signature
 // comes from the receiver's property type (an assert.sameValue(...) on a callable
 // object) shares the exact same argument bridging without a call node to look the
 // signature up from.
-func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool) (ast.Expr, error) {
+func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool) (ast.Expr, error) {
+	// A callee whose body reads its arguments object models that object from a
+	// snapshot of its parameters (see argumentsPlan), which stands in for the passed
+	// arguments only when the call passes exactly one argument per parameter. The
+	// tolerant argument handling below drops an argument past the parameter count and
+	// fills a missing one from a default or an absent value, so a call whose fixed
+	// argument count differs from the parameter count would leave the snapshot reading
+	// the wrong length and the wrong slots: the dropped extras never reach it and the
+	// filled slots box a value the call never passed. Neither the too-many nor the
+	// too-few direction is faithful without the real call-site count, so such a call
+	// hands back rather than emit a snapshot the arity does not fix. This reads the raw
+	// argument node count before any drop or fill. A rest parameter or a variadic-tail
+	// callee gathers a call-varying count that is not a snapshot function, so the check
+	// is confined to the fixed-arity callees the snapshot backs.
+	if calleeReadsArgs && rest == nil && !variadicTail && len(argNodes) != len(params) {
+		return nil, &NotYetLowerable{Reason: "arguments in a function called with an arity the parameters do not fix needs the call-site count, a later slice"}
+	}
 	// A spread of a fixed-length tuple into a fixed parameter list expands to the
 	// tuple's element reads, f(...pair) becoming f(pair.E0, pair.E1), so the spread
 	// lowers rather than hand back on the spread element kind the ordinary argument
@@ -668,7 +846,7 @@ func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, arg
 	if err != nil {
 		return nil, false, err
 	}
-	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false)
+	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1235,7 +1413,7 @@ func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNo
 		return nil, false, err
 	}
 	callee := &ast.SelectorExpr{X: recv, Sel: ident(field)}
-	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil, false)
+	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil, false, false)
 	if err != nil {
 		return nil, false, err
 	}

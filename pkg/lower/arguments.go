@@ -51,6 +51,16 @@ func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.
 	if sig.MinArgs != len(sig.Params) {
 		return nil, "", false, false, &NotYetLowerable{Reason: "arguments in a function with an omittable parameter needs the call-site arity, a later slice"}
 	}
+	// A body that stores into a named parameter makes the sloppy mapped-arguments
+	// aliasing observable: in a mapped arguments object arguments[i] tracks its
+	// parameter, so a rebind of the parameter changes arguments[i] and a write to
+	// arguments[i] changes the parameter. The entry snapshot boxes each parameter's
+	// original value once and cannot mirror a later store, so a read of arguments
+	// alongside a write to a parameter hands back rather than emit a store that stays
+	// frozen on the boxed original.
+	if r.bodyWritesParam(block, sig.Params) {
+		return nil, "", false, false, &NotYetLowerable{Reason: "arguments alongside a write to a named parameter needs the mapped store, a later slice"}
+	}
 	// Each parameter is boxed into the store, so each must lower to a plain Go local
 	// whose static type boxes into a value.Value. A destructured parameter has no
 	// single Go name, and a parameter typed as an object or array has no primitive
@@ -106,6 +116,57 @@ func (r *Renderer) bodyReferencesParam(n frontend.Node, params []frontend.Param)
 			return false
 		case frontend.NodeIdentifier:
 			return names[r.prog.Text(node)]
+		}
+		for _, c := range r.prog.Children(node) {
+			if walk(c) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, stmt := range r.prog.Children(n) {
+		if walk(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+// bodyWritesParam reports whether the body block stores into any of the named
+// parameters, the sibling of bodyReferencesParam for the write side. It counts a
+// plain or compound assignment whose target names a parameter (a = 1, a += 2) and
+// a ++ or -- whose operand names a parameter; a store into a parameter's property
+// (a.x = 1) does not rebind the parameter and is not counted. Like
+// bodyReferencesParam it descends into a nested arrow, which shares the enclosing
+// parameter binding, but stops at a nested function or method, whose same-spelled
+// parameter is its own. The match is deliberately conservative: a local that
+// shadows a parameter name counts too, which only widens the handback.
+func (r *Renderer) bodyWritesParam(n frontend.Node, params []frontend.Param) bool {
+	names := make(map[string]bool, len(params))
+	for _, p := range params {
+		names[p.Name] = true
+	}
+	var walk func(frontend.Node) bool
+	walk = func(node frontend.Node) bool {
+		switch node.Kind() {
+		case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression,
+			frontend.NodeMethodDeclaration, frontend.NodeGetAccessor,
+			frontend.NodeSetAccessor, frontend.NodeConstructor:
+			return false
+		case frontend.NodeBinaryExpression:
+			kids := r.prog.Children(node)
+			if len(kids) == 3 && isAssignOp(r.prog.Text(kids[1])) &&
+				kids[0].Kind() == frontend.NodeIdentifier && names[r.prog.Text(kids[0])] {
+				return true
+			}
+		case frontend.NodePrefixUnaryExpression, frontend.NodePostfixUnaryExpression:
+			kids := r.prog.Children(node)
+			if len(kids) == 1 && kids[0].Kind() == frontend.NodeIdentifier && names[r.prog.Text(kids[0])] {
+				op := unaryOpText(r.prog.Text(node), r.prog.Text(kids[0]))
+				if op == "++" || op == "--" {
+					return true
+				}
+			}
 		}
 		for _, c := range r.prog.Children(node) {
 			if walk(c) {

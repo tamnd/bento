@@ -716,6 +716,16 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	// routes before the primitive switch, whose kind tests a function type would
 	// otherwise fall past to the handback.
 	if calls, _ := r.prog.Signatures(r.prog.TypeAt(src)); len(calls) == 1 {
+		// A function that reads its arguments object models it from a fixed snapshot of
+		// its parameters (argumentsPlan). Boxed into a dynamic value it is invoked through
+		// value.Call with a call-varying argument slice the fixed snapshot cannot track,
+		// so the snapshot would read the wrong length and slots at any call that does not
+		// pass exactly one argument per parameter. The boxed convention makes that arity
+		// unknowable here, so an arguments-reading function boxed to dynamic hands back
+		// rather than emit a snapshot decoupled from the real call.
+		if r.boxedFuncReadsArguments(src) {
+			return nil, &NotYetLowerable{Reason: "arguments in a function boxed into a dynamic value needs the call-site count, a later slice"}
+		}
 		return r.boxFuncToDynamic(expr, calls[0])
 	}
 	// An optional (T | undefined) flowing into a dynamic slot boxes through

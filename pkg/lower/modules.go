@@ -60,7 +60,14 @@ func (r *Renderer) internalNamespaceCall(n, access frontend.Node, argNodes []fro
 	if err != nil {
 		return nil, true, err
 	}
-	expr, err := r.finishCall(n, ident(name), argNodes, nil, false)
+	// A sibling export that reads its arguments object needs the same arity guard a
+	// same-module call gets, so the member symbol is resolved to the export it names
+	// and checked before the direct call is built.
+	calleeReadsArgs := false
+	if sym, ok := r.prog.SymbolAt(kids[1]); ok {
+		calleeReadsArgs = r.funcSymReadsArguments(r.derefAlias(sym))
+	}
+	expr, err := r.finishCall(n, ident(name), argNodes, nil, false, calleeReadsArgs)
 	return expr, true, err
 }
 
