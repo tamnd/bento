@@ -234,6 +234,15 @@ func compileProgram(entry string, opts EmitOptions) (string, []string, error) {
 	r.SetGoSignatures(goSignatureResolver())
 	r.SetGoConstants(goConstantResolver())
 	r.SetGoErrorVars(goErrorVarResolver())
+	// Catch the ES2015 Block early error TypeScript does not report, a block-scoped
+	// function declaration whose name also appears as a var in the same block, before
+	// lowering. Node throws SyntaxError at parse time for it, so bento must reject it
+	// too rather than emit Go that redeclares the name and does not compile. The error
+	// is a plain error, not a *lower.NotYetLowerable, so a parse-phase negative test
+	// scores this rejection as a pass instead of a handback.
+	if err := r.CheckBlockScopeEarlyErrors(append([]frontend.Node{entryFile}, deps...)...); err != nil {
+		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
+	}
 	p, err := r.RenderProgramModules(entryFile, deps)
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
