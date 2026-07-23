@@ -220,31 +220,83 @@ func (r *Renderer) isCaughtErrorRef(n frontend.Node) bool {
 	return ok && r.errorLocals[name]
 }
 
-// caughtErrorNullCompare folds an equality between a caught error and the null or
-// undefined literal to a Go boolean constant. A caught value is a non-nil
-// *value.Error, so it is never null or undefined, which makes === and == false and
-// !== and != true regardless of which side holds the literal. It reports
-// handled=false when neither shape matches, so a compare that is not this one falls
-// through to the normal path.
-func (r *Renderer) caughtErrorNullCompare(opText string, left, right frontend.Node) (ast.Expr, bool) {
+// caughtErrorEquality lowers an equality (=== !== == !=) with a caught-error
+// binding on one side to a runtime comparison over the boxed value the binding
+// presents, rather than a typed path keyed on the checker's static view of it. A
+// caught binding's Go form is always the boxed value.Value that ToValue returns,
+// whatever concrete type the checker infers: a `throw "reason"` types the binding
+// string, a `throw undefined` types it undefined, and a thrown error object types
+// it the error. So a === against a string literal must run value.StrictEquals over
+// the box, not the value.BStr.Equal the two-string fast path would emit on a value
+// that has no Equal method, and a === undefined must test the box's kind at
+// runtime, not fold to a constant on the false premise that a caught value is
+// never nullish (throwing null or undefined boxes the primitive, it no longer
+// hands back). It reports handled=false when neither operand is a caught binding or
+// the other operand is not a primitive a boxed compare can host, so those shapes
+// fall through to the normal path.
+func (r *Renderer) caughtErrorEquality(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
 	switch opText {
 	case "===", "!==", "==", "!=":
 	default:
-		return nil, false
+		return nil, false, nil
 	}
-	isNullish := func(n frontend.Node) bool {
-		return n.Kind() == frontend.NodeNullKeyword || r.isUndefinedLiteral(n)
+	var caughtNode, otherNode frontend.Node
+	switch {
+	case r.isCaughtErrorRef(left):
+		caughtNode, otherNode = left, right
+	case r.isCaughtErrorRef(right):
+		caughtNode, otherNode = right, left
+	default:
+		return nil, false, nil
 	}
-	caughtVsNullish := (r.isCaughtErrorRef(left) && isNullish(right)) ||
-		(r.isCaughtErrorRef(right) && isNullish(left))
-	if !caughtVsNullish {
-		return nil, false
+	// The other operand must be one a boxed compare can host: a primitive literal, a
+	// primitive-typed value, a dynamic value, or another caught binding. A compare
+	// of a caught error against a non-primitive shape (a typed object or array) is a
+	// later slice and falls through rather than route here, keeping this to the
+	// primitive comparisons the caught-error tests exercise.
+	if !r.comparableToCaughtBinding(otherNode) {
+		return nil, false, nil
 	}
-	result := "false"
+	// A caught binding lowers to its boxed value.Value directly; any other operand
+	// boxes through boxOperand, which yields the value.StringValue, value.Number, or
+	// undefined box the runtime compare consumes.
+	lowerBoxed := func(n frontend.Node) (ast.Expr, error) {
+		if r.isCaughtErrorRef(n) {
+			return r.lowerExpr(n)
+		}
+		return r.boxOperand(n)
+	}
+	caughtExpr, err := lowerBoxed(caughtNode)
+	if err != nil {
+		return nil, false, err
+	}
+	otherExpr, err := lowerBoxed(otherNode)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	fn := "StrictEquals"
+	if opText == "==" || opText == "!=" {
+		fn = "LooseEquals"
+	}
+	cmp := &ast.CallExpr{Fun: sel("value", fn), Args: []ast.Expr{caughtExpr, otherExpr}}
 	if opText == "!==" || opText == "!=" {
-		result = "true"
+		return &ast.UnaryExpr{Op: token.NOT, X: cmp}, true, nil
 	}
-	return ident(result), true
+	return cmp, true, nil
+}
+
+// comparableToCaughtBinding reports whether n is an operand a boxed equality
+// against a caught binding can host: the null or undefined literal, a primitive the
+// value model boxes (string, number, boolean, bigint), a dynamic value already in
+// boxed form, or another caught binding. A non-primitive typed operand is left to
+// fall through, since boxing it into the compare is a later slice.
+func (r *Renderer) comparableToCaughtBinding(n frontend.Node) bool {
+	if n.Kind() == frontend.NodeNullKeyword || r.isUndefinedLiteral(n) {
+		return true
+	}
+	return r.isString(n) || r.isNumber(n) || r.isBool(n) || r.isBigInt(n) ||
+		r.isDynamic(n) || r.isCaughtErrorRef(n)
 }
 
 // caughtErrorStringRead reports whether n reads .message or .name off a catch
