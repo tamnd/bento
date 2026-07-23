@@ -68,6 +68,38 @@ func TestNoImplicitAnyGatesUnderProjectSetting(t *testing.T) {
 	}
 }
 
+// TestStrictPropertyInitializationGatesUnderProjectSetting proves the
+// strictPropertyInitialization toleration is scoped to the project setting: a
+// class field with no initializer lowers under bento's default, where the
+// setting is off and the checker's TS2564 is bento's own added strictness over a
+// property TypeScript leaves undefined until it is assigned, but hands back once
+// the project turned the check on, where the same report is a rejection
+// TypeScript stands behind. Emitting running Go for a program the project refused
+// would be unsound, so honoring the setting is what keeps the AOT gate matched to
+// the checker.
+func TestStrictPropertyInitializationGatesUnderProjectSetting(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "uninit.ts")
+	// A non-optional field with no initializer that the constructor never assigns
+	// is the TS2564 form; the class is otherwise fully typed.
+	src := "class C {\n  x: number;\n}\nconst c = new C();\nconsole.log(c.x);\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatalf("write entry: %v", err)
+	}
+
+	if _, err := EmitGo(entry, "test"); err != nil {
+		t.Fatalf("uninitialized field handed back under the default project, want a lowering: %v", err)
+	}
+
+	_, err := EmitGoWithOptions(entry, "test", EmitOptions{StrictPropertyInitialization: true})
+	if err == nil {
+		t.Fatal("uninitialized field lowered under strictPropertyInitialization, want a hand-back")
+	}
+	if !strings.Contains(err.Error(), "has no initializer and is not definitely assigned") {
+		t.Fatalf("hand-back reason = %q, want the checker's property-initialization message", err.Error())
+	}
+}
+
 // TestAllowUnreachableCodeGates proves the project's allowUnreachableCode setting
 // reaches the checker: an exhaustive switch that leaves a trailing statement
 // unreachable lowers under bento's default, where reachability is not a build
