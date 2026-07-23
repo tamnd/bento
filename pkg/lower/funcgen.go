@@ -242,17 +242,36 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	// like retType, so a nested function does not inherit the outer store. Methods
 	// and constructors keep the stricter paramFields and are not reached here, so
 	// arguments in one is still a later slice.
-	argsMat, argsStoreName, argsOK, argsWriteSafe, err := r.argumentsPlan(fn, sig)
-	if err != nil {
-		return nil, err
-	}
+	// A body that reads arguments is backed one of two ways. When every reference to
+	// this function is a direct call this pass rewrites, it threads the real call-site
+	// arguments through a hidden trailing parameter (argumentsthread.go): a loose-arity
+	// call, an optional or rest parameter, all read the true argument list, the store is
+	// that parameter, and no entry materialization runs. Otherwise it keeps the entry
+	// snapshot argumentsPlan builds from the parameters, sound only when every call
+	// passes one argument per parameter, and a rest, optional, or arity mismatch hands
+	// back there. Either way argsObjName is scoped to this body like retType.
+	var argsMat ast.Stmt
 	prevArgs, prevArgsWrite := r.argsObjName, r.argsWriteSafe
-	if argsOK {
-		r.argsObjName = argsStoreName
-		r.argsWriteSafe = argsWriteSafe
+	if sym, ok := r.prog.SymbolAt(fn); ok && r.funcSymThreadsArgs(sym) {
+		hidden := r.freshTemp()
+		r.requireImport(valuePkg)
+		params.List = append(params.List, hiddenArgsField(hidden))
+		r.argsObjName = hidden
+		block, _ := r.funcBodyBlock(fn)
+		r.argsWriteSafe = !r.bodyReferencesParam(block, sig.Params)
 	} else {
-		r.argsObjName = ""
-		r.argsWriteSafe = false
+		mat, argsStoreName, argsOK, writeSafe, err := r.argumentsPlan(fn, sig)
+		if err != nil {
+			return nil, err
+		}
+		if argsOK {
+			argsMat = mat
+			r.argsObjName = argsStoreName
+			r.argsWriteSafe = writeSafe
+		} else {
+			r.argsObjName = ""
+			r.argsWriteSafe = false
+		}
 	}
 	defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
 

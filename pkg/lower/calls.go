@@ -46,7 +46,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.finishCall(n, &ast.SelectorExpr{X: recv, Sel: ident("Call")}, kids[1:], nil, false, false)
+		return r.finishCall(n, &ast.SelectorExpr{X: recv, Sel: ident("Call")}, kids[1:], nil, false, false, false)
 	}
 	// A member callee (s.charCodeAt(...)) is a method call, not a plain function
 	// call; the string methods are the only ones covered so far. A call on a
@@ -121,7 +121,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.finishCall(n, callee, kids[1:], nil, false, false)
+		return r.finishCall(n, callee, kids[1:], nil, false, false, false)
 	}
 	// A call to a Promise executor's resolve or reject parameter settles the promise
 	// rather than calling a plain function value: the callback's lib.d.ts signature
@@ -241,12 +241,16 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	var callee ast.Expr
 	var defaults []frontend.Node
 	var variadicTail bool
-	// A callee whose body reads its arguments object through the parameter snapshot
-	// (argumentsPlan) needs the call to pass exactly one argument per parameter, so
-	// buildCall hands a mismatched arity back rather than drop or fill against the
-	// snapshot. It is resolved once here from the callee symbol, before the branches
-	// pick the Go spelling, and forwarded through finishCall to that guard.
-	calleeReadsArgs := r.funcSymReadsArguments(sym)
+	// A callee whose every reference is a direct call threads the real call-site
+	// arguments through a hidden trailing parameter (argumentsthread.go), so this call
+	// builds and passes that array; the snapshot arity guard is off for it. A callee
+	// that keeps the parameter snapshot (argumentsPlan) instead needs the call to pass
+	// exactly one argument per parameter, so buildCall hands a mismatched arity back
+	// rather than drop or fill against the snapshot. Both are resolved once here from the
+	// callee symbol and forwarded through finishCall; a function is at most one of the
+	// two, so the snapshot guard never fires on a threaded callee.
+	calleeThreadsArgs := r.funcSymThreadsArgs(sym)
+	calleeReadsArgs := !calleeThreadsArgs && r.funcSymReadsArguments(sym)
 	if goName, ok := r.funcExprSelf[sym]; ok {
 		// The callee is a named function expression calling itself. Its two-step
 		// lowering bound the closure to a Go local, so the recursive call is a plain
@@ -316,7 +320,7 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			defaults = defs
 		}
 	}
-	return r.finishCall(n, callee, kids[1:], defaults, variadicTail, calleeReadsArgs)
+	return r.finishCall(n, callee, kids[1:], defaults, variadicTail, calleeReadsArgs, calleeThreadsArgs)
 }
 
 // finishCall lowers the argument list of call n against its signature and builds
@@ -326,14 +330,14 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 // positionally, each bridged against its declared parameter, so a derived instance
 // passed for a base parameter upcasts to the embedded base the same way an
 // assignment would.
-func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool) (ast.Expr, error) {
+func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []frontend.Node, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool, calleeThreadsArgs bool) (ast.Expr, error) {
 	var params []frontend.Param
 	var rest *frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
 		params = sig.Params
 		rest = sig.RestParam
 	}
-	return r.buildCall(callee, argNodes, params, rest, defaults, variadicTail, calleeReadsArgs)
+	return r.buildCall(callee, argNodes, params, rest, defaults, variadicTail, calleeReadsArgs, calleeThreadsArgs)
 }
 
 // buildFixedTupleSpreadCall lowers a call whose argument list contains a spread of a
@@ -634,7 +638,15 @@ func (r *Renderer) assignedFuncExpr(sym frontend.Symbol) (frontend.Node, bool) {
 // comes from the receiver's property type (an assert.sameValue(...) on a callable
 // object) shares the exact same argument bridging without a call node to look the
 // signature up from.
-func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool) (ast.Expr, error) {
+func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool, calleeThreadsArgs bool) (ast.Expr, error) {
+	// A threaded callee takes the real call-site arguments through a hidden trailing
+	// parameter, so the declared parameters still bind by position (extras dropped,
+	// omissions filled) exactly as below while the actual argument list rides the hidden
+	// array appended at the end. The snapshot arity guard is skipped, and an extra
+	// argument past the parameters is kept for the array rather than dropped: it is a
+	// real argument the arguments object must see. funcSymCallShape proved every such
+	// call passes repeatable, non-spread arguments, so building the array below re-reads
+	// no side effect and enumerates every argument.
 	// A callee whose body reads its arguments object models that object from a
 	// snapshot of its parameters (see argumentsPlan), which stands in for the passed
 	// arguments only when the call passes exactly one argument per parameter. The
@@ -770,7 +782,7 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 			return nil, err
 		}
 		args = append(args, restArg)
-	} else if len(argNodes) > len(params) {
+	} else if !calleeThreadsArgs && len(argNodes) > len(params) {
 		// JavaScript evaluates every argument left to right and then ignores the ones
 		// past the callee's parameter count, so a call with extra arguments runs the
 		// fixed ones and drops the rest. Go has no way to pass an argument a function
@@ -779,12 +791,24 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		// is a literal or a plain variable read has no side effect and cannot throw, so
 		// it drops cleanly; an extra that could mutate, call, or throw would need its
 		// effect preserved before the call and hands back to a later slice rather than
-		// silently vanishing.
+		// silently vanishing. A threaded callee is excluded: its extras are real
+		// arguments the hidden array carries, not values to drop.
 		for _, extra := range argNodes[len(params):] {
 			if !r.isDroppableExtraArg(extra) {
 				return nil, &NotYetLowerable{Reason: "a call with a side-effecting extra argument the callee ignores is a later slice"}
 			}
 		}
+	}
+	// The hidden arguments array rides last, after the fixed parameters and any rest, so
+	// its position matches the trailing field hiddenArgsField added to the declaration.
+	// It carries every actual argument, so arguments.length and arguments[i] in the body
+	// see the real call, whatever the parameter count.
+	if calleeThreadsArgs {
+		hidden, err := r.hiddenArgsArray(argNodes)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, hidden)
 	}
 	return &ast.CallExpr{Fun: callee, Args: args}, nil
 }
@@ -846,7 +870,7 @@ func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, arg
 	if err != nil {
 		return nil, false, err
 	}
-	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false, false)
+	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false, false, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1413,7 +1437,7 @@ func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNo
 		return nil, false, err
 	}
 	callee := &ast.SelectorExpr{X: recv, Sel: ident(field)}
-	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil, false, false)
+	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil, false, false, false)
 	if err != nil {
 		return nil, false, err
 	}
