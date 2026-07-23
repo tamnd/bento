@@ -12,7 +12,8 @@ func (r *Resolver) resolveBare(specifier string, parent *Module) (Resolved, erro
 	// fall back to the builtin when no local package shadows it, which the walk
 	// below discovers naturally, so try the walk first and the builtin after.
 	dir := parentDir(parent)
-	key := resolutionKey{dir: dir, specifier: specifier, conditions: r.conditionKey()}
+	esm := parent != nil && parent.Format == FormatESM
+	key := resolutionKey{dir: dir, specifier: specifier, conditions: r.conditionKey(), esm: esm}
 	if hit, ok := r.cache.get(key); ok {
 		return hit, nil
 	}
@@ -29,7 +30,7 @@ func (r *Resolver) resolveBare(specifier string, parent *Module) (Resolved, erro
 		if !r.dirExists(pkgDir) {
 			continue
 		}
-		resolved, err := r.loadFromPackageDir(pkgDir, subpath, specifier)
+		resolved, err := r.loadFromPackageDir(pkgDir, subpath, specifier, esm)
 		if err != nil {
 			return Resolved{}, err
 		}
@@ -50,11 +51,12 @@ func (r *Resolver) resolveBare(specifier string, parent *Module) (Resolved, erro
 
 // loadFromPackageDir resolves a subpath inside a found package directory,
 // through exports when present and the legacy fields otherwise.
-func (r *Resolver) loadFromPackageDir(pkgDir, subpath, specifier string) (Resolved, error) {
+func (r *Resolver) loadFromPackageDir(pkgDir, subpath, specifier string, esm bool) (Resolved, error) {
 	pkg, err := r.readPackageJSON(filepath.Join(pkgDir, "package.json"))
 	if err != nil {
 		return Resolved{}, err
 	}
+	exts := r.searchExtensions(esm)
 
 	real := func(path string) Resolved {
 		canon := r.realPath(path)
@@ -84,28 +86,28 @@ func (r *Resolver) loadFromPackageDir(pkgDir, subpath, specifier string) (Resolv
 		if pkg != nil {
 			if main := pkg.mainEntry(r.conditions); main != "" {
 				full := filepath.Clean(filepath.Join(pkgDir, main))
-				if p, ok := r.resolveAsFile(full, true); ok {
+				if p, ok := r.resolveAsFile(full, true, exts); ok {
 					return real(p), nil
 				}
 				if r.dirExists(full) {
-					if p, ok := r.resolveIndex(full); ok {
+					if p, ok := r.resolveIndex(full, exts); ok {
 						return real(p), nil
 					}
 				}
 			}
 		}
-		if p, ok := r.resolveIndex(pkgDir); ok {
+		if p, ok := r.resolveIndex(pkgDir, exts); ok {
 			return real(p), nil
 		}
 		return Resolved{}, notFound(specifier, nil, nil)
 	}
 
 	full := filepath.Clean(filepath.Join(pkgDir, subpath))
-	if p, ok := r.resolveAsFile(full, true); ok {
+	if p, ok := r.resolveAsFile(full, true, exts); ok {
 		return real(p), nil
 	}
 	if r.dirExists(full) {
-		if p, ok := r.resolveAsDirectory(full); ok {
+		if p, ok := r.resolveAsDirectory(full, exts); ok {
 			return real(p), nil
 		}
 	}
