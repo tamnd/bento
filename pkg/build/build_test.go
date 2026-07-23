@@ -138,6 +138,34 @@ func TestConstructSignatureArityGates(t *testing.T) {
 	}
 }
 
+// TestObjectTypeWithSymbolMemberDoesNotPanic proves an object literal checked
+// against the global Object type under the es2015 lib lowers without panicking.
+// That Object type carries symbol-keyed members ([Symbol.hasInstance]), whose
+// checker-internal names are not valid UTF-8. Before the fix the symbol member
+// mangled into a struct field whose json tag held the raw non-UTF-8 key, and the
+// nested intern that failed later rolled its reservation back by popping the
+// emission order's tail, which dropped a sibling struct and stranded a name with
+// a nil declaration node, a nil that panicked go/ast.Walk. Interning now declines
+// the symbol-keyed shape by name, so the program lowers cleanly rather than
+// emitting a struct that does not print or crashing the walk.
+func TestObjectTypeWithSymbolMemberDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "objsym.ts")
+	src := "var a = { toString: 5 };\nvar c: Object = a;\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatalf("write entry: %v", err)
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			t.Fatalf("lowering panicked on an Object-typed binding under es2015: %v", p)
+		}
+	}()
+	if _, err := EmitGoWithOptions(entry, "test", EmitOptions{Target: "es2015"}); err != nil {
+		t.Fatalf("Object-typed binding handed back under es2015, want a lowering: %v", err)
+	}
+}
+
 // TestStrictOffNoImplicitAnyWidensToAny proves bento reproduces a project that
 // turned strict off while keeping noImplicitAny on. A destructuring binding from
 // an all-undefined-and-null initializer, var [a, b] = [undefined, null], is legal

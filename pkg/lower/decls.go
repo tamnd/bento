@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -143,7 +144,7 @@ func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
 		delete(d.nameByIdentity, id)
 		delete(d.nameBySig, sig)
 		delete(d.used, name)
-		d.order = d.order[:len(d.order)-1]
+		d.unreserve(name)
 		return "", err
 	}
 	body, err := printDecl(decl)
@@ -151,7 +152,7 @@ func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
 		delete(d.nameByIdentity, id)
 		delete(d.nameBySig, sig)
 		delete(d.used, name)
-		d.order = d.order[:len(d.order)-1]
+		d.unreserve(name)
 		return "", err
 	}
 	d.source[name] = body
@@ -329,6 +330,21 @@ func (d *declSet) reserve(base string) string {
 	return name
 }
 
+// unreserve removes a reserved name from the emission order by value. A rollback
+// cannot pop the tail, because renderStructBody interns a field's own struct
+// before it fails, so a nested name may sit above the one being rolled back and
+// popping the tail would drop that sibling and strand this name with a nil node.
+// Removing by value leaves any successfully interned nested struct in place and
+// takes exactly the failed name out.
+func (d *declSet) unreserve(name string) {
+	for i, n := range d.order {
+		if n == name {
+			d.order = append(d.order[:i], d.order[i+1:]...)
+			return
+		}
+	}
+}
+
 // reserveName claims a unique package-level name from a base and records it as
 // used, but does not enter it in the struct/enum emission order the way reserve
 // does. It is for declarations that emit through their own channel (the tagged
@@ -402,6 +418,16 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 			if _, ok := r.optionalUnionInfo(p); !ok {
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property outside the T | undefined shape needs the tagged sum, a later slice"}
 			}
+		}
+		// A symbol-keyed member ([Symbol.hasInstance] on the global Object type an
+		// object literal is checked against under the es2015 lib) reaches here with the
+		// checker's internal computed-name spelling, which carries a sentinel byte and
+		// so is not valid UTF-8. It is not a string property with a Go field spelling;
+		// it belongs in the object's symbol side table, a later slice. Decline before
+		// mangling turns the sentinel into a field name and the raw key into a json tag
+		// that is not printable Go.
+		if !utf8.ValidString(p.Name) {
+			return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "symbol-keyed property belongs in the object side table"}
 		}
 		field, ok := exportedField(p.Name)
 		if !ok {
