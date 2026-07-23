@@ -975,7 +975,15 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// dictionary is also boxed but keeps its own index-signature handback below, so
 	// widening to isDynamic would swallow that. A genuinely static literal, whose
 	// binding was never boxed, still takes the struct-field selector here.
-	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) {
+	// A dynamic receiver (one typed any or unknown, or an empty-object binding
+	// bento boxed to value.NewObject) has no interned struct to select a field
+	// from, and it carries a runtime Get, so a string-key read must fall through
+	// to the dynamic Get path below rather than fold to value.MissingProperty on a
+	// shape the box does not obey: object["if"] must read the property an earlier
+	// object.if = v wrote, the way the dotted read already does. The dynBound
+	// exclusion still stands for a boxed literal the checker types with a struct;
+	// a non-dynamic index-signature dictionary keeps its own handback below.
+	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isDynamic(obj) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {
