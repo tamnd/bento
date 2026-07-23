@@ -96,7 +96,7 @@ func (r *Renderer) catchParamLexCollision(tryNode frontend.Node) (string, bool) 
 			break
 		}
 	}
-	if catchClause.Kind() == frontend.NodeUnknown && len(r.prog.Children(catchClause)) == 0 {
+	if catchClause == nil {
 		return "", false
 	}
 	var paramNode, catchBlock frontend.Node
@@ -108,7 +108,10 @@ func (r *Renderer) catchParamLexCollision(tryNode frontend.Node) (string, bool) 
 			paramNode = k
 		}
 	}
-	if paramNode.Kind() != frontend.NodeVariableDeclaration || catchBlock.Kind() != frontend.NodeBlock {
+	// An optional catch binding (`catch {}`) has no parameter node, so there are no
+	// BoundNames to collide and nothing to reject. Guard the nil parameter before
+	// reading its kind, or the check segfaults on the bindingless catch clause.
+	if paramNode == nil || catchBlock == nil {
 		return "", false
 	}
 	// Only a simple `catch (e)` binding is checked. A destructuring catch parameter
