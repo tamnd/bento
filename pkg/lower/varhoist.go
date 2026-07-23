@@ -111,7 +111,84 @@ func (r *Renderer) varHoists(topStmts []frontend.Node) []frontend.Node {
 	// the binding pre-declares and its site becomes an assignment, and the undefined
 	// zero of the declared slot is what the initializer reads.
 	r.collectSelfRefVarHoists(topStmts, topNames, seen, &out)
+	// A scope-level `var` a closure earlier in the statement list captures needs the
+	// same top-of-scope declaration: JavaScript hoists the var to the function top,
+	// so the earlier closure reads the one shared binding, but Go cannot close over a
+	// name a statement below the closure declares. The binding pre-declares at the
+	// scope top, above the closure, and its own site lowers to an assignment.
+	r.collectForwardCapturedVarHoists(topStmts, topNames, seen, &out)
 	return out
+}
+
+// collectForwardCapturedVarHoists records each scope-level `var` whose name a
+// closure earlier in the statement list captures. Go binds a function literal's
+// free names to variables already declared above it, so a var declared below a
+// closure that reads it leaves the closure referencing an undeclared name; hoisting
+// the var to the scope top, above the closure, is what the JavaScript function-wide
+// var scope already means. Only a `var` qualifies: a let or const captured before
+// its declaration is a temporal-dead-zone error the source would not carry. A
+// binding whose declared type does not render to a Go type is left off, since its
+// pre-declaration would have no slot to name.
+func (r *Renderer) collectForwardCapturedVarHoists(topStmts []frontend.Node, topNames, seen map[string]bool, out *[]frontend.Node) {
+	for idx, s := range topStmts {
+		if !r.isVarStatement(s) {
+			continue
+		}
+		var decls []frontend.Node
+		collectVarDecls(r.prog, s, &decls)
+		for _, d := range decls {
+			kids := r.prog.Children(d)
+			if len(kids) == 0 {
+				continue
+			}
+			nn := kids[0]
+			name, ok := localName(r.prog.Text(nn))
+			if !ok || seen[name] {
+				continue
+			}
+			if !r.nameCapturedInEarlierClosure(topStmts, idx, name) {
+				continue
+			}
+			if _, err := r.typeExpr(r.prog.TypeAt(nn)); err != nil {
+				continue
+			}
+			seen[name] = true
+			*out = append(*out, nn)
+		}
+	}
+}
+
+// nameCapturedInEarlierClosure reports whether name appears inside a function-like
+// subtree of a statement before idx in topStmts, the only place a Go closure can
+// capture a name a later statement declares. A reference in the earlier statements'
+// straight-line code is not counted: reading a not-yet-declared var outside a
+// closure is a use before its scope-top declaration the ordinary path already
+// handles, so this hoist targets the closure capture alone.
+func (r *Renderer) nameCapturedInEarlierClosure(topStmts []frontend.Node, idx int, name string) bool {
+	for i := 0; i < idx; i++ {
+		if r.nameReadInsideClosure(topStmts[i], name) {
+			return true
+		}
+	}
+	return false
+}
+
+// nameReadInsideClosure reports whether name occurs inside any function-like
+// subtree rooted at or within n, the reference a Go closure emitted for that
+// function would capture. A function declaration statement is itself function-like,
+// so its body is reached; a closure nested in an expression is reached by the
+// descent. A same-spelled binding local to the closure is counted too, which only
+// widens the hoist and never leaves a capture unbacked.
+func (r *Renderer) nameReadInsideClosure(n frontend.Node, name string) bool {
+	if isFunctionLike(n.Kind()) {
+		return r.countIdentAnywhere(n, name) > 0
+	}
+	for _, ch := range r.prog.Children(n) {
+		if r.nameReadInsideClosure(ch, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // collectSelfRefVarHoists records each scope-level `var` whose initializer reads
