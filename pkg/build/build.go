@@ -80,6 +80,16 @@ type EmitOptions struct {
 	// options in the checker so the masked report surfaces and the unit hands back.
 	// A nil pointer keeps the strict default.
 	Strict *bool
+	// StrictPropertyInitialization is the project's effective
+	// strictPropertyInitialization setting, set directly or implied by strict.
+	// bento always checks strictly, so the checker reports a class property that
+	// has no initializer and is not definitely assigned whether or not the
+	// project asked for it. When the project did ask, the report is a rejection
+	// TypeScript stands behind and bento hands the unit back. When it did not, the
+	// report is bento's own added strictness over a property that TypeScript
+	// leaves undefined until assigned, so the field lowers to its Go zero value as
+	// before.
+	StrictPropertyInitialization bool
 }
 
 // Build type-checks the entry module, lowers it to a Go program, and compiles
@@ -396,6 +406,9 @@ func firstError(prog *frontend.Program, opts EmitOptions) string {
 			return d.Message
 		}
 		if !opts.NoImplicitAny && toleratedImplicitAny[d.Code] {
+			continue
+		}
+		if !opts.StrictPropertyInitialization && toleratedPropertyInit[d.Code] {
 			continue
 		}
 		if toleratedDynamicMember[d.Code] {
@@ -871,6 +884,17 @@ var toleratedConstructAny = map[int]bool{
 var toleratedPossiblyUndefined = map[int]bool{
 	18048: true, // 'X' is possibly 'undefined'.
 	2532:  true, // Object is possibly 'undefined'.
+}
+
+// toleratedPropertyInit is the strictPropertyInitialization report bento admits
+// when the project did not ask for it. bento checks strictly to keep the most
+// precise types it can, so the checker flags a class property with no initializer
+// that the constructor does not definitely assign; under a project that left
+// strictPropertyInitialization off, TypeScript leaves that property undefined
+// until it is written, and the field lowers to its Go zero value, so the report
+// is bento's own added strictness rather than one TypeScript stands behind.
+var toleratedPropertyInit = map[int]bool{
+	2564: true, // Property 'X' has no initializer and is not definitely assigned in the constructor.
 }
 
 // gateCgo detects whether any go: import the program reached pulls in cgo and
