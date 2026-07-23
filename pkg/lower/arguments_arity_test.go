@@ -5,39 +5,42 @@ import (
 	"testing"
 )
 
-// The parameter snapshot an arguments-reading function materializes stands in for
-// the passed arguments only when the call passes exactly one argument per
-// parameter. The tolerant call lowering drops an extra argument and fills a missing
-// one, so a call whose fixed argument count differs from the parameter count would
-// read the wrong length and the wrong slots off the snapshot. These pin that both
-// arity directions hand back, that a write to a named parameter alongside a read of
-// arguments hands back, and that an exact-arity read with no parameter write still
-// lowers so the guards are not over-broad.
+// An arguments-reading function all of whose references are direct calls threads the
+// real call-site arguments through a hidden trailing parameter, so a loose-arity call
+// reads the true argument count and slots rather than a snapshot of the parameters.
+// These pin that a too-many call now threads and lowers to the real count, that a
+// too-few call whose omitted slot is a typed parameter still hands back (no undefined
+// fits the Go slot), that a write to a named parameter alongside a read of arguments
+// still hands back, and that an exact-arity read with no parameter write keeps the
+// simpler snapshot so the change is confined to the loose cases.
 
-// TestArgumentsExtraArgHandsBack proves a call passing more arguments than the
-// arguments-reading callee declares hands back: the extras are dropped before the
-// snapshot, so arguments.length would read the parameter count, not the call count.
-func TestArgumentsExtraArgHandsBack(t *testing.T) {
+// TestArgumentsExtraArgThreads proves a call passing more arguments than the
+// arguments-reading callee declares threads the real arguments through the hidden
+// parameter, so arguments.length reads the call count, not the parameter count.
+func TestArgumentsExtraArgThreads(t *testing.T) {
 	const src = `function ref(): number { return arguments.length; }
 console.log(ref(42));
 `
-	reason := renderProgramTolerantHandBack(t, src)
-	if !strings.Contains(reason, "arity the parameters do not fix") {
-		t.Errorf("hand-back reason %q does not name the arguments arity case", reason)
+	source := renderProgramTolerant(t, src)
+	if !strings.Contains(source, "*value.Array[value.Value]") {
+		t.Errorf("the arguments-reading callee did not take the hidden arguments parameter:\n%s", source)
+	}
+	if !strings.Contains(source, "Ref(value.NewArray[value.Value](value.Number(42)))") {
+		t.Errorf("the call site did not pass the real arguments array:\n%s", source)
 	}
 }
 
 // TestArgumentsTooFewArgsHandsBack proves a call passing fewer arguments than the
-// arguments-reading callee declares hands back: the missing slots are filled before
-// the snapshot, so arguments.length would read the parameter count, not the shorter
-// call count.
+// callee declares still hands back when an omitted slot is a typed parameter: the
+// hidden array would carry the shorter argument list faithfully, but the Go parameter
+// has no undefined to bind, so the call cannot lower and the whole unit hands back.
 func TestArgumentsTooFewArgsHandsBack(t *testing.T) {
 	const src = `function testcase(a: number, b: number, c: number): number { return arguments.length; }
 console.log(testcase());
 `
 	reason := renderProgramTolerantHandBack(t, src)
-	if !strings.Contains(reason, "arity the parameters do not fix") {
-		t.Errorf("hand-back reason %q does not name the arguments arity case", reason)
+	if !strings.Contains(reason, "omits an argument the callee does not default") {
+		t.Errorf("hand-back reason %q does not name the unfilled-parameter case", reason)
 	}
 }
 

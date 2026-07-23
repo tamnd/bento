@@ -64,10 +64,17 @@ func (r *Renderer) internalNamespaceCall(n, access frontend.Node, argNodes []fro
 	// same-module call gets, so the member symbol is resolved to the export it names
 	// and checked before the direct call is built.
 	calleeReadsArgs := false
+	calleeThreadsArgs := false
 	if sym, ok := r.prog.SymbolAt(kids[1]); ok {
-		calleeReadsArgs = r.funcSymReadsArguments(r.derefAlias(sym))
+		target := r.derefAlias(sym)
+		// A member access such as m.f is not a direct call of f, so funcSymCallShape sees
+		// a non-call reference and never threads a namespace-called export; this stays
+		// false and the export keeps the snapshot arity guard. The predicate is consulted
+		// anyway so the declaration and this call site read the same answer.
+		calleeThreadsArgs = r.funcSymThreadsArgs(target)
+		calleeReadsArgs = !calleeThreadsArgs && r.funcSymReadsArguments(target)
 	}
-	expr, err := r.finishCall(n, ident(name), argNodes, nil, false, calleeReadsArgs)
+	expr, err := r.finishCall(n, ident(name), argNodes, nil, false, calleeReadsArgs, calleeThreadsArgs)
 	return expr, true, err
 }
 

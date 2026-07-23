@@ -240,22 +240,69 @@ func TestArgumentsWriteWithNamedParameterHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
-// TestArgumentsWithRestParameterHandsBack proves a body that reads arguments while
-// its signature carries a rest parameter hands back: the rest gathers a call-varying
-// tail, so the parameter count is not the call arity and the store cannot stand in.
-func TestArgumentsWithRestParameterHandsBack(t *testing.T) {
+// TestArgumentsWithRestParameterThreads proves a body that reads arguments while its
+// signature carries a rest parameter threads the real call-site arguments: the rest
+// gathers its own tail as before, and the hidden array carries every argument, so
+// arguments.length reads the true count regardless of the rest split.
+func TestArgumentsWithRestParameterThreads(t *testing.T) {
 	const src = "function f(a: number, ...rest: number[]): number { return arguments.length; }\n" +
 		"f(1, 2, 3);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "rest *value.Array[float64], _bt0 *value.Array[value.Value]") {
+		t.Errorf("the rest-parameter callee did not take the hidden arguments parameter after the rest:\n%s", source)
+	}
+	if !strings.Contains(source, "value.NewArray[value.Value](value.Number(1), value.Number(2), value.Number(3))") {
+		t.Errorf("the call site did not pass every real argument in the hidden array:\n%s", source)
+	}
 }
 
-// TestArgumentsWithOptionalParameterHandsBack proves a body that reads arguments
-// while a parameter is omittable hands back: a call may omit the slot, so the count
-// depends on the call site the body cannot see.
-func TestArgumentsWithOptionalParameterHandsBack(t *testing.T) {
+// TestArgumentsWithRestParameterRuns builds and runs an arguments-reading rest
+// function so the real count and the rest tail are both proven against the
+// JavaScript result.
+func TestArgumentsWithRestParameterRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function f(a: number, ...rest: number[]): number {
+  return arguments.length + rest.length;
+}
+console.log(f(1, 2, 3, 4));
+`
+	if got, want := runProgramGo(t, src), "7\n"; got != want {
+		t.Fatalf("arguments in a rest function printed %q, want %q", got, want)
+	}
+}
+
+// TestArgumentsWithOptionalParameterThreads proves a body that reads arguments while
+// a parameter is omittable threads the real arguments: the omitted parameter still
+// fills its default at the call site, while the hidden array holds only the arguments
+// actually passed, so arguments.length is the call count, not the parameter count.
+func TestArgumentsWithOptionalParameterThreads(t *testing.T) {
 	const src = "function f(a: number, b: number = 5): number { return arguments.length; }\n" +
 		"f(1);\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "*value.Array[value.Value]") {
+		t.Errorf("the optional-parameter callee did not take the hidden arguments parameter:\n%s", source)
+	}
+	if !strings.Contains(source, "value.NewArray[value.Value](value.Number(1))") {
+		t.Errorf("the call site did not pass only the argument actually supplied:\n%s", source)
+	}
+}
+
+// TestArgumentsWithOptionalParameterRuns builds and runs an arguments-reading
+// function with a defaulted parameter at two arities so the real count is proven
+// against the JavaScript result.
+func TestArgumentsWithOptionalParameterRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `
+function f(a: number, b: number = 5): number {
+  return arguments.length;
+}
+console.log(f(1));
+console.log(f(7, 8));
+`
+	if got, want := runProgramGo(t, src), "1\n2\n"; got != want {
+		t.Fatalf("arguments with an optional parameter printed %q, want %q", got, want)
+	}
 }
 
 // TestArgumentsUsedAsValueHandsBack proves a bare read of arguments that no backed
