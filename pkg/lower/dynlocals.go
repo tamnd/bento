@@ -58,6 +58,19 @@ func (r *Renderer) collectDynDecls(n frontend.Node, out map[string]bool, declCou
 	if isFunctionScope(n.Kind()) {
 		return
 	}
+	// A catch clause introduces bindings scoped to the catch: its parameter and any
+	// let or const declared in the catch block. bento lowers the whole catch body
+	// inside its own Go closure (the deferred recover), so those bindings live in
+	// that nested Go scope and never share the enclosing function's scope. Counting
+	// one against a same-named function-scoped var would drop that var from the
+	// dynamic-locals set and leave its narrowed read a bare box that fails go build,
+	// which is exactly the scope-catch-param-lex-close and scope-catch-block-lex-close
+	// shape. So the catch's own lexical bindings are skipped here, while a var in the
+	// catch block, which hoists to the function scope, is still walked and counted.
+	if n.Kind() == frontend.NodeTryStatement {
+		r.collectTryDynDecls(n, out, declCount)
+		return
+	}
 	if n.Kind() == frontend.NodeVariableDeclaration {
 		kids := r.prog.Children(n)
 		if len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier {
@@ -71,6 +84,66 @@ func (r *Renderer) collectDynDecls(n frontend.Node, out map[string]bool, declCou
 	}
 	for _, c := range r.prog.Children(n) {
 		r.collectDynDecls(c, out, declCount)
+	}
+}
+
+// collectTryDynDecls walks a try statement for the enclosing function's dynamic
+// locals, treating the catch clause's own lexical bindings as a separate Go scope.
+// The try block and finally block are walked the ordinary way, but the catch
+// parameter is skipped and the catch block only contributes its var declarations,
+// the ones that hoist out to the function, not its let and const bindings, which
+// lower inside the catch closure. A try's children are the try block first, then
+// the catch clause and the finally block in either order, the finally being the
+// one that is itself a block.
+func (r *Renderer) collectTryDynDecls(tryNode frontend.Node, out map[string]bool, declCount map[string]int) {
+	for i, k := range r.prog.Children(tryNode) {
+		switch {
+		case i == 0 || k.Kind() == frontend.NodeBlock:
+			// The try block (first child) and the finally block (a Block) share the
+			// enclosing scope, so their vars and any-typed locals count as usual.
+			r.collectDynDecls(k, out, declCount)
+		default:
+			// The catch clause: skip the parameter, keep only hoisting vars of its block.
+			for _, c := range r.prog.Children(k) {
+				if c.Kind() == frontend.NodeBlock {
+					r.collectCatchBlockDynDecls(c, out, declCount)
+				}
+			}
+		}
+	}
+}
+
+// collectCatchBlockDynDecls walks a catch block collecting only the var
+// declarations that hoist to the enclosing function, skipping let and const, which
+// are block-scoped to the catch and lowered inside its Go closure. It stops at a
+// nested function the same way collectDynDecls does.
+func (r *Renderer) collectCatchBlockDynDecls(n frontend.Node, out map[string]bool, declCount map[string]int) {
+	if isFunctionScope(n.Kind()) {
+		return
+	}
+	// A let or const statement in the catch block is block-scoped, so its
+	// declarations do not belong to the function's dynamic-locals set; leave the
+	// whole statement subtree alone. A var statement hoists, so it walks normally.
+	if n.Kind() == frontend.NodeVariableStatement && !r.isVarStatement(n) {
+		return
+	}
+	if n.Kind() == frontend.NodeTryStatement {
+		r.collectTryDynDecls(n, out, declCount)
+		return
+	}
+	if n.Kind() == frontend.NodeVariableDeclaration {
+		kids := r.prog.Children(n)
+		if len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier {
+			if name, ok := localName(r.prog.Text(kids[0])); ok {
+				declCount[name]++
+				if r.prog.TypeAt(kids[0]).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+					out[name] = true
+				}
+			}
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		r.collectCatchBlockDynDecls(c, out, declCount)
 	}
 }
 

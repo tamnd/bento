@@ -42,9 +42,46 @@ func (r *Renderer) classifyArrayElem(el frontend.Node) (arrayDefaultElem, error)
 	case len(ec) == 1 && r.patternNode(ec[0]):
 		return arrayDefaultElem{nested: ec[0]}, nil
 	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier:
+		if r.defaultNeedsNamedEvaluation(ec[1]) {
+			return arrayDefaultElem{}, namedEvaluationHandBack
+		}
 		return arrayDefaultElem{nameNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
 	default:
 		return arrayDefaultElem{}, &NotYetLowerable{Reason: "an array destructuring hole or rest is a later slice"}
+	}
+}
+
+// namedEvaluationHandBack is the reason a destructuring element hands back when its
+// default is an anonymous function or arrow. JavaScript's NamedEvaluation gives such a
+// default the binding's own name, so `[fn = function () {}]` makes fn.name === "fn".
+// bento models a function as a bare Go func with no name slot, so it cannot carry that
+// inferred name; a later read of it would fold to undefined, a wrong answer. The
+// element hands back rather than bind a value whose reflective name is wrong.
+var namedEvaluationHandBack = &NotYetLowerable{Reason: "a destructuring default that is an anonymous function or arrow takes the binding's name by NamedEvaluation, a reflective name the static function model does not host"}
+
+// defaultNeedsNamedEvaluation reports whether a destructuring element default is an
+// anonymous function or arrow, the NamedEvaluation case above. A named function
+// expression keeps its own name and is not renamed, so it is not this case; only an
+// arrow, which has no name, and a function expression with no name qualify.
+func (r *Renderer) defaultNeedsNamedEvaluation(defNode frontend.Node) bool {
+	// A cover default parenthesizes its function, `cover = (function () {})`, and the
+	// parentheses are transparent to NamedEvaluation, so the wrapper is peeled to reach
+	// the function it covers before the kind is judged.
+	for defNode.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(defNode)
+		if len(kids) != 1 {
+			return false
+		}
+		defNode = kids[0]
+	}
+	switch defNode.Kind() {
+	case frontend.NodeArrowFunction:
+		return true
+	case frontend.NodeFunctionExpression:
+		_, named := r.funcExprNameNode(defNode)
+		return !named
+	default:
+		return false
 	}
 }
 
@@ -118,8 +155,14 @@ func (r *Renderer) classifyObjectElem(el frontend.Node) (objectDefaultElem, erro
 	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && ec[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(el, ec[0], ec[1]), ":"):
 		return objectDefaultElem{nameNode: ec[0], bindNode: ec[1]}, nil
 	case len(ec) == 2 && ec[0].Kind() == frontend.NodeIdentifier && !strings.Contains(r.childGap(el, ec[0], ec[1]), ":"):
+		if r.defaultNeedsNamedEvaluation(ec[1]) {
+			return objectDefaultElem{}, namedEvaluationHandBack
+		}
 		return objectDefaultElem{nameNode: ec[0], bindNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
 	case len(ec) == 3 && ec[0].Kind() == frontend.NodeIdentifier && ec[1].Kind() == frontend.NodeIdentifier && strings.Contains(r.childGap(el, ec[0], ec[1]), ":") && strings.Contains(r.childGap(el, ec[1], ec[2]), "="):
+		if r.defaultNeedsNamedEvaluation(ec[2]) {
+			return objectDefaultElem{}, namedEvaluationHandBack
+		}
 		return objectDefaultElem{nameNode: ec[0], bindNode: ec[1], hasDefault: true, defNode: ec[2]}, nil
 	default:
 		return objectDefaultElem{}, &NotYetLowerable{Reason: "an object destructuring nested pattern is a later slice"}

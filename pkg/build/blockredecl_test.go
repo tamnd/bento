@@ -31,6 +31,27 @@ func TestBlockScopeFnVarRedeclarationRejected(t *testing.T) {
 	_ = nyl
 }
 
+// TestCatchParamLexicalRedeclarationRejected pins the catch early error from spec
+// 13.15.1: a catch parameter name that also occurs in the LexicallyDeclaredNames of
+// the catch block, a directly nested function declaration here, is a SyntaxError.
+// TypeScript reports nothing, so without the check the lowerer emits a Go block that
+// binds the catch parameter and then redeclares it as a function and the toolchain
+// rejects it. node throws at parse time, so this must be a real build error, not a
+// hand-back, or the parse-phase negative test scores as a handback rather than a pass.
+func TestCatchParamLexicalRedeclarationRejected(t *testing.T) {
+	src := "function f() {\n  try {\n  } catch (e) {\n    function e() {}\n  }\n}\nf();\n"
+	_, err := compileSource(t, src)
+	if err == nil {
+		t.Fatal("a catch parameter redeclared by a catch-block function should be rejected")
+	}
+	if !strings.Contains(err.Error(), "SyntaxError") {
+		t.Fatalf("expected the catch early-error rejection, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "not yet lowerable") {
+		t.Fatalf("the rejection must be a real build error, not a handback: %v", err)
+	}
+}
+
 // TestBlockScopeFnVarRedeclarationNestedBlockRejected pins the same collision when
 // the var sits in a nested plain block inside the function's block: a var is
 // function-scoped, so the inner block's `var f` is one of the outer block's
