@@ -223,6 +223,31 @@ func (r *Renderer) buildFwdHoistDecls(nameNodes []frontend.Node) ([]ast.Stmt, er
 	return out, nil
 }
 
+// dropAlreadyHoisted removes binding-name nodes whose name the var hoist or the
+// module hoist already declares at the scope top. The fwd hoist runs after both,
+// and each hoist emits one top-of-scope declaration, so a name a prior hoist owns
+// would be declared a second time here and Go rejects the redeclaration. The
+// overlap is real because the fwd-capture test matches an identifier by name
+// alone: an earlier closure with its own local `result` makes the fwd hoist think
+// a module-level `var result` is captured forward, when the var hoist already
+// pre-declares that binding and its site already lowers to an assignment through
+// the hoistedVars gate. Skipping it here leaves exactly one declaration; the
+// genuine const/let forward capture (the assert compareArray shape) is not a var
+// and not module-hoisted, so it is never in either set and stays on the fwd path.
+func (r *Renderer) dropAlreadyHoisted(nodes []frontend.Node) []frontend.Node {
+	if len(nodes) == 0 {
+		return nodes
+	}
+	out := make([]frontend.Node, 0, len(nodes))
+	for _, nn := range nodes {
+		if name, ok := localName(r.prog.Text(nn)); ok && (r.hoistedVars[name] || r.moduleAssignVars[name]) {
+			continue
+		}
+		out = append(out, nn)
+	}
+	return out
+}
+
 // enterFwdHoistScope computes the forward-captured callable bindings for a
 // scope's statement list, records them so flattenCallableBinding lowers each site
 // to an assignment rather than a fresh declaration, and returns the top-of-scope
@@ -232,8 +257,8 @@ func (r *Renderer) enterFwdHoistScope(topStmts []frontend.Node) ([]ast.Stmt, fun
 	prev, prevFunc := r.fwdHoisted, r.fwdHoistedFunc
 	restore := func() { r.fwdHoisted, r.fwdHoistedFunc = prev, prevFunc }
 
-	callableNodes := r.callableFwdHoists(topStmts)
-	funcNodes := r.funcFwdHoists(topStmts)
+	callableNodes := r.dropAlreadyHoisted(r.callableFwdHoists(topStmts))
+	funcNodes := r.dropAlreadyHoisted(r.funcFwdHoists(topStmts))
 	if len(callableNodes) == 0 && len(funcNodes) == 0 {
 		r.fwdHoisted, r.fwdHoistedFunc = nil, nil
 		return nil, restore, nil
