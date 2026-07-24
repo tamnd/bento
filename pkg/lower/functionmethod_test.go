@@ -129,8 +129,21 @@ func TestFunctionLengthLowersToConstant(t *testing.T) {
 	if strings.Contains(source, "MissingProperty") {
 		t.Errorf(".length folded to the missing-property path instead of a constant:\n%s", source)
 	}
-	if !strings.Contains(source, "NumberToString(2)") {
+	if !strings.Contains(source, "NumberToString(2.0)") {
 		t.Errorf(".length did not lower to the constant 2:\n%s", source)
+	}
+}
+
+// TestFunctionLengthBoxesIntoDynamicSink proves that when .length flows into a dynamic
+// slot (an any parameter), it boxes through value.Number of the float constant rather
+// than passing a bare untyped-int constant, which would not compile against value.Value.
+func TestFunctionLengthBoxesIntoDynamicSink(t *testing.T) {
+	const src = "function af(...a: number[]): void {}\n" +
+		"function check(x: any): void {}\n" +
+		"check(af.length);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.Number(0.0)") {
+		t.Errorf(".length into a dynamic sink did not box through value.Number(0.0):\n%s", source)
 	}
 }
 
