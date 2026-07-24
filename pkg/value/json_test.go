@@ -144,3 +144,15 @@ func inf(s int) float64 {
 }
 
 func negZero() float64 { z := float64(0); return -z }
+
+// TestJSONStringifyGoInteger proves a value the lowering leaves as a Go integer, an
+// untyped-constant argument boxed straight into the any slot, serializes as a number
+// rather than reaching the struct reflection walk, which would NumField-panic on it.
+func TestJSONStringifyGoInteger(t *testing.T) {
+	if got := JSONStringify(123).ToGoString(); got != "123" {
+		t.Fatalf("JSONStringify(123) = %q, want 123", got)
+	}
+	if got := JSONStringify(int64(-7)).ToGoString(); got != "-7" {
+		t.Fatalf("JSONStringify(int64(-7)) = %q, want -7", got)
+	}
+}
