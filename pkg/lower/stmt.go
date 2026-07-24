@@ -1380,7 +1380,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 			continue
 		}
 		if name, ok := localName(r.prog.Text(kids[0])); ok {
-			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name]
+			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && !r.scopeParams[name]
 		}
 	}
 	s, err := r.lowerVarStatement(n)
@@ -1481,7 +1481,14 @@ func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, e
 		if !ok {
 			return nil, false, nil
 		}
-		if r.blockDeclares(name) || r.hoistedVars[name] || r.moduleAssignVars[name] || r.fwdHoistedFunc[name] {
+		// A `var` whose name is a parameter of the enclosing function redeclares that
+		// parameter's binding: JavaScript hoists the var to the one function-scoped slot
+		// the parameter already occupies, so `function f(x){ var x; }` keeps x's argument
+		// value and a re-declaration would reset nothing. Go binds the parameter as a
+		// function argument, so a second `var x` there is a duplicate declaration that
+		// will not compile; routing it through the assignment path (or, with no
+		// initializer, emitting nothing) matches JavaScript and compiles.
+		if r.blockDeclares(name) || r.hoistedVars[name] || r.moduleAssignVars[name] || r.fwdHoistedFunc[name] || r.scopeParams[name] {
 			redeclared++
 		}
 	}
