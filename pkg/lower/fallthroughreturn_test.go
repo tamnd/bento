@@ -167,6 +167,53 @@ console.log(String(f(false)));
 	}
 }
 
+// TestBareReturnOptionalYieldsNone pins that an explicit bare `return;` in a function
+// whose inferred result is T | undefined lowers to the None of that option, not a bare
+// Go return. Unreachable-code elimination does not prune the later `return 1` from
+// return-type inference, so the function carries a value.Opt[float64] result the bare Go
+// return would leave short; the None spells the undefined the bare return yields. This
+// is the return/S12.9_A5 shape.
+func TestBareReturnOptionalYieldsNone(t *testing.T) {
+	src := `function f(b: boolean) { if (b) return; return 1; }`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.None[float64]") {
+		t.Fatalf("bare return in an optional-result function did not emit the None:\n%s", out)
+	}
+}
+
+// TestBareReturnOptionalRuns builds and runs the bare-return optional shape: the bare
+// arm yields undefined and the value arm yields the number.
+func TestBareReturnOptionalRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+function f(b: boolean): number | undefined { if (b) return; return 7; }
+console.log(String(f(true)));
+console.log(String(f(false)));
+`
+	got := runProgramGo(t, src)
+	want := "undefined\n7\n"
+	if got != want {
+		t.Fatalf("bare-return optional run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestBareReturnDynamicYieldsUndefined pins that a bare `return;` in a function whose
+// inferred result is a dynamic value (any) lowers to value.Undefined, the box that
+// result slot holds, rather than a bare Go return one operand short.
+func TestBareReturnDynamicYieldsUndefined(t *testing.T) {
+	skipIfShort(t)
+	src := `
+function f(b: boolean): any { if (b) return; return 9; }
+console.log(String(f(true)));
+console.log(String(f(false)));
+`
+	got := runProgramGo(t, src)
+	want := "undefined\n9\n"
+	if got != want {
+		t.Fatalf("bare-return dynamic run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestTypeofSwitchExhaustiveTerminates pins that a switch over typeof x whose cases
 // cover all eight typeof strings and each return counts as exhaustive-terminating, so
 // a value function ending in it (with the checker's unreachable tail after) compiles.
