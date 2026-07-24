@@ -4296,7 +4296,18 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 			}
 			cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
 		default:
-			return nil, true, &NotYetLowerable{Reason: "??= on a target that is neither the optional T | undefined nor a dynamic value is a later slice"}
+			// A nullable tagged-sum target (T | null, T | null | undefined) is nullish
+			// exactly on its sentinel arms, so the guard is a tag compare against the null
+			// arm ored with the undefined arm when the union carries it, the same tag test
+			// unionSentinelCompare emits for x === null. The store below wraps the
+			// right-hand side back into the union through coerceToTarget, so the slot stays
+			// the tagged sum and a later read still goes through it, no narrowing to a bare
+			// arm the Go slot could not hold.
+			if guard, ok := r.nullableUnionNullishGuard(name); ok {
+				cond = guard
+			} else {
+				return nil, true, &NotYetLowerable{Reason: "??= on a target that is neither the optional T | undefined nor a dynamic value is a later slice"}
+			}
 		}
 	case "||=":
 		// ||= assigns when the target is falsy, so the guard is the target's
@@ -4349,6 +4360,41 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 		Cond: cond,
 		Body: &ast.BlockStmt{List: []ast.Stmt{assign}},
 	}, true, nil
+}
+
+// nullableUnionNullishGuard builds the ??= trigger for a nullable tagged-sum local:
+// the value is nullish exactly when its tag is a sentinel arm, so the guard is
+// name.tag == <null arm> ored with name.tag == <undefined arm> for whichever
+// sentinels the union carries. A T | null union yields the single null-tag compare,
+// a T | null | undefined union the disjunction of both. A local that is not a
+// tagged-sum union, or a union with no sentinel arm, reports false so the caller
+// hands the ??= back rather than guess a guard.
+func (r *Renderer) nullableUnionNullishGuard(name string) (ast.Expr, bool) {
+	info, ok := r.unionLocals[name]
+	if !ok {
+		return nil, false
+	}
+	var guard ast.Expr
+	for _, flag := range []frontend.TypeFlags{frontend.TypeNull, frontend.TypeUndefined} {
+		arm, ok := info.armForFlags(flag)
+		if !ok {
+			continue
+		}
+		term := &ast.BinaryExpr{
+			X:  &ast.SelectorExpr{X: ident(name), Sel: ident("tag")},
+			Op: token.EQL,
+			Y:  ident(info.tagConst(arm)),
+		}
+		if guard == nil {
+			guard = term
+		} else {
+			guard = &ast.BinaryExpr{X: guard, Op: token.LOR, Y: term}
+		}
+	}
+	if guard == nil {
+		return nil, false
+	}
+	return guard, true
 }
 
 // incDecFromStep rewrites a compound step of one, x += 1 or x -= 1, into Go's ++
