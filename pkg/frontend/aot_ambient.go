@@ -31,7 +31,9 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // backs them with a package-level module object. require is the CommonJS loader
 // global, typed any so typeof require is "function" and a require(specifier) call
 // lowers through the dynamic call path; the lowerer backs it with a package-level
-// require function value. The node:fs, node:os, and node:path module declarations give the file
+// require function value. queueMicrotask is the WHATWG global that schedules a
+// callback on the microtask queue; the lowerer boxes the callback and emits
+// value.QueueMicrotask, and the assembled main drains the queue at its end. The node:fs, node:os, and node:path module declarations give the file
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a
@@ -53,6 +55,7 @@ declare var __filename: string;
 declare var module: any;
 declare var exports: any;
 declare var require: any;
+declare function queueMicrotask(callback: () => void): void;
 declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;

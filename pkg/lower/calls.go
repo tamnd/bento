@@ -202,6 +202,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return r.unaryStringGlobal("Atob", callee, kids[1:])
 		}
 	}
+	// queueMicrotask(fn) schedules fn on the microtask queue, the WHATWG global that
+	// runs a callback after the current synchronous run and before the next macrotask.
+	// It is an ambient global, not a user binding, so it routes before the user-function
+	// path the way the coercions do.
+	if r.prog.Text(kids[0]) == "queueMicrotask" && r.isAmbientGlobal(kids[0]) {
+		return r.queueMicrotaskCall(kids[1:])
+	}
 	// Symbol() and Symbol(desc) construct a fresh unique symbol, the boxed value a
 	// symbol-keyed property carries, and route before the user path the way the
 	// coercions do since Symbol is an ambient global, not a user binding.
@@ -3979,6 +3986,26 @@ func (r *Renderer) processStreamCall(stream, method string, argNodes []frontend.
 		goName = "WriteStderr"
 	}
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// queueMicrotaskCall lowers queueMicrotask(fn), the WHATWG global that schedules fn
+// on the microtask queue. The callback boxes to a value.Value the runtime invokes at
+// the microtask checkpoint, so it shares the queue and the first-in-first-out order
+// promise reactions use, and it sets the program's microtask flag so the assembled
+// main drains the queue at its end even when the program minted no promise. A call
+// with other than one argument hands back rather than emit a call that would drop or
+// misread the callback.
+func (r *Renderer) queueMicrotaskCall(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "queueMicrotask with this argument count is a later slice"}
+	}
+	fn, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.usesMicrotask = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "QueueMicrotask"), Args: []ast.Expr{fn}}, nil
 }
 
 // processCall lowers a call on the global process object. Only on is covered, and

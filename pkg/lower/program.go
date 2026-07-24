@@ -406,15 +406,18 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// JavaScript gives a microtask. The drain is appended after the classes render so a
 	// promise minted or observed inside a class method body, which lowers there, still
 	// sets the flag in time; a program that minted no promise drains nothing.
-	if r.usesPromise {
+	if r.usesPromise || r.usesMicrotask {
 		r.requireImport(valuePkg)
 		drain := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunMicrotasks")}}
 		mainDecl.Body.List = append(mainDecl.Body.List, drain)
+	}
+	if r.usesPromise {
 		// After the drain, any promise that rejected and was never observed is an
 		// unhandled rejection: JavaScript runs the unhandledrejection path once the
 		// microtask checkpoint is clear. Reporting it (to stderr, with a non-zero exit)
 		// is what lets a test that asserts a rejection observe it, rather than the
-		// rejection vanishing into a false pass.
+		// rejection vanishing into a false pass. This is gated on a promise alone, since
+		// queueMicrotask schedules a callback but mints no rejection to report.
 		report := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "ReportUnhandledRejections")}}
 		mainDecl.Body.List = append(mainDecl.Body.List, report)
 	}

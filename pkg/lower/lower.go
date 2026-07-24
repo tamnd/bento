@@ -58,13 +58,13 @@ func (e *NotYetLowerable) Error() string {
 // type identity (05_type_lowering.md section 29), which is only stable within
 // one program.
 type Renderer struct {
-	prog    *frontend.Program
+	prog *frontend.Program
 	// programStrict is set when the entry module opens with a "use strict" directive
 	// prologue, so a member store lowers to the throwing SetStrict rather than the
 	// silent-drop Set, the way a strict script observes a failed assignment.
 	programStrict bool
-	decls   *declSet
-	imports map[string]bool
+	decls         *declSet
+	imports       map[string]bool
 	// nodeImports maps a local binding name introduced by a node: import to the
 	// builtin it names, so a call to that binding lowers to the value helper the
 	// builtin maps to rather than a user function. It is populated once from the
@@ -383,6 +383,12 @@ type Renderer struct {
 	// unchanged. This is what lets common.mustCall, which asserts on exit that a wrapped
 	// function ran the expected number of times, observe the run.
 	usesExitCallbacks bool
+	// usesMicrotask records that the program called queueMicrotask, so the assembled
+	// main drains the microtask queue at its end (value.RunMicrotasks) even when the
+	// program minted no promise. queueMicrotask and a promise share one queue, so a
+	// program that scheduled a microtask through either needs the drain; this flag adds
+	// the queueMicrotask half to the usesPromise half the drain already gated on.
+	usesMicrotask bool
 	// usesCommonJSModule records that the program read the CommonJS module or exports
 	// wrapper global, so the assembled program emits the package-level module object
 	// and its exports alias (see commonjs.go). A module object is one value.Object with
