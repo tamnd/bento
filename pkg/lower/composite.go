@@ -558,10 +558,18 @@ func (r *Renderer) arrayIsArray(argNodes []frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "IsArray"), Args: []ast.Expr{boxed}}, nil
 	}
-	if _, ok := r.arrayElem(arg); ok {
-		return ident("true"), nil
+	// The brand is known statically, but the operand must still be evaluated for its
+	// side effects and stay referenced so the emitted Go compiles (a binding whose
+	// only use is this check would otherwise be declared and not used). Lower it and
+	// pass it through value.StaticBool, which yields the known result and keeps the
+	// operand live.
+	lowered, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, err
 	}
-	return ident("false"), nil
+	_, isArr := r.arrayElem(arg)
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "StaticBool"), Args: []ast.Expr{lowered, boolLit(isArr)}}, nil
 }
 
 // objectLiteral lowers an object literal { k: v, ... } to a composite literal
