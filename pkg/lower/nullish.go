@@ -33,6 +33,9 @@ func (r *Renderer) nullishCoalesce(left, right frontend.Node) (ast.Expr, error) 
 		if r.isDynamic(left) {
 			return r.dynamicNullishCoalesce(left, right)
 		}
+		if expr, ok, err := r.nullableUnionCoalesce(left, right); ok || err != nil {
+			return expr, err
+		}
 		return nil, &NotYetLowerable{Reason: "nullish coalescing whose left is a T | null, not the optional T | undefined or a dynamic operand, is a later slice"}
 	}
 	if r.isDynamic(right) {
@@ -100,6 +103,99 @@ func (r *Renderer) nullishCoalesce(left, right frontend.Node) (ast.Expr, error) 
 		Body: &ast.BlockStmt{List: body},
 	}
 	return &ast.CallExpr{Fun: lit}, nil
+}
+
+// nullableUnionCoalesce lowers a ?? b when the left is a tagged-sum nullable union
+// (T | null or T | null | undefined) with a single primitive value arm, the read-side
+// mirror of the ??= nullable-union store. The left is bound once to a temp, its tag is
+// tested against the sentinel arms, and the result is the fallback on a nullish tag or
+// the value arm's field otherwise, so the short-circuit is exact even for a
+// side-effecting fallback. The whole expression's Go type is the value arm's type, so
+// the fallback must be a definite value of that same arm: a fallback that widens the
+// type (a string fallback for a number arm) or is itself nullable would make the result
+// a wider union the value arm's field cannot hold, and hands back. ok=false means the
+// shape is not a single-primitive-arm nullable union, so the caller keeps its own
+// handback.
+func (r *Renderer) nullableUnionCoalesce(left, right frontend.Node) (ast.Expr, bool, error) {
+	info, ok := r.unionInfoOrIntern(r.prog.TypeAt(left))
+	if !ok {
+		return nil, false, nil
+	}
+	// Find the single value arm. An object arm (a pointer-field nullable object union)
+	// or more than one value arm is a different representation this slice does not model.
+	var varm unionArm
+	valueArms := 0
+	for _, a := range info.arms {
+		if a.tagOnly {
+			continue
+		}
+		if a.isObject || a.field == "" {
+			return nil, false, nil
+		}
+		varm = a
+		valueArms++
+	}
+	if valueArms != 1 {
+		return nil, false, nil
+	}
+	// The union must carry the null sentinel: a T | undefined-only union is the value.Opt
+	// shape the optional path handles and never reaches here.
+	nullArm, hasNull := info.armForFlags(frontend.TypeNull)
+	if !hasNull {
+		return nil, false, nil
+	}
+	undefArm, hasUndef := info.armForFlags(frontend.TypeUndefined)
+	// The fallback must be a definite value of the value arm: a non-union type whose
+	// primitive selects the same arm. A union fallback (a wider or still-nullable type),
+	// a dynamic fallback, or a fallback of a different primitive would not fit the value
+	// arm's Go field, so it hands back rather than emit a widening the field cannot hold.
+	rt := r.prog.TypeAt(right)
+	if rt.Flags&frontend.TypeUnion != 0 {
+		return nil, true, &NotYetLowerable{Reason: "?? on a T | null with a union or nullable fallback is a later slice"}
+	}
+	if fbArm, ok := info.armForFlags(rt.Flags); !ok || fbArm.field != varm.field {
+		return nil, true, &NotYetLowerable{Reason: "?? on a T | null whose fallback is not a definite value of the union's value arm is a later slice"}
+	}
+	l, err := r.lowerExpr(left)
+	if err != nil {
+		return nil, true, err
+	}
+	fallback, err := r.lowerExpr(right)
+	if err != nil {
+		return nil, true, err
+	}
+	// The nullish guard is the tag against the sentinel arms, null ored with undefined
+	// when the union carries both, the same tag test the sentinel compare emits.
+	tmp := r.freshTemp()
+	guard := ast.Expr(&ast.BinaryExpr{
+		X:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("tag")},
+		Op: token.EQL,
+		Y:  ident(info.tagConst(nullArm)),
+	})
+	if hasUndef {
+		guard = &ast.BinaryExpr{
+			X:  guard,
+			Op: token.LOR,
+			Y: &ast.BinaryExpr{
+				X:  &ast.SelectorExpr{X: ident(tmp), Sel: ident("tag")},
+				Op: token.EQL,
+				Y:  ident(info.tagConst(undefArm)),
+			},
+		}
+	}
+	body := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{l}},
+		&ast.IfStmt{
+			Cond: guard,
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{fallback}}}},
+		},
+		&ast.ReturnStmt{Results: []ast.Expr{&ast.SelectorExpr{X: ident(tmp), Sel: ident(varm.field)}}},
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: varm.goType}}}},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: lit}, true, nil
 }
 
 // dynamicNullishCoalesce lowers a ?? b when the left is a dynamic value, whose

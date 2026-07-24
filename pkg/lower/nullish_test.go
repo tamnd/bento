@@ -205,3 +205,72 @@ console.log(pick("kept", "z"));
 		t.Fatalf("dynamic nullish program printed %q, want %q", got, want)
 	}
 }
+
+// TestNullishCoalesceNullableUnionEmits pins that ?? on a tagged-sum nullable union
+// left binds the operand once and tests its tag against the sentinel arms, returning
+// the value arm's field when present and the fallback on a nullish tag: a T | null
+// tests the null tag alone, a T | null | undefined tests the null tag ored with the
+// undefined tag.
+func TestNullishCoalesceNullableUnionEmits(t *testing.T) {
+	const src = "function f(a: number | null): number { return a ?? 5; }\nconsole.log(f(null));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "tag == NumOrNullNull {") {
+		t.Errorf("T | null ?? did not test the null tag:\n%s", source)
+	}
+	if !strings.Contains(source, ".num") {
+		t.Errorf("T | null ?? did not read the value arm field:\n%s", source)
+	}
+
+	const src2 = "function g(c: string | null | undefined): string { return c ?? \"x\"; }\nconsole.log(g(null));\n"
+	source2 := renderProgram(t, src2)
+	if !strings.Contains(source2, "tag == StrOrUndefOrNullNull || ") ||
+		!strings.Contains(source2, "tag == StrOrUndefOrNullUndef {") {
+		t.Errorf("T | null | undefined ?? did not test both sentinel tags:\n%s", source2)
+	}
+}
+
+// TestNullishCoalesceNullableUnionHandsBack pins that a fallback that would widen the
+// result past the value arm (a string fallback for a number arm) hands back rather
+// than emit a value the arm's Go field cannot hold.
+func TestNullishCoalesceNullableUnionHandsBack(t *testing.T) {
+	const src = "function f(a: number | null): number | string { return a ?? \"wide\"; }\nconsole.log(f(null));\n"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if !strings.Contains(nyl.Reason, "value arm") && !strings.Contains(nyl.Reason, "union or nullable fallback") {
+		t.Errorf("hand-back reason = %q, want it to mention the value-arm mismatch", nyl.Reason)
+	}
+}
+
+// TestNullishCoalesceNullableUnionRuns builds and runs ?? over a T | null and a
+// T | null | undefined operand and matches Node: a null or undefined operand takes
+// the fallback, a present value is kept, and a side-effecting fallback fires only on
+// the nullish branch.
+func TestNullishCoalesceNullableUnionRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the test builds and runs generated Go")
+	}
+	const src = `function f(a: number | null): number { return a ?? 5; }
+function g(c: string | null | undefined): string { return c ?? "x"; }
+let hits = 0;
+function bump(): number { hits++; return 1; }
+function h(v: number | null): number { return v ?? bump(); }
+console.log(f(null));
+console.log(f(7));
+console.log(g(null));
+console.log(g(undefined));
+console.log(g("keep"));
+console.log(h(3), hits);
+console.log(h(null), hits);
+`
+	got := runProgramGo(t, src)
+	want := "5\n7\nx\nx\nkeep\n3 0\n1 1\n"
+	if got != want {
+		t.Fatalf("nullable-union nullish program printed %q, want %q", got, want)
+	}
+}
