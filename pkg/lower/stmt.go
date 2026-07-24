@@ -1576,6 +1576,30 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding initialized straight from a require of a composed module holds the
+		// boxed value.Value the loader returns, the module's exports. The checker types
+		// the binding by that module's inferred exports shape, and when the shape is an
+		// object (the common module.exports = { ... }) there is no single Go value the
+		// box coerces to, so the binding lands in a value.Value slot and is marked
+		// dynamic, exactly the regExpBoxedResultCall sibling above; every later property
+		// and element read off it then routes through the value model, the way a CommonJS
+		// consumer reads exports at run time. A primitive export coerces cleanly through
+		// bindingInit below and never reaches here.
+		if r.isRequireModuleCall(kids[initIdx]) &&
+			r.prog.TypeAt(kids[0]).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+			reqInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{reqInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err

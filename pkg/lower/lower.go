@@ -374,6 +374,40 @@ type Renderer struct {
 	// each queued .then callback in order. A program that mints no promise drains
 	// nothing, so its main is unchanged.
 	usesPromise bool
+	// usesCommonJSModule records that the program read the CommonJS module or exports
+	// wrapper global, so the assembled program emits the package-level module object
+	// and its exports alias (see commonjs.go). A module object is one value.Object with
+	// an exports property; the exports alias holds the same object the property starts
+	// at, so exports.x and module.exports.x reach one object, and a later
+	// module.exports = v reassigns the property without moving the alias, the divergence
+	// Node's wrapper has. A program that names neither global emits no such state.
+	usesCommonJSModule bool
+	// usesCommonJSRequire records that the program read the CommonJS require wrapper
+	// global, so the assembled program emits the package-level require function value
+	// (see commonjs.go). It is independent of usesCommonJSModule: a module can call
+	// require without ever touching module or exports, and one that does emits the
+	// require function alone.
+	usesCommonJSRequire bool
+	// requiredLoaders maps a CommonJS module reached by require, keyed by its resolved
+	// absolute path, to the base identifier its loader emits under. It is populated
+	// before any body lowers, so a require call in the entry or in another required
+	// module resolves its literal specifier to the target's loader name and lowers to
+	// a direct call on it. A path absent from the map is a specifier the compiler could
+	// not resolve to a sibling module, so its require falls through to the throwing
+	// require value instead.
+	requiredLoaders map[string]string
+	// requiredModuleActive is true while the body of a required CommonJS module is
+	// lowering, so the module and exports globals resolve to the loader's own module
+	// and exports locals rather than the entry's package-level objects. Each module
+	// has its own exports, so a shared package var would let two modules clobber one
+	// exports object; the loader-local binding keeps them separate.
+	requiredModuleActive bool
+	// reqUsesExports records that the required module body currently lowering read the
+	// exports global, so the loader declares the exports local only when the body names
+	// it. The module local is always declared, since the loader itself reads and
+	// finishes it; a body that never touches exports would leave an unused local and
+	// fail the Go build without this.
+	reqUsesExports bool
 	// tmpSeq is a monotonic counter the lowerer draws generated temporary names from,
 	// for the places a single source construct needs a Go local with no source name:
 	// the element a destructuring for...of binds before it reads each position out of

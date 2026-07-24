@@ -121,6 +121,8 @@ func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Ho
 		Target:               opts.Target,
 		ImportHelpers:        opts.ImportHelpers,
 		AllowUnreachableCode: opts.AllowUnreachableCode,
+		AllowJS:              opts.AllowJS,
+		CheckJS:              opts.CheckJS,
 	}
 	// A loose program that still asked for noImplicitAny gets the flag set directly:
 	// strict is what usually implies noImplicitAny, so with strict off the shim would

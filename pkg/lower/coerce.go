@@ -372,6 +372,16 @@ func (r *Renderer) isBigInt(n frontend.Node) bool {
 // dynamic paths use to route a property read, a +, or an assignment through the
 // value box rather than a static field, operator, or slot.
 func (r *Renderer) isDynamic(n frontend.Node) bool {
+	// The CommonJS module and exports globals are declared any (aot_ambient.go),
+	// but the checker's CommonJS export inference synthesizes a concrete shape for
+	// exports and module.exports from the module's own exports.x = v assignments,
+	// which would drive a static field read or write over the ambient object. The
+	// object is a value.Object the lowerer emits, so a member access off either
+	// name must dispatch through the dynamic Get and Set; routing the reference
+	// here overrides the inferred shape and keeps it on the value box.
+	if r.isCommonJSModuleGlobal(n) {
+		return true
+	}
 	// A read of a caught error's .message or .name lowers to a bento string
 	// (member.go), so it is not a boxed value even though the checker types the
 	// catch binding any or unknown; keeping it off the dynamic path routes a +

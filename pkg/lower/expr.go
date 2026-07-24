@@ -117,6 +117,41 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return sel("value", "Undefined"), nil
 		}
+		// __dirname and __filename are the CommonJS module-path globals, each a
+		// string fixed for the module. bento composes the program from its modules at
+		// compile time, so the path the reference resolves to is known here and lowers
+		// to the value.BStr of the module file's directory or its own path, read off
+		// the node's own file so a reference resolves against its module, not the
+		// entry. Left to fall through, they would hit the ambient-global handback below.
+		if r.isGlobalRef(n, "__dirname") {
+			return r.dirnameLit(n), nil
+		}
+		if r.isGlobalRef(n, "__filename") {
+			return r.filenameLit(n), nil
+		}
+		// module and exports are the CommonJS export globals. Each reads as a
+		// package-level value.Object the program emits once: module carries an exports
+		// property, exports aliases the object that property starts at. A member access
+		// like module.exports or exports.x lowers through the ordinary dynamic path from
+		// the object this returns, so only the bare name is modeled here. The predicate
+		// recognizes the checker's synthesized CommonJS export symbol, which isGlobalRef
+		// cannot because that symbol's declarations sit in the source file rather than a
+		// .d.ts. Left to fall through, the name would hit the ambient-global handback.
+		if r.isCommonJSModuleGlobal(n) {
+			if r.prog.Text(n) == "module" {
+				return r.moduleRef(), nil
+			}
+			return r.exportsRef(), nil
+		}
+		// require is the CommonJS loader global. It reads as a package-level function
+		// value the program emits once, so typeof require is "function" and a call
+		// require(specifier) lowers through the dynamic call path from that value. It is
+		// a plain ambient any (not subject to the export inference module and exports
+		// take), so isGlobalRef settles it. Left to fall through, the name would hit the
+		// ambient-global handback below and emit an undefined Go identifier.
+		if r.isGlobalRef(n, "require") {
+			return r.requireRef(), nil
+		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
 		// has no generated Go behind its name, so capitalizing the source name would
