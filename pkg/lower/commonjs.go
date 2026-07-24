@@ -98,6 +98,11 @@ func (r *Renderer) isCommonJSModuleGlobal(n frontend.Node) bool {
 // exports property; a read of module.exports then lowers through the ordinary
 // dynamic member path, since module is typed any.
 func (r *Renderer) moduleRef() ast.Expr {
+	// Inside a required module's loader, module is the loader's own module local, so
+	// two modules never share one object; the entry keeps the package-level object.
+	if r.requiredModuleActive {
+		return ident("module")
+	}
 	r.usesCommonJSModule = true
 	return ident(bentoModuleName)
 }
@@ -107,6 +112,13 @@ func (r *Renderer) moduleRef() ast.Expr {
 // module.exports = v reassigns module's property without moving this alias, which
 // is the divergence Node's wrapper has and a program observes only if it does both.
 func (r *Renderer) exportsRef() ast.Expr {
+	// Inside a required module's loader, exports is the loader's own exports local,
+	// read off its module.exports at entry; recording the use lets the loader declare
+	// that local only when the body names it. The entry keeps the package-level alias.
+	if r.requiredModuleActive {
+		r.reqUsesExports = true
+		return ident("exports")
+	}
 	r.usesCommonJSModule = true
 	return ident(bentoExportsName)
 }
