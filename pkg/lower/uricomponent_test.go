@@ -31,17 +31,35 @@ console.log(decodeURIComponent(s));
 	}
 }
 
-// TestEncodeURIComponentNonStringHandsBack pins that encodeURIComponent on a
-// non-string argument hands back, since the global would run a string coercion
-// first.
-func TestEncodeURIComponentNonStringHandsBack(t *testing.T) {
+// TestEncodeURIComponentNonStringCoerces pins that encodeURIComponent on a
+// non-string argument lowers through the value.ToString the global runs first,
+// rather than handing back.
+func TestEncodeURIComponentNonStringCoerces(t *testing.T) {
 	src := `
 const n = 42;
 console.log(encodeURIComponent(n));
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "non-string argument") {
-		t.Fatalf("expected a non-string handback, got: %q", reason)
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.EncodeURIComponent(value.ToString(") {
+		t.Fatalf("expected an EncodeURIComponent over a ToString coercion, got:\n%s", out)
+	}
+}
+
+// TestEncodeURIComponentDynamicRuns builds and runs encodeURIComponent over an
+// any-typed parameter fed a string, a number, and a boolean, the shape url.js's
+// encodeQuery reaches. Each is stringified the way the global does, then encoded.
+func TestEncodeURIComponentDynamicRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+function enc(x: any): string { return encodeURIComponent(x); }
+console.log(enc("a b/c"));
+console.log(enc(42));
+console.log(enc(true));
+`
+	got := runProgramGo(t, src)
+	want := "a%20b%2Fc\n42\ntrue\n"
+	if got != want {
+		t.Fatalf("dynamic encodeURIComponent mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 

@@ -4409,24 +4409,38 @@ func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
 
 // unaryStringGlobal lowers a bare global that takes exactly one string and returns
 // one string to its value runtime function: the URI codecs encodeURIComponent /
-// decodeURIComponent / encodeURI / decodeURI and the base64 codecs btoa / atob. A
-// different arity, or a non-string argument (which the global would coerce to a
-// string first, running that conversion), hands back. goName is the runtime
-// function to call and jsName names the global for the handback reason.
+// decodeURIComponent / encodeURI / decodeURI and the base64 codecs btoa / atob.
+// Each of these runs ToString on its argument before its own work, so a string
+// argument passes straight to the runtime function and a non-string one is coerced
+// through value.ToString first, boxing the argument and stringifying it the way the
+// global does. This is the shape url.js's encodeQuery(str) reaches, where str is an
+// any parameter handed to encodeURIComponent. A different arity hands back. goName is
+// the runtime function to call and jsName names the global for the handback reason.
 func (r *Renderer) unaryStringGlobal(goName, jsName string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: jsName + " with this argument count is a later slice"}
 	}
 	arg := argNodes[0]
-	if !r.isString(arg) {
-		return nil, &NotYetLowerable{Reason: jsName + " on a non-string argument is a later slice"}
+	if r.isString(arg) {
+		lowered, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{lowered}}, nil
 	}
-	lowered, err := r.lowerExpr(arg)
+	// The argument is not statically a string, so emit the ToString the global runs:
+	// box it to a value.Value and stringify. A dynamic argument passes through the box
+	// unchanged, and a static primitive is lifted through its constructor first.
+	boxed, err := r.boxArgToValue(arg)
 	if err != nil {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{lowered}}, nil
+	return &ast.CallExpr{
+		Fun:  sel("value", goName),
+		Args: []ast.Expr{&ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}},
+	}, nil
 }
 
 // symbolConstructor lowers Symbol() and Symbol(desc) to the boxed symbol value the
