@@ -85,7 +85,16 @@ func (r *Renderer) deleteMember(target frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(r.prog.Text(nameNode))}}}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Delete")}, Args: []ast.Expr{key}}, nil
+	// A strict-mode delete whose removal is refused (a non-configurable property)
+	// is a TypeError, not a false result, so a strict program routes through
+	// DeleteStrict. It behaves identically to Delete on a successful removal, so
+	// this only turns a genuinely refused delete into the throw the language
+	// requires; a sloppy program keeps the false-returning Delete.
+	method := "Delete"
+	if r.programStrict {
+		method = "DeleteStrict"
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(method)}, Args: []ast.Expr{key}}, nil
 }
 
 // deleteElement lowers delete obj[k] with a computed key. It mirrors the dynamic
