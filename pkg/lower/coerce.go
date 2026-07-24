@@ -401,6 +401,15 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.callOfDynamicStorage(n) {
 		return true
 	}
+	// A call whose callee is an element read off an evolving array (a[k]() where a was
+	// declared any[] and control-flow evolved a[k] to a concrete function type) invokes a
+	// boxed value.Value through its Call method, which always yields a value.Value. The
+	// checker narrows the call to the function's return, a concrete type the box does not
+	// carry as that Go type, so the call reads as dynamic by shape here to keep the box on
+	// the dynamic path where the surrounding sink coerces it.
+	if r.callOfDynamicArrayElement(n) {
+		return true
+	}
 	// A call to a user-defined overloaded function runs its all-dynamic implementation,
 	// whose Go func returns a value.Value. The checker narrows the call to the matched
 	// overload's return, a concrete type the box does not carry as that Go type, so the
@@ -642,6 +651,64 @@ func (r *Renderer) callOfDynamicStorage(n frontend.Node) bool {
 		return false
 	}
 	return r.localStorageDynamic(kids[0])
+}
+
+// callOfDynamicArrayElement reports whether n is a call whose callee is an element read
+// off an evolving array, a[k]() where a was declared any[] (or unknown[]) and so builds a
+// value.Value-element array, yet control-flow analysis narrowed a[k] to a concrete
+// function type. The element read yields a boxed value.Value, so the call dispatches
+// through the box's Call and its result is a value.Value whatever the narrowed return
+// type. It is the element-read counterpart of callOfDynamicStorage, which covers the same
+// mismatch for a callee bound to a dynamic local.
+func (r *Renderer) callOfDynamicArrayElement(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 {
+		return false
+	}
+	return r.dynamicArrayElemCallee(kids[0])
+}
+
+// dynamicArrayElemCallee reports whether calleeNode is an element read a[k] whose array
+// binding was declared with a dynamic element type (any[] or unknown[]), so the array
+// holds boxed value.Value elements, and whose own narrowed type is callable. That is the
+// evolving-array function-call shape: the read is a box that must be invoked through the
+// runtime Call rather than a direct Go call on a value.Value, which does not compile.
+func (r *Renderer) dynamicArrayElemCallee(calleeNode frontend.Node) bool {
+	if calleeNode.Kind() != frontend.NodeElementAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(calleeNode)
+	if len(kids) != 2 {
+		return false
+	}
+	obj, idxNode := kids[0], kids[1]
+	// The read must be a numeric or dynamic index, an At/AtI/GetIndex form off the array,
+	// not a string-key property read, which the box would resolve a different way.
+	if !r.isNumber(idxNode) && !r.isDynamic(idxNode) {
+		return false
+	}
+	// The array binding's declared element type carries the store's Go shape: an any or
+	// unknown element boxes to value.Value, so the read is a box even where the checker
+	// narrowed it. A statically typed element array reads its element directly and is not
+	// this shape.
+	sym, ok := r.prog.SymbolAt(obj)
+	if !ok {
+		return false
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeOfSymbol(sym))
+	if !ok {
+		return false
+	}
+	if elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return false
+	}
+	// The narrowed read must itself be callable, so this fires only for a[k]() and not a
+	// plain a[k] read the primitive-unbox path already handles.
+	calls, _ := r.prog.Signatures(r.prog.TypeAt(calleeNode))
+	return len(calls) >= 1
 }
 
 // localStorageDynamic reports whether a local identifier's Go slot is a boxed

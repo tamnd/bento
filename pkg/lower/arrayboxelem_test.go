@@ -60,3 +60,18 @@ for (let k = 0; k < 5; ++k) {
 		t.Fatalf("dynamic array push closure run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestEvolvingArrayElementCallRoutesThroughCall pins that a call whose callee is an
+// element read off an evolving array, a[k]() where a was declared any[] and narrowed to
+// a function, dispatches through the boxed value's Call method rather than a direct Go
+// call on a value.Value, which would not compile.
+func TestEvolvingArrayElementCallRoutesThroughCall(t *testing.T) {
+	const src = `let a = [];
+a.push(function () { return 7; });
+console.log(a[0]());
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Call()") {
+		t.Errorf("evolving-array element call did not route through the boxed Call:\n%s", source)
+	}
+}
