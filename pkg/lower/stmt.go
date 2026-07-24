@@ -1337,7 +1337,7 @@ func (r *Renderer) lowerVarStatement(n frontend.Node) (ast.Stmt, error) {
 	}
 	var decls []frontend.Node
 	collectVarDecls(r.prog, n, &decls)
-	return r.varDeclStmt(decls)
+	return r.varDeclStmt(decls, r.isVarStatement(n))
 }
 
 // usingKeyword reports whether a variable statement is an explicit-resource
@@ -1370,6 +1370,11 @@ func (r *Renderer) usingKeyword(n frontend.Node) (string, bool) {
 func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	var decls []frontend.Node
 	collectVarDecls(r.prog, n, &decls)
+	// Only a `var` shares the enclosing function's scope, so only a `var` redeclares a
+	// parameter's binding; a `let` or `const` naming a parameter is a fresh block-scoped
+	// shadow that keeps its own declaration. Gate the parameter test on the kind so a
+	// shadowing let/const stays fresh and still gets its blank when unread.
+	isVar := r.isVarStatement(n)
 	// Note which names are seeing their first Go declaration in this statement before
 	// it lowers, since lowering marks them declared and would otherwise make every
 	// later redeclaration look fresh too.
@@ -1380,7 +1385,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 			continue
 		}
 		if name, ok := localName(r.prog.Text(kids[0])); ok {
-			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && !r.scopeParams[name]
+			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && !(isVar && r.scopeParams[name])
 		}
 	}
 	s, err := r.lowerVarStatement(n)
@@ -1423,7 +1428,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 // block lowers to an assignment instead of a second declaration, since Go rejects a
 // duplicate short declaration where JavaScript allows the redeclaration; every
 // other statement builds a fresh Go declaration and records its names as declared.
-func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
+func (r *Renderer) varDeclStmt(decls []frontend.Node, isVar bool) (ast.Stmt, error) {
 	if len(decls) == 0 {
 		return nil, &NotYetLowerable{Reason: "variable declaration has no binding"}
 	}
@@ -1444,7 +1449,7 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 	if stmt, ok, err := r.dynamicImportNamespaceDecl(decls); err != nil || ok {
 		return stmt, err
 	}
-	if stmt, ok, err := r.redeclaredVarAssign(decls); err != nil || ok {
+	if stmt, ok, err := r.redeclaredVarAssign(decls, isVar); err != nil || ok {
 		return stmt, err
 	}
 	stmt, err := r.buildVarDecl(decls)
@@ -1470,7 +1475,7 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node) (ast.Stmt, error) {
 // a fresh one, or names a destructuring target, is a later slice and hands back;
 // one with no redeclared name reports ok=false and takes the ordinary declaration
 // path.
-func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, error) {
+func (r *Renderer) redeclaredVarAssign(decls []frontend.Node, isVar bool) (ast.Stmt, bool, error) {
 	redeclared := 0
 	for _, d := range decls {
 		kids := r.prog.Children(d)
@@ -1487,8 +1492,10 @@ func (r *Renderer) redeclaredVarAssign(decls []frontend.Node) (ast.Stmt, bool, e
 		// value and a re-declaration would reset nothing. Go binds the parameter as a
 		// function argument, so a second `var x` there is a duplicate declaration that
 		// will not compile; routing it through the assignment path (or, with no
-		// initializer, emitting nothing) matches JavaScript and compiles.
-		if r.blockDeclares(name) || r.hoistedVars[name] || r.moduleAssignVars[name] || r.fwdHoistedFunc[name] || r.scopeParams[name] {
+		// initializer, emitting nothing) matches JavaScript and compiles. The parameter
+		// test is gated on `isVar`: only a `var` shares the function scope, so a `let` or
+		// `const` naming a parameter is a fresh block-scoped shadow, not a redeclaration.
+		if r.blockDeclares(name) || r.hoistedVars[name] || r.moduleAssignVars[name] || r.fwdHoistedFunc[name] || (isVar && r.scopeParams[name]) {
 			redeclared++
 		}
 	}
@@ -4610,7 +4617,7 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	if r.forInitClosesOverCounter(decls) {
 		return nil, &NotYetLowerable{Reason: "a for-let init clause whose closure captures a loop counter needs per-iteration binding, a later slice"}
 	}
-	initDecl, err := r.varDeclStmt(decls)
+	initDecl, err := r.varDeclStmt(decls, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4703,7 +4710,7 @@ func (r *Renderer) forDestructureInit(decls []frontend.Node) ([]ast.Stmt, error)
 			continue
 		}
 		if kids[0].Kind() == frontend.NodeIdentifier {
-			s, err := r.varDeclStmt([]frontend.Node{d})
+			s, err := r.varDeclStmt([]frontend.Node{d}, false)
 			if err != nil {
 				return nil, err
 			}
