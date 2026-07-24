@@ -1543,6 +1543,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if stream, ok := r.processStream(recvNode); ok {
 		return r.processStreamCall(stream, method, argNodes)
 	}
+	// process.on('exit', fn) registers a run-at-exit callback, a call on the global
+	// process object rather than a value receiver, so it lowers to the value exit
+	// registry rather than a method on a runtime object. It routes here after the
+	// stream check, whose receiver is process.stdout, before the string gate below.
+	if r.isGlobalRef(recvNode, "process") {
+		return r.processCall(method, argNodes)
+	}
 	// console.log(...) and friends are calls on the global console, not a value
 	// receiver, so they lower to the value console helpers rather than a method on a
 	// runtime object. This is the print path a developer reaches for by default.
@@ -3902,6 +3909,36 @@ func (r *Renderer) processStreamCall(stream, method string, argNodes []frontend.
 		goName = "WriteStderr"
 	}
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
+}
+
+// processCall lowers a call on the global process object. Only on is covered, and
+// only for the "exit" event: process.on('exit', fn) registers fn as a run-at-exit
+// callback, lowering to value.OnExit with the callback boxed into a value.Value so
+// the end-of-main drain can invoke it without its static signature. It sets the
+// program's exit-callback flag so the assembled main appends value.RunExitCallbacks
+// as its final statement. A different method, a different event, a different arity,
+// or a non-function listener hands back rather than emitting a call that would drop
+// the registration.
+func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "on" {
+		return nil, &NotYetLowerable{Reason: "process." + method + " is a later slice"}
+	}
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "process.on with this argument count is a later slice"}
+	}
+	if argNodes[0].Kind() != frontend.NodeStringLiteral || unquote(r.prog.Text(argNodes[0])) != "exit" {
+		return nil, &NotYetLowerable{Reason: "process.on for an event other than exit is a later slice"}
+	}
+	if calls, _ := r.prog.Signatures(r.prog.TypeAt(argNodes[1])); len(calls) != 1 {
+		return nil, &NotYetLowerable{Reason: "process.on('exit') with a non-function listener is a later slice"}
+	}
+	fn, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	r.usesExitCallbacks = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "OnExit"), Args: []ast.Expr{fn}}, nil
 }
 
 // consoleCall lowers a call on the global console. The methods that write to

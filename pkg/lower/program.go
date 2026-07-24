@@ -410,6 +410,17 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 		mainDecl.Body.List = append(mainDecl.Body.List, report)
 	}
 
+	// A program that registered a process 'exit' listener runs the registered
+	// callbacks once as the final statement of main, the point Node fires the exit
+	// event: the synchronous body and the microtask checkpoint above have both
+	// finished and nothing remains but to leave. The callbacks run in registration
+	// order inside the runtime helper. A program that registered none appends nothing.
+	if r.usesExitCallbacks {
+		r.requireImport(valuePkg)
+		runExit := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunExitCallbacks")}}
+		mainDecl.Body.List = append(mainDecl.Body.List, runExit)
+	}
+
 	file := &ast.File{Name: ident("main")}
 	// The generated struct types the functions and the main body referred to are
 	// collected after lowering, since interning happens as a use is lowered, and
