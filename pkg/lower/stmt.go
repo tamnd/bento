@@ -4461,6 +4461,13 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 		if init, ok := r.foldFloatDecl(decls); ok {
 			return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
 		}
+		// Two or more float64 counters fold into Go's own multi-variable init clause,
+		// which allocates each variable fresh per iteration, so a body closure over a
+		// counter captures that iteration's value the way ES6 per-iteration binding means
+		// it to, where the block form would hoist them into shared vars and lose it.
+		if init, ok := r.foldFloatDeclMulti(decls); ok {
+			return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
+		}
 	}
 	// A loop whose init clause declares a closure over another loop counter,
 	// for (let i = 0, f = function () { return i }; i < 5; ++i), needs the ES6
@@ -4698,34 +4705,73 @@ func (r *Renderer) foldFloatDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if len(decls) != 1 {
 		return nil, false
 	}
-	kids := r.prog.Children(decls[0])
-	if len(kids) != 2 && len(kids) != 3 {
+	name, finit, ok := r.floatCounterFold(decls[0])
+	if !ok {
 		return nil, false
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{finit}}, true
+}
+
+// foldFloatDeclMulti folds a for-let that declares two or more float64 counters,
+// each from a numeric literal, into Go's own multi-variable init clause,
+// for i, j := 0.0, 10.0; i < 5; i, j = i+1, j+1. Go allocates a fresh copy of every
+// init-clause variable per iteration, so a closure the body forms over a counter
+// captures that iteration's value, the per-iteration binding ES6 gives a let loop.
+// The block form a multi-counter loop would otherwise take hoists the counters into
+// shared vars the post clause mutates in place, which loses that semantics; the fold
+// restores it. It declines unless every counter qualifies exactly as the single
+// counter fold demands (a float64 type, a plain numeric-literal initializer, no int
+// specialization, no bare annotation), so a mixed init that also declares a function
+// or a non-literal keeps the block form and its init-closure handback guard.
+func (r *Renderer) foldFloatDeclMulti(decls []frontend.Node) (ast.Stmt, bool) {
+	if len(decls) < 2 {
+		return nil, false
+	}
+	var lhs, rhs []ast.Expr
+	for _, d := range decls {
+		name, finit, ok := r.floatCounterFold(d)
+		if !ok {
+			return nil, false
+		}
+		lhs = append(lhs, ident(name))
+		rhs = append(rhs, finit)
+	}
+	return &ast.AssignStmt{Lhs: lhs, Tok: token.DEFINE, Rhs: rhs}, true
+}
+
+// floatCounterFold reports whether one for-let binding is a float64 counter
+// initialized from a numeric literal, and if so returns its name and the folded
+// float literal. It is the per-binding core the single- and multi-counter folds
+// share.
+func (r *Renderer) floatCounterFold(d frontend.Node) (string, ast.Expr, bool) {
+	kids := r.prog.Children(d)
+	if len(kids) != 2 && len(kids) != 3 {
+		return "", nil, false
 	}
 	name, ok := localName(r.prog.Text(kids[0]))
 	if !ok || r.int32Locals[name] || r.int64Locals[name] {
-		return nil, false
+		return "", nil, false
 	}
 	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 	if err != nil || !isFloat64Ident(typ) {
-		return nil, false
+		return "", nil, false
 	}
 	// A binding with a type annotation but no initializer, var x: number, carries the
 	// annotation as its trailing NodeUnknown child, not an expression. Folding it would
 	// lower that annotation as if it were an initializer, so decline and leave the
 	// uninitialized zero-value declaration to buildVarDecl.
-	if r.bindingTrailingIsAnnotation(decls[0]) {
-		return nil, false
+	if r.bindingTrailingIsAnnotation(d) {
+		return "", nil, false
 	}
 	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 	if err != nil {
-		return nil, false
+		return "", nil, false
 	}
 	finit, ok := floatLiteral(init)
 	if !ok {
-		return nil, false
+		return "", nil, false
 	}
-	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{finit}}, true
+	return name, finit, true
 }
 
 // foldShortDecl builds a Go short variable declaration for a lone binding whose

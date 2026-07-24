@@ -98,3 +98,43 @@ for (let i = 0, f = function () { return i; }; i < 5; ++i) {
 		t.Fatalf("handback reason = %q, want a per-iteration-binding deferral", err.Error())
 	}
 }
+
+// TestMultiCounterForFoldsToGoInitClause pins that a for-let declaring two float64
+// counters folds into Go's own multi-variable init clause rather than the block
+// form, so Go's per-iteration loop variables let a body closure capture each
+// iteration's counter value. The block form would hoist the counters into shared
+// vars the post clause mutates in place, capturing their final value instead.
+func TestMultiCounterForFoldsToGoInitClause(t *testing.T) {
+	const src = `let a: any[] = [], b: any[] = [];
+for (let i = 0, j = 10; i < 5; ++i, ++j) {
+  a.push(function () { return i; });
+  b.push(function () { return j; });
+}
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "for i, j := 0.0, 10.0;") {
+		t.Errorf("multi-counter for did not fold into Go's init clause:\n%s", source)
+	}
+}
+
+// TestMultiCounterClosureRuns builds and runs the two-counter loop, proving each
+// body closure reads its own iteration's counter, so a[k] answers k and b[k]
+// answers k + 10, the per-iteration binding ES6 gives a let loop.
+func TestMultiCounterClosureRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `let a: any[] = [], b: any[] = [];
+for (let i = 0, j = 10; i < 5; ++i, ++j) {
+  a.push(function () { return i; });
+  b.push(function () { return j; });
+}
+for (let k = 0; k < 5; ++k) {
+  console.log(a[k]());
+  console.log(b[k]());
+}
+`
+	got := runProgramGo(t, src)
+	want := "0\n10\n1\n11\n2\n12\n3\n13\n4\n14\n"
+	if got != want {
+		t.Fatalf("multi-counter closure run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
