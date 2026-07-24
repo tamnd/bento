@@ -116,6 +116,20 @@ func ToOptBoolean(v Value) Opt[bool] {
 	return Some(ToBoolean(v))
 }
 
+// OptValue unwraps an Opt[Value] into a plain Value: the present element when it
+// holds one, otherwise the undefined singleton. It is the identity-element case of
+// OptToValue, the box a method whose declared return is T | undefined needs when T
+// is any: the checker collapses any | undefined back to any, so downstream every
+// use of the result wants a Value, yet the runtime method still returns Opt[Value].
+// Threading it through OptValue keeps the static any contract and the runtime
+// representation in agreement without a per-call closure.
+func OptValue(o Opt[Value]) Value {
+	if o.present {
+		return o.val
+	}
+	return Undefined
+}
+
 // OptToValue boxes an optional into the dynamic Value the language sees when a
 // T | undefined result flows into an any slot, the lowering of an optional passed
 // where a boxed value is wanted (console.log of an array's at or pop, a member read

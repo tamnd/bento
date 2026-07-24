@@ -1079,6 +1079,24 @@ func (r *Renderer) objectSpread(srcNode frontend.Node, target frontend.Type, set
 // a copied range; the search methods indexOf and includes, over a synthesized
 // element-equality closure; and join, over a synthesized per-element ToString
 // closure.
+// wrapOptResultForAnyElem wraps a lowered array-method call whose Go result is an
+// Opt[T] (at, find, findLast, pop, shift) in value.OptValue when the receiver's
+// element type is any or unknown. On an any[] the checker collapses the method's
+// declared T | undefined back to plain any, so downstream the result must be a
+// value.Value, yet the runtime method still returns Opt[value.Value]; value.OptValue
+// unwraps it to the present element or the undefined singleton, keeping the static
+// any contract and the runtime representation in agreement. For a typed element
+// array the declared T | undefined survives as a real optional the normal coercion
+// boxes, so this leaves the call unchanged.
+func (r *Renderer) wrapOptResultForAnyElem(recvNode frontend.Node, call ast.Expr) ast.Expr {
+	elemT, ok := r.prog.ElementType(r.prog.TypeAt(recvNode))
+	if !ok || elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return call
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "OptValue"), Args: []ast.Expr{call}}
+}
+
 func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "push":
@@ -1159,11 +1177,19 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 	case "forEach":
 		return r.arrayCallbackMethod(recvNode, "ForEach", argNodes)
 	case "find":
-		return r.arrayCallbackMethod(recvNode, "Find", argNodes)
+		call, err := r.arrayCallbackMethod(recvNode, "Find", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		return r.wrapOptResultForAnyElem(recvNode, call), nil
 	case "findIndex":
 		return r.arrayCallbackMethod(recvNode, "FindIndex", argNodes)
 	case "findLast":
-		return r.arrayCallbackMethod(recvNode, "FindLast", argNodes)
+		call, err := r.arrayCallbackMethod(recvNode, "FindLast", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		return r.wrapOptResultForAnyElem(recvNode, call), nil
 	case "findLastIndex":
 		return r.arrayCallbackMethod(recvNode, "FindLastIndex", argNodes)
 	case "reverse":
@@ -1196,7 +1222,7 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Pop")}}, nil
+		return r.wrapOptResultForAnyElem(recvNode, &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Pop")}}), nil
 	case "shift":
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "array shift takes no arguments"}
@@ -1205,7 +1231,7 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Shift")}}, nil
+		return r.wrapOptResultForAnyElem(recvNode, &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Shift")}}), nil
 	case "unshift":
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
@@ -1277,7 +1303,7 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AtOpt")}, Args: []ast.Expr{arg}}, nil
+		return r.wrapOptResultForAnyElem(recvNode, &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("AtOpt")}, Args: []ast.Expr{arg}}), nil
 	case "fill":
 		if len(argNodes) < 1 || len(argNodes) > 3 {
 			return nil, &NotYetLowerable{Reason: "array fill takes a value and up to two bounds"}
