@@ -160,6 +160,7 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// faithfulness bar the for...of drive holds against its loop body.
 	r.collectCollMutations(entry)
 
+	r.programStrict = r.hasUseStrictPrologue(entry)
 	var funcs []ast.Decl
 	var moduleVars []ast.Decl
 	var mainBody []frontend.Node
@@ -1744,4 +1745,38 @@ func printFile(f *ast.File) (string, error) {
 		return "", &NotYetLowerable{Reason: "generated program did not print: " + err.Error()}
 	}
 	return b.String(), nil
+}
+
+// hasUseStrictPrologue reports whether the entry module opens with a "use strict"
+// directive. The directive prologue is the leading run of string-literal expression
+// statements, and "use strict" anywhere in that run makes the module strict; a
+// statement that is not a bare string literal ends the prologue. Scanning only the
+// prologue keeps a later string expression, or a x = "use strict" assignment, from
+// falsely marking the module strict.
+func (r *Renderer) hasUseStrictPrologue(entry frontend.Node) bool {
+	for _, stmt := range r.prog.Children(entry) {
+		if stmt.Kind() != frontend.NodeExpressionStatement {
+			return false
+		}
+		kids := r.prog.Children(stmt)
+		if len(kids) == 0 || kids[0].Kind() != frontend.NodeStringLiteral {
+			return false
+		}
+		if directiveText(r.prog.Text(kids[0])) == "use strict" {
+			return true
+		}
+	}
+	return false
+}
+
+// directiveText strips the surrounding quotes a string-literal directive carries in
+// source so its body compares against "use strict" directly.
+func directiveText(raw string) string {
+	if len(raw) >= 2 {
+		q := raw[0]
+		if (q == '"' || q == '\'') && raw[len(raw)-1] == q {
+			return raw[1 : len(raw)-1]
+		}
+	}
+	return raw
 }

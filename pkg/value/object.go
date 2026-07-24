@@ -157,6 +157,50 @@ func (v Value) Set(key BStr, val Value) Value {
 	return v
 }
 
+// SetStrict is the strict-mode form of Set. Where Set silently drops a write that a
+// sloppy assignment also drops, SetStrict throws the TypeError a strict assignment
+// raises: a write to a non-writable data property, a write through an accessor with
+// no setter, and a new key on a non-extensible object each throw, with V8's exact
+// message so a catch reads the text Node reports. Every write that would succeed
+// behaves identically to Set, so a strict program's ordinary property writes are
+// unchanged. The lowerer emits this in place of Set for a member store under a
+// "use strict" program.
+func (v Value) SetStrict(key BStr, val Value) Value {
+	switch v.kind {
+	case KindUndefined:
+		Throw(NewTypeError(FromGoString("Cannot set properties of undefined (setting '" + key.ToGoString() + "')")))
+	case KindNull:
+		Throw(NewTypeError(FromGoString("Cannot set properties of null (setting '" + key.ToGoString() + "')")))
+	}
+	if p := v.asProxy(); p != nil {
+		p.setKey(v, key, val)
+		return v
+	}
+	o := v.object()
+	if v.kind == KindArray && key.ToGoString() == "length" {
+		setArrayLength(o, val)
+		return v
+	}
+	for i := range o.keys {
+		if o.keys[i].Equal(key) {
+			if o.descs[i].isData() && !o.descs[i].writable {
+				Throw(NewTypeError(FromGoString("Cannot assign to read only property '" + key.ToGoString() + "' of object '#<Object>'")))
+			}
+			if o.descs[i].isAccessor() && o.descs[i].set.kind != KindFunc {
+				Throw(NewTypeError(FromGoString("Cannot set property " + key.ToGoString() + " of #<Object> which has only a getter")))
+			}
+			o.descs[i] = o.descs[i].write(v, val)
+			return v
+		}
+	}
+	if o.nonExtensible {
+		Throw(NewTypeError(FromGoString("Cannot add property " + key.ToGoString() + ", object is not extensible")))
+	}
+	o.keys = append(o.keys, key)
+	o.descs = append(o.descs, defaultDataProperty(val))
+	return v
+}
+
 // SetKey writes v[key] = val by the receiver's kind, the store mirror of the
 // kind-aware Get read. An array claims a numeric key into its dense element
 // storage, growing the slice with undefined holes so a[5] = x on a shorter array
