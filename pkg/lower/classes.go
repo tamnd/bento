@@ -942,8 +942,12 @@ func (r *Renderer) validateErrorSuper(info *classInfo) error {
 	if len(args) > 1 {
 		return &NotYetLowerable{Reason: "super() with more than a message argument is a later slice"}
 	}
-	if len(args) == 1 && !r.isString(args[0]) {
-		return &NotYetLowerable{Reason: "super() with a non-string message is a later slice"}
+	if len(args) == 1 && !r.isString(args[0]) && !r.isDynamic(args[0]) {
+		// A string message stores raw, and a dynamic one (an any-typed options.message ||
+		// fallback, the shape assert's AssertionError hands super) coerces through
+		// value.ErrorMessageString. A statically non-string, non-dynamic message, a number
+		// or a boolean, would need its own ToString and hands back.
+		return &NotYetLowerable{Reason: "super() with a message that is neither a string nor dynamic is a later slice"}
 	}
 	info.superArgs = args
 	info.preSuper = stmts[:superIdx]
@@ -2689,14 +2693,25 @@ func (r *Renderer) ctorBlock(info *classInfo) frontend.Node {
 
 // errorSuperMessage lowers the message a super(message) hands the built-in Error,
 // or the empty string a bare super() leaves, the value ctorBody stores into the
-// inherited message field. The argument is validated string-typed, so its lowered
-// form is already a value.BStr and needs no coercion.
+// inherited message field. A string-typed argument lowers to a value.BStr and stores
+// raw; a dynamic argument (validateErrorSuper admits those two) boxes and coerces
+// through value.ErrorMessageString, the constructor's rule that undefined leaves the
+// message empty and any other value takes ToString.
 func (r *Renderer) errorSuperMessage(info *classInfo) (ast.Expr, error) {
 	if len(info.superArgs) == 0 {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote("")}}}, nil
 	}
-	return r.lowerExpr(info.superArgs[0])
+	arg := info.superArgs[0]
+	if r.isString(arg) {
+		return r.lowerExpr(arg)
+	}
+	boxed, err := r.boxArgToValue(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ErrorMessageString"), Args: []ast.Expr{boxed}}, nil
 }
 
 // superCtorExpr builds the base value a derived constructor stores or folds:

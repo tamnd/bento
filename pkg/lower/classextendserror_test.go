@@ -140,3 +140,54 @@ console.log(b.message);
 		t.Fatalf("handback reason = %q, want the own-message phrasing", reason)
 	}
 }
+
+// TestClassExtendsErrorDynamicMessageLowers pins that a subclass whose super()
+// argument is dynamic rather than statically a string, the shape assert's
+// AssertionError hands (options.message || fallback off an any-typed options),
+// coerces through value.ErrorMessageString into the inherited message field.
+func TestClassExtendsErrorDynamicMessageLowers(t *testing.T) {
+	const src = `class E extends Error {
+  constructor(o: any) {
+    super(o.message || "def");
+    this.name = "E";
+  }
+}
+const e = new E({ message: "boom" });
+console.log(e.message);
+`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "e.Message = value.ErrorMessageString(") {
+		t.Fatalf("dynamic super message did not route through ErrorMessageString:\n%s", out)
+	}
+	if !strings.Contains(out, "e.Name = value.FromGoString(\"Error\")") {
+		t.Fatalf("super() did not default the inherited name to Error:\n%s", out)
+	}
+}
+
+// TestClassExtendsErrorDynamicMessageRuns builds a subclass with a dynamic super()
+// message and reads the stored value on three arms: a present string, a fallback
+// where the dynamic read is undefined, and a present non-string the constructor
+// coerces with ToString.
+func TestClassExtendsErrorDynamicMessageRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `class E extends Error {
+  constructor(o: any) {
+    super(o.message || "def");
+  }
+}
+class N extends Error {
+  constructor(o: any) {
+    super(o.count);
+  }
+}
+console.log(new E({ message: "boom" }).message);
+console.log(new E({}).message);
+console.log(new N({ count: 42 }).message);
+console.log(new N({}).message === "" ? "empty" : "nonempty");
+`
+	got := runProgramGo(t, src)
+	want := "boom\ndef\n42\nempty\n"
+	if got != want {
+		t.Fatalf("dynamic super message run mismatch:\n got %q\nwant %q", got, want)
+	}
+}

@@ -1,0 +1,7 @@
+== stdout:
+values differ
+AssertError
+Assertion failed
+true
+== exit:
+0
