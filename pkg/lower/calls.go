@@ -755,6 +755,16 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 				}
 				return nil, &NotYetLowerable{Reason: "a call that omits an argument the callee does not default is a later slice"}
 			}
+			// An untyped destructured parameter takes one boxed value.Value slot, so a
+			// default filling an omitted argument boxes to a dynamic value the same way an
+			// explicit argument does in the fixed loop above; without this the default's own
+			// struct or slice crosses raw into the value.Value slot and Go rejects the call.
+			if boxed, ok, err := r.dynamicDestructureArg(def, params[i]); err != nil {
+				return nil, err
+			} else if ok {
+				args = append(args, boxed)
+				continue
+			}
 			lowered, err := r.lowerArgAt(def, params[i].Type)
 			if err != nil {
 				return nil, err
