@@ -303,6 +303,13 @@ func (v Value) DeleteElem(key Value) bool {
 // remove, both reporting true the way delete does for a configurable or absent
 // property.
 func (v Value) deleteSymKey(key *Symbol) bool {
+	switch v.kind {
+	case KindUndefined, KindNull:
+		// delete base[sym] coerces base through ToObject first, which throws on a
+		// nullish base, so the symbol branch throws the same TypeError the string
+		// branch does rather than report a boolean.
+		Throw(NewTypeError(FromGoString("Cannot convert undefined or null to object")))
+	}
 	if p := v.asProxy(); p != nil {
 		return p.deleteSym(key)
 	}
