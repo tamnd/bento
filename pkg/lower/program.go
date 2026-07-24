@@ -395,6 +395,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// Numeric enums emit their float64-backed const blocks with the other
 	// package-level state, before the classes and functions that read them.
 	file.Decls = append(file.Decls, r.renderEnums()...)
+	// The CommonJS module object and its exports alias, when the program read either
+	// global, emit as package-level vars before the module bindings so both main and a
+	// top-level function that closes over module or exports name the same variable. A
+	// program that named neither emits nothing here.
+	file.Decls = append(file.Decls, r.commonjsModuleDecls()...)
 	// Module bindings a function reads emit as package-level vars beside the other
 	// state, so both main and the functions name the same variable.
 	file.Decls = append(file.Decls, moduleVars...)
@@ -556,6 +561,14 @@ func (r *Renderer) checkMangleCollisions(entry frontend.Node) error {
 	for _, t := range names {
 		if m, ok := mangleIdent(t); ok && m != t && texts[m] {
 			return &NotYetLowerable{Reason: "the module already speaks " + m + ", which " + t + " mangles to"}
+		}
+		// The CommonJS module object and exports alias emit under reserved Go names. A
+		// user binding whose Go spelling is one of them would share the identifier with
+		// the synthetic var, so the unit hands back rather than emit a redeclaration. A
+		// reference to the module or exports global itself never reaches here as its own
+		// text, since those spell module and exports, not the reserved Go names.
+		if m, ok := localName(t); ok && (m == bentoModuleName || m == bentoExportsName) {
+			return &NotYetLowerable{Reason: "the CommonJS module object reserves the Go name " + m + ", which " + t + " takes"}
 		}
 	}
 	return nil

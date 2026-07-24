@@ -21,7 +21,12 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // ambientSource declares the Node globals and node: modules the AOT compiler can
 // lower. process.env is a string-or-undefined map, which lowers to the optional
 // machinery; the streams' write takes a string and returns a boolean, matching
-// Node. The node:fs, node:os, and node:path module declarations give the file
+// Node. __dirname and __filename are the CommonJS module-path globals, each a
+// string the lowerer fills from the module's own file path, so a program reading
+// either resolves the same absolute path Node hands its wrapper. module and
+// exports are the CommonJS export globals, typed any so a read of module.exports
+// or a write of exports.x lowers through the dynamic member path; the lowerer
+// backs them with a package-level module object. The node:fs, node:os, and node:path module declarations give the file
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a
@@ -37,6 +42,10 @@ interface BentoProcess {
 	stderr: BentoWriteStream;
 }
 declare var process: BentoProcess;
+declare var __dirname: string;
+declare var __filename: string;
+declare var module: any;
+declare var exports: any;
 declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;
