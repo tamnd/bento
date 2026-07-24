@@ -1778,13 +1778,13 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
-		// new Event(...) and new EventTarget() build value objects the runtime reads
-		// through the dynamic member and call path, but the checker types the binding by
-		// the standard library's Event and EventTarget interfaces, which would route the
+		// new Event(...), new EventTarget(), and new AbortController() build value objects
+		// the runtime reads through the dynamic member and call path, but the checker types
+		// the binding by the standard library's static interfaces, which would route the
 		// binding to a Go struct slot it has no backing for. Landing it in a value.Value
 		// slot and marking it dynamic, the same slot a built-in require takes, sends every
 		// later addEventListener, dispatchEvent, or property read through the value model.
-		if r.isEventCtorNew(kids[initIdx]) {
+		if r.isDynGlobalCtorNew(kids[initIdx]) {
 			evInit, err := r.lowerExpr(kids[initIdx])
 			if err != nil {
 				return nil, err
@@ -5022,12 +5022,12 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if !ok || r.int32Locals[name] || r.int64Locals[name] {
 		return nil, false
 	}
-	// A new Event(...) or new EventTarget() binding must land in a value.Value slot
-	// marked dynamic, which only buildVarDecl's loop does. The := short form would
-	// leave the binding typed by the standard library's Event interface, routing every
-	// later member read through its union-typed shape rather than the value model. So
-	// decline the fold and let buildVarDecl take it.
-	if r.isEventCtorNew(kids[len(kids)-1]) {
+	// A new Event(...), new EventTarget(), or new AbortController() binding must land in
+	// a value.Value slot marked dynamic, which only buildVarDecl's loop does. The := short
+	// form would leave the binding typed by the standard library's static interface,
+	// routing every later member read through its union-typed shape rather than the value
+	// model. So decline the fold and let buildVarDecl take it.
+	if r.isDynGlobalCtorNew(kids[len(kids)-1]) {
 		return nil, false
 	}
 	// A binding with a type annotation but no initializer, var x: typeof undefined,

@@ -1228,7 +1228,7 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 		// types them by the standard library Event and EventTarget interfaces, which the
 		// primitive box path has no constructor for, so recognizing them here is what
 		// lets the box flow straight through the dynamic call.
-		return r.isEventCtorNew(src)
+		return r.isDynGlobalCtorNew(src)
 	}
 	// Object.getOwnPropertyDescriptor(o, key) and Object.getOwnPropertyDescriptors(o)
 	// lower to runtime calls that return a value.Value, the descriptor object or

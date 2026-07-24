@@ -139,6 +139,14 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "EventTarget" && r.isGlobalRef(kids[0], "EventTarget") {
 		return r.newEventTarget(kids[1:])
 	}
+	// new AbortController() builds the cancellation controller Node exposes as a global,
+	// backed by a value object that owns one AbortSignal. Like the event pair it is an
+	// ambient global rather than a user class, so a plain-identifier constructor routes
+	// to the runtime constructor. AbortSignal has no public constructor, so only the
+	// controller is claimed here; a signal comes from the controller or a static factory.
+	if r.prog.Text(kids[0]) == "AbortController" && r.isGlobalRef(kids[0], "AbortController") {
+		return r.newAbortController(kids[1:])
+	}
 	// new Function("a", "return a") builds a function from source text at run time,
 	// parsing the argument strings as a parameter list and a body. That is eval work,
 	// phase 11, so it hands back with the reason that names where it belongs rather
@@ -236,12 +244,25 @@ func (r *Renderer) newEventTarget(args []frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: sel("value", "NewEventTarget")}, nil
 }
 
-// isEventCtorNew reports whether n is a new Event(...) or new EventTarget()
-// expression on the ambient global constructor, the shape whose binding buildVarDecl
-// lands in a value.Value slot so the instance reads through the dynamic model rather
-// than the standard library's static Event or EventTarget interface. A user class of
-// either name resolves through classNameRef, not the global, so it is not claimed.
-func (r *Renderer) isEventCtorNew(n frontend.Node) bool {
+// newAbortController lowers new AbortController() to value.NewAbortController, the
+// cancellation controller that owns one AbortSignal. Only the zero-argument form exists,
+// so a call with an argument hands back.
+func (r *Renderer) newAbortController(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 0 {
+		return nil, &NotYetLowerable{Reason: "new AbortController takes no argument"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewAbortController")}, nil
+}
+
+// isDynGlobalCtorNew reports whether n is a new Event(...), new EventTarget(), or new
+// AbortController() expression on the ambient global constructor, the shape whose binding
+// buildVarDecl lands in a value.Value slot so the instance reads through the dynamic model
+// rather than the standard library's static interface. Each of these constructors lowers
+// to a value the runtime backs with a property bag, so the binding must stay dynamic to
+// route every later member read and call through the value model. A user class of any of
+// these names resolves through classNameRef, not the global, so it is not claimed.
+func (r *Renderer) isDynGlobalCtorNew(n frontend.Node) bool {
 	if n.Kind() != frontend.NodeNewExpression {
 		return false
 	}
@@ -250,7 +271,7 @@ func (r *Renderer) isEventCtorNew(n frontend.Node) bool {
 		return false
 	}
 	name := r.prog.Text(kids[0])
-	if name != "Event" && name != "EventTarget" {
+	if name != "Event" && name != "EventTarget" && name != "AbortController" {
 		return false
 	}
 	return r.isGlobalRef(kids[0], name)
