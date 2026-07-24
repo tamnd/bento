@@ -44,3 +44,29 @@ console.log(String(f2(1)));`
 		t.Fatalf("var-redeclares-param kept the wrong value, printed %q, want %q", got, want)
 	}
 }
+
+// TestLetInBlockShadowsParamStaysFresh pins that a `let` in a nested block whose name
+// is also a parameter is a fresh block-scoped binding, not a redeclaration of the
+// parameter: only a `var` shares the function scope. The inner "inner" must not leak
+// to the outer parameter, so f("outer") returns "outer", matching Node. This is the
+// block-scope/leave and block-scope/shadowing shape a too-broad parameter test broke.
+func TestLetInBlockShadowsParamStaysFresh(t *testing.T) {
+	skipIfShort(t)
+	const src = `function f(x: any){ { let x: any = "inner"; if (x !== "inner") throw new Error("bad inner"); } return x; }
+console.log(f("outer"));`
+	if got, want := runProgramGo(t, src), "outer\n"; got != want {
+		t.Fatalf("let shadowing a parameter leaked, printed %q, want %q", got, want)
+	}
+}
+
+// TestConstInBlockShadowsParamStaysFresh is the const twin: a block-scoped `const`
+// naming a parameter shadows it with its own binding, so the outer parameter value
+// survives and f("outer") returns "outer".
+func TestConstInBlockShadowsParamStaysFresh(t *testing.T) {
+	skipIfShort(t)
+	const src = `function f(x: any){ { const x: any = "inner"; if (x !== "inner") throw new Error("bad inner"); } return x; }
+console.log(f("outer"));`
+	if got, want := runProgramGo(t, src), "outer\n"; got != want {
+		t.Fatalf("const shadowing a parameter leaked, printed %q, want %q", got, want)
+	}
+}

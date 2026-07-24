@@ -91,7 +91,7 @@ func (r *Renderer) lowerUsingDefer(n frontend.Node) ([]ast.Stmt, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	bind, err := r.varDeclStmt(decls)
+	bind, err := r.varDeclStmt(decls, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -128,7 +128,7 @@ func (r *Renderer) lowerUsingScope(n frontend.Node, rest []frontend.Node) ([]ast
 			returns = true
 		}
 	}
-	bind, err := r.varDeclStmt(decls)
+	bind, err := r.varDeclStmt(decls, false)
 	if err != nil {
 		return nil, false, err
 	}
