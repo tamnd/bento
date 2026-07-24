@@ -333,6 +333,16 @@ func (r *Renderer) stringRegExpMethodCall(recvNode frontend.Node, method string,
 // when the runtime can build it; a pattern RE2 cannot host faithfully hands back with
 // the translator's reason, the honest ceiling the RE2 host imposes.
 func (r *Renderer) buildRegExp(pattern, flags string) (ast.Expr, error) {
+	// A regexp literal's body cannot hold an unescaped LineTerminator: the grammar's
+	// RegularExpressionChar excludes LF, CR, and the Unicode line and paragraph
+	// separators (U+2028, U+2029), so a raw one is a SyntaxError at parse. bento's
+	// front end tokenizes the separator into the body rather than reject it, so the
+	// pattern reaches here with the forbidden character embedded. Emitting a regexp
+	// from it would run a program the language never parses, so a body carrying a raw
+	// line terminator hands back rather than lower an invalid literal.
+	if strings.ContainsAny(pattern, "\n\r\u2028\u2029") {
+		return nil, &NotYetLowerable{Reason: "a regexp literal whose body holds a raw line terminator is a syntax error the front end does not reject, a later slice"}
+	}
 	if _, ok, reason := value.TranslateRegExpSource(pattern, flags); !ok {
 		return nil, &NotYetLowerable{Reason: reason}
 	}
