@@ -137,7 +137,24 @@ func encodeJSON(b *strings.Builder, v any) {
 			encodeJSON(b, r)
 			return
 		}
-		encodeJSONObject(b, reflect.ValueOf(v))
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			// A number literal the lowering leaves as a Go integer (an untyped
+			// constant argument boxed straight into the any slot) is still a
+			// JavaScript number; re-dispatch through the float64 arm so it formats
+			// the same and never reaches the struct walk, which would NumField-panic
+			// on a non-struct.
+			encodeJSON(b, float64(rv.Int()))
+			return
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+			encodeJSON(b, float64(rv.Uint()))
+			return
+		case reflect.Float32:
+			encodeJSON(b, rv.Float())
+			return
+		}
+		encodeJSONObject(b, rv)
 	}
 }
 

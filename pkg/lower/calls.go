@@ -2302,6 +2302,26 @@ func (r *Renderer) stringStaticMethodCall(recvNode frontend.Node, method string,
 // boxed value world the checker already typed the result as. A replacer or a
 // reviver function still changes the behavior, so a call that passes one hands
 // back rather than ignoring it.
+// jsonStringifyIsUndefinedResult reports whether a value of type t, passed as the
+// sole argument to JSON.stringify, serializes to the value undefined rather than to
+// a string. SerializeJSONProperty returns undefined for undefined itself, for a
+// symbol, and for any callable (a function value, whether or not it also carries
+// properties). Void names the same absent value a bare function statement yields.
+// An object or array that merely contains such a value is not this shape, since the
+// serializer folds a nested function to null or omits its key, so only a type whose
+// own top-level form is undefined is reported here.
+func (r *Renderer) jsonStringifyIsUndefinedResult(t frontend.Type) bool {
+	if t.Flags&(frontend.TypeUndefined|frontend.TypeVoid|frontend.TypeSymbol) != 0 {
+		return true
+	}
+	if t.Flags&frontend.TypeObject != 0 {
+		if call, _ := r.prog.Signatures(t); len(call) >= 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "stringify":
@@ -2314,6 +2334,16 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		// the call hands back rather than printing the wrong object.
 		if info, ok := r.classOfNode(argNodes[0]); ok && info.extended {
 			return nil, &NotYetLowerable{Reason: "JSON.stringify of a value typed as class " + info.name + ", which another class extends, is a later slice"}
+		}
+		// A top-level value whose JSON form is undefined (a function, a symbol, or
+		// undefined itself) makes JSON.stringify return the value undefined, not a
+		// string. The typed call result is a string, so there is no BStr the call can
+		// yield that equals undefined; hand the unit back rather than ship "" where
+		// Node produces undefined. A function or symbol nested in an array or object
+		// is a different shape (null, or an omitted key) the serializer handles, so
+		// only the bare top-level argument is guarded here.
+		if r.jsonStringifyIsUndefinedResult(r.prog.TypeAt(argNodes[0])) {
+			return nil, &NotYetLowerable{Reason: "JSON.stringify of a top-level value whose JSON form is undefined (a function, symbol, or undefined) returns undefined rather than a string, a later slice"}
 		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
