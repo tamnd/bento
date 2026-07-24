@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/value"
 )
 
 // This file lowers the CommonJS module system reached through require. A sibling
@@ -155,6 +156,51 @@ func (r *Renderer) requireModuleCall(callee frontend.Node, argNodes []frontend.N
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: ident(loader)}, true, nil
+}
+
+// builtinRequireCall lowers require('<builtin>') and require('node:<builtin>') to a
+// call on the runtime built-in registry, returning handled=false when the specifier
+// is not a Node built-in name so the caller keeps the throwing runtime require. The
+// specifier must be a string literal, since a built-in resolves by name at compile
+// time; a dynamic specifier stays on the runtime path. The registry returns the one
+// module value for the name (a real module where one exists, a throw-on-use stub
+// where it does not yet), so require of an unimplemented built-in loads while a use
+// of a missing member throws, rather than the require itself reporting the built-in
+// as an unresolvable module. value.IsBuiltinModule owns the built-in name set, so
+// the lowerer and the runtime never disagree on which specifiers are built-ins.
+func (r *Renderer) builtinRequireCall(argNodes []frontend.Node) (ast.Expr, bool) {
+	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeStringLiteral {
+		return nil, false
+	}
+	specifier := unquote(r.prog.Text(argNodes[0]))
+	if !value.IsBuiltinModule(specifier) {
+		return nil, false
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{
+		Fun:  sel("value", "RequireBuiltin"),
+		Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(specifier)}},
+	}, true
+}
+
+// isBuiltinRequireCall reports whether a node is a require('<builtin>') call, in
+// either the bare or the node: form, so a binding initialized straight from one lands
+// in a value.Value slot rather than reaching for a static type the built-in has no
+// declaration for. It mirrors isRequireModuleCall for the built-in registry: the
+// specifier must be a string literal naming a Node built-in, and value.IsBuiltinModule
+// owns that name set.
+func (r *Renderer) isBuiltinRequireCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || !r.isGlobalRef(kids[0], "require") {
+		return false
+	}
+	if kids[1].Kind() != frontend.NodeStringLiteral {
+		return false
+	}
+	return value.IsBuiltinModule(unquote(r.prog.Text(kids[1])))
 }
 
 // isRequireModuleCall reports whether a node is a require('<literal>') call whose

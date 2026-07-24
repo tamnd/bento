@@ -1600,6 +1600,26 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding initialized straight from require('<builtin>') takes the built-in
+		// registry's module value, a value.Value the runtime hands back. The built-in has
+		// no declaration file, so the checker gives the binding no usable type; it lands
+		// in a value.Value slot and is marked dynamic, the same slot the composed-module
+		// case above uses, so every later member read routes through the value model and
+		// reaches the module's throw-on-use stub or, once implemented, its real members.
+		if r.isBuiltinRequireCall(kids[initIdx]) {
+			reqInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{reqInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err

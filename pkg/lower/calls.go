@@ -230,6 +230,9 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if expr, handled, err := r.requireModuleCall(kids[0], kids[1:]); handled || err != nil {
 			return expr, err
 		}
+		if expr, handled := r.builtinRequireCall(kids[1:]); handled {
+			return expr, nil
+		}
 		return r.dynamicCall(kids[0], kids[1:])
 	}
 	// A bare call to any other ambient global (eval, and the globals whose lowering
