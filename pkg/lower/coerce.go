@@ -847,6 +847,16 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		}
 		return r.boxFuncToDynamic(expr, calls[0])
 	}
+	// A .done read off an IteratorResult lowers to the value.IterResult Done field, a
+	// plain Go bool, even though the checker types the property boolean | undefined
+	// (the lib marks IteratorResult.done optional). So it boxes through value.Bool
+	// directly rather than value.OptToValue, which expects an Opt the plain bool field
+	// is not. It routes before the optional path, whose checker-type test would
+	// otherwise send the bool through the option box and emit a call that fails to build.
+	if r.iterResultDoneRead(src) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{expr}}, nil
+	}
 	// An optional (T | undefined) flowing into a dynamic slot boxes through
 	// value.OptToValue, which yields the element's box when present and the undefined
 	// singleton when not, the box an array's at or pop and a member the checker types
