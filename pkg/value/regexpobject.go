@@ -56,6 +56,31 @@ func regexpGet(re *RegExp, name string) (Value, bool) {
 		return Bool(re.HasIndices()), true
 	case "lastIndex":
 		return Number(re.LastIndex()), true
+	case "test":
+		// A read of .test off the box yields a callable bound to the regexp, so a dynamic
+		// re.test(s) matches through the same *RegExp the concrete path uses: the subject
+		// coerces to a string the way the built-in does, and a global regexp advances its
+		// own lastIndex because the closure captures the one live regexp.
+		return NewFunc(func(args []Value) Value {
+			return Bool(re.Test(subjectArg(args)))
+		}), true
+	case "exec":
+		// A read of .exec off the box yields a callable bound to the regexp; it returns
+		// the match array or null the concrete Exec produces, already a boxed value.
+		return NewFunc(func(args []Value) Value {
+			return re.Exec(subjectArg(args))
+		}), true
 	}
 	return Undefined, false
+}
+
+// subjectArg coerces the first argument of a boxed regexp's test or exec to the
+// subject string, the way the built-ins run ToString on their argument. A call with no
+// argument matches against "undefined", the string the missing argument coerces to,
+// matching the engine.
+func subjectArg(args []Value) BStr {
+	if len(args) == 0 {
+		return ToString(Undefined)
+	}
+	return ToString(args[0])
 }

@@ -50,6 +50,41 @@ func TestRegExpValueGet(t *testing.T) {
 	}
 }
 
+// A read of .test or .exec off the box yields a callable bound to the live regexp: a
+// dynamic test reports the match boolean, an exec returns the match array with its
+// captures and .index, and a global regexp advances its own lastIndex across calls
+// because the closures share the one regexp.
+func TestRegExpValueMethods(t *testing.T) {
+	box := RegExpValue(NewRegExpLiteral("a(b+)", ""))
+	if !ToBoolean(box.Get(FromGoString("test")).Call(StringValue(FromGoString("zabbbc")))) {
+		t.Fatal("boxed .test missed a matching subject")
+	}
+	if ToBoolean(box.Get(FromGoString("test")).Call(StringValue(FromGoString("nope")))) {
+		t.Fatal("boxed .test matched a non-matching subject")
+	}
+	res := box.Get(FromGoString("exec")).Call(StringValue(FromGoString("zabbbc")))
+	if res.IsNull() {
+		t.Fatal("boxed .exec returned null on a match")
+	}
+	if got := res.GetIndex(0).AsString().ToGoString(); got != "abbb" {
+		t.Fatalf("exec[0] = %q, want abbb", got)
+	}
+	if got := res.GetIndex(1).AsString().ToGoString(); got != "bbb" {
+		t.Fatalf("exec[1] = %q, want bbb", got)
+	}
+
+	g := RegExpValue(NewRegExpLiteral("a", "g"))
+	testG := g.Get(FromGoString("test"))
+	testG.Call(StringValue(FromGoString("aaa")))
+	if got := ToNumber(g.Get(FromGoString("lastIndex"))); got != 1 {
+		t.Fatalf("lastIndex after one global test = %v, want 1", got)
+	}
+	testG.Call(StringValue(FromGoString("aaa")))
+	if got := ToNumber(g.Get(FromGoString("lastIndex"))); got != 2 {
+		t.Fatalf("lastIndex after two global tests = %v, want 2 (the box shares one regexp)", got)
+	}
+}
+
 // Identity: a regexp box compares equal to itself and unequal to a box of a distinct
 // regexp, the reference semantics an object carries, so === over a boxed regexp holds
 // only for the same box.
