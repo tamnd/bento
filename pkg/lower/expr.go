@@ -64,6 +64,19 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
 			return ident(name), nil
 		}
+		// A named function declaration that is also a callable object (it carries own
+		// data properties) lowers to a struct-typed package var, not a Go func, so a
+		// value read of it reads that var by its source name, the slot the property
+		// writes and the call path both use. Routing it through the function-symbol
+		// path below would capitalize it to the exported func spelling the callable
+		// never took, and no such func exists. An ambient global (String, Symbol,
+		// Number) is itself a callable object but is not a user binding and has no
+		// package var, so it is excluded and keeps its own routing below.
+		if !r.isAmbientGlobal(n) && r.isCallableObject(r.prog.TypeAt(n)) {
+			if name, ok := localName(r.prog.Text(n)); ok {
+				return ident(name), nil
+			}
+		}
 		if sym, ok := r.prog.SymbolAt(n); ok && r.derefAlias(sym).Flags&frontend.SymbolFunction != 0 {
 			sym = r.derefAlias(sym)
 			// A nested function declaration bound to a Go local reads by that local

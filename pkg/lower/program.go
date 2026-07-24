@@ -192,6 +192,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// only the statement nodes the analysis passes below walk; the calls carry no
 	// binding, so they ride mainItems alone.
 	var mainItems []mainItem
+	// callableFuncs holds the top-level named function declarations that are also
+	// callable objects (they carry own data properties). Each is registered as a
+	// package-level pointer var below and constructed at the top of main, so it is
+	// collected here rather than emitted as a bare Go func.
+	var callableFuncs []frontend.Node
 	pushStmt := func(n frontend.Node) {
 		mainBody = append(mainBody, n)
 		mainItems = append(mainItems, mainItem{node: n})
@@ -215,6 +220,20 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 						continue
 					}
 				}
+			}
+			// A named function declaration whose name carries own data properties is a
+			// callable object, not a bare func: it lowers to a struct-typed package var
+			// and a top-of-main construction, so it is registered and collected here
+			// rather than emitted through funcDecls, which would emit a `func Foo` that
+			// collides with the `type Foo` the callable-object model interns.
+			if r.isCallableObject(r.prog.TypeAt(stmt)) {
+				decl, err := r.registerCallableFuncDecl(stmt)
+				if err != nil {
+					return Program{}, err
+				}
+				moduleVars = append(moduleVars, decl)
+				callableFuncs = append(callableFuncs, stmt)
+				continue
 			}
 			fds, err := r.funcDecls(stmt)
 			if err != nil {
@@ -360,6 +379,17 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	}
 	stmts = append(hoistDecls, stmts...)
 	stmts = append(fwdDecls, stmts...)
+	// A callable-object function declaration hoists like any function, so its object
+	// is constructed before the body's first property write runs. The construction is
+	// prepended outermost, above the hoist and forward decls, so the package var it
+	// assigns holds the object by the time any statement reads it.
+	if len(callableFuncs) > 0 {
+		ctorStmts, err := r.buildCallableFuncDeclCtors(callableFuncs)
+		if err != nil {
+			return Program{}, err
+		}
+		stmts = append(ctorStmts, stmts...)
+	}
 	stmts = r.hoistStrBuilders(stmts)
 
 	// The required modules lower after the entry body, so the per-module analysis
