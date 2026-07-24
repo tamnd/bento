@@ -115,6 +115,19 @@ func NewArrayValue(elems []Value) Value {
 // produces. It returns the receiver value so JSON.parse can build an object in an
 // expression.
 func (v Value) Set(key BStr, val Value) Value {
+	// undefined and null carry no property storage, so a named write to either is a
+	// TypeError the way JavaScript's PutValue is, not the nil dereference v.object()
+	// would otherwise take. The message mirrors V8's "Cannot set properties of null
+	// (setting 'x')" so a catch that reads it sees the same text Node reports. The
+	// throw sits before any argument coercion here because the emitted call evaluates
+	// the right-hand side as a Go argument first, matching the spec order that runs the
+	// assignment's value before the reference is validated.
+	switch v.kind {
+	case KindUndefined:
+		Throw(NewTypeError(FromGoString("Cannot set properties of undefined (setting '" + key.ToGoString() + "')")))
+	case KindNull:
+		Throw(NewTypeError(FromGoString("Cannot set properties of null (setting '" + key.ToGoString() + "')")))
+	}
 	if p := v.asProxy(); p != nil {
 		p.setKey(v, key, val)
 		return v
