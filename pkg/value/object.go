@@ -335,6 +335,30 @@ func (v Value) Delete(key BStr) bool {
 	}
 }
 
+// DeleteStrict is the strict-mode form of Delete. A delete in a strict function
+// whose removal is refused is a TypeError rather than a false result: where Delete
+// reports false for a non-configurable property or a sealed array element,
+// DeleteStrict throws. A nullish receiver already throws through Delete, and every
+// removal that succeeds returns true unchanged, so an ordinary strict delete is
+// identical to the sloppy one. The lowerer emits this in place of Delete for a
+// member delete when the program is strict, so only a genuinely refused removal
+// turns into a throw; a configurable delete cannot regress.
+func (v Value) DeleteStrict(key BStr) bool {
+	if v.Delete(key) {
+		return true
+	}
+	// V8 names the receiver in the message: a plain object or function reads as
+	// "#<Object>", an array as "[object Array]". The failing case is a
+	// non-configurable own property, so the removal was refused and the operator
+	// throws with the key it could not delete.
+	recv := "#<Object>"
+	if v.kind == KindArray {
+		recv = "[object Array]"
+	}
+	Throw(NewTypeError(FromGoString("Cannot delete property '" + key.ToGoString() + "' of " + recv)))
+	return false
+}
+
 // deleteOwn removes a named own property, closing the gap in the parallel key and
 // value slices so the remaining properties keep their insertion order. A key the
 // object does not carry is already absent, so the result is true either way, the
