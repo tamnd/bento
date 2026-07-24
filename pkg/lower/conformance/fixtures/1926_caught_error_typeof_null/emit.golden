@@ -14,10 +14,10 @@ func main() {
 				thrown := value.Caught(rec)
 				_ = thrown
 				value.ConsoleLog(value.BoolToString(value.FromGoString("object").Equal(value.FromGoString("object"))))
-				value.ConsoleLog(value.BoolToString(false))
-				value.ConsoleLog(value.BoolToString(true))
-				value.ConsoleLog(value.BoolToString(false))
-				if !value.FromGoString("object").Equal(value.FromGoString("object")) || false {
+				value.ConsoleLog(value.BoolToString(value.StrictEquals(thrown.ToValue(), value.Null)))
+				value.ConsoleLog(value.BoolToString(!value.StrictEquals(thrown.ToValue(), value.Null)))
+				value.ConsoleLog(value.BoolToString(value.StrictEquals(thrown.ToValue(), value.Undefined)))
+				if !value.FromGoString("object").Equal(value.FromGoString("object")) || value.StrictEquals(thrown.ToValue(), value.Null) {
 					value.ConsoleLog(value.FromGoString("not an object"))
 				} else {
 					value.ConsoleLog(value.FromGoString("object"))

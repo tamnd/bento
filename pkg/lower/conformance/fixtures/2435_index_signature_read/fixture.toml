@@ -1,2 +1,1 @@
 feature = "index-signature-read"
-handback = "reading a key typed by an object's index signature is a later slice"

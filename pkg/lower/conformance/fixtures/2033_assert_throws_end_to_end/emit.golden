@@ -27,7 +27,7 @@ func AssertThrows(expectedErrorConstructor value.Value, func_ value.Value) {
 			if rec := recover(); rec != nil {
 				thrown := value.Caught(rec)
 				_ = thrown
-				if !value.FromGoString("object").Equal(value.FromGoString("object")) || false {
+				if !value.FromGoString("object").Equal(value.FromGoString("object")) || value.StrictEquals(thrown.ToValue(), value.Null) {
 					value.Throw(NewTest262Error(value.FromGoString("Thrown value was not an object!")))
 				} else if !value.StrictEquals(thrown.Constructor(), expectedErrorConstructor) {
 					expectedName := expectedErrorConstructor.Get(value.FromGoString("name"))

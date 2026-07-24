@@ -14,7 +14,7 @@ func main() {
 				e := value.Caught(rec)
 				_ = e
 				value.ConsoleLog(value.FromGoString("object"))
-				value.ConsoleLog(value.BoolToString(true))
+				value.ConsoleLog(value.BoolToString(!value.StrictEquals(e.ToValue(), value.Null)))
 			}
 		}()
 		value.Throw(value.NewThrownValue(value.NewObject().Set(value.FromGoString("code"), value.Number(7))))

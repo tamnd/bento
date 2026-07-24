@@ -1,2 +1,2 @@
 feature = "symbol-toprimitive"
-handback = "boxing an object method with a parameter is a later slice"
+handback = "symbol-keyed property belongs in the object side table"
