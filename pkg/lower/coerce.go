@@ -983,7 +983,44 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// overload's return, a concrete type the primitive box path would try to construct, so
 	// recognizing the call here lets a slot, a stringify, or a console.log take the box
 	// straight through the same as any other boxed result.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src)
+}
+
+// isDynamicValueLogical reports whether src is a value-returning && or || whose
+// lowering yields a value.Value box because at least one operand is dynamic. Such
+// an expression lowers through value.And or value.Or (or the lazy IIFE that
+// returns a value.Value), so its result is already a box and boxing it into a
+// dynamic slot is the identity. The checker may still type the whole expression as
+// a concrete primitive: sym && true is typed boolean because a symbol is always
+// truthy, so without this the primitive box path would wrap the already-boxed
+// result in value.Bool and emit value.Bool(value.And(...)), which does not
+// type-check. The condition mirrors valueLogical's dynamic branch exactly, so it
+// says true for precisely the shapes that lower to a box and false for the
+// static-truthy collapse, the two-boolean operator case, and the same-primitive
+// IIFE, none of which return a value.Value.
+func (r *Renderer) isDynamicValueLogical(src frontend.Node) bool {
+	if src.Kind() != frontend.NodeBinaryExpression {
+		return false
+	}
+	kids := r.prog.Children(src)
+	if len(kids) != 3 {
+		return false
+	}
+	left, op, right := kids[0], kids[1], kids[2]
+	opText := strings.TrimSpace(r.prog.Text(op))
+	if opText != "&&" && opText != "||" {
+		return false
+	}
+	// A left operand the checker proved always truthy or always falsy collapses to a
+	// single operand with no box, so it is not a boxed logical.
+	if _, known := r.staticTruthy(left); known && r.repeatableOperand(left) {
+		return false
+	}
+	// Two booleans keep Go's own operator and give a Go bool, not a box.
+	if r.isBool(left) && r.isBool(right) {
+		return false
+	}
+	return r.isDynamic(left) || r.isDynamic(right)
 }
 
 // isBoxedStaticFieldRead reports whether src reads a private static field, C.#x,

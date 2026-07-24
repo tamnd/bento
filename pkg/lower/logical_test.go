@@ -182,3 +182,38 @@ console.log(orProp({ x: 4 }, 9));
 		t.Fatalf("value-logical program printed %q, want %q", got, want)
 	}
 }
+
+// TestDynamicLogicalBoxesWithoutDoubleWrap pins that a value-returning && whose
+// operand is dynamic and whose whole-expression type is a concrete primitive boxes
+// into a dynamic slot as the identity, not wrapped again in value.Bool. sym && true
+// is typed boolean because a symbol is always truthy, but it lowers to value.And,
+// which already returns a value.Value; the earlier bug wrapped that in value.Bool
+// and emitted value.Bool(value.And(...)), which does not type-check.
+func TestDynamicLogicalBoxesWithoutDoubleWrap(t *testing.T) {
+	const src = "var sym: symbol = Symbol();\n" +
+		"function check(v: any): void { console.log(v); }\n" +
+		"check(sym && true);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.And(sym, value.Bool(true))") {
+		t.Fatalf("dynamic && did not lower to value.And:\n%s", source)
+	}
+	if strings.Contains(source, "value.Bool(value.And") {
+		t.Fatalf("dynamic && result was double-wrapped in value.Bool:\n%s", source)
+	}
+}
+
+// TestDynamicLogicalBoxedRuns builds and runs the Symbol logical-and test's shape:
+// sym && true is true (a symbol is truthy) and !sym && false is false, the two
+// facts test262's symbol-logical-and-evaluation asserts.
+func TestDynamicLogicalBoxedRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "var sym: symbol = Symbol();\n" +
+		"function check(v: any): void { console.log(v); }\n" +
+		"check(sym && true);\n" +
+		"check(!sym && false);\n"
+	got := runProgramGo(t, src)
+	want := "true\nfalse\n"
+	if got != want {
+		t.Fatalf("symbol logical-and program printed %q, want %q", got, want)
+	}
+}
