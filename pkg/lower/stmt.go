@@ -3613,8 +3613,15 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 		if err != nil {
 			return nil, false, err
 		}
+		// A strict-mode compound store throws on a failed write the same way a
+		// plain strict store does, so it routes through SetStrict; a sloppy
+		// program keeps the silent-drop Set.
+		compSet := "Set"
+		if r.programStrict {
+			compSet = "SetStrict"
+		}
 		return &ast.ExprStmt{X: &ast.CallExpr{
-			Fun:  &ast.SelectorExpr{X: recvStore, Sel: ident("Set")},
+			Fun:  &ast.SelectorExpr{X: recvStore, Sel: ident(compSet)},
 			Args: []ast.Expr{keyExpr(), result},
 		}}, true, nil
 	}
