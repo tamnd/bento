@@ -2318,11 +2318,35 @@ func (r *Renderer) staticReprMismatch(srcNode frontend.Node, srcType, tgtType fr
 	if !r.notAssignableAt(srcNode) {
 		return false
 	}
-	if _, srcClass := r.classOfNode(srcNode); srcClass {
+	if _, tgtClass := r.classOfType(tgtType); tgtClass {
+		// A class-typed parameter keeps its own upcast bridge (bridgeClassBinding), so a
+		// class value or subclass instance passed to it is not a mismatch here.
 		return false
 	}
-	if _, tgtClass := r.classOfType(tgtType); tgtClass {
-		return false
+	if _, srcClass := r.classOfNode(srcNode); srcClass {
+		// A class value passed where the parameter is not itself a class type drops a
+		// static-side struct into an unrelated Go slot the toolchain rejects, and
+		// bridgeClassBinding only rescues a class-typed parameter, so at a 2345 site this
+		// is a genuine mismatch that hands back.
+		return true
+	}
+	return r.reprMismatchAtFlaggedSite(srcType, tgtType)
+}
+
+// reprMismatchAtFlaggedSite reports, for a value the checker has already flagged not
+// assignable, whether emitting the store would cross incompatible Go types. It extends
+// mismatchedLoweredType with the unlowerable-source case: a class value or a builtin
+// constructor used as a value (typeof C, TypeErrorConstructor) has a type typeExpr
+// declines, so mismatchedLoweredType cannot prove a difference and answers false, which
+// would let the raw store through and emit a struct dropped into a primitive slot. At a
+// site the checker already calls not assignable an unlowerable source is a genuine
+// mismatch, not the unrelated lowering gap mismatchedLoweredType stays quiet about, so
+// this reports a mismatch and the bridge hands back rather than ship Go the toolchain
+// rejects. A source that lowers falls through to the provable comparison, so a
+// same-representation 2322 (const n: 0 = 1) still lands.
+func (r *Renderer) reprMismatchAtFlaggedSite(srcType, tgtType frontend.Type) bool {
+	if _, err := r.typeExpr(srcType); err != nil {
+		return true
 	}
 	return r.mismatchedLoweredType(srcType, tgtType)
 }
@@ -2380,14 +2404,21 @@ func (r *Renderer) assignmentReprMismatch(srcNode, tgtNode frontend.Node) bool {
 	if !srcHit && !tgtHit {
 		return false
 	}
-	if _, srcClass := r.classOfNode(srcNode); srcClass {
-		return false
-	}
 	tgtType := r.prog.TypeAt(tgtNode)
 	if _, tgtClass := r.classOfType(tgtType); tgtClass {
+		// A class-typed target keeps its own upcast bridge (bridgeClassBinding), which
+		// binds a class value or a subclass instance to it or hands back an unrelated
+		// one, so its deliberate change of Go type is not a mismatch here.
 		return false
 	}
-	return r.mismatchedLoweredType(r.prog.TypeAt(srcNode), tgtType)
+	if _, srcClass := r.classOfNode(srcNode); srcClass {
+		// A class value bound into a slot that is not itself a class type drops a
+		// static-side struct into a primitive or other unrelated Go slot, which the
+		// toolchain rejects; bridgeClassBinding only rescues a class-typed target, so at
+		// a site the checker already calls not assignable this is a genuine mismatch.
+		return true
+	}
+	return r.reprMismatchAtFlaggedSite(r.prog.TypeAt(srcNode), tgtType)
 }
 
 // assign2322At reports whether the checker put a code 2322 (assignment not assignable)

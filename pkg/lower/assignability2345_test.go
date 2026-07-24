@@ -44,6 +44,22 @@ func TestAssignabilityNumberForStringCtorArgHandsBack(t *testing.T) {
 	}
 }
 
+// A class value passed where a number parameter is declared is a 2345 whose source is a
+// class object and whose slot is a primitive. bridgeClassBinding rescues only a class-typed
+// parameter, so a class value in a float64 slot would ship Go the toolchain rejects; the
+// argument guard hands the call back instead. This pins the class-source-into-non-class-slot
+// case the srcClass excuse used to wave through.
+func TestAssignabilityClassValueForNumberArgHandsBack(t *testing.T) {
+	src := "class C {}\nfunction g(n: number): number { return n; }\nconsole.log(g(C));\n"
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "not assignable") {
+		t.Fatalf("class-value-for-number arg reason = %q, want a not-assignable handback", reason)
+	}
+	if strings.Contains(reason, "no representation guard") {
+		t.Fatalf("class-value-for-number arg reason = %q, want the guarded handback, not the reconciliation", reason)
+	}
+}
+
 // A value dropped into a builtin element slot, a string pushed onto a number array, is a
 // 2345 no guarded bridge reaches, since push lowers its argument straight into the Go
 // slice. The end-of-render reconciliation catches the unseen site and hands the unit
