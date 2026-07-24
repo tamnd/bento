@@ -304,6 +304,14 @@ func (v Value) Call(args ...Value) Value {
 // or from Object.seal, refuses removal and reports false, the value delete gives
 // when the property survives.
 func (v Value) Delete(key BStr) bool {
+	switch v.kind {
+	case KindUndefined, KindNull:
+		// delete base.k evaluates ToObject(base) before removing anything, and
+		// ToObject throws on a nullish base, so delete null.k and delete undefined[k]
+		// throw a TypeError rather than report a boolean. A non-nullish primitive
+		// receiver coerces to a wrapper with no own slot, so it still reports true.
+		Throw(NewTypeError(FromGoString("Cannot convert undefined or null to object")))
+	}
 	if p := v.asProxy(); p != nil {
 		return p.deleteKey(key)
 	}
