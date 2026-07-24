@@ -4461,6 +4461,23 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 		if init, ok := r.foldFloatDecl(decls); ok {
 			return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
 		}
+		// Two or more float64 counters fold into Go's own multi-variable init clause,
+		// which allocates each variable fresh per iteration, so a body closure over a
+		// counter captures that iteration's value the way ES6 per-iteration binding means
+		// it to, where the block form would hoist them into shared vars and lose it.
+		if init, ok := r.foldFloatDeclMulti(decls); ok {
+			return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
+		}
+	}
+	// A loop whose init clause declares a closure over another loop counter,
+	// for (let i = 0, f = function () { return i }; i < 5; ++i), needs the ES6
+	// per-iteration environment the block form does not model: the block hoists
+	// every counter into one shared Go var the post clause mutates in place, so the
+	// closure would read the counter's final value where the spec freezes it at the
+	// binding the init made. Emitting the block would run wrong rather than not
+	// compile, so the shape hands back until the per-iteration lowering lands.
+	if r.forInitClosesOverCounter(decls) {
+		return nil, &NotYetLowerable{Reason: "a for-let init clause whose closure captures a loop counter needs per-iteration binding, a later slice"}
 	}
 	initDecl, err := r.varDeclStmt(decls)
 	if err != nil {
@@ -4470,6 +4487,72 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	list := append([]ast.Stmt{initDecl}, blanks...)
 	list = append(list, loop)
 	return &ast.BlockStmt{List: list}, nil
+}
+
+// forInitClosesOverCounter reports whether a for loop's init clause declares a
+// function or arrow that reads one of the loop's own counters, the capture the
+// block form cannot lower soundly. It gathers the names the init binds, then asks
+// of each binding's initializer whether a function inside it reads one of those
+// names. The check is conservative: it descends only into function boundaries, so
+// a counter the initializer reads outside any closure (an ordinary value use the
+// block lowers correctly) does not trip it, and at worst a rare capturing shape
+// hands back where a wrong emit would otherwise run.
+func (r *Renderer) forInitClosesOverCounter(decls []frontend.Node) bool {
+	names := map[string]bool{}
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		if name, ok := localName(r.prog.Text(kids[0])); ok {
+			names[name] = true
+		}
+	}
+	if len(names) == 0 {
+		return false
+	}
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) != 2 && len(kids) != 3 {
+			continue
+		}
+		if r.subtreeFuncReadsName(kids[len(kids)-1], names) {
+			return true
+		}
+	}
+	return false
+}
+
+// subtreeFuncReadsName reports whether the subtree holds a function or arrow whose
+// body reads a name in set. It walks down to the first function boundary and only
+// there tests for the read, so a name used outside any closure is not counted a
+// capture.
+func (r *Renderer) subtreeFuncReadsName(n frontend.Node, set map[string]bool) bool {
+	switch n.Kind() {
+	case frontend.NodeFunctionExpression, frontend.NodeArrowFunction, frontend.NodeFunctionDeclaration:
+		return r.subtreeReadsName(n, set)
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.subtreeFuncReadsName(c, set) {
+			return true
+		}
+	}
+	return false
+}
+
+// subtreeReadsName reports whether the subtree reads any identifier named in set.
+func (r *Renderer) subtreeReadsName(n frontend.Node, set map[string]bool) bool {
+	if n.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(n)); ok && set[name] {
+			return true
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.subtreeReadsName(c, set) {
+			return true
+		}
+	}
+	return false
 }
 
 // forDestructureInit lowers a for loop's destructuring initializer into the
@@ -4622,34 +4705,73 @@ func (r *Renderer) foldFloatDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	if len(decls) != 1 {
 		return nil, false
 	}
-	kids := r.prog.Children(decls[0])
-	if len(kids) != 2 && len(kids) != 3 {
+	name, finit, ok := r.floatCounterFold(decls[0])
+	if !ok {
 		return nil, false
+	}
+	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{finit}}, true
+}
+
+// foldFloatDeclMulti folds a for-let that declares two or more float64 counters,
+// each from a numeric literal, into Go's own multi-variable init clause,
+// for i, j := 0.0, 10.0; i < 5; i, j = i+1, j+1. Go allocates a fresh copy of every
+// init-clause variable per iteration, so a closure the body forms over a counter
+// captures that iteration's value, the per-iteration binding ES6 gives a let loop.
+// The block form a multi-counter loop would otherwise take hoists the counters into
+// shared vars the post clause mutates in place, which loses that semantics; the fold
+// restores it. It declines unless every counter qualifies exactly as the single
+// counter fold demands (a float64 type, a plain numeric-literal initializer, no int
+// specialization, no bare annotation), so a mixed init that also declares a function
+// or a non-literal keeps the block form and its init-closure handback guard.
+func (r *Renderer) foldFloatDeclMulti(decls []frontend.Node) (ast.Stmt, bool) {
+	if len(decls) < 2 {
+		return nil, false
+	}
+	var lhs, rhs []ast.Expr
+	for _, d := range decls {
+		name, finit, ok := r.floatCounterFold(d)
+		if !ok {
+			return nil, false
+		}
+		lhs = append(lhs, ident(name))
+		rhs = append(rhs, finit)
+	}
+	return &ast.AssignStmt{Lhs: lhs, Tok: token.DEFINE, Rhs: rhs}, true
+}
+
+// floatCounterFold reports whether one for-let binding is a float64 counter
+// initialized from a numeric literal, and if so returns its name and the folded
+// float literal. It is the per-binding core the single- and multi-counter folds
+// share.
+func (r *Renderer) floatCounterFold(d frontend.Node) (string, ast.Expr, bool) {
+	kids := r.prog.Children(d)
+	if len(kids) != 2 && len(kids) != 3 {
+		return "", nil, false
 	}
 	name, ok := localName(r.prog.Text(kids[0]))
 	if !ok || r.int32Locals[name] || r.int64Locals[name] {
-		return nil, false
+		return "", nil, false
 	}
 	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 	if err != nil || !isFloat64Ident(typ) {
-		return nil, false
+		return "", nil, false
 	}
 	// A binding with a type annotation but no initializer, var x: number, carries the
 	// annotation as its trailing NodeUnknown child, not an expression. Folding it would
 	// lower that annotation as if it were an initializer, so decline and leave the
 	// uninitialized zero-value declaration to buildVarDecl.
-	if r.bindingTrailingIsAnnotation(decls[0]) {
-		return nil, false
+	if r.bindingTrailingIsAnnotation(d) {
+		return "", nil, false
 	}
 	init, err := r.bindingInit(kids[0], kids[len(kids)-1])
 	if err != nil {
-		return nil, false
+		return "", nil, false
 	}
 	finit, ok := floatLiteral(init)
 	if !ok {
-		return nil, false
+		return "", nil, false
 	}
-	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{finit}}, true
+	return name, finit, true
 }
 
 // foldShortDecl builds a Go short variable declaration for a lone binding whose

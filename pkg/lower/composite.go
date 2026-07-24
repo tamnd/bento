@@ -1086,11 +1086,22 @@ func (r *Renderer) arrayMethodCall(recvNode frontend.Node, method string, argNod
 		if err != nil {
 			return nil, err
 		}
+		// Push takes the array's element type, so each argument crosses into that slot the
+		// same way an array literal element does: a dynamic element array (an any[]) boxes a
+		// concrete argument into a value.Value, which routes a function argument through the
+		// callable box, and a union element array wraps into the arm constructor. A typed
+		// element array leaves the argument unchanged. elemT is read once off the receiver.
+		elemT, hasElemT := r.prog.ElementType(r.prog.TypeAt(recvNode))
 		args := make([]ast.Expr, 0, len(argNodes))
 		for _, a := range argNodes {
 			lowered, err := r.lowerExpr(a)
 			if err != nil {
 				return nil, err
+			}
+			if hasElemT {
+				if lowered, err = r.wrapUnionElem(lowered, a, elemT); err != nil {
+					return nil, err
+				}
 			}
 			args = append(args, lowered)
 		}

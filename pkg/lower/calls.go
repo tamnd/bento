@@ -113,8 +113,11 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if kids[0].Kind() != frontend.NodeIdentifier {
 		// A callee whose own type is dynamic is a boxed function value, so it dispatches
 		// through the runtime Call rather than a static Go call, the same way a dynamic
-		// member read resolves at runtime.
-		if r.isDynamic(kids[0]) {
+		// member read resolves at runtime. An element read off an evolving array, a[k]()
+		// where a is a value.Value-element array the checker narrowed to a function, is the
+		// same boxed callee even though the checker gives it a concrete function type, so it
+		// routes here too.
+		if r.isDynamic(kids[0]) || r.dynamicArrayElemCallee(kids[0]) {
 			return r.dynamicCall(kids[0], kids[1:])
 		}
 		callee, err := r.functionValueCallee(kids[0])
