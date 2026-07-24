@@ -75,3 +75,26 @@ console.log(a[0]());
 		t.Errorf("evolving-array element call did not route through the boxed Call:\n%s", source)
 	}
 }
+
+// TestForInitClosureCapturingCounterHandsBack pins that a for-let whose init clause
+// declares a closure over another loop counter hands back rather than emit the block
+// form, which hoists the counter to one shared var the post clause mutates and would
+// make the closure read the counter's final value where ES6 freezes it at the init
+// binding. A handback keeps the shape safe until the per-iteration lowering lands.
+func TestForInitClosureCapturingCounterHandsBack(t *testing.T) {
+	const src = `let a: any[] = [];
+for (let i = 0, f = function () { return i; }; i < 5; ++i) {
+  a.push(f);
+}
+`
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	_, err := r.RenderProgram(entryFile(t, prog))
+	if err == nil {
+		t.Fatalf("for-let init closure over a counter lowered, want a hand-back:\n%s", src)
+	}
+	if !strings.Contains(err.Error(), "per-iteration binding") {
+		t.Fatalf("handback reason = %q, want a per-iteration-binding deferral", err.Error())
+	}
+}

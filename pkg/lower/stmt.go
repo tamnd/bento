@@ -4462,6 +4462,16 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 			return &ast.ForStmt{Init: init, Cond: cond, Post: post, Body: body}, nil
 		}
 	}
+	// A loop whose init clause declares a closure over another loop counter,
+	// for (let i = 0, f = function () { return i }; i < 5; ++i), needs the ES6
+	// per-iteration environment the block form does not model: the block hoists
+	// every counter into one shared Go var the post clause mutates in place, so the
+	// closure would read the counter's final value where the spec freezes it at the
+	// binding the init made. Emitting the block would run wrong rather than not
+	// compile, so the shape hands back until the per-iteration lowering lands.
+	if r.forInitClosesOverCounter(decls) {
+		return nil, &NotYetLowerable{Reason: "a for-let init clause whose closure captures a loop counter needs per-iteration binding, a later slice"}
+	}
 	initDecl, err := r.varDeclStmt(decls)
 	if err != nil {
 		return nil, err
@@ -4470,6 +4480,72 @@ func (r *Renderer) lowerFor(n frontend.Node) (ast.Stmt, error) {
 	list := append([]ast.Stmt{initDecl}, blanks...)
 	list = append(list, loop)
 	return &ast.BlockStmt{List: list}, nil
+}
+
+// forInitClosesOverCounter reports whether a for loop's init clause declares a
+// function or arrow that reads one of the loop's own counters, the capture the
+// block form cannot lower soundly. It gathers the names the init binds, then asks
+// of each binding's initializer whether a function inside it reads one of those
+// names. The check is conservative: it descends only into function boundaries, so
+// a counter the initializer reads outside any closure (an ordinary value use the
+// block lowers correctly) does not trip it, and at worst a rare capturing shape
+// hands back where a wrong emit would otherwise run.
+func (r *Renderer) forInitClosesOverCounter(decls []frontend.Node) bool {
+	names := map[string]bool{}
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		if name, ok := localName(r.prog.Text(kids[0])); ok {
+			names[name] = true
+		}
+	}
+	if len(names) == 0 {
+		return false
+	}
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) != 2 && len(kids) != 3 {
+			continue
+		}
+		if r.subtreeFuncReadsName(kids[len(kids)-1], names) {
+			return true
+		}
+	}
+	return false
+}
+
+// subtreeFuncReadsName reports whether the subtree holds a function or arrow whose
+// body reads a name in set. It walks down to the first function boundary and only
+// there tests for the read, so a name used outside any closure is not counted a
+// capture.
+func (r *Renderer) subtreeFuncReadsName(n frontend.Node, set map[string]bool) bool {
+	switch n.Kind() {
+	case frontend.NodeFunctionExpression, frontend.NodeArrowFunction, frontend.NodeFunctionDeclaration:
+		return r.subtreeReadsName(n, set)
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.subtreeFuncReadsName(c, set) {
+			return true
+		}
+	}
+	return false
+}
+
+// subtreeReadsName reports whether the subtree reads any identifier named in set.
+func (r *Renderer) subtreeReadsName(n frontend.Node, set map[string]bool) bool {
+	if n.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(n)); ok && set[name] {
+			return true
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.subtreeReadsName(c, set) {
+			return true
+		}
+	}
+	return false
 }
 
 // forDestructureInit lowers a for loop's destructuring initializer into the
