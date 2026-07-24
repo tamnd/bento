@@ -50,6 +50,18 @@ func arrayLikeLen(recv Value) int {
 	return toLength(recv.Get(FromGoString("length")))
 }
 
+// requireArrayLikeThis performs the ToObject(this value) step every generic-receiver
+// Array.prototype method takes first: null and undefined have no object form, so the
+// spec's ReturnIfAbrupt throws a TypeError before any length or index is read. A
+// borrowed Array.prototype.<m>.call(null) or .call(undefined) therefore throws the
+// way Node does rather than silently reading a zero length and returning. Every other
+// receiver, including a primitive the spec would box, passes through unchanged.
+func requireArrayLikeThis(recv Value, method string) {
+	if recv.IsNullish() {
+		Throw(NewTypeError(FromGoString("Array.prototype." + method + " called on null or undefined")))
+	}
+}
+
 // arrayLikeGet reads element k off the receiver as the property named by the integer
 // k, the read a generic-receiver method makes at each index. It dispatches through
 // Get, so a real array answers from its dense storage and an array-like object from
@@ -106,6 +118,7 @@ func sameValueZero(a, b Value) bool {
 // A negative fromIndex counts from the end, the way the array method does. The
 // result boxes to a number so a borrowed call yields a value whatever the receiver.
 func GenericIndexOf(recv, target Value, from ...Value) Value {
+	requireArrayLikeThis(recv, "indexOf")
 	n := arrayLikeLen(recv)
 	start := 0
 	if len(from) > 0 {
@@ -135,6 +148,7 @@ func GenericIndexOf(recv, target Value, from ...Value) Value {
 // fromIndex, or -1. fromIndex defaults to the last index and a negative value counts
 // from the end.
 func GenericLastIndexOf(recv, target Value, from ...Value) Value {
+	requireArrayLikeThis(recv, "lastIndexOf")
 	n := arrayLikeLen(recv)
 	start := n - 1
 	if len(from) > 0 {
@@ -172,6 +186,7 @@ func arrayLikeSet(recv Value, k int, val Value) {
 // end is the length. The receiver is returned so the borrowed call reads as the
 // in-place fill the array method evaluates to.
 func GenericFill(recv, value Value, bounds ...Value) Value {
+	requireArrayLikeThis(recv, "fill")
 	n := arrayLikeLen(recv)
 	start, end := 0, n
 	if len(bounds) > 0 {
@@ -193,6 +208,7 @@ func GenericFill(recv, value Value, bounds ...Value) Value {
 // contribute the empty string, so join treats a hole as undefined the way the spec
 // does. The result boxes to a string.
 func GenericJoin(recv Value, sep ...Value) Value {
+	requireArrayLikeThis(recv, "join")
 	n := arrayLikeLen(recv)
 	separator := ","
 	if len(sep) > 0 && sep[0].kind != KindUndefined {
@@ -220,6 +236,7 @@ func GenericJoin(recv Value, sep ...Value) Value {
 // target index is deleted, matching the spec's DeletePropertyOrThrow on a missing
 // source.
 func GenericCopyWithin(recv Value, bounds ...Value) Value {
+	requireArrayLikeThis(recv, "copyWithin")
 	n := arrayLikeLen(recv)
 	to, from, final := 0, 0, n
 	if len(bounds) > 0 {
@@ -258,6 +275,7 @@ func GenericCopyWithin(recv Value, bounds ...Value) Value {
 // receiver. Each swap reads both elements as properties named by their indices and
 // writes them back, so a real array and an array-like object both reverse in place.
 func GenericReverse(recv Value) Value {
+	requireArrayLikeThis(recv, "reverse")
 	n := arrayLikeLen(recv)
 	for lower := 0; lower < n/2; lower++ {
 		upper := n - 1 - lower
@@ -281,6 +299,7 @@ func callBack(cb, recv, elem Value, k int) Value {
 // GenericForEach runs Array.prototype.forEach on a generic receiver, calling the
 // callback with each element, its index, and the receiver, and returning undefined.
 func GenericForEach(recv, cb Value, thisArg ...Value) Value {
+	requireArrayLikeThis(recv, "forEach")
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
 		if !arrayLikeHas(recv, k) {
@@ -300,6 +319,7 @@ func GenericForEach(recv, cb Value, thisArg ...Value) Value {
 // array. A hole in the range stays a hole in the result rather than materializing as
 // a stored undefined, matching the spec's HasProperty guard on each copied index.
 func GenericSlice(recv Value, bounds ...Value) Value {
+	requireArrayLikeThis(recv, "slice")
 	n := arrayLikeLen(recv)
 	start, end := 0, n
 	if len(bounds) > 0 {
@@ -326,6 +346,7 @@ func GenericSlice(recv Value, bounds ...Value) Value {
 // receiver or in a spreadable argument stays a hole in the result, so concat carries
 // holes across rather than filling them with undefined.
 func GenericConcat(recv Value, items ...Value) Value {
+	requireArrayLikeThis(recv, "concat")
 	out := []Value{}
 	appendFrom := func(src Value) {
 		if src.kind == KindArray {
@@ -353,6 +374,7 @@ func GenericConcat(recv Value, items ...Value) Value {
 // whatever the receiver's kind, so a borrowed map on an array-like still yields an
 // array.
 func GenericMap(recv, cb Value, thisArg ...Value) Value {
+	requireArrayLikeThis(recv, "map")
 	n := arrayLikeLen(recv)
 	out := make([]Value, n)
 	for k := 0; k < n; k++ {
@@ -368,6 +390,7 @@ func GenericMap(recv, cb Value, thisArg ...Value) Value {
 // GenericFilter runs Array.prototype.filter on a generic receiver, returning a new
 // array of the elements for which the callback's result is truthy, in order.
 func GenericFilter(recv, cb Value, thisArg ...Value) Value {
+	requireArrayLikeThis(recv, "filter")
 	n := arrayLikeLen(recv)
 	out := []Value{}
 	for k := 0; k < n; k++ {
@@ -385,6 +408,7 @@ func GenericFilter(recv, cb Value, thisArg ...Value) Value {
 // GenericSome runs Array.prototype.some on a generic receiver, reporting whether the
 // callback's result is truthy for any element, stopping at the first that is.
 func GenericSome(recv, cb Value, thisArg ...Value) Value {
+	requireArrayLikeThis(recv, "some")
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
 		if !arrayLikeHas(recv, k) {
@@ -401,6 +425,7 @@ func GenericSome(recv, cb Value, thisArg ...Value) Value {
 // the callback's result is truthy for every element, stopping at the first that is
 // not.
 func GenericEvery(recv, cb Value, thisArg ...Value) Value {
+	requireArrayLikeThis(recv, "every")
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
 		if !arrayLikeHas(recv, k) {
@@ -418,6 +443,7 @@ func GenericEvery(recv, cb Value, thisArg ...Value) Value {
 // Unlike the hole-skipping methods, find visits a hole as undefined, so the callback
 // is called for every index in range.
 func GenericFind(recv, cb Value, thisArg ...Value) Value {
+	requireArrayLikeThis(recv, "find")
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
 		elem := arrayLikeGet(recv, k)
@@ -431,6 +457,7 @@ func GenericFind(recv, cb Value, thisArg ...Value) Value {
 // GenericFindIndex runs Array.prototype.findIndex on a generic receiver, returning
 // the index of the first element for which the callback's result is truthy, or -1.
 func GenericFindIndex(recv, cb Value, thisArg ...Value) Value {
+	requireArrayLikeThis(recv, "findIndex")
 	n := arrayLikeLen(recv)
 	for k := 0; k < n; k++ {
 		if ToBoolean(callBack(cb, recv, arrayLikeGet(recv, k), k)) {
@@ -444,6 +471,7 @@ func GenericFindIndex(recv, cb Value, thisArg ...Value) Value {
 // whether any element at or after fromIndex is SameValueZero-equal to target, so a
 // stored NaN is found where indexOf would miss it. The result boxes to a boolean.
 func GenericIncludes(recv, target Value, from ...Value) Value {
+	requireArrayLikeThis(recv, "includes")
 	n := arrayLikeLen(recv)
 	start := 0
 	if len(from) > 0 {
@@ -477,6 +505,7 @@ func GenericIncludes(recv, target Value, from ...Value) Value {
 // callback takes the four arguments the spec passes, the accumulator, the element,
 // its index as a number, and the receiver.
 func GenericReduce(recv, cb Value, initial ...Value) Value {
+	requireArrayLikeThis(recv, "reduce")
 	n := arrayLikeLen(recv)
 	k := 0
 	var acc Value
@@ -508,6 +537,7 @@ func GenericReduce(recv, cb Value, initial ...Value) Value {
 // value throws a TypeError. A hole is skipped, and the callback takes the
 // accumulator, the element, its index, and the receiver.
 func GenericReduceRight(recv, cb Value, initial ...Value) Value {
+	requireArrayLikeThis(recv, "reduceRight")
 	n := arrayLikeLen(recv)
 	k := n - 1
 	var acc Value
