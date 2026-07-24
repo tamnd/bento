@@ -16,13 +16,11 @@ func TestArrayBufferByteLength(t *testing.T) {
 	}
 }
 
-// TestArrayBufferBadLengthClamps proves a negative or not-a-number byte length
-// yields an empty buffer rather than panicking, the covered-subset rule the byte
-// buffer's constructor also takes.
-func TestArrayBufferBadLengthClamps(t *testing.T) {
-	if got := NewArrayBuffer(-4).ByteLength(); got != 0 {
-		t.Errorf("NewArrayBuffer(-4).ByteLength = %v, want 0", got)
-	}
+// TestArrayBufferBadLength proves the byte length runs through ToIndex: a negative
+// length throws a RangeError the way Node does, while a not-a-number length maps to
+// zero (ToIntegerOrInfinity(NaN) is 0, which is in range) and yields an empty buffer.
+func TestArrayBufferBadLength(t *testing.T) {
+	wantRangeError(t, "NewArrayBuffer(-4)", func() { NewArrayBuffer(-4) })
 	if got := NewArrayBuffer(nanValue()).ByteLength(); got != 0 {
 		t.Errorf("NewArrayBuffer(NaN).ByteLength = %v, want 0", got)
 	}
