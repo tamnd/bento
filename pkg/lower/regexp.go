@@ -170,6 +170,17 @@ func (r *Renderer) regExpMethodCall(recvNode frontend.Node, method string, argNo
 			name = "Test"
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
+	case "toString":
+		// re.toString() takes no argument and renders "/" + source + "/" + flags, the
+		// same literal form String(re) and a template substitution produce, so the
+		// method call and the coercion agree. An argument is ignored the way the built-in
+		// ignores extra arguments, but a call that passes one still lowers, since the
+		// method reads none.
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ToStringBStr")}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "RegExp.prototype." + method + " is a later slice"}
 	}

@@ -174,6 +174,22 @@ func TestRegExpAccessors(t *testing.T) {
 	}
 }
 
+// ToStringBStr renders the literal form RegExp.prototype.toString produces, "/" +
+// source + "/" + flags: a flagged pattern keeps its flags in canonical order, the
+// empty pattern shows its "(?:)" source so it round-trips, and an escaped slash stays
+// escaped in the source so the rendered literal would re-parse to the same regexp.
+func TestRegExpToStringBStr(t *testing.T) {
+	if got := NewRegExpLiteral("ab+c", "gi").ToStringBStr().ToGoString(); got != "/ab+c/gi" {
+		t.Fatalf("ToStringBStr() = %q, want /ab+c/gi", got)
+	}
+	if got := NewRegExpLiteral("", "").ToStringBStr().ToGoString(); got != "/(?:)/" {
+		t.Fatalf("empty ToStringBStr() = %q, want /(?:)/", got)
+	}
+	if got := NewRegExpLiteral("[\\/]+", "").ToStringBStr().ToGoString(); got != "/[\\/]+/" {
+		t.Fatalf("escaped ToStringBStr() = %q, want /[\\/]+/", got)
+	}
+}
+
 // A non-global exec returns the match array with the whole match at index 0, the
 // captures after it, the .index of the match, and the .input it ran against, and
 // returns null with no match. A non-global regexp never reads or writes lastIndex.

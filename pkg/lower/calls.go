@@ -4278,6 +4278,12 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 	case r.isBigInt(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{lowered}}, nil
+	case r.isRegExp(arg):
+		// A regexp stringifies through RegExp.prototype.toString, "/" + source + "/" +
+		// flags, the literal form the program wrote. The lowered expr is the *value.RegExp
+		// itself, so the method reads its own source and flags with no boxing, the same
+		// way .source and .flags read off the concrete receiver.
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("ToStringBStr")}}, nil
 	case r.isDynamic(arg):
 		// A dynamic argument defers the whole ToString to the value model,
 		// which dispatches on the runtime kind.

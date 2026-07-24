@@ -167,6 +167,16 @@ func (re *RegExp) Flags() BStr {
 	return FromGoString(string(b))
 }
 
+// ToStringBStr renders the regexp the way RegExp.prototype.toString does,
+// "/" + source + "/" + flags, so String(re), `${re}`, "" + re, and re.toString()
+// all read the literal form the program wrote. The source is the .source getter's
+// text, already "(?:)" for the empty pattern, and the flags are the canonical run
+// Flags builds, so /a/gi stringifies to "/a/gi" and // to "/(?:)/".
+func (re *RegExp) ToStringBStr() BStr {
+	slash := FromGoString("/")
+	return slash.ConcatN(re.source, slash, re.Flags())
+}
+
 // The single-flag accessors report each flag as a boolean, the reads .global,
 // .ignoreCase, and the rest make. They mirror the flags string Flags builds, one
 // getter per flag, so a program can test one flag without parsing the string.

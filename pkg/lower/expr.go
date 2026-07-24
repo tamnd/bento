@@ -2127,6 +2127,11 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 	case r.isBigInt(n):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{e}}, nil
+	case r.isRegExp(n):
+		// A regexp operand coerces through RegExp.prototype.toString, "/" + source + "/"
+		// + flags, the same literal form String(re) and a template substitution produce,
+		// so "x" + re reads off the concrete *value.RegExp with no boxing.
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToStringBStr")}}, nil
 	case r.isDynamic(n):
 		// A dynamic operand coerces at runtime through the value model's
 		// ToString, which routes an object or array through ToPrimitive the
