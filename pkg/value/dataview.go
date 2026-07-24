@@ -97,22 +97,25 @@ func (d *DataView) liveByteLength() (int, bool) {
 func (d *DataView) Buffer() *ArrayBuffer { return d.buffer }
 
 // ByteOffset is the byte the view starts at within its buffer, the .byteOffset
-// getter, a Number to match the property's type. An out-of-bounds view reports zero,
-// the value the spec's getter returns once the view's range no longer fits.
+// getter, a Number to match the property's type. The getter (25 §25.3.4.2) reads
+// the view's witness record and throws a TypeError when IsViewOutOfBounds is true,
+// so a detached buffer or a shrink that has dropped the view's range is a TypeError
+// here rather than a zero.
 func (d *DataView) ByteOffset() float64 {
 	if _, oob := d.liveByteLength(); oob {
-		return 0
+		Throw(NewTypeError(FromGoString("Cannot read byteOffset of a DataView whose buffer is detached or out of bounds")))
 	}
 	return float64(d.byteOffset)
 }
 
-// ByteLength is the view's span in bytes, the .byteLength getter, a Number. It
-// follows the buffer's live state: a length-tracking view reports its span over the
-// buffer's current size, and an out-of-bounds view reports zero.
+// ByteLength is the view's span in bytes, the .byteLength getter, a Number. The
+// getter (25 §25.3.4.1) throws a TypeError when the view is out of bounds, the same
+// witness check ByteOffset makes; a length-tracking view that still fits reports its
+// live span over the buffer's current size.
 func (d *DataView) ByteLength() float64 {
 	n, oob := d.liveByteLength()
 	if oob {
-		return 0
+		Throw(NewTypeError(FromGoString("Cannot read byteLength of a DataView whose buffer is detached or out of bounds")))
 	}
 	return float64(n)
 }
