@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -1158,6 +1159,19 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 			return nil, err
 		}
 		if ok {
+			// `"valueOf" in obj` and its siblings ask whether an Object.prototype method
+			// is present. Every ordinary object inherits Object.prototype, so the answer is
+			// true, but a prototype-less object (Object.create(null)) has no such property
+			// and answers false. bento stores both a default plain object and a null-proto
+			// object with a nil [[Prototype]] slot, so it cannot tell them apart and does
+			// not install Object.prototype's own methods, which would make InOperator answer
+			// false for the inherited name on an ordinary object, a wrong result. Until a
+			// real Object.prototype sentinel distinguishes the two, a `key in obj` whose key
+			// literally names an Object.prototype property hands back rather than emit that
+			// wrong answer, a safe decline.
+			if name, ok := r.staticStringKey(left); ok && isObjectProtoPropName(name) {
+				return nil, &NotYetLowerable{Reason: "an `in` test for an Object.prototype property needs a modeled default prototype, a later slice"}
+			}
 			key, err := r.boxOperand(left)
 			if err != nil {
 				return nil, err
@@ -1605,6 +1619,46 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 		return floatConstLit(f), nil
 	}
 	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, nil
+}
+
+// staticStringKey returns the compile-time string value of a string-literal node and
+// true, or false when the node is not a plain string literal the source spells with
+// matching quotes. It is the narrow read the `in` lowering makes to see whether a key
+// literally names a well-known property, so only an unescaped, unambiguously quoted
+// literal is decoded; anything else reports false and the caller takes its dynamic path.
+func (r *Renderer) staticStringKey(n frontend.Node) (string, bool) {
+	if n.Kind() != frontend.NodeStringLiteral && n.Kind() != frontend.NodeNoSubstitutionTemplateLiteral {
+		return "", false
+	}
+	text := r.prog.Text(n)
+	if len(text) < 2 {
+		return "", false
+	}
+	quote := text[0]
+	if (quote != '"' && quote != '\'' && quote != '`') || text[len(text)-1] != quote {
+		return "", false
+	}
+	units, ok := decodeJSString(text[1 : len(text)-1])
+	if !ok {
+		return "", false
+	}
+	return string(utf16.Decode(units)), true
+}
+
+// isObjectProtoPropName reports whether name is one of Object.prototype's own property
+// names, the fixed set every ordinary object inherits: the standard methods plus the
+// legacy accessor helpers and the constructor and __proto__ slots. An `in` test for one
+// of these depends on whether the receiver's prototype is the default Object.prototype
+// or an explicit null, a distinction bento's nil-slot model cannot yet make, so the
+// lowering hands back on a match rather than answer from an unmodeled prototype.
+func isObjectProtoPropName(name string) bool {
+	switch name {
+	case "constructor", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+		"toLocaleString", "toString", "valueOf", "__proto__",
+		"__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__":
+		return true
+	}
+	return false
 }
 
 // floatConstLit renders a finite float64 as a Go float literal, the folded form of a
