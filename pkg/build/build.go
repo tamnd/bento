@@ -201,9 +201,6 @@ func overridesFor(opts EmitOptions) frontend.ConfigOverrides {
 }
 
 func compileProgram(entry string, opts EmitOptions) (string, []string, error) {
-	if isJavaScript(entry) {
-		return "", nil, fmt.Errorf("bento build: %s: JavaScript entries are a later slice; the AOT path compiles TypeScript (.ts) today", entry)
-	}
 	// Resolve the entry's symlinks before loading so a build from a symlinked
 	// directory finds its sibling modules. The checker resolves a relative import
 	// against the entry's canonical directory, so an entry named through a symlink
@@ -211,7 +208,19 @@ func compileProgram(entry string, opts EmitOptions) (string, []string, error) {
 	// canonical path and miss the one beside the link. Canonicalizing here keeps the
 	// entry and its resolved siblings on one spelling for the whole build.
 	entry = canonicalPath(entry)
-	prog, err := frontend.Load(frontend.LoadOptions{Roots: []string{entry}, Overrides: overridesFor(opts)})
+	ov := overridesFor(opts)
+	// A JavaScript entry is admitted by turning allowJs on so the checker lists the
+	// .js file among the program's source files rather than parsing and dropping it.
+	// checkJs stays off, so the file is typed, its unannotated forms widening to any,
+	// without its JavaScript-specific diagnostics gating the build; the any-typed
+	// forms then ride the lowerer's existing dynamic value path, the same one an
+	// explicit `x: any` takes. This is what lets `bento build foo.js` compile a
+	// dynamic JavaScript module through the AOT pipeline.
+	if isJavaScript(entry) {
+		allowJS := true
+		ov.AllowJS = &allowJS
+	}
+	prog, err := frontend.Load(frontend.LoadOptions{Roots: []string{entry}, Overrides: ov})
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
