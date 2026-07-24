@@ -297,12 +297,14 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	// Map, a user iterator) is a later slice and hands back.
 	var elemsMethod string
 	var iter ast.Expr
+	liveLen := false
 	switch {
 	case r.argsObjName != "" && r.isArgumentsIdent(kids[1]):
 		elemsMethod = "Elems"
 		iter = ident(r.argsObjName)
 	case isArrayElem(r, kids[1]):
 		elemsMethod = "Elems"
+		liveLen = r.bodyMayResizeArray(kids[2])
 	case r.numericTypedArray(kids[1]):
 		// A numeric typed array is its own iterable, yielding each element as the
 		// Number a read hands out, so for...of ranges its widened elements the same
@@ -331,6 +333,16 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A plain array's for...of follows the array iterator, which re-reads the array's
+	// live length before each step and reads the element at the current index, so a
+	// body that pops or pushes changes what the loop visits: after a pop the shortened
+	// array ends the loop early, and a push extends it. Ranging a captured Elems slice
+	// would freeze the length at loop entry and visit stale elements, so the array case
+	// drives an index loop over the live Len with an AtI read. The string, typed-array,
+	// and arguments cases keep the range: their length does not change across the loop.
+	if liveLen {
+		return r.forOfArrayLiveLength(iter, dkids[0], name, body, kids[2]), nil
+	}
 	rng := &ast.RangeStmt{
 		X:    &ast.CallExpr{Fun: &ast.SelectorExpr{X: iter, Sel: ident(elemsMethod)}},
 		Body: body,
@@ -350,6 +362,97 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 		rng.Tok = token.DEFINE
 	}
 	return rng, nil
+}
+
+// bodyMayResizeArray reports whether the for...of body holds an operation that could
+// change an array's length while the loop runs: a call to a length-mutating method
+// (pop, push, shift, unshift, splice), an assignment to a `.length` property, or an
+// assignment through an element access (arr[i] = v), which grows the array when i is
+// past its end. It cannot prove the mutated array is the one being iterated, aliasing
+// is beyond a syntactic scan, so it fires on any such operation in the body: a false
+// positive only trades the readable range for the correct index loop, whereas missing
+// a real resize would freeze the length and visit stale elements. A body with none of
+// these keeps the fast `range Elems()` form, which every non-mutating for...of uses.
+// The scan descends through nested statements and expressions but stops at a function
+// boundary, whose body binds its own control flow and does not run in this loop's step.
+func (r *Renderer) bodyMayResizeArray(body frontend.Node) bool {
+	resizers := map[string]bool{"pop": true, "push": true, "shift": true, "unshift": true, "splice": true}
+	var walk func(node frontend.Node) bool
+	walk = func(node frontend.Node) bool {
+		switch node.Kind() {
+		case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression,
+			frontend.NodeMethodDeclaration, frontend.NodeGetAccessor,
+			frontend.NodeSetAccessor, frontend.NodeConstructor, frontend.NodeArrowFunction:
+			return false
+		case frontend.NodeCallExpression:
+			kids := r.prog.Children(node)
+			if len(kids) >= 1 && kids[0].Kind() == frontend.NodePropertyAccessExpression {
+				pk := r.prog.Children(kids[0])
+				if len(pk) == 2 && resizers[r.prog.Text(pk[1])] {
+					return true
+				}
+			}
+		case frontend.NodeBinaryExpression:
+			kids := r.prog.Children(node)
+			if len(kids) == 3 && isAssignOp(r.prog.Text(kids[1])) {
+				lhs := kids[0]
+				if lhs.Kind() == frontend.NodeElementAccessExpression {
+					return true
+				}
+				if lhs.Kind() == frontend.NodePropertyAccessExpression {
+					pk := r.prog.Children(lhs)
+					if len(pk) == 2 && r.prog.Text(pk[1]) == "length" {
+						return true
+					}
+				}
+			}
+		}
+		for _, c := range r.prog.Children(node) {
+			if walk(c) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(body)
+}
+
+// forOfArrayLiveLength lowers a plain array's for...of to an index loop that re-reads
+// the array's live length each step, the array iterator's contract: _arr := <iterable>;
+// for _i := 0; _i < int(_arr.Len()); _i++ { x := _arr.AtI(_i); <body> }. The iterable is
+// evaluated once into _arr, the object the iterator captures, and every step reads its
+// current Len and the element at the running index, so a body that shortens the array
+// (pop, shift, splice) stops the loop where the live length now ends and a body that
+// extends it (push) visits the appended elements. When the body never reads the loop
+// binding the element read is dropped, mirroring the range form's blank-value loop, but
+// the live Len still bounds the iteration. The whole loop sits in its own block so the
+// _arr and index temporaries do not leak into the surrounding scope.
+func (r *Renderer) forOfArrayLiveLength(iter ast.Expr, bindNode frontend.Node, name string, body *ast.BlockStmt, bodyNode frontend.Node) ast.Stmt {
+	arrTmp := r.freshTemp()
+	idxTmp := r.freshTemp()
+	loopBody := body
+	if r.bodyUsesName(bodyNode, r.prog.Text(bindNode)) && !r.bodyBlockShadows(bodyNode, r.prog.Text(bindNode)) {
+		read := &ast.AssignStmt{
+			Lhs: []ast.Expr{ident(name)},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(arrTmp), Sel: ident("AtI")}, Args: []ast.Expr{ident(idxTmp)}}},
+		}
+		loopBody = &ast.BlockStmt{List: append([]ast.Stmt{read}, body.List...)}
+	}
+	forStmt := &ast.ForStmt{
+		Init: &ast.AssignStmt{Lhs: []ast.Expr{ident(idxTmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{&ast.BasicLit{Kind: token.INT, Value: "0"}}},
+		Cond: &ast.BinaryExpr{
+			X:  ident(idxTmp),
+			Op: token.LSS,
+			Y:  &ast.CallExpr{Fun: ident("int"), Args: []ast.Expr{&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(arrTmp), Sel: ident("Len")}}}},
+		},
+		Post: &ast.IncDecStmt{X: ident(idxTmp), Tok: token.INC},
+		Body: loopBody,
+	}
+	return &ast.BlockStmt{List: []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(arrTmp)}, Tok: token.DEFINE, Rhs: []ast.Expr{iter}},
+		forStmt,
+	}}
 }
 
 // lowerForIn lowers for (const k in obj) over a dynamic object to a Go range loop,
