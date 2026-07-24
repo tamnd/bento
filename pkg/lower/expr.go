@@ -2142,6 +2142,17 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 	case r.isBigInt(n):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{e}}, nil
+	case r.prog.TypeAt(n).Flags == frontend.TypeUndefined && r.repeatableOperand(n):
+		// A value typed exactly undefined concatenates as "undefined" ("x" + undefined is
+		// "xundefined"). A reference to it lowers to the value.Undefined singleton, a
+		// value.Value, so it coerces through value.ToString the way a dynamic operand does,
+		// reading the singleton back as "undefined", rather than through boxOperand, which
+		// has no case for a static undefined type and would hand back. The repeatable gate
+		// keeps this to a reference; an undefined-returning call has no value to take. This
+		// is the concat sibling of the same case in stringify, so "x" + undefined and
+		// `${undefined}` agree.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
 	case r.isRegExp(n):
 		// A regexp operand coerces through RegExp.prototype.toString, "/" + source + "/"
 		// + flags, the same literal form String(re) and a template substitution produce,

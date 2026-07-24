@@ -1,0 +1,7 @@
+== stdout:
+v=undefined
+v=undefined
+undefined=v
+aundefinedb
+== exit:
+0
