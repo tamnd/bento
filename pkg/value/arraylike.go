@@ -20,6 +20,25 @@ import (
 // valid array length.
 const maxArrayLength = 1<<53 - 1
 
+// maxArrayCreateLength is 2^32 - 1, the largest length ArrayCreate accepts: a real
+// array's length is a Uint32, so ArraySpeciesCreate(O, len) throws a RangeError before
+// it allocates when len exceeds this, even though a generic length may range up to
+// 2^53 - 1. A method that materializes a new array of a length it read off the receiver
+// must apply this bound before it loops, or a length like 2^32 would drive an
+// unbounded allocation instead of the spec's throw.
+const maxArrayCreateLength = 1<<32 - 1
+
+// requireArrayCreateLength performs the ArrayCreate(length) bound check: a length past
+// 2^32 - 1 throws a RangeError before any element is created, matching the spec's
+// ArraySpeciesCreate step that fails fast rather than letting a huge length turn into a
+// runaway allocation. It returns the length so a caller can guard and bind in one line.
+func requireArrayCreateLength(n int) int {
+	if n > maxArrayCreateLength {
+		Throw(NewRangeError(FromGoString("Invalid array length")))
+	}
+	return n
+}
+
 // toLength coerces a value to an array length the way the spec's ToLength does:
 // ToNumber then truncate toward zero, a NaN or non-positive result clamping to 0
 // and an over-large result capping at 2^53 - 1. It is what a generic-receiver
@@ -308,6 +327,11 @@ func GenericSlice(recv Value, bounds ...Value) Value {
 	if len(bounds) > 1 {
 		end = relIndex(toIntegerValue(bounds[1]), n)
 	}
+	// slice builds its result through ArraySpeciesCreate(O, count), so a count past
+	// ArrayCreate's 2^32 - 1 bound throws a RangeError before any element is copied.
+	if end > start {
+		requireArrayCreateLength(end - start)
+	}
 	out := []Value{}
 	for k := start; k < end; k++ {
 		if !arrayLikeHas(recv, k) {
@@ -354,6 +378,10 @@ func GenericConcat(recv Value, items ...Value) Value {
 // array.
 func GenericMap(recv, cb Value, thisArg ...Value) Value {
 	n := arrayLikeLen(recv)
+	// ArraySpeciesCreate(O, len) runs before the first callback, so a length past
+	// ArrayCreate's 2^32 - 1 bound throws a RangeError here rather than driving an
+	// unbounded allocation and never calling cb.
+	requireArrayCreateLength(n)
 	out := make([]Value, n)
 	for k := 0; k < n; k++ {
 		if !arrayLikeHas(recv, k) {
