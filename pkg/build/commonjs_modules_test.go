@@ -86,6 +86,49 @@ func TestRequireCycle(t *testing.T) {
 	}
 }
 
+// TestRequireExportsFunction pins slice G0.3c: a module whose body declares a
+// top-level function and exports it lowers the function to a closure bound to a
+// loader local, so it captures the loader's module and exports the way the source
+// reads them. The entry calls the exported function through its boxed binding. Node
+// prints the sum the required function returns.
+func TestRequireExportsFunction(t *testing.T) {
+	got := buildAndRun(t, "main.js", map[string]string{
+		"dep.js":  "function add(a, b) { return a + b; }\nmodule.exports = add;\n",
+		"main.js": "const add = require('./dep');\nconsole.log(add(2, 3));\n",
+	})
+	if want := "5\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestRequireInternalHelper pins a module that declares two functions, one calling
+// the other, and exports only the outer on an exports object. The inner helper is a
+// loader local the outer closure captures, and a sibling reference resolves to it,
+// so the composed call runs both. Node prints the result of the two nested calls.
+func TestRequireInternalHelper(t *testing.T) {
+	got := buildAndRun(t, "main.js", map[string]string{
+		"dep.js":  "function sq(x) { return x * x; }\nfunction sumSq(a, b) { return sq(a) + sq(b); }\nmodule.exports = { sumSq };\n",
+		"main.js": "const m = require('./dep');\nconsole.log(m.sumSq(3, 4));\n",
+	})
+	if want := "25\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestRequireRecursiveExport pins a recursive exported function: the loader local
+// is declared before it is assigned so the closure can call itself, the same
+// two-step form a recursive named function expression takes. Node prints the
+// factorial the required function computes.
+func TestRequireRecursiveExport(t *testing.T) {
+	got := buildAndRun(t, "main.js", map[string]string{
+		"dep.js":  "function fac(n) { return n <= 1 ? 1 : n * fac(n - 1); }\nmodule.exports = fac;\n",
+		"main.js": "console.log(require('./dep')(5));\n",
+	})
+	if want := "120\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
 // TestRequireRunsBodyOnce pins the module cache: a module required more than once
 // runs its body a single time, and every require returns the one exports value. The
 // module logs from its body, so a body run twice would print twice; Node prints the

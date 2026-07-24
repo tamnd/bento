@@ -284,7 +284,13 @@ func (r *Renderer) lowerRequiredModuleBody(file frontend.Node) ([]ast.Stmt, bool
 	for _, stmt := range r.prog.Children(file) {
 		switch stmt.Kind() {
 		case frontend.NodeFunctionDeclaration:
-			return nil, false, &NotYetLowerable{Reason: "a required module with a top-level function declaration is a later slice"}
+			// A top-level function declaration in a module body lowers to a closure bound
+			// to a loader local, the nested-function path, so it captures the loader's
+			// module and exports locals the way the source's function reads them. It rides
+			// the body in source order; enterNestedFuncScope below registers its local for
+			// the whole body so a sibling call or value reference resolves to it, and hands
+			// the module back if the declaration is outside that path's lowerable subset.
+			pushStmt(stmt)
 		case frontend.NodeClassDeclaration:
 			return nil, false, &NotYetLowerable{Reason: "a required module with a top-level class declaration is a later slice"}
 		case frontend.NodeEnumDeclaration:
@@ -337,6 +343,34 @@ func (r *Renderer) lowerRequiredModuleBody(file frontend.Node) ([]ast.Stmt, bool
 	r.dynLocals = r.dynLocalsOf(nil, mainBody)
 	r.bigOwned = r.bigOwnedLocalsOf(mainBody)
 	r.strBuilders = nil
+
+	// A top-level function declaration in the module lowers as a nested function, a
+	// closure bound to a loader local that captures module and exports. That pass
+	// switches on a non-nil scopeParams, the set an enclosing function's parameters
+	// populate; a loader has no parameters, so an empty non-nil set switches the pass
+	// on with nothing to collide against. enterNestedFuncScope then registers each
+	// declaration for the whole body before any statement lowers, so a sibling call or
+	// value reference resolves to the Go local, and returns an error for a declaration
+	// outside the lowerable subset (async, generator, a forward reference) so the whole
+	// module hands back rather than emit a partial body.
+	// The dynamic-bound-local set is populated as a body lowers (a require of an
+	// object or function module marks its binding here), so it must start empty for
+	// each module body rather than inherit the entry's or a sibling module's marks. A
+	// name the entry bound dynamically, const dep = require('./dep'), would otherwise
+	// still read dynamic inside this module and box a same-named function reference as
+	// if it were a value slot. The set restores when the module body finishes.
+	prevDynBound := r.dynBoundLocals
+	r.dynBoundLocals = map[string]bool{}
+	defer func() { r.dynBoundLocals = prevDynBound }()
+
+	prevScopeParams := r.scopeParams
+	r.scopeParams = map[string]bool{}
+	defer func() { r.scopeParams = prevScopeParams }()
+	restoreNested, err := r.enterNestedFuncScope(mainBody)
+	if err != nil {
+		return nil, false, err
+	}
+	defer restoreNested()
 
 	hoistDecls, restoreHoist, err := r.enterVarHoistScope(mainBody)
 	if err != nil {

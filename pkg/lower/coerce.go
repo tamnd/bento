@@ -420,6 +420,15 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.callOfDynamicArrayElement(n) {
 		return true
 	}
+	// A call whose callee is a member access on a boxed receiver, m.fn(x) where m is a
+	// module's exports object bound as a value.Value, dispatches through the runtime
+	// Call and yields a value.Value. The checker types the call by the member's static
+	// return, a concrete type the box does not carry as that Go type, so the call reads
+	// as dynamic by shape here to keep the box on the dynamic path where the enclosing
+	// coercion unwraps it down to whatever static slot it flows into.
+	if r.callOfDynamicMember(n) {
+		return true
+	}
 	// A call to a user-defined overloaded function runs its all-dynamic implementation,
 	// whose Go func returns a value.Value. The checker narrows the call to the matched
 	// overload's return, a concrete type the box does not carry as that Go type, so the
@@ -734,6 +743,23 @@ func (r *Renderer) callOfDynamicArrayElement(n frontend.Node) bool {
 		return false
 	}
 	return r.dynamicArrayElemCallee(kids[0])
+}
+
+// callOfDynamicMember reports whether n is a call whose callee is a member access
+// on a dynamic receiver, m.fn(x) where m holds a boxed value.Value. The call
+// dispatch (calls.go) routes such a call through dynamicCall, which reads the member
+// with a runtime Get and invokes the result with Call, so the call yields a
+// value.Value the checker's member-return type does not describe as a Go type.
+func (r *Renderer) callOfDynamicMember(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	recv := r.prog.Children(kids[0])
+	return len(recv) == 2 && r.isDynamic(recv[0])
 }
 
 // dynamicArrayElemCallee reports whether calleeNode is an element read a[k] whose array
@@ -1144,7 +1170,12 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// a stringify take the box through value.ConsoleValue, which renders the undefined
 	// box as "undefined", rather than wrapping the box in value.ToString as the string
 	// type would otherwise drive.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src)
+	// A call whose callee is a member on a boxed receiver, m.fn(x) where m holds a
+	// module's exports object, dispatches through the runtime Call and yields a
+	// value.Value box even though the checker types the call by the member's static
+	// return, so recognizing it here lets a stringify or a console.log take the box
+	// straight through rather than handing it to a primitive coercer it cannot take.
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src)
 }
 
 // isDynamicValueLogical reports whether src is a value-returning && or || whose
