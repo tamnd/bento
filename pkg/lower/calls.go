@@ -4278,6 +4278,19 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 	case r.isBigInt(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{lowered}}, nil
+	case r.prog.TypeAt(arg).Flags == frontend.TypeUndefined && r.repeatableOperand(arg):
+		// A value typed exactly undefined stringifies to "undefined" (String(undefined),
+		// `${undefined}`, and console.log(undefined) all print it). A reference to such a
+		// value (the undefined literal, a binding read, a member read) lowers to the
+		// value.Undefined singleton, a value.Value, so it defers to value.ToString the way a
+		// dynamic argument does: ToString reads the undefined singleton back as "undefined".
+		// Routing through the evaluated expression rather than folding to the constant keeps
+		// the operand referenced, so a bare binding read stays used. The repeatable gate
+		// keeps this to a reference: an undefined-returning function call lowers to a Go
+		// statement-call with no value, which value.ToString cannot take, so it hands back
+		// through the default below.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
 	case r.isRegExp(arg):
 		// A regexp stringifies through RegExp.prototype.toString, "/" + source + "/" +
 		// flags, the literal form the program wrote. The lowered expr is the *value.RegExp
