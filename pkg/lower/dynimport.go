@@ -34,6 +34,13 @@ const dynImportComputedReason = "a dynamic import with a runtime-computed specif
 // with m a compile-time namespace.
 const dynImportStaticReason = "a dynamic import whose result is used as a value is a later slice"
 
+// importMetaPropertyCallReason marks a call whose callee is an import
+// meta-property, import.defer(...) or import.meta(...). bento lowers none of the
+// import meta-properties yet, and the callee carries no value binding, so the
+// call hands back here rather than fall through to a type query the checker
+// panics on for an unsupported meta-property.
+const importMetaPropertyCallReason = "a call on an import meta-property is a later slice"
+
 // dynamicImportCall recognizes a dynamic import() call and routes it to the
 // honest, clearly-reasoned outcome for its specifier form. It returns
 // handled=false when the callee is not the import keyword, so the caller keeps
@@ -42,7 +49,19 @@ const dynImportStaticReason = "a dynamic import whose result is used as a value 
 // line the call falls on, so a test reports honestly instead of miscompiling
 // through the function-value path.
 func (r *Renderer) dynamicImportCall(n frontend.Node, kids []frontend.Node) (ast.Expr, bool, error) {
-	if len(kids) == 0 || !isDynamicImportCallee(r.prog, kids[0]) {
+	if len(kids) == 0 {
+		return nil, false, nil
+	}
+	// An import meta-property callee, import.defer(...) or import.meta(...), is not a
+	// dynamic import() and has no value binding. bento lowers none of the import
+	// meta-properties, and asking the checker for the callee type panics on an
+	// unsupported meta-property (the checker's checkMetaProperty only handles
+	// import.meta and new.target), so intercept the callee here and hand back
+	// cleanly before any type query runs.
+	if isImportMetaPropertyCallee(r.prog, kids[0]) {
+		return nil, true, &NotYetLowerable{Reason: importMetaPropertyCallReason}
+	}
+	if !isDynamicImportCallee(r.prog, kids[0]) {
 		return nil, false, nil
 	}
 	// A specifier that is a string literal or a template with no substitutions is
@@ -61,6 +80,21 @@ func (r *Renderer) dynamicImportCall(n frontend.Node, kids []frontend.Node) (ast
 // is unambiguous.
 func isDynamicImportCallee(prog *frontend.Program, callee frontend.Node) bool {
 	return callee.Kind() == frontend.NodeUnknown && strings.TrimSpace(prog.Text(callee)) == "import"
+}
+
+// isImportMetaPropertyCallee reports whether a call's callee is an import
+// meta-property, import.defer or import.meta, the shape import.<name>(...) takes.
+// The frontend has no dedicated node for a meta-property, so it surfaces as the
+// fallback kind carrying the whole meta-property text, import.defer. A value
+// binding could never take a name that starts with the reserved import keyword
+// followed by a dot, so the match is unambiguous. Whitespace inside the
+// meta-property (import . defer) is normalized out before the prefix test.
+func isImportMetaPropertyCallee(prog *frontend.Program, callee frontend.Node) bool {
+	if callee.Kind() != frontend.NodeUnknown {
+		return false
+	}
+	text := strings.Join(strings.Fields(prog.Text(callee)), "")
+	return strings.HasPrefix(text, "import.")
 }
 
 // isStaticSpecifier reports whether a dynamic import's specifier argument is

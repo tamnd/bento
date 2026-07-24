@@ -135,6 +135,27 @@ f();
 	}
 }
 
+// TestImportMetaPropertyCallHandsBack pins that a call whose callee is an import
+// meta-property, import.defer(...), hands back cleanly with the meta-property
+// reason rather than crashing. The negative test262 syntax cases spell
+// import.defer() this way; before the guard the callee reached a checker type
+// query that panics on an unsupported meta-property. The classifier intercepts it
+// first so the unit is a safe handback, not a crash.
+func TestImportMetaPropertyCallHandsBack(t *testing.T) {
+	prog := compileWithSibling(t,
+		`import.defer("./mod");`,
+		`export function inc(n: number): number { return n + 1; }`)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(rootFile(t, prog, "/m.ts"))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	if nyl.Reason != importMetaPropertyCallReason {
+		t.Fatalf("reason = %q, want %q", nyl.Reason, importMetaPropertyCallReason)
+	}
+}
+
 // renderModulesSource assembles the entry source file at entryPath with every
 // other lowerable source as a composed dep, the way the build's entryAndDeps does,
 // and renders them to one Go program. It lets a module test build and run a
