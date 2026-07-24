@@ -114,6 +114,24 @@ func TestGetPrototype(t *testing.T) {
 	}
 }
 
+// TestProtoReadOwnShadowsPrototype proves obj.__proto__ returns an own "__proto__"
+// data property when the receiver carries one (JSON.parse installs it), shadowing the
+// inherited accessor, and otherwise falls through to the prototype. This is the read
+// side of JSON/parse/duplicate-proto.
+func TestProtoReadOwnShadowsPrototype(t *testing.T) {
+	proto := NewObject()
+	child := ObjectCreate(proto)
+	// No own __proto__: the read is the prototype, matching GetPrototype.
+	if got := child.ProtoRead(); got.ref != proto.ref {
+		t.Fatal("ProtoRead without an own __proto__ did not return the prototype")
+	}
+	// An own "__proto__" data property shadows the accessor and reads as itself.
+	child.Set(FromGoString("__proto__"), Number(2))
+	if got := child.ProtoRead(); got.scalar != Number(2).scalar {
+		t.Fatalf("ProtoRead with an own __proto__ = %v, want the own value 2", got)
+	}
+}
+
 // TestObjectCreatePrimitiveThrows proves Object.create rejects a prototype that is
 // neither an object nor null with a TypeError.
 func TestObjectCreatePrimitiveThrows(t *testing.T) {
