@@ -250,7 +250,15 @@ func (r *Renderer) memberLogicalAssign(target frontend.Node, op string, value fr
 	if err != nil {
 		return nil, true, err
 	}
-	store := &ast.ExprStmt{X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: recvStore, Sel: ident("Set")}, Args: []ast.Expr{key(), val}}}
+	// A strict-mode logical assignment that reaches the store throws on a failed
+	// write the same way a plain strict store does, so it routes through SetStrict;
+	// a sloppy program keeps the silent-drop Set. The guard short-circuits before
+	// the store when the operator does not assign, so only an attempted write throws.
+	setMethod := "Set"
+	if r.programStrict {
+		setMethod = "SetStrict"
+	}
+	store := &ast.ExprStmt{X: &ast.CallExpr{Fun: &ast.SelectorExpr{X: recvStore, Sel: ident(setMethod)}, Args: []ast.Expr{key(), val}}}
 	return &ast.IfStmt{Cond: cond, Body: &ast.BlockStmt{List: []ast.Stmt{store}}}, true, nil
 }
 
