@@ -2382,6 +2382,9 @@ func (r *Renderer) elemToBStr(elem frontend.Type, arg ast.Expr) (ast.Expr, error
 	case elem.Flags&frontend.TypeBoolean != 0:
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{arg}}, nil
+	case elem.Flags&frontend.TypeBigInt != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{arg}}, nil
 	case elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "JoinString"), Args: []ast.Expr{arg}}, nil
