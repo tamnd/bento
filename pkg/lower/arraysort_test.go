@@ -18,17 +18,17 @@ console.log(a.join(","));
 	}
 }
 
-// TestArraySortNoComparatorHandsBack pins that sort with no comparator defers:
-// the default order coerces every element to a string and compares by code
-// unit, a different element-to-string path that is its own later slice.
-func TestArraySortNoComparatorHandsBack(t *testing.T) {
+// TestArraySortNoComparatorLowers pins that sort with no comparator lowers to the
+// synthesized default string-order comparator rather than handing back: the default
+// order coerces every element to a string and compares by code unit.
+func TestArraySortNoComparatorLowers(t *testing.T) {
 	const src = `const a: number[] = [3, 1, 2];
 a.sort();
 console.log(a.join(","));
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "comparator") {
-		t.Errorf("sort no-comparator hand-back reason = %q, want it to mention comparator", reason)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".Sort(func(a, b") {
+		t.Errorf("sort with no comparator did not synthesize a default comparator:\n%s", source)
 	}
 }
 

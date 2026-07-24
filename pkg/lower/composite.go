@@ -2279,7 +2279,15 @@ func (r *Renderer) arraySort(recvNode frontend.Node, argNodes []frontend.Node) (
 // an inline two-parameter arrow is a later slice, the same limits sort had.
 func (r *Renderer) arraySortMethod(recvNode frontend.Node, goMethod string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) == 0 {
-		return nil, &NotYetLowerable{Reason: "array " + goMethod + " without a comparator needs the default string-order sort, a later slice"}
+		cmp, err := r.defaultSortComparator(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{cmp}}, nil
 	}
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array " + goMethod + " with a comparator that is not an inline arrow function is a later slice"}
@@ -2305,35 +2313,79 @@ func (r *Renderer) arraySortMethod(recvNode frontend.Node, goMethod string, argN
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{cmp}}, nil
 }
 
+// defaultSortComparator synthesizes the comparator sort and toSorted use when the
+// call gives none. JavaScript's default order coerces every element to a string and
+// compares two elements by UTF-16 code unit, so [10, 9, 100, 1] orders as
+// 1, 10, 100, 9 (lexicographically, not numerically). It builds
+//
+//	func(a, b T) float64 { return float64(<a as string>.Compare(<b as string>)) }
+//
+// reading each element to a value.BStr the same way join does (elemToBStr) and
+// comparing with value.BStr.Compare, which returns -1/0/1 by code unit. An element
+// type whose ToString would run user code hands back, the same boundary join draws.
+func (r *Renderer) defaultSortComparator(recvNode frontend.Node) (ast.Expr, error) {
+	elemGo, ok := r.arrayElem(recvNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array default-order sort on a receiver whose element type did not lower"}
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array default-order sort could not read its element type"}
+	}
+	lhs, err := r.elemToBStr(elem, ident("a"))
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := r.elemToBStr(elem, ident("b"))
+	if err != nil {
+		return nil, err
+	}
+	compare := &ast.CallExpr{Fun: &ast.SelectorExpr{X: lhs, Sel: ident("Compare")}, Args: []ast.Expr{rhs}}
+	body := &ast.ReturnStmt{Results: []ast.Expr{&ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{compare}}}}
+	params := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("a"), ident("b")}, Type: elemGo}}}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: ident("float64")}}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{body}},
+	}, nil
+}
+
 // stringifyClosure builds the func(T) value.BStr the join method takes, spelling
 // out the element-type ToString. It mirrors stringify but over a synthesized
 // parameter rather than a node: a number goes through value.NumberToString, a
 // boolean through value.BoolToString, and a string is returned as is. Any other
 // element type, whose ToString would run user code, hands back.
 func (r *Renderer) stringifyClosure(elem frontend.Type, elemGo ast.Expr) (ast.Expr, error) {
-	var body ast.Expr
-	switch {
-	case elem.Flags&frontend.TypeString != 0:
-		body = ident("x")
-	case elem.Flags&frontend.TypeNumber != 0:
-		r.requireImport(valuePkg)
-		body = &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{ident("x")}}
-	case elem.Flags&frontend.TypeBoolean != 0:
-		r.requireImport(valuePkg)
-		body = &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{ident("x")}}
-	case elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
-		// A dynamic element is a boxed value.Value, so join runs the abstract
-		// ToString on each one at runtime, with join's own rule that undefined and
-		// null become the empty string. This is the shape the assert prelude's
-		// compareArray.format reaches through Array.prototype.map.call(...).join.
-		r.requireImport(valuePkg)
-		body = &ast.CallExpr{Fun: sel("value", "JoinString"), Args: []ast.Expr{ident("x")}}
-	default:
-		return nil, &NotYetLowerable{Reason: "array join on an element type without a value ToString is a later slice"}
+	body, err := r.elemToBStr(elem, ident("x"))
+	if err != nil {
+		return nil, err
 	}
 	params := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("x")}, Type: elemGo}}}
 	return &ast.FuncLit{
 		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "BStr")}}}},
 		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{body}}}},
 	}, nil
+}
+
+// elemToBStr spells out the element-type ToString over an already-lowered operand,
+// producing a value.BStr: a number goes through value.NumberToString, a boolean
+// through value.BoolToString, a string is returned as is, and a dynamic element runs
+// the abstract JoinString (undefined and null become the empty string). Any other
+// element type, whose ToString would run user code, hands back. Both join's
+// per-element closure and sort's default-order comparator read elements this way.
+func (r *Renderer) elemToBStr(elem frontend.Type, arg ast.Expr) (ast.Expr, error) {
+	switch {
+	case elem.Flags&frontend.TypeString != 0:
+		return arg, nil
+	case elem.Flags&frontend.TypeNumber != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{arg}}, nil
+	case elem.Flags&frontend.TypeBoolean != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{arg}}, nil
+	case elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "JoinString"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "coercing this array element type to a string is a later slice"}
+	}
 }
