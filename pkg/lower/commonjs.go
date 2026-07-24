@@ -47,6 +47,7 @@ func (r *Renderer) filenameLit(n frontend.Node) ast.Expr {
 const (
 	bentoModuleName  = "bentoModule"
 	bentoExportsName = "bentoExports"
+	bentoRequireName = "bentoRequire"
 )
 
 // isCommonJSModuleGlobal reports whether n is a reference to the CommonJS module
@@ -110,40 +111,64 @@ func (r *Renderer) exportsRef() ast.Expr {
 	return ident(bentoExportsName)
 }
 
-// commonjsModuleDecls returns the package-level declarations that back the module
-// and exports globals, or nil when the program named neither. The exports object
-// is declared first and the module object holds it under the exports property, so
-// the two names reach one object at program start; Go orders the two package vars
-// by the dependency between them.
+// requireRef lowers a bare require reference to the package-level require function
+// value, flagging that it must be emitted. require is typed any, so a call
+// require(specifier) lowers through the dynamic call path from the function value
+// this returns, and typeof require reads "function" off it; only the bare name is
+// modeled here.
+func (r *Renderer) requireRef() ast.Expr {
+	r.usesCommonJSRequire = true
+	return ident(bentoRequireName)
+}
+
+// commonjsModuleDecls returns the package-level declarations that back the module,
+// exports, and require globals, or nil when the program named none of them. The
+// exports object is declared first and the module object holds it under the
+// exports property, so the two names reach one object at program start; Go orders
+// the two package vars by the dependency between them. The require function value
+// is independent and emitted whenever require was named, even by a module that
+// never touched module or exports.
 func (r *Renderer) commonjsModuleDecls() []ast.Decl {
-	if !r.usesCommonJSModule {
-		return nil
-	}
-	r.requireImport(valuePkg)
-	exportsVar := &ast.GenDecl{
-		Tok: token.VAR,
-		Specs: []ast.Spec{&ast.ValueSpec{
-			Names:  []*ast.Ident{ident(bentoExportsName)},
-			Values: []ast.Expr{&ast.CallExpr{Fun: sel("value", "NewObject")}},
-		}},
-	}
-	moduleVar := &ast.GenDecl{
-		Tok: token.VAR,
-		Specs: []ast.Spec{&ast.ValueSpec{
-			Names: []*ast.Ident{ident(bentoModuleName)},
-			Values: []ast.Expr{&ast.CallExpr{
-				Fun: &ast.SelectorExpr{
-					X:   &ast.CallExpr{Fun: sel("value", "NewObject")},
-					Sel: ident("Set"),
-				},
-				Args: []ast.Expr{
-					r.goStringValue("exports"),
-					ident(bentoExportsName),
-				},
+	var decls []ast.Decl
+	if r.usesCommonJSModule {
+		r.requireImport(valuePkg)
+		exportsVar := &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names:  []*ast.Ident{ident(bentoExportsName)},
+				Values: []ast.Expr{&ast.CallExpr{Fun: sel("value", "NewObject")}},
 			}},
-		}},
+		}
+		moduleVar := &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names: []*ast.Ident{ident(bentoModuleName)},
+				Values: []ast.Expr{&ast.CallExpr{
+					Fun: &ast.SelectorExpr{
+						X:   &ast.CallExpr{Fun: sel("value", "NewObject")},
+						Sel: ident("Set"),
+					},
+					Args: []ast.Expr{
+						r.goStringValue("exports"),
+						ident(bentoExportsName),
+					},
+				}},
+			}},
+		}
+		decls = append(decls, exportsVar, moduleVar)
 	}
-	return []ast.Decl{exportsVar, moduleVar}
+	if r.usesCommonJSRequire {
+		r.requireImport(valuePkg)
+		requireVar := &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names:  []*ast.Ident{ident(bentoRequireName)},
+				Values: []ast.Expr{&ast.CallExpr{Fun: sel("value", "RequireFunc")}},
+			}},
+		}
+		decls = append(decls, requireVar)
+	}
+	return decls
 }
 
 // goStringValue builds the AST for the value.BStr of a Go string known at lower

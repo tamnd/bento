@@ -26,7 +26,10 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // either resolves the same absolute path Node hands its wrapper. module and
 // exports are the CommonJS export globals, typed any so a read of module.exports
 // or a write of exports.x lowers through the dynamic member path; the lowerer
-// backs them with a package-level module object. The node:fs, node:os, and node:path module declarations give the file
+// backs them with a package-level module object. require is the CommonJS loader
+// global, typed any so typeof require is "function" and a require(specifier) call
+// lowers through the dynamic call path; the lowerer backs it with a package-level
+// require function value. The node:fs, node:os, and node:path module declarations give the file
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a
@@ -46,6 +49,7 @@ declare var __dirname: string;
 declare var __filename: string;
 declare var module: any;
 declare var exports: any;
+declare var require: any;
 declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;

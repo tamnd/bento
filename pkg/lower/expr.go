@@ -143,6 +143,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 			}
 			return r.exportsRef(), nil
 		}
+		// require is the CommonJS loader global. It reads as a package-level function
+		// value the program emits once, so typeof require is "function" and a call
+		// require(specifier) lowers through the dynamic call path from that value. It is
+		// a plain ambient any (not subject to the export inference module and exports
+		// take), so isGlobalRef settles it. Left to fall through, the name would hit the
+		// ambient-global handback below and emit an undefined Go identifier.
+		if r.isGlobalRef(n, "require") {
+			return r.requireRef(), nil
+		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
 		// has no generated Go behind its name, so capitalizing the source name would

@@ -382,6 +382,12 @@ type Renderer struct {
 	// module.exports = v reassigns the property without moving the alias, the divergence
 	// Node's wrapper has. A program that names neither global emits no such state.
 	usesCommonJSModule bool
+	// usesCommonJSRequire records that the program read the CommonJS require wrapper
+	// global, so the assembled program emits the package-level require function value
+	// (see commonjs.go). It is independent of usesCommonJSModule: a module can call
+	// require without ever touching module or exports, and one that does emits the
+	// require function alone.
+	usesCommonJSRequire bool
 	// tmpSeq is a monotonic counter the lowerer draws generated temporary names from,
 	// for the places a single source construct needs a Go local with no source name:
 	// the element a destructuring for...of binds before it reads each position out of

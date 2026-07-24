@@ -214,6 +214,18 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Function" && r.isAmbientGlobal(kids[0]) {
 		return nil, &NotYetLowerable{Reason: "a Function built from a source string is eval, deferred to phase 11"}
 	}
+	// require(specifier) calls the CommonJS loader. require is an ambient global, so
+	// it would hand back with the generic reason below, but the lowerer backs it with
+	// a package-level function value (requireRef), so the call routes through the
+	// dynamic call path: the callee lowers to bentoRequire and each argument boxes,
+	// giving bentoRequire.Call(specifier). The declared-parameter call path cannot
+	// carry the argument because require is typed any and has no signature to bind it
+	// against, so every argument would drop; the dynamic path passes them by value.
+	// The loader itself throws "Cannot find module" until the module system lands, so
+	// only the call shape is built here, not the resolution.
+	if r.isGlobalRef(kids[0], "require") {
+		return r.dynamicCall(kids[0], kids[1:])
+	}
 	// A bare call to any other ambient global (eval, and the globals whose lowering
 	// is a later slice) is not a user binding and has no generated Go function to
 	// stand behind it. The user-function path below would emit a call to the name's

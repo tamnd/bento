@@ -567,7 +567,7 @@ func (r *Renderer) checkMangleCollisions(entry frontend.Node) error {
 		// the synthetic var, so the unit hands back rather than emit a redeclaration. A
 		// reference to the module or exports global itself never reaches here as its own
 		// text, since those spell module and exports, not the reserved Go names.
-		if m, ok := localName(t); ok && (m == bentoModuleName || m == bentoExportsName) {
+		if m, ok := localName(t); ok && (m == bentoModuleName || m == bentoExportsName || m == bentoRequireName) {
 			return &NotYetLowerable{Reason: "the CommonJS module object reserves the Go name " + m + ", which " + t + " takes"}
 		}
 	}
