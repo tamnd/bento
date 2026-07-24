@@ -64,6 +64,51 @@ func TestResolveDirectoryIndex(t *testing.T) {
 	}
 }
 
+func TestResolveDirectoryIndexPrefersCJSForRequire(t *testing.T) {
+	// A directory holding both index.js and index.mjs must resolve to index.js
+	// for a CommonJS require and to index.mjs for an ESM import, matching Node:
+	// require never picks the ESM-only file.
+	fs := newMemFS().
+		add("/app/index.js", "").
+		add("/app/lib/index.js", "").
+		add("/app/lib/index.mjs", "")
+	r := newTestResolver(fs, true)
+
+	cjs, err := r.Resolve("./lib", parentCJS("/app/index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cjs.Path != "/app/lib/index.js" {
+		t.Errorf("require path = %q, want /app/lib/index.js", cjs.Path)
+	}
+
+	esm, err := r.Resolve("./lib", parentESM("/app/index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if esm.Path != "/app/lib/index.mjs" {
+		t.Errorf("import path = %q, want /app/lib/index.mjs", esm.Path)
+	}
+}
+
+func TestResolveExtensionSearchPrefersCJSForRequire(t *testing.T) {
+	// The same rule applies to extensionless file resolution: require('./util')
+	// prefers util.js over util.mjs.
+	fs := newMemFS().
+		add("/app/index.js", "").
+		add("/app/util.js", "").
+		add("/app/util.mjs", "")
+	r := newTestResolver(fs, true)
+
+	got, err := r.Resolve("./util", parentCJS("/app/index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "/app/util.js" {
+		t.Errorf("require path = %q, want /app/util.js", got.Path)
+	}
+}
+
 func TestResolveStrictESMNoSearch(t *testing.T) {
 	fs := newMemFS().add("/app/index.mjs", "").add("/app/util.js", "")
 	r := newTestResolver(fs, false) // not dev: strict ESM
