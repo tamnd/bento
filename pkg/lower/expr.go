@@ -543,6 +543,16 @@ func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, tr
 	if r.isOptionalType(target) {
 		return r.conditionalOptional(cond, whenTrue, trueNode, whenFalse, falseNode, target)
 	}
+	// A ternary whose whole-expression type is dynamic (any or unknown), the shape a
+	// branch reading an any-typed value gives: `i >= 0 ? arguments[i] : fallback`
+	// types as any because arguments[i] is any, so the checker absorbs the other
+	// branch rather than forming a tagged sum. No union spells it, so each branch
+	// bridges to a value.Value the way an argument crossing into an any parameter
+	// does, a static branch boxing and a dynamic branch passing through, and the IIFE
+	// returns value.Value.
+	if target.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return r.conditionalDynamic(cond, whenTrue, trueNode, whenFalse, falseNode, target)
+	}
 	info, ok := r.unionInfoOrIntern(target)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "conditional whose branches are not both the same primitive type needs a union, a later slice"}
@@ -566,6 +576,42 @@ func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, tr
 				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{trueWrapped}}}},
 			},
 			&ast.ReturnStmt{Results: []ast.Expr{falseWrapped}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
+}
+
+// conditionalDynamic lowers a ternary whose whole-expression type is dynamic (any
+// or unknown) into an IIFE returning value.Value, bridging each branch to the
+// dynamic target the same way an argument crosses into an any parameter: a static
+// branch boxes through boxStaticToDynamic and a branch already dynamic passes
+// through. It is the any-typed sibling of conditionalUnion, reached when one branch
+// reads an any-typed value (an arguments element, a member off a boxed receiver) so
+// the checker types the whole ternary any and no tagged sum can spell it. A branch
+// bridgeArg cannot cross, an array or shape mismatch against the dynamic slot, hands
+// back through bridgeArg with its own reason. The condition and both branches are
+// already lowered by the caller.
+func (r *Renderer) conditionalDynamic(cond, whenTrue ast.Expr, trueNode frontend.Node, whenFalse ast.Expr, falseNode frontend.Node, target frontend.Type) (ast.Expr, error) {
+	trueBoxed, err := r.bridgeArg(whenTrue, trueNode, target)
+	if err != nil {
+		return nil, err
+	}
+	falseBoxed, err := r.bridgeArg(whenFalse, falseNode, target)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: cond,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{trueBoxed}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{falseBoxed}},
 		}},
 	}
 	return &ast.CallExpr{Fun: lit}, nil
