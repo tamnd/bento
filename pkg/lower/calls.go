@@ -561,9 +561,9 @@ func (r *Renderer) funcNodeReadsArguments(fn frontend.Node) bool {
 	if !ok {
 		return false
 	}
-	reads, supported := false, true
+	reads, supported, indexed := false, true, false
 	for _, stmt := range r.prog.Children(block) {
-		r.scanArguments(stmt, &reads, &supported)
+		r.scanArguments(stmt, &reads, &supported, &indexed)
 	}
 	return reads
 }

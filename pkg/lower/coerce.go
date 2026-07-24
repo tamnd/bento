@@ -2273,9 +2273,9 @@ func (r *Renderer) boxMethodClosure(m frontend.Node) (ast.Expr, error) {
 	if subtreeHasKind(r.prog, block, frontend.NodeThisKeyword) {
 		return nil, &NotYetLowerable{Reason: "boxing an object method that reads this is a later slice"}
 	}
-	var reads bool
+	var reads, indexed bool
 	supported := true
-	r.scanArguments(block, &reads, &supported)
+	r.scanArguments(block, &reads, &supported, &indexed)
 	if reads {
 		return nil, &NotYetLowerable{Reason: "boxing an object method that reads arguments is a later slice"}
 	}

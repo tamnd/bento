@@ -31,9 +31,9 @@ func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.
 	if !ok {
 		return nil, "", false, false, nil
 	}
-	reads, supported := false, true
+	reads, supported, indexed := false, true, false
 	for _, stmt := range r.prog.Children(block) {
-		r.scanArguments(stmt, &reads, &supported)
+		r.scanArguments(stmt, &reads, &supported, &indexed)
 	}
 	if !reads {
 		return nil, "", false, false, nil
@@ -51,15 +51,19 @@ func (r *Renderer) argumentsPlan(fn frontend.Node, sig frontend.Signature) (ast.
 	if sig.MinArgs != len(sig.Params) {
 		return nil, "", false, false, &NotYetLowerable{Reason: "arguments in a function with an omittable parameter needs the call-site arity, a later slice"}
 	}
-	// A body that stores into a named parameter makes the sloppy mapped-arguments
-	// aliasing observable: in a mapped arguments object arguments[i] tracks its
-	// parameter, so a rebind of the parameter changes arguments[i] and a write to
-	// arguments[i] changes the parameter. The entry snapshot boxes each parameter's
-	// original value once and cannot mirror a later store, so a read of arguments
-	// alongside a write to a parameter hands back rather than emit a store that stays
-	// frozen on the boxed original.
-	if r.bodyWritesParam(block, sig.Params) {
-		return nil, "", false, false, &NotYetLowerable{Reason: "arguments alongside a write to a named parameter needs the mapped store, a later slice"}
+	// A body that reads an arguments ELEMENT (arguments[i] or for..of arguments) and
+	// also stores into a named parameter makes the sloppy mapped-arguments aliasing
+	// observable: in a mapped arguments object arguments[i] tracks its parameter, so a
+	// rebind of the parameter changes arguments[i]. The entry snapshot boxes each
+	// parameter's original value once and cannot mirror a later store, so an element
+	// read alongside a parameter write hands back rather than emit a store frozen on
+	// the boxed original. A length-only read needs no such guard: arguments.length is
+	// fixed by the call arity and does not track a parameter write in either the mapped
+	// or the unmapped object, so it is faithful against the snapshot regardless. This
+	// is the shape node:assert's fail() reaches, `if (arguments.length === 1) { message
+	// = actual; ... }`, a length test guarding writes to its named parameters.
+	if indexed && r.bodyWritesParam(block, sig.Params) {
+		return nil, "", false, false, &NotYetLowerable{Reason: "arguments element read alongside a write to a named parameter needs the mapped store, a later slice"}
 	}
 	// Each parameter is boxed into the store, so each must lower to a plain Go local
 	// whose static type boxes into a value.Value. A destructured parameter has no
@@ -191,8 +195,10 @@ func (r *Renderer) bodyWritesParam(n frontend.Node, params []frontend.Param) boo
 // does not stop at an arrow, which has no arguments of its own and reads the
 // enclosing function's, so an arrow's read counts toward this body. A bare
 // reference to arguments that no backed shape consumed marks the body unsupported,
-// so the plan hands the whole function back.
-func (r *Renderer) scanArguments(n frontend.Node, reads, supported *bool) {
+// so the plan hands the whole function back. It sets indexed when a read observes an
+// arguments ELEMENT (arguments[i] or for..of arguments), the reads whose value tracks
+// a mapped parameter; a length-only read leaves indexed false.
+func (r *Renderer) scanArguments(n frontend.Node, reads, supported, indexed *bool) {
 	switch n.Kind() {
 	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression,
 		frontend.NodeMethodDeclaration, frontend.NodeGetAccessor,
@@ -217,31 +223,33 @@ func (r *Renderer) scanArguments(n frontend.Node, reads, supported *bool) {
 		if len(kids) == 2 {
 			// Descend only into the receiver: the name child is a property key, never a
 			// value reference to the arguments object.
-			r.scanArguments(kids[0], reads, supported)
+			r.scanArguments(kids[0], reads, supported, indexed)
 			return
 		}
 	case frontend.NodeElementAccessExpression:
 		kids := r.prog.Children(n)
 		if len(kids) == 2 && r.isArgumentsIdent(kids[0]) {
 			*reads = true
+			*indexed = true
 			// The receiver is the arguments object, backed by the store; scan only the
 			// index expression, which is an ordinary read.
-			r.scanArguments(kids[1], reads, supported)
+			r.scanArguments(kids[1], reads, supported, indexed)
 			return
 		}
 	case frontend.NodeForOfStatement:
 		kids := r.prog.Children(n)
 		if len(kids) == 3 && r.isArgumentsIdent(kids[1]) {
 			*reads = true
+			*indexed = true
 			// The iterable is the arguments object, ranged over the store; scan the loop
 			// binding and body but not the iterable identifier.
-			r.scanArguments(kids[0], reads, supported)
-			r.scanArguments(kids[2], reads, supported)
+			r.scanArguments(kids[0], reads, supported, indexed)
+			r.scanArguments(kids[2], reads, supported, indexed)
 			return
 		}
 	}
 	for _, c := range r.prog.Children(n) {
-		r.scanArguments(c, reads, supported)
+		r.scanArguments(c, reads, supported, indexed)
 	}
 }
 
