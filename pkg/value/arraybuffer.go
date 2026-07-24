@@ -1,6 +1,49 @@
 package value
 
-import "unsafe"
+import (
+	"math"
+	"unsafe"
+)
+
+// maxAllocByteLength is the largest byte length bento will allocate for a buffer's
+// backing store. ToIndex admits lengths up to 2^53-1, but a Data Block that large
+// cannot be created, so AllocateArrayBuffer's CreateByteDataBlock step throws a
+// RangeError above this limit (25 §6.2.9.1 and §25.1.3.1). The limit sits far above
+// any buffer a program realistically builds and far below Go's own allocation
+// ceiling, so an over-large request throws the spec's RangeError instead of driving
+// a makeslice panic or an out-of-memory abort.
+const maxAllocByteLength = 1 << 40 // 1 TiB
+
+// toIndex converts a JavaScript Number to a Go byte count, the ToIndex operation
+// (25 §7.1.22): it truncates toward zero and throws a RangeError when the result is
+// negative or exceeds 2^53-1. NaN maps to 0, which is in range, and a positive
+// infinity exceeds the ceiling and throws. It is the length rule ArrayBuffer's
+// constructor, resize, and transfer share for every byte-length argument, the reason
+// `new ArrayBuffer(-1)`, `new ArrayBuffer(2**53)`, and `new ArrayBuffer(Infinity)`
+// all throw a RangeError the way Node does. The bound is checked on the float before
+// the int conversion, so an infinity never reaches int(), whose result is undefined.
+func toIndex(v float64) int {
+	if v != v {
+		return 0
+	}
+	i := math.Trunc(v)
+	if i < 0 || i > maxSafeInteger {
+		Throw(NewRangeError(FromGoString("Invalid array buffer length")))
+	}
+	return int(i)
+}
+
+// requireAllocatable is CreateByteDataBlock's allocation check: it throws a RangeError
+// when n exceeds maxAllocByteLength and returns n otherwise. A resizable buffer reserves
+// its maximum up front the way V8 does, so its maxByteLength runs through here even when
+// the initial length is zero, matching the RangeError Node throws for a 7 PiB
+// maxByteLength option.
+func requireAllocatable(n int) int {
+	if n > maxAllocByteLength {
+		Throw(NewRangeError(FromGoString("Array buffer allocation failed")))
+	}
+	return n
+}
 
 // ArrayBuffer is bento's runtime representation of a JavaScript ArrayBuffer, the
 // raw byte backing store a typed array or a DataView views (25 §6.2 and §25.1). It
@@ -32,12 +75,12 @@ type ArrayBuffer struct {
 }
 
 // NewArrayBuffer builds a zeroed buffer of the given byte length, the lowering of
-// `new ArrayBuffer(n)`. The length is a Number, so it arrives as a float64 and is
-// truncated toward zero the way ToIndex does; a negative or not-a-number length
-// clamps to zero here rather than throwing, the same covered-subset rule the byte
-// buffer's constructor takes, with the RangeError a later slice.
+// `new ArrayBuffer(n)`. The length runs through ToIndex, so a negative length, a
+// non-integer past 2^53-1, or an infinity throws a RangeError before any allocation,
+// and CreateByteDataBlock's allocation limit throws a RangeError for a length too
+// large to back, matching the throws Node raises rather than clamping or panicking.
 func NewArrayBuffer(byteLength float64) *ArrayBuffer {
-	return &ArrayBuffer{data: allocBytes(typedLen(byteLength))}
+	return &ArrayBuffer{data: allocBytes(requireAllocatable(toIndex(byteLength)))}
 }
 
 // NewResizableArrayBuffer builds a resizable buffer of the given byte length that may
@@ -48,11 +91,12 @@ func NewArrayBuffer(byteLength float64) *ArrayBuffer {
 // backing run is sized to the initial length, not the maximum, and resize reallocates
 // it, so an unused max costs no storage.
 func NewResizableArrayBuffer(byteLength float64, maxByteLength float64) *ArrayBuffer {
-	n := typedLen(byteLength)
-	max := typedLen(maxByteLength)
+	n := toIndex(byteLength)
+	max := toIndex(maxByteLength)
 	if n > max {
 		Throw(NewRangeError(FromGoString("ArrayBuffer byte length exceeds its maxByteLength")))
 	}
+	requireAllocatable(max)
 	return &ArrayBuffer{data: allocBytes(n), resizable: true, maxByteLength: max}
 }
 
@@ -69,7 +113,7 @@ func (b *ArrayBuffer) Resize(newLength float64) {
 	if !b.resizable {
 		Throw(NewTypeError(FromGoString("Cannot resize a non-resizable ArrayBuffer")))
 	}
-	n := typedLen(newLength)
+	n := toIndex(newLength)
 	if n > b.maxByteLength {
 		Throw(NewRangeError(FromGoString("ArrayBuffer resize length exceeds its maxByteLength")))
 	}
@@ -137,7 +181,7 @@ func (b *ArrayBuffer) transfer(newLength []float64) *ArrayBuffer {
 	}
 	n := len(b.data)
 	if len(newLength) > 0 {
-		n = typedLen(newLength[0])
+		n = requireAllocatable(toIndex(newLength[0]))
 	}
 	out := &ArrayBuffer{data: allocBytes(n)}
 	copy(out.data, b.data)
