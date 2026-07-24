@@ -74,6 +74,17 @@ func JSONStringify(v any) BStr {
 	return FromGoString(b.String())
 }
 
+// JSONStringifyUndefined is JSON.stringify of a top-level value whose JSON form is
+// undefined: a function, a symbol, or undefined itself. SerializeJSONProperty returns
+// the value undefined for these, not a string, so the lowering emits this in place of
+// JSONStringify when the argument's static type is one of those shapes. The argument
+// is still passed (and so evaluated for its side effects, matching the spec order that
+// evaluates the argument before the call) but does not affect the undefined result.
+func JSONStringifyUndefined(v any) Value {
+	_ = v
+	return Undefined
+}
+
 // encodeJSON writes one value's JSON text to b. It dispatches on the concrete Go
 // type the lowering produces for each JavaScript type: a BStr is a quoted string,
 // a float64 is a JavaScript number, a bool is true or false, a *Array is a
@@ -197,6 +208,14 @@ func jsonToJSONGo(v any) (any, bool) {
 func jsonUndefinedGo(v any) bool {
 	if v == nil {
 		return true
+	}
+	// A statically typed slot may still hold a boxed value: a symbol[] element and an
+	// any-typed field both reach the walk as a value.Value. A boxed symbol, undefined,
+	// function, or hole is JSON-undefined the same as a bare Go func, so an array folds
+	// it to null and an object omits its key rather than the walk writing nothing where
+	// a value is required (which would drop an array slot or emit a keyless object entry).
+	if val, ok := v.(Value); ok {
+		return jsonUndefinedValue(val)
 	}
 	return reflect.ValueOf(v).Kind() == reflect.Func
 }
