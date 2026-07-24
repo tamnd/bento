@@ -133,6 +133,29 @@ func (r *Renderer) requireModuleCall(callee frontend.Node, argNodes []frontend.N
 	return &ast.CallExpr{Fun: ident(loader)}, true, nil
 }
 
+// isRequireModuleCall reports whether a node is a require('<literal>') call whose
+// specifier resolves to a module this build composed as a loader. It is how a
+// binding initialized straight from a require tells a composed-module result, the
+// boxed value.Value the loader returns, apart from any other initializer, so the
+// binding lands in a value.Value slot rather than the static struct the module's
+// inferred exports type would otherwise name. Any node in the call's file resolves
+// the same import edges, so the call node stands in for the file the require sits in.
+func (r *Renderer) isRequireModuleCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || !r.isGlobalRef(kids[0], "require") {
+		return false
+	}
+	path, ok := r.resolveRequire(n, kids[1])
+	if !ok {
+		return false
+	}
+	_, ok = r.requiredLoaders[path]
+	return ok
+}
+
 // renderRequiredModules emits, for each module reached by require, its cache slot
 // package var and its loader function, or nil when the program required nothing.
 // It runs after the entry body lowers, so the per-module analysis state it

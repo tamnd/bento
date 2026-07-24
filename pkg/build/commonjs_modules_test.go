@@ -49,6 +49,43 @@ func TestRequireLoadsModuleExports(t *testing.T) {
 	}
 }
 
+// TestRequireLoadsObjectExports pins slice G0.3b, the dynamic-value-into-static
+// bridge: a module whose module.exports is an object flows into the caller's
+// binding, which the checker types by the module's inferred exports shape. The
+// binding lands in a boxed value.Value slot rather than the Go struct that shape
+// would name, so the property reads off it resolve through the value model. Node
+// prints the two fields the entry reads back off the required object.
+func TestRequireLoadsObjectExports(t *testing.T) {
+	got := buildAndRun(t, "main.js", map[string]string{
+		"dep.js":  "module.exports = { x: 42, label: 'hi' };\n",
+		"main.js": "const d = require('./dep');\nconsole.log(d.x, d.label);\n",
+	})
+	if want := "42 hi\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestRequireCycle pins the partial-exports behaviour of a circular require through
+// object properties. Module a requires b before it finishes exporting, and b
+// requires back into a while a is still mid-body, so b sees a's exports as they
+// stand at re-entry: done is still false because a sets it after the require. Node
+// prints b's view of a captured during the cycle, then a's finished state.
+func TestRequireCycle(t *testing.T) {
+	got := buildAndRun(t, "main.js", map[string]string{
+		"a.js": "exports.done = false;\n" +
+			"const b = require('./b');\n" +
+			"exports.done = true;\n" +
+			"exports.bName = b.name;\n",
+		"b.js": "const a = require('./a');\n" +
+			"module.exports = { name: 'b', sawADone: a.done };\n",
+		"main.js": "const a = require('./a');\n" +
+			"console.log(a.done, a.bName);\n",
+	})
+	if want := "true b\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
 // TestRequireRunsBodyOnce pins the module cache: a module required more than once
 // runs its body a single time, and every require returns the one exports value. The
 // module logs from its body, so a body run twice would print twice; Node prints the
