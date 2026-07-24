@@ -559,6 +559,9 @@ func (r *Renderer) generatorCoroutine(fn frontend.Node) (yieldGo ast.Expr, newGe
 	if err != nil {
 		return nil, nil, err
 	}
+	if reason := deferredDestructureThrowHandback(binds); reason != nil {
+		return nil, nil, reason
+	}
 	if len(binds) != 0 {
 		body.List = append(binds, body.List...)
 	}

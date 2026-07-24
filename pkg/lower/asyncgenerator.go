@@ -111,6 +111,9 @@ func (r *Renderer) asyncGeneratorCoroutine(fn frontend.Node) (yieldGo ast.Expr, 
 	if err != nil {
 		return nil, nil, err
 	}
+	if reason := deferredDestructureThrowHandback(binds); reason != nil {
+		return nil, nil, reason
+	}
 	if len(binds) != 0 {
 		body.List = append(binds, body.List...)
 	}

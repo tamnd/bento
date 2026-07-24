@@ -192,6 +192,29 @@ console.log(f());`))
 	}
 }
 
+// TestGeneratorDestructureThrowAtBindHandsBack proves a generator whose parameter
+// destructuring throws at bind (a nested pattern reading off a nullish element) hands back
+// rather than emit: the language throws at the call that creates the iterator, before the
+// first resume, but the coroutine-body lowering would defer the throw to the first next(),
+// the wrong moment. A flat destructure that binds without a bind-time throw still lowers.
+func TestGeneratorDestructureThrowAtBindHandsBack(t *testing.T) {
+	reason := renderUntypedBindingHandBack(t, `function* f([{ x }] = []) { yield x; }
+var g = f();`)
+	if !strings.Contains(reason, "throws at bind") {
+		t.Fatalf("expected a bind-time-throw handback, got %q", reason)
+	}
+}
+
+// TestGeneratorFlatDestructureStillLowers proves the bind-time-throw guard is narrow: a
+// generator with a flat destructure that binds without throwing lowers as before.
+func TestGeneratorFlatDestructureStillLowers(t *testing.T) {
+	got := renderUntypedBinding(t, `function* f([x] = []) { yield x; }
+var g = f();`)
+	if !strings.Contains(got, "func F(__0 value.Value) *value.Gen") {
+		t.Fatalf("flat generator destructure did not lower to a dynamic slot:\n%s", got)
+	}
+}
+
 // TestUntypedArrayParamLowersToDynamicSlot proves an untyped array-pattern parameter
 // takes one boxed value.Value slot and reads its positions through the dynamic GetIndex
 // protocol, the index analog of the object pattern's Get.
