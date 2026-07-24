@@ -128,6 +128,17 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Proxy" {
 		return r.newProxy(kids[1:])
 	}
+	// new Event(type, init) and new EventTarget() build the DOM-style event pair Node
+	// exposes as globals, each backed by a value object the runtime constructs. They
+	// are ambient globals, not user classes (a user class of the same name was already
+	// claimed by classNameRef above), so a plain-identifier constructor of either name
+	// routes to the runtime constructor.
+	if r.prog.Text(kids[0]) == "Event" && r.isGlobalRef(kids[0], "Event") {
+		return r.newEvent(kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "EventTarget" && r.isGlobalRef(kids[0], "EventTarget") {
+		return r.newEventTarget(kids[1:])
+	}
 	// new Function("a", "return a") builds a function from source text at run time,
 	// parsing the argument strings as a parameter list and a body. That is eval work,
 	// phase 11, so it hands back with the reason that names where it belongs rather
@@ -188,6 +199,61 @@ func (r *Renderer) newObject(args []frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewObject")}, nil
+}
+
+// newEvent lowers new Event(type, init) to value.NewEvent, the DOM-style event the
+// EventTarget pair dispatches. The type argument boxes to a value.Value the runtime
+// reads as a string, and the optional init dictionary boxes too so the runtime can
+// read its bubbles and cancelable members; an absent init passes value.Undefined. A
+// call with no argument hands back, since an Event requires a type.
+func (r *Renderer) newEvent(args []frontend.Node) (ast.Expr, error) {
+	if len(args) < 1 {
+		return nil, &NotYetLowerable{Reason: "new Event() with no type is a later slice"}
+	}
+	typeArg, err := r.boxOperand(args[0])
+	if err != nil {
+		return nil, err
+	}
+	init := ast.Expr(sel("value", "Undefined"))
+	if len(args) >= 2 {
+		init, err = r.boxOperand(args[1])
+		if err != nil {
+			return nil, err
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewEvent"), Args: []ast.Expr{typeArg, init}}, nil
+}
+
+// newEventTarget lowers new EventTarget() to value.NewEventTarget, the object
+// addEventListener registers on and dispatchEvent fires. Only the zero-argument form
+// exists, so a call with an argument hands back.
+func (r *Renderer) newEventTarget(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 0 {
+		return nil, &NotYetLowerable{Reason: "new EventTarget takes no argument"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewEventTarget")}, nil
+}
+
+// isEventCtorNew reports whether n is a new Event(...) or new EventTarget()
+// expression on the ambient global constructor, the shape whose binding buildVarDecl
+// lands in a value.Value slot so the instance reads through the dynamic model rather
+// than the standard library's static Event or EventTarget interface. A user class of
+// either name resolves through classNameRef, not the global, so it is not claimed.
+func (r *Renderer) isEventCtorNew(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeNewExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name := r.prog.Text(kids[0])
+	if name != "Event" && name != "EventTarget" {
+		return false
+	}
+	return r.isGlobalRef(kids[0], name)
 }
 
 // newTypedArray lowers a typed-array construction, the fixed-width numeric buffers

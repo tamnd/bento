@@ -134,7 +134,20 @@ func (r *Renderer) dynBoundLocalsOf(paramNodes []frontend.Node, sig frontend.Sig
 			break
 		}
 		pkids := r.prog.Children(pn)
-		if len(pkids) == 0 || pkids[0].Kind() == frontend.NodeIdentifier {
+		if len(pkids) == 0 {
+			continue
+		}
+		// A plain-identifier parameter boxOperand forced dynamic (a listener's e: Event)
+		// binds a value.Value the body must read through Get, so its name joins the set
+		// even though it is not a destructuring pattern. This keeps the mark alive when
+		// blockBodyArrow rebuilds the set for the closure body, which would otherwise
+		// replace the outer merge forceCallbackDynParams made and lose the parameter.
+		if pkids[0].Kind() == frontend.NodeIdentifier {
+			if r.forceDynParams[pkids[0]] {
+				if name, ok := localName(r.prog.Text(pkids[0])); ok {
+					out[name] = true
+				}
+			}
 			continue
 		}
 		if !r.dynamicParamSlot(sig.Params[i]) {

@@ -265,6 +265,16 @@ type Renderer struct {
 	// dynLocals so one function's rest bindings do not leak into another's reads. A nil
 	// map (the default) marks nothing.
 	dynBoundLocals map[string]bool
+	// forceDynParams is the set of parameter name nodes a boxed callback lowers as a
+	// dynamic value.Value field rather than the static Go type the slot's signature
+	// gives them. A listener passed to a dynamic addEventListener has its parameter
+	// typed Event by the standard library, a runtime-only interface bento cannot spell
+	// as a Go field and whose members it reads through the value model. When boxOperand
+	// boxes such a callback it records each unspellable parameter here so
+	// closureParamFields emits a value.Value field for it, and marks its name dynamic so
+	// the body reads it through Get; the boxed call passes a value.Value into that slot
+	// anyway, so nothing is lost. A nil map (the default) forces nothing.
+	forceDynParams map[frontend.Node]bool
 	// errorLocals is the set of catch-binding names in scope while a catch block is
 	// lowered, each bound to the *value.Error the catch recovered. A read of the
 	// binding's .message or .name lowers to the matching method on the error; the

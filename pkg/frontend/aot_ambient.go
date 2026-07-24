@@ -36,7 +36,11 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // value.QueueMicrotask, and the assembled main drains the queue at its end.
 // structuredClone is the WHATWG global that deep-copies a data graph; the lowerer
 // boxes the argument and emits value.StructuredClone, whose clone the caller reads
-// through the dynamic model. The node:fs, node:os, and node:path module declarations give the file
+// through the dynamic model. Event and EventTarget need no declaration here: the
+// TypeScript standard library already declares the DOM-style event pair as ambient
+// globals, so the lowerer recognizes a new Event or new EventTarget by name, builds
+// the instance with value.NewEvent or value.NewEventTarget, and lands the binding in a
+// value.Value slot read through the dynamic member and call path. The node:fs, node:os, and node:path module declarations give the file
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a

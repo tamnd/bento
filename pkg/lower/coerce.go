@@ -866,6 +866,14 @@ func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
 	} else if ok {
 		return boxed, nil
 	}
+	// A callback boxed into a dynamic call (an addEventListener listener) has its
+	// parameters typed by the slot's static signature. A parameter whose type bento
+	// cannot spell as a Go field, a listener's e: Event, would fail the closure's
+	// parameter lowering; forcing it to the dynamic value.Value the boxed call passes it
+	// lets the closure lower and its body read the parameter through the value model.
+	if restore, ok := r.forceCallbackDynParams(n); ok {
+		defer restore()
+	}
 	e, err := r.lowerExpr(n)
 	if err != nil {
 		return nil, err
@@ -874,6 +882,63 @@ func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
 		return e, nil
 	}
 	return r.boxStaticToDynamic(e, n)
+}
+
+// forceCallbackDynParams inspects an arrow or function-expression flowing into a
+// dynamic slot and marks each parameter whose static type does not lower to a Go
+// field, so closureParamFields emits a value.Value field for it and its body reads it
+// through the value model. It returns a restore that clears both the forced set and
+// the dynamic-name marks, and reports whether it changed anything so the caller only
+// defers a restore when it did. A callback whose parameters all lower cleanly is left
+// untouched, so an existing typed callback keeps its exact static lowering.
+func (r *Renderer) forceCallbackDynParams(n frontend.Node) (func(), bool) {
+	if n.Kind() != frontend.NodeArrowFunction && n.Kind() != frontend.NodeFunctionExpression {
+		return nil, false
+	}
+	var forced []frontend.Node
+	var names []string
+	for _, pn := range r.funcParamNodes(n) {
+		pkids := r.prog.Children(pn)
+		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
+			continue
+		}
+		name, ok := localName(r.prog.Text(pkids[0]))
+		if !ok {
+			continue
+		}
+		// A parameter whose static type lowers cleanly keeps it; only one bento cannot
+		// spell yet is forced dynamic, so a number or string callback parameter is
+		// untouched and its golden does not move.
+		if _, err := r.typeExpr(r.prog.TypeAt(pkids[0])); err == nil {
+			continue
+		}
+		forced = append(forced, pkids[0])
+		names = append(names, name)
+	}
+	if len(forced) == 0 {
+		return nil, false
+	}
+	if r.forceDynParams == nil {
+		r.forceDynParams = map[frontend.Node]bool{}
+	}
+	prevDyn := r.dynBoundLocals
+	merged := map[string]bool{}
+	for k, v := range r.dynBoundLocals {
+		merged[k] = v
+	}
+	for _, pnode := range forced {
+		r.forceDynParams[pnode] = true
+	}
+	for _, name := range names {
+		merged[name] = true
+	}
+	r.dynBoundLocals = merged
+	return func() {
+		for _, pnode := range forced {
+			delete(r.forceDynParams, pnode)
+		}
+		r.dynBoundLocals = prevDyn
+	}, true
 }
 
 // boxStaticToDynamic wraps a statically typed primitive expression in the value
@@ -949,7 +1014,7 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		if r.boxedFuncReadsArguments(src) {
 			return nil, &NotYetLowerable{Reason: "arguments in a function boxed into a dynamic value needs the call-site count, a later slice"}
 		}
-		return r.boxFuncToDynamic(expr, calls[0])
+		return r.boxFuncToDynamic(expr, calls[0], src)
 	}
 	// A .done read off an IteratorResult lowers to the value.IterResult Done field, a
 	// plain Go bool, even though the checker types the property boolean | undefined
@@ -1060,7 +1125,7 @@ func (r *Renderer) boxOptionalToDynamic(expr ast.Expr, src frontend.Node) (ast.E
 // boxed call behaves as the direct call would. A shape the wrapper cannot bridge
 // (a rest parameter, an optional parameter, a parameter or result type with no
 // coercion yet) hands back rather than emit a wrapper that would not compile.
-func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature) (ast.Expr, error) {
+func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src frontend.Node) (ast.Expr, error) {
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "boxing a function with a rest parameter into a dynamic value is a later slice"}
 	}
@@ -1068,11 +1133,16 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature) (ast.
 		return nil, &NotYetLowerable{Reason: "boxing a function with an optional parameter into a dynamic value is a later slice"}
 	}
 	r.requireImport(valuePkg)
+	// A parameter forceCallbackDynParams marked dynamic already lowered to a value.Value
+	// field, so the wrapper hands it the boxed argument straight through rather than
+	// coercing to the static type the signature still names. paramNodes maps a parameter
+	// index to its source node so the forced set, keyed by the name node, is consulted.
+	paramNodes := r.funcParamNodes(src)
 	const argsName = "__a"
 	callArgs := make([]ast.Expr, 0, len(sig.Params))
 	for i, p := range sig.Params {
 		at := &ast.CallExpr{Fun: sel("value", "Arg"), Args: []ast.Expr{ident(argsName), &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}}}
-		if p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		if p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.paramForcedDyn(paramNodes, i) {
 			// A dynamic parameter takes the boxed argument as-is; the body already reads
 			// a value.Value there, so no coercion is needed.
 			callArgs = append(callArgs, at)
@@ -1149,7 +1219,16 @@ func (r *Renderer) boxStaticToDynamicFlags(expr ast.Expr, flags frontend.TypeFla
 func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	if src.Kind() == frontend.NodeNewExpression {
 		kids := r.prog.Children(src)
-		return len(kids) >= 1 && r.prog.Text(kids[0]) == "Object" && len(kids) == 1
+		if len(kids) == 1 && r.prog.Text(kids[0]) == "Object" {
+			return true
+		}
+		// new Event(...) and new EventTarget() lower to value.NewEvent and
+		// value.NewEventTarget, each a value.Value already, so an argument slot that
+		// takes one (dispatchEvent(new Event('x'))) needs no further boxing. The checker
+		// types them by the standard library Event and EventTarget interfaces, which the
+		// primitive box path has no constructor for, so recognizing them here is what
+		// lets the box flow straight through the dynamic call.
+		return r.isEventCtorNew(src)
 	}
 	// Object.getOwnPropertyDescriptor(o, key) and Object.getOwnPropertyDescriptors(o)
 	// lower to runtime calls that return a value.Value, the descriptor object or
@@ -2233,7 +2312,22 @@ func (r *Renderer) boxMethodClosure(m frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return r.boxFuncToDynamic(fn, sig)
+	return r.boxFuncToDynamic(fn, sig, m)
+}
+
+// paramForcedDyn reports whether the parameter at index i in paramNodes was marked
+// dynamic by forceCallbackDynParams, so the boxing wrapper hands it the boxed
+// argument straight through rather than coercing to the signature's static type. An
+// index past the node list, a padded slot a shorter callback grew, is not forced.
+func (r *Renderer) paramForcedDyn(paramNodes []frontend.Node, i int) bool {
+	if i < 0 || i >= len(paramNodes) {
+		return false
+	}
+	pkids := r.prog.Children(paramNodes[i])
+	if len(pkids) == 0 {
+		return false
+	}
+	return r.forceDynParams[pkids[0]]
 }
 
 // coerceDynamicToStatic wraps a boxed dynamic value in the coercion that lands it
