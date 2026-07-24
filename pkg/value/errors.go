@@ -269,6 +269,18 @@ func Caught(r any) *Error {
 		}
 	case Thrown:
 		e := &Error{name: FromGoString(t.ErrorName()), message: FromGoString(t.ErrorMessage())}
+		// A Thrown that carries an original JavaScript value (a rejected promise's
+		// reason, the value a Promise.reject or a rejected await raised) hands it back
+		// through ToValue, and the caught binding must read that very value, not the
+		// {name, message} object the runtime models a throw with: `catch (e)` after
+		// `await Promise.reject(err)` binds e to err, so `e === err` holds. Preserving it
+		// as the caught error's thrown value routes ToValue to the original the same way
+		// the ThrownValue case does for a synchronous `throw <value>`. A boundary Thrown
+		// carries no such value and is unaffected.
+		if tv, ok := t.(interface{ ToValue() Value }); ok {
+			e.thrown = tv.ToValue()
+			e.hasThrown = true
+		}
 		// A boundary failure that wraps a Go error (the GoError a go: call raises)
 		// hands the original error through Unwrap, so the caught error keeps a live
 		// handle to it and err.is/err.as can branch on identity (section 7.7). A
