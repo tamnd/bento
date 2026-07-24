@@ -3575,8 +3575,16 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 					Args: []ast.Expr{val},
 				}}, true, nil
 			}
+			// A member store under a "use strict" program throws on a failed write (a
+			// non-writable property, an accessor with no setter, a new key on a
+			// non-extensible object) rather than dropping it, so it routes through
+			// SetStrict; a sloppy program keeps the silent-drop Set.
+			setMethod := "Set"
+			if r.programStrict {
+				setMethod = "SetStrict"
+			}
 			return &ast.ExprStmt{X: &ast.CallExpr{
-				Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
+				Fun:  &ast.SelectorExpr{X: recv, Sel: ident(setMethod)},
 				Args: []ast.Expr{keyExpr(), val},
 			}}, true, nil
 		}

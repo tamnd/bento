@@ -59,6 +59,10 @@ func (e *NotYetLowerable) Error() string {
 // one program.
 type Renderer struct {
 	prog    *frontend.Program
+	// programStrict is set when the entry module opens with a "use strict" directive
+	// prologue, so a member store lowers to the throwing SetStrict rather than the
+	// silent-drop Set, the way a strict script observes a failed assignment.
+	programStrict bool
 	decls   *declSet
 	imports map[string]bool
 	// nodeImports maps a local binding name introduced by a node: import to the
