@@ -1,0 +1,7 @@
+== stdout:
+x[A]xAx
+x[A]x[A]x
+HELLO WORLD
+f%28a%29%28b%29
+== exit:
+0

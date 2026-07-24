@@ -290,6 +290,15 @@ func (r *Renderer) stringRegExpMethodCall(recvNode frontend.Node, method string,
 		if len(argNodes) != 2 {
 			return nil, &NotYetLowerable{Reason: "string ." + method + " with a regexp and this argument count is a later slice"}
 		}
+		if fn, ok, err := r.regexpReplacementFunc(argNodes[1]); err != nil {
+			return nil, err
+		} else if ok {
+			name := "ReplaceFuncStr"
+			if method == "replaceAll" {
+				name = "ReplaceAllFuncStr"
+			}
+			return call(name, fn), nil
+		}
 		if !r.isString(argNodes[1]) {
 			return nil, &NotYetLowerable{Reason: "string ." + method + " with a regexp and a non-string replacement is a later slice"}
 		}
@@ -325,6 +334,42 @@ func (r *Renderer) stringRegExpMethodCall(recvNode frontend.Node, method string,
 	default:
 		return nil, &NotYetLowerable{Reason: "string ." + method + " with a regexp is a later slice"}
 	}
+}
+
+// regexpReplacementFunc decides whether a String.prototype.replace or replaceAll
+// second argument is a function replacement the runtime ReplaceFuncStr slot can
+// take, and if so lowers it. The runtime method calls fn with the matched
+// substring alone and substitutes the string it returns, so the only shape backed
+// is an inline arrow or function expression with exactly one string parameter and a
+// string result, which lowers to func(c value.BStr) value.BStr, the slot's Go type.
+//
+// The bool distinguishes the two non-lowering cases the caller routes differently.
+// A node that is not a function at all returns (nil, false, nil), so the caller
+// falls through to the string-replacement path (a string template, or a handback
+// for a non-string replacement). A node that is a function but not the single
+// string-to-string shape (a replacer that reads the capture groups, the match
+// offset, or the subject, or returns a non-string) hands back with an error, since
+// it cannot fill the func(BStr) BStr slot faithfully and there is no string path
+// for it.
+func (r *Renderer) regexpReplacementFunc(arg frontend.Node) (ast.Expr, bool, error) {
+	if arg.Kind() != frontend.NodeArrowFunction && arg.Kind() != frontend.NodeFunctionExpression {
+		return nil, false, nil
+	}
+	sig, ok := r.prog.SignatureAt(arg)
+	if !ok || len(sig.Params) != 1 || sig.RestParam != nil {
+		return nil, false, &NotYetLowerable{Reason: "string replace with a function replacement that reads more than the matched substring is a later slice"}
+	}
+	if r.primitiveFlagsOfType(sig.Params[0].Type)&frontend.TypeString == 0 || r.primitiveFlagsOfType(sig.Return)&frontend.TypeString == 0 {
+		return nil, false, &NotYetLowerable{Reason: "string replace with a function replacement that is not string to string is a later slice"}
+	}
+	fn, err := r.lowerExpr(arg)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, isLit := fn.(*ast.FuncLit); !isLit {
+		return nil, false, &NotYetLowerable{Reason: "string replace with a function replacement that does not lower to a closure is a later slice"}
+	}
+	return fn, true, nil
 }
 
 // buildRegExp validates a pattern and flag pair through the runtime translator and,
