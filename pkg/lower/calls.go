@@ -209,6 +209,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "queueMicrotask" && r.isAmbientGlobal(kids[0]) {
 		return r.queueMicrotaskCall(kids[1:])
 	}
+	// structuredClone(value) deep-copies value through the structured-clone algorithm,
+	// the WHATWG global that clones a data graph rather than sharing it. It is an
+	// ambient global, not a user binding, so it routes before the user-function path
+	// the way the coercions do.
+	if r.prog.Text(kids[0]) == "structuredClone" && r.isAmbientGlobal(kids[0]) {
+		return r.structuredCloneCall(kids[1:])
+	}
 	// Symbol() and Symbol(desc) construct a fresh unique symbol, the boxed value a
 	// symbol-keyed property carries, and route before the user path the way the
 	// coercions do since Symbol is an ambient global, not a user binding.
@@ -4006,6 +4013,24 @@ func (r *Renderer) queueMicrotaskCall(argNodes []frontend.Node) (ast.Expr, error
 	r.usesMicrotask = true
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "QueueMicrotask"), Args: []ast.Expr{fn}}, nil
+}
+
+// structuredCloneCall lowers structuredClone(value), the WHATWG global that deep-copies
+// a data graph through the structured-clone algorithm. The one argument boxes to a
+// value.Value the runtime walks, and the call emits value.StructuredClone, whose result
+// is the clone as a value.Value the caller reads through the dynamic model. A call with
+// other than one argument, the form that would carry a transfer list, hands back rather
+// than emit a call that would drop it; the transfer form is a later slice.
+func (r *Renderer) structuredCloneCall(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "structuredClone with a transfer list is a later slice"}
+	}
+	arg, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "StructuredClone"), Args: []ast.Expr{arg}}, nil
 }
 
 // processCall lowers a call on the global process object. Only on is covered, and
