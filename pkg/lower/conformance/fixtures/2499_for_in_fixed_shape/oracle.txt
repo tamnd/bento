@@ -1,0 +1,11 @@
+== stdout:
+a
+b
+c
+count 3
+x,y
+d 4
+e 5
+f 6
+== exit:
+0

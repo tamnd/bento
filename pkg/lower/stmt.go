@@ -486,11 +486,12 @@ func (r *Renderer) lowerForIn(n frontend.Node) (ast.Stmt, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "for...in loop variable is not a Go identifier"}
 	}
-	// A statically-shaped receiver lowers to a Go struct or slice with no ForInKeys
-	// method, so only a dynamic receiver, whose lowering is a value.Value, is enumerated
-	// here; a typed object is a later slice.
+	// A statically-shaped receiver lowers to a Go struct with no ForInKeys method, so
+	// its keys are not read off the value at runtime. They are the shape's own
+	// enumerable field names, known at compile time and in the same order Object.keys
+	// folds, so the loop ranges over a literal key array rather than a runtime walk.
 	if !r.isDynamic(kids[1]) {
-		return nil, &NotYetLowerable{Reason: "for...in over a statically-typed object is a later slice"}
+		return r.lowerForInFixedShape(kids, dkids, name)
 	}
 	recv, err := r.lowerExpr(kids[1])
 	if err != nil {
@@ -532,6 +533,67 @@ func (r *Renderer) lowerForIn(n frontend.Node) (ast.Stmt, error) {
 		return &ast.BlockStmt{List: []ast.Stmt{decl, rng}}, nil
 	}
 	return rng, nil
+}
+
+// lowerForInFixedShape lowers for (const k in obj) over a fixed-shape object to a Go
+// range over a literal key array, for _, k := range value.NewArray[value.BStr](...).
+// The keys are the shape's own enumerable field names in the order Object.keys folds
+// them (fixedShapeProps, the same enumeration objectOwnNameArray uses), so the loop
+// matches the runtime for...in order without reading the struct at all. The receiver
+// is not emitted, since its keys are known at compile time; the body may still read it
+// by name. An optional-field shape, an array, or a non-identifier receiver hands back
+// through fixedShapeProps, the same boundary Object.keys draws for a shape whose own
+// keys are not statically settled.
+func (r *Renderer) lowerForInFixedShape(kids, dkids []frontend.Node, name string) (ast.Stmt, error) {
+	// Only a plain fixed-shape object folds its keys: a class instance carries its
+	// methods on the prototype, which for...in does not visit, but the shape's property
+	// list includes them, so folding a class instance would enumerate a method name the
+	// runtime never would. isFixedObjectShape rejects a class instance, an array, a
+	// tuple, and a callable, leaving the plain data-shape struct whose fields are exactly
+	// its own enumerable keys.
+	if !r.isFixedObjectShape(r.prog.TypeAt(kids[1])) {
+		return nil, &NotYetLowerable{Reason: "for...in over a class instance or other non-plain-shape receiver is a later slice"}
+	}
+	props, err := r.fixedShapeProps("for...in", kids[1])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	keys := make([]ast.Expr, len(props))
+	for i, p := range props {
+		keys[i] = &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p.Name)}}}
+	}
+	body, err := r.loopBody(kids[2])
+	if err != nil {
+		return nil, err
+	}
+	rng := &ast.RangeStmt{
+		X: &ast.CallExpr{Fun: &ast.SelectorExpr{
+			X:   &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "BStr")), Args: keys},
+			Sel: ident("Elems"),
+		}},
+		Body: body,
+	}
+	// A for...in may bind a key it never reads, so when the body does not use the
+	// binding the loop drops it and ranges only to drive the iteration; Go rejects an
+	// unused range value.
+	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) {
+		rng.Key = ident("_")
+		rng.Value = ident(name)
+		rng.Tok = token.DEFINE
+	}
+	// The keys are folded from the shape, so the receiver is never read at runtime, but
+	// referencing it in the for...in head marks it used to the unused-local pass, which
+	// then emits no blank assignment for it. Evaluate it to the blank identifier once
+	// ahead of the loop to keep it used in the Go the same way the source uses it; the
+	// receiver is a plain identifier (fixedShapeProps requires it), so this has no side
+	// effect the fold dropped.
+	recv, err := r.lowerExpr(kids[1])
+	if err != nil {
+		return nil, err
+	}
+	discard := &ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{recv}}
+	return &ast.BlockStmt{List: []ast.Stmt{discard, rng}}, nil
 }
 
 // isGeneratorIterable reports whether the checker types n as one of the built-in
