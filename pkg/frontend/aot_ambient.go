@@ -40,7 +40,13 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // TypeScript standard library already declares the DOM-style event pair as ambient
 // globals, so the lowerer recognizes a new Event or new EventTarget by name, builds
 // the instance with value.NewEvent or value.NewEventTarget, and lands the binding in a
-// value.Value slot read through the dynamic member and call path. The node:fs, node:os, and node:path module declarations give the file
+// value.Value slot read through the dynamic member and call path. __bento_os_info
+// and __bento_inspect are host callees, the bare names a Node builtin factory
+// reaches for when it needs the Go runtime: os.js reads __bento_os_info for the
+// platform snapshot and util.js and assert.js read __bento_inspect to render a
+// value. Each is declared here so the checker types it, and the lowerer emits a
+// direct call into the runtime (nodehost.OSInfoJSON, value.Inspect) rather than
+// the interpreter's host layer. The node:fs, node:os, and node:path module declarations give the file
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a
@@ -65,6 +71,7 @@ declare var require: any;
 declare function queueMicrotask(callback: () => void): void;
 declare function structuredClone(value: any): any;
 declare function __bento_os_info(): string;
+declare function __bento_inspect(value: any): string;
 declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;
