@@ -975,7 +975,7 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// dictionary is also boxed but keeps its own index-signature handback below, so
 	// widening to isDynamic would swallow that. A genuinely static literal, whose
 	// binding was never boxed, still takes the struct-field selector here.
-	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) {
+	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {
