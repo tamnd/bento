@@ -174,7 +174,8 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 		mainBody = append(mainBody, n)
 		mainItems = append(mainItems, mainItem{node: n})
 	}
-	for _, stmt := range r.prog.Children(entry) {
+	moduleStmts := r.prog.Children(entry)
+	for stmtIdx, stmt := range moduleStmts {
 		switch stmt.Kind() {
 		case frontend.NodeFunctionDeclaration:
 			// A function overload set is several declarations under one symbol: the bodyless
@@ -204,6 +205,14 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 			// hoisted binding whose initializer is not safe to evaluate at package-init
 			// time hands back, so the program routes to the interpreter rather than emit
 			// Go that reads a name main declared but a function cannot see.
+			//
+			// Before the hoist runs, a const or let a function reads that is called
+			// before its own declaration hands back: an eager package-var hoist would
+			// answer the binding's value where its temporal dead zone requires a
+			// ReferenceError throw.
+			if reason := r.tdzHoistHandback(moduleStmts, stmtIdx, stmt, hoisted); reason != nil {
+				return Program{}, reason
+			}
 			decl, mode, err := r.hoistModuleVar(stmt, hoisted, moduleOrder)
 			if err != nil {
 				return Program{}, err
@@ -1466,6 +1475,92 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 		}
 	}
 	return &ast.GenDecl{Tok: token.VAR, Specs: specs}, hoistAssign, nil
+}
+
+// tdzHoistHandback returns a hand-back when a module const or let that would hoist to a
+// package var could be read through a function before its own initializer runs, the
+// temporal dead zone the eager package-init hoist cannot honor. A const or let sits in
+// its TDZ from the top of the module until its declaration executes; a function that
+// reads it and is called in that window must throw ReferenceError, but a package-level
+// var is already set at package-init time and would answer the value instead, a wrong
+// answer. The check is sound and narrow: it fires only when a top-level function whose
+// body reads one of this statement's hoisted bindings is called in a module statement
+// that runs before this one. A function merely declared earlier, or called only after
+// the declaration, cannot observe the dead zone, so every binding-declared-before-use
+// program hoists unchanged. A var has no TDZ and is left to its own slice.
+func (r *Renderer) tdzHoistHandback(moduleStmts []frontend.Node, selfIdx int, stmt frontend.Node, hoisted map[string]bool) error {
+	if r.isVarStatement(stmt) {
+		return nil
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, stmt, &decls)
+	bound := map[string]bool{}
+	for _, d := range decls {
+		kids := r.prog.Children(d)
+		if len(kids) == 0 {
+			continue
+		}
+		if name, ok := localName(r.prog.Text(kids[0])); ok && hoisted[name] {
+			bound[name] = true
+		}
+	}
+	if len(bound) == 0 {
+		return nil
+	}
+	// The top-level functions whose body reads one of the hoisted binding names; only a
+	// call to one of these before the declaration can observe the binding in its TDZ.
+	readers := map[string]bool{}
+	for _, s := range moduleStmts {
+		if s.Kind() != frontend.NodeFunctionDeclaration {
+			continue
+		}
+		if r.subtreeReadsName(s, bound) {
+			if name, ok := r.funcDeclLocalName(s); ok {
+				readers[name] = true
+			}
+		}
+	}
+	if len(readers) == 0 {
+		return nil
+	}
+	for i := 0; i < selfIdx; i++ {
+		if r.subtreeCallsName(moduleStmts[i], readers) {
+			return &NotYetLowerable{Reason: "a module const or let a function reads is called before its declaration, a temporal dead zone the package-var hoist cannot honor"}
+		}
+	}
+	return nil
+}
+
+// funcDeclLocalName returns the declared name of a function declaration, its first
+// identifier child, as a Go identifier. A declaration with no nameable identifier
+// (an anonymous default export) returns false.
+func (r *Renderer) funcDeclLocalName(fn frontend.Node) (string, bool) {
+	for _, c := range r.prog.Children(fn) {
+		if c.Kind() == frontend.NodeIdentifier {
+			return localName(r.prog.Text(c))
+		}
+	}
+	return "", false
+}
+
+// subtreeCallsName reports whether the subtree holds a call expression whose callee is a
+// bare identifier named in set. It descends through every child, function boundaries
+// included, so a call nested inside a closure argument (assert.throws(_, () => f()))
+// counts the same as a bare top-level call.
+func (r *Renderer) subtreeCallsName(n frontend.Node, set map[string]bool) bool {
+	if n.Kind() == frontend.NodeCallExpression {
+		if kids := r.prog.Children(n); len(kids) > 0 && kids[0].Kind() == frontend.NodeIdentifier {
+			if name, ok := localName(r.prog.Text(kids[0])); ok && set[name] {
+				return true
+			}
+		}
+	}
+	for _, c := range r.prog.Children(n) {
+		if r.subtreeCallsName(c, set) {
+			return true
+		}
+	}
+	return false
 }
 
 // moduleVarSpec lowers one binding of a hoisted variable statement to a Go value

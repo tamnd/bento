@@ -83,6 +83,62 @@ console.log(count);
 	}
 }
 
+// TestTDZConstCalledBeforeDeclHandsBack pins that a module const a function reads,
+// where that function is called before the const's declaration, hands back rather than
+// hoist the const to an eager package var. ES6 keeps the const in its temporal dead
+// zone until its declaration runs, so the early call must throw ReferenceError; an eager
+// package var is already set and would answer the value, a wrong answer. A handback keeps
+// the shape safe until real TDZ enforcement lands.
+func TestTDZConstCalledBeforeDeclHandsBack(t *testing.T) {
+	const src = `function f() { return x + 1; }
+const g = f();
+const x = 1;
+`
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	_, err := r.RenderProgram(entryFile(t, prog))
+	if err == nil {
+		t.Fatalf("a const called through a function before its declaration lowered, want a hand-back:\n%s", src)
+	}
+	if !strings.Contains(err.Error(), "temporal dead zone") {
+		t.Fatalf("handback reason = %q, want a temporal-dead-zone deferral", err.Error())
+	}
+}
+
+// TestTDZConstCallNestedInClosureHandsBack pins the guard catches the call nested inside
+// a closure argument, the exact shape test262 uses: assert.throws(ReferenceError, () =>
+// f()). The reader's call sits inside a function expression the surrounding call invokes,
+// still textually before the const's declaration, so the dead zone applies.
+func TestTDZConstCallNestedInClosureHandsBack(t *testing.T) {
+	const src = `function f() { return x + 1; }
+(function () { f(); })();
+const x = 1;
+`
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	_, err := r.RenderProgram(entryFile(t, prog))
+	if err == nil {
+		t.Fatalf("a const called through a nested closure before its declaration lowered, want a hand-back:\n%s", src)
+	}
+	if !strings.Contains(err.Error(), "temporal dead zone") {
+		t.Fatalf("handback reason = %q, want a temporal-dead-zone deferral", err.Error())
+	}
+}
+
+// TestModuleConstDeclaredBeforeCallStillHoists pins that the TDZ guard is narrow: a
+// const declared before the function that reads it is called still hoists to a package
+// var, since no call can observe the dead zone. This is the ordinary shape and must not
+// regress to a handback.
+func TestModuleConstDeclaredBeforeCallStillHoists(t *testing.T) {
+	const src = "const total = 100;\nfunction share(n: number): number { return total / n; }\nconsole.log(share(4));\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "var total float64 = 100") {
+		t.Errorf("a const declared before its reader's call did not hoist:\n%s", source)
+	}
+}
+
 // TestModuleStringConstReadByFuncRuns proves a string binding hoists and carries
 // its value across the function boundary, not just a number.
 func TestModuleStringConstReadByFuncRuns(t *testing.T) {
