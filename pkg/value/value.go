@@ -128,6 +128,14 @@ func (v Value) IsNullish() bool   { return v.kind == KindUndefined || v.kind == 
 // exotic-array brand the spec tests rather than a duck-typed length probe.
 func IsArray(v Value) bool { return v.Kind() == KindArray }
 
+// StaticBool returns result and ignores operand, the lowering of a call whose
+// answer the checker already knows at compile time but whose operand must still be
+// evaluated and referenced. Array.isArray(x) on a statically typed x folds to true
+// or false, yet dropping x would discard its side effects (Array.isArray(f()) must
+// still call f) and leave a Go binding that x was the only use of unreferenced, so
+// the emit passes x through here to keep it live while yielding the known result.
+func StaticBool[T any](_ T, result bool) bool { return result }
+
 // TypeOf returns the JavaScript typeof string for the boxed value, the lowering
 // of typeof x when the operand is dynamic and its kind is only known at runtime.
 // The mapping is the language's, not Go's: null reports "object" (the historical

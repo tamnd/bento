@@ -65,8 +65,10 @@ func TestArrayStaticHandsBack(t *testing.T) {
 }
 
 // TestArrayIsArrayEmits pins the brand check: a dynamic value dispatches through
-// value.IsArray, a statically typed array folds to true, and any other static
-// type folds to false.
+// value.IsArray, a statically typed array folds to a known true, and any other
+// static type folds to a known false. The static folds thread the operand through
+// value.StaticBool so it stays evaluated and referenced (a bare true/false would
+// drop its side effects and leave a sole-use binding unreferenced).
 func TestArrayIsArrayEmits(t *testing.T) {
 	cases := []struct {
 		name string
@@ -81,12 +83,12 @@ func TestArrayIsArrayEmits(t *testing.T) {
 		{
 			"typedArray",
 			"export function f(a: number[]): boolean { return Array.isArray(a); }\n",
-			"return true",
+			"value.StaticBool(a, true)",
 		},
 		{
 			"nonArray",
 			"export function f(s: string): boolean { return Array.isArray(s); }\n",
-			"return false",
+			"value.StaticBool(s, false)",
 		},
 	}
 	for _, tc := range cases {
