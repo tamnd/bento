@@ -1004,6 +1004,22 @@ func (r *Renderer) errorInstanceof(left, right frontend.Node) (ast.Expr, bool, e
 	}, true, nil
 }
 
+// errorSubclassInstanceof lowers `e instanceof Error` where e is an instance of a
+// class that extends the built-in Error. The Go value is that class's struct
+// pointer, an Error by construction, so the test folds to the constant true. Only
+// the Error base itself is covered; instanceof a specific built-in error or another
+// class on such an instance stays a later slice, handled by the general decline.
+func (r *Renderer) errorSubclassInstanceof(left, right frontend.Node) (ast.Expr, bool) {
+	info, ok := r.classOfNode(left)
+	if !ok || !info.errorBase {
+		return nil, false
+	}
+	if name, ok := r.errorConstructorRef(right); !ok || name != "Error" {
+		return nil, false
+	}
+	return ident("true"), true
+}
+
 // errorMethodCall lowers a method call on a caught error, the error-identity
 // surface of section 7.7. Only is() is covered here: err.is(sentinel) lowers to
 // the *value.Error Is method against the Go error the caught error carries, so the
@@ -1164,7 +1180,10 @@ func (r *Renderer) thrownClassOf(n frontend.Node) (*classInfo, bool) {
 		return nil, false
 	}
 	for _, f := range info.fields {
-		if f.prop == "message" && r.prog.TypeAt(f.ident).Flags&frontend.TypeString != 0 {
+		// An Error subclass's inherited message is a synthesized value.BStr with no
+		// ident to read a type from, and it is a string by construction, so it
+		// satisfies the throwable check the same way a declared string message does.
+		if f.prop == "message" && (f.synthBStr || r.prog.TypeAt(f.ident).Flags&frontend.TypeString != 0) {
 			return info, true
 		}
 	}

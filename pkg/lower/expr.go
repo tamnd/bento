@@ -1174,6 +1174,12 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 	// error against a built-in error constructor is covered here, and any other
 	// instanceof hands back until class-instance narrowing lands.
 	if opText == "instanceof" {
+		// e instanceof Error on an instance of a class that extends Error folds to true
+		// at compile time, before the caught-binding path, since such an instance is not
+		// a caught error but its static type already answers the test.
+		if expr, ok := r.errorSubclassInstanceof(left, right); ok {
+			return expr, nil
+		}
 		expr, handled, err := r.errorInstanceof(left, right)
 		if err != nil {
 			return nil, err
