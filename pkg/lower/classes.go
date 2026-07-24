@@ -3636,8 +3636,8 @@ func (r *Renderer) bracketMethodCall(callee frontend.Node, argNodes []frontend.N
 func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	m, ok := info.staticMethodByName(method)
 	if !ok {
-		if _, isField := info.staticByName(method); isField {
-			return nil, &NotYetLowerable{Reason: "calling static ." + method + " of class " + info.name + " as a function is a later slice"}
+		if f, isField := info.staticByName(method); isField {
+			return r.staticFieldCall(info, f, argNodes)
 		}
 		return nil, &NotYetLowerable{Reason: "class " + info.name + " has no static method ." + method + " this slice lowers"}
 	}
@@ -3675,6 +3675,50 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: ident(m.goName), Args: args}, nil
+}
+
+// staticFieldCall lowers A.f(args) when f is a static FIELD holding a function
+// value, not a static method: a static field whose type is a function lowers to a
+// package var holding the closure (classKeyRead reads it as ident(f.goName)), so a
+// call of it is that var applied to the arguments, f.goName(args...), the value twin
+// of a static method's package-function call. It covers the shape a static function
+// field takes both when declared in the body (static make = function(){}) and when
+// added as an expando after the class (A.make = function(){}): each stores a closure
+// into the same package var, so each calls it the same way.
+//
+// Only a plain call of an all-required, rest-free function value is lowered: the field
+// value carries no parameter name nodes, so the call-site defaulting a declared method
+// gets (fillOmittedMethodArgs) is unavailable, and a field whose type is not a single
+// callable, or whose call would omit or overflow the parameters, hands back rather than
+// emit a call the var's Go type would reject. Each argument bridges to its parameter
+// type the same way a method call's does, since the var's Go parameter types come from
+// the same function type.
+func (r *Renderer) staticFieldCall(info *classInfo, f classField, argNodes []frontend.Node) (ast.Expr, error) {
+	handBack := &NotYetLowerable{Reason: "calling static ." + f.prop + " of class " + info.name + " as a function is a later slice"}
+	if f.ident == nil {
+		return nil, handBack
+	}
+	call, construct := r.prog.Signatures(r.prog.TypeAt(f.ident))
+	if len(call) != 1 || len(construct) != 0 {
+		return nil, handBack
+	}
+	sig := call[0]
+	if sig.RestParam != nil || len(argNodes) != len(sig.Params) || sig.MinArgs != len(sig.Params) {
+		return nil, handBack
+	}
+	args := make([]ast.Expr, 0, len(sig.Params))
+	for i, a := range argNodes {
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		lowered, err = r.bridgeArg(lowered, a, sig.Params[i].Type)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: ident(f.goName), Args: args}, nil
 }
 
 // argForDefaultedSlot returns the expression to lower for argument i of a method
