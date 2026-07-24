@@ -1020,12 +1020,13 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// a value.Value at run time, not the named struct the checker still gives it, so a
 	// string-key read must go through the runtime Get on the dynamic path below rather
 	// than select a Go field the box does not carry. object[Infinity] already lowers
-	// dynamically; this keeps object["1.2"] consistent with it. The guard is the
-	// dynBound binding specifically, not every dynamic receiver: a string-index
-	// dictionary is also boxed but keeps its own index-signature handback below, so
-	// widening to isDynamic would swallow that. A genuinely static literal, whose
-	// binding was never boxed, still takes the struct-field selector here.
-	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) {
+	// dynamically; this keeps object["1.2"] consistent with it. A string-index
+	// dictionary is boxed the same way, so a const-string-key read off it is excluded
+	// here too and falls to the dynamic Get below, where the boxed read unboxes to the
+	// signature's element type; only its own handback for a wider index type remains. A
+	// genuinely static literal, whose binding was never boxed, still takes the
+	// struct-field selector here.
+	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) && !r.isStringIndexDict(r.prog.TypeAt(obj)) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {
