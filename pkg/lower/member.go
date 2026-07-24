@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -664,7 +665,46 @@ func (r *Renderer) functionPropertyRead(obj frontend.Node, prop string) (ast.Exp
 			break
 		}
 	}
-	return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(sig.MinArgs)}, true, nil
+	// The count renders through floatConstLit so an integer arity is written with a
+	// trailing .0 (0 as 0.0), inferring float64 the way a number literal does. A bare
+	// "0" would infer Go int and fail value.Number and the arithmetic a number sink runs.
+	return floatConstLit(float64(sig.MinArgs)), true, nil
+}
+
+// foldsToFunctionProperty reports whether n is a property read that
+// functionPropertyRead folds to a static value, a function value's .length (a
+// number) or .name (a string). A function's own length and name are not fields the
+// interned shape carries, so missingPropertyRead would otherwise judge them absent
+// and classify the read dynamic, when in fact propertyAccess routes them to
+// functionPropertyRead first and folds each to a static primitive. Excluding them
+// from the missing-property path keeps the read on its true static type, so a number
+// or string sink boxes it once (assert.sameValue(af.length, 0) wraps value.Number)
+// rather than pass an unboxed constant where a value.Value is wanted. It mirrors
+// functionPropertyRead's own guard: a named function declaration receiver with call
+// signatures, no construct signatures, and no own properties, read for length or name.
+func (r *Renderer) foldsToFunctionProperty(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return false
+	}
+	obj := kids[0]
+	prop := strings.TrimSpace(r.prog.Text(kids[1]))
+	if prop != "length" && prop != "name" {
+		return false
+	}
+	if obj.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	objType := r.prog.TypeAt(obj)
+	call, construct := r.prog.Signatures(objType)
+	if len(call) == 0 || len(construct) != 0 || len(r.prog.Properties(objType)) != 0 {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(obj)
+	return ok && sym.Flags&frontend.SymbolFunction != 0
 }
 
 // missingPropertyFold lowers a read of a property an object shape does not declare,
@@ -707,6 +747,14 @@ func (r *Renderer) missingPropertyRead(n frontend.Node) bool {
 		return false
 	}
 	obj := kids[0]
+	// A function value's .length and .name are not fields the interned shape carries,
+	// but propertyAccess routes them to functionPropertyRead before the missing-property
+	// fold and each folds to a static primitive, so they are not misses. Excluding them
+	// here keeps missingPropertyRead a true mirror of propertyAccess's routing and keeps
+	// the read on its static type rather than the boxed-undefined dynamic path.
+	if r.foldsToFunctionProperty(n) {
+		return false
+	}
 	// The read names a property either dotted (o.k) or bracketed with a string
 	// literal (o["k"]); both lower to value.MissingProperty when the key is absent,
 	// so both are recognized here. A bracket read with a computed key is not this
