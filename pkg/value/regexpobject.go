@@ -30,8 +30,8 @@ func (v Value) asRegExp() *RegExp {
 // canonical flag run, each flag its own boolean, and .lastIndex the resume offset. A
 // name that is not a regexp own property reports ok=false, so the caller climbs the
 // ordinary prototype chain and answers undefined for a miss the way a plain object
-// read does. The method properties (.test, .exec) are not values here; a dynamic call
-// of them is a later slice, so they read undefined rather than a wrong callable.
+// read does. The method properties (.test, .exec) read a callable bound to the live
+// regexp, so a dynamic re.test(s) or re.exec(s) matches through the same *RegExp.
 func regexpGet(re *RegExp, name string) (Value, bool) {
 	switch name {
 	case "source":
