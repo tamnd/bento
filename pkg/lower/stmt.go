@@ -1066,6 +1066,27 @@ func (r *Renderer) lowerReturn(n frontend.Node) (ast.Stmt, error) {
 			}
 			return &ast.ReturnStmt{Results: []ast.Expr{ident("true")}}, nil
 		}
+		// A bare return yields undefined. A void function has no Go result, so the bare
+		// Go return matches it. But a function whose inferred type also admits a value
+		// carries a Go result: unreachable-code elimination does not prune a dead
+		// `return x` from return-type inference, so a `return;` followed by a dead
+		// `return x` gives the function a T | undefined result the bare Go return leaves
+		// short. The bare return then spells the undefined that result holds, the None of
+		// an option or the dynamic value.Undefined, so Go accepts the short return.
+		if !isVoidReturn(r.retType) {
+			if inner, ok := r.optionalInner(r.prog.UnionMembers(r.retType)); ok {
+				none, err := r.noneOf(inner)
+				if err != nil {
+					return nil, err
+				}
+				return &ast.ReturnStmt{Results: []ast.Expr{none}}, nil
+			}
+			if r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+				r.requireImport(valuePkg)
+				return &ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}}, nil
+			}
+			return nil, &NotYetLowerable{Reason: "a bare return from a function whose result is neither void, an option, nor a dynamic value is a later slice"}
+		}
 		return &ast.ReturnStmt{}, nil
 	}
 	if r.tryRet == tryRetBody && isVoidReturn(r.retType) {
