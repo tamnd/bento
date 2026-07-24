@@ -462,3 +462,37 @@ console.log("x");
 		t.Fatalf("static generator method did not lower to a receiver-less CG returning *value.Gen, got:\n%s", got)
 	}
 }
+
+// TestIterResultDoneBoxesThroughBool pins that a `.done` read off an IteratorResult
+// flowing into a dynamic slot boxes through value.Bool, not the optional box. The lib
+// types IteratorResult.done as boolean | undefined, so the checker would route the read
+// through the option path; but the runtime IterResult.Done field is a plain Go bool, and
+// value.OptToValue would take an Opt the bool is not, emitting Go that does not build.
+// This is the generators/declaration shape.
+func TestIterResultDoneBoxesThroughBool(t *testing.T) {
+	const src = `function* g(): Generator<number> { yield 1; }
+const it = g();
+const r = it.next();
+const d: any = r.done;
+console.log(String(d));
+`
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "value.Bool(r.Done)") {
+		t.Fatalf("iterator-result .done did not box through value.Bool:\n%s", got)
+	}
+}
+
+// TestIterResultDoneBoxesRuns builds and runs the same shape end to end: the boxed
+// bool prints as the boolean it is, matching Node.
+func TestIterResultDoneBoxesRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function* g(): Generator<number> { yield 1; }
+const it = g();
+it.next();
+const d: any = it.next().done;
+console.log(String(d));
+`
+	if got, want := runProgramGo(t, src), "true\n"; got != want {
+		t.Fatalf("iterator-result .done boxed run printed %q, want %q", got, want)
+	}
+}
