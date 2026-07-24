@@ -274,6 +274,17 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		// lowering bound the closure to a Go local, so the recursive call is a plain
 		// call on that func value rather than on a top-level function name.
 		callee = ident(goName)
+	} else if r.isDynamic(kids[0]) || r.localStorageDynamic(kids[0]) {
+		// A callee identifier bound to a boxed value.Value slot dispatches through the
+		// runtime Call even when its symbol carries the function flag, the shape a
+		// require of a function-exporting module takes: const f = require('./fn') binds
+		// f to the module's exported function as a box, not a Go func a static name could
+		// call, and the checker aliases f's symbol to that exported function so the flag
+		// is set. This must precede the SymbolFunction branch, which would otherwise
+		// spell a capitalized Go name the boxed binding never emitted. The storage check
+		// also catches an implicit-any binding whose type the checker evolved to a
+		// concrete function while the slot itself stays a value.Value box.
+		return r.dynamicCall(kids[0], kids[1:])
 	} else if sym.Flags&frontend.SymbolFunction != 0 {
 		name, ok := exportedField(sym.Name)
 		if !ok {
@@ -311,13 +322,6 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		} else {
 			defaults = r.calleeDefaults(sym)
 		}
-	} else if r.isDynamic(kids[0]) || r.localStorageDynamic(kids[0]) {
-		// A binding of dynamic type used as a callee (a parameter typed any that holds
-		// a function) is a boxed function value, so it dispatches through the runtime
-		// Call the same way a non-identifier dynamic callee does. The storage check
-		// catches an implicit-any binding whose type the checker evolved to a concrete
-		// function at the call site while the slot itself stays a value.Value box.
-		return r.dynamicCall(kids[0], kids[1:])
 	} else {
 		// A bare identifier used as a callee that the checker accepted has a call
 		// signature, so the binding is a function value: an arrow or function
@@ -1426,6 +1430,13 @@ func (r *Renderer) closurePadForSlot(a frontend.Node, pt frontend.Type) ([]front
 // applies. A data property (a non-function field) is not callable and stays for
 // the read path.
 func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	// A boxed receiver, the exports object a require binds as a value.Value, carries
+	// the module's inferred object shape yet has no Go struct to select a func field
+	// off. Declining here keeps such a call off the struct-field path and lets it reach
+	// the dynamic dispatch below, which reads the method with a runtime Get and Call.
+	if r.isDynamic(recvNode) {
+		return nil, false, nil
+	}
 	t := r.prog.TypeAt(recvNode)
 	if t.Flags&frontend.TypeObject == 0 {
 		return nil, false, nil
@@ -1949,6 +1960,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ValueOfMethod")}}, nil
+	}
+	// A method the special cases above did not claim, called on a boxed receiver,
+	// dispatches through the runtime: the member m.fn is read with a dynamic Get and
+	// the result invoked with Call, the shape m.fn(x) takes where m = require('./mod')
+	// binds a module's exports object as a box. It routes here after toString and
+	// valueOf, which the value model answers with their own dedicated helpers, and
+	// before the string gate below, which would reject a boxed receiver.
+	if r.isDynamic(recvNode) {
+		return r.dynamicCall(callee, argNodes)
 	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}

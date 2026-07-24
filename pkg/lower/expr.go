@@ -53,6 +53,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// rather than the exported Inc and name a Go symbol the composition never
 		// declared. A non-alias local derefs to itself, so the deref is safe on any
 		// binding.
+		// A local bound to a boxed value.Value slot reads by its own Go name even when
+		// its symbol aliases a function, the shape const f = require('./fn') takes: the
+		// checker aliases f to the module's exported function so the function flag is set,
+		// but the binding holds the value.Value the loader returned, not the Go func the
+		// capitalized export names. So the boxed local shadows the function routing below
+		// and reads as its source name, the slot every other read and the dynamic call
+		// site use.
+		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
+			return ident(name), nil
+		}
 		if sym, ok := r.prog.SymbolAt(n); ok && r.derefAlias(sym).Flags&frontend.SymbolFunction != 0 {
 			sym = r.derefAlias(sym)
 			// A nested function declaration bound to a Go local reads by that local
