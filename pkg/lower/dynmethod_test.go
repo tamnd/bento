@@ -61,6 +61,41 @@ console.log(s.toString());
 	}
 }
 
+// TestConsoleLogSymbolToStringUnboxes pins that console.log(sym.toString()) over a
+// symbol prints the string toString gives without wrapping it in value.ConsoleValue.
+// The symbol binding is a boxed value, so callOfDynamicMember once claimed the call
+// produced a box and routed the console argument through ConsoleValue, but the
+// toString lowering unboxes a known-kind receiver to its concrete value.BStr, which
+// ConsoleValue, wanting a value.Value, cannot take: the emitted Go did not compile.
+// The receiver kind is known, so the call is a bstr, and console.log takes it direct.
+func TestConsoleLogSymbolToStringUnboxes(t *testing.T) {
+	src := `const a = Symbol("hello"); console.log(a.toString());`
+	out := renderProgram(t, src)
+	if strings.Contains(out, "ConsoleValue(") {
+		t.Fatalf("console.log(symbol.toString()) wrapped a bstr in value.ConsoleValue:\n%s", out)
+	}
+	if !strings.Contains(out, ".ToStringMethod().AsString()") {
+		t.Fatalf("symbol .toString() did not unbox to ToStringMethod().AsString():\n%s", out)
+	}
+}
+
+// TestConsoleLogSymbolToStringRuns builds and runs the same shape end to end, proving
+// the emitted Go compiles now that the console argument is the unboxed bstr.
+func TestConsoleLogSymbolToStringRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const a = Symbol("hello");
+const b = Symbol();
+console.log(a.toString());
+console.log(b.toString());
+`
+	got := runProgramGo(t, src)
+	want := "Symbol(hello)\nSymbol()\n"
+	if got != want {
+		t.Fatalf("console.log(symbol.toString()) run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestDynamicValueOfLowers pins that x.valueOf() on a dynamic receiver lowers to the
 // runtime dispatch rather than handing back: the call becomes recv.ValueOfMethod(),
 // which returns the receiver value the way Object.prototype.valueOf and the primitive

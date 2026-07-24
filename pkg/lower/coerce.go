@@ -759,7 +759,21 @@ func (r *Renderer) callOfDynamicMember(n frontend.Node) bool {
 		return false
 	}
 	recv := r.prog.Children(kids[0])
-	return len(recv) == 2 && r.isDynamic(recv[0])
+	if len(recv) != 2 || !r.isDynamic(recv[0]) {
+		return false
+	}
+	// A recv.toString() on a boxed receiver whose kind the checker knows does not
+	// route through dynamicCall: the toString lowering (calls.go) unboxes it to the
+	// receiver's concrete value.BStr, since the known kind types the call string and
+	// AsString() matches that. So the call yields a bstr, not a box, and must stay off
+	// the dynamic path, the same exclusion the toString emission makes on the
+	// receiver's declared type. Only a genuinely any or unknown receiver keeps the
+	// boxed toString result, and valueOf always stays boxed, so neither is excluded.
+	if strings.TrimSpace(r.prog.Text(recv[1])) == "toString" && r.isBoxedValue(recv[0]) &&
+		r.prog.TypeAt(recv[0]).Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return false
+	}
+	return true
 }
 
 // dynamicArrayElemCallee reports whether calleeNode is an element read a[k] whose array
