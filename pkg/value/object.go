@@ -33,6 +33,7 @@ type Object struct {
 	elemsSealed   bool         // set once Object.seal marks an array's elements non-configurable, so a delete fails
 	elemsFrozen   bool         // set once Object.freeze marks an array's elements non-writable, so a write drops
 	proxy         *proxyData   // non-nil marks this Object a Proxy exotic object; every internal method routes through its handler
+	regexp        *RegExp      // non-nil marks this Object the dynamic box of a RegExp; typeof is "object" and its reads and string form route to the regexp
 }
 
 // isExtensible reports whether new properties may still be added, the state

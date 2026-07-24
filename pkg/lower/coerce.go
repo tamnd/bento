@@ -978,6 +978,17 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if r.producesBoxedValue(src) {
 		return expr, nil
 	}
+	// A regexp flowing into a dynamic slot boxes into a value.Value through
+	// value.RegExpValue, which keeps the live *value.RegExp reachable so the box is
+	// truthy, reports typeof "object", stringifies to its literal form, and answers its
+	// own accessors. It routes before the primitive switch, whose kind tests a regexp
+	// type would otherwise fall past to the handback. A dynamic call of .test or .exec
+	// off the box is a later slice; the box supports the value coercions and the
+	// property reads.
+	if r.isRegExp(src) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "RegExpValue"), Args: []ast.Expr{expr}}, nil
+	}
 	// A value whose Go shape is a fixed-object struct, a { x: string } binding flowing
 	// into a dynamic slot (an any, an index-signature dictionary), boxes into a live
 	// value.Object copying its fields, so the box carries the same properties the struct

@@ -458,6 +458,16 @@ func (v Value) Get(key BStr) Value {
 		}
 		return o.getChained(v, key)
 	case KindObject:
+		if re := v.object().regexp; re != nil {
+			// A boxed regexp answers its own accessors, .source and .flags and the flag
+			// booleans and .lastIndex, from the live regexp rather than an empty property
+			// bag, so a dynamic read off an any-typed regexp reads the same value the
+			// concrete accessor would. A name that is not a regexp own property climbs the
+			// ordinary chain and ends at undefined.
+			if val, ok := regexpGet(re, name); ok {
+				return val
+			}
+		}
 		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
@@ -938,6 +948,14 @@ func hintName(hint primHint) Value {
 func toPrimitive(v Value, hint primHint) Value {
 	if !isObjectLike(v) {
 		return v
+	}
+	if re := v.asRegExp(); re != nil {
+		// A boxed regexp has no Symbol.toPrimitive and its valueOf returns itself, so
+		// OrdinaryToPrimitive would fall to its toString either way: the literal form
+		// "/" + source + "/" + flags. Short-circuiting to that here makes String(box), a
+		// template substitution, and "" + box all render the pattern the same way the
+		// concrete RegExp.prototype.toString does.
+		return StringValue(re.ToStringBStr())
 	}
 	exotic := v.getSymKey(symbolToPrimitive)
 	if !exotic.IsNullish() {
