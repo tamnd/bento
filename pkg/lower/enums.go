@@ -380,6 +380,94 @@ func (r *Renderer) enumValueRef(n frontend.Node) (ast.Expr, bool, error) {
 	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, true, nil
 }
 
+// enumReverseInfo returns the numeric enum a bracket read Foo[i] indexes into for
+// its reverse mapping, matched by the receiver identifier's enum name. It reports
+// ok=false for a receiver that is not an identifier, not a registered enum, a
+// string enum (which has no reverse map), or a const enum (which is erased and whose
+// numeric-index read the checker rejects outright), so the caller falls through to
+// its other element-access paths.
+func (r *Renderer) enumReverseInfo(obj frontend.Node) (*enumInfo, bool) {
+	if obj.Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	info, ok := r.enums[r.prog.Text(obj)]
+	if !ok || info.isString || info.isConst {
+		return nil, false
+	}
+	return info, true
+}
+
+// enumReverseRead lowers Foo[i] on a numeric enum to its reverse mapping: the member
+// name whose value equals i, or the empty string when no member matches. A
+// compile-time numeric-literal index folds straight to the matching name, dropping
+// the switch; a runtime number index rides a switch over the member values inside a
+// value-returning closure. When two members share a value TypeScript's reverse map
+// keeps the last, so the fold and the switch both resolve a duplicate value to the
+// last member's name and the switch emits one case per distinct value, never a
+// duplicate Go case. The whole expression's Go type is value.BStr, the string the
+// checker gives the reverse read; a miss yields the empty string rather than
+// undefined, the same static-type trust the index-signature read takes for an
+// absent key.
+func (r *Renderer) enumReverseRead(info *enumInfo, idxNode frontend.Node) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	// A compile-time numeric-literal index resolves at build time: scan for the last
+	// member with that value (last wins, matching the reverse map) and fold to its
+	// name, or the empty string for no match.
+	if idxNode.Kind() == frontend.NodeNumericLiteral {
+		if v, ok := numericLiteralValue(r.prog.Text(idxNode)); ok {
+			name := ""
+			for _, m := range info.members {
+				if m.value == v {
+					name = m.name
+				}
+			}
+			return enumNameLit(name), nil
+		}
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, err
+	}
+	// A runtime number index switches over the distinct member values. Later members
+	// overwrite an earlier one that shares a value, so the switch keeps one case per
+	// value carrying the last member's name, which both matches the reverse map and
+	// keeps the Go switch free of a duplicate case.
+	var order []float64
+	name := map[float64]string{}
+	for _, m := range info.members {
+		if _, seen := name[m.value]; !seen {
+			order = append(order, m.value)
+		}
+		name[m.value] = m.name
+	}
+	cases := make([]ast.Stmt, 0, len(order))
+	for _, v := range order {
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{enumValueLit(v)},
+			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{enumNameLit(name[v])}}},
+		})
+	}
+	tmp := r.freshTemp()
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident(tmp)}, Type: ident("float64")}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "BStr")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.SwitchStmt{Tag: ident(tmp), Body: &ast.BlockStmt{List: cases}},
+			&ast.ReturnStmt{Results: []ast.Expr{enumNameLit("")}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit, Args: []ast.Expr{idx}}, nil
+}
+
+// enumNameLit renders an enum member name as a value.BStr string literal, the string
+// a reverse-map read yields. A member name is a Go-identifier-legal ASCII string, so
+// the quoted Go string carries the same code units the JS string would.
+func enumNameLit(name string) ast.Expr {
+	return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}}}
+}
+
 // renderEnums emits the package-level block for each plain enum in source order. A
 // const enum emits nothing: its members were inlined at every use site. A numeric
 // enum reads like a hand-written Go enum, a float64-typed constant per member; a

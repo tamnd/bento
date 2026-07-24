@@ -991,6 +991,15 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			return expr, err
 		}
 	}
+	// Foo[i] with a number index on a numeric enum receiver is the reverse mapping:
+	// TypeScript reifies a numeric enum with a reverse map from each member's value
+	// back to its name, so Color[2] reads "B". It routes before the array and shape
+	// paths, whose arrayElem read fails on the enum object and would hand the read
+	// back. A string enum omits the reverse map and a const enum is erased, so those
+	// receivers report ok=false here and stay on their own paths.
+	if info, ok := r.enumReverseInfo(obj); ok && r.isNumber(idxNode) {
+		return r.enumReverseRead(info, idxNode)
+	}
 	// C["m"] or c["m"] with a constant string key on a class receiver is the bracket
 	// spelling of the dotted member read, the shape a non-identifier or computed
 	// member name (a string method name, a ["m"] accessor, a [k] name whose k is a
