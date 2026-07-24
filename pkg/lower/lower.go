@@ -374,6 +374,15 @@ type Renderer struct {
 	// each queued .then callback in order. A program that mints no promise drains
 	// nothing, so its main is unchanged.
 	usesPromise bool
+	// usesExitCallbacks records that the program registered a process 'exit' listener
+	// with process.on('exit', fn), so the assembled main runs the registered callbacks
+	// once at its very end (value.RunExitCallbacks), after the microtask drain, the
+	// point Node fires the exit event: the event loop is empty and the process is about
+	// to exit. The callbacks run in registration order, the order the runtime list
+	// keeps them. A program that registers no exit listener runs nothing, so its main is
+	// unchanged. This is what lets common.mustCall, which asserts on exit that a wrapped
+	// function ran the expected number of times, observe the run.
+	usesExitCallbacks bool
 	// usesCommonJSModule records that the program read the CommonJS module or exports
 	// wrapper global, so the assembled program emits the package-level module object
 	// and its exports alias (see commonjs.go). A module object is one value.Object with

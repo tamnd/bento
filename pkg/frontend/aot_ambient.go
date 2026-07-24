@@ -21,7 +21,9 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // ambientSource declares the Node globals and node: modules the AOT compiler can
 // lower. process.env is a string-or-undefined map, which lowers to the optional
 // machinery; the streams' write takes a string and returns a boolean, matching
-// Node. __dirname and __filename are the CommonJS module-path globals, each a
+// Node. process.on is declared only for the "exit" event, the one the lowerer
+// registers as a run-at-exit callback, so a listener on any other event still
+// errors rather than compiling to a no-op. __dirname and __filename are the CommonJS module-path globals, each a
 // string the lowerer fills from the module's own file path, so a program reading
 // either resolves the same absolute path Node hands its wrapper. module and
 // exports are the CommonJS export globals, typed any so a read of module.exports
@@ -43,6 +45,7 @@ interface BentoProcess {
 	argv: string[];
 	stdout: BentoWriteStream;
 	stderr: BentoWriteStream;
+	on(event: "exit", listener: () => void): void;
 }
 declare var process: BentoProcess;
 declare var __dirname: string;
