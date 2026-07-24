@@ -249,11 +249,13 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
-		// A read of the legacy __proto__ accessor is the object's prototype, not an own
-		// property of that name, so it lowers to GetPrototype rather than a Get on the
-		// bag. The write side mirrors this to SetPrototype.
+		// A read of the legacy __proto__ accessor is the object's prototype, unless the
+		// receiver carries an own "__proto__" data property (JSON.parse installs one),
+		// which shadows the inherited accessor. ProtoRead resolves that precedence: own
+		// data property first, else the prototype. The write side mirrors the accessor
+		// through SetPrototype.
 		if prop == "__proto__" {
-			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetPrototype")}}, nil
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ProtoRead")}}, nil
 		}
 		key := &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}}}
 		return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{key}}, n)

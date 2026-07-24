@@ -83,6 +83,22 @@ func (v Value) SetProtoAssign(proto Value) Value {
 	}
 }
 
+// ProtoRead is the read of the legacy `obj.__proto__` member. The name __proto__
+// is an accessor inherited from Object.prototype, so an own property of that name
+// shadows it: JSON.parse and CreateDataProperty install an own "__proto__" data
+// property that a later obj.__proto__ read must return in place of the prototype
+// (see JSON/parse/duplicate-proto). Only when the receiver carries no own __proto__
+// does the read fall through to the accessor's [[Prototype]] result.
+func (v Value) ProtoRead() Value {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		if o := v.object(); o.hasOwn(FromGoString("__proto__")) {
+			return v.Get(FromGoString("__proto__"))
+		}
+	}
+	return v.GetPrototype()
+}
+
 // GetPrototype returns the receiver's [[Prototype]] as a value, the runtime behind
 // Object.getPrototypeOf(o). A slot holding an object reports that object; a slot
 // left nil, whether never set or set to null through Object.create(null), reports
