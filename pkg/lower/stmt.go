@@ -4892,6 +4892,26 @@ func floatLiteral(init ast.Expr) (ast.Expr, bool) {
 	return &ast.BasicLit{Kind: token.FLOAT, Value: lit.Value + ".0"}, true
 }
 
+// floatifyBindingDefault floatifies a plain integer-literal default when the
+// binding's declared Go type is float64, so let [x = 23] = [undefined] binds
+// x := 23.0 the way a plain let x = 23 does through foldFloatDecl, rather than an
+// int the number sink cannot take. A default that is not a bare integer literal, or
+// a binding whose Go type is not float64, is left as coerceToType rendered it, so a
+// string, boolean, or already-float default passes through untouched.
+func (r *Renderer) floatifyBindingDefault(expr ast.Expr, nameNode frontend.Node) (ast.Expr, error) {
+	nameGo, err := r.typeExpr(r.bindingDeclaredType(nameNode))
+	if err != nil {
+		return nil, err
+	}
+	if !isFloat64Ident(nameGo) {
+		return expr, nil
+	}
+	if f, ok := floatLiteral(expr); ok {
+		return f, nil
+	}
+	return expr, nil
+}
+
 // loopBody lowers the body of a loop, which JavaScript allows to be either a
 // braced block or a single unbraced statement. A block lowers as its statements;
 // a lone statement is lowered on its own and wrapped in a Go block, since a Go

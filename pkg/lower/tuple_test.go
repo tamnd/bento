@@ -313,3 +313,17 @@ console.log(g([3, 4]) + "");
 		t.Fatalf("dead-default tuple parameter printed %q, want %q", got, want)
 	}
 }
+
+// TestTupleDestructureNumberDefaultFloatifies pins that a number-literal default in
+// an always-undefined tuple destructure binds x := 23.0, the float64 the number sink
+// takes, rather than the bare int coerceToType leaves, which the emitted Go could not
+// pass to value.Number. It mirrors the floatification a plain let x = 23 already gets.
+func TestTupleDestructureNumberDefaultFloatifies(t *testing.T) {
+	const src = `let [x = 23] = [undefined];
+console.log(x);
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "x := 23.0") {
+		t.Errorf("tuple destructure number default did not floatify:\n%s", source)
+	}
+}
