@@ -3358,6 +3358,15 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 	paramNodes := r.funcParamNodes(m.node)
 	for i, a := range argNodes {
 		a = r.argForDefaultedSlot(paramNodes, sig, i, a)
+		// An untyped destructured parameter takes one boxed value.Value slot, so an array
+		// or object literal argument boxes member by member rather than passing the Go
+		// struct its own shape would build, which the value.Value slot cannot hold.
+		if boxed, ok, err := r.dynamicDestructureArg(a, sig.Params[i]); err != nil {
+			return nil, err
+		} else if ok {
+			args = append(args, boxed)
+			continue
+		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
@@ -3438,6 +3447,15 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 	paramNodes := r.funcParamNodes(m.node)
 	for i, a := range argNodes {
 		a = r.argForDefaultedSlot(paramNodes, sig, i, a)
+		// An untyped destructured parameter takes one boxed value.Value slot, so an array
+		// or object literal argument boxes member by member rather than passing the Go
+		// struct its own shape would build, which the value.Value slot cannot hold.
+		if boxed, ok, err := r.dynamicDestructureArg(a, sig.Params[i]); err != nil {
+			return nil, err
+		} else if ok {
+			args = append(args, boxed)
+			continue
+		}
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err

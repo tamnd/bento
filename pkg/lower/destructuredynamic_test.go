@@ -118,6 +118,48 @@ console.log(f({ x: 4, y: 5, z: 6 }));`))
 	}
 }
 
+// TestUntypedDestructureMethodArgBoxes proves an array or object literal passed to a
+// class method whose parameter is an untyped destructuring pattern boxes into the one
+// value.Value slot the method takes, rather than passing the Go tuple or object struct
+// the literal's own shape builds, which the value.Value parameter cannot hold. Before
+// the method-call path shared the dynamic-slot boxing the function-call path had, the
+// raw struct reached the method and the emitted Go did not compile.
+func TestUntypedDestructureMethodArgBoxes(t *testing.T) {
+	got := renderUntypedBinding(t, `class C {
+  m([x, y, z]) { console.log(x, y, z); }
+  static s({ a, b }) { console.log(a, b); }
+}
+new C().m([1, 2, 3]);
+C.s({ a: 4, b: 5 });`)
+	for _, want := range []string{
+		"NewC().M(value.NewArrayValue(",
+		"CS(value.NewObject()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated Go missing %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Tuple_") {
+		t.Fatalf("a destructure method arg still passed a raw tuple struct:\n%s", got)
+	}
+}
+
+// TestUntypedDestructureMethodArgRuns compiles and runs the method-call boxing end to
+// end, so the boxed array and object flow into the untyped patterns and each bound name
+// reads back out of its one slot.
+func TestUntypedDestructureMethodArgRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `class C {
+  m([x, y, z]) { return String(x) + String(y) + String(z); }
+  static s({ a, b }) { return String(a) + String(b); }
+}
+console.log(new C().m([1, 2, 3]));
+console.log(C.s({ a: 4, b: 5 }));`))
+	if got != "123\n45\n" {
+		t.Fatalf("got %q, want %q", got, "123\n45\n")
+	}
+}
+
 // TestUntypedArrayParamLowersToDynamicSlot proves an untyped array-pattern parameter
 // takes one boxed value.Value slot and reads its positions through the dynamic GetIndex
 // protocol, the index analog of the object pattern's Get.
