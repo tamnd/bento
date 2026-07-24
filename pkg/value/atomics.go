@@ -72,15 +72,29 @@ func AtomicLoad(a AtomicView, index float64) float64 {
 	return a.At(i)
 }
 
+// atomicToInteger is the ToIntegerOrInfinity Atomics.store applies to its value before
+// it stores or returns it (25 §25.4.3.11 step 3): truncate toward zero and normalize
+// -0 to +0, leaving an infinity as it is. It is what makes `Atomics.store(i32a, 0, -0)`
+// return +0 rather than -0 and a fractional value store and return its truncation.
+func atomicToInteger(v float64) float64 {
+	if t := math.Trunc(v); t != 0 {
+		return t
+	}
+	return 0 // +0, the normalization -0 and +0 both collapse to.
+}
+
 // AtomicStore writes value at the index and returns it, the lowering of Atomics.store.
-// The spec returns the integer value passed in, not the wrapped element the store
-// keeps, so a value outside the element's range reads back here as the value given
+// The value runs through ToIntegerOrInfinity first, so a -0 normalizes to +0 and a
+// fractional value truncates before it is both stored and returned, matching Object.is
+// on the result. The spec returns that integer, not the wrapped element the store
+// keeps, so a value outside the element's range reads back here as the integer given
 // while the stored element wraps; the covered subset passes an in-range integer, for
 // which the two agree.
 func AtomicStore(a AtomicView, index float64, value float64) float64 {
 	i := atomicIndex(a, index)
-	a.SetAt(i, value)
-	return value
+	v := atomicToInteger(value)
+	a.SetAt(i, v)
+	return v
 }
 
 // AtomicAdd adds value to the element and returns the previous element, the lowering of
