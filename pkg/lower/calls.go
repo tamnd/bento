@@ -2337,13 +2337,24 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 		}
 		// A top-level value whose JSON form is undefined (a function, a symbol, or
 		// undefined itself) makes JSON.stringify return the value undefined, not a
-		// string. The typed call result is a string, so there is no BStr the call can
-		// yield that equals undefined; hand the unit back rather than ship "" where
-		// Node produces undefined. A function or symbol nested in an array or object
-		// is a different shape (null, or an omitted key) the serializer handles, so
-		// only the bare top-level argument is guarded here.
+		// string. Emit value.JSONStringifyUndefined, which evaluates the argument for
+		// its side effects and returns the undefined Value; jsonStringifyUndefinedCall
+		// (see isDynamic) marks this call node dynamic, so the box flows undefined into
+		// a dynamic sink and hands back into a string slot rather than shipping "" where
+		// Node produces undefined. A function or symbol nested in an array or object is a
+		// different shape (null, or an omitted key) the serializer handles, so only the
+		// bare top-level argument is treated here. With a replacer or space present the
+		// result is still undefined, but that shape is rare and left as a safe handback.
 		if r.jsonStringifyIsUndefinedResult(r.prog.TypeAt(argNodes[0])) {
-			return nil, &NotYetLowerable{Reason: "JSON.stringify of a top-level value whose JSON form is undefined (a function, symbol, or undefined) returns undefined rather than a string, a later slice"}
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: "JSON.stringify of a top-level value whose JSON form is undefined, with a replacer or space argument, is a later slice"}
+			}
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "JSONStringifyUndefined"), Args: []ast.Expr{arg}}, nil
 		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {

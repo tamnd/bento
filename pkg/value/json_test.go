@@ -33,6 +33,26 @@ func TestJSONStringifyScalars(t *testing.T) {
 	}
 }
 
+// TestJSONStringifyBoxedUndefinedElement proves a boxed JSON-undefined value, a
+// symbol being the motivating one, folds to null as an array element and omits its
+// key as an object property, the same as a bare Go func. A symbol[] element and an
+// any-typed field both reach the static walk as a value.Value, so the fold must key
+// off the boxed kind, not only the Go func kind.
+func TestJSONStringifyBoxedUndefinedElement(t *testing.T) {
+	sym := NewSymbol(FromGoString("desc"))
+	if got := JSONStringify(NewArray[Value](sym)).ToGoString(); got != "[null]" {
+		t.Fatalf("JSONStringify([sym]) = %q, want [null]", got)
+	}
+	if got := JSONStringify(NewArray[Value](Number(1), sym, Number(2))).ToGoString(); got != "[1,null,2]" {
+		t.Fatalf("JSONStringify([1,sym,2]) = %q, want [1,null,2]", got)
+	}
+	obj := NewObject()
+	obj.Set(FromGoString("key"), sym)
+	if got := JSONStringify(obj).ToGoString(); got != "{}" {
+		t.Fatalf("JSONStringify({key: sym}) = %q, want {}", got)
+	}
+}
+
 // TestJSONStringifyStringEscapes checks that string escaping matches the
 // specification's well-formed JSON.stringify: the two structural characters, the
 // short control escapes, the \u form for the other control characters, and a

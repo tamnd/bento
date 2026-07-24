@@ -450,6 +450,15 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.regExpBoxedResultCall(n) {
 		return true
 	}
+	// JSON.stringify of a top-level value whose JSON form is undefined lowers to
+	// value.JSONStringifyUndefined, which returns the undefined Value (calls.go). The
+	// checker types JSON.stringify as string, a Go type the box does not carry, so
+	// isDynamic recognizes the call by shape to keep the box on the dynamic path: it
+	// flows undefined into a dynamic sink and hands back into a string slot rather than
+	// unboxing to a wrong string.
+	if r.jsonStringifyUndefinedCall(n) {
+		return true
+	}
 	// A .value read off an IteratorResult whose type is not a clean primitive, the
 	// array iterator's `number | undefined` value being the first, stays the boxed
 	// value.Value the IterResult carries: there is no single Go type to coerce it to,
@@ -576,6 +585,52 @@ func (r *Renderer) objectBoxedResultCall(n frontend.Node) bool {
 	// classification does not matter.
 	args := kids[1:]
 	return len(args) == 1 && r.isDynamic(args[0])
+}
+
+// jsonStringifyUndefinedCall reports whether n is a single-argument JSON.stringify
+// call whose argument's JSON form is undefined (a function, a symbol, or undefined).
+// jsonCall lowers exactly this shape to value.JSONStringifyUndefined, which returns
+// the undefined Value rather than a string, so isDynamic keeps the box on the dynamic
+// path where a dynamic sink takes it as undefined and a string slot hands back. It
+// must stay in lockstep with the emit guard in jsonCall: same one-argument test, same
+// jsonStringifyIsUndefinedResult predicate over the argument's type.
+func (r *Renderer) jsonStringifyUndefinedCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 {
+		return false
+	}
+	if !r.isGlobalRef(parts[0], "JSON") || r.prog.Text(parts[1]) != "stringify" {
+		return false
+	}
+	args := kids[1:]
+	return len(args) == 1 && r.jsonStringifyIsUndefinedResult(r.prog.TypeAt(args[0]))
+}
+
+// guardJSONStringifyUndefinedIntoString hands back when a JSON.stringify call whose
+// JSON form is undefined flows into a clean string slot. The call lowers to the
+// undefined Value box, and coercing it into a string would run value.ToString, which
+// renders "undefined" — a value whose typeof is "string" where Node keeps a value
+// whose typeof is "undefined". There is no BStr that equals undefined, so the only
+// sound result is a handback. A slot that is any, unknown, or a union keeps the box
+// and is not guarded here.
+func (r *Renderer) guardJSONStringifyUndefinedIntoString(src frontend.Node, targetFlags frontend.TypeFlags) error {
+	if targetFlags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return nil
+	}
+	if targetFlags&frontend.TypeString == 0 {
+		return nil
+	}
+	if r.jsonStringifyUndefinedCall(src) {
+		return &NotYetLowerable{Reason: "JSON.stringify of a top-level value whose JSON form is undefined bound into a string slot cannot be represented as a string, a later slice"}
+	}
+	return nil
 }
 
 // arrayProtoBorrowedResultCall reports whether n is a call whose callee is
@@ -1060,7 +1115,13 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// overload's return, a concrete type the primitive box path would try to construct, so
 	// recognizing the call here lets a slot, a stringify, or a console.log take the box
 	// straight through the same as any other boxed result.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src)
+	// JSON.stringify of a top-level value whose JSON form is undefined lowers to
+	// value.JSONStringifyUndefined, a value.Value box (calls.go), even though the
+	// checker types JSON.stringify as string. Recognizing it here lets a console.log or
+	// a stringify take the box through value.ConsoleValue, which renders the undefined
+	// box as "undefined", rather than wrapping the box in value.ToString as the string
+	// type would otherwise drive.
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src)
 }
 
 // isDynamicValueLogical reports whether src is a value-returning && or || whose
@@ -2217,6 +2278,9 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	if err := r.guardOptionalShapeCrossTypes(r.prog.TypeAt(srcNode), r.retType); err != nil {
 		return nil, err
 	}
+	if err := r.guardJSONStringifyUndefinedIntoString(srcNode, r.retType.Flags); err != nil {
+		return nil, err
+	}
 	srcDyn := r.isDynamic(srcNode)
 	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(r.retType)
 	switch {
@@ -2274,6 +2338,9 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	// carries an optional property cannot compile as one Go struct assigned to
 	// another, so it hands back the way it did before optional shapes interned.
 	if err := r.guardOptionalShapeCross(src, r.prog.TypeAt(target)); err != nil {
+		return nil, err
+	}
+	if err := r.guardJSONStringifyUndefinedIntoString(src, r.prog.TypeAt(target).Flags); err != nil {
 		return nil, err
 	}
 	srcDyn := r.isDynamic(src)
