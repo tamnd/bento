@@ -374,6 +374,14 @@ type Renderer struct {
 	// each queued .then callback in order. A program that mints no promise drains
 	// nothing, so its main is unchanged.
 	usesPromise bool
+	// usesCommonJSModule records that the program read the CommonJS module or exports
+	// wrapper global, so the assembled program emits the package-level module object
+	// and its exports alias (see commonjs.go). A module object is one value.Object with
+	// an exports property; the exports alias holds the same object the property starts
+	// at, so exports.x and module.exports.x reach one object, and a later
+	// module.exports = v reassigns the property without moving the alias, the divergence
+	// Node's wrapper has. A program that names neither global emits no such state.
+	usesCommonJSModule bool
 	// tmpSeq is a monotonic counter the lowerer draws generated temporary names from,
 	// for the places a single source construct needs a Go local with no source name:
 	// the element a destructuring for...of binds before it reads each position out of
