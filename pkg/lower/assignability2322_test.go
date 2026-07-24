@@ -59,6 +59,33 @@ func TestAssignability2322NumberForStringAssignHandsBack(t *testing.T) {
 	}
 }
 
+// A class value assigned to a number binding is a 2322 whose source is a class object and
+// whose slot is a primitive. bridgeClassBinding rescues only a class-typed slot, so a class
+// value dropped into a float64 slot would ship Go the toolchain rejects; the assignment
+// guard hands the unit back instead. This pins the class-source-into-non-class-slot case
+// the srcClass excuse used to wave through.
+func TestAssignability2322ClassValueForNumberAssignHandsBack(t *testing.T) {
+	src := "class C {}\nlet x = 3;\nx = C;\nconsole.log(typeof x);\n"
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "not assignable") {
+		t.Fatalf("class-value-for-number assign reason = %q, want a not-assignable handback", reason)
+	}
+	if strings.Contains(reason, "no representation guard") {
+		t.Fatalf("class-value-for-number assign reason = %q, want the guarded handback, not the reconciliation", reason)
+	}
+}
+
+// A builtin constructor value assigned to a number binding is the same shape: the source
+// type does not lower, so the flagged-site guard reads it as a genuine mismatch and hands
+// back rather than store TypeError's static side into a float64 slot.
+func TestAssignability2322BuiltinCtorForNumberAssignHandsBack(t *testing.T) {
+	src := "let x = 3;\nx = TypeError;\nconsole.log(typeof x);\n"
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "not assignable") {
+		t.Fatalf("builtin-ctor-for-number assign reason = %q, want a not-assignable handback", reason)
+	}
+}
+
 // A number dropped into a string-array element is a 2322 no guarded bridge reaches, since
 // the array literal lowers its element straight into the Go slice. The end-of-render
 // reconciliation catches the unseen site and hands the unit back rather than ship the
