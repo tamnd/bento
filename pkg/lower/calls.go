@@ -707,28 +707,11 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		}
 		// An untyped destructured parameter takes one boxed value.Value slot rather than
 		// the Go struct or slice its checker type would map to, so the argument boxes to a
-		// dynamic value here the same way a static value crossing into any does. Bridging
-		// against the parameter's object type instead would build the wrong struct, the one
-		// with dynamic fields the argument's own concrete struct does not match. An array or
-		// object literal boxes member by member straight from its node: its contextual type
-		// is the pattern's shapeless tuple, which the typed literal path cannot spell, so it
-		// skips that lowering rather than hand the whole call back on it.
-		if r.dynamicParamSlot(params[i]) {
-			if boxed, ok, err := r.boxLiteralToDynamic(a); err != nil {
-				return nil, err
-			} else if ok {
-				args = append(args, boxed)
-				continue
-			}
-			lowered, err := r.lowerExpr(a)
-			if err != nil {
-				return nil, err
-			}
-			lowered, err = r.bridgeArg(lowered, a, frontend.Type{Flags: frontend.TypeAny})
-			if err != nil {
-				return nil, err
-			}
-			args = append(args, lowered)
+		// dynamic value here the same way a static value crossing into any does.
+		if boxed, ok, err := r.dynamicDestructureArg(a, params[i]); err != nil {
+			return nil, err
+		} else if ok {
+			args = append(args, boxed)
 			continue
 		}
 		lowered, err := r.lowerArgAt(a, params[i].Type)
@@ -1326,6 +1309,36 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 		return nil, &NotYetLowerable{Reason: "an argument the checker calls not assignable whose Go type differs from the parameter is a later slice"}
 	}
 	return r.bridgeClassBinding(lowered, node, pt)
+}
+
+// dynamicDestructureArg boxes an argument bound for an untyped destructured parameter
+// into its one value.Value slot and reports ok. Such a parameter arrives as a single
+// boxed value the pattern reads through the dynamic protocol, not the Go struct or slice
+// its checker type maps to, so an array or object literal argument boxes member by member
+// straight from its node and any other source bridges against the any slot. Bridging
+// against the parameter's own object type instead would build the wrong struct, the one
+// with dynamic fields the argument's concrete struct does not carry. It reports ok=false
+// when the parameter is not such a slot, so the caller bridges against the declared type
+// the ordinary way. A method call and a plain function call share it, so a literal into a
+// shapeless-tuple destructure boxes the same either way.
+func (r *Renderer) dynamicDestructureArg(a frontend.Node, p frontend.Param) (ast.Expr, bool, error) {
+	if !r.dynamicParamSlot(p) {
+		return nil, false, nil
+	}
+	if boxed, ok, err := r.boxLiteralToDynamic(a); err != nil {
+		return nil, false, err
+	} else if ok {
+		return boxed, true, nil
+	}
+	lowered, err := r.lowerExpr(a)
+	if err != nil {
+		return nil, false, err
+	}
+	bridged, err := r.bridgeArg(lowered, a, frontend.Type{Flags: frontend.TypeAny})
+	if err != nil {
+		return nil, false, err
+	}
+	return bridged, true, nil
 }
 
 // lowerArgAt lowers one argument node against its declared parameter type. An
