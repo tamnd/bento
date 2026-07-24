@@ -210,14 +210,23 @@ func (r *Renderer) scanArguments(n frontend.Node, reads, supported, indexed *boo
 		return
 	case frontend.NodeIdentifier:
 		if r.prog.Text(n) == "arguments" {
+			// A bare reference to the arguments object, used as a whole value, boxes the
+			// snapshot store (see lowerExpr's arguments case), so it is a backed read. The
+			// .length, arguments[i], and for..of forms are intercepted by their own branches
+			// above and never reach here.
 			*reads = true
-			*supported = false
 		}
 		return
 	case frontend.NodePropertyAccessExpression:
 		kids := r.prog.Children(n)
-		if len(kids) == 2 && r.isArgumentsIdent(kids[0]) && r.prog.Text(kids[1]) == "length" {
+		if len(kids) == 2 && r.isArgumentsIdent(kids[0]) {
+			// arguments.length reads the store count; any other property of the arguments
+			// object (callee, caller) is not backed by the snapshot, so the whole function
+			// hands back rather than box the object and read undefined off the array.
 			*reads = true
+			if r.prog.Text(kids[1]) != "length" {
+				*supported = false
+			}
 			return
 		}
 		if len(kids) == 2 {

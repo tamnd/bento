@@ -22,6 +22,18 @@ import (
 func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	switch n.Kind() {
 	case frontend.NodeIdentifier:
+		// A bare reference to the arguments object, used as a whole value (passed to a
+		// call, spread, assigned), boxes the parameter snapshot this body materialized
+		// into a dynamic array value. `arguments` is a reserved word in the strict-mode
+		// code bento compiles, so an identifier spelled arguments is always the implicit
+		// arguments object, never a user binding. The .length, arguments[i], and for..of
+		// arguments forms have their own reads and reach here only as a bare value use.
+		// When no snapshot is in scope (argsObjName empty) this falls through to the
+		// ordinary name handling, which reports the read the plan could not back.
+		if r.argsObjName != "" && r.prog.Text(n) == "arguments" {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "ArgumentsValue"), Args: []ast.Expr{ident(r.argsObjName)}}, nil
+		}
 		// A bare reference to a go: import binding used as a value is a constant read
 		// into the Go package, marshaled by the constant's Go type. It is checked by the
 		// binding's own text, the key the import recorded, before the local-name path,

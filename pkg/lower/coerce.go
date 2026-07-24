@@ -978,6 +978,14 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if r.producesBoxedValue(src) {
 		return expr, nil
 	}
+	// A bare arguments reference already lowered to value.ArgumentsValue (see lowerExpr's
+	// arguments case), which is a box, so it enters a dynamic slot as itself with no
+	// wrapping. Its static type is IArguments, which the primitive switch below does not
+	// recognize, so without this passthrough the boxed expr would be re-boxed and hand
+	// back. Gated on the snapshot being in scope, the same guard the lowerExpr case takes.
+	if r.argsObjName != "" && r.isArgumentsIdent(src) {
+		return expr, nil
+	}
 	// A regexp flowing into a dynamic slot boxes into a value.Value through
 	// value.RegExpValue, which keeps the live *value.RegExp reachable so the box is
 	// truthy, reports typeof "object", stringifies to its literal form, and answers its
