@@ -1129,6 +1129,45 @@ func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig fron
 	return out, nil
 }
 
+// deferredDestructureThrowHandback reports a handback when a parameter destructuring the
+// binds carry can throw at bind time. A generator or async generator lowers its parameter
+// destructuring into the coroutine body, which the language runs eagerly at the call that
+// creates the iterator, before the first resume. So a destructure that throws at bind (a
+// nested pattern reading a property off a nullish element, which emits an IsNullish guard
+// that calls value.Throw) would fire on the first next() under our lowering rather than at
+// the call, the wrong moment. A destructure that binds without a bind-time throw is
+// unaffected, so a plain generator destructure lowers unchanged; only the throwing shape
+// hands back until the eager-parameter path lands. The caller passes the binds it built,
+// so this inspects exactly what the coroutine body would run.
+func deferredDestructureThrowHandback(binds []ast.Stmt) error {
+	throws := false
+	for _, s := range binds {
+		ast.Inspect(s, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if ok && pkg.Name == "value" && sel.Sel.Name == "Throw" {
+				throws = true
+				return false
+			}
+			return true
+		})
+		if throws {
+			break
+		}
+	}
+	if throws {
+		return &NotYetLowerable{Reason: "a generator parameter destructuring that throws at bind runs its throw at the wrong moment under the coroutine-body lowering, a later slice"}
+	}
+	return nil
+}
+
 // blankUnusedParamBinding appends `_ = name` when the destructured parameter member
 // bound as name is never read in the body. A parameter member always emits its read
 // at body entry (name := __0.Field), so an unused member is declared and not used in

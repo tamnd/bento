@@ -160,6 +160,61 @@ console.log(C.s({ a: 4, b: 5 }));`))
 	}
 }
 
+// TestUntypedDestructureOmittedDefaultBoxes proves that when a call omits an argument for
+// an untyped destructure parameter that carries a default, the default array literal boxes
+// to a value.Value the same as an explicit argument does, rather than crossing raw into the
+// dynamic slot as its own tuple struct, which Go would reject.
+func TestUntypedDestructureOmittedDefaultBoxes(t *testing.T) {
+	got := renderUntypedBinding(t, `function f([x] = []) { console.log(x); }
+f();`)
+	if !strings.Contains(got, "func F(__0 value.Value)") {
+		t.Fatalf("defaulted destructure param did not take a dynamic slot:\n%s", got)
+	}
+	if !strings.Contains(got, "F(value.NewArrayValue(") {
+		t.Fatalf("omitted default did not box to a dynamic value:\n%s", got)
+	}
+	if strings.Contains(got, "Tuple_") {
+		t.Fatalf("the omitted default still passed a raw tuple struct:\n%s", got)
+	}
+}
+
+// TestUntypedDestructureOmittedDefaultRuns compiles and runs the omitted-default path end
+// to end: the empty default fills the dynamic slot and the pattern reads undefined out of
+// the missing position.
+func TestUntypedDestructureOmittedDefaultRuns(t *testing.T) {
+	skipIfShort(t)
+	got := goRunSource(t, renderUntypedBinding(t, `function f([x] = []) {
+  return x === undefined ? "undef" : String(x);
+}
+console.log(f());`))
+	if got != "undef\n" {
+		t.Fatalf("got %q, want %q", got, "undef\n")
+	}
+}
+
+// TestGeneratorDestructureThrowAtBindHandsBack proves a generator whose parameter
+// destructuring throws at bind (a nested pattern reading off a nullish element) hands back
+// rather than emit: the language throws at the call that creates the iterator, before the
+// first resume, but the coroutine-body lowering would defer the throw to the first next(),
+// the wrong moment. A flat destructure that binds without a bind-time throw still lowers.
+func TestGeneratorDestructureThrowAtBindHandsBack(t *testing.T) {
+	reason := renderUntypedBindingHandBack(t, `function* f([{ x }] = []) { yield x; }
+var g = f();`)
+	if !strings.Contains(reason, "throws at bind") {
+		t.Fatalf("expected a bind-time-throw handback, got %q", reason)
+	}
+}
+
+// TestGeneratorFlatDestructureStillLowers proves the bind-time-throw guard is narrow: a
+// generator with a flat destructure that binds without throwing lowers as before.
+func TestGeneratorFlatDestructureStillLowers(t *testing.T) {
+	got := renderUntypedBinding(t, `function* f([x] = []) { yield x; }
+var g = f();`)
+	if !strings.Contains(got, "func F(__0 value.Value) *value.Gen") {
+		t.Fatalf("flat generator destructure did not lower to a dynamic slot:\n%s", got)
+	}
+}
+
 // TestUntypedArrayParamLowersToDynamicSlot proves an untyped array-pattern parameter
 // takes one boxed value.Value slot and reads its positions through the dynamic GetIndex
 // protocol, the index analog of the object pattern's Get.
