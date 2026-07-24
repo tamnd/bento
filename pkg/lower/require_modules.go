@@ -59,6 +59,30 @@ func (r *Renderer) discoverRequiredModules(files []frontend.Node) {
 	}
 }
 
+// collectRequiredModuleDecls runs the declaration pre-passes over each module
+// reached by require, so a class or enum declared at a required module's top level
+// registers in the shared renderer state and emits as a package-level Go type
+// beside the entry's, the same hoisting a static-import sibling's declarations get
+// (collectModules). A required module's body still runs in its loader, so unlike a
+// composed sibling it keeps its runtime statements; only its type-level declarations
+// hoist here. It runs after the entry's own pre-passes so a name the entry declares
+// wins the shared taken set, and before any loader body lowers so a `new C()` inside
+// the body resolves to the registered class.
+func (r *Renderer) collectRequiredModuleDecls(reqDeps []frontend.Node) error {
+	for _, dep := range reqDeps {
+		if _, required := r.requiredLoaders[dep.File().Path]; !required {
+			continue
+		}
+		if err := r.collectClasses(dep); err != nil {
+			return err
+		}
+		if err := r.collectEnums(dep); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // requireTargets returns the resolved absolute paths of every module the file
 // reaches through a require call whose specifier is a string literal. It walks the
 // whole file so a require nested in a function body or a conditional is found too,
@@ -292,9 +316,19 @@ func (r *Renderer) lowerRequiredModuleBody(file frontend.Node) ([]ast.Stmt, bool
 			// the module back if the declaration is outside that path's lowerable subset.
 			pushStmt(stmt)
 		case frontend.NodeClassDeclaration:
-			return nil, false, &NotYetLowerable{Reason: "a required module with a top-level class declaration is a later slice"}
+			// The class registered in the pre-pass (collectRequiredModuleDecls) and emits
+			// as a package-level Go type, so its declaration statement carries no runtime
+			// code in the loader body, the same as the entry's class declarations. A class
+			// with ordered static initialization steps runs that work at its declaration's
+			// position, which the loader body would have to reproduce, so it hands back
+			// until a later slice threads the static-init call into the loader.
+			if info, ok := r.classInfoForDecl(stmt); ok && len(info.staticInit) > 0 {
+				return nil, false, &NotYetLowerable{Reason: "a required module with a class carrying static initialization is a later slice"}
+			}
 		case frontend.NodeEnumDeclaration:
-			return nil, false, &NotYetLowerable{Reason: "a required module with a top-level enum declaration is a later slice"}
+			// The enum registered in the pre-pass and emits its const block package-level,
+			// or inlines at each use for a const enum, so its declaration carries no runtime
+			// code in the loader body, the same as the entry's enum declarations.
 		case frontend.NodeInterfaceDeclaration, frontend.NodeTypeAliasDeclaration:
 			// Type-level declarations carry no runtime code.
 			continue

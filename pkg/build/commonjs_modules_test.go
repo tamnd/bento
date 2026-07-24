@@ -129,6 +129,27 @@ func TestRequireRecursiveExport(t *testing.T) {
 	}
 }
 
+// TestRequireExportsClassInstance pins slice G0.3d: a required module that
+// declares a top-level class, constructs an instance in its body, and exports a
+// value read off it. The class registers in the shared pre-pass and emits as a
+// package-level Go type the loader body constructs, and the primitive it exports
+// crosses the require boundary the way any primitive export does. Node prints the
+// sum the instance method returns.
+func TestRequireExportsClassInstance(t *testing.T) {
+	got := buildAndRun(t, "main.js", map[string]string{
+		"dep.js": "class Point {\n" +
+			"  x; y;\n" +
+			"  constructor(x, y) { this.x = x; this.y = y; }\n" +
+			"  sum() { return this.x + this.y; }\n" +
+			"}\n" +
+			"module.exports = new Point(3, 4).sum();\n",
+		"main.js": "console.log(require('./dep'));\n",
+	})
+	if want := "7\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
 // TestRequireRunsBodyOnce pins the module cache: a module required more than once
 // runs its body a single time, and every require returns the one exports value. The
 // module logs from its body, so a body run twice would print twice; Node prints the

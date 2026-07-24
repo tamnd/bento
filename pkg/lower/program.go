@@ -129,6 +129,13 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// same pre-pass records which arrows are escape-safe so the arrow's declaration
 	// lowers the default away and its call sites fill it, both reading one map.
 	r.collectArrowDefaults(entry)
+	// A module reached by require registers its class and enum declarations in the
+	// same shared pre-pass, so each emits a package-level Go type the loader body
+	// constructs and reads. It runs after the entry's collectors so an entry name
+	// wins the shared taken set, and before any loader body lowers.
+	if err := r.collectRequiredModuleDecls(reqDeps); err != nil {
+		return Program{}, err
+	}
 
 	// A module-level binding a top-level function or class body reads cannot stay a
 	// local of main, since a separate Go function cannot see main's locals; it hoists
