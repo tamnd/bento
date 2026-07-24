@@ -1443,6 +1443,26 @@ func (r *Renderer) varDeclStmt(decls []frontend.Node, isVar bool) (ast.Stmt, err
 			}
 		}
 	}
+	// Proxy.revocable(target, handler) returns a live value.Value box for the
+	// { proxy, revoke } object. The box stores straight through only when the binding
+	// is dynamic (any): its .proxy and .revoke reads then route to the runtime object.
+	// A binding the checker typed with the concrete { proxy, revoke } shape would build
+	// a Go struct whose fields the value.Value initializer cannot fill, so the emitted
+	// Go reads handle.Revoke off a value.Value and does not compile. Storing a box under
+	// a static struct shape is a later slice; hand back rather than emit that mismatch.
+	for _, d := range decls {
+		initIdx := r.bindingInitIdx(d)
+		if initIdx < 0 {
+			continue
+		}
+		if !r.isProxyRevocableCall(r.prog.Children(d)[initIdx]) {
+			continue
+		}
+		nameType := r.prog.TypeAt(r.prog.Children(d)[0])
+		if nameType.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+			return nil, &NotYetLowerable{Flags: nameType.Flags, Reason: "a Proxy.revocable result bound under its static { proxy, revoke } shape is a later slice; the box needs an any binding"}
+		}
+	}
 	// A binding from an awaited static dynamic import carries no runtime value: its
 	// namespace resolves to package-level Go declarations, so the declaration lowers
 	// to the await suspension alone, with no Go var.
