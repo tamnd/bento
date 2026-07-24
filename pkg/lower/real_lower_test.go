@@ -79,6 +79,13 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 		if d.Code == 2339 || d.Code == 2551 {
 			continue
 		}
+		// 7053 and 7052 (a bracket read whose key can't index the receiver's type,
+		// the index spelling of a missing member) are admitted by the AOT front door
+		// (build.go toleratedDynamicMember) because the read still lowers, so mirror
+		// them here too.
+		if d.Code == 7053 || d.Code == 7052 {
+			continue
+		}
 		// 2695 (a comma whose left side has no side effect) is admitted by the AOT
 		// front door because the comma still lowers, so mirror it here.
 		if d.Code == 2695 {
