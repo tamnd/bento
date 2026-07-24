@@ -325,7 +325,70 @@ func (r *Renderer) collectClasses(entry frontend.Node) error {
 			return err
 		}
 	}
+	r.collectExpandoStatics(entry)
 	return nil
+}
+
+// collectExpandoStatics registers a top-level ClassName.member = <function> as a
+// static field of the class it names, so the assignment lowers to the package var
+// store the class already emits for a static field and a later ClassName.member(args)
+// call lowers to that var applied to the arguments (staticFieldCall). It runs right
+// after registerClass, so every class name it references is already registered, and
+// against the same taken name set, so the package var it mints never collides.
+//
+// It covers only a function-valued expando. The field's Go type and its call
+// signature come from the right-hand function expression, whose type is a concrete
+// function type whether the checker admits the member (a JS-mode module, where the
+// expando is inferred onto the constructor) or reports it absent (a TS-mode module,
+// where the store draws a tolerated 2339 and the member reads back as any). Reading
+// the type from the value rather than the member keeps the package var a func type
+// either way. A non-function right-hand side, a receiver that is not a plain class
+// name, or a member the class already declares is left for another pass or slice.
+func (r *Renderer) collectExpandoStatics(entry frontend.Node) {
+	for _, stmt := range r.prog.Children(entry) {
+		if stmt.Kind() != frontend.NodeExpressionStatement {
+			continue
+		}
+		kids := r.prog.Children(stmt)
+		if len(kids) != 1 || kids[0].Kind() != frontend.NodeBinaryExpression {
+			continue
+		}
+		parts := r.prog.Children(kids[0])
+		if len(parts) != 3 || strings.TrimSpace(r.prog.Text(parts[1])) != "=" {
+			continue
+		}
+		rhs := parts[2]
+		if rhs.Kind() != frontend.NodeFunctionExpression && rhs.Kind() != frontend.NodeArrowFunction {
+			continue
+		}
+		obj, prop, ok := r.targetProp(parts[0])
+		if !ok || obj.Kind() != frontend.NodeIdentifier {
+			continue
+		}
+		info, ok := r.classNameRef(obj)
+		if !ok {
+			continue
+		}
+		if _, exists := info.staticByName(prop); exists {
+			continue
+		}
+		propGo, ok := exportedField(prop)
+		if !ok {
+			continue
+		}
+		name := ""
+		for _, cand := range []string{lowerFirst(info.goName) + propGo, info.goName + propGo} {
+			if !r.classTaken[cand] && !goKeywords[cand] {
+				name = cand
+				break
+			}
+		}
+		if name == "" {
+			continue
+		}
+		r.classTaken[name] = true
+		info.statics = append(info.statics, classField{prop: prop, goName: name, ident: rhs})
+	}
 }
 
 // registerClass validates one class declaration against the covered subset and
