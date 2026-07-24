@@ -72,6 +72,49 @@ func TestHostCalleeInspectNoArgHandsBack(t *testing.T) {
 	}
 }
 
+// TestHostCalleeURLParseLowers pins that __bento_url_parse(input, base), the callee
+// the url module reaches for to resolve a URL, lowers to nodehost.URLParseJSON over
+// the two string arguments read as Go strings rather than handing back.
+func TestHostCalleeURLParseLowers(t *testing.T) {
+	src := `const raw = __bento_url_parse("http://a.com/p", ""); const u: any = JSON.parse(raw);`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "nodehost.URLParseJSON(") {
+		t.Fatalf("__bento_url_parse() did not lower to nodehost.URLParseJSON:\n%s", out)
+	}
+	if !strings.Contains(out, ".ToGoString()") {
+		t.Fatalf("__bento_url_parse() arguments did not read as Go strings:\n%s", out)
+	}
+}
+
+// TestHostCalleeURLParseWithOneArgHandsBack pins that __bento_url_parse with a
+// single argument hands back: the callee takes input and base, and a one-argument
+// call is a malformed factory. The missing argument draws a 2554 the AOT front
+// door tolerates, so the call reaches the arity guard through the tolerant path.
+func TestHostCalleeURLParseWithOneArgHandsBack(t *testing.T) {
+	src := `const raw: any = __bento_url_parse("http://a.com/");`
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "__bento_url_parse") {
+		t.Fatalf("__bento_url_parse(one arg) handed back for the wrong reason: %q", reason)
+	}
+}
+
+// TestHostCalleeURLParseRuns builds and runs a program that parses a URL through
+// the host callee and reads back its components, checking the protocol, hostname,
+// pathname, and origin match what Go's net/url resolves, so the bridge returns a
+// well-formed object JSON.parse can read.
+func TestHostCalleeURLParseRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const u = JSON.parse(__bento_url_parse("http://user@host.com:8080/a/b?x=1#h", ""));
+console.log(u.protocol, u.hostname, u.port, u.pathname, u.search, u.hash, u.origin, u.username);
+`
+	got := runProgramGo(t, src)
+	want := "http: host.com 8080 /a/b ?x=1 #h http://host.com:8080 user\n"
+	if got != want {
+		t.Fatalf("url-parse host callee run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestHostCalleeInspectRuns builds and runs a program that inspects an object, a
 // nested array, and a top-level string, and checks the compact form matches the
 // interpreter's prelude inspector: keys unquoted, nested strings quoted, a bare

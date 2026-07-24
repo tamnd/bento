@@ -44,9 +44,10 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // and __bento_inspect are host callees, the bare names a Node builtin factory
 // reaches for when it needs the Go runtime: os.js reads __bento_os_info for the
 // platform snapshot and util.js and assert.js read __bento_inspect to render a
-// value. Each is declared here so the checker types it, and the lowerer emits a
-// direct call into the runtime (nodehost.OSInfoJSON, value.Inspect) rather than
-// the interpreter's host layer. The node:fs, node:os, and node:path module declarations give the file
+// value, and url.js reads __bento_url_parse to resolve a URL against a base. Each
+// is declared here so the checker types it, and the lowerer emits a direct call
+// into the runtime (nodehost.OSInfoJSON, value.Inspect, nodehost.URLParseJSON)
+// rather than the interpreter's host layer. The node:fs, node:os, and node:path module declarations give the file
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a
@@ -72,6 +73,7 @@ declare function queueMicrotask(callback: () => void): void;
 declare function structuredClone(value: any): any;
 declare function __bento_os_info(): string;
 declare function __bento_inspect(value: any): string;
+declare function __bento_url_parse(input: string, base: string): string;
 declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;

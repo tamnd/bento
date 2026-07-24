@@ -1,0 +1,6 @@
+== stdout:
+http: host.com 8080 /a/b ?x=1 #h http://host.com:8080 user
+http://host.com/a/c?y=2 /a/c ?y=2 http://host.com
+false
+== exit:
+0

@@ -65,6 +65,32 @@ func (r *Renderer) hostCallee(name string) (func(r *Renderer, argNodes []fronten
 				Args: []ast.Expr{arg},
 			}, nil
 		}, true
+	// __bento_url_parse(input, base) resolves a URL against an optional base and
+	// returns the parsed WHATWG components as a JSON string the url module reads.
+	// Both arguments are strings the checker types, so they lower to value.BStr; the
+	// Go host takes plain strings, so each argument reads through .ToGoString, and
+	// the JSON result wraps back into a value.BStr the string-typed call returns. It
+	// routes to pkg/nodehost like os_info because the parse pulls host detail
+	// (net/url) rather than pure value introspection.
+	case "__bento_url_parse":
+		return func(r *Renderer, argNodes []frontend.Node) (ast.Expr, error) {
+			args, err := r.stringArgsN("__bento_url_parse", argNodes, 2)
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			r.requireImport(nodehostPkg)
+			return &ast.CallExpr{
+				Fun: sel("value", "FromGoString"),
+				Args: []ast.Expr{&ast.CallExpr{
+					Fun: sel("nodehost", "URLParseJSON"),
+					Args: []ast.Expr{
+						&ast.CallExpr{Fun: &ast.SelectorExpr{X: args[0], Sel: ast.NewIdent("ToGoString")}},
+						&ast.CallExpr{Fun: &ast.SelectorExpr{X: args[1], Sel: ast.NewIdent("ToGoString")}},
+					},
+				}},
+			}, nil
+		}, true
 	default:
 		return nil, false
 	}
