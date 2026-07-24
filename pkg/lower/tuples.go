@@ -579,6 +579,9 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 			if err != nil {
 				return nil, err
 			}
+			if def, err = r.floatifyBindingDefault(def, info.nameNode); err != nil {
+				return nil, err
+			}
 			info.name = name
 			infos[i] = info
 			defaultVal[i] = def
