@@ -57,12 +57,27 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 // hands back (see collectModules). With no siblings this is exactly the
 // single-file path.
 func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Node) (Program, error) {
+	// A module reached through require runs as its own loader function, not as
+	// flattened package declarations, so the require targets across the whole file
+	// set are discovered before anything lowers: a require call site then resolves to
+	// a loader name already in hand, and the deps split into the import-composed
+	// siblings and the require-loaded modules. A dep reached only by require leaves
+	// the collectModules path, which composes declarations, for the loader path.
+	r.discoverRequiredModules(append([]frontend.Node{entry}, deps...))
+	var esDeps, reqDeps []frontend.Node
+	for _, dep := range deps {
+		if _, required := r.requiredLoaders[dep.File().Path]; required {
+			reqDeps = append(reqDeps, dep)
+		} else {
+			esDeps = append(esDeps, dep)
+		}
+	}
 	// The sibling modules register first: their classes, enums, and generic
 	// instantiations join the shared pre-pass state so an entry call site resolves
 	// against them, and their top-level functions come back to emit as package
 	// funcs beside the entry's. A sibling this slice cannot compose hands back here
 	// before the entry lowers.
-	depFuncs, err := r.collectModules(deps)
+	depFuncs, err := r.collectModules(esDeps)
 	if err != nil {
 		return Program{}, err
 	}
@@ -331,6 +346,16 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	stmts = append(fwdDecls, stmts...)
 	stmts = r.hoistStrBuilders(stmts)
 
+	// The required modules lower after the entry body, so the per-module analysis
+	// state each loader overwrites is already spent, and before the throw and promise
+	// checks below, so a module body that throws or mints a promise sets the same
+	// program-level flag the entry's body would: the entry's main then defers the
+	// uncaught reporter or drains the microtask queue for work a loader runs.
+	requiredDecls, err := r.renderRequiredModules(reqDeps)
+	if err != nil {
+		return Program{}, err
+	}
+
 	// A program that can raise a thrown value defers the uncaught-error reporter as
 	// its first statement, so a throw that escapes every catch prints an
 	// uncaught-error line and exits non-zero rather than crashing with a Go stack.
@@ -407,6 +432,10 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// A composed sibling's functions emit as package funcs before the entry's, the
 	// order a hand-written Go file keeps a dependency above its user.
 	file.Decls = append(file.Decls, depFuncs...)
+	// Each required module's cache slot var and loader function emit here, before the
+	// entry's functions and main, so a require call in either resolves to a loader
+	// name already declared in the package.
+	file.Decls = append(file.Decls, requiredDecls...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
 
