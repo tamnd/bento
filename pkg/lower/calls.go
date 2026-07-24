@@ -252,6 +252,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		}
 		return r.dynamicCall(kids[0], kids[1:])
 	}
+	// A __bento_* host callee, the bare name a Node builtin factory reaches for when
+	// it needs the Go runtime (os.js reading __bento_os_info), lowers to a direct call
+	// into pkg/nodehost. It routes before the ambient-global handback below, which
+	// would otherwise decline the name it is declared as an ambient global under.
+	if expr, handled, err := r.hostCalleeCall(kids[0], kids[1:]); handled || err != nil {
+		return expr, err
+	}
 	// A bare call to any other ambient global (eval, and the globals whose lowering
 	// is a later slice) is not a user binding and has no generated Go function to
 	// stand behind it. The user-function path below would emit a call to the name's

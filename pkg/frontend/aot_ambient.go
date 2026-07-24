@@ -64,6 +64,7 @@ declare var exports: any;
 declare var require: any;
 declare function queueMicrotask(callback: () => void): void;
 declare function structuredClone(value: any): any;
+declare function __bento_os_info(): string;
 declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;
