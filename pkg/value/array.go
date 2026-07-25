@@ -254,6 +254,59 @@ func (a *Array[T]) ReduceRightNoInit(f func(T, T) T) T {
 	return acc
 }
 
+// ReduceIndex is Reduce for a callback that also reads the element index, the
+// (accumulator, element, index) shape JavaScript passes. It mirrors Reduce,
+// handing the position as a float64 third argument, the Number the index
+// parameter lowers to.
+func ReduceIndex[T, A any](a *Array[T], f func(A, T, float64) A, init A) A {
+	acc := init
+	for i, x := range a.elems {
+		acc = f(acc, x, float64(i))
+	}
+	return acc
+}
+
+// ReduceNoInitIndex is ReduceNoInit for an (accumulator, element, index)
+// callback. The accumulator seeds from the first element and the fold runs from
+// the second, so the first callback index is 1, matching JavaScript. An empty
+// array throws.
+func (a *Array[T]) ReduceNoInitIndex(f func(T, T, float64) T) T {
+	if len(a.elems) == 0 {
+		Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+	}
+	acc := a.elems[0]
+	for i := 1; i < len(a.elems); i++ {
+		acc = f(acc, a.elems[i], float64(i))
+	}
+	return acc
+}
+
+// ReduceRightIndex is ReduceRight for an (accumulator, element, index) callback,
+// walking from the last element to the first and passing each element's own
+// descending index as a float64.
+func ReduceRightIndex[T, A any](a *Array[T], f func(A, T, float64) A, init A) A {
+	acc := init
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		acc = f(acc, a.elems[i], float64(i))
+	}
+	return acc
+}
+
+// ReduceRightNoInitIndex is ReduceRightNoInit for an (accumulator, element,
+// index) callback. The accumulator seeds from the last element and the fold runs
+// toward the first, so the first callback index is len-2, matching JavaScript's
+// descending visit order. An empty array throws.
+func (a *Array[T]) ReduceRightNoInitIndex(f func(T, T, float64) T) T {
+	if len(a.elems) == 0 {
+		Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+	}
+	acc := a.elems[len(a.elems)-1]
+	for i := len(a.elems) - 2; i >= 0; i-- {
+		acc = f(acc, a.elems[i], float64(i))
+	}
+	return acc
+}
+
 // Filter returns a new array of the elements for which f returns true, in order,
 // the lowering of Array.prototype.filter. As with Map, the callback takes only
 // the element for now. The result is a fresh array, so the receiver is

@@ -1918,8 +1918,14 @@ func (r *Renderer) arrayFold(recvNode frontend.Node, argNodes []frontend.Node, f
 	if arrow.Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array reduce with a callback that is not an inline arrow function is a later slice"}
 	}
-	if r.arrowParamCount(arrow) != 2 {
-		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the index or array parameter is a later slice"}
+	switch r.arrowParamCount(arrow) {
+	case 2:
+		// (accumulator, element) callback: the free function as named.
+	case 3:
+		// (accumulator, element, index) callback: the index-aware variant.
+		freeFn += "Index"
+	default:
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the array parameter is a later slice"}
 	}
 	elemType, ok := r.arrayElem(recvNode)
 	if !ok {
@@ -1961,8 +1967,14 @@ func (r *Renderer) arrayFoldNoInit(recvNode frontend.Node, arrow frontend.Node, 
 	if arrow.Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array reduce with a callback that is not an inline arrow function is a later slice"}
 	}
-	if r.arrowParamCount(arrow) != 2 {
-		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the index or array parameter is a later slice"}
+	switch r.arrowParamCount(arrow) {
+	case 2:
+		// (accumulator, element) callback: the method as named.
+	case 3:
+		// (accumulator, element, index) callback: the index-aware variant.
+		methodFn += "Index"
+	default:
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the array parameter is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
