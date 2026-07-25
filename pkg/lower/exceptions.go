@@ -147,6 +147,16 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "AbortController" && r.isGlobalRef(kids[0], "AbortController") {
 		return r.newAbortController(kids[1:])
 	}
+	// new TextEncoder() and new TextDecoder(label, options) build the string-to-bytes
+	// codec Node and the web platform expose as globals. Like the event pair they are
+	// ambient globals rather than user classes, so a plain-identifier constructor of
+	// either name routes to the runtime constructor.
+	if r.prog.Text(kids[0]) == "TextEncoder" && r.isGlobalRef(kids[0], "TextEncoder") {
+		return r.newTextEncoder(kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "TextDecoder" && r.isGlobalRef(kids[0], "TextDecoder") {
+		return r.newTextDecoder(kids[1:])
+	}
 	// new Function("a", "return a") builds a function from source text at run time,
 	// parsing the argument strings as a parameter list and a body. That is eval work,
 	// phase 11, so it hands back with the reason that names where it belongs rather

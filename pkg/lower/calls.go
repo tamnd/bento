@@ -1877,6 +1877,16 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isSet(recvNode) {
 		return r.setMethodCall(recvNode, method, argNodes)
 	}
+	// A method on a TextEncoder or TextDecoder receiver lowers to the matching
+	// value.TextEncoder or value.TextDecoder method. Like the collection paths it
+	// routes before the primitive and string paths, which expect a number, boolean, or
+	// string receiver a codec is not.
+	if r.isTextEncoder(recvNode) {
+		return r.textEncoderMethodCall(recvNode, method, argNodes)
+	}
+	if r.isTextDecoder(recvNode) {
+		return r.textDecoderMethodCall(recvNode, method, argNodes)
+	}
 	// A method on a Promise receiver, p.then(cb) or p.catch(cb), lowers to a
 	// value.Promise method. Like Map and Set it routes before the primitive and
 	// string paths, which expect a number, boolean, or string receiver a promise is

@@ -334,6 +334,13 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Size")}}, nil
 	}
+	// encoder.encoding and the decoder's encoding, fatal, and ignoreBOM are accessors
+	// in the source and methods on the runtime codec types, the same shape map.size
+	// takes, so they route before the struct-field path would try to intern the name as
+	// a field of a shape neither codec has.
+	if expr, ok, err := r.textCodecGetter(obj, prop); err != nil || ok {
+		return expr, err
+	}
 	// BYTES_PER_ELEMENT is the element width in bytes, a constant of the element kind
 	// read the same off the constructor (Int32Array.BYTES_PER_ELEMENT) and off an
 	// instance (b.BYTES_PER_ELEMENT), typed a Number in both. The static form fires on

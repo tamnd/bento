@@ -1160,6 +1160,19 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// its register interface as fields.
 			return r.renderFinalizationRegistry(t)
 		}
+		if r.isTextEncoderType(t) {
+			// A TextEncoder is the codec's string-to-utf8 half, spelled as a pointer to
+			// value.TextEncoder. It is not a struct shape, so it routes here before
+			// renderObject would intern its encode interface as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "TextEncoder")), nil
+		}
+		if r.isTextDecoderType(t) {
+			// A TextDecoder is the codec's bytes-to-string half, spelled as a pointer to
+			// value.TextDecoder, routed here for the same reason as the encoder.
+			r.requireImport(valuePkg)
+			return star(sel("value", "TextDecoder")), nil
+		}
 		if r.regExpType(t) {
 			// A RegExp (22 §22.2) is the value model's compiled pattern, spelled as a
 			// pointer to value.RegExp. It is not a struct shape, so it routes here before
