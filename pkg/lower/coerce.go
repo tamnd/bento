@@ -871,6 +871,19 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	// value the boxLiteralToDynamic case above does not catch, which handles only a
 	// literal written at the boxing site, not an already-bound struct.
 	if r.isFixedObjectShape(r.prog.TypeAt(src)) {
+		// A function-typed member cannot survive the boxing. ObjectFromStruct reuses the
+		// JSON reflection walk, which reads a Go func as the value undefined (a function
+		// has no JSON form), so a struct carrying a method or an accessor getter would box
+		// into an object whose callable slot is silently dropped, e.g. a descriptor
+		// { get: fn } bound to a variable and boxed loses its getter and reads undefined.
+		// Faithfully boxing an arbitrary Go func would need a generic value-to-typed-Go
+		// unboxing this slice does not have, so a shape with a callable member hands back
+		// rather than ship the dropped-function wrong. A literal written at the boxing site
+		// never reaches here: boxLiteralToDynamic above lowers { f(){} } through live
+		// NewFunc closures, so only an already-bound struct takes this path.
+		if r.fixedShapeHasCallableMember(r.prog.TypeAt(src), nil) {
+			return nil, &NotYetLowerable{Reason: "boxing a fixed-shape object with a function-typed member into a dynamic value would drop the callable, a later slice"}
+		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{expr}}, nil
 	}
@@ -1980,12 +1993,18 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 		// the literal to a value.Number and writing through SetKeyed lets the runtime
 		// resolve that canonical name the same way `o[42] = v` does, so a later o[42] or
 		// o["42"] read lands the same slot. A numeric name is never __proto__, so it
-		// takes no prototype directive.
+		// takes no prototype directive. The key boxes straight from the literal rather
+		// than through boxOperand: the checker types a property-name node as the
+		// property's value type, so boxOperand on { 0: {..} } would see the descriptor
+		// object shape and emit ObjectFromStruct over a bare int, which panics. Number
+		// over the lowered literal names the key by its own numeric value instead.
 		if keyNode.Kind() == frontend.NodeNumericLiteral {
-			boxedKey, err := r.boxOperand(keyNode)
+			num, err := r.numericLiteral(keyNode)
 			if err != nil {
 				return nil, err
 			}
+			r.requireImport(valuePkg)
+			boxedKey := &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{num}}
 			boxedVal, err := r.boxOperand(valNode)
 			if err != nil {
 				return nil, err
