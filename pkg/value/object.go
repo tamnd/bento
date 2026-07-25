@@ -476,6 +476,13 @@ func (o *Object) getChained(recv Value, key BStr) Value {
 			}
 		}
 	}
+	// Nothing on the receiver's own chain overrode the name, so fall back to the
+	// Object.prototype method every ordinary object inherits. This runs only on a
+	// genuine miss, after the override check above, so a user-declared property of
+	// the same name still wins.
+	if b, ok := objectProtoBuiltin(recv, key); ok {
+		return b
+	}
 	return Undefined
 }
 
