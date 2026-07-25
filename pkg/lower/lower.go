@@ -146,6 +146,14 @@ type Renderer struct {
 	// aliasing corner the snapshot cannot mirror, so it hands back. It is saved and
 	// restored alongside argsObjName.
 	argsWriteSafe bool
+	// argsStoreLen is the fixed length of the arguments store in the current body, the
+	// call arity the snapshot captures (len of the parameters). arguments.length does
+	// not change when a program assigns arguments[i] for an i at or past it, so a write
+	// to a constant index that far grows the Go store and would misreport the length; it
+	// hands back instead. It is -1 when the length is not statically known (the hidden
+	// real-arguments store threads a call-varying arity), where no constant-bound guard
+	// applies. Saved and restored alongside argsObjName.
+	argsStoreLen int
 	// argsThreads memoizes whether a top-level function symbol threads the real
 	// call-site arguments through a hidden trailing parameter (see argumentsthread.go).
 	// The decision is a pure function of the symbol, consulted once at the declaration
