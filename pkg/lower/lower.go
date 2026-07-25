@@ -1481,6 +1481,33 @@ func (r *Renderer) isFixedObjectShape(t frontend.Type) bool {
 	return ok
 }
 
+// fixedShapeHasCallableMember reports whether a fixed object shape carries a
+// function-typed member anywhere in its property tree, the members ObjectFromStruct
+// cannot box because the JSON reflection walk it reuses reads a Go func as
+// undefined. It recurses into nested fixed-shape members so a struct holding a
+// struct holding a getter is caught too, and breaks recursion on a type already
+// visited (a shape whose member refers back to it) by its per-program identity. A
+// member that is itself callable is the direct hit; a nested non-fixed member (a
+// primitive, an array, a class instance) contributes no droppable func here.
+func (r *Renderer) fixedShapeHasCallableMember(t frontend.Type, seen map[int]bool) bool {
+	if seen == nil {
+		seen = map[int]bool{}
+	}
+	if seen[t.Identity()] {
+		return false
+	}
+	seen[t.Identity()] = true
+	for _, p := range r.prog.Properties(t) {
+		if calls, _ := r.prog.Signatures(p.Type); len(calls) > 0 {
+			return true
+		}
+		if r.isFixedObjectShape(p.Type) && r.fixedShapeHasCallableMember(p.Type, seen) {
+			return true
+		}
+	}
+	return false
+}
+
 // isGoOpaqueType reports whether an object type is a go: opaque handle, the
 // GoOpaque<Tag> the bridge projects for a Go type it does not express (section
 // 6.13). GoOpaque is { readonly __goOpaque: Tag }, so the phantom brand property is
