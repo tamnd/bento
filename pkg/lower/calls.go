@@ -209,6 +209,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "queueMicrotask" && r.isAmbientGlobal(kids[0]) {
 		return r.queueMicrotaskCall(kids[1:])
 	}
+	// The timer globals schedule a callback for a later turn of the event loop, the
+	// macrotask half of the scheduling queueMicrotask above does the microtask half of.
+	// They are ambient globals, not user bindings, so they route before the user-function
+	// path the way the coercions do.
+	if expr, handled, err := r.timerCall(kids[0], kids[1:]); handled || err != nil {
+		return expr, err
+	}
 	// structuredClone(value) deep-copies value through the structured-clone algorithm,
 	// the WHATWG global that clones a data graph rather than sharing it. It is an
 	// ambient global, not a user binding, so it routes before the user-function path
@@ -4025,6 +4032,73 @@ func (r *Renderer) queueMicrotaskCall(argNodes []frontend.Node) (ast.Expr, error
 	r.usesMicrotask = true
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "QueueMicrotask"), Args: []ast.Expr{fn}}, nil
+}
+
+// timerCall lowers a call to one of the timer globals, reporting handled=false when the
+// callee is some other name so the caller keeps looking. setTimeout, setInterval, and
+// setImmediate schedule a callback for a later turn of the event loop and return the
+// Timeout object that cancels it; the three clear functions take that object back.
+//
+// Every argument boxes to a value.Value, because these globals are variadic in their
+// tail: Node forwards any argument past the delay to the callback. That is also why the
+// generated call passes the extra arguments through rather than dropping them, which a
+// signature-bound call against the ambient declaration would do.
+//
+// Any use of a timer sets the program's timer flag, so the assembled main runs the event
+// loop after the synchronous body instead of exiting with callbacks still scheduled.
+func (r *Renderer) timerCall(calleeNode frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	name := r.prog.Text(calleeNode)
+	var goName string
+	minArgs := 1
+	switch name {
+	case "setTimeout", "setInterval":
+		goName, minArgs = timerGoName(name), 2
+	case "setImmediate":
+		goName = "SetImmediate"
+	case "clearTimeout", "clearInterval", "clearImmediate":
+		// One runtime function backs all three clears: the handle already records which
+		// kind of timer it stands for, so the three differ only in the handle they are
+		// documented to take, and a handle a program passes to the wrong one cancels the
+		// timer it names rather than silently doing nothing.
+		goName = "ClearTimer"
+	default:
+		return nil, false, nil
+	}
+	if !r.isAmbientGlobal(calleeNode) {
+		return nil, false, nil
+	}
+	// setTimeout(fn) with no delay is Node-legal and means the shortest delay, so the
+	// missing argument is filled with undefined here; the runtime's clamp turns that into
+	// the 1ms floor. A call with no callback at all has nothing to schedule, so it hands
+	// back rather than emitting a call that would schedule undefined.
+	if len(argNodes) < 1 {
+		return nil, true, &NotYetLowerable{Reason: "a call to " + name + " with no argument is a later slice"}
+	}
+	args := make([]ast.Expr, 0, max(len(argNodes), minArgs))
+	for _, a := range argNodes {
+		boxed, err := r.boxOperand(a)
+		if err != nil {
+			return nil, true, err
+		}
+		args = append(args, boxed)
+	}
+	for len(args) < minArgs {
+		r.requireImport(valuePkg)
+		args = append(args, sel("value", "Undefined"))
+	}
+	r.usesTimers = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, true, nil
+}
+
+// timerGoName maps a scheduling global to the runtime function that backs it. The two
+// names differ only in whether the timer re-arms, so they share every other part of the
+// lowering above.
+func timerGoName(name string) string {
+	if name == "setInterval" {
+		return "SetInterval"
+	}
+	return "SetTimeout"
 }
 
 // structuredCloneCall lowers structuredClone(value), the WHATWG global that deep-copies

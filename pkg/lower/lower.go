@@ -409,6 +409,12 @@ type Renderer struct {
 	// program that scheduled a microtask through either needs the drain; this flag adds
 	// the queueMicrotask half to the usesPromise half the drain already gated on.
 	usesMicrotask bool
+	// usesTimers records that the program called one of the timer globals, so the
+	// assembled main runs the event loop (value.RunEventLoop) after its synchronous body
+	// rather than exiting with callbacks still scheduled. The loop drains the microtask
+	// queue itself, at its start and after every callback, so it stands in for the plain
+	// RunMicrotasks drain rather than running alongside it.
+	usesTimers bool
 	// usesCommonJSModule records that the program read the CommonJS module or exports
 	// wrapper global, so the assembled program emits the package-level module object
 	// and its exports alias (see commonjs.go). A module object is one value.Object with
