@@ -162,6 +162,29 @@ func MapArray[T, U any](a *Array[T], f func(T) U) *Array[U] {
 	return &Array[U]{elems: out}
 }
 
+// MapIndex is Map for a callback that also reads the element index, the lowering
+// of Array.prototype.map whose callback takes (element, index) and returns the
+// element type. The index is the float64 position, matching JavaScript's number
+// index, so the emitted callback is func(T, float64) T.
+func (a *Array[T]) MapIndex(f func(T, float64) T) *Array[T] {
+	out := make([]T, len(a.elems))
+	for i, x := range a.elems {
+		out[i] = f(x, float64(i))
+	}
+	return &Array[T]{elems: out}
+}
+
+// MapArrayIndex is the type-changing form of MapIndex: the (element, index)
+// callback returns a different type than the element, the same reason MapArray
+// is a free function with both type arguments spelled out.
+func MapArrayIndex[T, U any](a *Array[T], f func(T, float64) U) *Array[U] {
+	out := make([]U, len(a.elems))
+	for i, x := range a.elems {
+		out[i] = f(x, float64(i))
+	}
+	return &Array[U]{elems: out}
+}
+
 // Reduce folds the array left to right into a single accumulator, the lowering
 // of Array.prototype.reduce called with an initial value. It is a free function
 // rather than a method because the accumulator type A may differ from the
@@ -239,6 +262,19 @@ func (a *Array[T]) Filter(f func(T) bool) *Array[T] {
 	out := make([]T, 0, len(a.elems))
 	for _, x := range a.elems {
 		if f(x) {
+			out = append(out, x)
+		}
+	}
+	return &Array[T]{elems: out}
+}
+
+// FilterIndex is Filter for a predicate that also reads the element index, the
+// lowering of Array.prototype.filter whose callback takes (element, index). The
+// index is the float64 position, so the emitted predicate is func(T, float64) bool.
+func (a *Array[T]) FilterIndex(f func(T, float64) bool) *Array[T] {
+	out := make([]T, 0, len(a.elems))
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
 			out = append(out, x)
 		}
 	}

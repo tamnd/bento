@@ -1713,6 +1713,15 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
 	}
+	// A callback taking (element, index) reads the position, so it lowers to the
+	// index-aware runtime variant (MapIndex/FilterIndex, or MapArrayIndex for a
+	// type-changing map), whose callback is func(T, float64) U. A callback that also
+	// reads the third array parameter is a later slice. A zero- or one-parameter
+	// callback stays the element-only path below.
+	if r.arrowParamCount(argNodes[0]) >= 3 {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the array parameter is a later slice"}
+	}
+	index := r.arrowParamCount(argNodes[0]) == 2
 	// A callback that ignores its element, () => expr, lowers to a zero-parameter func
 	// literal, but the array method and the value.MapArray free function both take a
 	// func(T) U over the element type. Pad the missing element parameter off the
@@ -1749,11 +1758,18 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 				return nil, err
 			}
 			r.requireImport(valuePkg)
+			mapArrayFn := "MapArray"
+			if index {
+				mapArrayFn = "MapArrayIndex"
+			}
 			return &ast.CallExpr{
-				Fun:  &ast.IndexListExpr{X: sel("value", "MapArray"), Indices: []ast.Expr{elemType, bodyType}},
+				Fun:  &ast.IndexListExpr{X: sel("value", mapArrayFn), Indices: []ast.Expr{elemType, bodyType}},
 				Args: []ast.Expr{recv, fn},
 			}, nil
 		}
+	}
+	if index {
+		goMethod += "Index"
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
