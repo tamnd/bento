@@ -1,6 +1,7 @@
 package cpath
 
 import (
+	"path"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -105,6 +106,64 @@ func TestJoinNormalizes(t *testing.T) {
 		if got := Join(c.elem...); got != c.want {
 			t.Errorf("Join(%q) = %q, want %q", c.elem, got, c.want)
 		}
+	}
+}
+
+// TestJoinUnderARootDoesNotBecomeUNC pins the seam that matters most and is the
+// easiest to get wrong. Joining with one separator between every pair and letting
+// normalization collapse the rest is fine everywhere but the front of the path: a
+// doubled separator there is a UNC root, not a redundant separator, so "/" joined
+// with "./mod" came back as //./mod, naming the server "." and the share "mod".
+// A module resolved against a root directory landed on a path that does not exist.
+func TestJoinUnderARootDoesNotBecomeUNC(t *testing.T) {
+	cases := []struct {
+		elem []string
+		want string
+	}{
+		{[]string{"/", "./mod"}, "/mod"},
+		{[]string{"/", "mod.ts"}, "/mod.ts"},
+		{[]string{"/", "package.json"}, "/package.json"},
+		{[]string{"C:/", "main.ts"}, "C:/main.ts"},
+		{[]string{"/a", "/b"}, "/a/b"},
+		{[]string{"/a/", "b"}, "/a/b"},
+		// A UNC path the caller really did hand in keeps its root.
+		{[]string{"//server/share", "x.ts"}, "//server/share/x.ts"},
+	}
+	for _, c := range cases {
+		if got := Join(c.elem...); got != c.want {
+			t.Errorf("Join(%q) = %q, want %q", c.elem, got, c.want)
+		}
+	}
+}
+
+// TestJoinAgreesWithPathJoinOnPOSIXShapes pins Join against the standard library
+// wherever the two conventions coincide, which is every POSIX shape that does not
+// end in a separator. cpath exists because path and filepath each get a Windows
+// path wrong; it has no license to get a plain one wrong.
+//
+// The one deliberate divergence is a trailing separator, which path.Join drops and
+// cpath keeps: a path written as a directory keeps saying so, and dropping it is
+// the file map's rule rather than the path model's. RemoveTrailingSeparator is
+// where that rule is applied.
+func TestJoinAgreesWithPathJoinOnPOSIXShapes(t *testing.T) {
+	shapes := [][]string{
+		{"/", "./mod"},
+		{"/", "a", "b"},
+		{"/a", "b"},
+		{"/a/", "/b"},
+		{"a", "..", "b"},
+		{".", "a"},
+		{"", "a"},
+		{"/a", "", "b"},
+	}
+	for _, elem := range shapes {
+		want := path.Join(elem...)
+		if got := Join(elem...); got != want {
+			t.Errorf("Join(%q) = %q, want %q (path.Join)", elem, got, want)
+		}
+	}
+	if got, want := Join("/a/", "b/"), "/a/b/"; got != want {
+		t.Errorf(`Join("/a/", "b/") = %q, want %q: a trailing separator survives`, got, want)
 	}
 }
 

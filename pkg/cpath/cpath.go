@@ -219,17 +219,31 @@ func Ext(p string) string { return path.Ext(p) }
 // Join joins checker path elements and normalizes the result, so a ".." in a
 // later element is resolved rather than carried and the answer is a checker path
 // ready to be used as a key.
+//
+// It puts exactly one separator at each seam rather than joining with one and
+// letting normalization collapse the rest. A doubled separator anywhere else in a
+// path is redundant and cleans away, but a doubled one at the front is a UNC root
+// and does not: Join("/", "./mod") built as "/" + "/" + "./mod" reads as the
+// server "." and the share "mod", so the answer came back as //./mod instead of
+// /mod. That is not a spelling difference, it is a different file, and it took
+// out every import resolved against a root directory.
 func Join(elem ...string) string {
-	nonEmpty := elem[:0:0]
+	var out string
 	for _, e := range elem {
-		if e != "" {
-			nonEmpty = append(nonEmpty, e)
+		switch {
+		case e == "":
+		case out == "":
+			out = e
+		case strings.HasSuffix(out, "/"):
+			out += strings.TrimPrefix(e, "/")
+		default:
+			out += "/" + strings.TrimPrefix(e, "/")
 		}
 	}
-	if len(nonEmpty) == 0 {
+	if out == "" {
 		return ""
 	}
-	return FromOS(strings.Join(nonEmpty, "/"))
+	return FromOS(out)
 }
 
 // Volume is the volume a checker path is rooted at, with its trailing slash:
