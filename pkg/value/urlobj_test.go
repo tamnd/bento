@@ -166,10 +166,11 @@ func TestURLSearchParamsForEach(t *testing.T) {
 func TestURLSearchParamsEncoding(t *testing.T) {
 	p := NewURLSearchParams()
 	p.Append(FromGoString("a b"), FromGoString("c&d=e"))
-	p.Append(FromGoString("π"), FromGoString("*!'()"))
-	// Space is "+", and the characters encodeURIComponent spares but the query
-	// serializer does not are percent encoded.
-	want := "a+b=c%26d%3De&%CF%80=%2A%21%27%28%29"
+	p.Append(FromGoString("π"), FromGoString("*!'()~"))
+	// Space is "+". The serializer's literal set is neither the unreserved set nor
+	// encodeURIComponent's: "*" survives and "~" does not, which is each of them the
+	// other way round from encodeURIComponent. Node agrees with this string.
+	want := "a+b=c%26d%3De&%CF%80=*%21%27%28%29%7E"
 	if got := p.ToString().ToGoString(); got != want {
 		t.Errorf("serialization = %q, want %q", got, want)
 	}
@@ -178,7 +179,7 @@ func TestURLSearchParamsEncoding(t *testing.T) {
 	if got := back.Get(FromGoString("a b")); got.IsNull() || got.AsString().ToGoString() != "c&d=e" {
 		t.Errorf("round-tripped value = %v, want c&d=e", got)
 	}
-	if got := back.Get(FromGoString("π")); got.IsNull() || got.AsString().ToGoString() != "*!'()" {
+	if got := back.Get(FromGoString("π")); got.IsNull() || got.AsString().ToGoString() != "*!'()~" {
 		t.Errorf("round-tripped unicode name = %v", got)
 	}
 }

@@ -1,0 +1,23 @@
+== stdout:
+https://user:pw@example.com:8443/a/b?x=1&y=2#frag
+https:
+user
+pw
+example.com:8443
+example.com
+8443
+/a/b
+?x=1&y=2
+#frag
+https://example.com:8443
+https://user:pw@example.com:8443/a/b?x=1&y=2#frag
+https://user:pw@example.com:8443/a/b?x=1&y=2#frag
+https://example.com/a/c?q=1
+/a/c
+/
+
+true
+false
+true
+== exit:
+0

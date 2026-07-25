@@ -377,10 +377,10 @@ func (p *URLSearchParams) serialize() string {
 const upperHex = "0123456789ABCDEF"
 
 // encodeFormComponent percent-encodes one name or value for a query string. The set
-// left literal is exactly what a browser's URLSearchParams serializer leaves literal:
-// the unreserved characters, with a space as "+". That is narrower than
-// encodeURIComponent's own set, which spares "!'()*"; the serializer encodes those,
-// so they are encoded here.
+// left literal is the urlencoded serializer's, which is not the unreserved set and not
+// encodeURIComponent's: a space is "+", "*" stays literal, and "~" does not. Those last
+// two are each the opposite of what encodeURIComponent does, so the set is spelled out
+// here rather than described as a delta from it.
 func encodeFormComponent(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -388,7 +388,7 @@ func encodeFormComponent(s string) string {
 		c := s[i]
 		switch {
 		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
-			c == '-', c == '_', c == '.', c == '~':
+			c == '*', c == '-', c == '.', c == '_':
 			b.WriteByte(c)
 		case c == ' ':
 			b.WriteByte('+')

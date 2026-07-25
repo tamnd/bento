@@ -30,7 +30,7 @@ p.forEach((value, name) => {
 const enc = new URLSearchParams();
 enc.append("a b", "c&d=e");
 enc.append("greek", "π");
-enc.append("punct", "*!'()");
+enc.append("punct", "*!'()~");
 console.log(enc.toString());
 
 // And the serialization parses back to the pairs it came from.

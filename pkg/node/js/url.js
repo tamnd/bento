@@ -21,13 +21,14 @@ __bento_defineModule("url", function (module, exports, require) {
   }
 
   // encodeQuery / decodeQuery follow the application/x-www-form-urlencoded rules
-  // URLSearchParams uses: spaces become "+", everything else is percent encoded
-  // by encodeURIComponent, and "*", "!", "'", "(", ")" stay literal to match the
-  // browser serializer.
+  // URLSearchParams uses: a space is "+", and everything outside the serializer's
+  // literal set is percent encoded. That set is not encodeURIComponent's. It encodes
+  // "!", "'", "(", ")" and "~", which encodeURIComponent spares, and it spares "*",
+  // which is the one character encodeURIComponent spares that the serializer keeps.
   function encodeQuery(str) {
     return encodeURIComponent(str)
       .replace(/%20/g, "+")
-      .replace(/[!'()*]/g, function (c) {
+      .replace(/[!'()~]/g, function (c) {
         return "%" + c.charCodeAt(0).toString(16).toUpperCase();
       });
   }
