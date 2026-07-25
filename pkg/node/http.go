@@ -161,13 +161,14 @@ func (h *httpBridge) runServer(srv *httpServer, id int64, ln net.Listener, gosrv
 		delete(h.servers, id)
 		h.mu.Unlock()
 		// refs is owned by the loop goroutine, so drop the reference there rather
-		// than from this accept goroutine. The dispatch that follows is already
-		// posted after it, so the loop sees the unref first and can then exit.
-		h.loop.Post(func() { h.loop.Unref() })
+		// than from this accept goroutine, and queue the events before the drop.
+		// Posting the Unref first lets the loop wake on it, find no references and
+		// nothing pending, and exit before these events are even posted.
 		if serveErr != nil && serveErr != http.ErrServerClosed {
 			h.emit("__bento_http_dispatchServerError", id, serveErr.Error(), "")
 		}
 		h.emit("__bento_http_dispatchClose", id)
+		h.loop.Post(func() { h.loop.Unref() })
 	})
 }
 

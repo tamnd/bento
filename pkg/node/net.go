@@ -118,8 +118,12 @@ func (n *netBridgeState) listenImpl(prefix string, tlsCfg *tls.Config, args []an
 		n.mu.Lock()
 		delete(n.servers, id)
 		n.mu.Unlock()
-		n.loop.Post(func() { n.loop.Unref() })
+		// Queue the close event before dropping the reference that was holding the
+		// loop open for it. The other order leaves a window where Run wakes on the
+		// Unref, sees no references and nothing pending, and exits before the event
+		// is posted, so the handler never runs.
 		n.emit(prefix+"dispatchServerClose", id)
+		n.loop.Post(func() { n.loop.Unref() })
 	})
 	return nil, nil
 }
@@ -162,9 +166,14 @@ func (n *netBridgeState) connectImpl(prefix string, secure bool, args []any) (an
 			conn, err = net.Dial("tcp", addr)
 		}
 		if err != nil {
-			n.loop.Post(func() { n.loop.Unref() })
+			// The error event has to be queued before the reference goes, or Run can
+			// exit through the gap and the program never sees the failure. The gap is
+			// wide here because building Node's error runs between the two, and it is
+			// wide enough to lose the event under load: a whole-package run on Windows
+			// loses it, one test on its own does not.
 			msg, props := nodehost.NetError(err, "connect", host, port)
 			n.emit(prefix+"dispatchError", id, msg, props)
+			n.loop.Post(func() { n.loop.Unref() })
 			return
 		}
 		nc := n.adopt(id, conn, prefix, false)
@@ -270,8 +279,8 @@ func (n *netBridgeState) startPumps(nc *netConn) {
 		n.mu.Lock()
 		delete(n.conns, nc.id)
 		n.mu.Unlock()
-		n.loop.Post(func() { n.loop.Unref() })
 		n.emit(nc.prefix+"dispatchClose", nc.id)
+		n.loop.Post(func() { n.loop.Unref() })
 	})
 }
 

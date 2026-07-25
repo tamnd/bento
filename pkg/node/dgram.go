@@ -221,8 +221,8 @@ func (d *dgramBridgeState) startReadLoop(sock *udpSocket) {
 		d.mu.Lock()
 		delete(d.sockets, sock.id)
 		d.mu.Unlock()
-		d.loop.Post(func() { d.loop.Unref() })
 		d.emit("__bento_dgram_dispatchClose", sock.id)
+		d.loop.Post(func() { d.loop.Unref() })
 	})
 }
 

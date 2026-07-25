@@ -10,6 +10,43 @@ import (
 	"testing"
 )
 
+// platformErrno is the number a real socket failure carries on this platform, so
+// the fixtures below are the errors the standard library actually hands over
+// rather than ones that only look right.
+//
+// It cannot be syscall.ECONNREFUSED and friends. Go defines those names on
+// Windows too, but as synthetic values in its own block: syscall.ECONNREFUSED is
+// 536870934 there, which is 0x20000000 plus the POSIX number and is not anything
+// Winsock ever returns. A dial to a closed port on Windows carries 10061, checked
+// on the box rather than reasoned about, and so the errno the classification has
+// to recognize is that one.
+func platformErrno(code string) syscall.Errno {
+	if runtime.GOOS == "windows" {
+		switch code {
+		case "ECONNREFUSED":
+			return 10061 // WSAECONNREFUSED
+		case "EADDRINUSE":
+			return 10048 // WSAEADDRINUSE
+		case "EADDRNOTAVAIL":
+			return 10049 // WSAEADDRNOTAVAIL
+		case "EACCES":
+			return 10013 // WSAEACCES
+		}
+		return 0
+	}
+	switch code {
+	case "ECONNREFUSED":
+		return syscall.ECONNREFUSED
+	case "EADDRINUSE":
+		return syscall.EADDRINUSE
+	case "EADDRNOTAVAIL":
+		return syscall.EADDRNOTAVAIL
+	case "EACCES":
+		return syscall.EACCES
+	}
+	return 0
+}
+
 // wantSocketErrno is the number Node reports as err.errno for a socket code on
 // this platform, derived the same way wantErrno above derives a filesystem one:
 // from the platform's own constant off Windows, from libuv's block on it.
@@ -49,8 +86,8 @@ func wantSocketErrno(code string) int {
 // over, an errno inside a *net.OpError, because that is what the classification
 // has to see through.
 func TestClassifySocketNamesNodesCode(t *testing.T) {
-	opErr := func(op string, en syscall.Errno) error {
-		return &net.OpError{Op: op, Net: "tcp", Err: os.NewSyscallError(op, en)}
+	opErr := func(op, code string) error {
+		return &net.OpError{Op: op, Net: "tcp", Err: os.NewSyscallError(op, platformErrno(code))}
 	}
 	cases := []struct {
 		what string
@@ -58,10 +95,10 @@ func TestClassifySocketNamesNodesCode(t *testing.T) {
 		code string
 		desc string
 	}{
-		{"a refused connection", opErr("connect", syscall.ECONNREFUSED), "ECONNREFUSED", "connection refused"},
-		{"a port already bound", opErr("bind", syscall.EADDRINUSE), "EADDRINUSE", "address already in use"},
-		{"a privileged port", opErr("bind", syscall.EACCES), "EACCES", "permission denied"},
-		{"an address on no interface", opErr("bind", syscall.EADDRNOTAVAIL), "EADDRNOTAVAIL", "address not available"},
+		{"a refused connection", opErr("connect", "ECONNREFUSED"), "ECONNREFUSED", "connection refused"},
+		{"a port already bound", opErr("bind", "EADDRINUSE"), "EADDRINUSE", "address already in use"},
+		{"a privileged port", opErr("bind", "EACCES"), "EACCES", "permission denied"},
+		{"an address on no interface", opErr("bind", "EADDRNOTAVAIL"), "EADDRNOTAVAIL", "address not available"},
 		{"a name that does not resolve", &net.DNSError{Err: "no such host", Name: "x.invalid", IsNotFound: true}, "ENOTFOUND", "unknown node or service"},
 		{"a resolver that timed out", &net.DNSError{Err: "timeout", Name: "x.invalid", IsTimeout: true}, "EAI_AGAIN", "temporary failure"},
 		{"a dial that ran out of time", &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}, "ETIMEDOUT", "connection timed out"},
@@ -109,7 +146,7 @@ func TestClassifySocketDoesNotGuessFromTheMessage(t *testing.T) {
 	if got := ClassifySocketError(err); got.Code != "UNKNOWN" {
 		t.Errorf("text alone classified as %q, want UNKNOWN: the message is not evidence", got.Code)
 	}
-	withErrno := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
+	withErrno := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", platformErrno("EADDRINUSE"))}
 	if got := ClassifySocketError(withErrno); got.Code != "EADDRINUSE" {
 		t.Errorf("errno classified as %q, want EADDRINUSE", got.Code)
 	}
@@ -121,8 +158,8 @@ func TestClassifySocketDoesNotGuessFromTheMessage(t *testing.T) {
 // error carries the description and a connect or a bind does not, and a port of
 // zero is left out of both the message and the error object.
 func TestNetErrorMatchesNodesMessage(t *testing.T) {
-	opErr := func(op string, en syscall.Errno) error {
-		return &net.OpError{Op: op, Net: "tcp", Err: os.NewSyscallError(op, en)}
+	opErr := func(op, code string) error {
+		return &net.OpError{Op: op, Net: "tcp", Err: os.NewSyscallError(op, platformErrno(code))}
 	}
 	cases := []struct {
 		what    string
@@ -134,7 +171,7 @@ func TestNetErrorMatchesNodesMessage(t *testing.T) {
 		props   map[string]any
 	}{
 		{
-			what: "a refused connection", err: opErr("connect", syscall.ECONNREFUSED),
+			what: "a refused connection", err: opErr("connect", "ECONNREFUSED"),
 			call: "connect", address: "127.0.0.1", port: 1,
 			message: "connect ECONNREFUSED 127.0.0.1:1",
 			props: map[string]any{
@@ -143,7 +180,7 @@ func TestNetErrorMatchesNodesMessage(t *testing.T) {
 			},
 		},
 		{
-			what: "a privileged port", err: opErr("bind", syscall.EACCES),
+			what: "a privileged port", err: opErr("bind", "EACCES"),
 			call: "listen", address: "127.0.0.1", port: 1,
 			message: "listen EACCES: permission denied 127.0.0.1:1",
 			props: map[string]any{
@@ -154,7 +191,7 @@ func TestNetErrorMatchesNodesMessage(t *testing.T) {
 		{
 			// Node leaves a port it was never given out of both, so this is the shape
 			// of listen(0, host) failing.
-			what: "an address on no interface", err: opErr("bind", syscall.EADDRNOTAVAIL),
+			what: "an address on no interface", err: opErr("bind", "EADDRNOTAVAIL"),
 			call: "listen", address: "203.0.113.99", port: 0,
 			message: "listen EADDRNOTAVAIL: address not available 203.0.113.99",
 			props: map[string]any{
@@ -163,7 +200,7 @@ func TestNetErrorMatchesNodesMessage(t *testing.T) {
 			},
 		},
 		{
-			what: "a datagram bind", err: opErr("bind", syscall.EACCES),
+			what: "a datagram bind", err: opErr("bind", "EACCES"),
 			call: "bind", address: "127.0.0.1", port: 1,
 			message: "bind EACCES 127.0.0.1:1",
 			props: map[string]any{
