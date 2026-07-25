@@ -354,7 +354,7 @@ func TestRegExpAstralCodeUnits(t *testing.T) {
 		t.Error("a lone surrogate is one code unit a single dot should match")
 	}
 	// An astral literal in the pattern matches the same two units in the subject.
-	if !NewRegExpLiteral(supp, "").Test(FromGoString("x"+supp+"y")) {
+	if !NewRegExpLiteral(supp, "").Test(FromGoString("x" + supp + "y")) {
 		t.Error("an astral literal pattern missed the astral character")
 	}
 	// .index counts in UTF-16 units: 'b' after a supplementary character sits at 2.
