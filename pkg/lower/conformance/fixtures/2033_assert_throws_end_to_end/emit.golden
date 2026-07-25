@@ -32,7 +32,7 @@ func AssertThrows(expectedErrorConstructor value.Value, func_ value.Value) {
 				} else if !value.StrictEquals(thrown.Constructor(), expectedErrorConstructor) {
 					expectedName := expectedErrorConstructor.Get(value.FromGoString("name"))
 					actualName := thrown.Constructor().Get(value.FromGoString("name"))
-					message = value.Concat(message, value.FromGoString("Expected a ").ConcatN(value.ToString(expectedName), value.FromGoString(" but got a "), value.ToString(actualName)))
+					message = value.Concat(message, value.FromGoString("Expected a ").ConcatN(value.PlusToString(expectedName), value.FromGoString(" but got a "), value.PlusToString(actualName)))
 					value.Throw(NewTest262Error(message))
 				}
 				done = true
@@ -44,7 +44,7 @@ func AssertThrows(expectedErrorConstructor value.Value, func_ value.Value) {
 	}(); done {
 		return
 	}
-	message = value.Concat(message, value.FromGoString("Expected a ").ConcatN(value.ToString(expectedErrorConstructor.Get(value.FromGoString("name"))), value.FromGoString(" to be thrown but no exception was thrown at all")))
+	message = value.Concat(message, value.FromGoString("Expected a ").ConcatN(value.PlusToString(expectedErrorConstructor.Get(value.FromGoString("name"))), value.FromGoString(" to be thrown but no exception was thrown at all")))
 	value.Throw(NewTest262Error(message))
 }
 func main() {

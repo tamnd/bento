@@ -18,7 +18,7 @@ func main() {
 		})(value.Arg(__a, 0), value.ToString(value.Arg(__a, 1)))
 	})).Set(value.FromGoString("set"), value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Bool((func(t value.Value, key value.BStr, value_ value.Value) bool {
-			log.Push(key.ConcatN(value.FromGoString("="), value.ToString(value_)))
+			log.Push(key.ConcatN(value.FromGoString("="), value.PlusToString(value_)))
 			t.SetKey(key, value_)
 			return true
 		})(value.Arg(__a, 0), value.ToString(value.Arg(__a, 1)), value.Arg(__a, 2)))

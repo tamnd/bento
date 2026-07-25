@@ -29,7 +29,7 @@ func Run() *value.Promise[value.Unit] {
 				return value.Number(_bt3)
 			}))
 		}
-		value.ConsoleLog(value.Concat(value.FromGoString("final:"), value.ToString(r.Value)))
+		value.ConsoleLog(value.Concat(value.FromGoString("final:"), value.PlusToString(r.Value)))
 	})
 }
 func main() {

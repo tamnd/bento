@@ -12,7 +12,7 @@ func __consolePrintHandle__(msg value.Value) {
 func D_DONE(error value.Value) {
 	if value.ToBoolean(error) {
 		if error.TypeOf().Equal(value.FromGoString("object")) && !error.IsNull() && value.InOperator(value.StringValue(value.FromGoString("name")), error) {
-			__consolePrintHandle__(value.StringValue(value.FromGoString("Test262:AsyncTestFailure:").ConcatN(value.ToString(error.Get(value.FromGoString("name"))), value.FromGoString(": "), value.ToString(error.Get(value.FromGoString("message"))))))
+			__consolePrintHandle__(value.StringValue(value.FromGoString("Test262:AsyncTestFailure:").ConcatN(value.PlusToString(error.Get(value.FromGoString("name"))), value.FromGoString(": "), value.PlusToString(error.Get(value.FromGoString("message"))))))
 		} else {
 			__consolePrintHandle__(value.StringValue(value.Concat(value.FromGoString("Test262:AsyncTestFailure:Test262Error: "), value.StringCoerce(error))))
 		}

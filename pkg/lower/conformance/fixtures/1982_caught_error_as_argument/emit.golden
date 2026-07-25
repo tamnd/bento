@@ -7,7 +7,7 @@ import (
 )
 
 func Describe(x value.Value) value.BStr {
-	return value.FromGoString("got ").ConcatN(value.ToString(x.Get(value.FromGoString("name"))), value.FromGoString(": "), value.ToString(x.Get(value.FromGoString("message"))))
+	return value.FromGoString("got ").ConcatN(value.PlusToString(x.Get(value.FromGoString("name"))), value.FromGoString(": "), value.PlusToString(x.Get(value.FromGoString("message"))))
 }
 func main() {
 	defer value.ReportUncaught()

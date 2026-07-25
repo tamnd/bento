@@ -9,7 +9,7 @@ import (
 func Label(name value.Value) value.BStr {
 	_bt0 := value.NewArray[value.Value](name)
 	if _bt0.Len() == 1 {
-		name = value.StringValue(value.FromGoString("[").ConcatN(value.ToString(name), value.FromGoString("]")))
+		name = value.StringValue(value.FromGoString("[").ConcatN(value.PlusToString(name), value.FromGoString("]")))
 	}
 	return value.StringCoerce(name)
 }

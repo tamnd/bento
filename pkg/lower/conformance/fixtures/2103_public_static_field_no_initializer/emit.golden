@@ -16,5 +16,5 @@ func NewBox() *Box {
 	return &Box{}
 }
 func main() {
-	value.ConsoleLog(value.ToString(boxValue).ConcatN(value.FromGoString("|"), value.ToString(boxLabel)))
+	value.ConsoleLog(value.PlusToString(boxValue).ConcatN(value.FromGoString("|"), value.PlusToString(boxLabel)))
 }

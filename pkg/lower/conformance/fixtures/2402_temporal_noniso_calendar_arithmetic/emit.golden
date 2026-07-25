@@ -17,7 +17,7 @@ func main() {
 	value.ConsoleLog(r2.Since(r, "year").ToString())
 	j := value.PlainDateFromFields(2019, 4, 20, "japanese", "constrain")
 	jp := j.AddDate(value.NewDuration(0, 1, 0, 0, 0, 0, 0, 0, 0, 0), "constrain")
-	value.ConsoleLog(jp.ToString().ConcatN(value.FromGoString(" "), value.ToString(value.OptToValue(jp.Era(), value.StringValue)), value.FromGoString(" "), value.ToString(value.OptToValue(jp.EraYear(), value.Number))))
+	value.ConsoleLog(jp.ToString().ConcatN(value.FromGoString(" "), value.PlusToString(value.OptToValue(jp.Era(), value.StringValue)), value.FromGoString(" "), value.PlusToString(value.OptToValue(jp.EraYear(), value.Number))))
 	value.ConsoleLog(g.WithFields(value.None[float64](), value.Some[float64](3), value.None[float64](), "constrain").ToString())
 	value.ConsoleLog(r.WithFields(value.None[float64](), value.Some[float64](4), value.None[float64](), "constrain").ToString())
 	value.ConsoleLog(r.WithFields(value.Some[float64](114), value.None[float64](), value.None[float64](), "constrain").ToString())

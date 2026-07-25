@@ -15,7 +15,7 @@ func main() {
 	})
 	mixed := value.NewArray[*value.Promise[float64]](value.Resolved[float64](9), value.Rejected[float64](value.NewRejection(value.StringValue(value.FromGoString("bad")))))
 	value.All[float64](mixed).Catch(func(e value.Value) {
-		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.ToString(e)))
+		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.PlusToString(e)))
 	})
 	empty := value.NewArray[*value.Promise[float64]]()
 	value.All[float64](empty).Then(func(vs *value.Array[float64]) {
