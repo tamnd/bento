@@ -26,28 +26,28 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           submodules: true
           # Sitemap lastmod comes from the latest content commit.
           fetch-depth: 0
 
       - name: Checkout tago
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           repository: tamnd/tago
           path: .tago-src
           fetch-depth: 1
 
       - name: Setup Go
-        uses: actions/setup-go@v6.4.0
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: .tago-src/go.mod
           cache: false
 
       - name: Cache tago binary
         id: tago-bin-cache
-        uses: actions/cache@v5.0.5
+        uses: actions/cache@v6.1.0
         with:
           path: /usr/local/bin/tago
           key: tago-bin-${{ runner.os }}-${{ hashFiles('.tago-src/go.sum', '.tago-src/**/*.go') }}
@@ -107,7 +107,7 @@ jobs:
       group: cloudflare-pages-bento
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 1
           sparse-checkout: scripts/
