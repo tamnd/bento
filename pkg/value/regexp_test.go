@@ -325,3 +325,50 @@ func TestRegExpTest(t *testing.T) {
 		t.Error("test matched a non-matching input")
 	}
 }
+
+// A supplementary character occupies two UTF-16 code units, so a regexp counts it as
+// two positions: one dot matches only one unit, .index and lastIndex are reported in
+// units, and the matched text reads back as the whole character. A lone surrogate is a
+// single unit that one dot matches. This is the UTF-16 code-unit accounting exec, test,
+// and the String methods run on, so a pattern built from an astral literal matches the
+// same units the subject carries rather than collapsing the character to one rune.
+func TestRegExpAstralCodeUnits(t *testing.T) {
+	supp := string(rune(0x10300)) // 𐌀 = U+10300, two UTF-16 units
+	units := []struct {
+		pat, flags, subj string
+		want             bool
+	}{
+		{"^.$", "", supp, false},        // one dot is one unit, the character is two
+		{"^..$", "", supp, true},        // two dots cover the two units
+		{"(?-s:^.$)", "s", supp, false}, // remove-dotAll: single dot still one unit
+		{".", "", supp, true},           // dot matches the first unit
+		{"^.$", "", "a", true},
+	}
+	for _, c := range units {
+		if got := NewRegExpLiteral(c.pat, c.flags).Test(FromGoString(c.subj)); got != c.want {
+			t.Errorf("/%s/%s.test(supp) = %v, want %v", c.pat, c.flags, got, c.want)
+		}
+	}
+	// A lone high surrogate is one code unit a single dot matches.
+	if !NewRegExpLiteral("(?-s:^.$)", "s").Test(FromUTF16([]uint16{0xD800})) {
+		t.Error("a lone surrogate is one code unit a single dot should match")
+	}
+	// An astral literal in the pattern matches the same two units in the subject.
+	if !NewRegExpLiteral(supp, "").Test(FromGoString("x"+supp+"y")) {
+		t.Error("an astral literal pattern missed the astral character")
+	}
+	// .index counts in UTF-16 units: 'b' after a supplementary character sits at 2.
+	res := NewRegExpLiteral("b", "").Exec(FromGoString(supp + "b"))
+	if idx := ToNumber(res.Get(FromGoString("index"))); idx != 2 {
+		t.Errorf(".index after a supplementary character = %v, want 2", idx)
+	}
+	// The matched text reads back as the whole character, not a severed unit.
+	m := NewRegExpLiteral("^.{2}$", "").Exec(FromGoString(supp))
+	if got := ToNumber(m.Get(FromGoString("length"))); got != 1 {
+		t.Errorf("match array length = %v, want 1", got)
+	}
+	// replace and split keep the astral character intact.
+	if got := NewRegExpLiteral("b", "g").ReplaceStr(FromGoString(supp+"b"+supp), FromGoString("X")).ToGoString(); got != supp+"X"+supp {
+		t.Errorf("replace mangled the astral character: %q", got)
+	}
+}
