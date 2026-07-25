@@ -48,6 +48,7 @@ const (
 	bentoModuleName  = "bentoModule"
 	bentoExportsName = "bentoExports"
 	bentoRequireName = "bentoRequire"
+	bentoProcessName = "bentoProcess"
 )
 
 // isCommonJSModuleGlobal reports whether n is a reference to the CommonJS module
@@ -133,6 +134,17 @@ func (r *Renderer) requireRef() ast.Expr {
 	return ident(bentoRequireName)
 }
 
+// processRef lowers a bare process reference to the package-level process object,
+// flagging that it must be emitted. process is typed any, so a member read like
+// process.argv or process.platform lowers through the ordinary dynamic member path
+// from the object this returns, and a call the static process paths do not claim
+// dispatches through the runtime from it too. The object is built once at program
+// start, so every reference reaches the one process object a Node program expects.
+func (r *Renderer) processRef() ast.Expr {
+	r.usesProcess = true
+	return ident(bentoProcessName)
+}
+
 // commonjsModuleDecls returns the package-level declarations that back the module,
 // exports, and require globals, or nil when the program named none of them. The
 // exports object is declared first and the module object holds it under the
@@ -179,6 +191,20 @@ func (r *Renderer) commonjsModuleDecls() []ast.Decl {
 			}},
 		}
 		decls = append(decls, requireVar)
+	}
+	// The process object is independent of the module globals and emitted whenever
+	// the program read process as a value, so a program that only branches on
+	// process.platform pays for it and one that never names process does not.
+	if r.usesProcess {
+		r.requireImport(valuePkg)
+		processVar := &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names:  []*ast.Ident{ident(bentoProcessName)},
+				Values: []ast.Expr{&ast.CallExpr{Fun: sel("value", "ProcessValue")}},
+			}},
+		}
+		decls = append(decls, processVar)
 	}
 	return decls
 }
