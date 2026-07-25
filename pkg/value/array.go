@@ -1057,19 +1057,27 @@ func (a *Array[T]) Unshift(xs ...T) float64 {
 // Array.prototype.slice applies to each of its bounds. NaN truncates to zero,
 // matching ToIntegerOrInfinity, so a NaN bound behaves as 0.
 func relativeIndex(v float64, length int) int {
-	i := int(v)
 	if v != v { // NaN truncates to 0
-		i = 0
+		return 0
 	}
+	// ToIntegerOrInfinity keeps ±Infinity, and a finite magnitude past the buffer
+	// clamps to an edge, so decide those in float space: int(v) on a value outside
+	// the int range is implementation-defined (amd64 yields the indefinite integer,
+	// a large negative) and would fold +Infinity or a huge finite end back to 0.
+	if v >= float64(length) { // +Infinity and anything at or past the end
+		return length
+	}
+	if v <= float64(-length) { // -Infinity and anything at or before -length
+		return 0
+	}
+	// v is finite in (-length, length) now, so int(v) truncates toward zero safely.
+	i := int(v)
 	if i < 0 {
 		i += length
 		if i < 0 {
 			return 0
 		}
 		return i
-	}
-	if i > length {
-		return length
 	}
 	return i
 }
