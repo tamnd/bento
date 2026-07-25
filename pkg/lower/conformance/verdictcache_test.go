@@ -69,6 +69,10 @@ func mustDiscover(t *testing.T) []Fixture {
 // ignored one would serve the wrong output after exactly the change the cache exists to
 // notice.
 func TestVerdictKeyRespondsToEveryInput(t *testing.T) {
+	// Caching is turned back on for this test, since a run that disabled it would
+	// otherwise get no key at all and fail on the harness's own setting rather than on
+	// anything about the key.
+	t.Setenv("BENTO_CONFORMANCE_NO_CACHE", "")
 	golden := []byte("package main\n\nfunc main() {}\n")
 	env := map[string]string{"TZ": "UTC"}
 
@@ -99,6 +103,7 @@ func TestVerdictKeyRespondsToEveryInput(t *testing.T) {
 // a fixture's environment map happened to be built in. Go randomizes map iteration, so a
 // key that hashed the map as it ranged would differ run to run and never hit.
 func TestVerdictKeyIsStableAcrossEnvOrdering(t *testing.T) {
+	t.Setenv("BENTO_CONFORMANCE_NO_CACHE", "")
 	golden := []byte("package main\n\nfunc main() {}\n")
 	first, ok := VerdictKey(golden, map[string]string{"A": "1", "B": "2", "C": "3"})
 	if !ok {
