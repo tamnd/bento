@@ -7,17 +7,26 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
+
+	"github.com/tamnd/bento/pkg/nodehost"
 )
 
 // fsResult is the JSON envelope every filesystem host function returns. OK
 // distinguishes success from a mapped error; the remaining fields are populated
 // per operation and omitted when empty so the JS layer sees a tidy object.
 type fsResult struct {
-	OK      bool       `json:"ok"`
-	Code    string     `json:"code,omitempty"`
-	Errno   int        `json:"errno,omitempty"`
-	Msg     string     `json:"msg,omitempty"`
+	OK bool `json:"ok"`
+	// Code, Errno and Desc are the three parts of a Node filesystem error: the
+	// string a program branches on, the number err.errno carries, and libuv's
+	// description, which the JavaScript side puts between the code and the syscall
+	// to build the message Node builds.
+	Code  string `json:"code,omitempty"`
+	Errno int    `json:"errno,omitempty"`
+	Desc  string `json:"desc,omitempty"`
+	// Syscall is set only when the call failed at a later step than the one the
+	// JavaScript side would report on its own, and it overrides that name; see
+	// failAt.
+	Syscall string     `json:"syscall,omitempty"`
 	B64     string     `json:"b64,omitempty"`
 	Path    string     `json:"path,omitempty"`
 	Stat    *statInfo  `json:"stat,omitempty"`
@@ -50,7 +59,7 @@ type dirEntry struct {
 func jsonString[T any](v T) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return `{"ok":false,"code":"UNKNOWN","msg":"marshal failed"}`
+		return `{"ok":false,"code":"UNKNOWN","desc":"marshal failed"}`
 	}
 	return string(b)
 }
@@ -61,46 +70,26 @@ func ok(r fsResult) string {
 	return jsonString(r)
 }
 
-// fail maps a Go error to a Node-style error envelope (ENOENT, EEXIST, ...).
+// fail maps a Go error to a Node-style error envelope: the code a program
+// branches on, the number err.errno carries, and libuv's description of it, which
+// the JavaScript side assembles into Node's message. The classification is
+// nodehost's so the interpreter and the AOT path answer the same thing, and so
+// the Windows translation lives in one place; see pkg/nodehost/fserror.go for why
+// it cannot be a comparison against syscall.ENOENT and friends.
 func fail(err error) string {
-	code, errno := "UNKNOWN", -1
-	if perr, ok := errors.AsType[*fs.PathError](err); ok {
-		err = perr.Err
-	}
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		code, errno = "ENOENT", -2
-	case errors.Is(err, fs.ErrExist):
-		code, errno = "EEXIST", -17
-	case errors.Is(err, fs.ErrPermission):
-		code, errno = "EACCES", -13
-	default:
-		if en, ok := errors.AsType[syscall.Errno](err); ok {
-			code = errnoName(en)
-		}
-	}
-	return jsonString(fsResult{OK: false, Code: code, Errno: errno, Msg: err.Error()})
+	e := nodehost.ClassifyFSError(err)
+	return jsonString(fsResult{OK: false, Code: e.Code, Errno: e.Errno, Desc: e.Desc})
 }
 
-func errnoName(en syscall.Errno) string {
-	switch en {
-	case syscall.ENOENT:
-		return "ENOENT"
-	case syscall.EEXIST:
-		return "EEXIST"
-	case syscall.EACCES:
-		return "EACCES"
-	case syscall.ENOTDIR:
-		return "ENOTDIR"
-	case syscall.EISDIR:
-		return "EISDIR"
-	case syscall.ENOTEMPTY:
-		return "ENOTEMPTY"
-	case syscall.EINVAL:
-		return "EINVAL"
-	default:
-		return "UNKNOWN"
-	}
+// failAt is fail for a call that got further than the JavaScript side assumes.
+// readFileSync reports itself as the open, since that is the step that fails for
+// a path that is missing or unreadable, but a directory opens perfectly well and
+// fails on the read. Node names the step that actually failed and gives no path
+// at all in that case, printing "EISDIR: illegal operation on a directory, read",
+// so the host says which syscall it was and the JS side takes its word for it.
+func failAt(err error, syscall string) string {
+	e := nodehost.ClassifyFSError(err)
+	return jsonString(fsResult{OK: false, Code: e.Code, Errno: e.Errno, Desc: e.Desc, Syscall: syscall})
 }
 
 // fsHostFuncs returns the synchronous filesystem primitives the fs module builds
@@ -127,6 +116,13 @@ func fsHostFuncs() map[string]HostFunc {
 func hostFSRead(a []any) (any, error) {
 	data, err := os.ReadFile(str(a, 0))
 	if err != nil {
+		// os.ReadFile opens and then reads, and it says which of the two failed in
+		// the PathError's Op, so a directory comes back as a failed read and is
+		// reported as one.
+		var perr *fs.PathError
+		if errors.As(err, &perr) && perr.Op == "read" {
+			return failAt(err, "read"), nil
+		}
 		return fail(err), nil
 	}
 	return ok(fsResult{B64: base64.StdEncoding.EncodeToString(data)}), nil
@@ -259,10 +255,15 @@ func hostFSRealpath(a []any) (any, error) {
 	if err != nil {
 		return fail(err), nil
 	}
-	if resolved, rerr := filepath.EvalSymlinks(p); rerr == nil {
-		p = resolved
+	// Node's realpathSync throws when the path does not exist rather than
+	// answering with a path that names nothing, and every other reason
+	// EvalSymlinks fails, a symlink loop or a permission denial, is a throw there
+	// too. Swallowing the error handed the caller a path it had no evidence for.
+	resolved, rerr := filepath.EvalSymlinks(p)
+	if rerr != nil {
+		return fail(rerr), nil
 	}
-	return ok(fsResult{Path: p}), nil
+	return ok(fsResult{Path: resolved}), nil
 }
 
 func hostFSReadlink(a []any) (any, error) {
