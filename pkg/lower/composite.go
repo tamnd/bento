@@ -1590,15 +1590,37 @@ func (r *Renderer) mapMethodCall(recvNode frontend.Node, method string, argNodes
 	if err != nil {
 		return nil, err
 	}
+	// A map whose key or value type nothing narrowed, the `new Map()` of a JavaScript
+	// file, holds boxed values, while the checker types each argument by what was
+	// written: m.set("a", 1) passes a string and a number. So each argument crosses into
+	// the slot it fills, the key for every method and the value for set's second. An
+	// argument that is already a box crosses as itself: boxing it again would build a
+	// second object, and an object key matches by identity, so m.get(k) would then miss
+	// the entry m.set(k, v) just wrote.
+	k, v, hasKV := r.mapKeyVal(r.prog.TypeAt(recvNode))
+	slots := []frontend.Type{k, v}
 	args := make([]ast.Expr, 0, want)
-	for _, a := range argNodes {
+	for i, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
 		}
+		if hasKV && i < len(slots) && slots[i].Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 && !r.isDynamic(a) {
+			if lowered, err = r.boxStaticToDynamic(lowered, a); err != nil {
+				return nil, err
+			}
+		}
 		args = append(args, lowered)
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+	call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}
+	// get on a dynamic-valued map hands back an Opt[value.Value], which its consumers
+	// read as the box an absent entry renders undefined, the same adaptation an any
+	// element's array at() takes.
+	if goName == "Get" && hasKV && v.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "OptValue"), Args: []ast.Expr{call}}, nil
+	}
+	return call, nil
 }
 
 // setMethodCall lowers a method call on a Set receiver to the matching value.Set
@@ -1651,11 +1673,20 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 	if err != nil {
 		return nil, err
 	}
+	// A set whose member type nothing narrowed holds boxed values, so each argument
+	// crosses into that slot the same way a dynamic map's key does.
+	elem, hasElem := r.setElem(r.prog.TypeAt(recvNode))
+	dynElem := hasElem && elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 	args := make([]ast.Expr, 0, want)
 	for _, a := range argNodes {
 		lowered, err := r.lowerExpr(a)
 		if err != nil {
 			return nil, err
+		}
+		if dynElem && !r.isDynamic(a) {
+			if lowered, err = r.boxStaticToDynamic(lowered, a); err != nil {
+				return nil, err
+			}
 		}
 		args = append(args, lowered)
 	}

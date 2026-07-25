@@ -905,6 +905,19 @@ func StrictEquals(a, b Value) bool {
 	}
 }
 
+// SameValueZero implements the SameValueZero comparison, the key and member
+// identity a Map and a Set use. It is Strict Equality with one difference: NaN is
+// the same value as NaN, so a collection holds one NaN key however many times it is
+// offered. The zeroes stay a single value under both, which float64 == already
+// gives. Every other kind compares exactly as === does.
+func SameValueZero(a, b Value) bool {
+	if a.kind == KindNumber && b.kind == KindNumber {
+		x, y := a.AsNumber(), b.AsNumber()
+		return x == y || (x != x && y != y)
+	}
+	return StrictEquals(a, b)
+}
+
 // Or implements the value-returning a || b over dynamic values: the left operand
 // when it is truthy, the right otherwise. Both arguments arrive evaluated, so the
 // lowering only takes this form when the right operand has no side effect to

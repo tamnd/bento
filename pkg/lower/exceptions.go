@@ -618,6 +618,12 @@ func (r *Renderer) mapCtor(k, v frontend.Type) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	switch {
+	case k.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+		// A key type nothing narrowed, which is what a bare `new Map()` gets in a
+		// JavaScript file, keys on the boxed value itself. One map then holds a number,
+		// a string, and an object key at once, and SameValueZero over the box is the
+		// single comparison that gets each of those kinds right.
+		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewDynMap"), Index: vExpr}}, nil
 	case k.Flags&frontend.TypeNumber != 0:
 		return &ast.CallExpr{Fun: &ast.IndexExpr{X: sel("value", "NewNumberMap"), Index: vExpr}}, nil
 	case k.Flags&frontend.TypeString != 0:
@@ -882,6 +888,11 @@ func (r *Renderer) newSet(n frontend.Node, args []frontend.Node) (ast.Expr, erro
 func (r *Renderer) setCtor(elem frontend.Type) (ast.Expr, error) {
 	r.requireImport(valuePkg)
 	switch {
+	case elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+		// A member type nothing narrowed, the bare `new Set()` of a JavaScript file,
+		// holds the boxed values themselves and compares them by SameValueZero, exactly
+		// as the dynamic Map keys its entries.
+		return &ast.CallExpr{Fun: sel("value", "NewDynSet")}, nil
 	case elem.Flags&frontend.TypeNumber != 0:
 		return &ast.CallExpr{Fun: sel("value", "NewNumberSet")}, nil
 	case elem.Flags&frontend.TypeString != 0:
