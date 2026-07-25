@@ -2929,6 +2929,12 @@ func InstantFromString(s string) *Instant {
 	if !p.hasZ && !p.hasOffset {
 		Throw(NewRangeError(FromGoString("a Temporal.Instant string requires a UTC offset or a Z designator")))
 	}
+	// The parser reads the date digits without a range check, so a syntactically well-formed but
+	// impossible date like "2020-01-00" (day zero) or "2020-13-01" (month thirteen) reaches here.
+	// An Instant reads its wall clock as a real ISO date before folding to the epoch, so reject an
+	// out-of-range date the same way every other date-bearing string form does. ZonedDateTime's
+	// string path already does this; the Instant path was the one that fell through.
+	rejectISODate(float64(p.year), float64(p.month), float64(p.day))
 	secs := int64(isoToEpochDays(p.year, p.month, p.day))*86_400 +
 		int64(p.hour)*3600 + int64(p.minute)*60 + int64(p.second)
 	ns := new(big.Int).SetInt64(secs)
