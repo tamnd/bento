@@ -17,6 +17,8 @@ import (
 	"sync"
 
 	"github.com/microsoft/typescript-go/shim"
+
+	"github.com/tamnd/bento/pkg/cpath"
 )
 
 // RealAdapter implements TSAdapter over the real checker.
@@ -102,6 +104,17 @@ func prog(p ProgramHandle) *realProgram { return p.(*realProgram) }
 // own resolution and checking over the complete in-memory file set, so the type
 // view and bento's module graph describe the same files.
 func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Host) (ProgramHandle, error) {
+	// Normalize once, here, even though Load already did: the keys of this map are
+	// the names the checker hands back on every source file, and a key that is not a
+	// checker path does not merely read oddly, it panics the compiler's file system.
+	// The conversion is idempotent, so doing it twice costs nothing and means an
+	// adapter reached from a test or a future caller cannot be given a raw operating
+	// system path by accident.
+	roots = append([]string(nil), roots...)
+	for i, r := range roots {
+		roots[i] = cpath.FromOS(r)
+	}
+
 	files := map[string]string{}
 	for _, r := range roots {
 		if content, ok := host.ReadFile(r); ok {
@@ -147,6 +160,10 @@ func (a *RealAdapter) BuildProgram(roots []string, opts CompilerOptions, host Ho
 			}
 			for _, spec := range shim.ImportSpecifiers(sf) {
 				resolved, kind, ok := host.ResolveModule(spec, name)
+				// A host answers in checker paths, and this keeps that true of the
+				// map keys even for one that does not, since an unnormalized key
+				// panics the compiler's file system rather than merely reading oddly.
+				resolved = cpath.FromOS(resolved)
 				imports[name] = append(imports[name], ResolvedImportInfo{
 					Specifier:    spec,
 					ResolvedFile: resolved,

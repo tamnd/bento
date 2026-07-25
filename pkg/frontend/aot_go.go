@@ -37,6 +37,11 @@ func goDeclPath(importPath, version string) string {
 // the go: target from a resolved import edge. ok is false for any path that is not
 // one of these virtual declaration files.
 func goImportForDeclPath(path string) (importPath, version string, ok bool) {
+	// On the volume rather than under it: a Windows load serves these at
+	// "C:/__bento_go__/...", because the checker's file map may not mix a
+	// POSIX-style key with a Windows-style one. devolume puts the path back in the
+	// one spelling goDeclPrefix is written as.
+	path = devolume(path)
 	if !strings.HasPrefix(path, goDeclPrefix) || !strings.HasSuffix(path, ".d.ts") {
 		return "", "", false
 	}

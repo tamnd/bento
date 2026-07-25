@@ -1,6 +1,11 @@
 package frontend
 
-import "github.com/tamnd/bento/pkg/goimport"
+import (
+	"strings"
+
+	"github.com/tamnd/bento/pkg/cpath"
+	"github.com/tamnd/bento/pkg/goimport"
+)
 
 // This file gives the AOT frontend the Node globals a real program uses. The
 // TypeScript standard libraries declare Math, Number, String, and JSON, but not
@@ -17,6 +22,23 @@ import "github.com/tamnd/bento/pkg/goimport"
 // also what makes isAmbientGlobal treat process as library-provided rather than a
 // user binding, the same test that separates the global Math from a local shadow.
 const ambientPath = "/__bento_ambient__.d.ts"
+
+// devolume drops a checker path's volume, so bento's synthetic paths are
+// recognized by the one POSIX spelling they are written as here no matter which
+// drive the program they belong to sits on. Every virtual path is handed to the
+// checker through cpath.Virtual, which gives it the program's volume; this is the
+// other half of that, and the two are what let the constants above stay readable
+// instead of becoming per-load values.
+func devolume(p string) string {
+	if vol := cpath.Volume(p); vol != "" {
+		return "/" + strings.TrimPrefix(p, vol)
+	}
+	return p
+}
+
+// isAmbientPath reports whether a path names the synthetic ambient library, on any
+// volume.
+func isAmbientPath(p string) bool { return devolume(p) == ambientPath }
 
 // ambientSource declares the Node globals and node: modules the AOT compiler can
 // lower. process is typed any, the same shape module, exports, and require take,
@@ -114,14 +136,14 @@ func ambientText() string {
 type ambientOverlay struct{ base FileSystem }
 
 func (a ambientOverlay) ReadFile(path string) (string, bool) {
-	if path == ambientPath {
+	if isAmbientPath(path) {
 		return ambientText(), true
 	}
 	return a.base.ReadFile(path)
 }
 
 func (a ambientOverlay) FileExists(path string) bool {
-	if path == ambientPath {
+	if isAmbientPath(path) {
 		return true
 	}
 	return a.base.FileExists(path)

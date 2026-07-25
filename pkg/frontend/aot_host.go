@@ -2,19 +2,26 @@ package frontend
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/tamnd/bento/pkg/cpath"
 	"github.com/tamnd/bento/pkg/frontend/adapter"
 	"github.com/tamnd/bento/pkg/resolve"
 )
 
 // osFileSystem is the default FileSystem for a Load with no FS supplied: it reads
 // straight through the operating system.
+//
+// Every path reaching it is a checker path, so it is one of the two kinds of place
+// that converts: this is where bento touches the disk. The conversion is a no-op on
+// Unix, and on Windows the os package would in fact accept the slashes as they
+// stand, but converting here is what lets the rest of the package hold one
+// convention and say so, rather than relying on a tolerance the standard library
+// documents nowhere.
 type osFileSystem struct{}
 
 func (osFileSystem) ReadFile(path string) (string, bool) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(cpath.ToOS(path))
 	if err != nil {
 		return "", false
 	}
@@ -22,12 +29,12 @@ func (osFileSystem) ReadFile(path string) (string, bool) {
 }
 
 func (osFileSystem) FileExists(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Stat(cpath.ToOS(path))
 	return err == nil && !info.IsDir()
 }
 
 func (osFileSystem) DirectoryExists(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Stat(cpath.ToOS(path))
 	return err == nil && info.IsDir()
 }
 
@@ -94,7 +101,7 @@ func (h *loadHost) GetCurrentDirectory() string         { return h.cwd }
 func (h *loadHost) ResolveModule(specifier, containingFile string) (string, adapter.ImportKind, bool) {
 	parent := &resolve.Module{
 		Path:   containingFile,
-		Dir:    filepath.Dir(containingFile),
+		Dir:    cpath.Dir(containingFile),
 		Format: resolve.FormatESM,
 	}
 	res, err := h.resolver.Resolve(specifier, parent)
@@ -103,12 +110,14 @@ func (h *loadHost) ResolveModule(specifier, containingFile string) (string, adap
 	}
 	// A go: import resolves to the virtual path its generated declarations are
 	// served at, and is a typed input so the checker binds the names imported from
-	// it against the real Go package API.
+	// it against the real Go package API. The virtual path takes the importing
+	// file's volume, because the checker's file map may not mix a POSIX-style key
+	// with a Windows-style one.
 	if res.Kind == resolve.KindGo {
-		return goDeclPath(res.Path, res.GoVersion), adapter.ImportGo, true
+		return cpath.Virtual(goDeclPath(res.Path, res.GoVersion), containingFile), adapter.ImportGo, true
 	}
 	kind := mapImportKind(specifier, res)
-	return res.Path, kind, res.Kind == resolve.KindFile && isSourceFile(res.Path)
+	return cpath.FromOS(res.Path), kind, res.Kind == resolve.KindFile && isSourceFile(res.Path)
 }
 
 // importKindFromSpecifier classifies an unresolved specifier by shape alone, so a
