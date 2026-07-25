@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -239,4 +240,54 @@ func descOf(t *testing.T, code string) string {
 	}
 	t.Fatalf("no description written down for %s", code)
 	return ""
+}
+
+// TestSymlinkEitherWorksOrSaysWhy is the Windows audit of fs.symlinkSync in a
+// runnable form.
+//
+// Creating a symbolic link on Windows needs SeCreateSymbolicLinkPrivilege, which
+// an ordinary account does not hold unless Developer Mode is on. Go asks for the
+// unprivileged flag first and falls back, so the call succeeds on a developer box
+// and fails with ERROR_PRIVILEGE_NOT_HELD on a locked-down one. Node is in
+// exactly the same position, so there is nothing here to fix: bento is as capable
+// as the runtime it stands in for.
+//
+// What is worth pinning is the failure being legible. ERROR_PRIVILEGE_NOT_HELD is
+// 1314, which matches no POSIX errno, so the old raw comparison reported UNKNOWN
+// and a program had no way to tell a missing privilege from a broken path. libuv
+// calls it EPERM and so does bento now.
+func TestSymlinkEitherWorksOrSaysWhy(t *testing.T) {
+	eng := harness(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+
+	// caughtError insists on a failure, and half of what this test allows is
+	// success, so the call is run here and both outcomes come back as JSON.
+	raw := evalString(t, eng, `(function () {
+		const fs = require("fs");
+		try { fs.symlinkSync(`+strconv.Quote(target)+`, `+strconv.Quote(link)+`); return "{}"; }
+		catch (e) { return JSON.stringify({ code: e.code, message: e.message }); }
+	})()`)
+	var got map[string]string
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("decode %q: %v", raw, err)
+	}
+
+	if got["code"] == "" {
+		// The call succeeded, which is the only acceptable outcome off Windows.
+		if data, err := os.ReadFile(link); err != nil || string(data) != "x" {
+			t.Fatalf("symlink reported success but reading through it gave %q: %v", data, err)
+		}
+		return
+	}
+	if runtime.GOOS != "windows" {
+		t.Fatalf("symlink failed with %s: %s", got["code"], got["message"])
+	}
+	if got["code"] != "EPERM" {
+		t.Errorf("symlink without the privilege reported %q, want EPERM: %s", got["code"], got["message"])
+	}
 }

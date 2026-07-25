@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/tamnd/bento/pkg/engine"
+	"github.com/tamnd/bento/pkg/nodehost"
 )
 
 // wsBridgeState backs the WebSocket client global. It dials and performs the
@@ -88,7 +89,8 @@ func (w *wsBridgeState) connect(args []any) (any, error) {
 			// queued. Posting the Unref first lets Run observe refs at zero with an
 			// empty queue in the window before the events land and exit before the
 			// handlers run.
-			w.emit("__bento_ws_dispatchError", id, err.Error())
+			msg, props := nodehost.NetError(err, "", "", 0)
+			w.emit("__bento_ws_dispatchError", id, msg, props)
 			w.emit("__bento_ws_dispatchClose", id, int64(1006), "")
 			w.loop.Post(func() { w.loop.Unref() })
 			return

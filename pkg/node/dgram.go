@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/tamnd/bento/pkg/engine"
+	"github.com/tamnd/bento/pkg/nodehost"
 )
 
 // dgramBridgeState backs node:dgram (UDP). UDP is connectionless, so unlike net
@@ -113,7 +114,8 @@ func (d *dgramBridgeState) bind(args []any) (any, error) {
 		laddr.IP = net.ParseIP(host)
 	}
 	if err := d.openConn(sock, laddr, true); err != nil {
-		d.emit("__bento_dgram_dispatchError", sock.id, errCode(err), err.Error())
+		msg, props := nodehost.NetError(err, "bind", host, port)
+		d.emit("__bento_dgram_dispatchError", sock.id, msg, props)
 	}
 	return nil, nil
 }
@@ -136,18 +138,20 @@ func (d *dgramBridgeState) send(args []any) (any, error) {
 	sendID := int64(intArg(args, 4))
 
 	if err := d.openConn(sock, &net.UDPAddr{}, false); err != nil {
-		d.dispatchSend(sendID, sock.id, err)
+		// The lazy bind failed, so the call that failed is the bind and it named no
+		// address: the socket asked for an ephemeral port on every interface.
+		d.dispatchSend(sendID, sock.id, err, "bind", "", 0)
 		return nil, nil
 	}
 	conn := sock.conn
 	d.pool(func() {
 		addr, rerr := net.ResolveUDPAddr(sock.network, net.JoinHostPort(host, strconv.Itoa(port)))
 		if rerr != nil {
-			d.dispatchSend(sendID, sock.id, rerr)
+			d.dispatchSend(sendID, sock.id, rerr, "send", host, port)
 			return
 		}
 		_, werr := conn.WriteToUDP(data, addr)
-		d.dispatchSend(sendID, sock.id, werr)
+		d.dispatchSend(sendID, sock.id, werr, "send", host, port)
 	})
 	return nil, nil
 }
@@ -155,9 +159,10 @@ func (d *dgramBridgeState) send(args []any) (any, error) {
 // dispatchSend reports a send completion. It always fires the socket error event
 // on failure so an error is observable even without a per-send callback, and
 // fires the keyed send callback when the caller supplied one.
-func (d *dgramBridgeState) dispatchSend(sendID, socketID int64, err error) {
+func (d *dgramBridgeState) dispatchSend(sendID, socketID int64, err error, call, host string, port int) {
 	if err != nil {
-		d.emit("__bento_dgram_dispatchError", socketID, errCode(err), err.Error())
+		msg, props := nodehost.NetError(err, call, host, port)
+		d.emit("__bento_dgram_dispatchError", socketID, msg, props)
 	}
 	if sendID != 0 {
 		msg := ""

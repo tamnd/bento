@@ -497,12 +497,10 @@ __bento_defineModule("http", function (module, exports, require) {
     delete requests[reqId];
   };
 
-  globalThis.__bento_http_dispatchServerError = function (serverId, code, message) {
+  globalThis.__bento_http_dispatchServerError = function (serverId, message, props) {
     const server = servers[serverId];
     if (!server) return;
-    const err = new Error(message);
-    if (code) err.code = code;
-    server.emit("error", err);
+    server.emit("error", __bento_makeNetError(message, props));
   };
 
   globalThis.__bento_http_dispatchClose = function (serverId) {

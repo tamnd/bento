@@ -5,6 +5,22 @@
 // through the __bento_net_dispatch* globals; this side drives writes back through
 // the __bento_net_* host functions, all keyed by integer ids.
 
+// __bento_makeNetError builds the Error a failed network call raises. Go
+// classifies the failure and passes the message Node would build along with a
+// JSON object of the properties Node hangs off the error: code, errno, syscall,
+// and the address the call named. Every networking module dispatches errors
+// through it, so it is a global defined here rather than a per-module helper.
+//
+// The properties arrive as JSON rather than as arguments because the set differs
+// by failure: a connect error carries an address and a port, a lookup failure
+// carries a hostname instead, and one that nothing could name carries no code at
+// all.
+globalThis.__bento_makeNetError = function (message, props) {
+  const err = new Error(message);
+  if (props) Object.assign(err, JSON.parse(props));
+  return err;
+};
+
 __bento_defineModule("net", function (module, exports, require) {
   "use strict";
 
@@ -201,19 +217,22 @@ __bento_defineModule("net", function (module, exports, require) {
     socket.emit("close");
   };
 
-  globalThis.__bento_net_dispatchError = function (connId, message) {
+  // Go classifies the failure and hands over the message Node would build plus a
+  // JSON object of the properties Node hangs off the error: code, errno, syscall,
+  // and the address the call named. Reading the platform's error text here would
+  // be guessing, and it guessed wrong on Windows, where a refused connection says
+  // "No connection could be made because the target machine actively refused it".
+  globalThis.__bento_net_dispatchError = function (connId, message, props) {
     const socket = sockets[connId];
     if (!socket) return;
     delete sockets[connId];
-    socket.emit("error", new Error(message));
+    socket.emit("error", __bento_makeNetError(message, props));
   };
 
-  globalThis.__bento_net_dispatchServerError = function (serverId, code, message) {
+  globalThis.__bento_net_dispatchServerError = function (serverId, message, props) {
     const server = servers[serverId];
     if (!server) return;
-    const err = new Error(message);
-    if (code) err.code = code;
-    server.emit("error", err);
+    server.emit("error", __bento_makeNetError(message, props));
   };
 
   globalThis.__bento_net_dispatchServerClose = function (serverId) {

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tamnd/bento/pkg/engine"
+	"github.com/tamnd/bento/pkg/nodehost"
 )
 
 // httpBridge backs the node:http server. It owns the Go http.Server instances
@@ -123,7 +124,8 @@ func (h *httpBridge) listen(args []any) (any, error) {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		h.emit("__bento_http_dispatchServerError", id, errCode(err), err.Error())
+		msg, props := nodehost.NetError(err, "listen", host, port)
+		h.emit("__bento_http_dispatchServerError", id, msg, props)
 		return nil, nil
 	}
 	h.serveListener(srv, id, ln)
@@ -163,7 +165,7 @@ func (h *httpBridge) runServer(srv *httpServer, id int64, ln net.Listener, gosrv
 		// posted after it, so the loop sees the unref first and can then exit.
 		h.loop.Post(func() { h.loop.Unref() })
 		if serveErr != nil && serveErr != http.ErrServerClosed {
-			h.emit("__bento_http_dispatchServerError", id, "", serveErr.Error())
+			h.emit("__bento_http_dispatchServerError", id, serveErr.Error(), "")
 		}
 		h.emit("__bento_http_dispatchClose", id)
 	})
@@ -208,12 +210,15 @@ func isUpgrade(r *http.Request) bool {
 func (h *httpBridge) handleUpgrade(serverID, reqID int64, w http.ResponseWriter, r *http.Request) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		h.emit("__bento_http_dispatchServerError", serverID, "", "connection is not hijackable")
+		h.emit("__bento_http_dispatchServerError", serverID, "connection is not hijackable", "")
 		return
 	}
 	conn, brw, err := hj.Hijack()
 	if err != nil {
-		h.emit("__bento_http_dispatchServerError", serverID, errCode(err), err.Error())
+		// A hijack names no address, so the message stays Go's and the properties
+		// carry only what the error itself says.
+		msg, props := nodehost.NetError(err, "", "", 0)
+		h.emit("__bento_http_dispatchServerError", serverID, msg, props)
 		return
 	}
 

@@ -136,12 +136,10 @@ __bento_defineModule("dgram", function (module, exports, require) {
     cb(message ? new Error(message) : null);
   };
 
-  globalThis.__bento_dgram_dispatchError = function (socketId, code, message) {
+  globalThis.__bento_dgram_dispatchError = function (socketId, message, props) {
     const socket = sockets[socketId];
     if (!socket) return;
-    const err = new Error(message);
-    if (code) err.code = code;
-    socket.emit("error", err);
+    socket.emit("error", __bento_makeNetError(message, props));
   };
 
   globalThis.__bento_dgram_dispatchClose = function (socketId) {

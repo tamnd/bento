@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tamnd/bento/pkg/engine"
+	"github.com/tamnd/bento/pkg/nodehost"
 )
 
 // netBridgeState backs node:net. It owns the Go listeners and connections and
@@ -89,7 +90,8 @@ func (n *netBridgeState) listenImpl(prefix string, tlsCfg *tls.Config, args []an
 
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
-		n.emit(prefix+"dispatchServerError", id, errCode(err), err.Error())
+		msg, props := nodehost.NetError(err, "listen", host, port)
+		n.emit(prefix+"dispatchServerError", id, msg, props)
 		return nil, nil
 	}
 	if tlsCfg != nil {
@@ -161,7 +163,8 @@ func (n *netBridgeState) connectImpl(prefix string, secure bool, args []any) (an
 		}
 		if err != nil {
 			n.loop.Post(func() { n.loop.Unref() })
-			n.emit(prefix+"dispatchError", id, err.Error())
+			msg, props := nodehost.NetError(err, "connect", host, port)
+			n.emit(prefix+"dispatchError", id, msg, props)
 			return
 		}
 		nc := n.adopt(id, conn, prefix, false)
