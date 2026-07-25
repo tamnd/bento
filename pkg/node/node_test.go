@@ -1,12 +1,24 @@
 package node
 
 import (
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/tamnd/bento/pkg/engine"
 	_ "github.com/tamnd/bento/pkg/engine/quickjs"
 )
+
+// nodePlatform is the name Node gives the host through process.platform. Only
+// Windows differs from Go's own name for it.
+func nodePlatform() string {
+	if runtime.GOOS == "windows" {
+		return "win32"
+	}
+	return runtime.GOOS
+}
 
 // harness builds an engine with the minimal prelude hooks the node layer needs
 // (__bento_defineModule, require, __bento_inspect) and installs the node layer.
@@ -18,8 +30,13 @@ func harness(t *testing.T) engine.Engine {
 	}
 	t.Cleanup(func() { _ = eng.Close() })
 
-	// A stand-in prelude: just the module registry the node factories plug into.
-	const mini = `
+	// A stand-in prelude: the module registry the node factories plug into, plus
+	// the sliver of process that path reads. Without a process, path silently
+	// picks its posix variant on every platform, so the harness would hide the
+	// thing a Windows run is meant to check: that the default export is win32
+	// there, the way Node's is.
+	mini := `
+	globalThis.process = { platform: ` + strconv.Quote(nodePlatform()) + `, cwd: function () { return "/"; } };
 	globalThis.__bento_inspect = function (v) { try { return JSON.stringify(v); } catch (e) { return String(v); } };
 	(function () {
 	  const resolved = new Map();
@@ -69,12 +86,16 @@ func evalString(t *testing.T, eng engine.Engine, expr string) string {
 
 func TestPathModule(t *testing.T) {
 	eng := harness(t)
+	// The default export follows the host, so the answers that build a fresh
+	// string carry the platform's separator and are spelled with filepath here.
+	// dirname is a slice of its argument, so it keeps the separators it was given
+	// on either platform, and the two explicit variants are fixed by name.
 	cases := map[string]string{
-		`require("path").join("a", "b", "c")`:      "a/b/c",
+		`require("path").join("a", "b", "c")`:      filepath.Join("a", "b", "c"),
 		`require("path").basename("/x/y/z.ts")`:    "z.ts",
 		`require("path").extname("/x/y/z.ts")`:     ".ts",
 		`require("path").dirname("/x/y/z.ts")`:     "/x/y",
-		`require("path").normalize("/a/./b/../c")`: "/a/c",
+		`require("path").normalize("/a/./b/../c")`: filepath.Clean("/a/./b/../c"),
 		`require("node:path").isAbsolute("/x")`:    "true",
 		`require("path").posix.join("a", "b")`:     "a/b",
 		`require("path").win32.join("a", "b")`:     "a\\b",

@@ -276,11 +276,14 @@
   }
 
   // dirnameOf returns the directory portion of a path, a plain string helper used
-  // when the host does not supply a directory (data: modules and the like).
+  // when the host does not supply a directory (data: modules and the like). It
+  // splits on either separator, since a Windows path may carry a backslash and a
+  // data: URL never does, and the host's answer is preferred over this one
+  // wherever there is one.
   function dirnameOf(p) {
-    const i = p.lastIndexOf("/");
+    const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
     if (i < 0) return ".";
-    return i === 0 ? "/" : p.slice(0, i);
+    return i === 0 ? p.slice(0, 1) : p.slice(0, i);
   }
 
   // compileModule wraps transpiled CommonJS source in the classic Node module
@@ -299,17 +302,24 @@
   // and, for code, transpiled. The record is cached before the body runs so a
   // circular require sees the partial exports, exactly as Node does.
   function loadUserModule(info) {
-    const cached = userCache[info.path];
+    // A module has two spellings. info.path is the module path the host resolves
+    // against, slash-separated on every platform. info.filename is the operating
+    // system's spelling, which is what Node puts in __filename, module.filename,
+    // module.id, and the require.cache key, so that is what this side uses. A
+    // data: module has no file, so it falls back to its own name. On Unix the two
+    // spellings are the same string; on Windows they are not.
+    const filename = info.filename || info.path;
+    const cached = userCache[filename];
     if (cached) return cached.exports;
 
     const record = {
-      id: info.path,
-      filename: info.path,
+      id: filename,
+      filename: filename,
       exports: {},
       loaded: false,
       format: info.format || "commonjs",
     };
-    userCache[info.path] = record;
+    userCache[filename] = record;
 
     try {
       if (info.kind === "json") {
@@ -317,15 +327,15 @@
         record.loaded = true;
         return record.exports;
       }
-      const fn = compileModule(info.code, info.path);
-      const dir = info.dir || dirnameOf(info.path);
-      fn.call(record.exports, record.exports, requireFrom(info.path, record.format), record, info.path, dir);
+      const fn = compileModule(info.code, filename);
+      const dir = info.dir || dirnameOf(filename);
+      fn.call(record.exports, record.exports, requireFrom(info.path, record.format), record, filename, dir);
       record.loaded = true;
       return record.exports;
     } catch (e) {
       // A module that throws while loading must not leave a poisoned half-built
       // entry behind; a later require should try again from scratch.
-      delete userCache[info.path];
+      delete userCache[filename];
       throw e;
     }
   }
@@ -356,7 +366,10 @@
       if (resolved.has(spec) || factories.has(spec)) return spec;
       const info = JSON.parse(__bento_loadModule(spec, parentPath || "", parentFormat || "commonjs"));
       if (!info.ok) throw moduleNotFound(spec);
-      return info.path;
+      // Node's require.resolve answers a filename, so it answers in the operating
+      // system's spelling and its result is a key into require.cache. A builtin
+      // has no file and comes back as its own name.
+      return info.filename || info.path;
     };
     req.cache = userCache;
     return req;
@@ -369,7 +382,10 @@
   // __bento_runEntry runs the transpiled entry file through the same module
   // wrapper as any other module, giving it its own record and a require bound to
   // its directory. The runtime calls this once per program.
-  g.__bento_runEntry = function (filename, code, dir) {
+  // The entry carries both spellings for the same reason a required module does:
+  // path is the module path the resolver reads back as the referrer, filename is
+  // the operating system's spelling the user's code sees.
+  g.__bento_runEntry = function (path, code, filename, dir) {
     const record = {
       id: ".",
       filename: filename,
@@ -383,7 +399,7 @@
     // bare module or exports at top level still see the running module.
     g.module = record;
     g.exports = record.exports;
-    fn.call(record.exports, record.exports, requireFrom(filename, "commonjs"), record, filename, dir);
+    fn.call(record.exports, record.exports, requireFrom(path, "commonjs"), record, filename, dir);
     record.loaded = true;
     g.exports = record.exports;
   };

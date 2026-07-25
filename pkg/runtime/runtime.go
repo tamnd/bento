@@ -14,10 +14,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
+	"github.com/tamnd/bento/pkg/cpath"
 	"github.com/tamnd/bento/pkg/engine"
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/loop"
@@ -156,13 +156,19 @@ func (rt *Runtime) runEntry(path, source string) error {
 // wrapper so it gets its own module record and a require bound to its directory.
 // The entry path is made absolute so relative imports and the module cache key on
 // a stable identity, matching how Node keys __filename.
+//
+// It hands the prelude both spellings of that path. The module path is what the
+// resolver reads back as the referrer, so it is slash-separated on every platform;
+// __filename and __dirname are the operating system's spelling, the way Node's
+// are. On Unix the two are the same string. See pkg/cpath.
 func (rt *Runtime) evalEntry(path, code string) error {
-	abs, err := filepath.Abs(path)
+	abs, err := cpath.Abs(path)
 	if err != nil {
 		abs = path
 	}
-	dir := filepath.Dir(abs)
-	if _, err := rt.eng.Call("__bento_runEntry", abs, code, dir); err != nil {
+	filename := cpath.ToOS(abs)
+	dir := cpath.ToOS(cpath.Dir(abs))
+	if _, err := rt.eng.Call("__bento_runEntry", abs, code, filename, dir); err != nil {
 		return err
 	}
 	return nil

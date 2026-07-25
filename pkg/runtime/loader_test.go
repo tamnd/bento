@@ -131,8 +131,54 @@ console.log(join("a", "b"));`,
 		"node_modules/path/package.json": `{"name":"path","main":"index.js"}`,
 		"node_modules/path/index.js":     `module.exports = { join: function () { return "IMPOSTER"; } };`,
 	})
-	if out != "a/b\n" {
-		t.Errorf("stdout = %q, want a/b from core path", out)
+	// The joined string follows the platform, since node:path is path.win32 on
+	// Windows, and the point of the test is which module answered rather than how
+	// the answer is spelled.
+	if want := filepath.Join("a", "b") + "\n"; out != want {
+		t.Errorf("stdout = %q, want %q from core path", out, want)
+	}
+}
+
+// TestModuleIdentityIsTheHostSpelling pins the Node contract for what the module
+// wrapper hands a module about itself. __filename is the file's path spelled the
+// way the host spells it, module.filename and module.id agree with it, __dirname
+// is its directory in the same spelling, require.resolve answers that string, and
+// require.cache is keyed by it. Inside bento the resolver works in module paths,
+// which are slash-separated on every platform, so on Windows these are a
+// different string from the module's own path and this is where the two meet.
+func TestModuleIdentityIsTheHostSpelling(t *testing.T) {
+	out := runFile(t, "index.ts", map[string]string{
+		"index.ts": `const lib = require("./lib.ts");
+console.log("resolve", require.resolve("./lib.ts") === lib.file);
+console.log("cached", require.cache[lib.file] !== undefined);`,
+		"lib.ts": `const sep = process.platform === "win32" ? "\\" : "/";
+const other = sep === "/" ? "\\" : "/";
+console.log("filename", __filename === module.filename, __filename === module.id);
+console.log("dirname", __filename === __dirname + sep + "lib.ts");
+console.log("spelling", __filename.indexOf(other) < 0);
+console.log("self", require.cache[__filename] === module);
+export const file = __filename;`,
+	})
+	want := "filename true true\ndirname true\nspelling true\nself true\nresolve true\ncached true\n"
+	if out != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// TestEntryIdentityIsTheHostSpelling pins the same contract for the entry, which
+// runs through its own wrapper. Node gives the entry module the id ".", so that
+// one string is not the filename, but everything else matches.
+func TestEntryIdentityIsTheHostSpelling(t *testing.T) {
+	out := runFile(t, "index.ts", map[string]string{
+		"index.ts": `const sep = process.platform === "win32" ? "\\" : "/";
+const other = sep === "/" ? "\\" : "/";
+console.log("filename", __filename === module.filename, module.id === ".");
+console.log("dirname", __filename === __dirname + sep + "index.ts");
+console.log("spelling", __filename.indexOf(other) < 0);`,
+	})
+	want := "filename true true\ndirname true\nspelling true\n"
+	if out != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out, want)
 	}
 }
 

@@ -77,12 +77,64 @@ func TestRmSyncMissingPanics(t *testing.T) {
 	RmSync(FromGoString(filepath.Join(t.TempDir(), "never")), false, false)
 }
 
+// TestMkdtempPrefixEndingInSeparator pins that a prefix ending in a separator
+// creates a randomly named directory inside it, the way Node's mkdtempSync does,
+// rather than one named after the parent directory. Splitting with Dir and Base
+// instead of Split got this wrong on every platform: Base("/tmp/") is "tmp", so
+// the created directory came out as /tmp/tmpXXXXXX.
+func TestMkdtempPrefixEndingInSeparator(t *testing.T) {
+	parent := t.TempDir()
+	dir := Mkdtemp(FromGoString(parent + string(filepath.Separator))).ToGoString()
+	if got := filepath.Dir(dir); got != parent {
+		t.Fatalf("created %q under %q, want it under %q", dir, got, parent)
+	}
+	base := filepath.Base(dir)
+	if strings.HasPrefix(base, filepath.Base(parent)) {
+		t.Fatalf("created dir base %q repeats the parent's name", base)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("stat created dir %q: %v", dir, err)
+	}
+}
+
+// TestMkdtempBarePrefixLandsInCwd pins that a prefix with no directory part is
+// created in the working directory, which is where Node puts it, rather than
+// erroring on an empty parent.
+func TestMkdtempBarePrefixLandsInCwd(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dir := Mkdtemp(FromGoString("run-")).ToGoString()
+	if filepath.Dir(dir) != "." {
+		t.Fatalf("Mkdtemp(%q) = %q, want it relative to the working directory", "run-", dir)
+	}
+}
+
 // TestPathJoin pins that PathJoin matches path.join's normalization: redundant
-// separators collapse and "." and ".." segments resolve.
+// separators collapse and "." and ".." segments resolve. The expected string is
+// built with filepath because node:path is path.win32 on Windows, so the answer
+// carries the platform's separator and Node's does too.
 func TestPathJoin(t *testing.T) {
 	got := PathJoin(FromGoString("a"), FromGoString("b"), FromGoString("../c")).ToGoString()
-	if got != "a/c" {
-		t.Fatalf("PathJoin = %q, want %q", got, "a/c")
+	if want := filepath.Join("a", "c"); got != want {
+		t.Fatalf("PathJoin = %q, want %q", got, want)
+	}
+}
+
+// TestPathJoinNoParts pins path.join()'s empty-input answer, ".", which
+// filepath.Join spells as the empty string.
+func TestPathJoinNoParts(t *testing.T) {
+	if got := PathJoin().ToGoString(); got != "." {
+		t.Fatalf("PathJoin() = %q, want %q", got, ".")
+	}
+}
+
+// TestPathJoinUsesThePlatformSeparator pins that the joined string is a host path
+// and not a module path, so it is the user program's answer rather than the
+// compiler's bookkeeping. On Unix the two conventions agree, so this asserts
+// against filepath rather than against a literal.
+func TestPathJoinUsesThePlatformSeparator(t *testing.T) {
+	got := PathJoin(FromGoString("a"), FromGoString("b")).ToGoString()
+	if !strings.Contains(got, string(filepath.Separator)) {
+		t.Fatalf("PathJoin = %q, want the platform separator %q", got, string(filepath.Separator))
 	}
 }
 

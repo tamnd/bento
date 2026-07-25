@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -46,8 +47,13 @@ const p = await Promise.resolve(join("a", "b", "c"));
 console.log(p);
 console.log(typeof path.dirname);`,
 	})
-	if out != "a/b/c\nfunction\n" {
-		t.Errorf("stdout = %q, want the joined path and a function", out)
+	// node:path is path.win32 on Windows and path.posix elsewhere, so the joined
+	// answer carries the platform's separator. Node behaves the same way, and
+	// bento matching Node is the point, so the expectation follows the platform
+	// rather than the code being bent to a POSIX-only string.
+	want := filepath.Join("a", "b", "c") + "\nfunction\n"
+	if out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
 	}
 }
 
@@ -94,8 +100,8 @@ func TestNonAwaitEntryStaysCommonJS(t *testing.T) {
 		"app.ts": `import { join } from "node:path";
 console.log(join("p", "q"));`,
 	})
-	if out != "p/q\n" {
-		t.Errorf("stdout = %q, want p/q", out)
+	if want := filepath.Join("p", "q") + "\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
 	}
 }
 

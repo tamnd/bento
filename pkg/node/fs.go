@@ -290,8 +290,18 @@ func hostFSChmod(a []any) (any, error) {
 func hostFSMkdtemp(a []any) (any, error) {
 	// Node appends six random characters directly to the prefix in its parent
 	// directory. MkdirTemp substitutes the trailing "*" with the random run.
+	//
+	// The split is filepath.Split and not Dir plus Base, because those two do not
+	// compose back to the prefix when it ends in a separator: Dir("/tmp/") is
+	// "/tmp" and Base("/tmp/") is "tmp", so mkdtempSync("/tmp/") would have made
+	// /tmp/tmpXXXXXX where Node makes /tmp/XXXXXX. Split leaves the stem empty,
+	// which with the appended "*" says exactly what the caller meant.
 	prefix := str(a, 0)
-	dir, err := os.MkdirTemp(filepath.Dir(prefix), filepath.Base(prefix)+"*")
+	parent, stem := filepath.Split(prefix)
+	if parent == "" {
+		parent = "."
+	}
+	dir, err := os.MkdirTemp(parent, stem+"*")
 	if err != nil {
 		return fail(err), nil
 	}

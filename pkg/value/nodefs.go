@@ -2,7 +2,7 @@ package value
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 )
 
 // This file is the value-model side of the small node:fs, node:os, and node:path
@@ -46,8 +46,14 @@ func Mkdtemp(prefix BStr) BStr {
 // becomes the pattern stem. A prefix ending in a separator (its base is empty)
 // means the caller wants a random name inside that directory, which an empty
 // stem plus the "*" the caller appends expresses.
+//
+// The split is filepath's, not path's, because the prefix is a real path on the
+// host and not a module path. A POSIX-only split leaves a Windows prefix like
+// C:\Users\x\AppData\Local\Temp\run- whole, since it holds no "/", and
+// os.MkdirTemp then rejects the entire thing as a pattern containing a path
+// separator. That was a panic on every Windows mkdtemp.
 func splitPrefix(prefix string) (dir, base string) {
-	dir, base = path.Split(prefix)
+	dir, base = filepath.Split(prefix)
 	if dir == "" {
 		dir = "."
 	}
@@ -114,13 +120,25 @@ func Tmpdir() BStr {
 
 // PathJoin joins the parts with the platform separator and normalizes the
 // result, the lowering of path.join. It collapses redundant separators and
-// resolves the "." and ".." segments the same way Node's path.join does on a
-// POSIX platform, so a compiled program builds the same path string. With no
-// parts it returns ".", path.join's empty-input result.
+// resolves the "." and ".." segments, so a compiled program builds the same
+// path string Node's path.join builds.
+//
+// The separator is the platform's, which is what Node does: its path module is
+// path.win32 on Windows and path.posix elsewhere, so path.join("a","b") is
+// "a\b" there and "a/b" here. This is the one helper where bento must not hold
+// the compiler's slash convention, because the string is the user program's
+// answer rather than the compiler's bookkeeping. filepath is exactly that rule.
+//
+// With no parts it returns ".", path.join's empty-input result, which
+// filepath.Join spells as the empty string instead.
 func PathJoin(parts ...BStr) BStr {
 	segs := make([]string, len(parts))
 	for i, p := range parts {
 		segs[i] = p.ToGoString()
 	}
-	return FromGoString(path.Join(segs...))
+	joined := filepath.Join(segs...)
+	if joined == "" {
+		return FromGoString(".")
+	}
+	return FromGoString(joined)
 }
