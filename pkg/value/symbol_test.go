@@ -59,7 +59,7 @@ func TestSymbolRegistry(t *testing.T) {
 		t.Fatalf("registered symbol description = %v, want \"shared\"", got)
 	}
 
-	if got := SymbolKeyFor(a); got.kind != KindString || got.str().ToGoString() != "shared" {
+	if got := SymbolKeyFor(a); got.IsUndefined() || got.Get().ToGoString() != "shared" {
 		t.Fatalf("Symbol.keyFor(a) = %v, want \"shared\"", got)
 	}
 	if got := SymbolKeyFor(fresh); !got.IsUndefined() {
