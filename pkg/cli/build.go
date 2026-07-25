@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -23,7 +24,8 @@ func newBuildCmd() *cobra.Command {
 		Use:   "build <entry>",
 		Short: "Compile a TypeScript or JavaScript entry to a single native binary",
 		Long: "Build type-checks the entry module, lowers it to Go, and compiles that\n" +
-			"Go to a native binary. With no -o the binary takes the entry's base name.\n" +
+			"Go to a native binary. With no -o the binary takes the entry's base name,\n" +
+			"plus .exe on Windows, which is also added to an -o that leaves it off.\n" +
 			"With --emit-go it writes the generated Go source instead of a binary, which\n" +
 			"is how the benchmark suite records the code each workload compiles to.",
 		Args: cobra.ExactArgs(1),
@@ -39,8 +41,16 @@ func newBuildCmd() *cobra.Command {
 				}
 				return os.WriteFile(emitGo, []byte(source), 0o644)
 			}
-			if err := build.Build(build.Options{Entry: args[0], Output: output, AllowCgo: allowCgo}); err != nil {
+			written, err := build.Build(build.Options{Entry: args[0], Output: output, AllowCgo: allowCgo})
+			if err != nil {
 				return err
+			}
+			// A build is silent when it wrote the file the caller named, the way a
+			// compiler is. It is not silent when Windows needed an extension the
+			// caller left off, since a script that goes on to run what it asked for
+			// would otherwise look for a file that is not there.
+			if output != "" && filepath.Base(written) != filepath.Base(output) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "bento build: wrote %s\n", written)
 			}
 			return nil
 		},

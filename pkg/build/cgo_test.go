@@ -130,7 +130,7 @@ console.log(Marker());
 		t.Fatalf("write entry: %v", err)
 	}
 
-	err := Build(Options{Entry: entry, Output: filepath.Join(dir, "out"), AllowCgo: false})
+	_, err := Build(Options{Entry: entry, Output: filepath.Join(dir, "out"), AllowCgo: false})
 	if err == nil {
 		t.Fatal("a cgo go: import built without an acknowledgment, want the section 9.5 diagnostic")
 	}

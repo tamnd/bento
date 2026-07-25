@@ -21,10 +21,11 @@ func buildAndRun(t *testing.T, entry string, files map[string]string) string {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, entry), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, entry), Output: bin})
+	if err != nil {
 		t.Fatalf("build %s: %v", entry, err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run %s: %v (%s)", entry, err, got)
 	}

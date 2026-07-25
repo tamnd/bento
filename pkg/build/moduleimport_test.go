@@ -63,10 +63,11 @@ func TestNamedExportFunctionRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -130,10 +131,11 @@ func TestConstExportRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -189,10 +191,11 @@ func TestAliasedImportRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -233,10 +236,11 @@ func TestNamedImportFunctionValueReadRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -280,10 +284,11 @@ func TestDefaultExportFunctionRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -363,10 +368,11 @@ func TestNamespaceMemberValueReadRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -406,10 +412,11 @@ func TestNamespaceConstMemberValueReadRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -445,10 +452,11 @@ func TestNamespaceImportRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
@@ -528,10 +536,11 @@ func TestReExportRunsComposed(t *testing.T) {
 		}
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: filepath.Join(dir, "main.ts"), Output: bin})
+	if err != nil {
 		t.Fatalf("build composed program: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run composed program: %v (%s)", err, got)
 	}
