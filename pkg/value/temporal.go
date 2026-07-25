@@ -3148,11 +3148,18 @@ func (z *ZonedDateTime) calendarID() string {
 // UTC is answered directly, a numeric offset becomes a fixed zone, and any other identifier
 // is looked up in the IANA database.
 func resolveTimeZone(id string) (*time.Location, string) {
-	if id == "UTC" {
-		return time.UTC, "UTC"
+	if strings.EqualFold(id, "UTC") {
+		return time.UTC, "UTC" // time-zone names are case insensitive; UTC canonicalizes upper case
 	}
 	if loc, canon, ok := parseOffsetZone(id); ok {
 		return loc, canon
+	}
+	// A full Temporal date-time string is itself a valid time-zone identifier when it carries a
+	// bracketed time-zone annotation: ToTemporalTimeZoneIdentifier takes the bracket, not the
+	// string's own offset, so "…-12:12[+01:46]" resolves to +01:46. The annotation is an offset
+	// or a named zone, so it resolves through the same path, at most one level deep.
+	if p, ok := parseTemporalISOString(id); ok && p.timeZone != "" {
+		return resolveTimeZone(p.timeZone)
 	}
 	loc, err := time.LoadLocation(id)
 	if err != nil {
