@@ -4078,7 +4078,11 @@ func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "String() with this argument count is a later slice"}
 	}
-	return r.stringify(argNodes[0])
+	// The String built-in renders a symbol argument as "Symbol(desc)" rather than
+	// throwing, the one kind where String(v) diverges from abstract ToString, so it
+	// takes the symbol-descriptive coercion. A template substitution keeps the
+	// throwing ToString below.
+	return r.stringifyMode(argNodes[0], true)
 }
 
 // stringify lowers one expression to its string form under the ECMAScript ToString
@@ -4089,6 +4093,20 @@ func (r *Renderer) stringCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 // ToString runs user code) hands back. String(x) and `${x}` share this so the two
 // paths always agree on how a value becomes a string.
 func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
+	return r.stringifyMode(arg, false)
+}
+
+// stringifyMode is stringify with the one degree of freedom the String built-in
+// needs: when symbolDescriptive is true a runtime-dynamic argument coerces through
+// value.StringCoerce, which renders a symbol as "Symbol(desc)"; when false it
+// coerces through value.ToString, which throws on a symbol the way a template
+// substitution and a bare concatenation do. Every non-symbol value coerces
+// identically either way, so the two share all the primitive cases below.
+func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast.Expr, error) {
+	coerceFn := "ToString"
+	if symbolDescriptive {
+		coerceFn = "StringCoerce"
+	}
 	// A caught error coerces through Error.prototype.toString, "Name: message", the
 	// bento string the *value.Error produces directly, so String(err) and `${err}`
 	// read the same as the engine. It routes before the general lower below, which
@@ -4111,7 +4129,7 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 		// (a number for reduce, an array for toArray) while the lowered expr is a box, so
 		// the primitive stringifiers would be handed a value.Value they cannot take.
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
+		return &ast.CallExpr{Fun: sel("value", coerceFn), Args: []ast.Expr{lowered}}, nil
 	case r.isString(arg):
 		return lowered, nil // already a string, the identity
 	case r.isNumber(arg):
@@ -4127,7 +4145,7 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 		// A dynamic argument defers the whole ToString to the value model,
 		// which dispatches on the runtime kind.
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
+		return &ast.CallExpr{Fun: sel("value", coerceFn), Args: []ast.Expr{lowered}}, nil
 	case r.isOptional(arg):
 		// A T | undefined optional stringifies through the value model: box it into a
 		// dynamic value (a present element through its own constructor, an undefined one
@@ -4140,7 +4158,7 @@ func (r *Renderer) stringify(arg frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}, nil
+		return &ast.CallExpr{Fun: sel("value", coerceFn), Args: []ast.Expr{boxed}}, nil
 	default:
 		// A tagged-sum union reads its string through the ToString method the renderer
 		// emits for it: the method switches the tag to the active arm's string form, so
