@@ -53,15 +53,18 @@ f({});
 
 // TestConstructorTypeNotBoxedAsEmptyTop guards the narrowing: a construct-signature
 // type { new(): T } also has no declared property, but it is a constructor value, not
-// the { } top type, so it must not lower to the dynamic box.
+// the { } top type, so it must not lower to the dynamic box. A constructable callable
+// object has no single Go func field to stand in for it, so the whole shape hands back
+// as NotYetLowerable rather than being dropped onto the empty-top boxing path, an
+// explicit refusal that is a stronger guarantee than merely not boxing.
 func TestConstructorTypeNotBoxedAsEmptyTop(t *testing.T) {
 	src := `class Foo {
     constructor(x: number) {}
 }
 const foo: { new(): Foo } = Foo;
 `
-	out := renderProgramTolerant(t, src)
-	if strings.Contains(out, "var foo value.Value") || strings.Contains(out, "foo value.Value") {
-		t.Fatalf("constructor type was wrongly boxed as the empty top type:\n%s", out)
+	reason := renderProgramTolerantHandBack(t, src)
+	if !strings.Contains(reason, "constructable callable object") {
+		t.Fatalf("constructor type did not hand back as a constructable callable object, got: %s", reason)
 	}
 }
