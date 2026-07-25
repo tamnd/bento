@@ -1598,7 +1598,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// registry rather than a method on a runtime object. It routes here after the
 	// stream check, whose receiver is process.stdout, before the string gate below.
 	if r.isGlobalRef(recvNode, "process") {
-		return r.processCall(method, argNodes)
+		if expr, handled, err := r.processCall(method, argNodes); handled || err != nil {
+			return expr, err
+		}
+		// A process method with no direct lowering is a member of the process object,
+		// so it falls through to the dynamic path below, which reads the member off
+		// that object and calls it. process.cwd() and process.exit(0) land here.
 	}
 	// console.log(...) and friends are calls on the global console, not a value
 	// receiver, so they lower to the value console helpers rather than a method on a
@@ -4040,34 +4045,43 @@ func (r *Renderer) structuredCloneCall(argNodes []frontend.Node) (ast.Expr, erro
 	return &ast.CallExpr{Fun: sel("value", "StructuredClone"), Args: []ast.Expr{arg}}, nil
 }
 
-// processCall lowers a call on the global process object. Only on is covered, and
-// only for the "exit" event: process.on('exit', fn) registers fn as a run-at-exit
-// callback, lowering to value.OnExit with the callback boxed into a value.Value so
-// the end-of-main drain can invoke it without its static signature. It sets the
-// program's exit-callback flag so the assembled main appends value.RunExitCallbacks
-// as its final statement. A different method, a different event, a different arity,
-// or a non-function listener hands back rather than emitting a call that would drop
-// the registration.
-func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+// processCall lowers the calls on the global process object that have a direct
+// runtime lowering, reporting whether it claimed the call. Only process.on('exit',
+// fn) is claimed: it registers fn as a run-at-exit callback, lowering to
+// value.OnExit with the callback boxed into a value.Value so the end-of-main drain
+// can invoke it without its static signature, and it sets the program's
+// exit-callback flag so the assembled main appends value.RunExitCallbacks as its
+// final statement. That shape is claimed here rather than left to the process
+// object because the drain has to be emitted into main, which a runtime call
+// through the object cannot arrange.
+//
+// Every other method is left unclaimed, so the caller falls through to the dynamic
+// path and dispatches it against the process object: process.cwd() and
+// process.exit(0) are members of that object, so they run rather than handing back
+// the way they did when process had no value form. A malformed process.on, one
+// with the wrong arity or a non-function listener, still hands back rather than
+// dropping the registration, since the object's own on would register a listener
+// the static drain does not know about.
+func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
 	if method != "on" {
-		return nil, &NotYetLowerable{Reason: "process." + method + " is a later slice"}
+		return nil, false, nil
 	}
 	if len(argNodes) != 2 {
-		return nil, &NotYetLowerable{Reason: "process.on with this argument count is a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "process.on with this argument count is a later slice"}
 	}
 	if argNodes[0].Kind() != frontend.NodeStringLiteral || unquote(r.prog.Text(argNodes[0])) != "exit" {
-		return nil, &NotYetLowerable{Reason: "process.on for an event other than exit is a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "process.on for an event other than exit is a later slice"}
 	}
 	if calls, _ := r.prog.Signatures(r.prog.TypeAt(argNodes[1])); len(calls) != 1 {
-		return nil, &NotYetLowerable{Reason: "process.on('exit') with a non-function listener is a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "process.on('exit') with a non-function listener is a later slice"}
 	}
 	fn, err := r.boxOperand(argNodes[1])
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	r.usesExitCallbacks = true
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "OnExit"), Args: []ast.Expr{fn}}, nil
+	return &ast.CallExpr{Fun: sel("value", "OnExit"), Args: []ast.Expr{fn}}, true, nil
 }
 
 // consoleCall lowers a call on the global console. The methods that write to

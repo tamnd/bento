@@ -19,11 +19,18 @@ import "github.com/tamnd/bento/pkg/goimport"
 const ambientPath = "/__bento_ambient__.d.ts"
 
 // ambientSource declares the Node globals and node: modules the AOT compiler can
-// lower. process.env is a string-or-undefined map, which lowers to the optional
-// machinery; the streams' write takes a string and returns a boolean, matching
-// Node. process.on is declared only for the "exit" event, the one the lowerer
-// registers as a run-at-exit callback, so a listener on any other event still
-// errors rather than compiling to a no-op. __dirname and __filename are the CommonJS module-path globals, each a
+// lower. process is typed any, the same shape module, exports, and require take,
+// because the lowerer backs it with a real package-level process object
+// (value.ProcessValue): a member read like process.platform or process.env.HOME
+// lowers through the dynamic member path and resolves against that live object, so
+// a name the object carries reads its value and one it does not reads undefined,
+// exactly as in Node. An earlier revision declared a narrow BentoProcess interface
+// instead, which typed the handful of members the lowerer special-cased; that made
+// every other member a static "missing property" even though the runtime object
+// has it, so the declaration follows the runtime rather than a fixed member list.
+// The static process paths in the lowerer (process.on('exit'),
+// process.stdout.write) still claim their call shapes before the dynamic path, so
+// they keep emitting their direct helper calls. __dirname and __filename are the CommonJS module-path globals, each a
 // string the lowerer fills from the module's own file path, so a program reading
 // either resolves the same absolute path Node hands its wrapper. module and
 // exports are the CommonJS export globals, typed any so a read of module.exports
@@ -54,16 +61,7 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // benchmark passes). The surface is deliberately small: it grows one entry at a
 // time as the lowerer learns to emit each one, so a declared name is always a
 // lowerable one.
-const ambientSource = `interface BentoProcessEnv { [key: string]: string | undefined; }
-interface BentoWriteStream { write(chunk: string): boolean; }
-interface BentoProcess {
-	env: BentoProcessEnv;
-	argv: string[];
-	stdout: BentoWriteStream;
-	stderr: BentoWriteStream;
-	on(event: "exit", listener: () => void): void;
-}
-declare var process: BentoProcess;
+const ambientSource = `declare var process: any;
 declare var __dirname: string;
 declare var __filename: string;
 declare var module: any;

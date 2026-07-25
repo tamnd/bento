@@ -423,6 +423,13 @@ type Renderer struct {
 	// require without ever touching module or exports, and one that does emits the
 	// require function alone.
 	usesCommonJSRequire bool
+	// usesProcess records that the program read the process global as a value, so the
+	// assembled program emits the package-level process object (see commonjs.go). It is
+	// set by a bare process reference, the one a member read like process.argv lowers
+	// its receiver through; the static process call paths (process.on('exit'),
+	// process.stdout.write) emit their own helper calls and do not set it, so a program
+	// that only uses those still emits no process object.
+	usesProcess bool
 	// requiredLoaders maps a CommonJS module reached by require, keyed by its resolved
 	// absolute path, to the base identifier its loader emits under. It is populated
 	// before any body lowers, so a require call in the entry or in another required

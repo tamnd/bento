@@ -188,6 +188,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isGlobalRef(n, "require") {
 			return r.requireRef(), nil
 		}
+		// process is the Node process global. It reads as a package-level value.Object
+		// the program emits once, so a member access like process.argv, process.env, or
+		// process.platform lowers through the ordinary dynamic member path from that
+		// object, and typeof process reads "object" off it. The static process paths in
+		// calls.go (process.on('exit'), process.stdout.write) claim their own call shapes
+		// before a receiver would lower and so never reach here. Left to fall through,
+		// the name would hit the ambient-global handback below.
+		if r.isGlobalRef(n, "process") {
+			return r.processRef(), nil
+		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
 		// has no generated Go behind its name, so capitalizing the source name would
