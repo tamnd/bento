@@ -19,6 +19,39 @@ console.log(String(r));
 	}
 }
 
+// TestRegexpArrayElemNotReboxed pins that a RegExp[] element read flowing into a
+// dynamic slot does NOT re-wrap in value.RegExpValue: a RegExp[] backs its elements in
+// value.Value, so the read is already a box and value.RegExpValue (which takes an
+// unboxed *value.RegExp) would not compile over it. The scalar case above still wraps.
+func TestRegexpArrayElemNotReboxed(t *testing.T) {
+	src := `
+function notSame(a: unknown, b: unknown): void { if (a === b) throw new Error("same"); }
+var values = [];
+for (var i = 0; i < 2; ++i) { values[i] = /(?:)/; }
+notSame(values[0], values[1]);
+`
+	out := renderProgram(t, src)
+	if strings.Contains(out, "value.RegExpValue(values.At") {
+		t.Fatalf("a RegExp[] element read was re-wrapped in value.RegExpValue:\n%s", out)
+	}
+}
+
+// TestRegexpArrayElemRuns builds and runs the emitted Go: two distinct regexp literals
+// stored in a RegExp[] are not identical, matching the spec, so the guard does not throw.
+func TestRegexpArrayElemRuns(t *testing.T) {
+	src := `
+function notSame(a: unknown, b: unknown): void { if (a === b) throw new Error("same"); }
+var values = [];
+for (var i = 0; i < 2; ++i) { values[i] = /(?:)/; }
+notSame(values[0], values[1]);
+console.log("ok");
+`
+	got := runProgramGo(t, src)
+	if strings.TrimSpace(got) != "ok" {
+		t.Fatalf("RegExp[] element identity ran wrong: got %q, want %q", got, "ok")
+	}
+}
+
 // TestRegexpBoxRuns builds and runs the emitted Go: a boxed regexp reports typeof
 // "object", stringifies to its literal form, reads its own accessors off the live
 // regexp, and is truthy, all through the dynamic value model.

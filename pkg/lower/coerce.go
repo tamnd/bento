@@ -1368,7 +1368,44 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// this the number type would drive value.NumberToString over a value.Value, which
 	// does not compile; with it the read flows through the value model, which prints
 	// the property that has not been assigned yet as undefined.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
+}
+
+// isBoxedArrayElemRead reports whether src is an element read a[i] off an evolving
+// array (one declared any[]/unknown[], the shape `var a = []` takes) whose Go backing is
+// value.Value, so the read already answers a box and enters a dynamic slot as itself with
+// no wrapping. The checker narrows the read to the element's assigned static type, RegExp
+// for `a[i] = /x/`, so without this the isRegExp box below would wrap the read in
+// value.RegExpValue, which expects an unboxed *value.RegExp and does not compile over the
+// value.Value the evolving array stores; a scalar RegExp binding stays *value.RegExp and
+// still takes the wrap. The declared-type test mirrors dynamicArrayElemUnbox, which reads
+// the same backing: a read narrowed to a primitive (number, string) unboxes to that
+// primitive through .AsNumber()/.AsString() and so is excluded, keeping its primitive box;
+// only a read left as the value.Value box (a RegExp, a Date, an object element) passes
+// through here.
+func (r *Renderer) isBoxedArrayElemRead(src frontend.Node) bool {
+	if src.Kind() != frontend.NodeElementAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(src)
+	if len(kids) != 2 {
+		return false
+	}
+	obj := kids[0]
+	sym, ok := r.prog.SymbolAt(obj)
+	if !ok {
+		return false
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeOfSymbol(sym))
+	if !ok || elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
+		return false
+	}
+	// A read the narrowing unboxes to a primitive (a.At(i).AsNumber()) or an optional
+	// .Get() is not a bare box and still takes the primitive box path; exclude both.
+	if _, ok := r.dynamicArrayElemUnbox(obj, src); ok {
+		return false
+	}
+	return !r.optArrayElemNarrowed(obj, src)
 }
 
 // isDynamicValueLogical reports whether src is a value-returning && or || whose
