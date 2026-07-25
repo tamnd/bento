@@ -10,12 +10,16 @@ type cache struct {
 	results map[resolutionKey]Resolved
 }
 
-// resolutionKey identifies a resolution question. The parent directory and the
-// active conditions both change the answer, so both are part of the key.
+// resolutionKey identifies a resolution question. The parent directory, the
+// active conditions, and the importer's module system (CommonJS vs ESM) all
+// change the answer, so all three are part of the key. Format matters because a
+// require and an import of the same specifier from the same directory can
+// resolve to different files (index.js vs index.mjs).
 type resolutionKey struct {
 	dir        string
 	specifier  string
 	conditions string
+	esm        bool
 }
 
 func newCache() *cache {

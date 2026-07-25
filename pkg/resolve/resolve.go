@@ -130,6 +130,10 @@ type Resolver struct {
 	builtins   Builtins
 	conditions []string
 	extensions []string
+	// cjsExtensions is extensions reordered for a CommonJS require context, with
+	// ESM-only extensions (.mjs, .mts) moved to the end so require prefers the
+	// .js family, as Node does.
+	cjsExtensions []string
 	// dev turns on extension search and directory index for ESM parents and the
 	// TypeScript extension rewrite, matching how a dev server should feel.
 	dev bool
@@ -184,10 +188,44 @@ func New(opts Options) *Resolver {
 		builtins:         opts.Builtins,
 		conditions:       conditions,
 		extensions:       extensions,
+		cjsExtensions:    commonJSOrder(extensions),
 		dev:              opts.Dev,
 		preserveSymlinks: opts.PreserveSymlinks,
 		cache:            newCache(),
 	}
+}
+
+// esmOnlyExtensions are the extensions that only ever hold an ES module. Node's
+// CommonJS loader never resolves a bare specifier or a directory index to one of
+// these, so the require-context search order pushes them to the back.
+var esmOnlyExtensions = map[string]bool{".mjs": true, ".mts": true}
+
+// commonJSOrder returns the extension search order for a CommonJS (require)
+// context: the configured order with the ESM-only extensions moved to the end,
+// keeping every other extension's relative position. This makes require('./x')
+// and require of a directory prefer index.js over index.mjs, matching Node,
+// while the ESM order stays exactly as configured.
+func commonJSOrder(exts []string) []string {
+	head := make([]string, 0, len(exts))
+	tail := make([]string, 0, len(exts))
+	for _, ext := range exts {
+		if esmOnlyExtensions[ext] {
+			tail = append(tail, ext)
+		} else {
+			head = append(head, ext)
+		}
+	}
+	return append(head, tail...)
+}
+
+// searchExtensions returns the extension search order for the importer's format.
+// A CommonJS require prefers the .js family; an ESM import keeps the configured,
+// TypeScript-first order.
+func (r *Resolver) searchExtensions(esm bool) []string {
+	if esm {
+		return r.extensions
+	}
+	return r.cjsExtensions
 }
 
 // Resolve turns a specifier into a Resolved, using parent to choose relative-vs-
