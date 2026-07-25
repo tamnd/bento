@@ -105,7 +105,7 @@ func TestRootedAgreesWithTheCompiler(t *testing.T) {
 		p := cpath.FromOS(in)
 		got := cpath.IsAbs(p)
 		want := shim.IsRootedDiskPath(p)
-		if got != want && !(len(p) == 2 && strings.HasSuffix(p, ":")) {
+		if got != want && (len(p) != 2 || !strings.HasSuffix(p, ":")) {
 			t.Errorf("IsAbs(%q) = %v, compiler's IsRootedDiskPath says %v", p, got, want)
 		}
 	}
