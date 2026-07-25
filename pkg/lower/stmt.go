@@ -492,11 +492,12 @@ func (r *Renderer) lowerForIn(n frontend.Node) (ast.Stmt, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "for...in loop variable is not a Go identifier"}
 	}
-	// A statically-shaped receiver lowers to a Go struct or slice with no ForInKeys
-	// method, so only a dynamic receiver, whose lowering is a value.Value, is enumerated
-	// here; a typed object is a later slice.
+	// A statically-shaped receiver lowers to a Go struct with no ForInKeys method, so
+	// its keys are not read off the value at runtime. They are the shape's own
+	// enumerable field names, known at compile time and in the same order Object.keys
+	// folds, so the loop ranges over a literal key array rather than a runtime walk.
 	if !r.isDynamic(kids[1]) {
-		return nil, &NotYetLowerable{Reason: "for...in over a statically-typed object is a later slice"}
+		return r.lowerForInFixedShape(kids, dkids, name)
 	}
 	recv, err := r.lowerExpr(kids[1])
 	if err != nil {
@@ -538,6 +539,67 @@ func (r *Renderer) lowerForIn(n frontend.Node) (ast.Stmt, error) {
 		return &ast.BlockStmt{List: []ast.Stmt{decl, rng}}, nil
 	}
 	return rng, nil
+}
+
+// lowerForInFixedShape lowers for (const k in obj) over a fixed-shape object to a Go
+// range over a literal key array, for _, k := range value.NewArray[value.BStr](...).
+// The keys are the shape's own enumerable field names in the order Object.keys folds
+// them (fixedShapeProps, the same enumeration objectOwnNameArray uses), so the loop
+// matches the runtime for...in order without reading the struct at all. The receiver
+// is not emitted, since its keys are known at compile time; the body may still read it
+// by name. An optional-field shape, an array, or a non-identifier receiver hands back
+// through fixedShapeProps, the same boundary Object.keys draws for a shape whose own
+// keys are not statically settled.
+func (r *Renderer) lowerForInFixedShape(kids, dkids []frontend.Node, name string) (ast.Stmt, error) {
+	// Only a plain fixed-shape object folds its keys: a class instance carries its
+	// methods on the prototype, which for...in does not visit, but the shape's property
+	// list includes them, so folding a class instance would enumerate a method name the
+	// runtime never would. isFixedObjectShape rejects a class instance, an array, a
+	// tuple, and a callable, leaving the plain data-shape struct whose fields are exactly
+	// its own enumerable keys.
+	if !r.isFixedObjectShape(r.prog.TypeAt(kids[1])) {
+		return nil, &NotYetLowerable{Reason: "for...in over a class instance or other non-plain-shape receiver is a later slice"}
+	}
+	props, err := r.fixedShapeProps("for...in", kids[1])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	keys := make([]ast.Expr, len(props))
+	for i, p := range props {
+		keys[i] = &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(p.Name)}}}
+	}
+	body, err := r.loopBody(kids[2])
+	if err != nil {
+		return nil, err
+	}
+	rng := &ast.RangeStmt{
+		X: &ast.CallExpr{Fun: &ast.SelectorExpr{
+			X:   &ast.CallExpr{Fun: index(sel("value", "NewArray"), sel("value", "BStr")), Args: keys},
+			Sel: ident("Elems"),
+		}},
+		Body: body,
+	}
+	// A for...in may bind a key it never reads, so when the body does not use the
+	// binding the loop drops it and ranges only to drive the iteration; Go rejects an
+	// unused range value.
+	if r.bodyUsesName(kids[2], r.prog.Text(dkids[0])) {
+		rng.Key = ident("_")
+		rng.Value = ident(name)
+		rng.Tok = token.DEFINE
+	}
+	// The keys are folded from the shape, so the receiver is never read at runtime, but
+	// referencing it in the for...in head marks it used to the unused-local pass, which
+	// then emits no blank assignment for it. Evaluate it to the blank identifier once
+	// ahead of the loop to keep it used in the Go the same way the source uses it; the
+	// receiver is a plain identifier (fixedShapeProps requires it), so this has no side
+	// effect the fold dropped.
+	recv, err := r.lowerExpr(kids[1])
+	if err != nil {
+		return nil, err
+	}
+	discard := &ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{recv}}
+	return &ast.BlockStmt{List: []ast.Stmt{discard, rng}}, nil
 }
 
 // isGeneratorIterable reports whether the checker types n as one of the built-in
@@ -1391,7 +1453,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 			continue
 		}
 		if name, ok := localName(r.prog.Text(kids[0])); ok {
-			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && !(isVar && r.scopeParams[name])
+			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && (!isVar || !r.scopeParams[name])
 		}
 	}
 	s, err := r.lowerVarStatement(n)
@@ -1736,6 +1798,70 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 				Names:  []*ast.Ident{ident(name)},
 				Type:   sel("value", "Value"),
 				Values: []ast.Expr{boxInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
+		// A binding initialized straight from a require of a composed module holds the
+		// boxed value.Value the loader returns, the module's exports. The checker types
+		// the binding by that module's inferred exports shape, and when the shape is an
+		// object (the common module.exports = { ... }) there is no single Go value the
+		// box coerces to, so the binding lands in a value.Value slot and is marked
+		// dynamic, exactly the regExpBoxedResultCall sibling above; every later property
+		// and element read off it then routes through the value model, the way a CommonJS
+		// consumer reads exports at run time. A primitive export coerces cleanly through
+		// bindingInit below and never reaches here.
+		if r.isRequireModuleCall(kids[initIdx]) &&
+			r.prog.TypeAt(kids[0]).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+			reqInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{reqInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
+		// A binding initialized straight from require('<builtin>') takes the built-in
+		// registry's module value, a value.Value the runtime hands back. The built-in has
+		// no declaration file, so the checker gives the binding no usable type; it lands
+		// in a value.Value slot and is marked dynamic, the same slot the composed-module
+		// case above uses, so every later member read routes through the value model and
+		// reaches the module's throw-on-use stub or, once implemented, its real members.
+		if r.isBuiltinRequireCall(kids[initIdx]) {
+			reqInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{reqInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
+		// new Event(...), new EventTarget(), and new AbortController() build value objects
+		// the runtime reads through the dynamic member and call path, but the checker types
+		// the binding by the standard library's static interfaces, which would route the
+		// binding to a Go struct slot it has no backing for. Landing it in a value.Value
+		// slot and marking it dynamic, the same slot a built-in require takes, sends every
+		// later addEventListener, dispatchEvent, or property read through the value model.
+		if r.isDynGlobalCtorNew(kids[initIdx]) {
+			evInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{evInit},
 			})
 			r.markDynBound(name)
 			continue
@@ -4272,7 +4398,18 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 			}
 			cond = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}}
 		default:
-			return nil, true, &NotYetLowerable{Reason: "??= on a target that is neither the optional T | undefined nor a dynamic value is a later slice"}
+			// A nullable tagged-sum target (T | null, T | null | undefined) is nullish
+			// exactly on its sentinel arms, so the guard is a tag compare against the null
+			// arm ored with the undefined arm when the union carries it, the same tag test
+			// unionSentinelCompare emits for x === null. The store below wraps the
+			// right-hand side back into the union through coerceToTarget, so the slot stays
+			// the tagged sum and a later read still goes through it, no narrowing to a bare
+			// arm the Go slot could not hold.
+			if guard, ok := r.nullableUnionNullishGuard(name); ok {
+				cond = guard
+			} else {
+				return nil, true, &NotYetLowerable{Reason: "??= on a target that is neither the optional T | undefined nor a dynamic value is a later slice"}
+			}
 		}
 	case "||=":
 		// ||= assigns when the target is falsy, so the guard is the target's
@@ -4325,6 +4462,41 @@ func (r *Renderer) logicalAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 		Cond: cond,
 		Body: &ast.BlockStmt{List: []ast.Stmt{assign}},
 	}, true, nil
+}
+
+// nullableUnionNullishGuard builds the ??= trigger for a nullable tagged-sum local:
+// the value is nullish exactly when its tag is a sentinel arm, so the guard is
+// name.tag == <null arm> ored with name.tag == <undefined arm> for whichever
+// sentinels the union carries. A T | null union yields the single null-tag compare,
+// a T | null | undefined union the disjunction of both. A local that is not a
+// tagged-sum union, or a union with no sentinel arm, reports false so the caller
+// hands the ??= back rather than guess a guard.
+func (r *Renderer) nullableUnionNullishGuard(name string) (ast.Expr, bool) {
+	info, ok := r.unionLocals[name]
+	if !ok {
+		return nil, false
+	}
+	var guard ast.Expr
+	for _, flag := range []frontend.TypeFlags{frontend.TypeNull, frontend.TypeUndefined} {
+		arm, ok := info.armForFlags(flag)
+		if !ok {
+			continue
+		}
+		term := &ast.BinaryExpr{
+			X:  &ast.SelectorExpr{X: ident(name), Sel: ident("tag")},
+			Op: token.EQL,
+			Y:  ident(info.tagConst(arm)),
+		}
+		if guard == nil {
+			guard = term
+		} else {
+			guard = &ast.BinaryExpr{X: guard, Op: token.LOR, Y: term}
+		}
+	}
+	if guard == nil {
+		return nil, false
+	}
+	return guard, true
 }
 
 // incDecFromStep rewrites a compound step of one, x += 1 or x -= 1, into Go's ++
@@ -4996,6 +5168,14 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	}
 	name, ok := localName(r.prog.Text(kids[0]))
 	if !ok || r.int32Locals[name] || r.int64Locals[name] {
+		return nil, false
+	}
+	// A new Event(...), new EventTarget(), or new AbortController() binding must land in
+	// a value.Value slot marked dynamic, which only buildVarDecl's loop does. The := short
+	// form would leave the binding typed by the standard library's static interface,
+	// routing every later member read through its union-typed shape rather than the value
+	// model. So decline the fold and let buildVarDecl take it.
+	if r.isDynGlobalCtorNew(kids[len(kids)-1]) {
 		return nil, false
 	}
 	// A binding with a type annotation but no initializer, var x: typeof undefined,

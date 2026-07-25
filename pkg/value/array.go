@@ -162,6 +162,29 @@ func MapArray[T, U any](a *Array[T], f func(T) U) *Array[U] {
 	return &Array[U]{elems: out}
 }
 
+// MapIndex is Map for a callback that also reads the element index, the lowering
+// of Array.prototype.map whose callback takes (element, index) and returns the
+// element type. The index is the float64 position, matching JavaScript's number
+// index, so the emitted callback is func(T, float64) T.
+func (a *Array[T]) MapIndex(f func(T, float64) T) *Array[T] {
+	out := make([]T, len(a.elems))
+	for i, x := range a.elems {
+		out[i] = f(x, float64(i))
+	}
+	return &Array[T]{elems: out}
+}
+
+// MapArrayIndex is the type-changing form of MapIndex: the (element, index)
+// callback returns a different type than the element, the same reason MapArray
+// is a free function with both type arguments spelled out.
+func MapArrayIndex[T, U any](a *Array[T], f func(T, float64) U) *Array[U] {
+	out := make([]U, len(a.elems))
+	for i, x := range a.elems {
+		out[i] = f(x, float64(i))
+	}
+	return &Array[U]{elems: out}
+}
+
 // Reduce folds the array left to right into a single accumulator, the lowering
 // of Array.prototype.reduce called with an initial value. It is a free function
 // rather than a method because the accumulator type A may differ from the
@@ -231,6 +254,59 @@ func (a *Array[T]) ReduceRightNoInit(f func(T, T) T) T {
 	return acc
 }
 
+// ReduceIndex is Reduce for a callback that also reads the element index, the
+// (accumulator, element, index) shape JavaScript passes. It mirrors Reduce,
+// handing the position as a float64 third argument, the Number the index
+// parameter lowers to.
+func ReduceIndex[T, A any](a *Array[T], f func(A, T, float64) A, init A) A {
+	acc := init
+	for i, x := range a.elems {
+		acc = f(acc, x, float64(i))
+	}
+	return acc
+}
+
+// ReduceNoInitIndex is ReduceNoInit for an (accumulator, element, index)
+// callback. The accumulator seeds from the first element and the fold runs from
+// the second, so the first callback index is 1, matching JavaScript. An empty
+// array throws.
+func (a *Array[T]) ReduceNoInitIndex(f func(T, T, float64) T) T {
+	if len(a.elems) == 0 {
+		Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+	}
+	acc := a.elems[0]
+	for i := 1; i < len(a.elems); i++ {
+		acc = f(acc, a.elems[i], float64(i))
+	}
+	return acc
+}
+
+// ReduceRightIndex is ReduceRight for an (accumulator, element, index) callback,
+// walking from the last element to the first and passing each element's own
+// descending index as a float64.
+func ReduceRightIndex[T, A any](a *Array[T], f func(A, T, float64) A, init A) A {
+	acc := init
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		acc = f(acc, a.elems[i], float64(i))
+	}
+	return acc
+}
+
+// ReduceRightNoInitIndex is ReduceRightNoInit for an (accumulator, element,
+// index) callback. The accumulator seeds from the last element and the fold runs
+// toward the first, so the first callback index is len-2, matching JavaScript's
+// descending visit order. An empty array throws.
+func (a *Array[T]) ReduceRightNoInitIndex(f func(T, T, float64) T) T {
+	if len(a.elems) == 0 {
+		Throw(NewTypeError(FromGoString("Reduce of empty array with no initial value")))
+	}
+	acc := a.elems[len(a.elems)-1]
+	for i := len(a.elems) - 2; i >= 0; i-- {
+		acc = f(acc, a.elems[i], float64(i))
+	}
+	return acc
+}
+
 // Filter returns a new array of the elements for which f returns true, in order,
 // the lowering of Array.prototype.filter. As with Map, the callback takes only
 // the element for now. The result is a fresh array, so the receiver is
@@ -239,6 +315,19 @@ func (a *Array[T]) Filter(f func(T) bool) *Array[T] {
 	out := make([]T, 0, len(a.elems))
 	for _, x := range a.elems {
 		if f(x) {
+			out = append(out, x)
+		}
+	}
+	return &Array[T]{elems: out}
+}
+
+// FilterIndex is Filter for a predicate that also reads the element index, the
+// lowering of Array.prototype.filter whose callback takes (element, index). The
+// index is the float64 position, so the emitted predicate is func(T, float64) bool.
+func (a *Array[T]) FilterIndex(f func(T, float64) bool) *Array[T] {
+	out := make([]T, 0, len(a.elems))
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
 			out = append(out, x)
 		}
 	}
@@ -338,6 +427,89 @@ func (a *Array[T]) FindLast(f func(T) bool) Opt[T] {
 func (a *Array[T]) FindLastIndex(f func(T) bool) float64 {
 	for i := len(a.elems) - 1; i >= 0; i-- {
 		if f(a.elems[i]) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// SomeIndex is Some for a callback that also reads the element index, the
+// (element, index) shape JavaScript passes. It mirrors Some, handing the
+// position as a float64 second argument, the Number the index parameter lowers
+// to. Short-circuiting and the empty-array false are unchanged.
+func (a *Array[T]) SomeIndex(f func(T, float64) bool) bool {
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+// EveryIndex is Every for an (element, index) callback, threading the position
+// as a float64. Short-circuiting on the first rejection and the vacuous empty
+// true are unchanged.
+func (a *Array[T]) EveryIndex(f func(T, float64) bool) bool {
+	for i, x := range a.elems {
+		if !f(x, float64(i)) {
+			return false
+		}
+	}
+	return true
+}
+
+// ForEachIndex is ForEach for an (element, index) callback, running it for
+// effect with the position as a float64. It returns nothing, matching forEach's
+// undefined result.
+func (a *Array[T]) ForEachIndex(f func(T, float64)) {
+	for i, x := range a.elems {
+		f(x, float64(i))
+	}
+}
+
+// FindIndexed is Find for an (element, index) callback, returning the first
+// element the predicate accepts as an Opt[T]. The name avoids colliding with
+// FindIndex, which returns the position rather than the element. The position is
+// passed as a float64.
+func (a *Array[T]) FindIndexed(f func(T, float64) bool) Opt[T] {
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
+			return Some(x)
+		}
+	}
+	return None[T]()
+}
+
+// FindIndexIndex is FindIndex for an (element, index) callback, returning the
+// position of the first match or -1. The predicate receives the position as a
+// float64.
+func (a *Array[T]) FindIndexIndex(f func(T, float64) bool) float64 {
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// FindLastIndexed is FindLast for an (element, index) callback, walking from the
+// end and returning the last match as an Opt[T]. The position is passed as a
+// float64, matching JavaScript's descending visit order.
+func (a *Array[T]) FindLastIndexed(f func(T, float64) bool) Opt[T] {
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		if f(a.elems[i], float64(i)) {
+			return Some(a.elems[i])
+		}
+	}
+	return None[T]()
+}
+
+// FindLastIndexIndex is FindLastIndex for an (element, index) callback,
+// returning the position of the last match or -1. The predicate receives the
+// position as a float64, walking from the end.
+func (a *Array[T]) FindLastIndexIndex(f func(T, float64) bool) float64 {
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		if f(a.elems[i], float64(i)) {
 			return float64(i)
 		}
 	}

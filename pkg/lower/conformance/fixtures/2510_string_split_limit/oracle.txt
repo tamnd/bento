@@ -1,0 +1,9 @@
+== stdout:
+a|b
+0
+a|b|c|d
+a|b
+a|b
+x|y
+== exit:
+0

@@ -202,6 +202,20 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 			return r.unaryStringGlobal("Atob", callee, kids[1:])
 		}
 	}
+	// queueMicrotask(fn) schedules fn on the microtask queue, the WHATWG global that
+	// runs a callback after the current synchronous run and before the next macrotask.
+	// It is an ambient global, not a user binding, so it routes before the user-function
+	// path the way the coercions do.
+	if r.prog.Text(kids[0]) == "queueMicrotask" && r.isAmbientGlobal(kids[0]) {
+		return r.queueMicrotaskCall(kids[1:])
+	}
+	// structuredClone(value) deep-copies value through the structured-clone algorithm,
+	// the WHATWG global that clones a data graph rather than sharing it. It is an
+	// ambient global, not a user binding, so it routes before the user-function path
+	// the way the coercions do.
+	if r.prog.Text(kids[0]) == "structuredClone" && r.isAmbientGlobal(kids[0]) {
+		return r.structuredCloneCall(kids[1:])
+	}
 	// Symbol() and Symbol(desc) construct a fresh unique symbol, the boxed value a
 	// symbol-keyed property carries, and route before the user path the way the
 	// coercions do since Symbol is an ambient global, not a user binding.
@@ -216,6 +230,34 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// ambient-global reason below.
 	if r.prog.Text(kids[0]) == "Function" && r.isAmbientGlobal(kids[0]) {
 		return nil, &NotYetLowerable{Reason: "a Function built from a source string is eval, deferred to phase 11"}
+	}
+	// require(specifier) calls the CommonJS loader. A specifier that resolves to a
+	// module the build composed lowers to a direct call on that module's loader
+	// function, which runs the module body once, caches its exports, and returns them
+	// as the require expression's value. A specifier require cannot resolve statically,
+	// or one whose target this slice does not compose, routes through the dynamic call
+	// path instead: require is an ambient global backed by a package-level function
+	// value (requireRef), so the callee lowers to bentoRequire and each argument boxes,
+	// giving bentoRequire.Call(specifier). That path is used rather than the declared-
+	// parameter one because require is typed any and has no signature to bind against,
+	// so a bound call would drop the argument; the dynamic path passes it by value. The
+	// runtime require throws "Cannot find module", so an unresolved require fails
+	// honestly rather than resolving to a wrong value.
+	if r.isGlobalRef(kids[0], "require") {
+		if expr, handled, err := r.requireModuleCall(kids[0], kids[1:]); handled || err != nil {
+			return expr, err
+		}
+		if expr, handled := r.builtinRequireCall(kids[1:]); handled {
+			return expr, nil
+		}
+		return r.dynamicCall(kids[0], kids[1:])
+	}
+	// A __bento_* host callee, the bare name a Node builtin factory reaches for when
+	// it needs the Go runtime (os.js reading __bento_os_info), lowers to a direct call
+	// into pkg/nodehost. It routes before the ambient-global handback below, which
+	// would otherwise decline the name it is declared as an ambient global under.
+	if expr, handled, err := r.hostCalleeCall(kids[0], kids[1:]); handled || err != nil {
+		return expr, err
 	}
 	// A bare call to any other ambient global (eval, and the globals whose lowering
 	// is a later slice) is not a user binding and has no generated Go function to
@@ -259,6 +301,17 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		// lowering bound the closure to a Go local, so the recursive call is a plain
 		// call on that func value rather than on a top-level function name.
 		callee = ident(goName)
+	} else if r.isDynamic(kids[0]) || r.localStorageDynamic(kids[0]) {
+		// A callee identifier bound to a boxed value.Value slot dispatches through the
+		// runtime Call even when its symbol carries the function flag, the shape a
+		// require of a function-exporting module takes: const f = require('./fn') binds
+		// f to the module's exported function as a box, not a Go func a static name could
+		// call, and the checker aliases f's symbol to that exported function so the flag
+		// is set. This must precede the SymbolFunction branch, which would otherwise
+		// spell a capitalized Go name the boxed binding never emitted. The storage check
+		// also catches an implicit-any binding whose type the checker evolved to a
+		// concrete function while the slot itself stays a value.Value box.
+		return r.dynamicCall(kids[0], kids[1:])
 	} else if sym.Flags&frontend.SymbolFunction != 0 {
 		name, ok := exportedField(sym.Name)
 		if !ok {
@@ -296,13 +349,6 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		} else {
 			defaults = r.calleeDefaults(sym)
 		}
-	} else if r.isDynamic(kids[0]) || r.localStorageDynamic(kids[0]) {
-		// A binding of dynamic type used as a callee (a parameter typed any that holds
-		// a function) is a boxed function value, so it dispatches through the runtime
-		// Call the same way a non-identifier dynamic callee does. The storage check
-		// catches an implicit-any binding whose type the checker evolved to a concrete
-		// function at the call site while the slot itself stays a value.Value box.
-		return r.dynamicCall(kids[0], kids[1:])
 	} else {
 		// A bare identifier used as a callee that the checker accepted has a call
 		// signature, so the binding is a function value: an arrow or function
@@ -515,9 +561,9 @@ func (r *Renderer) funcNodeReadsArguments(fn frontend.Node) bool {
 	if !ok {
 		return false
 	}
-	reads, supported := false, true
+	reads, supported, indexed := false, true, false
 	for _, stmt := range r.prog.Children(block) {
-		r.scanArguments(stmt, &reads, &supported)
+		r.scanArguments(stmt, &reads, &supported, &indexed)
 	}
 	return reads
 }
@@ -1434,6 +1480,13 @@ func (r *Renderer) closurePadForSlot(a frontend.Node, pt frontend.Type) ([]front
 // applies. A data property (a non-function field) is not callable and stays for
 // the read path.
 func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	// A boxed receiver, the exports object a require binds as a value.Value, carries
+	// the module's inferred object shape yet has no Go struct to select a func field
+	// off. Declining here keeps such a call off the struct-field path and lets it reach
+	// the dynamic dispatch below, which reads the method with a runtime Get and Call.
+	if r.isDynamic(recvNode) {
+		return nil, false, nil
+	}
 	t := r.prog.TypeAt(recvNode)
 	if t.Flags&frontend.TypeObject == 0 {
 		return nil, false, nil
@@ -1539,6 +1592,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// lowers to a value write helper rather than a method on a runtime object.
 	if stream, ok := r.processStream(recvNode); ok {
 		return r.processStreamCall(stream, method, argNodes)
+	}
+	// process.on('exit', fn) registers a run-at-exit callback, a call on the global
+	// process object rather than a value receiver, so it lowers to the value exit
+	// registry rather than a method on a runtime object. It routes here after the
+	// stream check, whose receiver is process.stdout, before the string gate below.
+	if r.isGlobalRef(recvNode, "process") {
+		return r.processCall(method, argNodes)
 	}
 	// console.log(...) and friends are calls on the global console, not a value
 	// receiver, so they lower to the value console helpers rather than a method on a
@@ -1957,6 +2017,15 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ValueOfMethod")}}, nil
+	}
+	// A method the special cases above did not claim, called on a boxed receiver,
+	// dispatches through the runtime: the member m.fn is read with a dynamic Get and
+	// the result invoked with Call, the shape m.fn(x) takes where m = require('./mod')
+	// binds a module's exports object as a box. It routes here after toString and
+	// valueOf, which the value model answers with their own dedicated helpers, and
+	// before the string gate below, which would reject a boxed receiver.
+	if r.isDynamic(recvNode) {
+		return r.dynamicCall(callee, argNodes)
 	}
 	if !r.isString(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
@@ -3933,6 +4002,74 @@ func (r *Renderer) processStreamCall(stream, method string, argNodes []frontend.
 	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{arg}}, nil
 }
 
+// queueMicrotaskCall lowers queueMicrotask(fn), the WHATWG global that schedules fn
+// on the microtask queue. The callback boxes to a value.Value the runtime invokes at
+// the microtask checkpoint, so it shares the queue and the first-in-first-out order
+// promise reactions use, and it sets the program's microtask flag so the assembled
+// main drains the queue at its end even when the program minted no promise. A call
+// with other than one argument hands back rather than emit a call that would drop or
+// misread the callback.
+func (r *Renderer) queueMicrotaskCall(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "queueMicrotask with this argument count is a later slice"}
+	}
+	fn, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.usesMicrotask = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "QueueMicrotask"), Args: []ast.Expr{fn}}, nil
+}
+
+// structuredCloneCall lowers structuredClone(value), the WHATWG global that deep-copies
+// a data graph through the structured-clone algorithm. The one argument boxes to a
+// value.Value the runtime walks, and the call emits value.StructuredClone, whose result
+// is the clone as a value.Value the caller reads through the dynamic model. A call with
+// other than one argument, the form that would carry a transfer list, hands back rather
+// than emit a call that would drop it; the transfer form is a later slice.
+func (r *Renderer) structuredCloneCall(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) != 1 {
+		return nil, &NotYetLowerable{Reason: "structuredClone with a transfer list is a later slice"}
+	}
+	arg, err := r.boxOperand(argNodes[0])
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "StructuredClone"), Args: []ast.Expr{arg}}, nil
+}
+
+// processCall lowers a call on the global process object. Only on is covered, and
+// only for the "exit" event: process.on('exit', fn) registers fn as a run-at-exit
+// callback, lowering to value.OnExit with the callback boxed into a value.Value so
+// the end-of-main drain can invoke it without its static signature. It sets the
+// program's exit-callback flag so the assembled main appends value.RunExitCallbacks
+// as its final statement. A different method, a different event, a different arity,
+// or a non-function listener hands back rather than emitting a call that would drop
+// the registration.
+func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if method != "on" {
+		return nil, &NotYetLowerable{Reason: "process." + method + " is a later slice"}
+	}
+	if len(argNodes) != 2 {
+		return nil, &NotYetLowerable{Reason: "process.on with this argument count is a later slice"}
+	}
+	if argNodes[0].Kind() != frontend.NodeStringLiteral || unquote(r.prog.Text(argNodes[0])) != "exit" {
+		return nil, &NotYetLowerable{Reason: "process.on for an event other than exit is a later slice"}
+	}
+	if calls, _ := r.prog.Signatures(r.prog.TypeAt(argNodes[1])); len(calls) != 1 {
+		return nil, &NotYetLowerable{Reason: "process.on('exit') with a non-function listener is a later slice"}
+	}
+	fn, err := r.boxOperand(argNodes[1])
+	if err != nil {
+		return nil, err
+	}
+	r.usesExitCallbacks = true
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "OnExit"), Args: []ast.Expr{fn}}, nil
+}
+
 // consoleCall lowers a call on the global console. The methods that write to
 // standard output (log, info, debug) lower to value.ConsoleLog, and the ones that
 // write to standard error (error, warn) to value.ConsoleError. Each argument is
@@ -4141,6 +4278,25 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 	case r.isBigInt(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{lowered}}, nil
+	case r.prog.TypeAt(arg).Flags == frontend.TypeUndefined && r.repeatableOperand(arg):
+		// A value typed exactly undefined stringifies to "undefined" (String(undefined),
+		// `${undefined}`, and console.log(undefined) all print it). A reference to such a
+		// value (the undefined literal, a binding read, a member read) lowers to the
+		// value.Undefined singleton, a value.Value, so it defers to value.ToString the way a
+		// dynamic argument does: ToString reads the undefined singleton back as "undefined".
+		// Routing through the evaluated expression rather than folding to the constant keeps
+		// the operand referenced, so a bare binding read stays used. The repeatable gate
+		// keeps this to a reference: an undefined-returning function call lowers to a Go
+		// statement-call with no value, which value.ToString cannot take, so it hands back
+		// through the default below.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{lowered}}, nil
+	case r.isRegExp(arg):
+		// A regexp stringifies through RegExp.prototype.toString, "/" + source + "/" +
+		// flags, the literal form the program wrote. The lowered expr is the *value.RegExp
+		// itself, so the method reads its own source and flags with no boxing, the same
+		// way .source and .flags read off the concrete receiver.
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("ToStringBStr")}}, nil
 	case r.isDynamic(arg):
 		// A dynamic argument defers the whole ToString to the value model,
 		// which dispatches on the runtime kind.
@@ -4272,24 +4428,38 @@ func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
 
 // unaryStringGlobal lowers a bare global that takes exactly one string and returns
 // one string to its value runtime function: the URI codecs encodeURIComponent /
-// decodeURIComponent / encodeURI / decodeURI and the base64 codecs btoa / atob. A
-// different arity, or a non-string argument (which the global would coerce to a
-// string first, running that conversion), hands back. goName is the runtime
-// function to call and jsName names the global for the handback reason.
+// decodeURIComponent / encodeURI / decodeURI and the base64 codecs btoa / atob.
+// Each of these runs ToString on its argument before its own work, so a string
+// argument passes straight to the runtime function and a non-string one is coerced
+// through value.ToString first, boxing the argument and stringifying it the way the
+// global does. This is the shape url.js's encodeQuery(str) reaches, where str is an
+// any parameter handed to encodeURIComponent. A different arity hands back. goName is
+// the runtime function to call and jsName names the global for the handback reason.
 func (r *Renderer) unaryStringGlobal(goName, jsName string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: jsName + " with this argument count is a later slice"}
 	}
 	arg := argNodes[0]
-	if !r.isString(arg) {
-		return nil, &NotYetLowerable{Reason: jsName + " on a non-string argument is a later slice"}
+	if r.isString(arg) {
+		lowered, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{lowered}}, nil
 	}
-	lowered, err := r.lowerExpr(arg)
+	// The argument is not statically a string, so emit the ToString the global runs:
+	// box it to a value.Value and stringify. A dynamic argument passes through the box
+	// unchanged, and a static primitive is lifted through its constructor first.
+	boxed, err := r.boxArgToValue(arg)
 	if err != nil {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{lowered}}, nil
+	return &ast.CallExpr{
+		Fun:  sel("value", goName),
+		Args: []ast.Expr{&ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}},
+	}, nil
 }
 
 // symbolConstructor lowers Symbol() and Symbol(desc) to the boxed symbol value the
@@ -4534,9 +4704,9 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 	case "split":
 		// Only the string-separator form lowers, to value.BStr.Split returning a
 		// string array; a regexp separator does not type as a string, so methodCall
-		// hands it back, and the optional limit argument is a later slice, so exactly
-		// one argument is admitted.
-		return "Split", []argKind{argString}, 1, false, true
+		// hands it back. The optional limit is a trailing number, so the guard admits
+		// one or two arguments and value.BStr.Split is Go-variadic on the limit.
+		return "Split", []argKind{argString, argNumber}, 1, false, true
 	case "startsWith":
 		return "StartsWith", []argKind{argString, argNumber}, 1, false, true
 	case "endsWith":

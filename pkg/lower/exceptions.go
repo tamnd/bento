@@ -128,6 +128,25 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "Proxy" {
 		return r.newProxy(kids[1:])
 	}
+	// new Event(type, init) and new EventTarget() build the DOM-style event pair Node
+	// exposes as globals, each backed by a value object the runtime constructs. They
+	// are ambient globals, not user classes (a user class of the same name was already
+	// claimed by classNameRef above), so a plain-identifier constructor of either name
+	// routes to the runtime constructor.
+	if r.prog.Text(kids[0]) == "Event" && r.isGlobalRef(kids[0], "Event") {
+		return r.newEvent(kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "EventTarget" && r.isGlobalRef(kids[0], "EventTarget") {
+		return r.newEventTarget(kids[1:])
+	}
+	// new AbortController() builds the cancellation controller Node exposes as a global,
+	// backed by a value object that owns one AbortSignal. Like the event pair it is an
+	// ambient global rather than a user class, so a plain-identifier constructor routes
+	// to the runtime constructor. AbortSignal has no public constructor, so only the
+	// controller is claimed here; a signal comes from the controller or a static factory.
+	if r.prog.Text(kids[0]) == "AbortController" && r.isGlobalRef(kids[0], "AbortController") {
+		return r.newAbortController(kids[1:])
+	}
 	// new Function("a", "return a") builds a function from source text at run time,
 	// parsing the argument strings as a parameter list and a body. That is eval work,
 	// phase 11, so it hands back with the reason that names where it belongs rather
@@ -188,6 +207,74 @@ func (r *Renderer) newObject(args []frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "NewObject")}, nil
+}
+
+// newEvent lowers new Event(type, init) to value.NewEvent, the DOM-style event the
+// EventTarget pair dispatches. The type argument boxes to a value.Value the runtime
+// reads as a string, and the optional init dictionary boxes too so the runtime can
+// read its bubbles and cancelable members; an absent init passes value.Undefined. A
+// call with no argument hands back, since an Event requires a type.
+func (r *Renderer) newEvent(args []frontend.Node) (ast.Expr, error) {
+	if len(args) < 1 {
+		return nil, &NotYetLowerable{Reason: "new Event() with no type is a later slice"}
+	}
+	typeArg, err := r.boxOperand(args[0])
+	if err != nil {
+		return nil, err
+	}
+	init := ast.Expr(sel("value", "Undefined"))
+	if len(args) >= 2 {
+		init, err = r.boxOperand(args[1])
+		if err != nil {
+			return nil, err
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewEvent"), Args: []ast.Expr{typeArg, init}}, nil
+}
+
+// newEventTarget lowers new EventTarget() to value.NewEventTarget, the object
+// addEventListener registers on and dispatchEvent fires. Only the zero-argument form
+// exists, so a call with an argument hands back.
+func (r *Renderer) newEventTarget(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 0 {
+		return nil, &NotYetLowerable{Reason: "new EventTarget takes no argument"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewEventTarget")}, nil
+}
+
+// newAbortController lowers new AbortController() to value.NewAbortController, the
+// cancellation controller that owns one AbortSignal. Only the zero-argument form exists,
+// so a call with an argument hands back.
+func (r *Renderer) newAbortController(args []frontend.Node) (ast.Expr, error) {
+	if len(args) != 0 {
+		return nil, &NotYetLowerable{Reason: "new AbortController takes no argument"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "NewAbortController")}, nil
+}
+
+// isDynGlobalCtorNew reports whether n is a new Event(...), new EventTarget(), or new
+// AbortController() expression on the ambient global constructor, the shape whose binding
+// buildVarDecl lands in a value.Value slot so the instance reads through the dynamic model
+// rather than the standard library's static interface. Each of these constructors lowers
+// to a value the runtime backs with a property bag, so the binding must stay dynamic to
+// route every later member read and call through the value model. A user class of any of
+// these names resolves through classNameRef, not the global, so it is not claimed.
+func (r *Renderer) isDynGlobalCtorNew(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeNewExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name := r.prog.Text(kids[0])
+	if name != "Event" && name != "EventTarget" && name != "AbortController" {
+		return false
+	}
+	return r.isGlobalRef(kids[0], name)
 }
 
 // newTypedArray lowers a typed-array construction, the fixed-width numeric buffers
@@ -917,6 +1004,22 @@ func (r *Renderer) errorInstanceof(left, right frontend.Node) (ast.Expr, bool, e
 	}, true, nil
 }
 
+// errorSubclassInstanceof lowers `e instanceof Error` where e is an instance of a
+// class that extends the built-in Error. The Go value is that class's struct
+// pointer, an Error by construction, so the test folds to the constant true. Only
+// the Error base itself is covered; instanceof a specific built-in error or another
+// class on such an instance stays a later slice, handled by the general decline.
+func (r *Renderer) errorSubclassInstanceof(left, right frontend.Node) (ast.Expr, bool) {
+	info, ok := r.classOfNode(left)
+	if !ok || !info.errorBase {
+		return nil, false
+	}
+	if name, ok := r.errorConstructorRef(right); !ok || name != "Error" {
+		return nil, false
+	}
+	return ident("true"), true
+}
+
 // errorMethodCall lowers a method call on a caught error, the error-identity
 // surface of section 7.7. Only is() is covered here: err.is(sentinel) lowers to
 // the *value.Error Is method against the Go error the caught error carries, so the
@@ -1077,7 +1180,10 @@ func (r *Renderer) thrownClassOf(n frontend.Node) (*classInfo, bool) {
 		return nil, false
 	}
 	for _, f := range info.fields {
-		if f.prop == "message" && r.prog.TypeAt(f.ident).Flags&frontend.TypeString != 0 {
+		// An Error subclass's inherited message is a synthesized value.BStr with no
+		// ident to read a type from, and it is a string by construction, so it
+		// satisfies the throwable check the same way a declared string message does.
+		if f.prop == "message" && (f.synthBStr || r.prog.TypeAt(f.ident).Flags&frontend.TypeString != 0) {
 			return info, true
 		}
 	}

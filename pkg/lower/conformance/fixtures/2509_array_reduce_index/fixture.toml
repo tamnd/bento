@@ -1,0 +1,1 @@
+feature = "reduce and reduceRight callbacks that read the element index"

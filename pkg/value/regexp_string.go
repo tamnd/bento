@@ -107,6 +107,55 @@ func (re *RegExp) ReplaceAllStr(s, repl BStr) BStr {
 	return re.ReplaceStr(s, repl)
 }
 
+// ReplaceFuncStr runs String.prototype.replace with a function replacement (22
+// §22.1.3.19), calling fn with each match's text and substituting the string fn
+// returns. It covers the single-argument replacer the lowerer admits: fn receives the
+// matched substring, not the capture groups, offset, or subject the full replacer
+// signature also passes. A non-global regexp replaces the first match; a global one
+// resets lastIndex and replaces every match, advancing one code unit past an empty
+// match so the walk terminates, the same iteration ReplaceStr runs.
+func (re *RegExp) ReplaceFuncStr(s BStr, fn func(BStr) BStr) BStr {
+	str := s.ToGoString()
+	if !re.global {
+		loc := re.re.FindStringSubmatchIndex(str)
+		if loc == nil || (re.sticky && loc[0] != 0) {
+			return s
+		}
+		var b strings.Builder
+		b.WriteString(str[:loc[0]])
+		b.WriteString(fn(FromGoString(str[loc[0]:loc[1]])).ToGoString())
+		b.WriteString(str[loc[1]:])
+		return FromGoString(b.String())
+	}
+	re.lastIndex = 0
+	var b strings.Builder
+	last := 0
+	for {
+		m, ok := re.match(s)
+		if !ok {
+			break
+		}
+		b.WriteString(str[last:m[0]])
+		b.WriteString(fn(FromGoString(str[m[0]:m[1]])).ToGoString())
+		last = m[1]
+		if m[0] == m[1] {
+			re.lastIndex++
+		}
+	}
+	b.WriteString(str[last:])
+	return FromGoString(b.String())
+}
+
+// ReplaceAllFuncStr runs String.prototype.replaceAll with a function replacement,
+// requiring a global regexp and throwing a TypeError otherwise the way ReplaceAllStr
+// does; with the global flag present it replaces every match as a global replace does.
+func (re *RegExp) ReplaceAllFuncStr(s BStr, fn func(BStr) BStr) BStr {
+	if !re.global {
+		Throw(NewTypeError(FromGoString("replaceAll must be called with a global RegExp")))
+	}
+	return re.ReplaceFuncStr(s, fn)
+}
+
 // SplitStr runs String.prototype.split with a regexp separator (22 §22.2.7.11). It
 // walks the subject, matching the separator anchored at each position the way the
 // specification's sticky splitter clone does, cutting the text between matches into

@@ -57,12 +57,27 @@ func (r *Renderer) RenderProgram(entry frontend.Node) (Program, error) {
 // hands back (see collectModules). With no siblings this is exactly the
 // single-file path.
 func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Node) (Program, error) {
+	// A module reached through require runs as its own loader function, not as
+	// flattened package declarations, so the require targets across the whole file
+	// set are discovered before anything lowers: a require call site then resolves to
+	// a loader name already in hand, and the deps split into the import-composed
+	// siblings and the require-loaded modules. A dep reached only by require leaves
+	// the collectModules path, which composes declarations, for the loader path.
+	r.discoverRequiredModules(append([]frontend.Node{entry}, deps...))
+	var esDeps, reqDeps []frontend.Node
+	for _, dep := range deps {
+		if _, required := r.requiredLoaders[dep.File().Path]; required {
+			reqDeps = append(reqDeps, dep)
+		} else {
+			esDeps = append(esDeps, dep)
+		}
+	}
 	// The sibling modules register first: their classes, enums, and generic
 	// instantiations join the shared pre-pass state so an entry call site resolves
 	// against them, and their top-level functions come back to emit as package
 	// funcs beside the entry's. A sibling this slice cannot compose hands back here
 	// before the entry lowers.
-	depFuncs, err := r.collectModules(deps)
+	depFuncs, err := r.collectModules(esDeps)
 	if err != nil {
 		return Program{}, err
 	}
@@ -114,6 +129,13 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// same pre-pass records which arrows are escape-safe so the arrow's declaration
 	// lowers the default away and its call sites fill it, both reading one map.
 	r.collectArrowDefaults(entry)
+	// A module reached by require registers its class and enum declarations in the
+	// same shared pre-pass, so each emits a package-level Go type the loader body
+	// constructs and reads. It runs after the entry's collectors so an entry name
+	// wins the shared taken set, and before any loader body lowers.
+	if err := r.collectRequiredModuleDecls(reqDeps); err != nil {
+		return Program{}, err
+	}
 
 	// A module-level binding a top-level function or class body reads cannot stay a
 	// local of main, since a separate Go function cannot see main's locals; it hoists
@@ -170,6 +192,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// only the statement nodes the analysis passes below walk; the calls carry no
 	// binding, so they ride mainItems alone.
 	var mainItems []mainItem
+	// callableFuncs holds the top-level named function declarations that are also
+	// callable objects (they carry own data properties). Each is registered as a
+	// package-level pointer var below and constructed at the top of main, so it is
+	// collected here rather than emitted as a bare Go func.
+	var callableFuncs []frontend.Node
 	pushStmt := func(n frontend.Node) {
 		mainBody = append(mainBody, n)
 		mainItems = append(mainItems, mainItem{node: n})
@@ -193,6 +220,20 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 						continue
 					}
 				}
+			}
+			// A named function declaration whose name carries own data properties is a
+			// callable object, not a bare func: it lowers to a struct-typed package var
+			// and a top-of-main construction, so it is registered and collected here
+			// rather than emitted through funcDecls, which would emit a `func Foo` that
+			// collides with the `type Foo` the callable-object model interns.
+			if r.isCallableObject(r.prog.TypeAt(stmt)) {
+				decl, err := r.registerCallableFuncDecl(stmt)
+				if err != nil {
+					return Program{}, err
+				}
+				moduleVars = append(moduleVars, decl)
+				callableFuncs = append(callableFuncs, stmt)
+				continue
 			}
 			fds, err := r.funcDecls(stmt)
 			if err != nil {
@@ -338,7 +379,28 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	}
 	stmts = append(hoistDecls, stmts...)
 	stmts = append(fwdDecls, stmts...)
+	// A callable-object function declaration hoists like any function, so its object
+	// is constructed before the body's first property write runs. The construction is
+	// prepended outermost, above the hoist and forward decls, so the package var it
+	// assigns holds the object by the time any statement reads it.
+	if len(callableFuncs) > 0 {
+		ctorStmts, err := r.buildCallableFuncDeclCtors(callableFuncs)
+		if err != nil {
+			return Program{}, err
+		}
+		stmts = append(ctorStmts, stmts...)
+	}
 	stmts = r.hoistStrBuilders(stmts)
+
+	// The required modules lower after the entry body, so the per-module analysis
+	// state each loader overwrites is already spent, and before the throw and promise
+	// checks below, so a module body that throws or mints a promise sets the same
+	// program-level flag the entry's body would: the entry's main then defers the
+	// uncaught reporter or drains the microtask queue for work a loader runs.
+	requiredDecls, err := r.renderRequiredModules(reqDeps)
+	if err != nil {
+		return Program{}, err
+	}
 
 	// A program that can raise a thrown value defers the uncaught-error reporter as
 	// its first statement, so a throw that escapes every catch prints an
@@ -374,17 +436,31 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// JavaScript gives a microtask. The drain is appended after the classes render so a
 	// promise minted or observed inside a class method body, which lowers there, still
 	// sets the flag in time; a program that minted no promise drains nothing.
-	if r.usesPromise {
+	if r.usesPromise || r.usesMicrotask {
 		r.requireImport(valuePkg)
 		drain := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunMicrotasks")}}
 		mainDecl.Body.List = append(mainDecl.Body.List, drain)
+	}
+	if r.usesPromise {
 		// After the drain, any promise that rejected and was never observed is an
 		// unhandled rejection: JavaScript runs the unhandledrejection path once the
 		// microtask checkpoint is clear. Reporting it (to stderr, with a non-zero exit)
 		// is what lets a test that asserts a rejection observe it, rather than the
-		// rejection vanishing into a false pass.
+		// rejection vanishing into a false pass. This is gated on a promise alone, since
+		// queueMicrotask schedules a callback but mints no rejection to report.
 		report := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "ReportUnhandledRejections")}}
 		mainDecl.Body.List = append(mainDecl.Body.List, report)
+	}
+
+	// A program that registered a process 'exit' listener runs the registered
+	// callbacks once as the final statement of main, the point Node fires the exit
+	// event: the synchronous body and the microtask checkpoint above have both
+	// finished and nothing remains but to leave. The callbacks run in registration
+	// order inside the runtime helper. A program that registered none appends nothing.
+	if r.usesExitCallbacks {
+		r.requireImport(valuePkg)
+		runExit := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunExitCallbacks")}}
+		mainDecl.Body.List = append(mainDecl.Body.List, runExit)
 	}
 
 	file := &ast.File{Name: ident("main")}
@@ -404,6 +480,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// Numeric enums emit their float64-backed const blocks with the other
 	// package-level state, before the classes and functions that read them.
 	file.Decls = append(file.Decls, r.renderEnums()...)
+	// The CommonJS module object and its exports alias, when the program read either
+	// global, emit as package-level vars before the module bindings so both main and a
+	// top-level function that closes over module or exports name the same variable. A
+	// program that named neither emits nothing here.
+	file.Decls = append(file.Decls, r.commonjsModuleDecls()...)
 	// Module bindings a function reads emit as package-level vars beside the other
 	// state, so both main and the functions name the same variable.
 	file.Decls = append(file.Decls, moduleVars...)
@@ -411,6 +492,10 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// A composed sibling's functions emit as package funcs before the entry's, the
 	// order a hand-written Go file keeps a dependency above its user.
 	file.Decls = append(file.Decls, depFuncs...)
+	// Each required module's cache slot var and loader function emit here, before the
+	// entry's functions and main, so a require call in either resolves to a loader
+	// name already declared in the package.
+	file.Decls = append(file.Decls, requiredDecls...)
 	file.Decls = append(file.Decls, funcs...)
 	file.Decls = append(file.Decls, mainDecl)
 
@@ -576,6 +661,14 @@ func (r *Renderer) checkMangleCollisions(entry frontend.Node) error {
 	for _, t := range names {
 		if m, ok := mangleIdent(t); ok && m != t && texts[m] {
 			return &NotYetLowerable{Reason: "the module already speaks " + m + ", which " + t + " mangles to"}
+		}
+		// The CommonJS module object and exports alias emit under reserved Go names. A
+		// user binding whose Go spelling is one of them would share the identifier with
+		// the synthetic var, so the unit hands back rather than emit a redeclaration. A
+		// reference to the module or exports global itself never reaches here as its own
+		// text, since those spell module and exports, not the reserved Go names.
+		if m, ok := localName(t); ok && (m == bentoModuleName || m == bentoExportsName || m == bentoRequireName) {
+			return &NotYetLowerable{Reason: "the CommonJS module object reserves the Go name " + m + ", which " + t + " takes"}
 		}
 	}
 	return nil

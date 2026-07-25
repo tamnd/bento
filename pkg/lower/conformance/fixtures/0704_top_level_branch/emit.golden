@@ -9,20 +9,14 @@ import (
 func main() {
 	i := 0.0
 	total := 0.0
-	for {
+	for _bt0 := true; _bt0; _bt0 = i < 4 {
 		total += i
 		i++
-		if i >= 4 {
-			break
-		}
 	}
 	value.ConsoleLog(value.NumberToString(total))
 	once := 0.0
-	for {
+	for _bt1 := true; _bt1; _bt1 = false {
 		once++
-		if !false {
-			break
-		}
 	}
 	value.ConsoleLog(value.NumberToString(once))
 	n := 0.0

@@ -58,16 +58,16 @@ func TestTranslateRegExp(t *testing.T) {
 	}
 
 	handback := []struct{ pattern, flags string }{
-		{`(a)\1`, ""},    // backreference
-		{`(?=foo)`, ""},  // lookahead
-		{`(?!foo)`, ""},  // negative lookahead
-		{`(?<=foo)`, ""}, // lookbehind
-		{`\p{L}`, ""},    // unicode property escape, a later slice
-		{`foo`, "u"},     // unicode mode, a later slice
-		{`foo`, "v"},     // unicode-sets mode, a later slice
-		{`^foo`, "m"},    // multiline anchor needs the ECMAScript terminator set
-		{`a(?m:b)c`, ""}, // inline multiline modifier, a later slice
-		{`a(?i)b`, ""},   // bare inline modifier, a later slice
+		{`(a)\1`, ""},      // backreference
+		{`(?=foo)`, ""},    // lookahead
+		{`(?!foo)`, ""},    // negative lookahead
+		{`(?<=foo)`, ""},   // lookbehind
+		{`\p{L}`, ""},      // unicode property escape, a later slice
+		{`foo`, "u"},       // unicode mode, a later slice
+		{`foo`, "v"},       // unicode-sets mode, a later slice
+		{`^foo`, "m"},      // multiline anchor needs the ECMAScript terminator set
+		{`a(?m:b)c`, ""},   // inline multiline modifier, a later slice
+		{`a(?i)b`, ""},     // bare inline modifier, a later slice
 		{`a(?x:b)c`, ""},   // inline modifier with an unsupported flag
 		{`(?s-:.es$)`, ""}, // empty-remove inline modifier RE2 cannot compile, caught by the trial gate
 	}
@@ -171,6 +171,22 @@ func TestRegExpAccessors(t *testing.T) {
 	}
 	if !all.HasIndices() || !all.Global() || !all.DotAll() {
 		t.Fatalf("d/g/s getters wrong: %+v", all)
+	}
+}
+
+// ToStringBStr renders the literal form RegExp.prototype.toString produces, "/" +
+// source + "/" + flags: a flagged pattern keeps its flags in canonical order, the
+// empty pattern shows its "(?:)" source so it round-trips, and an escaped slash stays
+// escaped in the source so the rendered literal would re-parse to the same regexp.
+func TestRegExpToStringBStr(t *testing.T) {
+	if got := NewRegExpLiteral("ab+c", "gi").ToStringBStr().ToGoString(); got != "/ab+c/gi" {
+		t.Fatalf("ToStringBStr() = %q, want /ab+c/gi", got)
+	}
+	if got := NewRegExpLiteral("", "").ToStringBStr().ToGoString(); got != "/(?:)/" {
+		t.Fatalf("empty ToStringBStr() = %q, want /(?:)/", got)
+	}
+	if got := NewRegExpLiteral("[\\/]+", "").ToStringBStr().ToGoString(); got != "/[\\/]+/" {
+		t.Fatalf("escaped ToStringBStr() = %q, want /[\\/]+/", got)
 	}
 }
 

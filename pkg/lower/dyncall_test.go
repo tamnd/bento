@@ -88,8 +88,8 @@ console.log(tag());
 // Control-flow analysis narrows the callee to a concrete function type at the call
 // site, but the slot stays a box, so the call must dispatch through the runtime Call
 // rather than a static Go call the box does not support. The call result is a box
-// too, so the enclosing String coercion routes through value.ToString, not the
-// number path the evolved return type would pick.
+// too, so the enclosing String built-in coercion routes through value.StringCoerce,
+// not the number path the evolved return type would pick.
 func TestEvolvedAnyCalleeRoutesThroughRuntimeCall(t *testing.T) {
 	const src = `var f;
 f = function () { return 1; };
@@ -99,7 +99,7 @@ console.log(String(f()));
 	if !strings.Contains(source, "f.Call()") {
 		t.Errorf("evolved-any callee did not dispatch through the runtime Call:\n%s", source)
 	}
-	if !strings.Contains(source, "value.ToString(f.Call())") {
+	if !strings.Contains(source, "value.StringCoerce(f.Call())") {
 		t.Errorf("call result was not treated as a box by the enclosing coercion:\n%s", source)
 	}
 	if strings.Contains(source, "value.NumberToString(f.Call())") {

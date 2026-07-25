@@ -103,14 +103,17 @@ func (r *Renderer) funcNodeThreadsArgs(fn frontend.Node, sig frontend.Signature)
 	if !ok {
 		return false
 	}
-	reads, supported := false, true
+	reads, supported, indexed := false, true, false
 	for _, stmt := range r.prog.Children(block) {
-		r.scanArguments(stmt, &reads, &supported)
+		r.scanArguments(stmt, &reads, &supported, &indexed)
 	}
 	if !reads || !supported {
 		return false
 	}
-	if r.bodyWritesParam(block, sig.Params) {
+	// A write to a named parameter alongside an element read stays a later slice, the
+	// same mapped-arguments handback the snapshot plan keeps; a length-only read does
+	// not observe the aliasing, so the write does not bar threading.
+	if indexed && r.bodyWritesParam(block, sig.Params) {
 		return false
 	}
 	// A default that reads an earlier parameter collapses the optional tail into one Go

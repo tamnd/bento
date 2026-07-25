@@ -15,7 +15,7 @@ func main() {
 				e := value.Caught(rec)
 				_ = e
 				saved = e.ToValue()
-				value.ConsoleLog(value.BoolToString(value.StrictEquals(saved, e.ToValue())))
+				value.ConsoleLog(value.BoolToString(value.StrictEquals(e.ToValue(), saved)))
 				value.ConsoleLog(value.BoolToString(value.StrictEquals(saved, value.StringValue(value.FromGoString("oops")))))
 			}
 		}()

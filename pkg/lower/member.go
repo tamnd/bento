@@ -991,6 +991,15 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			return expr, err
 		}
 	}
+	// Foo[i] with a number index on a numeric enum receiver is the reverse mapping:
+	// TypeScript reifies a numeric enum with a reverse map from each member's value
+	// back to its name, so Color[2] reads "B". It routes before the array and shape
+	// paths, whose arrayElem read fails on the enum object and would hand the read
+	// back. A string enum omits the reverse map and a const enum is erased, so those
+	// receivers report ok=false here and stay on their own paths.
+	if info, ok := r.enumReverseInfo(obj); ok && r.isNumber(idxNode) {
+		return r.enumReverseRead(info, idxNode)
+	}
 	// C["m"] or c["m"] with a constant string key on a class receiver is the bracket
 	// spelling of the dotted member read, the shape a non-identifier or computed
 	// member name (a string method name, a ["m"] accessor, a [k] name whose k is a
@@ -1020,12 +1029,13 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// a value.Value at run time, not the named struct the checker still gives it, so a
 	// string-key read must go through the runtime Get on the dynamic path below rather
 	// than select a Go field the box does not carry. object[Infinity] already lowers
-	// dynamically; this keeps object["1.2"] consistent with it. The guard is the
-	// dynBound binding specifically, not every dynamic receiver: a string-index
-	// dictionary is also boxed but keeps its own index-signature handback below, so
-	// widening to isDynamic would swallow that. A genuinely static literal, whose
-	// binding was never boxed, still takes the struct-field selector here.
-	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) {
+	// dynamically; this keeps object["1.2"] consistent with it. A string-index
+	// dictionary is boxed the same way, so a const-string-key read off it is excluded
+	// here too and falls to the dynamic Get below, where the boxed read unboxes to the
+	// signature's element type; only its own handback for a wider index type remains. A
+	// genuinely static literal, whose binding was never boxed, still takes the
+	// struct-field selector here.
+	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) && !r.isStringIndexDict(r.prog.TypeAt(obj)) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {

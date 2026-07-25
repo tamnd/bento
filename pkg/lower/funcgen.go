@@ -1031,6 +1031,15 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 		if !ok {
 			return nil, &NotYetLowerable{Reason: noun + " parameter is not a Go identifier"}
 		}
+		// A parameter boxOperand forced dynamic (a listener's e: Event, whose static
+		// type bento cannot spell) takes a value.Value field, the box the dynamic call
+		// passes it; its name is already marked dynamic so the body reads it through Get.
+		if r.forceDynParams[pkids[0]] {
+			r.requireImport(valuePkg)
+			fields = append(fields, &ast.Field{Names: []*ast.Ident{ident(name)}, Type: sel("value", "Value")})
+			pi++
+			continue
+		}
 		ptype, err := r.typeExpr(r.prog.TypeAt(pkids[0]))
 		if err != nil {
 			return nil, err

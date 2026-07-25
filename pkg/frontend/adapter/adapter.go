@@ -117,15 +117,15 @@ type CompilerOptions struct {
 	AllowUnreachableCode *bool
 	ImportHelpers        bool
 	Target               string
-	Lib              []string
-	Module           string
-	ModuleResolution string
-	AllowJS          bool
-	CheckJS          bool
-	JSX              string
-	SkipLibCheck     bool
-	BaseURL          string
-	Paths            map[string][]string
+	Lib                  []string
+	Module               string
+	ModuleResolution     string
+	AllowJS              bool
+	CheckJS              bool
+	JSX                  string
+	SkipLibCheck         bool
+	BaseURL              string
+	Paths                map[string][]string
 }
 
 // Host is how typescript-go reaches the file system and bento's module

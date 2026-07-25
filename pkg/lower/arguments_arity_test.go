@@ -90,3 +90,57 @@ console.log(f(1, 2));
 		t.Errorf("an exact-arity arguments read did not materialize the snapshot:\n%s", source)
 	}
 }
+
+// TestArgumentsLengthOnlyParamWriteLowers proves a body whose only arguments read is
+// arguments.length lowers even alongside a write to a named parameter: length is
+// fixed by the call arity and does not track the parameter in either the mapped or
+// the unmapped object, so the entry snapshot stays faithful and the mapped-store
+// handback does not fire. It is the shape node:assert's fail() reaches.
+func TestArgumentsLengthOnlyParamWriteLowers(t *testing.T) {
+	const src = `function fail(actual: any, expected: any, message: any): void {
+  if (arguments.length === 1) { message = actual; actual = undefined; }
+  console.log(String(message));
+}
+fail("a", "b", "c");
+`
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.NewArray[value.Value](actual, expected, message)") {
+		t.Errorf("a length-only arguments read with a parameter write did not materialize the snapshot:\n%s", source)
+	}
+}
+
+// TestArgumentsLengthOnlyParamWriteRuns builds the length-guarded parameter-rewrite
+// shape and reads the length and the rewritten parameter. Called with the full arity
+// the length test is false, so the parameter keeps its passed value, the snapshot
+// length is the parameter count, and the write is invisible to the length read.
+func TestArgumentsLengthOnlyParamWriteRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `function pick(a: any, b: any): void {
+  if (arguments.length === 1) { b = a; a = undefined; }
+  console.log(String(arguments.length) + ":" + String(a) + ":" + String(b));
+}
+pick("x", "y");
+`
+	got := runProgramGo(t, src)
+	want := "2:x:y\n"
+	if got != want {
+		t.Fatalf("length-only arguments run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestArgumentsElementParamWriteStillHandsBack is the control: the same parameter
+// write alongside an element read of arguments still hands back, since arguments[i]
+// does track the parameter in the mapped object and the frozen snapshot cannot
+// mirror the later store. Only the length-only read is relaxed.
+func TestArgumentsElementParamWriteStillHandsBack(t *testing.T) {
+	const src = `function foo(a: any, b: any): unknown {
+  if (arguments.length === 1) { a = b; }
+  return arguments[0];
+}
+foo(10, 20);
+`
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "element read alongside a write to a named parameter") {
+		t.Errorf("hand-back reason %q does not name the element-read parameter-write case", reason)
+	}
+}

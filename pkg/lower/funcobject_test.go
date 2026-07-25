@@ -1,30 +1,44 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
 
-// TestFunctionWithOwnPropertyHandsBack pins that a named function that later
-// carries own data properties (foo.x = 1) hands back rather than lowering. Its
-// checker type is a callable object, and the callable-object model interns a
-// `type Foo struct { Call func(); X float64 }` for that shape. Emitting the
-// `func Foo` declaration too puts two Foo declarations in one block, which does
-// not compile, so bento used to emit Go that failed to build (Object/keys
-// 15.2.3.14-3-2 hit exactly this). Handing back routes the unit to the
-// interpreter until a named callable object is a modeled slice.
-func TestFunctionWithOwnPropertyHandsBack(t *testing.T) {
+// TestNamedCallableFuncDeclLowers pins that a named function declaration that
+// later carries own data properties (foo.x = 1) lowers to the callable-object
+// shape: a struct-typed package var, not a bare `func Foo`. Its checker type is a
+// callable object, so the model interns a `type Foo struct { Call func(); X ... }`
+// and constructs it at the top of main; emitting a `func Foo` too would put two
+// Foo declarations in one block, which does not compile (Object/keys 15.2.3.14-3-2
+// hit exactly this). The var and its construction replace the old handback.
+func TestNamedCallableFuncDeclLowers(t *testing.T) {
 	const src = "function foo() {}\nfoo.x = 1;\nconsole.log(String(foo.x));\n"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	out := renderProgram(t, src)
+	if strings.Contains(out, "func Foo(") {
+		t.Fatalf("named callable object emitted a colliding bare func:\n%s", out)
 	}
-	if !strings.Contains(nyl.Reason, "callable object") {
-		t.Errorf("hand-back reason = %q, want it to mention a callable object", nyl.Reason)
+	if !strings.Contains(out, "var foo *Foo") {
+		t.Fatalf("named callable object was not declared at package scope:\n%s", out)
+	}
+	if !strings.Contains(out, "foo = &Foo{}") {
+		t.Fatalf("named callable object was not constructed into its package var:\n%s", out)
+	}
+	if strings.Contains(out, "foo := &Foo{}") {
+		t.Fatalf("named callable object kept a short declaration that shadows the package var:\n%s", out)
+	}
+}
+
+// TestNamedCallableFuncDeclRuns builds and runs the named callable object end to
+// end: it writes an own property and reads it back, proving the package var holds
+// the object and the property field round-trips. Node prints 1.
+func TestNamedCallableFuncDeclRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "function foo() {}\nfoo.x = 1;\nconsole.log(String(foo.x));\n"
+	got := runProgramGo(t, src)
+	want := "1\n"
+	if got != want {
+		t.Fatalf("named callable object run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 

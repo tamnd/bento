@@ -1,0 +1,14 @@
+== stdout:
+object
+/ab+c/gi
+x=/ab+c/gi
+t:/ab+c/gi
+ab+c
+gi
+true
+false
+0
+truthy
+true
+== exit:
+0

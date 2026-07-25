@@ -86,6 +86,11 @@ type classInfo struct {
 	// lower before the base assignment the way JavaScript runs them (this is in the
 	// temporal dead zone until super returns).
 	preSuper []frontend.Node
+	// errorBase marks a class that extends the built-in Error. It carries the
+	// inherited message and name as its own value.BStr fields rather than embedding
+	// a base classInfo (base stays nil), so construction fills them from super() and
+	// the throw path reads message straight off the instance.
+	errorBase bool
 	// vprops, set only on a hierarchy root, names the methods some subclass
 	// overrides; each becomes a slot in the root's vtable (section 13).
 	// overrides names this class's own methods that fill an inherited slot.
@@ -127,6 +132,10 @@ type classField struct {
 	// as an assignment in the class's static init function in member order rather
 	// than as the var's own initializer. It is always false for an instance field.
 	runtimeInit bool
+	// synthBStr marks a field bento synthesizes for an Error subclass's inherited
+	// message and name: it has no source ident (ident is nil) and a fixed value.BStr
+	// Go type, and its stores skip the declared-type coercion that reads ident.
+	synthBStr bool
 }
 
 // staticInitStep is one step of a class's ordered static initialization: either
@@ -316,7 +325,70 @@ func (r *Renderer) collectClasses(entry frontend.Node) error {
 			return err
 		}
 	}
+	r.collectExpandoStatics(entry)
 	return nil
+}
+
+// collectExpandoStatics registers a top-level ClassName.member = <function> as a
+// static field of the class it names, so the assignment lowers to the package var
+// store the class already emits for a static field and a later ClassName.member(args)
+// call lowers to that var applied to the arguments (staticFieldCall). It runs right
+// after registerClass, so every class name it references is already registered, and
+// against the same taken name set, so the package var it mints never collides.
+//
+// It covers only a function-valued expando. The field's Go type and its call
+// signature come from the right-hand function expression, whose type is a concrete
+// function type whether the checker admits the member (a JS-mode module, where the
+// expando is inferred onto the constructor) or reports it absent (a TS-mode module,
+// where the store draws a tolerated 2339 and the member reads back as any). Reading
+// the type from the value rather than the member keeps the package var a func type
+// either way. A non-function right-hand side, a receiver that is not a plain class
+// name, or a member the class already declares is left for another pass or slice.
+func (r *Renderer) collectExpandoStatics(entry frontend.Node) {
+	for _, stmt := range r.prog.Children(entry) {
+		if stmt.Kind() != frontend.NodeExpressionStatement {
+			continue
+		}
+		kids := r.prog.Children(stmt)
+		if len(kids) != 1 || kids[0].Kind() != frontend.NodeBinaryExpression {
+			continue
+		}
+		parts := r.prog.Children(kids[0])
+		if len(parts) != 3 || strings.TrimSpace(r.prog.Text(parts[1])) != "=" {
+			continue
+		}
+		rhs := parts[2]
+		if rhs.Kind() != frontend.NodeFunctionExpression && rhs.Kind() != frontend.NodeArrowFunction {
+			continue
+		}
+		obj, prop, ok := r.targetProp(parts[0])
+		if !ok || obj.Kind() != frontend.NodeIdentifier {
+			continue
+		}
+		info, ok := r.classNameRef(obj)
+		if !ok {
+			continue
+		}
+		if _, exists := info.staticByName(prop); exists {
+			continue
+		}
+		propGo, ok := exportedField(prop)
+		if !ok {
+			continue
+		}
+		name := ""
+		for _, cand := range []string{lowerFirst(info.goName) + propGo, info.goName + propGo} {
+			if !r.classTaken[cand] && !goKeywords[cand] {
+				name = cand
+				break
+			}
+		}
+		if name == "" {
+			continue
+		}
+		r.classTaken[name] = true
+		info.statics = append(info.statics, classField{prop: prop, goName: name, ident: rhs})
+	}
 }
 
 // registerClass validates one class declaration against the covered subset and
@@ -461,8 +533,23 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 				}
 				continue
 			}
-			if firstWord(text) != "extends" || info.base != nil {
+			if firstWord(text) != "extends" || info.base != nil || info.errorBase {
 				return &NotYetLowerable{Reason: "class heritage (" + firstWord(text) + ") is a later slice"}
+			}
+			// A class that extends the built-in Error carries the inherited message and
+			// name as its own value.BStr fields rather than embedding a base classInfo;
+			// there is no registered class to embed, and the runtime models the error
+			// surface off those two fields plus the class name. Extending another
+			// built-in error (TypeError and its kin) is its own later slice.
+			if name, ok := r.errorBaseName(m); ok {
+				if name != "Error" {
+					return &NotYetLowerable{Reason: "extending the built-in " + name + ", an error other than Error, is a later slice"}
+				}
+				info.errorBase = true
+				info.fields = append(info.fields,
+					classField{prop: "message", goName: "Message", synthBStr: true},
+					classField{prop: "name", goName: "Name", synthBStr: true})
+				continue
 			}
 			base, err := r.baseClassOf(m)
 			if err != nil {
@@ -472,6 +559,11 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			base.extended = true
 		default:
 			return &NotYetLowerable{Reason: "this class member kind is a later slice"}
+		}
+	}
+	if info.errorBase {
+		if err := r.checkErrorBaseFields(info); err != nil {
+			return err
 		}
 	}
 	// Parameter properties are fields the constructor declares, and TypeScript
@@ -518,6 +610,17 @@ func (r *Renderer) registerClass(decl frontend.Node, taken map[string]bool) erro
 			// derived class declares no constructor of its own.
 			info.ctorParams = info.base.ctorParams
 		} else if err := r.validateSuper(info); err != nil {
+			return err
+		}
+	}
+	if info.errorBase {
+		// An Error subclass fills its inherited message and name in the constructor,
+		// so it needs one of its own; a subclass without a constructor inherits the
+		// built-in's, whose synthesis is a later slice.
+		if info.ctor == nil {
+			return &NotYetLowerable{Reason: "an Error subclass without its own constructor is a later slice"}
+		}
+		if err := r.validateErrorSuper(info); err != nil {
 			return err
 		}
 	}
@@ -652,6 +755,47 @@ func (r *Renderer) baseClassOf(clause frontend.Node) (*classInfo, error) {
 	default:
 		return nil, &NotYetLowerable{Reason: "a base class that is not a plain class name is a later slice"}
 	}
+}
+
+// errorBaseName reports the built-in error constructor an extends clause names,
+// Error and its kin, unwrapping the heritage node the way baseClassOf does. It
+// gates on errorConstructorRef, which checks the ambient-global test, so a user
+// class named Error that shadows the built-in is never mistaken for it and keeps
+// its own registered-base lowering.
+func (r *Renderer) errorBaseName(clause frontend.Node) (string, bool) {
+	kids := r.prog.Children(clause)
+	if len(kids) != 1 {
+		return "", false
+	}
+	ekids := r.prog.Children(kids[0])
+	if len(ekids) != 1 {
+		return "", false
+	}
+	base := ekids[0]
+	for base.Kind() == frontend.NodeParenthesizedExpression {
+		inner := r.prog.Children(base)
+		if len(inner) != 1 {
+			return "", false
+		}
+		base = inner[0]
+	}
+	return r.errorConstructorRef(base)
+}
+
+// checkErrorBaseFields declines an Error subclass that declares its own message or
+// name field beside the two this slice synthesizes: two fields sharing a Go name
+// would give the struct a duplicate field, and the field disambiguator only breaks
+// a field-against-method tie, not a field-against-field one.
+func (r *Renderer) checkErrorBaseFields(info *classInfo) error {
+	for _, f := range info.fields {
+		if f.synthBStr {
+			continue
+		}
+		if f.prop == "message" || f.prop == "name" {
+			return &NotYetLowerable{Reason: "an Error subclass that declares its own ." + f.prop + " field is a later slice"}
+		}
+	}
+	return nil
 }
 
 // classMember is one emitted member for the clash walk: its kind, its source
@@ -814,6 +958,60 @@ func (r *Renderer) validateSuper(info *classInfo) error {
 	// omitted slots fill in superCtorArgs the way newClass fills them, so a base optional
 	// the checker accepted the short super() against is filled there, and a base parameter
 	// that is not a recognized optional hands back rather than pass a bogus value.
+	info.superArgs = args
+	info.preSuper = stmts[:superIdx]
+	return nil
+}
+
+// validateErrorSuper validates the constructor of an Error subclass: it must call
+// super() exactly once with at most one string message argument, past only this-free
+// leading statements, the same shape validateSuper checks for a user base minus the
+// base constructor's parameter list, which the built-in Error does not expose. It
+// records the message argument as superArgs and the leading statements as preSuper,
+// which ctorBody replays before it fills the inherited message and name.
+func (r *Renderer) validateErrorSuper(info *classInfo) error {
+	if n := r.countSuperCalls(info.ctor); n != 1 {
+		return &NotYetLowerable{Reason: "an Error subclass constructor that calls super() " + itoa(n) + " times is a later slice"}
+	}
+	var block frontend.Node
+	for _, k := range r.prog.Children(info.ctor) {
+		if k.Kind() == frontend.NodeBlock {
+			block = k
+		}
+	}
+	stmts := r.prog.Children(block)
+	superIdx := -1
+	for i, s := range stmts {
+		if _, ok := r.superCallOf(s); ok {
+			superIdx = i
+			break
+		}
+	}
+	if superIdx < 0 {
+		return &NotYetLowerable{Reason: "an Error subclass constructor with no super() statement is a later slice"}
+	}
+	for _, s := range stmts[:superIdx] {
+		if subtreeHasKind(r.prog, s, frontend.NodeThisKeyword) {
+			return &NotYetLowerable{Reason: "a statement that reads this before super() is a later slice"}
+		}
+		if subtreeHasKind(r.prog, s, frontend.NodeSuperKeyword) {
+			return &NotYetLowerable{Reason: "a statement that reads super before super() is a later slice"}
+		}
+		if subtreeHasKind(r.prog, s, frontend.NodeVariableStatement) {
+			return &NotYetLowerable{Reason: "a variable declaration before super() is a later slice"}
+		}
+	}
+	args, _ := r.superCallOf(stmts[superIdx])
+	if len(args) > 1 {
+		return &NotYetLowerable{Reason: "super() with more than a message argument is a later slice"}
+	}
+	if len(args) == 1 && !r.isString(args[0]) && !r.isDynamic(args[0]) {
+		// A string message stores raw, and a dynamic one (an any-typed options.message ||
+		// fallback, the shape assert's AssertionError hands super) coerces through
+		// value.ErrorMessageString. A statically non-string, non-dynamic message, a number
+		// or a boolean, would need its own ToString and hands back.
+		return &NotYetLowerable{Reason: "super() with a message that is neither a string nor dynamic is a later slice"}
+	}
 	info.superArgs = args
 	info.preSuper = stmts[:superIdx]
 	return nil
@@ -2175,9 +2373,18 @@ func (r *Renderer) classStruct(info *classInfo) (ast.Decl, error) {
 		fields.List = append(fields.List, &ast.Field{Type: ident(info.base.goName)})
 	}
 	for _, f := range info.fields {
-		goType, err := r.typeExpr(r.prog.TypeAt(f.ident))
-		if err != nil {
-			return nil, err
+		var goType ast.Expr
+		if f.synthBStr {
+			// A synthesized Error field has no source ident to read a type from; its Go
+			// type is fixed value.BStr, the runtime string the message and name carry.
+			r.requireImport(valuePkg)
+			goType = sel("value", "BStr")
+		} else {
+			var err error
+			goType, err = r.typeExpr(r.prog.TypeAt(f.ident))
+			if err != nil {
+				return nil, err
+			}
 		}
 		// A private field (#x) is invisible to JSON.stringify in JavaScript, so its
 		// Go field takes the json:"-" tag that omits it rather than the property
@@ -2443,6 +2650,37 @@ func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
 			Tok: token.ASSIGN,
 			Rhs: []ast.Expr{superVal},
 		})
+	} else if info.errorBase {
+		// The this-free statements before super() run first, then super() fills the
+		// inherited message and name: the message from its argument (the empty string
+		// for a bare super()), the name to "Error" the way the built-in constructor
+		// sets it, before any this.name in the body overrides it.
+		if len(info.preSuper) > 0 {
+			pre, err := r.scopedBlockRange(r.ctorBlock(info), 0, len(info.preSuper))
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, pre.List...)
+		}
+		msg, err := r.errorSuperMessage(info)
+		if err != nil {
+			return nil, err
+		}
+		msgField, _ := info.fieldByName("message")
+		nameField, _ := info.fieldByName("name")
+		r.requireImport(valuePkg)
+		stmts = append(stmts,
+			&ast.AssignStmt{
+				Lhs: []ast.Expr{&ast.SelectorExpr{X: ident(info.recv), Sel: ident(msgField.goName)}},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{msg},
+			},
+			&ast.AssignStmt{
+				Lhs: []ast.Expr{&ast.SelectorExpr{X: ident(info.recv), Sel: ident(nameField.goName)}},
+				Tok: token.ASSIGN,
+				Rhs: []ast.Expr{&ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote("Error")}}}},
+			},
+		)
 	}
 	inits, err := r.fieldInitStmts(info)
 	if err != nil {
@@ -2492,9 +2730,10 @@ func (r *Renderer) ctorBodyStmts(info *classInfo) ([]ast.Stmt, error) {
 		return nil, nil
 	}
 	skip := 0
-	if info.base != nil {
+	if info.base != nil || info.errorBase {
 		// The pre-super statements and the validated super() call are all emitted
-		// by the caller ahead of the base assignment; the body picks up after them.
+		// by the caller ahead of the base assignment (or the inherited message and
+		// name fill for an Error subclass); the body picks up after them.
 		skip = len(info.preSuper) + 1
 	}
 	body, err := r.scopedBlock(r.ctorBlock(info), skip)
@@ -2513,6 +2752,29 @@ func (r *Renderer) ctorBlock(info *classInfo) frontend.Node {
 		}
 	}
 	return block
+}
+
+// errorSuperMessage lowers the message a super(message) hands the built-in Error,
+// or the empty string a bare super() leaves, the value ctorBody stores into the
+// inherited message field. A string-typed argument lowers to a value.BStr and stores
+// raw; a dynamic argument (validateErrorSuper admits those two) boxes and coerces
+// through value.ErrorMessageString, the constructor's rule that undefined leaves the
+// message empty and any other value takes ToString.
+func (r *Renderer) errorSuperMessage(info *classInfo) (ast.Expr, error) {
+	if len(info.superArgs) == 0 {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote("")}}}, nil
+	}
+	arg := info.superArgs[0]
+	if r.isString(arg) {
+		return r.lowerExpr(arg)
+	}
+	boxed, err := r.boxArgToValue(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ErrorMessageString"), Args: []ast.Expr{boxed}}, nil
 }
 
 // superCtorExpr builds the base value a derived constructor stores or folds:
@@ -2592,6 +2854,12 @@ func (r *Renderer) superCtorArgs(info *classInfo) ([]ast.Expr, error) {
 // because a pure expression's evaluation cannot be observed out of order or
 // skipped. Anything else reports ok=false and the general form runs.
 func (r *Renderer) ctorCompositeFold(info *classInfo) (ast.Expr, bool, error) {
+	// An Error subclass fills its inherited message and name through the general
+	// constructor form, which has the super slot that stores them; the fold has no
+	// such slot, so it never folds one.
+	if info.errorBase {
+		return nil, false, nil
+	}
 	// A super() argument that captures the instance, an arrow closing over `this`
 	// passed into the base constructor, reads the receiver the folded one-line
 	// literal has not bound: the fold emits a bare `return &B{A: *NewA(arg)}` with
@@ -3431,8 +3699,8 @@ func (r *Renderer) bracketMethodCall(callee frontend.Node, argNodes []frontend.N
 func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	m, ok := info.staticMethodByName(method)
 	if !ok {
-		if _, isField := info.staticByName(method); isField {
-			return nil, &NotYetLowerable{Reason: "calling static ." + method + " of class " + info.name + " as a function is a later slice"}
+		if f, isField := info.staticByName(method); isField {
+			return r.staticFieldCall(info, f, argNodes)
 		}
 		return nil, &NotYetLowerable{Reason: "class " + info.name + " has no static method ." + method + " this slice lowers"}
 	}
@@ -3470,6 +3738,50 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 		return nil, err
 	}
 	return &ast.CallExpr{Fun: ident(m.goName), Args: args}, nil
+}
+
+// staticFieldCall lowers A.f(args) when f is a static FIELD holding a function
+// value, not a static method: a static field whose type is a function lowers to a
+// package var holding the closure (classKeyRead reads it as ident(f.goName)), so a
+// call of it is that var applied to the arguments, f.goName(args...), the value twin
+// of a static method's package-function call. It covers the shape a static function
+// field takes both when declared in the body (static make = function(){}) and when
+// added as an expando after the class (A.make = function(){}): each stores a closure
+// into the same package var, so each calls it the same way.
+//
+// Only a plain call of an all-required, rest-free function value is lowered: the field
+// value carries no parameter name nodes, so the call-site defaulting a declared method
+// gets (fillOmittedMethodArgs) is unavailable, and a field whose type is not a single
+// callable, or whose call would omit or overflow the parameters, hands back rather than
+// emit a call the var's Go type would reject. Each argument bridges to its parameter
+// type the same way a method call's does, since the var's Go parameter types come from
+// the same function type.
+func (r *Renderer) staticFieldCall(info *classInfo, f classField, argNodes []frontend.Node) (ast.Expr, error) {
+	handBack := &NotYetLowerable{Reason: "calling static ." + f.prop + " of class " + info.name + " as a function is a later slice"}
+	if f.ident == nil {
+		return nil, handBack
+	}
+	call, construct := r.prog.Signatures(r.prog.TypeAt(f.ident))
+	if len(call) != 1 || len(construct) != 0 {
+		return nil, handBack
+	}
+	sig := call[0]
+	if sig.RestParam != nil || len(argNodes) != len(sig.Params) || sig.MinArgs != len(sig.Params) {
+		return nil, handBack
+	}
+	args := make([]ast.Expr, 0, len(sig.Params))
+	for i, a := range argNodes {
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		lowered, err = r.bridgeArg(lowered, a, sig.Params[i].Type)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, lowered)
+	}
+	return &ast.CallExpr{Fun: ident(f.goName), Args: args}, nil
 }
 
 // argForDefaultedSlot returns the expression to lower for argument i of a method
@@ -3658,6 +3970,9 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	if err != nil || !ok {
 		return nil, ok, err
 	}
+	if f.synthBStr && compound {
+		return nil, false, &NotYetLowerable{Reason: "a compound assignment to an inherited Error field is a later slice"}
+	}
 
 	lhs, err := r.lowerExpr(target)
 	if err != nil {
@@ -3680,9 +3995,18 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		rhs, err = r.coerceToTarget(rhs, parts[2], f.ident)
-		if err != nil {
-			return nil, false, err
+		if f.synthBStr {
+			// An inherited Error field is a value.BStr with no ident to coerce against;
+			// a string source lowers straight to a BStr, so it stores as-is, and a
+			// non-string store (this.name = 5) is its own later slice.
+			if !r.isString(parts[2]) {
+				return nil, false, &NotYetLowerable{Reason: "assigning a non-string to an inherited Error field is a later slice"}
+			}
+		} else {
+			rhs, err = r.coerceToTarget(rhs, parts[2], f.ident)
+			if err != nil {
+				return nil, false, err
+			}
 		}
 	}
 

@@ -16,7 +16,6 @@ func Run() float64 {
 	return get()
 }
 func main() {
-	var mid func() float64
 	get = func() float64 {
 		return mid()
 	}

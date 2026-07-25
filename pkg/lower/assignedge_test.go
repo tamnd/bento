@@ -154,10 +154,10 @@ func TestMemberCompoundValueRuns(t *testing.T) {
 	// (o.k += v), (o[k] += v), and a class field compound all evaluate to the updated
 	// value, the same as the store the statement form performs.
 	cases := map[string]string{
-		"dynamic-dot":  `const o: any = { k: 10 }; const r: number = (o.k += 5); console.log(r); console.log(o.k);`,
-		"dynamic-idx":  `const o: any = { k: 10 }; const key = "k"; const r: number = (o[key] += 5); console.log(r); console.log(o[key]);`,
-		"objlit-dot":   `const o = { k: 10 }; const r = (o.k += 5); console.log(r); console.log(o.k);`,
-		"class-field":  `class C { x = 10; } const c = new C(); const r = (c.x += 5); console.log(r); console.log(c.x);`,
+		"dynamic-dot": `const o: any = { k: 10 }; const r: number = (o.k += 5); console.log(r); console.log(o.k);`,
+		"dynamic-idx": `const o: any = { k: 10 }; const key = "k"; const r: number = (o[key] += 5); console.log(r); console.log(o[key]);`,
+		"objlit-dot":  `const o = { k: 10 }; const r = (o.k += 5); console.log(r); console.log(o.k);`,
+		"class-field": `class C { x = 10; } const c = new C(); const r = (c.x += 5); console.log(r); console.log(c.x);`,
 	}
 	for name, src := range cases {
 		if got, want := runProgramGoTolerant(t, src), "15\n15\n"; got != want {

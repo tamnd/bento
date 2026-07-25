@@ -189,6 +189,20 @@ func NewError(message BStr) *Error {
 	return &Error{name: FromGoString("Error"), message: message}
 }
 
+// ErrorMessageString coerces a dynamic value to the message string the Error
+// constructor stores. The constructor (20 §20.5.1.1) sets the message only when the
+// argument is not undefined, leaving the empty string otherwise, and coerces a
+// present argument with ToString: new Error(undefined).message is "", but
+// new Error(0).message is "0". It backs an Error subclass whose super() argument is
+// not statically a string, where the lowered argument is a value.Value the inherited
+// message field cannot take raw.
+func ErrorMessageString(v Value) BStr {
+	if v.Kind() == KindUndefined {
+		return FromGoString("")
+	}
+	return ToString(v)
+}
+
 // NewTypeError constructs a TypeError, the lowering of new TypeError(message) and
 // the error a failed type guard raises.
 func NewTypeError(message BStr) *Error {

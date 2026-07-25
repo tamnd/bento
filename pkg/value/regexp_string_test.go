@@ -80,6 +80,42 @@ func TestRegExpReplaceStr(t *testing.T) {
 	}
 }
 
+// ReplaceFuncStr calls the function with each matched substring and substitutes what
+// it returns: a non-global regexp replaces the first match, a global one every match,
+// and an empty-matching global pattern advances one code unit per step so the walk
+// terminates. ReplaceAllFuncStr requires a global regexp and throws otherwise.
+func TestRegExpReplaceFuncStr(t *testing.T) {
+	bracket := func(m BStr) BStr { return FromGoString("[" + m.ToGoString() + "]") }
+	first := NewRegExpLiteral("a", "").ReplaceFuncStr(FromGoString("banana"), bracket)
+	if first.ToGoString() != "b[a]nana" {
+		t.Errorf("non-global replace func = %q, want b[a]nana", first.ToGoString())
+	}
+	all := NewRegExpLiteral("a", "g").ReplaceFuncStr(FromGoString("banana"), bracket)
+	if all.ToGoString() != "b[a]n[a]n[a]" {
+		t.Errorf("global replace func = %q, want b[a]n[a]n[a]", all.ToGoString())
+	}
+	miss := NewRegExpLiteral("z", "").ReplaceFuncStr(FromGoString("banana"), bracket)
+	if miss.ToGoString() != "banana" {
+		t.Errorf("replace func on a miss = %q, want banana", miss.ToGoString())
+	}
+	empty := NewRegExpLiteral("x*", "g").ReplaceFuncStr(FromGoString("ab"), bracket)
+	if empty.ToGoString() != "[]a[]b[]" {
+		t.Errorf("empty-pattern global replace func = %q, want []a[]b[]", empty.ToGoString())
+	}
+	allF := NewRegExpLiteral("a", "g").ReplaceAllFuncStr(FromGoString("banana"), bracket)
+	if allF.ToGoString() != "b[a]n[a]n[a]" {
+		t.Errorf("replaceAll func = %q, want b[a]n[a]n[a]", allF.ToGoString())
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("ReplaceAllFuncStr on a non-global regexp did not throw")
+			}
+		}()
+		NewRegExpLiteral("a", "").ReplaceAllFuncStr(FromGoString("a"), bracket)
+	}()
+}
+
 // split cuts the subject at each separator match, includes each capture group of the
 // separator between the pieces, honors the limit, and handles the empty subject.
 func TestRegExpSplitStr(t *testing.T) {

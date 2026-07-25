@@ -15,11 +15,14 @@ func TestArrayToSortedEmitsMethod(t *testing.T) {
 	}
 }
 
-// TestArrayToSortedNoComparatorHandsBack pins that a toSorted call without a
-// comparator, which would need the default string-order sort, is a later slice.
-func TestArrayToSortedNoComparatorHandsBack(t *testing.T) {
+// TestArrayToSortedNoComparatorLowers pins that a toSorted call without a comparator
+// lowers to the synthesized default string-order comparator rather than handing back.
+func TestArrayToSortedNoComparatorLowers(t *testing.T) {
 	src := "const a = [3, 1, 2];\nconsole.log(a.toSorted().join(\",\"));\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".ToSorted(func(a, b") {
+		t.Errorf("toSorted with no comparator did not synthesize a default comparator:\n%s", source)
+	}
 }
 
 // TestArrayToSortedRuns builds and runs toSorted against the Node oracle,

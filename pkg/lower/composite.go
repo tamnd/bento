@@ -453,7 +453,16 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 		return r.arrayFromDynamic(argNodes)
 	}
 	if len(argNodes) > 1 {
-		return nil, &NotYetLowerable{Reason: "Array.from with a map callback into a typed array is a later slice"}
+		// Array.from(arr, fn) over a real array is exactly arr.map(fn): the callback
+		// receives each element and its result becomes the new element, so the array
+		// map lowering already spells the whole thing (src.Map(fn) for a same-type
+		// callback, value.MapArray[T, U](src, fn) for a type-changing one). A
+		// non-array source (a string or user iterable) with a map callback, and the
+		// index parameter map itself does not yet thread, stay a later slice.
+		if _, ok := r.arrayElem(argNodes[0]); ok {
+			return r.arrayMapFilter(argNodes[0], "Map", argNodes[1:], true)
+		}
+		return nil, &NotYetLowerable{Reason: "Array.from with a map callback over a non-array source is a later slice"}
 	}
 	elemType, ok := r.arrayElem(call)
 	if !ok {
@@ -1704,6 +1713,15 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
 	}
+	// A callback taking (element, index) reads the position, so it lowers to the
+	// index-aware runtime variant (MapIndex/FilterIndex, or MapArrayIndex for a
+	// type-changing map), whose callback is func(T, float64) U. A callback that also
+	// reads the third array parameter is a later slice. A zero- or one-parameter
+	// callback stays the element-only path below.
+	if r.arrowParamCount(argNodes[0]) >= 3 {
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the array parameter is a later slice"}
+	}
+	index := r.arrowParamCount(argNodes[0]) == 2
 	// A callback that ignores its element, () => expr, lowers to a zero-parameter func
 	// literal, but the array method and the value.MapArray free function both take a
 	// func(T) U over the element type. Pad the missing element parameter off the
@@ -1740,11 +1758,18 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 				return nil, err
 			}
 			r.requireImport(valuePkg)
+			mapArrayFn := "MapArray"
+			if index {
+				mapArrayFn = "MapArrayIndex"
+			}
 			return &ast.CallExpr{
-				Fun:  &ast.IndexListExpr{X: sel("value", "MapArray"), Indices: []ast.Expr{elemType, bodyType}},
+				Fun:  &ast.IndexListExpr{X: sel("value", mapArrayFn), Indices: []ast.Expr{elemType, bodyType}},
 				Args: []ast.Expr{recv, fn},
 			}, nil
 		}
+	}
+	if index {
+		goMethod += "Index"
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -1772,8 +1797,14 @@ func (r *Renderer) arrayCallbackMethod(recvNode frontend.Node, goMethod string, 
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
 	}
-	if r.arrowParamCount(argNodes[0]) != 1 {
-		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the index or array parameter is a later slice"}
+	switch r.arrowParamCount(argNodes[0]) {
+	case 1:
+		// element-only callback: the base method as named.
+	case 2:
+		// (element, index) callback: route to the index-aware variant.
+		goMethod = arrayCallbackIndexName[goMethod]
+	default:
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the array parameter is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -1788,12 +1819,27 @@ func (r *Renderer) arrayCallbackMethod(recvNode frontend.Node, goMethod string, 
 	// lowers to a func that returns that body's value and does not fit, so it is wrapped
 	// to drive the call for effect and drop the result, the way forEach ignores it. some
 	// and every keep their func(T) bool result, so only forEach adapts.
-	if goMethod == "ForEach" {
+	if goMethod == "ForEach" || goMethod == "ForEachIndex" {
 		if lit, ok := fn.(*ast.FuncLit); ok && lit.Type.Results != nil {
 			fn = r.dropFuncResult(lit)
 		}
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// arrayCallbackIndexName maps each element-only callback method to the runtime
+// variant that also threads the element index, the (element, index) shape
+// JavaScript passes. find and findLast use distinct names (FindIndexed,
+// FindLastIndexed) to avoid colliding with FindIndex/FindLastIndex, which return
+// the position rather than the element.
+var arrayCallbackIndexName = map[string]string{
+	"Some":          "SomeIndex",
+	"Every":         "EveryIndex",
+	"ForEach":       "ForEachIndex",
+	"Find":          "FindIndexed",
+	"FindIndex":     "FindIndexIndex",
+	"FindLast":      "FindLastIndexed",
+	"FindLastIndex": "FindLastIndexIndex",
 }
 
 // dropFuncResult wraps a function literal that returns a value in an adapter that
@@ -1872,8 +1918,14 @@ func (r *Renderer) arrayFold(recvNode frontend.Node, argNodes []frontend.Node, f
 	if arrow.Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array reduce with a callback that is not an inline arrow function is a later slice"}
 	}
-	if r.arrowParamCount(arrow) != 2 {
-		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the index or array parameter is a later slice"}
+	switch r.arrowParamCount(arrow) {
+	case 2:
+		// (accumulator, element) callback: the free function as named.
+	case 3:
+		// (accumulator, element, index) callback: the index-aware variant.
+		freeFn += "Index"
+	default:
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the array parameter is a later slice"}
 	}
 	elemType, ok := r.arrayElem(recvNode)
 	if !ok {
@@ -1915,8 +1967,14 @@ func (r *Renderer) arrayFoldNoInit(recvNode frontend.Node, arrow frontend.Node, 
 	if arrow.Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array reduce with a callback that is not an inline arrow function is a later slice"}
 	}
-	if r.arrowParamCount(arrow) != 2 {
-		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the index or array parameter is a later slice"}
+	switch r.arrowParamCount(arrow) {
+	case 2:
+		// (accumulator, element) callback: the method as named.
+	case 3:
+		// (accumulator, element, index) callback: the index-aware variant.
+		methodFn += "Index"
+	default:
+		return nil, &NotYetLowerable{Reason: "array reduce with a callback that reads the array parameter is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -2279,7 +2337,15 @@ func (r *Renderer) arraySort(recvNode frontend.Node, argNodes []frontend.Node) (
 // an inline two-parameter arrow is a later slice, the same limits sort had.
 func (r *Renderer) arraySortMethod(recvNode frontend.Node, goMethod string, argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) == 0 {
-		return nil, &NotYetLowerable{Reason: "array " + goMethod + " without a comparator needs the default string-order sort, a later slice"}
+		cmp, err := r.defaultSortComparator(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		recv, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{cmp}}, nil
 	}
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array " + goMethod + " with a comparator that is not an inline arrow function is a later slice"}
@@ -2305,35 +2371,82 @@ func (r *Renderer) arraySortMethod(recvNode frontend.Node, goMethod string, argN
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{cmp}}, nil
 }
 
+// defaultSortComparator synthesizes the comparator sort and toSorted use when the
+// call gives none. JavaScript's default order coerces every element to a string and
+// compares two elements by UTF-16 code unit, so [10, 9, 100, 1] orders as
+// 1, 10, 100, 9 (lexicographically, not numerically). It builds
+//
+//	func(a, b T) float64 { return float64(<a as string>.Compare(<b as string>)) }
+//
+// reading each element to a value.BStr the same way join does (elemToBStr) and
+// comparing with value.BStr.Compare, which returns -1/0/1 by code unit. An element
+// type whose ToString would run user code hands back, the same boundary join draws.
+func (r *Renderer) defaultSortComparator(recvNode frontend.Node) (ast.Expr, error) {
+	elemGo, ok := r.arrayElem(recvNode)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array default-order sort on a receiver whose element type did not lower"}
+	}
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "array default-order sort could not read its element type"}
+	}
+	lhs, err := r.elemToBStr(elem, ident("a"))
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := r.elemToBStr(elem, ident("b"))
+	if err != nil {
+		return nil, err
+	}
+	compare := &ast.CallExpr{Fun: &ast.SelectorExpr{X: lhs, Sel: ident("Compare")}, Args: []ast.Expr{rhs}}
+	body := &ast.ReturnStmt{Results: []ast.Expr{&ast.CallExpr{Fun: ident("float64"), Args: []ast.Expr{compare}}}}
+	params := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("a"), ident("b")}, Type: elemGo}}}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: ident("float64")}}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{body}},
+	}, nil
+}
+
 // stringifyClosure builds the func(T) value.BStr the join method takes, spelling
 // out the element-type ToString. It mirrors stringify but over a synthesized
 // parameter rather than a node: a number goes through value.NumberToString, a
 // boolean through value.BoolToString, and a string is returned as is. Any other
 // element type, whose ToString would run user code, hands back.
 func (r *Renderer) stringifyClosure(elem frontend.Type, elemGo ast.Expr) (ast.Expr, error) {
-	var body ast.Expr
-	switch {
-	case elem.Flags&frontend.TypeString != 0:
-		body = ident("x")
-	case elem.Flags&frontend.TypeNumber != 0:
-		r.requireImport(valuePkg)
-		body = &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{ident("x")}}
-	case elem.Flags&frontend.TypeBoolean != 0:
-		r.requireImport(valuePkg)
-		body = &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{ident("x")}}
-	case elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
-		// A dynamic element is a boxed value.Value, so join runs the abstract
-		// ToString on each one at runtime, with join's own rule that undefined and
-		// null become the empty string. This is the shape the assert prelude's
-		// compareArray.format reaches through Array.prototype.map.call(...).join.
-		r.requireImport(valuePkg)
-		body = &ast.CallExpr{Fun: sel("value", "JoinString"), Args: []ast.Expr{ident("x")}}
-	default:
-		return nil, &NotYetLowerable{Reason: "array join on an element type without a value ToString is a later slice"}
+	body, err := r.elemToBStr(elem, ident("x"))
+	if err != nil {
+		return nil, err
 	}
 	params := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("x")}, Type: elemGo}}}
 	return &ast.FuncLit{
 		Type: &ast.FuncType{Params: params, Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "BStr")}}}},
 		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{body}}}},
 	}, nil
+}
+
+// elemToBStr spells out the element-type ToString over an already-lowered operand,
+// producing a value.BStr: a number goes through value.NumberToString, a boolean
+// through value.BoolToString, a string is returned as is, and a dynamic element runs
+// the abstract JoinString (undefined and null become the empty string). Any other
+// element type, whose ToString would run user code, hands back. Both join's
+// per-element closure and sort's default-order comparator read elements this way.
+func (r *Renderer) elemToBStr(elem frontend.Type, arg ast.Expr) (ast.Expr, error) {
+	switch {
+	case elem.Flags&frontend.TypeString != 0:
+		return arg, nil
+	case elem.Flags&frontend.TypeNumber != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{arg}}, nil
+	case elem.Flags&frontend.TypeBoolean != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{arg}}, nil
+	case elem.Flags&frontend.TypeBigInt != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{arg}}, nil
+	case elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0:
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "JoinString"), Args: []ast.Expr{arg}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "coercing this array element type to a string is a later slice"}
+	}
 }

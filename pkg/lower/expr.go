@@ -22,6 +22,18 @@ import (
 func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	switch n.Kind() {
 	case frontend.NodeIdentifier:
+		// A bare reference to the arguments object, used as a whole value (passed to a
+		// call, spread, assigned), boxes the parameter snapshot this body materialized
+		// into a dynamic array value. `arguments` is a reserved word in the strict-mode
+		// code bento compiles, so an identifier spelled arguments is always the implicit
+		// arguments object, never a user binding. The .length, arguments[i], and for..of
+		// arguments forms have their own reads and reach here only as a bare value use.
+		// When no snapshot is in scope (argsObjName empty) this falls through to the
+		// ordinary name handling, which reports the read the plan could not back.
+		if r.argsObjName != "" && r.prog.Text(n) == "arguments" {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "ArgumentsValue"), Args: []ast.Expr{ident(r.argsObjName)}}, nil
+		}
 		// A bare reference to a go: import binding used as a value is a constant read
 		// into the Go package, marshaled by the constant's Go type. It is checked by the
 		// binding's own text, the key the import recorded, before the local-name path,
@@ -54,6 +66,29 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// rather than the exported Inc and name a Go symbol the composition never
 		// declared. A non-alias local derefs to itself, so the deref is safe on any
 		// binding.
+		// A local bound to a boxed value.Value slot reads by its own Go name even when
+		// its symbol aliases a function, the shape const f = require('./fn') takes: the
+		// checker aliases f to the module's exported function so the function flag is set,
+		// but the binding holds the value.Value the loader returned, not the Go func the
+		// capitalized export names. So the boxed local shadows the function routing below
+		// and reads as its source name, the slot every other read and the dynamic call
+		// site use.
+		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
+			return ident(name), nil
+		}
+		// A named function declaration that is also a callable object (it carries own
+		// data properties) lowers to a struct-typed package var, not a Go func, so a
+		// value read of it reads that var by its source name, the slot the property
+		// writes and the call path both use. Routing it through the function-symbol
+		// path below would capitalize it to the exported func spelling the callable
+		// never took, and no such func exists. An ambient global (String, Symbol,
+		// Number) is itself a callable object but is not a user binding and has no
+		// package var, so it is excluded and keeps its own routing below.
+		if !r.isAmbientGlobal(n) && r.isCallableObject(r.prog.TypeAt(n)) {
+			if name, ok := localName(r.prog.Text(n)); ok {
+				return ident(name), nil
+			}
+		}
 		if sym, ok := r.prog.SymbolAt(n); ok && r.derefAlias(sym).Flags&frontend.SymbolFunction != 0 {
 			sym = r.derefAlias(sym)
 			// A nested function declaration bound to a Go local reads by that local
@@ -117,6 +152,41 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isUndefinedLiteral(n) {
 			r.requireImport(valuePkg)
 			return sel("value", "Undefined"), nil
+		}
+		// __dirname and __filename are the CommonJS module-path globals, each a
+		// string fixed for the module. bento composes the program from its modules at
+		// compile time, so the path the reference resolves to is known here and lowers
+		// to the value.BStr of the module file's directory or its own path, read off
+		// the node's own file so a reference resolves against its module, not the
+		// entry. Left to fall through, they would hit the ambient-global handback below.
+		if r.isGlobalRef(n, "__dirname") {
+			return r.dirnameLit(n), nil
+		}
+		if r.isGlobalRef(n, "__filename") {
+			return r.filenameLit(n), nil
+		}
+		// module and exports are the CommonJS export globals. Each reads as a
+		// package-level value.Object the program emits once: module carries an exports
+		// property, exports aliases the object that property starts at. A member access
+		// like module.exports or exports.x lowers through the ordinary dynamic path from
+		// the object this returns, so only the bare name is modeled here. The predicate
+		// recognizes the checker's synthesized CommonJS export symbol, which isGlobalRef
+		// cannot because that symbol's declarations sit in the source file rather than a
+		// .d.ts. Left to fall through, the name would hit the ambient-global handback.
+		if r.isCommonJSModuleGlobal(n) {
+			if r.prog.Text(n) == "module" {
+				return r.moduleRef(), nil
+			}
+			return r.exportsRef(), nil
+		}
+		// require is the CommonJS loader global. It reads as a package-level function
+		// value the program emits once, so typeof require is "function" and a call
+		// require(specifier) lowers through the dynamic call path from that value. It is
+		// a plain ambient any (not subject to the export inference module and exports
+		// take), so isGlobalRef settles it. Left to fall through, the name would hit the
+		// ambient-global handback below and emit an undefined Go identifier.
+		if r.isGlobalRef(n, "require") {
+			return r.requireRef(), nil
 		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
@@ -338,6 +408,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isDeleteExpr(n) {
 			return r.deleteExpr(n)
 		}
+		if r.isVoidExpr(n) {
+			return r.voidExpr(n)
+		}
 		// A regexp literal in a value position also surfaces as the catch-all node,
 		// told apart by its RegExp type and /body/flags source. It lowers to the
 		// *value.RegExp it constructs; a literal used as a replace or split pattern is
@@ -485,6 +558,16 @@ func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, tr
 	if r.isOptionalType(target) {
 		return r.conditionalOptional(cond, whenTrue, trueNode, whenFalse, falseNode, target)
 	}
+	// A ternary whose whole-expression type is dynamic (any or unknown), the shape a
+	// branch reading an any-typed value gives: `i >= 0 ? arguments[i] : fallback`
+	// types as any because arguments[i] is any, so the checker absorbs the other
+	// branch rather than forming a tagged sum. No union spells it, so each branch
+	// bridges to a value.Value the way an argument crossing into an any parameter
+	// does, a static branch boxing and a dynamic branch passing through, and the IIFE
+	// returns value.Value.
+	if target.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return r.conditionalDynamic(cond, whenTrue, trueNode, whenFalse, falseNode, target)
+	}
 	info, ok := r.unionInfoOrIntern(target)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "conditional whose branches are not both the same primitive type needs a union, a later slice"}
@@ -508,6 +591,42 @@ func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, tr
 				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{trueWrapped}}}},
 			},
 			&ast.ReturnStmt{Results: []ast.Expr{falseWrapped}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
+}
+
+// conditionalDynamic lowers a ternary whose whole-expression type is dynamic (any
+// or unknown) into an IIFE returning value.Value, bridging each branch to the
+// dynamic target the same way an argument crosses into an any parameter: a static
+// branch boxes through boxStaticToDynamic and a branch already dynamic passes
+// through. It is the any-typed sibling of conditionalUnion, reached when one branch
+// reads an any-typed value (an arguments element, a member off a boxed receiver) so
+// the checker types the whole ternary any and no tagged sum can spell it. A branch
+// bridgeArg cannot cross, an array or shape mismatch against the dynamic slot, hands
+// back through bridgeArg with its own reason. The condition and both branches are
+// already lowered by the caller.
+func (r *Renderer) conditionalDynamic(cond, whenTrue ast.Expr, trueNode frontend.Node, whenFalse ast.Expr, falseNode frontend.Node, target frontend.Type) (ast.Expr, error) {
+	trueBoxed, err := r.bridgeArg(whenTrue, trueNode, target)
+	if err != nil {
+		return nil, err
+	}
+	falseBoxed, err := r.bridgeArg(whenFalse, falseNode, target)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: cond,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{trueBoxed}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{falseBoxed}},
 		}},
 	}
 	return &ast.CallExpr{Fun: lit}, nil
@@ -1116,6 +1235,12 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 	// error against a built-in error constructor is covered here, and any other
 	// instanceof hands back until class-instance narrowing lands.
 	if opText == "instanceof" {
+		// e instanceof Error on an instance of a class that extends Error folds to true
+		// at compile time, before the caught-binding path, since such an instance is not
+		// a caught error but its static type already answers the test.
+		if expr, ok := r.errorSubclassInstanceof(left, right); ok {
+			return expr, nil
+		}
 		expr, handled, err := r.errorInstanceof(left, right)
 		if err != nil {
 			return nil, err
@@ -2017,6 +2142,22 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 	case r.isBigInt(n):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{e}}, nil
+	case r.prog.TypeAt(n).Flags == frontend.TypeUndefined && r.repeatableOperand(n):
+		// A value typed exactly undefined concatenates as "undefined" ("x" + undefined is
+		// "xundefined"). A reference to it lowers to the value.Undefined singleton, a
+		// value.Value, so it coerces through value.ToString the way a dynamic operand does,
+		// reading the singleton back as "undefined", rather than through boxOperand, which
+		// has no case for a static undefined type and would hand back. The repeatable gate
+		// keeps this to a reference; an undefined-returning call has no value to take. This
+		// is the concat sibling of the same case in stringify, so "x" + undefined and
+		// `${undefined}` agree.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
+	case r.isRegExp(n):
+		// A regexp operand coerces through RegExp.prototype.toString, "/" + source + "/"
+		// + flags, the same literal form String(re) and a template substitution produce,
+		// so "x" + re reads off the concrete *value.RegExp with no boxing.
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToStringBStr")}}, nil
 	case r.isDynamic(n):
 		// A dynamic operand coerces at runtime through the value model's
 		// ToString, which routes an object or array through ToPrimitive the

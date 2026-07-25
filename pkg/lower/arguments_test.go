@@ -305,10 +305,43 @@ console.log(f(7, 8));
 	}
 }
 
-// TestArgumentsUsedAsValueHandsBack proves a bare read of arguments that no backed
-// shape consumes hands back, since passing the arity object around is a later slice.
-func TestArgumentsUsedAsValueHandsBack(t *testing.T) {
+// TestArgumentsUsedAsValueBoxes proves a bare read of arguments used as a whole value
+// boxes the parameter snapshot through value.ArgumentsValue, so passing the arguments
+// object around lowers rather than hands back.
+func TestArgumentsUsedAsValueBoxes(t *testing.T) {
 	const src = "function f(a: number): unknown { return arguments; }\n" +
+		"f(1);\n"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.ArgumentsValue(") {
+		t.Fatalf("a bare arguments value did not box through value.ArgumentsValue:\n%s", out)
+	}
+}
+
+// TestArgumentsUsedAsValueRuns builds and runs a body that returns its arguments as a
+// value: the boxed snapshot reports its length, answers its indices, and reads typeof
+// "object", all through the dynamic value model.
+func TestArgumentsUsedAsValueRuns(t *testing.T) {
+	src := `
+function pack(a: number, b: number, c: number): unknown {
+  return arguments;
+}
+const args: any = pack(10, 20, 30);
+console.log(args.length);
+console.log(args[0], args[1], args[2]);
+console.log(typeof args);
+`
+	got := runProgramGo(t, src)
+	want := "3\n10 20 30\nobject\n"
+	if got != want {
+		t.Fatalf("arguments used as a value ran wrong\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestArgumentsDotCalleeHandsBack proves that a property of the arguments object other
+// than length or an index (callee, caller) is not backed by the snapshot, so the whole
+// function hands back rather than box the object and read undefined off the array.
+func TestArgumentsDotCalleeHandsBack(t *testing.T) {
+	const src = "function f(a: number): unknown { return arguments.callee; }\n" +
 		"f(1);\n"
 	renderProgramHandBack(t, src)
 }

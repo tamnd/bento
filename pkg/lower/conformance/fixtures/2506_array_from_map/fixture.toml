@@ -1,0 +1,1 @@
+feature = "Array.from over an array with a map callback"

@@ -9,7 +9,10 @@ import (
 // where the checker narrowed it to one primitive, past a typeof guard, goes
 // through the matching accessor, so the static expression around it takes the
 // unboxed Go value. A read still typed any keeps the bare box for the runtime
-// helper it flows into.
+// helper it flows into. The final String(x) over the still-dynamic x takes the
+// String built-in's symbol-descriptive coercion (value.StringCoerce), which
+// reports Symbol(desc) rather than throwing, the one way String(x) differs from
+// a bare ToString.
 func TestDynNarrowedReadEmits(t *testing.T) {
 	const src = `function f(x: any): string {
   if (typeof x === 'string') {
@@ -30,7 +33,7 @@ console.log(f("s"));
 		"value.Concat(value.FromGoString(\"v=\"), x.AsString())",
 		"x.AsNumber() * 2",
 		"if x.AsBool() {",
-		"value.ToString(x)",
+		"value.StringCoerce(x)",
 	} {
 		if !strings.Contains(source, want) {
 			t.Errorf("narrowed dynamic read did not print %q:\n%s", want, source)

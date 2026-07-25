@@ -276,3 +276,55 @@ console.log(String(Color["Blue"]));
 		t.Fatalf("plain enum bracket read run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestEnumReverseLiteralFolds pins the compile-time fold: a numeric-literal index
+// resolves straight to the member name, so Color[1] emits the name string with no
+// switch, and a no-match literal folds to the empty string.
+func TestEnumReverseLiteralFolds(t *testing.T) {
+	const src = "enum Color { R, G, B }\nconsole.log(Color[1], Color[999]);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, `value.FromGoString("G")`) {
+		t.Fatalf("literal reverse read Color[1] did not fold to the member name:\n%s", source)
+	}
+	if strings.Contains(source, "switch") {
+		t.Fatalf("literal reverse read emitted a switch instead of folding:\n%s", source)
+	}
+}
+
+// TestEnumReverseRuntimeSwitches pins the runtime arm: a number-typed index rides a
+// switch over the distinct member values inside a value.BStr-returning closure.
+func TestEnumReverseRuntimeSwitches(t *testing.T) {
+	const src = "enum Color { R, G, B }\nconst n: number = 2;\nconsole.log(Color[n]);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "func(_bt0 float64) value.BStr") {
+		t.Fatalf("runtime reverse read did not emit the BStr closure:\n%s", source)
+	}
+	for _, want := range []string{`return value.FromGoString("R")`, `return value.FromGoString("G")`, `return value.FromGoString("B")`} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("runtime reverse read is missing case %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestEnumReverseRuns builds and runs the reverse mapping and matches Node: a literal
+// index, a runtime index, an enum-valued index (Color[Color.G]), a non-contiguous
+// value, and a duplicate-valued enum whose reverse map keeps the last member.
+func TestEnumReverseRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = `enum Color { R, G, B }
+console.log(Color[0], Color[1], Color[2]);
+const n: number = 2;
+console.log(Color[n]);
+console.log(Color[Color.G]);
+enum E { A = 1, B = 5, C = 10 }
+const m: number = 5;
+console.log(E[m], E[10], E[1]);
+enum D { A = 0, B = 0 }
+console.log(D[0]);
+`
+	got := runProgramGo(t, src)
+	want := "R G B\nB\nG\nB C A\nB\n"
+	if got != want {
+		t.Fatalf("enum reverse-map run mismatch:\n got %q\nwant %q", got, want)
+	}
+}

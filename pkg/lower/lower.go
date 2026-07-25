@@ -58,13 +58,13 @@ func (e *NotYetLowerable) Error() string {
 // type identity (05_type_lowering.md section 29), which is only stable within
 // one program.
 type Renderer struct {
-	prog    *frontend.Program
+	prog *frontend.Program
 	// programStrict is set when the entry module opens with a "use strict" directive
 	// prologue, so a member store lowers to the throwing SetStrict rather than the
 	// silent-drop Set, the way a strict script observes a failed assignment.
 	programStrict bool
-	decls   *declSet
-	imports map[string]bool
+	decls         *declSet
+	imports       map[string]bool
 	// nodeImports maps a local binding name introduced by a node: import to the
 	// builtin it names, so a call to that binding lowers to the value helper the
 	// builtin maps to rather than a user function. It is populated once from the
@@ -265,6 +265,16 @@ type Renderer struct {
 	// dynLocals so one function's rest bindings do not leak into another's reads. A nil
 	// map (the default) marks nothing.
 	dynBoundLocals map[string]bool
+	// forceDynParams is the set of parameter name nodes a boxed callback lowers as a
+	// dynamic value.Value field rather than the static Go type the slot's signature
+	// gives them. A listener passed to a dynamic addEventListener has its parameter
+	// typed Event by the standard library, a runtime-only interface bento cannot spell
+	// as a Go field and whose members it reads through the value model. When boxOperand
+	// boxes such a callback it records each unspellable parameter here so
+	// closureParamFields emits a value.Value field for it, and marks its name dynamic so
+	// the body reads it through Get; the boxed call passes a value.Value into that slot
+	// anyway, so nothing is lost. A nil map (the default) forces nothing.
+	forceDynParams map[frontend.Node]bool
 	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
 	// the block currently lowering. A proxy holds its target by identity and dispatches
 	// its traps off the live object, so a write through the proxy and a mutation of the
@@ -384,6 +394,55 @@ type Renderer struct {
 	// each queued .then callback in order. A program that mints no promise drains
 	// nothing, so its main is unchanged.
 	usesPromise bool
+	// usesExitCallbacks records that the program registered a process 'exit' listener
+	// with process.on('exit', fn), so the assembled main runs the registered callbacks
+	// once at its very end (value.RunExitCallbacks), after the microtask drain, the
+	// point Node fires the exit event: the event loop is empty and the process is about
+	// to exit. The callbacks run in registration order, the order the runtime list
+	// keeps them. A program that registers no exit listener runs nothing, so its main is
+	// unchanged. This is what lets common.mustCall, which asserts on exit that a wrapped
+	// function ran the expected number of times, observe the run.
+	usesExitCallbacks bool
+	// usesMicrotask records that the program called queueMicrotask, so the assembled
+	// main drains the microtask queue at its end (value.RunMicrotasks) even when the
+	// program minted no promise. queueMicrotask and a promise share one queue, so a
+	// program that scheduled a microtask through either needs the drain; this flag adds
+	// the queueMicrotask half to the usesPromise half the drain already gated on.
+	usesMicrotask bool
+	// usesCommonJSModule records that the program read the CommonJS module or exports
+	// wrapper global, so the assembled program emits the package-level module object
+	// and its exports alias (see commonjs.go). A module object is one value.Object with
+	// an exports property; the exports alias holds the same object the property starts
+	// at, so exports.x and module.exports.x reach one object, and a later
+	// module.exports = v reassigns the property without moving the alias, the divergence
+	// Node's wrapper has. A program that names neither global emits no such state.
+	usesCommonJSModule bool
+	// usesCommonJSRequire records that the program read the CommonJS require wrapper
+	// global, so the assembled program emits the package-level require function value
+	// (see commonjs.go). It is independent of usesCommonJSModule: a module can call
+	// require without ever touching module or exports, and one that does emits the
+	// require function alone.
+	usesCommonJSRequire bool
+	// requiredLoaders maps a CommonJS module reached by require, keyed by its resolved
+	// absolute path, to the base identifier its loader emits under. It is populated
+	// before any body lowers, so a require call in the entry or in another required
+	// module resolves its literal specifier to the target's loader name and lowers to
+	// a direct call on it. A path absent from the map is a specifier the compiler could
+	// not resolve to a sibling module, so its require falls through to the throwing
+	// require value instead.
+	requiredLoaders map[string]string
+	// requiredModuleActive is true while the body of a required CommonJS module is
+	// lowering, so the module and exports globals resolve to the loader's own module
+	// and exports locals rather than the entry's package-level objects. Each module
+	// has its own exports, so a shared package var would let two modules clobber one
+	// exports object; the loader-local binding keeps them separate.
+	requiredModuleActive bool
+	// reqUsesExports records that the required module body currently lowering read the
+	// exports global, so the loader declares the exports local only when the body names
+	// it. The module local is always declared, since the loader itself reads and
+	// finishes it; a body that never touches exports would leave an unused local and
+	// fail the Go build without this.
+	reqUsesExports bool
 	// tmpSeq is a monotonic counter the lowerer draws generated temporary names from,
 	// for the places a single source construct needs a Go local with no source name:
 	// the element a destructuring for...of binds before it reads each position out of

@@ -1,0 +1,8 @@
+== stdout:
+a%20b%26c%3Dd
+42
+true
+http://a.b/x%20y?q=1
+MTIz
+== exit:
+0

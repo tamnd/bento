@@ -621,15 +621,33 @@ func (s BStr) ReplaceAll(search, replacement BStr) BStr {
 }
 
 // Split divides the string on each occurrence of a string separator and returns
-// the pieces, String.prototype.split(separator) in its string-separator form
-// (the regexp form and the optional limit are not modeled here; the compiler
-// hands those back). The pieces are cut on code-unit boundaries, so a separator
-// that occurs at the start or end yields an empty leading or trailing piece and a
-// separator that does not occur yields the whole string as the one piece, exactly
-// as JavaScript does. An empty separator splits into single code units, and the
-// empty string split by an empty separator is the empty array, the two edges the
-// specification calls out.
-func (s BStr) Split(sep BStr) *Array[BStr] {
+// the pieces, String.prototype.split(separator, limit) in its string-separator
+// form (the regexp form hands back in the compiler). The pieces are cut on
+// code-unit boundaries, so a separator that occurs at the start or end yields an
+// empty leading or trailing piece and a separator that does not occur yields the
+// whole string as the one piece, exactly as JavaScript does. An empty separator
+// splits into single code units, and the empty string split by an empty
+// separator is the empty array, the two edges the specification calls out.
+//
+// The optional limit is variadic so one Go signature covers split(sep) and
+// split(sep, n): it is coerced through ToUint32 the way the specification's split
+// caps the result, a limit of zero yields the empty array, and a limit shorter
+// than the piece count truncates the result to that many leading pieces (the rest
+// are not rejoined). An absent limit leaves the split unbounded.
+func (s BStr) Split(sep BStr, limit ...float64) *Array[BStr] {
+	lim := -1
+	if len(limit) > 0 {
+		lim = int(ToUint32(limit[0]))
+		if lim == 0 {
+			return &Array[BStr]{elems: []BStr{}}
+		}
+	}
+	capped := func(out []BStr) *Array[BStr] {
+		if lim >= 0 && len(out) > lim {
+			out = out[:lim]
+		}
+		return &Array[BStr]{elems: out}
+	}
 	s, sep = s.flat(), sep.flat()
 	// Fast path: the receiver and the separator are both valid UTF-8 and the
 	// separator is non-empty. UTF-8 is self-synchronizing, so a byte-level split
@@ -656,7 +674,7 @@ func (s BStr) Split(sep BStr) *Array[BStr] {
 			start += idx + len(sp)
 		}
 		out = append(out, asciiOrCounted(hay[start:], ascii))
-		return &Array[BStr]{elems: out}
+		return capped(out)
 	}
 	su := s.units()
 	if sep.lengthU16 == 0 {
@@ -667,7 +685,7 @@ func (s BStr) Split(sep BStr) *Array[BStr] {
 		for i, u := range su {
 			out[i] = FromUTF16([]uint16{u})
 		}
-		return &Array[BStr]{elems: out}
+		return capped(out)
 	}
 	pu := sep.units()
 	var out []BStr
@@ -682,7 +700,7 @@ func (s BStr) Split(sep BStr) *Array[BStr] {
 		}
 	}
 	out = append(out, FromUTF16(su[start:]))
-	return &Array[BStr]{elems: out}
+	return capped(out)
 }
 
 // asciiOrCounted wraps a UTF-8 substring as a BStr on the fast path. When the

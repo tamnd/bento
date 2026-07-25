@@ -1,0 +1,6 @@
+== stdout:
+boom
+AppError
+42
+true
+AppError kapow

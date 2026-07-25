@@ -21,7 +21,33 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // ambientSource declares the Node globals and node: modules the AOT compiler can
 // lower. process.env is a string-or-undefined map, which lowers to the optional
 // machinery; the streams' write takes a string and returns a boolean, matching
-// Node. The node:fs, node:os, and node:path module declarations give the file
+// Node. process.on is declared only for the "exit" event, the one the lowerer
+// registers as a run-at-exit callback, so a listener on any other event still
+// errors rather than compiling to a no-op. __dirname and __filename are the CommonJS module-path globals, each a
+// string the lowerer fills from the module's own file path, so a program reading
+// either resolves the same absolute path Node hands its wrapper. module and
+// exports are the CommonJS export globals, typed any so a read of module.exports
+// or a write of exports.x lowers through the dynamic member path; the lowerer
+// backs them with a package-level module object. require is the CommonJS loader
+// global, typed any so typeof require is "function" and a require(specifier) call
+// lowers through the dynamic call path; the lowerer backs it with a package-level
+// require function value. queueMicrotask is the WHATWG global that schedules a
+// callback on the microtask queue; the lowerer boxes the callback and emits
+// value.QueueMicrotask, and the assembled main drains the queue at its end.
+// structuredClone is the WHATWG global that deep-copies a data graph; the lowerer
+// boxes the argument and emits value.StructuredClone, whose clone the caller reads
+// through the dynamic model. Event and EventTarget need no declaration here: the
+// TypeScript standard library already declares the DOM-style event pair as ambient
+// globals, so the lowerer recognizes a new Event or new EventTarget by name, builds
+// the instance with value.NewEvent or value.NewEventTarget, and lands the binding in a
+// value.Value slot read through the dynamic member and call path. __bento_os_info
+// and __bento_inspect are host callees, the bare names a Node builtin factory
+// reaches for when it needs the Go runtime: os.js reads __bento_os_info for the
+// platform snapshot and util.js and assert.js read __bento_inspect to render a
+// value, and url.js reads __bento_url_parse to resolve a URL against a base. Each
+// is declared here so the checker types it, and the lowerer emits a direct call
+// into the runtime (nodehost.OSInfoJSON, value.Inspect, nodehost.URLParseJSON)
+// rather than the interpreter's host layer. The node:fs, node:os, and node:path module declarations give the file
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a
@@ -35,8 +61,19 @@ interface BentoProcess {
 	argv: string[];
 	stdout: BentoWriteStream;
 	stderr: BentoWriteStream;
+	on(event: "exit", listener: () => void): void;
 }
 declare var process: BentoProcess;
+declare var __dirname: string;
+declare var __filename: string;
+declare var module: any;
+declare var exports: any;
+declare var require: any;
+declare function queueMicrotask(callback: () => void): void;
+declare function structuredClone(value: any): any;
+declare function __bento_os_info(): string;
+declare function __bento_inspect(value: any): string;
+declare function __bento_url_parse(input: string, base: string): string;
 declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;

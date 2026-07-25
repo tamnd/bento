@@ -1,0 +1,5 @@
+== stdout:
+[x]
+p,q
+== exit:
+0
