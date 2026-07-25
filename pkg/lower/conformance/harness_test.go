@@ -67,6 +67,14 @@ func fixtures(t *testing.T) []Fixture {
 // dedicated cache keeps the stdlib and pkg/value warm across runs so the oracle
 // stays fast, and the teardown drops the whole cache once it grows past a cap, so
 // one-shot golden churn is bounded and the developer's own cache never sees it.
+//
+// The cap used to fire on every full run: the corpus links enough one-shot binaries
+// to cross it in a single sweep, and dropping the whole cache took the warm stdlib
+// and pkg/value with it, so the next run started cold and the cache never did the
+// one job it was for. The verdict cache (verdictcache.go) is what fixes that rather
+// than a larger cap: a run where no golden changed compiles nothing at all, so the
+// cache stops growing and the cap goes back to being the disk safety net it was
+// meant to be, firing only after a change that genuinely rebuilds the corpus.
 func TestMain(m *testing.M) {
 	cache := filepath.Join(os.TempDir(), "bento-conformance-gocache")
 	if err := os.Setenv("GOCACHE", cache); err != nil {
@@ -227,7 +235,7 @@ func TestOracle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse oracle: %v", err)
 			}
-			stdout, exit := runGolden(t, root, golden, f.Meta.Env)
+			stdout, exit := runGoldenCached(t, root, golden, f.Meta.Env)
 			if normalizeOut(stdout) != normalizeOut(want.Stdout) {
 				t.Errorf("%s stdout mismatch\n--- got ---\n%s\n--- want ---\n%s", f.Slug, stdout, want.Stdout)
 			}
@@ -236,6 +244,29 @@ func TestOracle(t *testing.T) {
 			}
 		})
 	}
+}
+
+// runGoldenCached returns what a golden prints and exits with, reusing the output a
+// previous run recorded when nothing that could change it has changed. Compiling and
+// linking a golden is what the oracle check costs, and every fixture is its own main
+// package, so the link happens once per fixture and Go's build cache cannot avoid it.
+// The verdict cache can: see verdictcache.go for what the key covers.
+//
+// Only the output is cached, never the pass or fail verdict, so the comparison against
+// oracle.txt still runs every time and editing an oracle takes effect at once.
+func runGoldenCached(t *testing.T, root string, golden []byte, env map[string]string) (string, int) {
+	t.Helper()
+	key, cacheable := VerdictKey(golden, env)
+	if cacheable {
+		if v, hit := LookupVerdict(key); hit {
+			return v.Stdout, v.Exit
+		}
+	}
+	stdout, exit := runGolden(t, root, golden, env)
+	if cacheable {
+		StoreVerdict(key, Verdict{Stdout: stdout, Exit: exit})
+	}
+	return stdout, exit
 }
 
 // runGolden writes the golden into a scratch directory inside this module and runs
