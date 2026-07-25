@@ -21,6 +21,7 @@ func ObjectCreate(proto Value) Value {
 		o.proto = proto.object()
 	case KindNull:
 		o.proto = nil
+		o.protoNull = true
 	default:
 		Throw(NewTypeError(FromGoString("Object prototype may only be an Object or null")))
 		return Undefined
@@ -46,25 +47,40 @@ func (v Value) SetPrototype(proto Value) Value {
 		return v
 	}
 	o := v.object()
-	var np *Object
+	// The target's [[Prototype]] identity is the new object, or explicit null. A change
+	// is rejected on a non-extensible object; setting the slot to the value it already
+	// holds is a no-op the spec allows even when non-extensible. Because a nil proto
+	// slot means both the default and an explicit null, the protoNull flag tells the
+	// two apart so setting a default-prototype object to null is seen as the real change
+	// it is, not mistaken for a no-op the way a bare nil == nil test would.
 	switch proto.kind {
 	case KindObject, KindArray, KindFunc:
-		np = proto.object()
+		np := proto.object()
+		if o.proto == np && !o.protoNull {
+			return v
+		}
+		if !o.isExtensible() {
+			Throw(NewTypeError(FromGoString("#<Object> is not extensible")))
+			return v
+		}
+		o.proto = np
+		o.protoNull = false
+		return v
 	case KindNull:
-		np = nil
+		if o.proto == nil && o.protoNull {
+			return v
+		}
+		if !o.isExtensible() {
+			Throw(NewTypeError(FromGoString("#<Object> is not extensible")))
+			return v
+		}
+		o.proto = nil
+		o.protoNull = true
+		return v
 	default:
 		Throw(NewTypeError(FromGoString("Object prototype may only be an Object or null")))
 		return v
 	}
-	if np == o.proto {
-		return v
-	}
-	if !o.isExtensible() {
-		Throw(NewTypeError(FromGoString("#<Object> is not extensible")))
-		return v
-	}
-	o.proto = np
-	return v
 }
 
 // SetProtoAssign applies the legacy __proto__ assignment, the runtime shared by the

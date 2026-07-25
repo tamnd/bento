@@ -28,6 +28,7 @@ type Object struct {
 	elems         []Value      // dense element storage for an array
 	call          callFn       // the invocable body of a callable, nil for a plain object
 	proto         *Object      // the [[Prototype]] a read climbs on an own miss; nil is the end of the user chain
+	protoNull     bool         // distinguishes an explicit null [[Prototype]] from the default when proto is nil; read only by SetPrototype's change test
 	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
 	elemsSealed   bool         // set once Object.seal marks an array's elements non-configurable, so a delete fails
 	elemsFrozen   bool         // set once Object.freeze marks an array's elements non-writable, so a write drops
