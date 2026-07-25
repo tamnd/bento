@@ -109,9 +109,8 @@ console.log(a.getTime(), b.getTime(), Date.now());
 func TestUncoveredDateFormsHandBack(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
 		{"const v = Date.now() > 0 ? 1 : \"2023-01-01\";\nconst d = new Date(v);\nconsole.log(d.getTime());", "needs coercion"},
-		{`const d = new Date(2023, 0, 1); console.log(d.getTime());`, "year, month, and day components"},
 		{`const d = new Date(0); console.log(d.toDateString());`, "the Date method .toDateString"},
-		{`console.log(Date.UTC(2023, 0, 1));`, "Date.UTC is a later slice"},
+		{`const d = new Date(0); console.log(d.toJSON());`, "the Date method .toJSON"},
 	} {
 		prog := compileJS(t, c.src)
 		r := NewRenderer(prog)
@@ -171,17 +170,16 @@ console.log(Number.isNaN(d.getUTCFullYear()), Number.isNaN(d.getMonth()), Number
 	}
 }
 
-// TestDateSettersHandBack pins that mutating a date says so rather than silently doing
-// nothing, since a setter that appeared to work and did not would be the worst kind of
-// wrong answer.
-func TestDateSettersHandBack(t *testing.T) {
-	prog := compileJS(t, `const d = new Date(0); d.setFullYear(2000); console.log(d.getTime());`)
-	r := NewRenderer(prog)
-	r.SetGoSignatures(testGoSignatures())
-	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
-		t.Fatal("setFullYear lowered, want a hand-back")
-	} else if !strings.Contains(err.Error(), "the Date method .setFullYear") {
-		t.Errorf("got: %v\nwant a reason naming setFullYear", err)
+// TestDateSettersMutateInPlace pins that a setter moves the date it was called on and
+// gives the new time value back, so it reads as both a statement and an expression.
+func TestDateSettersMutateInPlace(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(0);
+console.log(d.setUTCFullYear(2000));
+console.log(d.toISOString());
+`))
+	want := "946684800000\n2000-01-01T00:00:00.000Z\n"
+	if got != want {
+		t.Errorf("setter in place\n got: %q\nwant: %q", got, want)
 	}
 }
 
@@ -233,6 +231,77 @@ func TestDateParseLowersToTheRuntime(t *testing.T) {
 console.log(d.getTime(), Date.parse("2023-01-01"));
 `)
 	for _, want := range []string{"value.NewDateFromString(", "value.ParseDate("} {
+		if !strings.Contains(src, want) {
+			t.Errorf("emitted Go does not contain %q:\n%s", want, src)
+		}
+	}
+}
+
+// TestDateFromComponents is the ordinary JavaScript spelling of the calendar
+// constructor and of Date.UTC. Only the UTC side is pinned exactly, since the component
+// constructor reads local time.
+func TestDateFromComponents(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `console.log(Date.UTC(2023, 10, 14, 22, 13, 20, 123));
+console.log(new Date(Date.UTC(2023, 10, 14)).toISOString());
+console.log(new Date(Date.UTC(2023, 10)).toISOString());
+console.log(new Date(Date.UTC(99, 0, 1)).getUTCFullYear());
+`))
+	want := "1700000000123\n2023-11-14T00:00:00.000Z\n2023-11-01T00:00:00.000Z\n1999\n"
+	if got != want {
+		t.Errorf("date from components\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestComponentsOverflowInJS pins the carrying rule a program relies on, which is the
+// whole reason the constructor accepts out-of-range values.
+func TestComponentsOverflowInJS(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `console.log(new Date(Date.UTC(2023, 12, 1)).toISOString());
+console.log(new Date(Date.UTC(2023, 10, 0)).toISOString());
+console.log(new Date(Date.UTC(2023, 0, 1, 25)).toISOString());
+`))
+	want := "2024-01-01T00:00:00.000Z\n2023-10-31T00:00:00.000Z\n2023-01-02T01:00:00.000Z\n"
+	if got != want {
+		t.Errorf("component overflow\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestSettersInJS pins the mutation surface a program actually writes: replace a field,
+// and add to one to move the date.
+func TestSettersInJS(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(Date.UTC(2023, 0, 20, 12, 0, 0, 0));
+d.setUTCHours(9, 30);
+console.log(d.toISOString());
+d.setUTCDate(d.getUTCDate() + 45);
+console.log(d.toISOString());
+console.log(d.setTime(0), d.toISOString());
+`))
+	want := "2023-01-20T09:30:00.000Z\n2023-03-06T09:30:00.000Z\n0 1970-01-01T00:00:00.000Z\n"
+	if got != want {
+		t.Errorf("setters\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestComponentConstructorIsLocalInJS pins that the calendar constructor reads local
+// time, without pinning a zone: what it built has to read back as what was written.
+func TestComponentConstructorIsLocalInJS(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(2023, 10, 14, 9, 30, 0, 0);
+console.log(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes());
+console.log(d.getTime() === new Date(2023, 10, 14, 9, 30, 0, 0).getTime());
+`))
+	want := "2023 10 14 9 30\ntrue\n"
+	if got != want {
+		t.Errorf("local component constructor\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestComponentsLowerToTheRuntime pins the emitted Go for the two construction paths and
+// for a setter.
+func TestComponentsLowerToTheRuntime(t *testing.T) {
+	src := renderExpandoJS(t, `const d = new Date(2023, 0, 1);
+d.setUTCMonth(5);
+console.log(d.getTime(), Date.UTC(2023, 0, 1));
+`)
+	for _, want := range []string{"value.NewDateFromComponents(", "value.DateUTC(", ".SetUTCMonth("} {
 		if !strings.Contains(src, want) {
 			t.Errorf("emitted Go does not contain %q:\n%s", want, src)
 		}
