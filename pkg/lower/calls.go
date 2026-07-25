@@ -4638,7 +4638,11 @@ func (r *Renderer) stringProtoBorrowedCall(name, method string, argNodes []front
 		return nil, err
 	}
 	r.requireImport(valuePkg)
-	str := &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{recv}}
+	// The receiver runs through RequireObjectCoercible before ToString, so a borrowed
+	// String.prototype method called on null or undefined throws a TypeError the way
+	// the spec's step 1 does rather than stringifying the nullish this to
+	// "null"/"undefined" and running the method on that text.
+	str := &ast.CallExpr{Fun: sel("value", "CoerceThisToString"), Args: []ast.Expr{recv}}
 	methodArgs := argNodes[1:]
 	// toString and valueOf on the coerced string are identity, so they read as the
 	// coerced BStr with no further call, the same shortcut the direct path takes.
