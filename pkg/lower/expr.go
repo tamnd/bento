@@ -2169,18 +2169,20 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		// so "x" + re reads off the concrete *value.RegExp with no boxing.
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToStringBStr")}}, nil
 	case r.isDynamic(n) || r.producesBoxedValue(r.unwrapParens(n)):
-		// A dynamic operand coerces at runtime through the value model's
-		// ToString, which routes an object or array through ToPrimitive the
-		// same way the + operator's own concatenation branch does.
+		// A dynamic operand coerces at runtime through the value model's + branch,
+		// value.PlusToString, which routes an object or array through ToPrimitive with
+		// the default hint the AdditionOperator passes, not the string hint a plain
+		// ToString uses, so an object with a hint-sensitive valueOf/Symbol.toPrimitive
+		// concatenates the same bytes the engine's + produces.
 		// producesBoxedValue catches an operand the checker types as a union or
 		// concrete type but whose lowering yields a value.Value box: a dynamic-operand
 		// && / || lowers to value.And(...), a boxed logical whose static type is the
 		// union of its arms (string | null for arr && arr[0]), so isDynamic is false
-		// yet the emitted value has no ToString method. Routing it through value.ToString
+		// yet the emitted value has no ToString method. Routing it through PlusToString
 		// reads the box, where the union-method path below would emit a .ToString() the
 		// box does not carry and fail to compile.
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
+		return &ast.CallExpr{Fun: sel("value", "PlusToString"), Args: []ast.Expr{e}}, nil
 	default:
 		// A tagged-sum union operand reads its string through the ToString method the
 		// renderer emits for it, the same method String(x) and a template substitution
@@ -2190,19 +2192,20 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		if _, ok := r.unionStringValued(n); ok {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToString")}}, nil
 		}
-		// A non-primitive operand coerces through the same value.ToString protocol
-		// the dynamic case uses: ToPrimitive on the object or array, then ToString on
-		// the result, so { a: 1 } becomes "[object Object]" and [1, 2] becomes "1,2"
-		// the way the engine joins an array. It must box into a dynamic value first,
-		// which an object or array literal does through its live-value constructor; a
-		// non-primitive whose only form is a Go struct or slice has no box yet and
+		// A non-primitive operand coerces through the same value.PlusToString protocol
+		// the dynamic case uses: ToPrimitive with the default hint on the object or
+		// array, then ToString on the result, so { a: 1 } becomes "[object Object]" and
+		// [1, 2] becomes "1,2" the way the engine joins an array, and a hint-sensitive
+		// valueOf wins over toString the way + requires. It must box into a dynamic value
+		// first, which an object or array literal does through its live-value constructor;
+		// a non-primitive whose only form is a Go struct or slice has no box yet and
 		// hands back through boxOperand for a later slice.
 		boxed, err := r.boxOperand(n)
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}, nil
+		return &ast.CallExpr{Fun: sel("value", "PlusToString"), Args: []ast.Expr{boxed}}, nil
 	}
 }
 

@@ -636,6 +636,19 @@ func ToString(v Value) BStr {
 	}
 }
 
+// PlusToString coerces an operand of the + operator's string-concatenation branch:
+// ToPrimitive with the default hint (the hint + passes, per the AdditionOperator
+// spec) and then ToString on the resulting primitive. It differs from ToString on
+// exactly one kind, an object whose valueOf, toString, or Symbol.toPrimitive reads
+// the hint: + must ask for "default", where a plain ToString asks for "string", so
+// { valueOf: () => 42, toString: () => "s" } concatenates as "42", not "s". Every
+// primitive is already primitive, so ToPrimitive returns it unchanged and this
+// matches ToString for a number, string, boolean, bigint, null, or undefined; a
+// symbol still throws in the trailing ToString the way "" + Symbol() does.
+func PlusToString(v Value) BStr {
+	return ToString(toPrimitiveDefault(v))
+}
+
 // StringCoerce implements the String built-in called as a function, String(v),
 // which differs from abstract ToString on exactly one kind: a symbol renders as
 // its descriptive string "Symbol(desc)" (SymbolDescriptiveString) rather than
