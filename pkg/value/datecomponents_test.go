@@ -24,6 +24,36 @@ func TestDateUTCBuildsFromComponents(t *testing.T) {
 	}
 }
 
+// TestDateUTCNoArgIsInvalidDate pins that Date.UTC() with no year is the Invalid Date:
+// ToNumber(undefined) is NaN, so there is no year to build on and the defaults must not
+// invent 1900. A year that is present, even 0, still builds through the legacy-year rule.
+func TestDateUTCNoArgIsInvalidDate(t *testing.T) {
+	if got := DateUTC(); !math.IsNaN(got) {
+		t.Errorf("Date.UTC() = %v, want NaN", got)
+	}
+	if got := DateUTC(0, 0, 1); got != -2_208_988_800_000 { // year 0 is 1900 by the legacy rule
+		t.Errorf("Date.UTC(0, 0, 1) = %v, want -2208988800000", got)
+	}
+}
+
+// TestSetFullYearOnInvalidDateRebuildsLocal pins that a local year setter recovering an
+// invalid date lands the year at local midnight, an hour off the UTC setter west or east
+// of Greenwich. The recovered base +0 is read as its UTC components, but the rebuild still
+// runs the local-to-UTC conversion for a local setter and skips it for a UTC one.
+func TestSetFullYearOnInvalidDateRebuildsLocal(t *testing.T) {
+	d := NewDateFromMillis(math.NaN())
+	d.SetFullYear(2016)
+	if want := localWallClockToTimeValue(2016, 1, 1, 0, 0, 0, 0); d.GetTime() != want {
+		t.Errorf("SetFullYear(2016) on invalid date = %v, want %v (local midnight)", d.GetTime(), want)
+	}
+
+	u := NewDateFromMillis(math.NaN())
+	u.SetUTCFullYear(2016)
+	if want := DateUTC(2016, 0, 1); u.GetTime() != want {
+		t.Errorf("SetUTCFullYear(2016) on invalid date = %v, want %v (UTC midnight)", u.GetTime(), want)
+	}
+}
+
 // TestComponentsOverflowIntoTheFieldAbove pins the rule that makes this arithmetic rather
 // than validation: an out-of-range component carries. That is what lets a program add
 // forty-five days to a date without counting month lengths itself.

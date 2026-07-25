@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+// TestTimeClipNormalizesNegativeZero pins that a time value of zero is the positive zero,
+// never the negative one. TimeClip closes with ToIntegerOrInfinity, which maps -0 to +0,
+// so a date built from -0 or from a tiny negative fraction reads back +0 through getTime
+// and valueOf, and a SameValue(«-0», «0») test cannot see a stray negative zero.
+func TestTimeClipNormalizesNegativeZero(t *testing.T) {
+	for _, in := range []float64{math.Copysign(0, -1), -0.4, -0.999} {
+		d := NewDateFromMillis(in)
+		if got := d.GetTime(); got != 0 || math.Signbit(got) {
+			t.Errorf("NewDateFromMillis(%v).GetTime() = %v (signbit %v), want +0", in, got, math.Signbit(got))
+		}
+		if got := d.ValueOf(); got != 0 || math.Signbit(got) {
+			t.Errorf("NewDateFromMillis(%v).ValueOf() = %v (signbit %v), want +0", in, got, math.Signbit(got))
+		}
+	}
+}
+
 // TestNewDateReadsTheClock pins that the bare constructor lands on the current moment.
 // The window is generous on purpose: the assertion is that a clock was read at all, not
 // that it agrees with a second reading to the millisecond.
