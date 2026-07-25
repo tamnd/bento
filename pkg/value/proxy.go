@@ -343,24 +343,35 @@ func (p *proxyData) getPrototypeOf() Value {
 	return res
 }
 
-// setPrototypeOf runs the setPrototypeOf trap, the [[SetPrototypeOf]](V) internal
-// method behind Object.setPrototypeOf. With no trap the assignment forwards to the
-// target. With a trap a falsy return is a refused assignment the Object.set
-// PrototypeOf layer turns into a TypeError, and over a non-extensible target the new
-// prototype must equal the target's current one, so the trap cannot swap a prototype
-// that can no longer change.
-func (p *proxyData) setPrototypeOf(proto Value) {
+// setPrototypeOfResult runs the [[SetPrototypeOf]](V) internal method and reports
+// whether the assignment succeeded, the boolean Reflect.setPrototypeOf returns and
+// Object.setPrototypeOf turns into a throw on false. With no trap the request forwards
+// to the target's own [[SetPrototypeOf]], which likewise reports success. With a trap a
+// falsy return refuses the assignment and reports false rather than throwing, so a
+// Reflect caller can observe the refusal; the throw belongs to the Object layer. Over a
+// non-extensible target a truthy trap that installs a different prototype violates the
+// invariant and throws, since the target can no longer change.
+func (p *proxyData) setPrototypeOfResult(proto Value) bool {
 	p.checkRevoked("setPrototypeOf")
 	trap := p.trap("setPrototypeOf")
 	if trap.kind == KindUndefined {
-		p.target.SetPrototype(proto)
-		return
+		return ReflectSetPrototypeOf(p.target, proto)
 	}
 	if !ToBoolean(trap.Call(p.target, proto)) {
-		Throw(NewTypeError(FromGoString("'setPrototypeOf' on proxy: trap returned falsy")))
+		return false
 	}
 	if !p.target.IsExtensible() && !sameValue(proto, p.target.GetPrototype()) {
 		Throw(NewTypeError(FromGoString("'setPrototypeOf' on proxy: proxy target is non-extensible but the trap set a different prototype")))
+	}
+	return true
+}
+
+// setPrototypeOf runs the [[SetPrototypeOf]](V) internal method for Object.setProto
+// typeOf, the layer that turns a refused assignment into a TypeError. A truthy result
+// succeeds; a falsy one is the refusal Reflect.setPrototypeOf would report as false.
+func (p *proxyData) setPrototypeOf(proto Value) {
+	if !p.setPrototypeOfResult(proto) {
+		Throw(NewTypeError(FromGoString("'setPrototypeOf' on proxy: trap returned falsy")))
 	}
 }
 

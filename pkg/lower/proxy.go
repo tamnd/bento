@@ -58,6 +58,64 @@ func (r *Renderer) newProxy(args []frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: sel("value", "NewProxy"), Args: []ast.Expr{target, handler}}, nil
 }
 
+// isProxyConstruction reports whether a node is a new Proxy(target, handler)
+// expression, the initializer a var binding must store as a boxed value.Value and
+// mark dynamic. The checker types the result typeof target, a fixed shape, but the
+// value is the exotic value.NewProxy builds, so a named member read p.attr off the
+// binding must route through the runtime Get that dispatches the get trap rather
+// than an interned Go struct selector the box does not carry. Only a two-argument
+// construction off the ambient Proxy global is one; Proxy.revocable is a call, not
+// a new, and a local class named Proxy resolves through classNameRef before here.
+func (r *Renderer) isProxyConstruction(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeNewExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || r.prog.Text(kids[0]) != "Proxy" {
+		return false
+	}
+	if _, ok := r.classNameRef(kids[0]); ok {
+		return false
+	}
+	return len(kids[1:]) == 2
+}
+
+// markProxyTargetLocals scans a block's statements for a new Proxy(ident, handler)
+// whose target is a plain identifier and records each such name, so the target's own
+// binding boxes to a shared value.Value the proxy can alias rather than a detached
+// copy. It walks the statement subtrees so a proxy built inside an initializer or an
+// expression is seen. The scan is additive and cheap: with no Proxy construction in
+// the block it marks nothing and the proxy paths behave exactly as before.
+func (r *Renderer) markProxyTargetLocals(nodes []frontend.Node) {
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if r.isProxyConstruction(n) {
+			target := r.prog.Children(n)[1]
+			if target.Kind() == frontend.NodeIdentifier {
+				if name, ok := localName(r.prog.Text(target)); ok {
+					if r.proxyTargetLocals == nil {
+						r.proxyTargetLocals = map[string]bool{}
+					}
+					r.proxyTargetLocals[name] = true
+				}
+			}
+		}
+		for _, kid := range r.prog.Children(n) {
+			walk(kid)
+		}
+	}
+	for _, n := range nodes {
+		walk(n)
+	}
+}
+
+// isProxyTargetLocal reports whether a binding name was marked a proxy target by the
+// block pre-scan, the cue for its initializer to box to a shared value.Value.
+func (r *Renderer) isProxyTargetLocal(nameNode frontend.Node) bool {
+	name, ok := localName(r.prog.Text(nameNode))
+	return ok && r.proxyTargetLocals[name]
+}
+
 // proxyStaticCall lowers a static call on the ambient Proxy global. Only
 // Proxy.revocable(target, handler) is covered: it lowers to value.ProxyRevocable over
 // the two boxed operands, which builds the proxy and pairs it with a revoke function

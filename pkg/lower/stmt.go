@@ -46,6 +46,12 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 		return nil, err
 	}
 	defer restoreNested()
+	// A binding used as a new Proxy target must box to a shared value.Value before its
+	// own declaration lowers, so the proxy aliases it rather than a detached copy. The
+	// pre-scan marks those names ahead of the statement loop; it is additive, so a
+	// nested block's proxy target declared in that block is caught by the block's own
+	// scan.
+	r.markProxyTargetLocals(nodes)
 	out := make([]ast.Stmt, 0, len(nodes))
 	for i, n := range nodes {
 		if atTop {
@@ -1899,6 +1905,22 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 			return boxed, nil
 		}
 	}
+	// A binding the block pre-scan marked a new Proxy target boxes its object or array
+	// literal to a shared value.Value and is marked dynBound, so the proxy aliases the
+	// same live object the target binding holds. A write through the proxy and a
+	// mutation of the target then agree, the identity the [[Set]] and setPrototypeOf
+	// invariants read. Only a literal target shares this way; a target initialized by a
+	// call or another binding is left alone, so its proxy stays the handback it was.
+	if r.isProxyTargetLocal(nameNode) {
+		if boxed, ok, err := r.boxLiteralToDynamic(initNode); err != nil {
+			return nil, err
+		} else if ok {
+			if name, ok := localName(r.prog.Text(nameNode)); ok {
+				r.markDynBound(name)
+			}
+			return boxed, nil
+		}
+	}
 	// An object literal whose shape is not statically fixed, one with a computed key
 	// naming a runtime value, has no closed key set a Go struct could declare, so it
 	// builds as the dynamic bag even when its binding was not written any. The binding
@@ -1924,6 +1946,24 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 	// model that keys the property bag by symbol identity. An annotated `let s: symbol`
 	// binding carries the symbol flag already, so isSymbol routes it without the mark.
 	if r.isSymbolConstructorCall(initNode) {
+		boxed, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
+	// A `var p = new Proxy(target, handler)` binding holds the boxed value.Value
+	// value.NewProxy builds, the exotic object whose trap dispatch lives on the value
+	// model. The checker types the binding typeof target, a fixed shape, so a named
+	// member read p.attr off it would otherwise intern to a Go struct selector the box
+	// does not carry (p.Attr, a gobuild failure). Returning the boxed initializer
+	// straight lets := infer its value.Value slot, and the mark routes every later read
+	// and write off the proxy through the runtime Get and Set that dispatch its get and
+	// set traps, exactly the boxed-symbol sibling above.
+	if r.isProxyConstruction(initNode) {
 		boxed, err := r.lowerExpr(initNode)
 		if err != nil {
 			return nil, err

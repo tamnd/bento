@@ -275,6 +275,16 @@ type Renderer struct {
 	// the body reads it through Get; the boxed call passes a value.Value into that slot
 	// anyway, so nothing is lost. A nil map (the default) forces nothing.
 	forceDynParams map[frontend.Node]bool
+	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
+	// the block currently lowering. A proxy holds its target by identity and dispatches
+	// its traps off the live object, so a write through the proxy and a mutation of the
+	// target must reach the same value; a target boxed as a detached copy through
+	// ObjectFromStruct would diverge. A pre-scan over the block marks each such name
+	// before any statement lowers, so the target's own binding boxes its literal to a
+	// shared value.Value and is marked dynBound, and boxOperand then passes that shared
+	// value to value.NewProxy rather than copying a fixed-shape struct. It is populated
+	// additively per block from lowerStatements; a nil map marks nothing.
+	proxyTargetLocals map[string]bool
 	// errorLocals is the set of catch-binding names in scope while a catch block is
 	// lowered, each bound to the *value.Error the catch recovered. A read of the
 	// binding's .message or .name lowers to the matching method on the error; the

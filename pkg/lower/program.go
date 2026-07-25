@@ -586,6 +586,17 @@ type mainItem struct {
 func (r *Renderer) lowerMainItems(items []mainItem) ([]ast.Stmt, error) {
 	r.blockDeclared = append(r.blockDeclared, map[string]bool{})
 	defer func() { r.blockDeclared = r.blockDeclared[:len(r.blockDeclared)-1] }()
+	// A binding used as a new Proxy target must box to a shared value.Value before its
+	// own declaration lowers, so the proxy aliases it rather than a detached copy. The
+	// top-level body lowers here rather than through lowerStatements, so the pre-scan
+	// runs over the statement nodes ahead of the loop.
+	nodes := make([]frontend.Node, 0, len(items))
+	for _, it := range items {
+		if it.initClass == nil {
+			nodes = append(nodes, it.node)
+		}
+	}
+	r.markProxyTargetLocals(nodes)
 	out := make([]ast.Stmt, 0, len(items))
 	for _, it := range items {
 		if it.initClass != nil {
