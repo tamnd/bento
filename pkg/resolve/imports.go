@@ -1,8 +1,9 @@
 package resolve
 
 import (
-	"path/filepath"
 	"strings"
+
+	"github.com/tamnd/bento/pkg/cpath"
 )
 
 // resolveImports resolves a "#"-prefixed subpath import against the nearest
@@ -35,7 +36,9 @@ func (r *Resolver) resolveImports(specifier string, parent *Module) (Resolved, e
 	// A package-relative target resolves as an exact file inside the package, with
 	// no extension search, matching how exports targets resolve.
 	if strings.HasPrefix(target, "./") {
-		full := filepath.Clean(filepath.Join(pkg.dir, filepath.FromSlash(target)))
+		// The target is a slash path out of the package.json and stays one; the
+		// resolver never holds an operating system path.
+		full := cpath.Join(pkg.dir, target)
 		if r.fileExists(full) {
 			real := r.realPath(full)
 			return Resolved{

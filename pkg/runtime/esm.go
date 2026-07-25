@@ -3,9 +3,9 @@ package runtime
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/tamnd/bento/pkg/cpath"
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/resolve"
 )
@@ -42,7 +42,7 @@ func (h moduleHost) Normalize(referrer, specifier string) (string, error) {
 	// Imports written in the entry carry the engine's fixed entry name, so anchor
 	// them at the real entry directory the runtime recorded.
 	if referrer == entryModuleName && h.rt.esmEntry != "" {
-		parent = &resolve.Module{Path: h.rt.esmEntry, Dir: filepath.Dir(h.rt.esmEntry), Format: resolve.FormatESM}
+		parent = &resolve.Module{Path: h.rt.esmEntry, Dir: cpath.Dir(h.rt.esmEntry), Format: resolve.FormatESM}
 	}
 	res, err := h.rt.resolver.Resolve(specifier, parent)
 	if err != nil {
@@ -95,9 +95,9 @@ func (h moduleHost) Load(name string) (string, error) {
 // ES module's own path.
 func esmParent(referrer string) *resolve.Module {
 	if spec, ok := strings.CutPrefix(referrer, reqPrefix); ok {
-		return &resolve.Module{Path: spec, Dir: filepath.Dir(spec), Format: resolve.FormatCommonJS}
+		return &resolve.Module{Path: spec, Dir: cpath.Dir(spec), Format: resolve.FormatCommonJS}
 	}
-	return &resolve.Module{Path: referrer, Dir: filepath.Dir(referrer), Format: resolve.FormatESM}
+	return &resolve.Module{Path: referrer, Dir: cpath.Dir(referrer), Format: resolve.FormatESM}
 }
 
 // runESMEntry runs an entry program as a native ES module, the path taken when
@@ -105,7 +105,7 @@ func esmParent(referrer string) *resolve.Module {
 // so its own imports resolve against its directory. The event loop then pumps
 // timers and the top-level-await continuations until the program settles.
 func (rt *Runtime) runESMEntry(path, source string) error {
-	abs, err := filepath.Abs(path)
+	abs, err := cpath.Abs(path)
 	if err != nil {
 		abs = path
 	}

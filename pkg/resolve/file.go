@@ -1,32 +1,38 @@
 package resolve
 
 import (
-	"path/filepath"
 	"strings"
+
+	"github.com/tamnd/bento/pkg/cpath"
 )
 
 // resolveFileSpecifier resolves a relative or absolute specifier against its
 // parent, choosing the CommonJS or ESM file algorithm by the parent's format.
-func (r *Resolver) resolveFileSpecifier(specifier string, parent *Module) (Resolved, error) {
+// path is the module path classify unwrapped, which differs from specifier only
+// for a file: URL; specifier is what the importer wrote and is what the cache
+// key, the error message and the Resolved carry, so a diagnostic names the
+// import the way the source spells it.
+func (r *Resolver) resolveFileSpecifier(path, specifier string, parent *Module) (Resolved, error) {
 	dir := parentDir(parent)
 	key := resolutionKey{dir: dir, specifier: specifier, conditions: r.conditionKey()}
 	if hit, ok := r.cache.get(key); ok {
 		return hit, nil
 	}
 
-	target := specifier
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(dir, specifier)
+	target := path
+	if !cpath.IsAbs(target) {
+		target = cpath.Join(dir, target)
+	} else {
+		target = cpath.FromOS(target)
 	}
-	target = filepath.Clean(target)
 
 	esm := parent != nil && parent.Format == FormatESM
-	path, err := r.resolveFile(target, specifier, parent, esm)
+	found, err := r.resolveFile(target, specifier, parent, esm)
 	if err != nil {
 		return Resolved{}, err
 	}
 
-	real := r.realPath(path)
+	real := r.realPath(found)
 	resolved := Resolved{
 		Kind:      KindFile,
 		Format:    r.detectFormat(real),
@@ -79,12 +85,12 @@ func (r *Resolver) resolveAsFile(target string, allowSearch bool) (string, bool)
 // actually lives at ./util.ts on disk. It swaps a JavaScript extension for its
 // TypeScript sibling and reports the first that exists.
 func (r *Resolver) tsExtensionRewrite(target string) (string, bool) {
-	ext := strings.ToLower(filepath.Ext(target))
+	ext := strings.ToLower(cpath.Ext(target))
 	siblings, ok := tsSiblings[ext]
 	if !ok {
 		return "", false
 	}
-	base := strings.TrimSuffix(target, filepath.Ext(target))
+	base := strings.TrimSuffix(target, cpath.Ext(target))
 	for _, tsExt := range siblings {
 		candidate := base + tsExt
 		if r.fileExists(candidate) {
@@ -110,9 +116,9 @@ func (r *Resolver) resolveAsDirectory(dir string) (string, bool) {
 	if !r.dirExists(dir) {
 		return "", false
 	}
-	if pkg, err := r.readPackageJSON(filepath.Join(dir, "package.json")); err == nil && pkg != nil {
+	if pkg, err := r.readPackageJSON(cpath.Join(dir, "package.json")); err == nil && pkg != nil {
 		if main := pkg.mainEntry(r.conditions); main != "" {
-			target := filepath.Clean(filepath.Join(dir, main))
+			target := cpath.Join(dir, main)
 			if p, ok := r.resolveAsFile(target, true); ok {
 				return p, true
 			}
@@ -130,7 +136,7 @@ func (r *Resolver) resolveAsDirectory(dir string) (string, bool) {
 // resolveIndex tries index.<ext> in a directory in extension order.
 func (r *Resolver) resolveIndex(dir string) (string, bool) {
 	for _, ext := range r.extensions {
-		candidate := filepath.Join(dir, "index"+ext)
+		candidate := cpath.Join(dir, "index"+ext)
 		if r.fileExists(candidate) {
 			return candidate, true
 		}
@@ -142,13 +148,13 @@ func (r *Resolver) resolveIndex(dir string) (string, bool) {
 // an import of ./x.js would have resolved to ./x.ts.
 func (r *Resolver) fileNotFound(target, specifier string, parent *Module) *ResolveError {
 	err := notFound(specifier, parent, nil)
-	ext := strings.ToLower(filepath.Ext(target))
+	ext := strings.ToLower(cpath.Ext(target))
 	if siblings, ok := tsSiblings[ext]; ok {
-		base := strings.TrimSuffix(target, filepath.Ext(target))
+		base := strings.TrimSuffix(target, cpath.Ext(target))
 		for _, tsExt := range siblings {
 			if r.fileExists(base + tsExt) {
 				err.Message = "cannot find module " + specifier +
-					"; did you mean the TypeScript source " + filepath.Base(base) + tsExt + "?"
+					"; did you mean the TypeScript source " + cpath.Base(base) + tsExt + "?"
 				break
 			}
 		}
@@ -168,7 +174,7 @@ func parentDir(parent *Module) string {
 		return parent.Dir
 	}
 	if parent.Path != "" {
-		return filepath.Dir(parent.Path)
+		return cpath.Dir(parent.Path)
 	}
 	return "."
 }

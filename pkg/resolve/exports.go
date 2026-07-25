@@ -1,13 +1,14 @@
 package resolve
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/tamnd/bento/pkg/cpath"
 )
 
 // dirOf returns the directory containing a file path.
-func dirOf(path string) string { return filepath.Dir(path) }
+func dirOf(path string) string { return cpath.Dir(path) }
 
 // hasCondition reports whether name is in the active condition set.
 func hasCondition(conditions []string, name string) bool {

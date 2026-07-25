@@ -213,7 +213,13 @@ func (r *Resolver) Resolve(specifier string, parent *Module) (Resolved, error) {
 			Message:   "unsupported URL scheme in " + specifier,
 		}
 	case classRelative, classAbsolute:
-		return r.resolveFileSpecifier(specifier, parent)
+		// rest is the path classify unwrapped, which for a file: URL is the path
+		// inside it and for everything else is the specifier itself. Passing
+		// specifier here instead meant a file: URL was never unwrapped at all and so
+		// never resolved, on any platform; it surfaced on the Windows form,
+		// file:///C:/app/x.ts, because that is the only way an absolute Windows path
+		// can appear as a specifier.
+		return r.resolveFileSpecifier(rest, specifier, parent)
 	case classBare:
 		return r.resolveBare(specifier, parent)
 	default:

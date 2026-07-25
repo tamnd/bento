@@ -1,15 +1,16 @@
 package resolve
 
 import (
-	"path/filepath"
 	"strings"
+
+	"github.com/tamnd/bento/pkg/cpath"
 )
 
 // detectFormat decides how a resolved file should be parsed. Extension wins for
 // the unambiguous cases; the ambiguous .ts/.js family defers to the nearest
 // package.json "type". Content is never sniffed.
 func (r *Resolver) detectFormat(path string) Format {
-	switch strings.ToLower(filepath.Ext(path)) {
+	switch strings.ToLower(cpath.Ext(path)) {
 	case ".mjs", ".mts":
 		return FormatESM
 	case ".cjs", ".cts":
@@ -31,7 +32,7 @@ func (r *Resolver) detectFormat(path string) Format {
 // "type". A bare .ts with no governing type defaults to ESM (a documented,
 // DX-correct divergence from Node); a bare .js defaults to CommonJS like Node.
 func (r *Resolver) ambiguousFormat(path string, fallback Format) Format {
-	pkg := r.nearestPackageJSON(filepath.Dir(path))
+	pkg := r.nearestPackageJSON(cpath.Dir(path))
 	if pkg == nil {
 		return fallback
 	}
@@ -49,10 +50,10 @@ func (r *Resolver) ambiguousFormat(path string, fallback Format) Format {
 // first package.json it can parse, or nil if none governs the file.
 func (r *Resolver) nearestPackageJSON(dir string) *packageJSON {
 	for {
-		if pkg, err := r.readPackageJSON(filepath.Join(dir, "package.json")); err == nil && pkg != nil {
+		if pkg, err := r.readPackageJSON(cpath.Join(dir, "package.json")); err == nil && pkg != nil {
 			return pkg
 		}
-		parent := filepath.Dir(dir)
+		parent := cpath.Dir(dir)
 		if parent == dir {
 			return nil
 		}
