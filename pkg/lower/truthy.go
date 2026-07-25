@@ -30,7 +30,17 @@ import (
 // it is evaluated once, since the inlined form names the operand twice.
 func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 	if r.isBool(n) {
-		return r.lowerExpr(n)
+		lowered, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		// A boolean-typed operand usually lowers to a Go bool the position already
+		// wants, but one whose runtime form is a value.Value box (obj.hasOwnProperty(k),
+		// typed boolean by the checker yet dispatched through the runtime Call) would
+		// leave a value.Value where an if or a ! needs a bool. coerceBoxedBooleanOperand
+		// reads such a box back through value.ToBoolean and passes a native bool through
+		// untouched, so if (obj.hasOwnProperty(k)) compiles the same as any other guard.
+		return r.coerceBoxedBooleanOperand(n, lowered), nil
 	}
 	// A non-primitive operand the checker proved always truthy or always falsy
 	// collapses to that Go boolean constant: an object, array, function, or class

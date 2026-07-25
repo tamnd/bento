@@ -22,6 +22,21 @@ func TestBoxedBooleanOperandInAndCoerces(t *testing.T) {
 	}
 }
 
+// A boxed boolean operand standing bare in an if condition (no operator) must also
+// read back through ToBoolean, since lowerTruthy would otherwise leave the
+// value.Value box where the Go if wants a bool. This is the shape the test262
+// Object.create and Object.defineProperties enumeration tests take,
+// if (obj.hasOwnProperty(p)).
+func TestBoxedBooleanOperandInIfCoerces(t *testing.T) {
+	src := "var obj = {};\n" +
+		"var item = \"property\";\n" +
+		"if (obj.hasOwnProperty(item)) { console.log(1); }\n"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.ToBoolean(") {
+		t.Fatalf("expected a bare boxed boolean if condition to be wrapped in value.ToBoolean, got:\n%s", out)
+	}
+}
+
 // End to end, obj.hasOwnProperty(item) && item === "property" over a property
 // defined with Object.defineProperty runs and prints true, matching Node: the
 // property is own and enumerable, so the for-in loop finds it and the guard holds.
