@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -30,7 +31,12 @@ var update = flag.Bool("update", false, "rewrite emit.golden files from the curr
 // feature, set by `go test -feature math.hypot`, narrows the run to fixtures whose
 // fixture.toml tags them with that feature. It is the incremental seam: working on
 // one lowering path reruns only that path's fixtures. Empty runs the whole corpus.
-var feature = flag.String("feature", "", "run only fixtures tagged with this feature")
+//
+// A dotted group selects everything under it, so -feature math runs math.hypot and
+// math.trunc together. Feature tags are already named that way, and an area is the
+// unit a lowering slice actually works in, so this is the grouping that matters:
+// one run covers the area rather than one invocation per leaf.
+var feature = flag.String("feature", "", "run only fixtures tagged with this feature or dotted group")
 
 // fixtures discovers the corpus once and applies the -feature filter. A discovery
 // error or an empty corpus is fatal, since a run that silently checks nothing is
@@ -49,14 +55,47 @@ func fixtures(t *testing.T) []Fixture {
 	}
 	var kept []Fixture
 	for _, f := range all {
-		if f.Meta.Feature == *feature {
+		if matchesFeature(f.Meta.Feature, *feature) {
 			kept = append(kept, f)
 		}
 	}
 	if len(kept) == 0 {
-		t.Fatalf("no fixtures tagged feature %q", *feature)
+		// A mistyped tag is the common way to get here, so the message names what
+		// could have been meant rather than only what was not found.
+		t.Fatalf("no fixtures tagged feature %q\navailable: %s", *feature, strings.Join(featureNames(all), " "))
 	}
 	return kept
+}
+
+// matchesFeature reports whether a fixture's tag is selected by a -feature value. A
+// tag matches when it is that value exactly, or when it sits under it as a dotted
+// group. The boundary is the dot rather than a bare prefix, so -feature math selects
+// math.hypot without also dragging in an unrelated mathml.
+func matchesFeature(tag, want string) bool {
+	return tag == want || strings.HasPrefix(tag, want+".")
+}
+
+// featureNames lists the distinct tags and the groups they sit under, sorted, for the
+// message a failed filter prints. Groups are included because they are selectable,
+// and a list of leaves alone would hide the shorter thing the developer wanted.
+func featureNames(all []Fixture) []string {
+	seen := map[string]bool{}
+	for _, f := range all {
+		for tag := f.Meta.Feature; tag != ""; {
+			seen[tag] = true
+			dot := strings.LastIndex(tag, ".")
+			if dot < 0 {
+				break
+			}
+			tag = tag[:dot]
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // TestMain redirects the golden go run builds to a build cache kept apart from the
