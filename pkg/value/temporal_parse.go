@@ -120,6 +120,9 @@ func (sc *isoScanner) scanDate(p *isoParse) bool {
 		if !ok {
 			return false
 		}
+		if sign == -1 && v == 0 {
+			return false // "-000000" is minus zero as an extended year, which the grammar rejects
+		}
 		year = sign * v
 	} else {
 		v, ok := sc.digits(4)
@@ -317,6 +320,9 @@ func (sc *isoScanner) scanOffsetOrZ(p *isoParse) {
 // timeZone, the first one winning, and accepts whether or not it is critical; a Plain type
 // drops the zone while ZonedDateTime.from reads it.
 func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
+	calCount := 0
+	calCritical := false
+	tzCount := 0
 	for sc.peek() == '[' {
 		sc.pos++
 		critical := sc.accept('!')
@@ -334,9 +340,16 @@ func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
 		}
 		eq := strings.IndexByte(body, '=')
 		if eq < 0 {
-			if p.timeZone == "" {
-				p.timeZone = body // the first time-zone annotation wins; Plain types drop it
+			// A bracket with no "=" is a time-zone annotation. A string carries at most one,
+			// so a second is a syntax error whatever its critical flag.
+			tzCount++
+			if tzCount > 1 {
+				return false
 			}
+			if !validTimeZoneAnnotation(body) {
+				return false
+			}
+			p.timeZone = body // the sole time-zone annotation; Plain types drop it
 			continue
 		}
 		key := body[:eq]
@@ -348,6 +361,10 @@ func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
 			if val == "" {
 				return false
 			}
+			calCount++
+			if critical {
+				calCritical = true
+			}
 			if p.calendar == "" {
 				p.calendar = val // the first calendar annotation wins
 			}
@@ -357,7 +374,37 @@ func (sc *isoScanner) scanAnnotations(p *isoParse) bool {
 			return false // a critical annotation whose key is not understood is an error
 		}
 	}
+	// More than one calendar annotation is a syntax error when any of them carries the
+	// critical flag; without a critical flag the first calendar wins and the rest are dropped.
+	if calCount > 1 && calCritical {
+		return false
+	}
 	return true
+}
+
+// validTimeZoneAnnotation reports whether body, the content of a "[...]" time-zone
+// annotation, is a form the grammar accepts. A named zone (anything not beginning with a
+// sign) passes here and is validated against the recognized zones only when a caller
+// resolves it. A numeric-offset zone must be minute precision, "±HH", "±HHMM", or "±HH:MM";
+// a sub-minute offset such as "-07:00:01" or "-070000.5" is not a valid time-zone
+// annotation, so it is rejected the way the reference implementation rejects it.
+func validTimeZoneAnnotation(body string) bool {
+	if body == "" {
+		return false
+	}
+	if body[0] != '+' && body[0] != '-' {
+		return true // a named zone; the recognizer checks it at resolve time
+	}
+	rest := body[1:]
+	switch len(rest) {
+	case 2: // HH
+		return isDigit(rest[0]) && isDigit(rest[1])
+	case 4: // HHMM
+		return isDigit(rest[0]) && isDigit(rest[1]) && isDigit(rest[2]) && isDigit(rest[3])
+	case 5: // HH:MM
+		return isDigit(rest[0]) && isDigit(rest[1]) && rest[2] == ':' && isDigit(rest[3]) && isDigit(rest[4])
+	}
+	return false // longer means a seconds or sub-second field, which a zone annotation cannot carry
 }
 
 // validAnnotationKey reports whether key matches the RFC 9557 annotation-key grammar: a
@@ -558,6 +605,9 @@ func parseTemporalYearMonthOnly(s string) (isoParse, bool) {
 		v, ok := sc.digits(6)
 		if !ok {
 			return p, false
+		}
+		if sign == -1 && v == 0 {
+			return p, false // "-000000" is minus zero as an extended year, which the grammar rejects
 		}
 		year = sign * v
 	} else {

@@ -277,6 +277,46 @@ func TestInstantFromStringThrows(t *testing.T) {
 	}
 }
 
+// TestISOStringRejections pins the four RFC 9557 syntax rejections the shared parser enforces:
+// a minus-zero extended year, more than one calendar annotation when any is critical, more than
+// one time-zone annotation, and a sub-minute offset inside a time-zone annotation. Each is a
+// RangeError the reference implementation raises, so InstantFromString must throw too.
+func TestISOStringRejections(t *testing.T) {
+	bad := []string{
+		// minus zero as an extended year
+		"-000000-03-30T00:45Z", "-000000-03-30T01:45+01:00", "-000000-03-30T01:45:00+00:00[UTC]",
+		// more than one calendar annotation, one critical
+		"1970-01-01T00:00Z[u-ca=iso8601][!u-ca=iso8601]",
+		"1970-01-01T00:00Z[!u-ca=iso8601][u-ca=iso8601]",
+		"1970-01-01T00:00Z[UTC][u-ca=iso8601][!u-ca=iso8601]",
+		"1970-01-01T00:00Z[u-ca=iso8601][foo=bar][!u-ca=iso8601]",
+		// more than one time-zone annotation
+		"1970-01-01T00:00Z[UTC][UTC]", "1970-01-01T00:00Z[!UTC][UTC]",
+		"1970-01-01T00:00Z[UTC][!UTC]", "1970-01-01T00:00Z[UTC][u-ca=iso8601][UTC]",
+		"1970-01-01T00:00Z[UTC][foo=bar][UTC]",
+		// sub-minute offset inside a time-zone annotation
+		"2021-08-19T17:30:00-07:00:01[-07:00:01]", "2021-08-19T17:30:00-07:00:00[-07:00:00]",
+		"2021-08-19T17:30:00-07:00:00.1[-07:00:00.1]",
+	}
+	for _, s := range bad {
+		if name := catchThrow(func() { InstantFromString(s) }); name != "RangeError" {
+			t.Errorf("InstantFromString(%q) threw %q, want RangeError", s, name)
+		}
+	}
+	// The tightening must not reject the valid neighbours: a positive zero year, a single
+	// calendar annotation, a single time-zone annotation, and a minute-precision offset zone.
+	good := []string{
+		"+000000-03-30T00:45Z", "-000001-03-30T00:45Z",
+		"1970-01-01T00:00Z[u-ca=iso8601]", "1970-01-01T00:00Z[UTC]",
+		"2021-08-19T17:30:00-07:00[-07:00]", "2021-08-19T17:30:00-0700[-0700]",
+	}
+	for _, s := range good {
+		if name := catchThrow(func() { InstantFromString(s) }); name != "" {
+			t.Errorf("InstantFromString(%q) threw %q, want acceptance", s, name)
+		}
+	}
+}
+
 // TestZonedDateTimeFromString pins the string parser feeding Temporal.ZonedDateTime.from: a
 // bare wall-clock reading resolved through the zone, a matching numeric offset, a Z designator
 // giving the exact instant, the UTC and fixed-offset zones, a fall-back overlap taking the
