@@ -1,6 +1,7 @@
 package value
 
 import (
+	"fmt"
 	"math"
 	"regexp"
 	"strings"
@@ -200,6 +201,130 @@ func (re *RegExp) LastIndex() float64 { return re.lastIndex }
 // property does.
 func (re *RegExp) SetLastIndex(v float64) { re.lastIndex = v }
 
+// A JavaScript regexp matches over UTF-16 code units, but RE2 matches over the runes
+// of a UTF-8 string, and the two disagree exactly on the characters that are not a
+// single code unit: a supplementary character is one rune but two code units, and a
+// lone surrogate is not a scalar value at all. So a subject is transcoded to a "unit
+// string" before it is matched, one rune per UTF-16 code unit, so RE2's per-rune
+// operators — the dot, a negated class, an anchor — count units the way ECMAScript
+// does and a single dot does not swallow a surrogate pair. A code unit in the Basic
+// Multilingual Plane is already a valid rune and maps to itself, so an all-BMP subject
+// (the overwhelming common case) is byte-identical to its UTF-8 form and takes the
+// unchanged path; a surrogate code unit, which cannot be a Go rune, maps into a
+// private-use block so it survives as one rune, and a supplementary character becomes
+// the two surrogate runes it is spelled with, so the dot no longer matches it whole.
+const surrogateRuneBase = 0xF0000
+const surrogateRuneEnd = surrogateRuneBase + 0x7FF
+
+// unitToRune maps a UTF-16 code unit to the rune that stands for it in a unit string:
+// a surrogate goes to the private-use block, every other unit is its own rune.
+func unitToRune(u uint16) rune {
+	if u >= 0xD800 && u <= 0xDFFF {
+		return surrogateRuneBase + rune(u-0xD800)
+	}
+	return rune(u)
+}
+
+// isMappedSurrogate reports whether a rune of a unit string stands for a surrogate
+// code unit, the runes re2Text must map back rather than copy.
+func isMappedSurrogate(r rune) bool { return r >= surrogateRuneBase && r <= surrogateRuneEnd }
+
+// needsUnitForm reports whether s must be transcoded before matching: it holds a
+// supplementary character (two code units) or a lone surrogate, the only cases where a
+// rune of the UTF-8 form is not exactly one UTF-16 code unit. An all-BMP string does
+// not, so it keeps the UTF-8 fast path with no allocation.
+func needsUnitForm(s BStr) bool {
+	s = s.flat()
+	if s.utf16 != nil {
+		return true // the code-unit view exists only for a lone surrogate
+	}
+	for _, r := range s.utf8 {
+		if r > 0xFFFF {
+			return true
+		}
+	}
+	return false
+}
+
+// re2Subject returns the string RE2 matches s against: the plain UTF-8 form when s is
+// all-BMP, or the unit-transcoded form when s holds a supplementary character or lone
+// surrogate, so each rune of the result is exactly one UTF-16 code unit.
+func re2Subject(s BStr) string {
+	if !needsUnitForm(s) {
+		return s.ToGoString()
+	}
+	units := s.units()
+	var b strings.Builder
+	b.Grow(len(units) + len(units)/2)
+	for _, u := range units {
+		b.WriteRune(unitToRune(u))
+	}
+	return b.String()
+}
+
+// re2Unit converts a byte offset in a re2Subject string to the UTF-16 code-unit offset
+// the language reports positions in. Every rune of a unit string is one code unit, so
+// the offset is the rune count of the prefix.
+func re2Unit(str string, b int) int {
+	if b <= 0 {
+		return 0
+	}
+	if b > len(str) {
+		b = len(str)
+	}
+	return utf8.RuneCountInString(str[:b])
+}
+
+// re2Byte converts a UTF-16 code-unit offset to the byte offset of that position in a
+// re2Subject string, advancing one rune per unit. It reports ok=false for an offset
+// past the end, the position the stateful match treats as no match.
+func re2Byte(str string, u int) (int, bool) {
+	if u <= 0 {
+		return 0, true
+	}
+	count := 0
+	for i := range str {
+		if count == u {
+			return i, true
+		}
+		count++
+	}
+	if count == u {
+		return len(str), true
+	}
+	return 0, false
+}
+
+// re2Text reconstructs the string a byte range of a re2Subject denotes, undoing the
+// surrogate mapping so a matched supplementary character reads back as its two code
+// units and a mapped surrogate reads back as itself. A range with no mapped surrogate
+// and no supplementary rune keeps the UTF-8 fast path; otherwise the units are rebuilt.
+func re2Text(str string, lo, hi int) BStr {
+	sub := str[lo:hi]
+	if !strings.ContainsFunc(sub, func(r rune) bool { return isMappedSurrogate(r) || r > 0xFFFF }) {
+		return FromGoString(sub)
+	}
+	var units []uint16
+	for _, r := range sub {
+		switch {
+		case isMappedSurrogate(r):
+			units = append(units, uint16(0xD800+(r-surrogateRuneBase)))
+		case r > 0xFFFF:
+			h, l := utf16.EncodeRune(r)
+			units = append(units, uint16(h), uint16(l))
+		default:
+			units = append(units, uint16(r))
+		}
+	}
+	return FromUTF16(units)
+}
+
+// re2Whole maps a fully assembled transcoded string back into a BStr, undoing the
+// unit-rune transcoding over its whole length. The string-side methods build a result
+// by splicing transcoded subject slices with transcoded replacement text, so the whole
+// thing is in the unit-rune domain and is mapped back in one pass at the end.
+func re2Whole(str string) BStr { return re2Text(str, 0, len(str)) }
+
 // Exec runs RegExp.prototype.exec (22 §22.2.7.2): it matches the pattern against s
 // and returns the match result array on success or null on failure. Under the global
 // or sticky flag it starts from lastIndex and advances lastIndex past the match, and
@@ -230,11 +355,11 @@ func (re *RegExp) Test(s BStr) bool {
 // coordinates, and updates lastIndex to the UTF-16 offset past the match on success or
 // to zero on failure, but only when the global or sticky flag makes lastIndex live.
 func (re *RegExp) match(s BStr) ([]int, bool) {
-	str := s.ToGoString()
+	str := re2Subject(s)
 	stateful := re.global || re.sticky
 	startByte := 0
 	if stateful {
-		off, ok := utf16OffsetToByte(str, lastIndexToLength(re.lastIndex))
+		off, ok := re2Byte(str, lastIndexToLength(re.lastIndex))
 		if !ok {
 			re.lastIndex = 0
 			return nil, false
@@ -259,7 +384,7 @@ func (re *RegExp) match(s BStr) ([]int, bool) {
 		}
 	}
 	if stateful {
-		re.lastIndex = float64(byteToUTF16Offset(str, abs[1]))
+		re.lastIndex = float64(re2Unit(str, abs[1]))
 	}
 	return abs, true
 }
@@ -271,7 +396,7 @@ func (re *RegExp) match(s BStr) ([]int, bool) {
 // indices arrive in bytes and .index is reported in the UTF-16 code units the language
 // counts positions in.
 func (re *RegExp) buildResult(s BStr, m []int) Value {
-	str := s.ToGoString()
+	str := re2Subject(s)
 	n := len(m) / 2
 	elems := make([]Value, n)
 	for i := 0; i < n; i++ {
@@ -279,11 +404,11 @@ func (re *RegExp) buildResult(s BStr, m []int) Value {
 		if lo < 0 {
 			elems[i] = Undefined
 		} else {
-			elems[i] = StringValue(FromGoString(str[lo:hi]))
+			elems[i] = StringValue(re2Text(str, lo, hi))
 		}
 	}
 	res := NewArrayValue(elems)
-	res.Set(FromGoString("index"), Number(float64(byteToUTF16Offset(str, m[0]))))
+	res.Set(FromGoString("index"), Number(float64(re2Unit(str, m[0]))))
 	res.Set(FromGoString("input"), StringValue(s))
 	res.Set(FromGoString("groups"), re.groupsObject(elems))
 	return res
@@ -338,55 +463,6 @@ func lastIndexToLength(v float64) int {
 	return int(v)
 }
 
-// utf16OffsetToByte converts a UTF-16 code-unit offset into the byte offset of the
-// same position in the UTF-8 string, the translation between the unit the language
-// counts positions in and the unit RE2 searches in. It reports ok=false when the
-// offset is past the end of the string or lands inside a surrogate pair, both of
-// which the stateful match treats as a position with no match.
-func utf16OffsetToByte(s string, u16 int) (int, bool) {
-	if u16 == 0 {
-		return 0, true
-	}
-	count := 0
-	for i, r := range s {
-		if count == u16 {
-			return i, true
-		}
-		w := utf16.RuneLen(r)
-		if w < 0 {
-			w = 1
-		}
-		count += w
-	}
-	if count == u16 {
-		return len(s), true
-	}
-	return 0, false
-}
-
-// byteToUTF16Offset counts the UTF-16 code units in the prefix of s up to the byte
-// offset b, the reverse of utf16OffsetToByte, used to report .index and lastIndex in
-// the units the language counts.
-func byteToUTF16Offset(s string, b int) int {
-	if b <= 0 {
-		return 0
-	}
-	if b > len(s) {
-		b = len(s)
-	}
-	count := 0
-	for i := 0; i < b; {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		w := utf16.RuneLen(r)
-		if w < 0 {
-			w = 1
-		}
-		count += w
-		i += size
-	}
-	return count
-}
-
 // canonicalSource returns the text .source reports for a pattern. An empty pattern
 // reads back as "(?:)", the specification's non-capturing empty group, so the
 // source is always a valid pattern that round-trips through the RegExp constructor;
@@ -436,6 +512,22 @@ const (
 	jsWhitespaceClass    = `[\t\n\x0b\f\r\x{feff}\p{Z}]`
 	jsNonWhitespaceClass = `[^\t\n\x0b\f\r\x{feff}\p{Z}]`
 )
+
+// writeRE2Literal writes a literal character to the RE2 pattern. A supplementary
+// character is not one UTF-16 code unit, so in a unit string it is spelled with its two
+// surrogate runes; the pattern splits it the same way so it matches the transcoded
+// subject, and inside a character class the two runes match either half the way a
+// non-unicode-mode regexp treats a raw astral character in a class. A BMP character is
+// written unchanged, which is what the pattern needs whether it is a literal or one of
+// the RE2 metacharacters (+ * ? { | ^ $) the caller routes here.
+func writeRE2Literal(b *strings.Builder, c rune) {
+	if c > 0xFFFF {
+		h, l := utf16.EncodeRune(c)
+		fmt.Fprintf(b, `\x{%x}\x{%x}`, unitToRune(uint16(h)), unitToRune(uint16(l)))
+		return
+	}
+	b.WriteRune(c)
+}
 
 func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	if fl.unicode {
@@ -493,14 +585,22 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 				i++
 				continue
 			}
-			b.WriteRune(c)
-			b.WriteRune(n)
+			// A supplementary character after a backslash is an identity escape yielding the
+			// character itself (\X is X for a non-special X), so it is emitted as its two
+			// surrogate units, without the backslash, to match the transcoded subject. A BMP
+			// escape is copied verbatim so its RE2 meaning carries through.
+			if n > 0xFFFF {
+				writeRE2Literal(&b, n)
+			} else {
+				b.WriteRune(c)
+				b.WriteRune(n)
+			}
 			i++
 		case inClass:
 			if c == ']' {
 				inClass = false
 			}
-			b.WriteRune(c)
+			writeRE2Literal(&b, c)
 		case c == '[':
 			inClass = true
 			b.WriteRune(c)
@@ -569,7 +669,7 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 				b.WriteString(`[^\n\r\x{2028}\x{2029}]`)
 			}
 		default:
-			b.WriteRune(c)
+			writeRE2Literal(&b, c)
 		}
 	}
 	if inClass {
