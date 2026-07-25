@@ -61,10 +61,12 @@ func TestToPrimitiveSymbolToPrimitiveWinsOverValueOf(t *testing.T) {
 func TestToPrimitiveSymbolReceivesHint(t *testing.T) {
 	// The exotic method returns the hint it was handed, so each coercion context can
 	// be read back: a relational number hint, a string coercion's string hint, and a
-	// loose-equality default hint.
+	// loose-equality default hint. The hint is the method's first argument, the way the
+	// AOT calling convention binds a user function's first declared parameter, since a
+	// Symbol.toPrimitive body's this is bound lexically rather than passed positionally.
 	o := NewObject()
 	o.setSymKey(symbolToPrimitive, NewFunc(func(args []Value) Value {
-		hint := Arg(args, 1)
+		hint := Arg(args, 0)
 		switch hint.str().ToGoString() {
 		case "number":
 			return Number(1)
