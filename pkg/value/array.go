@@ -380,6 +380,89 @@ func (a *Array[T]) FindLastIndex(f func(T) bool) float64 {
 	return -1
 }
 
+// SomeIndex is Some for a callback that also reads the element index, the
+// (element, index) shape JavaScript passes. It mirrors Some, handing the
+// position as a float64 second argument, the Number the index parameter lowers
+// to. Short-circuiting and the empty-array false are unchanged.
+func (a *Array[T]) SomeIndex(f func(T, float64) bool) bool {
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
+			return true
+		}
+	}
+	return false
+}
+
+// EveryIndex is Every for an (element, index) callback, threading the position
+// as a float64. Short-circuiting on the first rejection and the vacuous empty
+// true are unchanged.
+func (a *Array[T]) EveryIndex(f func(T, float64) bool) bool {
+	for i, x := range a.elems {
+		if !f(x, float64(i)) {
+			return false
+		}
+	}
+	return true
+}
+
+// ForEachIndex is ForEach for an (element, index) callback, running it for
+// effect with the position as a float64. It returns nothing, matching forEach's
+// undefined result.
+func (a *Array[T]) ForEachIndex(f func(T, float64)) {
+	for i, x := range a.elems {
+		f(x, float64(i))
+	}
+}
+
+// FindIndexed is Find for an (element, index) callback, returning the first
+// element the predicate accepts as an Opt[T]. The name avoids colliding with
+// FindIndex, which returns the position rather than the element. The position is
+// passed as a float64.
+func (a *Array[T]) FindIndexed(f func(T, float64) bool) Opt[T] {
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
+			return Some(x)
+		}
+	}
+	return None[T]()
+}
+
+// FindIndexIndex is FindIndex for an (element, index) callback, returning the
+// position of the first match or -1. The predicate receives the position as a
+// float64.
+func (a *Array[T]) FindIndexIndex(f func(T, float64) bool) float64 {
+	for i, x := range a.elems {
+		if f(x, float64(i)) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
+// FindLastIndexed is FindLast for an (element, index) callback, walking from the
+// end and returning the last match as an Opt[T]. The position is passed as a
+// float64, matching JavaScript's descending visit order.
+func (a *Array[T]) FindLastIndexed(f func(T, float64) bool) Opt[T] {
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		if f(a.elems[i], float64(i)) {
+			return Some(a.elems[i])
+		}
+	}
+	return None[T]()
+}
+
+// FindLastIndexIndex is FindLastIndex for an (element, index) callback,
+// returning the position of the last match or -1. The predicate receives the
+// position as a float64, walking from the end.
+func (a *Array[T]) FindLastIndexIndex(f func(T, float64) bool) float64 {
+	for i := len(a.elems) - 1; i >= 0; i-- {
+		if f(a.elems[i], float64(i)) {
+			return float64(i)
+		}
+	}
+	return -1
+}
+
 // Slice returns a shallow copy of a portion of the array into a new array, the
 // lowering of Array.prototype.slice. It takes zero, one, or two Number bounds,
 // matching the source call, since JavaScript's slice has both arguments

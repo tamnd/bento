@@ -25,12 +25,15 @@ func TestArrayForEachEmitsVoidCallback(t *testing.T) {
 	}
 }
 
-// TestArrayEveryIndexCallbackHandsBack pins that a predicate callback that also
-// reads the index parameter hands back, since the value method takes a
-// single-element func the two-parameter arrow could not satisfy.
-func TestArrayEveryIndexCallbackHandsBack(t *testing.T) {
+// TestArrayEveryIndexCallbackLowers pins that a predicate callback reading the
+// index parameter lowers to the index-aware runtime variant (slice 300), rather
+// than handing back as it did before that variant existed.
+func TestArrayEveryIndexCallbackLowers(t *testing.T) {
 	src := "const a = [1, 2, 3];\nconsole.log(a.every((n: number, i: number): boolean => n > i));\n"
-	renderProgramHandBack(t, src)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, ".EveryIndex(func(n float64, i float64) bool") {
+		t.Errorf("every with an (element, index) callback did not lower to EveryIndex:\n%s", source)
+	}
 }
 
 // TestArrayFindEmitsMethod pins that find over an inline arrow lowers to the

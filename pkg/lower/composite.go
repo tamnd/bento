@@ -1797,8 +1797,14 @@ func (r *Renderer) arrayCallbackMethod(recvNode frontend.Node, goMethod string, 
 	if len(argNodes) != 1 || argNodes[0].Kind() != frontend.NodeArrowFunction {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that is not an inline arrow function is a later slice"}
 	}
-	if r.arrowParamCount(argNodes[0]) != 1 {
-		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the index or array parameter is a later slice"}
+	switch r.arrowParamCount(argNodes[0]) {
+	case 1:
+		// element-only callback: the base method as named.
+	case 2:
+		// (element, index) callback: route to the index-aware variant.
+		goMethod = arrayCallbackIndexName[goMethod]
+	default:
+		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the array parameter is a later slice"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
@@ -1813,12 +1819,27 @@ func (r *Renderer) arrayCallbackMethod(recvNode frontend.Node, goMethod string, 
 	// lowers to a func that returns that body's value and does not fit, so it is wrapped
 	// to drive the call for effect and drop the result, the way forEach ignores it. some
 	// and every keep their func(T) bool result, so only forEach adapts.
-	if goMethod == "ForEach" {
+	if goMethod == "ForEach" || goMethod == "ForEachIndex" {
 		if lit, ok := fn.(*ast.FuncLit); ok && lit.Type.Results != nil {
 			fn = r.dropFuncResult(lit)
 		}
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goMethod)}, Args: []ast.Expr{fn}}, nil
+}
+
+// arrayCallbackIndexName maps each element-only callback method to the runtime
+// variant that also threads the element index, the (element, index) shape
+// JavaScript passes. find and findLast use distinct names (FindIndexed,
+// FindLastIndexed) to avoid colliding with FindIndex/FindLastIndex, which return
+// the position rather than the element.
+var arrayCallbackIndexName = map[string]string{
+	"Some":          "SomeIndex",
+	"Every":         "EveryIndex",
+	"ForEach":       "ForEachIndex",
+	"Find":          "FindIndexed",
+	"FindIndex":     "FindIndexIndex",
+	"FindLast":      "FindLastIndexed",
+	"FindLastIndex": "FindLastIndexIndex",
 }
 
 // dropFuncResult wraps a function literal that returns a value in an adapter that
