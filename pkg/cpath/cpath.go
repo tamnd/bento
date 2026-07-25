@@ -186,7 +186,7 @@ func IsAbs(p string) bool {
 	n := rootLength(p)
 	// A bare "c:" is rooted at a volume but not at a directory: it means the
 	// working directory on that drive, which is not something bento may hold.
-	return n > 0 && !(n == 2 && p[1] == ':')
+	return n > 0 && (n != 2 || p[1] != ':')
 }
 
 // Dir is path.Dir over a checker path, with the volume kept. path.Dir has no idea
