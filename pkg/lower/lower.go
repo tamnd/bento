@@ -275,6 +275,11 @@ type Renderer struct {
 	// the body reads it through Get; the boxed call passes a value.Value into that slot
 	// anyway, so nothing is lost. A nil map (the default) forces nothing.
 	forceDynParams map[frontend.Node]bool
+	// growthVisiting is the set of function nodes funcReturnsGrowingObject is currently
+	// asking about, so a factory that calls itself does not spin: the question "does f
+	// return an object that grows" reaches f's own body, and a function already on the
+	// stack answers false rather than ask again. A nil map (the default) holds nothing.
+	growthVisiting map[frontend.Node]bool
 	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
 	// the block currently lowering. A proxy holds its target by identity and dispatches
 	// its traps off the live object, so a write through the proxy and a mutation of the

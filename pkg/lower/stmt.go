@@ -1945,6 +1945,23 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 		}
 		return boxed, nil
 	}
+	// A binding initialized by a call to a factory that returns an object that grows
+	// holds the runtime bag the callee handed back, whose Go type is value.Value. The
+	// checker types the binding by the shape the object finishes with, so without this
+	// the binding would land in a Go struct slot the box cannot fill. Returning the
+	// boxed initializer straight lets := infer the value.Value slot, and the mark routes
+	// every later read and write off the binding through the value model, so a property
+	// the factory did not set reads undefined here the same as it does inside it.
+	if initNode.Kind() == frontend.NodeCallExpression && r.callOfGrowingObjectFunc(initNode) {
+		boxed, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
 	// A `const s = Symbol()` binding holds the boxed symbol value.NewSymbol builds, but
 	// the checker types it unique symbol, a flagless type the dynamic guards do not see
 	// and typeExpr cannot name. The boxed initializer is returned straight, so := infers
