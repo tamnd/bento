@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tamnd/bento/pkg/build"
 )
@@ -30,7 +32,12 @@ var update = flag.Bool("update", false, "rewrite emit.golden files from the curr
 // feature, set by `go test -feature math.hypot`, narrows the run to fixtures whose
 // fixture.toml tags them with that feature. It is the incremental seam: working on
 // one lowering path reruns only that path's fixtures. Empty runs the whole corpus.
-var feature = flag.String("feature", "", "run only fixtures tagged with this feature")
+//
+// A dotted group selects everything under it, so -feature math runs math.hypot and
+// math.trunc together. Feature tags are already named that way, and an area is the
+// unit a lowering slice actually works in, so this is the grouping that matters:
+// one run covers the area rather than one invocation per leaf.
+var feature = flag.String("feature", "", "run only fixtures tagged with this feature or dotted group")
 
 // fixtures discovers the corpus once and applies the -feature filter. A discovery
 // error or an empty corpus is fatal, since a run that silently checks nothing is
@@ -49,14 +56,47 @@ func fixtures(t *testing.T) []Fixture {
 	}
 	var kept []Fixture
 	for _, f := range all {
-		if f.Meta.Feature == *feature {
+		if matchesFeature(f.Meta.Feature, *feature) {
 			kept = append(kept, f)
 		}
 	}
 	if len(kept) == 0 {
-		t.Fatalf("no fixtures tagged feature %q", *feature)
+		// A mistyped tag is the common way to get here, so the message names what
+		// could have been meant rather than only what was not found.
+		t.Fatalf("no fixtures tagged feature %q\navailable: %s", *feature, strings.Join(featureNames(all), " "))
 	}
 	return kept
+}
+
+// matchesFeature reports whether a fixture's tag is selected by a -feature value. A
+// tag matches when it is that value exactly, or when it sits under it as a dotted
+// group. The boundary is the dot rather than a bare prefix, so -feature math selects
+// math.hypot without also dragging in an unrelated mathml.
+func matchesFeature(tag, want string) bool {
+	return tag == want || strings.HasPrefix(tag, want+".")
+}
+
+// featureNames lists the distinct tags and the groups they sit under, sorted, for the
+// message a failed filter prints. Groups are included because they are selectable,
+// and a list of leaves alone would hide the shorter thing the developer wanted.
+func featureNames(all []Fixture) []string {
+	seen := map[string]bool{}
+	for _, f := range all {
+		for tag := f.Meta.Feature; tag != ""; {
+			seen[tag] = true
+			dot := strings.LastIndex(tag, ".")
+			if dot < 0 {
+				break
+			}
+			tag = tag[:dot]
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // TestMain redirects the golden go run builds to a build cache kept apart from the
@@ -67,19 +107,86 @@ func fixtures(t *testing.T) []Fixture {
 // dedicated cache keeps the stdlib and pkg/value warm across runs so the oracle
 // stays fast, and the teardown drops the whole cache once it grows past a cap, so
 // one-shot golden churn is bounded and the developer's own cache never sees it.
+//
+// The cap used to fire on every full run: the corpus links enough one-shot binaries
+// to cross it in a single sweep, and dropping the whole cache took the warm stdlib
+// and pkg/value with it, so the next run started cold and the cache never did the
+// one job it was for. The verdict cache (verdictcache.go) is what fixes that rather
+// than a larger cap: a run where no golden changed compiles nothing at all, so the
+// cache stops growing and the cap goes back to being the disk safety net it was
+// meant to be, firing only after a change that genuinely rebuilds the corpus.
 func TestMain(m *testing.M) {
-	cache := filepath.Join(os.TempDir(), "bento-conformance-gocache")
+	cache := goldenCacheDir()
 	if err := os.Setenv("GOCACHE", cache); err != nil {
 		panic(err)
 	}
+	release := markRunner(cache)
 	code := m.Run()
 	// A cache past this size is mostly dead one-shot golden binaries, so drop it
 	// rather than let it grow; the next run rewarms the stdlib into a fresh one.
+	// Dropping it is only safe when no other run is building against it, since a
+	// cache removed mid-build fails that build from deep inside the go tool.
 	const maxGoldenCache = 2 << 30 // 2 GiB
-	if dirSize(cache) > maxGoldenCache {
+	if sole := release(); sole && dirSize(cache) > maxGoldenCache {
 		_ = os.RemoveAll(cache)
 	}
 	os.Exit(code)
+}
+
+// goldenCacheDir is the build cache goldens compile into. It defaults to a shared
+// directory under the temporary directory, so a run reuses the stdlib the previous run
+// compiled rather than paying for it again, and BENTO_CONFORMANCE_GOCACHE overrides it.
+//
+// The override is for a machine running two corpora at once, two branches under test in
+// parallel. They would otherwise share one cache that each is allowed to delete, and a
+// private cache is the way to be sure a measurement is measuring only itself.
+func goldenCacheDir() string {
+	if dir := os.Getenv("BENTO_CONFORMANCE_GOCACHE"); dir != "" {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), "bento-conformance-gocache")
+}
+
+// markRunner records that this process is using the golden cache and returns a function
+// that clears the mark and reports whether this run was the last one out. Only the last
+// one out may apply the size cap: deleting the cache under a concurrent build makes that
+// build fail with a missing object file, which reads as if the compiler broke rather
+// than as if two runs shared a machine.
+//
+// A mark that outlives its process, from a run that was killed, would block the cap
+// forever, so a stale one is ignored. The window is generous because a full corpus run
+// takes minutes, and the cost of guessing wrong is only a cache that grows for one more
+// run.
+func markRunner(cache string) func() bool {
+	const staleAfter = 6 * time.Hour
+	dir := cache + ".runners"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		// Without a mark this run cannot tell whether it is alone, so it declines to
+		// trim rather than risk deleting a cache someone else is building against.
+		return func() bool { return false }
+	}
+	// The name is unique rather than the pid, since two runs can carry the same pid
+	// when one of them is inside a container.
+	f, err := os.CreateTemp(dir, "run-")
+	if err != nil {
+		return func() bool { return false }
+	}
+	mine := f.Name()
+	_ = f.Close()
+	return func() bool {
+		_ = os.Remove(mine)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil || time.Since(info.ModTime()) < staleAfter {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 // dirSize sums the bytes of every file under root, the check TestMain uses to decide
@@ -198,6 +305,13 @@ func TestHandback(t *testing.T) {
 // runtime regression that still compiles is caught by what it prints. It runs the
 // checked-in golden, not a fresh lowering, so the artifact the corpus ships is the
 // one exercised.
+//
+// This is the expensive test in the repo. Every fixture is its own main package, so Go
+// links a separate binary per fixture and its build cache cannot avoid the link. What
+// makes a repeat run cheap is the verdict cache: a golden that already ran against this
+// runtime, toolchain and environment has its output replayed instead. Only the output is
+// cached, never the pass or fail verdict, so the comparison below happens every time and
+// editing an oracle takes effect at once. See verdictcache.go for what the key covers.
 func TestOracle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping golden compile-and-run under -short")
@@ -227,23 +341,65 @@ func TestOracle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse oracle: %v", err)
 			}
-			stdout, exit := runGolden(t, root, golden, f.Meta.Env)
-			if normalizeOut(stdout) != normalizeOut(want.Stdout) {
-				t.Errorf("%s stdout mismatch\n--- got ---\n%s\n--- want ---\n%s", f.Slug, stdout, want.Stdout)
+			// A cached output is reused only when nothing that could change it has
+			// changed; see verdictcache.go for what the key covers.
+			key, cacheable := VerdictKey(golden, f.Meta.Env)
+			cached := false
+			var got Verdict
+			var stderr string
+			if cacheable {
+				if v, hit := LookupVerdict(key); hit {
+					got, cached = v, true
+				}
 			}
-			if exit != want.Exit {
-				t.Errorf("%s exit code = %d, want %d", f.Slug, exit, want.Exit)
+			if !cached {
+				run := runGolden(t, root, golden, f.Meta.Env)
+				got = Verdict{Stdout: run.Stdout, Exit: run.Exit}
+				stderr = run.Stderr
+			}
+
+			matched := normalizeOut(got.Stdout) == normalizeOut(want.Stdout) && got.Exit == want.Exit
+			if normalizeOut(got.Stdout) != normalizeOut(want.Stdout) {
+				t.Errorf("%s stdout mismatch\n--- got ---\n%s\n--- want ---\n%s", f.Slug, got.Stdout, want.Stdout)
+			}
+			if got.Exit != want.Exit {
+				t.Errorf("%s exit code = %d, want %d", f.Slug, got.Exit, want.Exit)
+			}
+			// A failed build and a program that ran and threw look the same from stdout
+			// and the exit code alone: both print nothing and exit non-zero. Only stderr
+			// tells them apart, so it is reported on any failure rather than dropped.
+			if !matched && stderr != "" {
+				t.Errorf("%s stderr\n%s", f.Slug, stderr)
+			}
+
+			// Only a result that matched is worth keeping. A failing one is either a
+			// regression, which is about to be fixed and so pointless to remember, or an
+			// infrastructure flake, which must never become sticky: caching it would
+			// replay the failure on every later run and read as a real red long after the
+			// contention that caused it passed.
+			if cacheable && !cached && matched {
+				StoreVerdict(key, got)
 			}
 		})
 	}
 }
 
+// goldenRun is everything a golden produced. Stdout and Exit are what the oracle
+// compares; Stderr is carried alongside because `go run` reports a build failure there
+// while still exiting non-zero with nothing on stdout, which is indistinguishable from a
+// program that ran and threw unless the two streams travel together.
+type goldenRun struct {
+	Stdout string
+	Exit   int
+	Stderr string
+}
+
 // runGolden writes the golden into a scratch directory inside this module and runs
-// it with `go run`, returning its stdout and exit code. The scratch directory sits
-// under the module tree so the golden's import of bento's value package resolves
-// from this module's requirements with no separate go.mod, the same way bento's own
-// build compiles a program inside its module tree.
-func runGolden(t *testing.T, root string, golden []byte, env map[string]string) (string, int) {
+// it with `go run`. The scratch directory sits under the module tree so the golden's
+// import of bento's value package resolves from this module's requirements with no
+// separate go.mod, the same way bento's own build compiles a program inside its module
+// tree.
+func runGolden(t *testing.T, root string, golden []byte, env map[string]string) goldenRun {
 	t.Helper()
 	dir, err := os.MkdirTemp(root, "goldenrun-")
 	if err != nil {
@@ -274,11 +430,11 @@ func runGolden(t *testing.T, root string, golden []byte, env map[string]string) 
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return stdout.String(), exit.ExitCode()
+			return goldenRun{Stdout: stdout.String(), Exit: exit.ExitCode(), Stderr: stderr.String()}
 		}
 		t.Fatalf("go run failed to start: %v\n--- stderr ---\n%s", err, stderr.String())
 	}
-	return stdout.String(), 0
+	return goldenRun{Stdout: stdout.String()}
 }
 
 // normalizeOut trims trailing newlines so a one-line expected value in oracle.txt
