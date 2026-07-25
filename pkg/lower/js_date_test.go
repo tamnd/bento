@@ -110,7 +110,7 @@ func TestUncoveredDateFormsHandBack(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
 		{`const d = new Date("2023-01-01"); console.log(d.getTime());`, "new Date from a string"},
 		{`const d = new Date(2023, 0, 1); console.log(d.getTime());`, "year, month, and day components"},
-		{`const d = new Date(0); console.log(d.getFullYear());`, "the Date method .getFullYear"},
+		{`const d = new Date(0); console.log(d.toDateString());`, "the Date method .toDateString"},
 		{`console.log(Date.parse("2023-01-01"));`, "Date.parse is a later slice"},
 	} {
 		prog := compileJS(t, c.src)
@@ -124,5 +124,63 @@ func TestUncoveredDateFormsHandBack(t *testing.T) {
 		if !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s\n got: %v\nwant a reason containing %q", c.src, err, c.want)
 		}
+	}
+}
+
+// TestDateGettersReadTheComponents is the ordinary JavaScript spelling of the calendar
+// reads. Only the UTC getters are pinned exactly: the local ones depend on the zone the
+// compiled program runs in, so they are checked for agreement instead.
+func TestDateGettersReadTheComponents(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(1700000000123);
+console.log(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCDay());
+console.log(d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds());
+console.log(new Date(-1).getUTCFullYear(), new Date(-1).getUTCMonth(), new Date(-1).getUTCDate());
+`))
+	want := "2023 10 14 2\n22 13 20 123\n1969 11 31\n"
+	if got != want {
+		t.Errorf("date getters\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestLocalGettersAgreeWithTheOffset pins the local reads without pinning a zone: the
+// local wall clock, shifted back by the offset the date reports, has to land on the UTC
+// wall clock. That holds in every zone, so the assertion is stable wherever the compiled
+// program runs.
+func TestLocalGettersAgreeWithTheOffset(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(1700000000123);
+const shifted = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+console.log(d.getHours() === shifted.getUTCHours(), d.getDate() === shifted.getUTCDate());
+console.log(d.getMilliseconds() === d.getUTCMilliseconds());
+console.log(d.getFullYear() >= 2023);
+`))
+	want := "true true\ntrue\ntrue\n"
+	if got != want {
+		t.Errorf("local getters\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestInvalidDateGettersAreNaNInJS pins that a program reading the Invalid Date sees NaN
+// from every getter rather than a number that reads like an instant.
+func TestInvalidDateGettersAreNaNInJS(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(NaN);
+console.log(Number.isNaN(d.getUTCFullYear()), Number.isNaN(d.getMonth()), Number.isNaN(d.getTimezoneOffset()));
+`))
+	want := "true true true\n"
+	if got != want {
+		t.Errorf("invalid date getters\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestDateSettersHandBack pins that mutating a date says so rather than silently doing
+// nothing, since a setter that appeared to work and did not would be the worst kind of
+// wrong answer.
+func TestDateSettersHandBack(t *testing.T) {
+	prog := compileJS(t, `const d = new Date(0); d.setFullYear(2000); console.log(d.getTime());`)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
+		t.Fatal("setFullYear lowered, want a hand-back")
+	} else if !strings.Contains(err.Error(), "the Date method .setFullYear") {
+		t.Errorf("got: %v\nwant a reason naming setFullYear", err)
 	}
 }

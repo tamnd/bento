@@ -81,19 +81,40 @@ func (r *Renderer) dateStaticCall(method string, argNodes []frontend.Node) (ast.
 	return &ast.CallExpr{Fun: sel("value", "DateNow")}, nil
 }
 
-// dateMethodCall lowers a method call on a Date receiver. getTime and valueOf both give
-// the time value, and toISOString serializes it; the calendar getters read components
-// this slice does not derive, so they hand back naming the slice that brings them.
+// dateGetters maps each no-argument Date read to the runtime method that answers it.
+// The calendar getters come in a local pair and a UTC pair for every component, which is
+// most of the surface, and each is a straight rename, so the dispatch is a table rather
+// than a switch with sixteen near-identical arms.
+var dateGetters = map[string]string{
+	"getTime":            "GetTime",
+	"valueOf":            "ValueOf",
+	"toISOString":        "ToISOString",
+	"getTimezoneOffset":  "GetTimezoneOffset",
+	"getFullYear":        "GetFullYear",
+	"getMonth":           "GetMonth",
+	"getDate":            "GetDate",
+	"getDay":             "GetDay",
+	"getHours":           "GetHours",
+	"getMinutes":         "GetMinutes",
+	"getSeconds":         "GetSeconds",
+	"getMilliseconds":    "GetMilliseconds",
+	"getUTCFullYear":     "GetUTCFullYear",
+	"getUTCMonth":        "GetUTCMonth",
+	"getUTCDate":         "GetUTCDate",
+	"getUTCDay":          "GetUTCDay",
+	"getUTCHours":        "GetUTCHours",
+	"getUTCMinutes":      "GetUTCMinutes",
+	"getUTCSeconds":      "GetUTCSeconds",
+	"getUTCMilliseconds": "GetUTCMilliseconds",
+}
+
+// dateMethodCall lowers a method call on a Date receiver: the two reads that give the
+// time value, the ISO format, and the calendar getters, each of which takes no argument
+// and gives a Number. The setters mutate the time value and the other formats have their
+// own rules, so both hand back naming the slice that brings them.
 func (r *Renderer) dateMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
-	var goName string
-	switch method {
-	case "getTime":
-		goName = "GetTime"
-	case "valueOf":
-		goName = "ValueOf"
-	case "toISOString":
-		goName = "ToISOString"
-	default:
+	goName, ok := dateGetters[method]
+	if !ok {
 		return nil, &NotYetLowerable{Reason: "the Date method ." + method + " is a later slice"}
 	}
 	if len(r.namedArgs(argNodes)) != 0 {
