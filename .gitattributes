@@ -1,0 +1,12 @@
+# Every text file in this repository is LF, in the working tree and in the
+# object store, on every platform.
+#
+# Without this a Windows checkout converts to CRLF and the 786 golden files stop
+# matching what the renderer produces, which is always LF. The failure is
+# especially unpleasant to read: the test prints two blocks that look
+# byte-identical and says they differ.
+#
+# eol=lf also normalizes on the way in, so an editor that writes CRLF cannot
+# commit one. text=auto still detects genuinely binary content and leaves it
+# alone, so this stays correct for any non-text fixture we add later.
+* text=auto eol=lf
