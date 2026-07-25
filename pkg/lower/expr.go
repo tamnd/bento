@@ -1742,6 +1742,15 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 	if err != nil {
 		return nil, err
 	}
+	// A boolean-typed operand whose lowering is a value.Value box (a method call on a
+	// generic receiver, obj.hasOwnProperty(k), that the checker types boolean but the
+	// runtime dispatches through Call) cannot ride a Go && / || / == / != directly: the
+	// operator needs a Go bool on each side. binaryOp already picked the boolean Go
+	// token from the two static boolean types, so the value is a boolean box; reading it
+	// back through ToBoolean recovers the Go bool the operator wants. This runs only for
+	// a boxed boolean operand, so a native bool local passes through untouched.
+	l = r.coerceBoxedBooleanOperand(left, l)
+	rr = r.coerceBoxedBooleanOperand(right, rr)
 	// Arithmetic on two constant number operands folds to a float64 literal, because
 	// JavaScript number arithmetic is float64 and Go's is not for integer-spelled
 	// constants: 5 + 3 under := infers int, and 7 / 2 folds to the integer 3 rather
@@ -2215,6 +2224,22 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "PlusToString"), Args: []ast.Expr{boxed}}, nil
 	}
+}
+
+// coerceBoxedBooleanOperand reads a boolean operand back through value.ToBoolean
+// when its lowered form is a value.Value box rather than a native Go bool, so a Go
+// boolean operator (&&, ||, ==, !=) has the bool it requires on that side. The
+// mismatch arises when the checker types an expression boolean but the runtime
+// lowers it to a box: obj.hasOwnProperty(k) dispatches through the runtime Call and
+// yields a value.Value even though its static type is boolean. The operand is only
+// wrapped when it is statically boolean and its source produces a box; a native bool
+// local, whose lowering is already a Go bool, passes through unchanged.
+func (r *Renderer) coerceBoxedBooleanOperand(n frontend.Node, lowered ast.Expr) ast.Expr {
+	if !r.isBool(n) || !r.producesBoxedValue(r.unwrapParens(n)) {
+		return lowered
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ToBoolean"), Args: []ast.Expr{lowered}}
 }
 
 // binaryOp picks the Go operator for a TypeScript binary operator given its
