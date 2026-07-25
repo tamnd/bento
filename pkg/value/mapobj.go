@@ -62,6 +62,18 @@ func NewRefMap[K comparable, V any]() *Map[K, V] {
 	return &Map[K, V]{eq: func(a, b K) bool { return a == b }}
 }
 
+// NewDynMap builds an empty Map whose keys are dynamic values, the lowering of a
+// `new Map()` written with no key type. That is the ordinary spelling in JavaScript,
+// where nothing narrows the key to a single kind, so one map holds a number, a
+// string, and an object key side by side. Keys compare by SameValueZero over the
+// boxed value, which is the one comparison that covers every kind at once: a number
+// key matches by value with NaN matching itself, a string by code unit, and an
+// object by identity, exactly as the kind-specific constructors above do for the
+// keys they each admit.
+func NewDynMap[V any]() *Map[Value, V] {
+	return &Map[Value, V]{eq: SameValueZero}
+}
+
 // find returns the index of the entry whose key matches k, or -1 when the map has
 // no such key. It is the linear scan every keyed operation shares; the hashed index
 // that replaces it is a later performance slice.

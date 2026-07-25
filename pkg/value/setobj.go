@@ -64,6 +64,14 @@ func NewRefSet[T comparable]() *Set[T] {
 	return &Set[T]{eq: func(a, b T) bool { return a == b }}
 }
 
+// NewDynSet builds an empty Set whose members are dynamic values, the lowering of a
+// `new Set()` written with no member type, the ordinary spelling in JavaScript.
+// Members compare by SameValueZero over the boxed value, the one comparison that
+// covers every kind at once, exactly as NewDynMap does for its keys.
+func NewDynSet() *Set[Value] {
+	return &Set[Value]{eq: SameValueZero}
+}
+
 // find returns the index of the member that matches v, or -1 when the set has no
 // such member. It is the linear scan every membership operation shares; the hashed
 // index that replaces it is a later performance slice.
