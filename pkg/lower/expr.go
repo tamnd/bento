@@ -1606,6 +1606,14 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 	// would not compile on a *big.Int, and typed on both operands because TypeScript
 	// forbids mixing a bigint with any other type in an operator.
 	if r.isBigInt(left) && r.isBigInt(right) {
+		// The checker types the operator node bigint, but a mixed subexpression like
+		// (year - 1970n), where year is an untyped value the checker widens to bigint
+		// through the literal, lowers through the number path to a float64. Feeding that
+		// to new(big.Int).Mul would not compile, so when an operand does not soundly lower
+		// to a *big.Int hand the whole expression back rather than emit broken Go.
+		if !r.bigIntExprIsSound(left) || !r.bigIntExprIsSound(right) {
+			return nil, &NotYetLowerable{Reason: "bigint operator has an operand that lowers to a number, not a big.Int"}
+		}
 		return r.bigIntBinary(opText, left, right)
 	}
 
