@@ -46,6 +46,18 @@ func (r *Renderer) newProxy(args []frontend.Node) (ast.Expr, error) {
 	if len(args) != 2 {
 		return nil, &NotYetLowerable{Reason: "new Proxy takes exactly a target and a handler"}
 	}
+	// A fixed-shape target (a RegExp, a function, and other intrinsics) boxes to a
+	// value.Value that carries no runtime property bag, the same limitation that
+	// hands back a bare Reflect.has on such a value. A proxy over it would still box
+	// it and forward [[HasProperty]], [[Get]], and [[OwnPropertyKeys]] to that bagless
+	// box, which reports every inherited or own property absent and answers has, in,
+	// and Object.create lookups with a wrong false. Decline the construction so the
+	// program hands back rather than running to a wrong answer; a plain-object target
+	// is dynamic and keeps its bag, so it lowers as before. A property view over a
+	// boxed intrinsic target is a later slice.
+	if !r.isDynamic(args[0]) {
+		return nil, &NotYetLowerable{Reason: "new Proxy over a fixed-shape target, which boxes to a value with no runtime property bag to forward a trap to, is a later slice"}
+	}
 	target, err := r.boxOperand(args[0])
 	if err != nil {
 		return nil, err
