@@ -453,7 +453,16 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 		return r.arrayFromDynamic(argNodes)
 	}
 	if len(argNodes) > 1 {
-		return nil, &NotYetLowerable{Reason: "Array.from with a map callback into a typed array is a later slice"}
+		// Array.from(arr, fn) over a real array is exactly arr.map(fn): the callback
+		// receives each element and its result becomes the new element, so the array
+		// map lowering already spells the whole thing (src.Map(fn) for a same-type
+		// callback, value.MapArray[T, U](src, fn) for a type-changing one). A
+		// non-array source (a string or user iterable) with a map callback, and the
+		// index parameter map itself does not yet thread, stay a later slice.
+		if _, ok := r.arrayElem(argNodes[0]); ok {
+			return r.arrayMapFilter(argNodes[0], "Map", argNodes[1:], true)
+		}
+		return nil, &NotYetLowerable{Reason: "Array.from with a map callback over a non-array source is a later slice"}
 	}
 	elemType, ok := r.arrayElem(call)
 	if !ok {
