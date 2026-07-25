@@ -428,6 +428,15 @@ func TranslateRegExpSource(pattern, flags string) (re2 string, ok bool, reason s
 // alternation core, maps to RE2 unchanged except for the dot, whose line-terminator
 // set differs between the two and is rewritten to the ECMAScript set here, scoped by
 // the s flag an inline (?s:...) modifier turns on or off.
+// jsWhitespaceClass is RE2's spelling of ECMAScript's \s: tab, newline, vertical tab,
+// form feed, carriage return, U+FEFF, and every Unicode space separator (\p{Z} = Zs+Zl+Zp,
+// which covers space, NBSP, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000).
+// jsNonWhitespaceClass is its negation, RE2's spelling of \S.
+const (
+	jsWhitespaceClass    = `[\t\n\x0b\f\r\x{feff}\p{Z}]`
+	jsNonWhitespaceClass = `[^\t\n\x0b\f\r\x{feff}\p{Z}]`
+)
+
 func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	if fl.unicode {
 		return "", false, "a unicode-mode (u flag) regexp is a later slice"
@@ -466,6 +475,23 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 			}
 			if n == 'p' || n == 'P' {
 				return "", false, "a unicode property escape in a regexp is a later slice"
+			}
+			// ECMAScript's \s and \S span the full Unicode WhiteSpace set (tab, the line
+			// terminators, the space separators \p{Z}, and the zero-width no-break space
+			// U+FEFF), but RE2's \s is ASCII-only, so a bare \s / \S would wrongly reject
+			// or accept characters like NBSP or U+3000. Outside a character class the escape
+			// is rewritten to the explicit Unicode class (and its negation) that matches JS.
+			// Inside a class the escape is left verbatim: RE2 cannot host an inline negated
+			// property, and splicing would change the common [\s\S] match-any idiom, so the
+			// pre-existing ASCII behavior stands there rather than risk a regression.
+			if !inClass && (n == 's' || n == 'S') {
+				if n == 's' {
+					b.WriteString(jsWhitespaceClass)
+				} else {
+					b.WriteString(jsNonWhitespaceClass)
+				}
+				i++
+				continue
 			}
 			b.WriteRune(c)
 			b.WriteRune(n)
