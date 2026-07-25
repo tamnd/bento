@@ -25,13 +25,18 @@ const (
 	MathSQRT2  = 1.4142135623730951 // Math.SQRT2, the square root of two
 )
 
-// The finite Number constants.
+// The finite Number constants. Every one is a JavaScript Number, an IEEE-754
+// double, so each is typed float64 explicitly. MAX_SAFE_INTEGER and MIN_SAFE_INTEGER
+// are whole numbers, and an untyped integer constant defaults to int when it lands
+// in a `:=`, so `const n = Number.MAX_SAFE_INTEGER` would otherwise bind an int-typed
+// Go var and refuse to flow into a float64 parameter (value.Some[float64], NewDuration).
+// Typing them float64 keeps the JS model, that all five are the same kind of number.
 const (
-	NumberEpsilon        = 2.220446049250313e-16  // Number.EPSILON, 2^-52, the gap above 1
-	NumberMaxSafeInteger = 9007199254740991       // Number.MAX_SAFE_INTEGER, 2^53 - 1
-	NumberMinSafeInteger = -9007199254740991      // Number.MIN_SAFE_INTEGER
-	NumberMaxValue       = 1.7976931348623157e308 // Number.MAX_VALUE, the largest finite double
-	NumberMinValue       = 5e-324                 // Number.MIN_VALUE, the smallest positive subnormal
+	NumberEpsilon        float64 = 2.220446049250313e-16  // Number.EPSILON, 2^-52, the gap above 1
+	NumberMaxSafeInteger float64 = 9007199254740991       // Number.MAX_SAFE_INTEGER, 2^53 - 1
+	NumberMinSafeInteger float64 = -9007199254740991      // Number.MIN_SAFE_INTEGER
+	NumberMaxValue       float64 = 1.7976931348623157e308 // Number.MAX_VALUE, the largest finite double
+	NumberMinValue       float64 = 5e-324                 // Number.MIN_VALUE, the smallest positive subnormal
 )
 
 // The non-finite Number constants cannot be Go constants (an infinity or NaN is

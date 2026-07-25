@@ -29,7 +29,7 @@ func TestStringFromGoIsBentoString(t *testing.T) {
 }
 
 func TestInt64ToNumberInRange(t *testing.T) {
-	for _, n := range []int64{0, 1, -1, value.NumberMaxSafeInteger, value.NumberMinSafeInteger} {
+	for _, n := range []int64{0, 1, -1, int64(value.NumberMaxSafeInteger), int64(value.NumberMinSafeInteger)} {
 		if got := Int64ToNumber(n); got != float64(n) {
 			t.Errorf("Int64ToNumber(%d) = %v, want %v", n, got, float64(n))
 		}
@@ -37,7 +37,7 @@ func TestInt64ToNumberInRange(t *testing.T) {
 }
 
 func TestInt64ToNumberOutOfRangeRaises(t *testing.T) {
-	for _, n := range []int64{value.NumberMaxSafeInteger + 1, value.NumberMinSafeInteger - 1} {
+	for _, n := range []int64{int64(value.NumberMaxSafeInteger) + 1, int64(value.NumberMinSafeInteger) - 1} {
 		func() {
 			defer func() {
 				r := recover()
@@ -62,7 +62,7 @@ func TestUint64ToNumberOutOfRangeRaises(t *testing.T) {
 			t.Errorf("raised %T, want RangeError", r)
 		}
 	}()
-	Uint64ToNumber(value.NumberMaxSafeInteger + 1)
+	Uint64ToNumber(uint64(value.NumberMaxSafeInteger) + 1)
 }
 
 func TestMustReturnsValueWhenNoError(t *testing.T) {
