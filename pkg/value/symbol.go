@@ -125,15 +125,17 @@ func SymbolFor(key BStr) Value {
 	return symbolValue(s)
 }
 
-// SymbolKeyFor returns the registry key a symbol was interned under as a string
-// value, or undefined when the symbol never entered the registry, the read
+// SymbolKeyFor returns the registry key a symbol was interned under, present when
+// the symbol was created with Symbol.for and absent otherwise, the read
 // Symbol.keyFor(sym) makes. It is only valid on a KindSymbol value, the shape the
-// lowerer guarantees at the call site.
-func SymbolKeyFor(v Value) Value {
+// lowerer guarantees at the call site. The Opt[BStr] result matches how the checker
+// types Symbol.keyFor as string|undefined: a typed slot takes the Opt directly and a
+// boxed use flows it through value.OptToValue(_, value.StringValue).
+func SymbolKeyFor(v Value) Opt[BStr] {
 	if key, ok := symbolRegistryKeys[v.symbol()]; ok {
-		return StringValue(key)
+		return Some(key)
 	}
-	return Undefined
+	return None[BStr]()
 }
 
 // SymbolDescriptiveString renders a symbol as "Symbol(desc)", the SymbolDescriptiveString
