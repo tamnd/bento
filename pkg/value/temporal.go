@@ -3865,6 +3865,11 @@ func (z *ZonedDateTime) HoursInDay() float64 {
 	today := z.startOfDayInstant(dt.date.year, dt.date.month, dt.date.day)
 	ny, nm, nd := addISODate(dt.date.year, dt.date.month, dt.date.day, 0, 0, 0, big.NewInt(1), "constrain")
 	next := z.startOfDayInstant(ny, nm, nd)
+	// The next day's start must be a representable instant. When the receiver sits at the upper
+	// edge of the range the boundary lands past nsMaxInstant, and the length of the day is not a
+	// question that can be answered, so this throws rather than returning a wrong number.
+	validateEpochNanoseconds(today)
+	validateEpochNanoseconds(next)
 	gap := new(big.Int).Sub(next, today)
 	return float64(gap.Int64()) / 3_600_000_000_000
 }
