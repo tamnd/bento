@@ -745,7 +745,7 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 		// call carries the default's value, not an undefined the static slot cannot
 		// hold. A variadicTail callee fills its own tail by arity in its body, so an
 		// undefined there rides the variadic untouched and is left alone.
-		if !variadicTail && i < len(defaults) && defaults[i] != nil && r.isUndefinedLiteral(a) {
+		if !variadicTail && i < len(defaults) && defaults[i] != nil && r.isUndefinedArg(a) {
 			a = defaults[i]
 		}
 		// A bare reference to a pure rest-parameter function passed to a rest-parameter

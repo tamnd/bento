@@ -27,6 +27,39 @@ func TestDefaultParamExplicitUndefinedFillsDefault(t *testing.T) {
 	}
 }
 
+// TestDefaultParamVoidZeroFillsDefault proves that void 0, which always evaluates to
+// undefined, fills a defaulted slot the same way the undefined literal does: the fold
+// hands the parameter its default, so an undefined never lands in a slot whose static
+// type (float64 here) cannot hold it. This is the shape the test262 dflt-params tests
+// take when they pass void 0 for a defaulted argument.
+func TestDefaultParamVoidZeroFillsDefault(t *testing.T) {
+	const src = "function ref(fromLiteral = 23, fromExpr = 45, fromHole = 99): number {\n" +
+		"  return fromLiteral + fromExpr + fromHole;\n" +
+		"}\n" +
+		"ref(undefined, void 0);\n"
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "Ref(23, 45, 99)") {
+		t.Errorf("void 0 did not fill with the default:\n%s", source)
+	}
+	if strings.Contains(source, "value.Undefined") {
+		t.Errorf("void 0 lowered to value.Undefined in a float64 slot instead of the default:\n%s", source)
+	}
+}
+
+// TestDefaultParamVoidSideEffectHandsBack proves the fold is withheld when the void
+// operand could run: void applied to a call keeps the operand's effect, so it is not
+// folded away to the default. Such a void hands back at lowering rather than dropping
+// the call, so this must not silently substitute the default.
+func TestDefaultParamVoidSideEffectHandsBack(t *testing.T) {
+	const src = "let n = 0;\n" +
+		"function bump(): number { n = n + 1; return n; }\n" +
+		"function ref(by: number = 1): number { return by; }\n" +
+		"ref(void bump());\n"
+	if reason := renderProgramHandBack(t, src); reason == "" {
+		t.Fatalf("a void over a call in a defaulted slot should hand back, not fold to the default")
+	}
+}
+
 // TestDefaultParamExplicitUndefinedOnMethodFillsDefault proves the same undefined
 // substitution on an instance method, whose call site can always reconstruct the
 // default.

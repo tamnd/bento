@@ -873,6 +873,26 @@ func (r *Renderer) isUndefinedLiteral(n frontend.Node) bool {
 		r.prog.TypeAt(n).Flags == frontend.TypeUndefined
 }
 
+// isUndefinedArg reports whether an argument is statically the undefined value, so a
+// defaulted parameter slot fills its default for it exactly as it does for an omission.
+// It covers the undefined literal and a void over a side-effect-free operand (void 0 the
+// canonical one), which always evaluates to undefined; a void whose operand could run a
+// call or an assignment is excluded so folding it to the default never drops that effect,
+// the same repeatableOperand discipline voidExpr takes before it folds to the singleton.
+// Without this a void 0 in a numeric-defaulted slot lowers to value.Undefined and lands in
+// a float64 parameter, which does not compile; the fold hands the parameter its default
+// instead, the value the language binds for an undefined argument.
+func (r *Renderer) isUndefinedArg(n frontend.Node) bool {
+	if r.isUndefinedLiteral(n) {
+		return true
+	}
+	if !r.isVoidExpr(n) {
+		return false
+	}
+	kids := r.prog.Children(n)
+	return len(kids) == 1 && r.repeatableOperand(r.unwrapParens(kids[0]))
+}
+
 // combineIsDynamic reports whether a binary operator on these operands produces a
 // boxed dynamic result, which is the case only for + with a dynamic operand: the
 // result kind is not known until runtime, so it goes through value.Add. When the
