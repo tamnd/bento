@@ -1,6 +1,9 @@
 package value
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // This file is the runtime side of Node's built-in module registry, the seam the
 // whole Node-compatibility roadmap builds against. A Node test reaches a built-in
@@ -113,9 +116,56 @@ func RequireBuiltin(specifier string) Value {
 	if m, ok := builtinModuleCache[name]; ok {
 		return m
 	}
-	m := newStubModule(name)
+	m := buildBuiltinModule(name)
 	builtinModuleCache[name] = m
 	return m
+}
+
+// buildBuiltinModule constructs the module value for a canonical built-in name: a
+// real implementation for a name bento carries, or the throw-on-use stub for one it
+// does not yet. The module core module is the first real entry, since it is the seam
+// a program uses to read the registry itself rather than a data-bearing library. Each
+// later slice adds a case here that returns a real module and drops the name from the
+// stub path.
+func buildBuiltinModule(name string) Value {
+	switch name {
+	case "module":
+		return newModuleModule()
+	default:
+		return newStubModule(name)
+	}
+}
+
+// newModuleModule builds the module core module, require('module') or
+// require('node:module'), the reflection of the built-in registry back into the
+// program. Its isBuiltin answers whether a specifier names a registered built-in, in
+// either the bare or the node: form, and its builtinModules is the sorted list of the
+// registered names, both reading the one name set IsBuiltinModule gates require on, so
+// a program sees the same built-in surface the require machinery resolves against.
+func newModuleModule() Value {
+	mod := NewObject()
+	mod.Set(FromGoString("isBuiltin"), NewFunc(func(args []Value) Value {
+		return Bool(IsBuiltinModule(ToString(Arg(args, 0)).ToGoString()))
+	}))
+	mod.Set(FromGoString("builtinModules"), builtinModulesArray())
+	return mod
+}
+
+// builtinModulesArray renders the registered built-in names as a sorted string array,
+// the value of module.builtinModules. The names come straight from builtinModuleNames
+// so the array and IsBuiltinModule can never disagree, and the sort makes the array
+// deterministic across runs since the underlying map has no order.
+func builtinModulesArray() Value {
+	names := make([]string, 0, len(builtinModuleNames))
+	for n := range builtinModuleNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	elems := make([]Value, len(names))
+	for i, n := range names {
+		elems[i] = StringValue(FromGoString(n))
+	}
+	return NewArrayValue(elems)
 }
 
 // newStubModule builds the throw-on-use stub for a registered-but-unimplemented
