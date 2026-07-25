@@ -2158,10 +2158,17 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		// + flags, the same literal form String(re) and a template substitution produce,
 		// so "x" + re reads off the concrete *value.RegExp with no boxing.
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToStringBStr")}}, nil
-	case r.isDynamic(n):
+	case r.isDynamic(n) || r.producesBoxedValue(r.unwrapParens(n)):
 		// A dynamic operand coerces at runtime through the value model's
 		// ToString, which routes an object or array through ToPrimitive the
 		// same way the + operator's own concatenation branch does.
+		// producesBoxedValue catches an operand the checker types as a union or
+		// concrete type but whose lowering yields a value.Value box: a dynamic-operand
+		// && / || lowers to value.And(...), a boxed logical whose static type is the
+		// union of its arms (string | null for arr && arr[0]), so isDynamic is false
+		// yet the emitted value has no ToString method. Routing it through value.ToString
+		// reads the box, where the union-method path below would emit a .ToString() the
+		// box does not carry and fail to compile.
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{e}}, nil
 	default:
