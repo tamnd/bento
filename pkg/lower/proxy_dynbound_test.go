@@ -1,6 +1,9 @@
 package lower
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A binding initialized by new Proxy holds the boxed proxy value, so a named member
 // read p.attr off it dispatches through the runtime get trap rather than an interned
@@ -48,5 +51,31 @@ func TestProxyWriteRefusedOnSharedNonExtensibleTarget(t *testing.T) {
 	src := "var target = { attr: 1 };\nvar p = new Proxy(target, { set: undefined });\nObject.preventExtensions(target);\np.other = 9;\nconsole.log(String(target.other));\n"
 	if got := runProgramGoTolerant(t, src); got != "undefined\n" {
 		t.Fatalf("new key through proxy over non-extensible shared target: got %q, want undefined", got)
+	}
+}
+
+// A proxy over a fixed-shape target boxes that target to a value with no runtime
+// property bag, so forwarding a trap to it would answer every property absent. The
+// construction hands back rather than lowering to that wrong answer, the same
+// boundary a bare Reflect.has on such a value keeps.
+func TestProxyOverFixedShapeTargetHandsBack(t *testing.T) {
+	for _, src := range []string{
+		"var re = /(?:)/m;\nvar p = new Proxy(re, {});\nconsole.log(String(p));\n",
+		"var f = function() {};\nvar p = new Proxy(f, {});\nconsole.log(String(p));\n",
+	} {
+		reason := renderProgramHandBack(t, src)
+		if !strings.Contains(reason, "fixed-shape target") {
+			t.Fatalf("reason = %q, want it to name the fixed-shape target", reason)
+		}
+	}
+}
+
+// A proxy over a plain-object target keeps lowering: the object is dynamic and
+// carries a property bag the trap forwards to, so the guard leaves it untouched.
+func TestProxyOverPlainObjectStillLowers(t *testing.T) {
+	src := "var target = { attr: 1 };\nvar p = new Proxy(target, {});\nconsole.log(String(p.attr));\n"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "NewProxy") {
+		t.Fatalf("want a NewProxy call in:\n%s", out)
 	}
 }
