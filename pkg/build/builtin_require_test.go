@@ -19,6 +19,40 @@ func TestRequireBuiltinResolvesBothForms(t *testing.T) {
 	}
 }
 
+// TestModuleBuiltinReadsRegistry pins the last G1.1 clause: the module core module
+// reflects the built-in registry back to the program. require('node:module') hands
+// back a real module, not a stub, so isBuiltin answers over the registered name set in
+// either specifier form, and builtinModules is a live array of the registered names.
+// isBuiltin reads the same set require resolves on, so it is true for a real built-in
+// in the bare or the node: form and false for a relative path. Node prints "true",
+// "true", "false", "true", then "true".
+func TestModuleBuiltinReadsRegistry(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"const m = require('node:module');\n"+
+			"console.log(m.isBuiltin('fs'));\n"+
+			"console.log(m.isBuiltin('node:fs'));\n"+
+			"console.log(m.isBuiltin('./local'));\n"+
+			"console.log(Array.isArray(m.builtinModules));\n"+
+			"console.log(m.builtinModules.length > 0);\n")
+	if want := "true\ntrue\nfalse\ntrue\ntrue\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestModuleBuiltinBareAndNodeFormShareIdentity pins that the module core module
+// itself obeys the registry identity rule: require('module') and require('node:module')
+// are the one cached value, so the bare and node: forms are interchangeable for the
+// registry's own reflection just as they are for any other built-in. Node prints "true".
+func TestModuleBuiltinBareAndNodeFormShareIdentity(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"const a = require('module');\n"+
+			"const b = require('node:module');\n"+
+			"console.log(a === b);\n")
+	if want := "true\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
 // TestRequireBuiltinStubThrowsOnUse pins the honest-stub rule: requiring an
 // unimplemented built-in loads, but touching a member throws a clear error naming
 // the module and the member rather than resolving to a silent wrong value. The body
