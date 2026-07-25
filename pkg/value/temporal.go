@@ -1060,6 +1060,23 @@ func durationFromDayNanos(total *big.Int, largeRank int) *Duration {
 // sign of x decides trunc, expand, and the half-toward-zero ties, so the helper is correct
 // for the signed counts the other Temporal types will round.
 func roundBigToIncrement(x, increment *big.Int, mode string) *big.Int {
+	return roundBigToIncrementSigned(x, increment, mode, x.Sign())
+}
+
+// roundBigToIncrementAsIfPositive is RoundNumberToIncrementAsIfPositive: it rounds exactly as
+// roundBigToIncrement but resolves the sign-dependent modes (trunc, expand, and the half-toward
+// and half-away ties) as though x were positive, so expand and half-away always move toward +inf
+// and trunc and half-toward always move toward -inf regardless of x's real sign. Instant and
+// ZonedDateTime round a point on the absolute number line, where "round up" means toward the
+// future for a pre-epoch instant just as for a post-epoch one, so they round this way.
+func roundBigToIncrementAsIfPositive(x, increment *big.Int, mode string) *big.Int {
+	return roundBigToIncrementSigned(x, increment, mode, 1)
+}
+
+// roundBigToIncrementSigned is the shared core of the two rounding entry points: sign is the sign
+// the mode reads for its toward/away decisions, x.Sign() for ordinary rounding and a forced +1 for
+// the as-if-positive variant.
+func roundBigToIncrementSigned(x, increment *big.Int, mode string, sign int) *big.Int {
 	q := new(big.Int)
 	rem := new(big.Int)
 	q.DivMod(x, increment, rem)
@@ -1076,17 +1093,17 @@ func roundBigToIncrement(x, increment *big.Int, mode string) *big.Int {
 	case "floor":
 		pickHigh = false
 	case "trunc":
-		pickHigh = x.Sign() < 0
+		pickHigh = sign < 0
 	case "expand":
-		pickHigh = x.Sign() >= 0
+		pickHigh = sign >= 0
 	case "halfCeil":
 		pickHigh = cmp >= 0
 	case "halfFloor":
 		pickHigh = cmp > 0
 	case "halfExpand":
-		pickHigh = cmp > 0 || (cmp == 0 && x.Sign() >= 0)
+		pickHigh = cmp > 0 || (cmp == 0 && sign >= 0)
 	case "halfTrunc":
-		pickHigh = cmp > 0 || (cmp == 0 && x.Sign() < 0)
+		pickHigh = cmp > 0 || (cmp == 0 && sign < 0)
 	case "halfEven":
 		pickHigh = cmp > 0 || (cmp == 0 && q.Bit(0) == 1)
 	default:
@@ -3023,7 +3040,7 @@ func (i *Instant) Round(smallestUnit string, increment float64, roundingMode str
 		Throw(NewRangeError(FromGoString("Temporal.Instant.prototype.round roundingIncrement is out of range")))
 	}
 	quantum := new(big.Int).Mul(big.NewInt(inc), big.NewInt(unitNs))
-	rounded := roundBigToIncrement(i.ns, quantum, roundingMode)
+	rounded := roundBigToIncrementAsIfPositive(i.ns, quantum, roundingMode)
 	return newInstant(rounded)
 }
 
