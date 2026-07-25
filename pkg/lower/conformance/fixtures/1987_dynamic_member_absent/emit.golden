@@ -28,5 +28,5 @@ func main() {
 	value.ConsoleLog(value.NumberToString(point.X))
 	value.ConsoleLog(value.ConsoleValue(value.MissingProperty(Make())))
 	value.ConsoleLog(value.NumberToString(calls))
-	value.ConsoleLog(value.ToString(value.MissingProperty(point)))
+	value.ConsoleLog(value.StringCoerce(value.MissingProperty(point)))
 }

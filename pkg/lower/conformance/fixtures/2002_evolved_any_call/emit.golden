@@ -13,5 +13,5 @@ func main() {
 			return 1
 		})())
 	})
-	value.ConsoleLog(value.ToString(f.Call()))
+	value.ConsoleLog(value.StringCoerce(f.Call()))
 }

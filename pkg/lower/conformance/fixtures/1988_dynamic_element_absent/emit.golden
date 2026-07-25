@@ -24,7 +24,7 @@ func main() {
 	point := &ObjLabelX{X: 1, Label: value.FromGoString("p")}
 	value.ConsoleLog(value.NumberToString(point.X))
 	value.ConsoleLog(value.ConsoleValue(value.MissingProperty(point)))
-	value.ConsoleLog(value.ToString(value.MissingProperty(point)))
+	value.ConsoleLog(value.StringCoerce(value.MissingProperty(point)))
 	value.ConsoleLog(value.ConsoleValue(value.MissingProperty(Make())))
 	value.ConsoleLog(value.NumberToString(calls))
 }

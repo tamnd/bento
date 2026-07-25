@@ -14,8 +14,12 @@ func main() {
 	}
 	value.ConsoleLog(value.NumberToString(sum))
 	sq := value.NewArray[float64]()
-	for _, i := range value.NewArray[float64](1, 2, 3).Elems() {
-		sq.Push(i * i)
+	{
+		_bt0 := value.NewArray[float64](1, 2, 3)
+		for _bt1 := 0; _bt1 < int(_bt0.Len()); _bt1++ {
+			i := _bt0.AtI(_bt1)
+			sq.Push(i * i)
+		}
 	}
 	value.ConsoleLog(sq.Join(value.FromGoString(","), func(x float64) value.BStr {
 		return value.NumberToString(x)

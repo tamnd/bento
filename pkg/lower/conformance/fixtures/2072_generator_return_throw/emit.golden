@@ -37,18 +37,18 @@ func Recover() *value.Gen[float64] {
 func main() {
 	defer value.ReportUncaught()
 	g := Guarded()
-	value.ConsoleLog(value.Concat(value.FromGoString("value "), value.ToString(value.GenNext(g, value.Undefined, func(_bt2 float64) value.Value {
+	value.ConsoleLog(value.Concat(value.FromGoString("value "), value.StringCoerce(value.GenNext(g, value.Undefined, func(_bt2 float64) value.Value {
 		return value.Number(_bt2)
 	}).Value)))
 	done := value.GenReturn(g, value.Number(99), func(_bt3 float64) value.Value {
 		return value.Number(_bt3)
 	})
-	value.ConsoleLog(value.FromGoString("return ").ConcatN(value.ToString(done.Value), value.FromGoString(" "), value.BoolToString(done.Done)))
+	value.ConsoleLog(value.FromGoString("return ").ConcatN(value.StringCoerce(done.Value), value.FromGoString(" "), value.BoolToString(done.Done)))
 	r := Recover()
-	value.ConsoleLog(value.Concat(value.FromGoString("first "), value.ToString(value.GenNext(r, value.Undefined, func(_bt4 float64) value.Value {
+	value.ConsoleLog(value.Concat(value.FromGoString("first "), value.StringCoerce(value.GenNext(r, value.Undefined, func(_bt4 float64) value.Value {
 		return value.Number(_bt4)
 	}).Value)))
-	value.ConsoleLog(value.Concat(value.FromGoString("after "), value.ToString(value.GenThrow(r, value.NewError(value.FromGoString("boom")), func(_bt5 float64) value.Value {
+	value.ConsoleLog(value.Concat(value.FromGoString("after "), value.StringCoerce(value.GenThrow(r, value.NewError(value.FromGoString("boom")), func(_bt5 float64) value.Value {
 		return value.Number(_bt5)
 	}).Value)))
 }
