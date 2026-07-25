@@ -845,7 +845,12 @@ func toPrimitive(v Value, hint primHint) Value {
 			Throw(NewTypeError(FromGoString("Symbol.toPrimitive is not a function")))
 			return Undefined
 		}
-		res := exotic.Call(v, hintName(hint))
+		// The exotic is invoked with the hint as its first argument, the spec's
+		// Call(O, «hint»). The receiver O is the method's this, which the AOT calling
+		// convention binds lexically rather than as a positional argument, so a body that
+		// reads this hands back at compile time and never reaches here; passing the hint
+		// alone lands it in the method's first declared parameter, where the spec puts it.
+		res := exotic.Call(hintName(hint))
 		if isObjectLike(res) {
 			Throw(NewTypeError(FromGoString("Cannot convert object to primitive value")))
 			return Undefined
