@@ -206,6 +206,13 @@ func TestHandback(t *testing.T) {
 // runtime regression that still compiles is caught by what it prints. It runs the
 // checked-in golden, not a fresh lowering, so the artifact the corpus ships is the
 // one exercised.
+//
+// This is the expensive test in the repo. Every fixture is its own main package, so Go
+// links a separate binary per fixture and its build cache cannot avoid the link. What
+// makes a repeat run cheap is the verdict cache: a golden that already ran against this
+// runtime, toolchain and environment has its output replayed instead. Only the output is
+// cached, never the pass or fail verdict, so the comparison below happens every time and
+// editing an oracle takes effect at once. See verdictcache.go for what the key covers.
 func TestOracle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping golden compile-and-run under -short")
@@ -235,46 +242,65 @@ func TestOracle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse oracle: %v", err)
 			}
-			stdout, exit := runGoldenCached(t, root, golden, f.Meta.Env)
-			if normalizeOut(stdout) != normalizeOut(want.Stdout) {
-				t.Errorf("%s stdout mismatch\n--- got ---\n%s\n--- want ---\n%s", f.Slug, stdout, want.Stdout)
+			// A cached output is reused only when nothing that could change it has
+			// changed; see verdictcache.go for what the key covers.
+			key, cacheable := VerdictKey(golden, f.Meta.Env)
+			cached := false
+			var got Verdict
+			var stderr string
+			if cacheable {
+				if v, hit := LookupVerdict(key); hit {
+					got, cached = v, true
+				}
 			}
-			if exit != want.Exit {
-				t.Errorf("%s exit code = %d, want %d", f.Slug, exit, want.Exit)
+			if !cached {
+				run := runGolden(t, root, golden, f.Meta.Env)
+				got = Verdict{Stdout: run.Stdout, Exit: run.Exit}
+				stderr = run.Stderr
+			}
+
+			matched := normalizeOut(got.Stdout) == normalizeOut(want.Stdout) && got.Exit == want.Exit
+			if normalizeOut(got.Stdout) != normalizeOut(want.Stdout) {
+				t.Errorf("%s stdout mismatch\n--- got ---\n%s\n--- want ---\n%s", f.Slug, got.Stdout, want.Stdout)
+			}
+			if got.Exit != want.Exit {
+				t.Errorf("%s exit code = %d, want %d", f.Slug, got.Exit, want.Exit)
+			}
+			// A failed build and a program that ran and threw look the same from stdout
+			// and the exit code alone: both print nothing and exit non-zero. Only stderr
+			// tells them apart, so it is reported on any failure rather than dropped.
+			if !matched && stderr != "" {
+				t.Errorf("%s stderr\n%s", f.Slug, stderr)
+			}
+
+			// Only a result that matched is worth keeping. A failing one is either a
+			// regression, which is about to be fixed and so pointless to remember, or an
+			// infrastructure flake, which must never become sticky: caching it would
+			// replay the failure on every later run and read as a real red long after the
+			// contention that caused it passed.
+			if cacheable && !cached && matched {
+				StoreVerdict(key, got)
 			}
 		})
 	}
 }
 
-// runGoldenCached returns what a golden prints and exits with, reusing the output a
-// previous run recorded when nothing that could change it has changed. Compiling and
-// linking a golden is what the oracle check costs, and every fixture is its own main
-// package, so the link happens once per fixture and Go's build cache cannot avoid it.
-// The verdict cache can: see verdictcache.go for what the key covers.
-//
-// Only the output is cached, never the pass or fail verdict, so the comparison against
-// oracle.txt still runs every time and editing an oracle takes effect at once.
-func runGoldenCached(t *testing.T, root string, golden []byte, env map[string]string) (string, int) {
-	t.Helper()
-	key, cacheable := VerdictKey(golden, env)
-	if cacheable {
-		if v, hit := LookupVerdict(key); hit {
-			return v.Stdout, v.Exit
-		}
-	}
-	stdout, exit := runGolden(t, root, golden, env)
-	if cacheable {
-		StoreVerdict(key, Verdict{Stdout: stdout, Exit: exit})
-	}
-	return stdout, exit
+// goldenRun is everything a golden produced. Stdout and Exit are what the oracle
+// compares; Stderr is carried alongside because `go run` reports a build failure there
+// while still exiting non-zero with nothing on stdout, which is indistinguishable from a
+// program that ran and threw unless the two streams travel together.
+type goldenRun struct {
+	Stdout string
+	Exit   int
+	Stderr string
 }
 
 // runGolden writes the golden into a scratch directory inside this module and runs
-// it with `go run`, returning its stdout and exit code. The scratch directory sits
-// under the module tree so the golden's import of bento's value package resolves
-// from this module's requirements with no separate go.mod, the same way bento's own
-// build compiles a program inside its module tree.
-func runGolden(t *testing.T, root string, golden []byte, env map[string]string) (string, int) {
+// it with `go run`. The scratch directory sits under the module tree so the golden's
+// import of bento's value package resolves from this module's requirements with no
+// separate go.mod, the same way bento's own build compiles a program inside its module
+// tree.
+func runGolden(t *testing.T, root string, golden []byte, env map[string]string) goldenRun {
 	t.Helper()
 	dir, err := os.MkdirTemp(root, "goldenrun-")
 	if err != nil {
@@ -305,11 +331,11 @@ func runGolden(t *testing.T, root string, golden []byte, env map[string]string) 
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return stdout.String(), exit.ExitCode()
+			return goldenRun{Stdout: stdout.String(), Exit: exit.ExitCode(), Stderr: stderr.String()}
 		}
 		t.Fatalf("go run failed to start: %v\n--- stderr ---\n%s", err, stderr.String())
 	}
-	return stdout.String(), 0
+	return goldenRun{Stdout: stdout.String()}
 }
 
 // normalizeOut trims trailing newlines so a one-line expected value in oracle.txt
