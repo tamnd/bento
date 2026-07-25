@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tamnd/bento/pkg/build"
 )
@@ -115,18 +116,77 @@ func featureNames(all []Fixture) []string {
 // cache stops growing and the cap goes back to being the disk safety net it was
 // meant to be, firing only after a change that genuinely rebuilds the corpus.
 func TestMain(m *testing.M) {
-	cache := filepath.Join(os.TempDir(), "bento-conformance-gocache")
+	cache := goldenCacheDir()
 	if err := os.Setenv("GOCACHE", cache); err != nil {
 		panic(err)
 	}
+	release := markRunner(cache)
 	code := m.Run()
 	// A cache past this size is mostly dead one-shot golden binaries, so drop it
 	// rather than let it grow; the next run rewarms the stdlib into a fresh one.
+	// Dropping it is only safe when no other run is building against it, since a
+	// cache removed mid-build fails that build from deep inside the go tool.
 	const maxGoldenCache = 2 << 30 // 2 GiB
-	if dirSize(cache) > maxGoldenCache {
+	if sole := release(); sole && dirSize(cache) > maxGoldenCache {
 		_ = os.RemoveAll(cache)
 	}
 	os.Exit(code)
+}
+
+// goldenCacheDir is the build cache goldens compile into. It defaults to a shared
+// directory under the temporary directory, so a run reuses the stdlib the previous run
+// compiled rather than paying for it again, and BENTO_CONFORMANCE_GOCACHE overrides it.
+//
+// The override is for a machine running two corpora at once, two branches under test in
+// parallel. They would otherwise share one cache that each is allowed to delete, and a
+// private cache is the way to be sure a measurement is measuring only itself.
+func goldenCacheDir() string {
+	if dir := os.Getenv("BENTO_CONFORMANCE_GOCACHE"); dir != "" {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), "bento-conformance-gocache")
+}
+
+// markRunner records that this process is using the golden cache and returns a function
+// that clears the mark and reports whether this run was the last one out. Only the last
+// one out may apply the size cap: deleting the cache under a concurrent build makes that
+// build fail with a missing object file, which reads as if the compiler broke rather
+// than as if two runs shared a machine.
+//
+// A mark that outlives its process, from a run that was killed, would block the cap
+// forever, so a stale one is ignored. The window is generous because a full corpus run
+// takes minutes, and the cost of guessing wrong is only a cache that grows for one more
+// run.
+func markRunner(cache string) func() bool {
+	const staleAfter = 6 * time.Hour
+	dir := cache + ".runners"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		// Without a mark this run cannot tell whether it is alone, so it declines to
+		// trim rather than risk deleting a cache someone else is building against.
+		return func() bool { return false }
+	}
+	// The name is unique rather than the pid, since two runs can carry the same pid
+	// when one of them is inside a container.
+	f, err := os.CreateTemp(dir, "run-")
+	if err != nil {
+		return func() bool { return false }
+	}
+	mine := f.Name()
+	_ = f.Close()
+	return func() bool {
+		_ = os.Remove(mine)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil || time.Since(info.ModTime()) < staleAfter {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 // dirSize sums the bytes of every file under root, the check TestMain uses to decide
