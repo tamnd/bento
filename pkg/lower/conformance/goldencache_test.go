@@ -11,6 +11,9 @@ import (
 // machine without sharing a build cache. The default has to stay shared, since reusing
 // the stdlib the last run compiled is most of why a warm run is quick.
 func TestGoldenCacheDirIsOverridable(t *testing.T) {
+	// The override is cleared first, since the run measuring this corpus may well have
+	// set it, and the default is what this half of the test is about.
+	t.Setenv("BENTO_CONFORMANCE_GOCACHE", "")
 	def := goldenCacheDir()
 	if def != filepath.Join(os.TempDir(), "bento-conformance-gocache") {
 		t.Errorf("default golden cache = %q, want the shared one under the temporary directory", def)
