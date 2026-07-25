@@ -508,6 +508,16 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 			if r.prog.TypeAt(n).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
 				return true
 			}
+			// A read off an object that grows stays boxed even where its type is a clean
+			// primitive. The checker types such an object by the shape it ends up with, so
+			// `const o = {}` followed by `o.x = 1` types o.x number from the first line,
+			// but the property is not there until the assignment runs. Coercing the read
+			// down to a float64 would answer 0, or NaN through ToNumber, to a question
+			// whose answer is undefined. Boxed, the read prints undefined and arithmetic
+			// on it still gives NaN, which is what JavaScript does.
+			if r.growingObjectRead(n) {
+				return true
+			}
 		}
 	}
 	// A pure string-index dictionary, { [x: string]: string }, lowers to a boxed
@@ -1336,7 +1346,13 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// value.Value box even though the checker types the call by the member's static
 	// return, so recognizing it here lets a stringify or a console.log take the box
 	// straight through rather than handing it to a primitive coercer it cannot take.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src)
+	// A read off an object that grows, the `o.x` of a JavaScript `const o = {}`
+	// followed by `o.x = 1`, lowers to a Get on the runtime bag and so is already a
+	// box, while the checker types it by the shape the object finishes with. Without
+	// this the number type would drive value.NumberToString over a value.Value, which
+	// does not compile; with it the read flows through the value model, which prints
+	// the property that has not been assigned yet as undefined.
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src)
 }
 
 // isDynamicValueLogical reports whether src is a value-returning && or || whose
@@ -1374,6 +1390,25 @@ func (r *Renderer) isDynamicValueLogical(src frontend.Node) bool {
 		return false
 	}
 	return r.isDynamic(left) || r.isDynamic(right)
+}
+
+// isDynamicValueAdd reports whether src is a + whose lowering yields a value.Value
+// box because an operand is dynamic. It mirrors the condition combineBinary boxes on
+// exactly, so the two never disagree about whether the result is a box.
+//
+// The checker can still type such a sum as a concrete primitive. A read off an object
+// that grows is typed number while the read itself stays boxed, so `o.x + 1` is typed
+// number over two boxed operands, and without this the primitive box path would wrap
+// the already-boxed value.Add in value.Number, which does not compile.
+func (r *Renderer) isDynamicValueAdd(src frontend.Node) bool {
+	if src.Kind() != frontend.NodeBinaryExpression {
+		return false
+	}
+	kids := r.prog.Children(src)
+	if len(kids) != 3 {
+		return false
+	}
+	return r.combineIsDynamic(strings.TrimSpace(r.prog.Text(kids[1])), kids[0], kids[2])
 }
 
 // isBoxedStaticFieldRead reports whether src reads a private static field, C.#x,
@@ -2458,6 +2493,13 @@ func (r *Renderer) unboxDynamicRead(read ast.Expr, n frontend.Node) (ast.Expr, e
 	// that backs missingPropertyRead sees no declared "year" field and reports the read
 	// dynamic, which would otherwise leave the box uncoerced where its string consumer
 	// expects a bstr. Keying off the precise type first coerces it correctly.
+	// A read off an object that grows is the exception: the checker types it by the
+	// shape the object ends up with, so the type says number while the property is
+	// still absent, and coercing down would answer NaN where JavaScript answers
+	// undefined. It keeps the box, and the consumer coerces if it needs to.
+	if r.growingObjectRead(n) {
+		return read, nil
+	}
 	if flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 &&
 		flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
 		return r.coerceDynamicToStaticFlags(read, flags)

@@ -1928,7 +1928,14 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 	// the boxed initializer) and every later read and write of it routes the dynamic
 	// way rather than reach for a struct field the shape never had. A literal whose
 	// keys are all plain or constant stays on the struct path above.
-	if initNode.Kind() == frontend.NodeObjectLiteralExpression && r.objectLiteralNotFixed(initNode) {
+	// An object literal that omits a property its type names is the same case arrived at
+	// from the other direction: a JavaScript `const o = {}` whose later `o.x = 1` the
+	// checker folded into its type. The keys are known but the object grows past them, so
+	// it boxes and binds dynamic exactly as above, and the later writes land on the
+	// runtime object rather than on a struct field holding a zero that JavaScript would
+	// read as undefined.
+	if initNode.Kind() == frontend.NodeObjectLiteralExpression &&
+		(r.objectLiteralNotFixed(initNode) || r.objectLiteralGrowsProperties(initNode)) {
 		boxed, err := r.boxObjectLiteral(initNode)
 		if err != nil {
 			return nil, err

@@ -664,6 +664,99 @@ func (r *Renderer) objectLiteralNotFixed(n frontend.Node) bool {
 	return false
 }
 
+// objectLiteralGrowsProperties reports whether an object literal leaves out a property
+// its own type names, which is how a JavaScript file spells an object that grows.
+//
+//	const o = {};
+//	o.x = 1;
+//
+// The checker folds that later assignment back into the literal's type, the expando
+// inference a .js file gets, so the literal is typed { x: number } while building none
+// of it. A Go struct would put x at its zero value, and a read before the assignment
+// would then see 0 where JavaScript has undefined, so the shape is not one a struct can
+// carry honestly. The dynamic bag is what the object actually is, and boxing it also
+// routes the later writes through the runtime rather than at a field that has to exist.
+//
+// A spread member reports false: its contribution is not known from the literal's own
+// keys, so a literal that omits a property only because a spread supplies it must stay
+// on the path that copies the spread's fields.
+//
+// An omitted property that its type marks optional also reports false. That is the
+// TypeScript shape `const p: { x: number; y?: number } = { x: 1 }`, where the slot's
+// declared type says the property may be absent and objectLiteralContextual already
+// fills it with the empty optional. Only a property the type says is there, and the
+// literal does not build, is growth.
+func (r *Renderer) objectLiteralGrowsProperties(n frontend.Node) bool {
+	supplied := map[string]bool{}
+	for _, m := range r.prog.Children(n) {
+		if m.Kind() != frontend.NodeUnknown {
+			return false
+		}
+		kids := r.prog.Children(m)
+		if len(kids) == 1 && strings.HasPrefix(strings.TrimSpace(r.prog.Text(m)), "...") {
+			return false
+		}
+		if len(kids) == 0 {
+			return false
+		}
+		prop, ok := r.memberName(kids[0])
+		if !ok {
+			return false
+		}
+		supplied[prop] = true
+	}
+	for _, p := range r.prog.Properties(r.prog.TypeAt(n)) {
+		if !p.Optional && !supplied[p.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// identifierBindsAGrowingObject reports whether an identifier names a binding whose
+// initializer was a growing object literal, the `const o = {}` of a JavaScript file.
+//
+// It answers from the declaration rather than from a mark carried in the renderer,
+// because the question is asked at every read of the name and a mark would have to be
+// mirrored through every scope the dynamic-locals bookkeeping saves and restores.
+func (r *Renderer) identifierBindsAGrowingObject(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(n)
+	if !ok {
+		return false
+	}
+	for _, d := range r.prog.Declarations(sym) {
+		if d.Kind() != frontend.NodeVariableDeclaration {
+			continue
+		}
+		kids := r.prog.Children(d)
+		if len(kids) < 2 {
+			continue
+		}
+		init := kids[len(kids)-1]
+		if init.Kind() == frontend.NodeObjectLiteralExpression && r.objectLiteralGrowsProperties(init) {
+			return true
+		}
+	}
+	return false
+}
+
+// growingObjectRead reports whether a node is a property or index read off an object
+// that grows. Such a read lowers to a Get on the runtime bag, a value.Value box, while
+// the checker types it by the shape the object ends up with, so every consumer that
+// picks its coercion from the static type would be handed a box where it expects a
+// float64 or a bstr. Naming the shape here is what lets producesBoxedValue route the
+// read down the dynamic path the way it routes any other already-boxed result.
+func (r *Renderer) growingObjectRead(n frontend.Node) bool {
+	if n.Kind() != frontend.NodePropertyAccessExpression && n.Kind() != frontend.NodeElementAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	return len(kids) >= 1 && r.identifierBindsAGrowingObject(kids[0])
+}
+
 func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	// A literal whose shape is not statically fixed, one carrying a computed key that
 	// names a runtime value, has no closed key set a Go struct could declare, so it
