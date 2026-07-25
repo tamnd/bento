@@ -29,6 +29,6 @@ func main() {
 		value.JSONParse(value.FromGoString("12 34"))
 		value.ConsoleLog(value.FromGoString("no throw"))
 	}()
-	value.ConsoleLog(value.ToString(value.JSONParse(value.FromGoString("42"))))
-	value.ConsoleLog(value.ToString(value.JSONParse(value.FromGoString(" [1, 2, 3] ")).Get(value.FromGoString("length"))))
+	value.ConsoleLog(value.StringCoerce(value.JSONParse(value.FromGoString("42"))))
+	value.ConsoleLog(value.StringCoerce(value.JSONParse(value.FromGoString(" [1, 2, 3] ")).Get(value.FromGoString("length"))))
 }

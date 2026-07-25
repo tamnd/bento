@@ -19,6 +19,6 @@ func main() {
 	wide := value.BigIntFromBig(bigLit1)
 	value.ConsoleLog(value.ConsoleValue(wide))
 	value.ConsoleLog(value.ConsoleValue(Add()))
-	value.ConsoleLog(value.ToString(d))
+	value.ConsoleLog(value.StringCoerce(d))
 	value.ConsoleLog(value.FromGoString("").ConcatN(value.ToString(d), value.FromGoString("")))
 }

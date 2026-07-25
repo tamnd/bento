@@ -11,14 +11,14 @@ func Label(name value.Value) value.BStr {
 	if _bt0.Len() == 1 {
 		name = value.StringValue(value.FromGoString("[").ConcatN(value.ToString(name), value.FromGoString("]")))
 	}
-	return value.ToString(name)
+	return value.StringCoerce(name)
 }
 func Pair(a value.Value, b value.Value) value.BStr {
 	_bt1 := value.NewArray[value.Value](a, b)
 	if _bt1.Len() == 1 {
 		b = a
 	}
-	return value.ToString(a).ConcatN(value.FromGoString(","), value.ToString(b))
+	return value.StringCoerce(a).ConcatN(value.FromGoString(","), value.StringCoerce(b))
 }
 func main() {
 	value.ConsoleLog(Label(value.StringValue(value.FromGoString("x"))))

@@ -7,12 +7,12 @@ import (
 )
 
 func main() {
-	value.ConsoleLog(value.BoolToString(true))
+	value.ConsoleLog(value.BoolToString(value.StaticBool(value.NewArray[float64](1, 2, 3), true)))
 	like := value.NewObject()
 	like.Set(value.FromGoString("length"), value.Number(3))
 	value.ConsoleLog(value.BoolToString(value.IsArray(like)))
 	boxed := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2)})
 	value.ConsoleLog(value.BoolToString(value.IsArray(boxed)))
-	value.ConsoleLog(value.BoolToString(false))
-	value.ConsoleLog(value.BoolToString(false))
+	value.ConsoleLog(value.BoolToString(value.StaticBool(value.FromGoString("nope"), false)))
+	value.ConsoleLog(value.BoolToString(value.StaticBool(42, false)))
 }

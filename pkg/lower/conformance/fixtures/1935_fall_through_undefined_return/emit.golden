@@ -16,7 +16,7 @@ func Classify(x value.BStr) value.Value {
 	return value.Undefined
 }
 func main() {
-	value.ConsoleLog(value.ToString(Classify(value.FromGoString("num"))))
-	value.ConsoleLog(value.ToString(Classify(value.FromGoString("str"))))
-	value.ConsoleLog(value.ToString(Classify(value.FromGoString("other"))))
+	value.ConsoleLog(value.StringCoerce(Classify(value.FromGoString("num"))))
+	value.ConsoleLog(value.StringCoerce(Classify(value.FromGoString("str"))))
+	value.ConsoleLog(value.StringCoerce(Classify(value.FromGoString("other"))))
 }

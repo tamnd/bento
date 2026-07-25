@@ -20,7 +20,7 @@ func main() {
 	q := &ObjC{C: 9}
 	value.ConsoleLog(value.NumberToString(q.C))
 	o := value.NewObject().Set(value.FromGoString("x y"), value.Number(5)).SetKeyed(value.Number(42), value.Number(7))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("x y"))))
-	value.ConsoleLog(value.ToString(o.GetIndex(42)))
-	value.ConsoleLog(value.ToString(o.Get(value.FromGoString("42"))))
+	value.ConsoleLog(value.StringCoerce(o.Get(value.FromGoString("x y"))))
+	value.ConsoleLog(value.StringCoerce(o.GetIndex(42)))
+	value.ConsoleLog(value.StringCoerce(o.Get(value.FromGoString("42"))))
 }
