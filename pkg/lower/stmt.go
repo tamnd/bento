@@ -1765,8 +1765,10 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 		// RegExpMatchArray | null, or string[]), so the binding lands in a value.Value
 		// slot and is marked dynamic, which routes the later null compare and the element
 		// and property reads off the result through the value model rather than the
-		// static shape the concrete type would otherwise name.
-		if r.regExpBoxedResultCall(kids[initIdx]) {
+		// static shape the concrete type would otherwise name. A params.get(name) binding
+		// joins them: its string | null is a tagged sum the runtime cannot name, so it
+		// takes the same box and the same dynamic marking.
+		if r.regExpBoxedResultCall(kids[initIdx]) || r.urlSearchParamsGetCall(kids[initIdx]) {
 			execInit, err := r.lowerExpr(kids[initIdx])
 			if err != nil {
 				return nil, err

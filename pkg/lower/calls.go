@@ -1637,6 +1637,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Date") {
 		return r.dateStaticCall(method, argNodes)
 	}
+	// URL.canParse(input, base) is a static call on the global URL constructor, routed
+	// here for the same reason Date's statics are: the standard library types that
+	// constructor with a construct signature, so reaching it as an ordinary callable
+	// hands the unit back before the static is looked at.
+	if r.isGlobalRef(recvNode, "URL") {
+		return r.urlStaticCall(method, argNodes)
+	}
 	// Atomics.load(ta, i) and friends are calls on the global Atomics namespace, not a
 	// value receiver, so they lower to the value atomic helpers over the typed array
 	// they take rather than a method on Atomics.
@@ -1869,6 +1876,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// A method on a Map receiver lowers to a value.Map method (section 6.5). This
 	// routes before the primitive and string paths, which expect a number, boolean,
 	// or string receiver a map is not.
+	// A method on a URL or URLSearchParams receiver lowers to the matching runtime
+	// method. The query view shares the Map shape, which isMapType rules out by name, and
+	// it routes ahead of the Map path here for the same reason: the more specific
+	// fingerprint goes first. Both are object receivers the primitive and string paths
+	// below would not know what to do with.
+	if r.isURL(recvNode) {
+		return r.urlMethodCall(recvNode, method, argNodes)
+	}
+	if r.isURLSearchParams(recvNode) {
+		return r.urlSearchParamsMethodCall(recvNode, method, argNodes)
+	}
 	if r.isMap(recvNode) {
 		return r.mapMethodCall(recvNode, method, argNodes)
 	}

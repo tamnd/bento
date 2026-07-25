@@ -157,6 +157,15 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "TextDecoder" && r.isGlobalRef(kids[0], "TextDecoder") {
 		return r.newTextDecoder(kids[1:])
 	}
+	// new URL(input, base) and new URLSearchParams(init) build the WHATWG pair. Like the
+	// codec they are ambient globals rather than user classes, so a plain-identifier
+	// constructor of either name routes to the runtime constructor.
+	if r.prog.Text(kids[0]) == "URL" && r.isGlobalRef(kids[0], "URL") {
+		return r.newURL(kids[1:])
+	}
+	if r.prog.Text(kids[0]) == "URLSearchParams" && r.isGlobalRef(kids[0], "URLSearchParams") {
+		return r.newURLSearchParams(kids[1:])
+	}
 	// new Date() and new Date(ms) build the clock built-in. It is claimed here rather
 	// than through the general constructor path because the standard library types
 	// Date's constructor with several call and construct signatures at once, which

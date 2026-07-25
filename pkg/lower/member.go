@@ -313,6 +313,13 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Len")}}, nil
 		}
 	}
+	// The URL components and params.size are accessors in the source and methods on the
+	// runtime types, routed before the struct-field path for the same reason the codec
+	// getters below are, and ahead of map.size because the query view shares the Map
+	// shape.
+	if expr, ok, err := r.urlGetter(obj, prop); err != nil || ok {
+		return expr, err
+	}
 	// map.size reads the entry count of a Map (section 6.5). It is an accessor in the
 	// source but a method on value.Map, so it lowers to a Size() call, the same float64
 	// the checker gives the property. This routes before the struct-field path, which
