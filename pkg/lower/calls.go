@@ -1630,6 +1630,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if r.isGlobalRef(recvNode, "Math") {
 		return r.mathCall(method, argNodes)
 	}
+	// Date.now() is a static call on the global Date constructor. It routes here for
+	// the same reason new Date does: the standard library types that constructor with
+	// several call and construct signatures, so reaching it as an ordinary callable
+	// hands the unit back before the static is ever looked at.
+	if r.isGlobalRef(recvNode, "Date") {
+		return r.dateStaticCall(method, argNodes)
+	}
 	// Atomics.load(ta, i) and friends are calls on the global Atomics namespace, not a
 	// value receiver, so they lower to the value atomic helpers over the typed array
 	// they take rather than a method on Atomics.
@@ -1886,6 +1893,12 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	}
 	if r.isTextDecoder(recvNode) {
 		return r.textDecoderMethodCall(recvNode, method, argNodes)
+	}
+	// A method on a Date receiver lowers to a value.Date method, routed here for the
+	// same reason the collections are: a date is an object receiver the primitive and
+	// string paths below would not know what to do with.
+	if r.isDate(recvNode) {
+		return r.dateMethodCall(recvNode, method, argNodes)
 	}
 	// A method on a Promise receiver, p.then(cb) or p.catch(cb), lowers to a
 	// value.Promise method. Like Map and Set it routes before the primitive and

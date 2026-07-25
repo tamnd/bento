@@ -157,6 +157,14 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	if r.prog.Text(kids[0]) == "TextDecoder" && r.isGlobalRef(kids[0], "TextDecoder") {
 		return r.newTextDecoder(kids[1:])
 	}
+	// new Date() and new Date(ms) build the clock built-in. It is claimed here rather
+	// than through the general constructor path because the standard library types
+	// Date's constructor with several call and construct signatures at once, which
+	// renderFuncType hands back on; claiming the construction ahead of that means the
+	// constructor's own type never has to be rendered.
+	if r.prog.Text(kids[0]) == "Date" && r.isGlobalRef(kids[0], "Date") {
+		return r.newDate(kids[1:])
+	}
 	// new Function("a", "return a") builds a function from source text at run time,
 	// parsing the argument strings as a parameter list and a body. That is eval work,
 	// phase 11, so it hands back with the reason that names where it belongs rather
