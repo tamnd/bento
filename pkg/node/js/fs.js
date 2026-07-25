@@ -9,21 +9,38 @@ __bento_defineModule("fs", function (module, exports, require) {
   const { Buffer } = require("buffer");
   const path = require("path");
 
-  function makeError(env, syscall, pathArg) {
-    const err = new Error(
-      (env.code || "Error") + ": " + (env.msg || "operation failed") +
-      (pathArg ? ", " + syscall + " '" + pathArg + "'" : "")
-    );
-    err.code = env.code || "UNKNOWN";
-    err.errno = env.errno || -1;
+  // makeError builds the error Node builds for a failed filesystem call. The
+  // message is "${code}: ${description}, ${syscall} '${path}'", and an operation
+  // that names two paths says "'${path}' -> '${dest}'", which is what rename,
+  // copyfile and symlink report. The Go side classifies the failure and hands
+  // over the code, libuv's number for it, and libuv's description, so the three
+  // properties a program reads and the message it prints agree with Node's.
+  function makeError(env, syscall, pathArg, destArg) {
+    const code = env.code || "UNKNOWN";
+    // The host names the syscall itself when the call got further than the caller
+    // assumes. readFileSync on a directory opens fine and fails on the read, and
+    // Node reports that one as "read" with no path: "EISDIR: illegal operation on
+    // a directory, read".
+    if (env.syscall) {
+      syscall = env.syscall;
+      pathArg = undefined;
+      destArg = undefined;
+    }
+    let message = code + ": " + (env.desc || "unknown error") + ", " + syscall;
+    if (pathArg !== undefined && pathArg !== null) message += " '" + pathArg + "'";
+    if (destArg !== undefined && destArg !== null) message += " -> '" + destArg + "'";
+    const err = new Error(message);
+    err.errno = typeof env.errno === "number" ? env.errno : -1;
+    err.code = code;
     err.syscall = syscall;
-    if (pathArg) err.path = pathArg;
+    if (pathArg !== undefined && pathArg !== null) err.path = String(pathArg);
+    if (destArg !== undefined && destArg !== null) err.dest = String(destArg);
     return err;
   }
 
-  function call(name, args, syscall, pathArg) {
+  function call(name, args, syscall, pathArg, destArg) {
     const env = JSON.parse(name.apply(null, args));
-    if (!env.ok) throw makeError(env, syscall, pathArg);
+    if (!env.ok) throw makeError(env, syscall, pathArg, destArg);
     return env;
   }
 
@@ -113,25 +130,37 @@ __bento_defineModule("fs", function (module, exports, require) {
     return env.entries.map((e) => e.name);
   }
   function renameSync(from, to) {
-    call(__bento_fs_rename, [String(from), String(to)], "rename", from);
+    call(__bento_fs_rename, [String(from), String(to)], "rename", from, to);
   }
   function copyFileSync(from, to) {
-    call(__bento_fs_copy, [String(from), String(to)], "copyfile", from);
+    call(__bento_fs_copy, [String(from), String(to)], "copyfile", from, to);
   }
   function realpathSync(p) {
-    return call(__bento_fs_realpath, [String(p)], "realpath", p).path;
+    // Node's realpathSync walks the path with lstat and lets that call's error
+    // out, so a failure reports itself as lstat and not as realpath. Only
+    // realpathSync.native, which bento does not have yet, says realpath.
+    return call(__bento_fs_realpath, [String(p)], "lstat", p).path;
   }
   function readlinkSync(p) {
     return call(__bento_fs_readlink, [String(p)], "readlink", p).path;
   }
   function symlinkSync(target, p) {
-    call(__bento_fs_symlink, [String(target), String(p)], "symlink", p);
+    call(__bento_fs_symlink, [String(target), String(p)], "symlink", target, p);
   }
   function chmodSync(p, mode) {
     call(__bento_fs_chmod, [String(p), mode | 0], "chmod", p);
   }
+  // accessSync asks the same question statSync does, but it reports itself as the
+  // access syscall the way Node does, so a caught error reads
+  // "ENOENT: no such file or directory, access '/nope'". The mode argument is not
+  // consulted yet; existence is the only check.
+  function accessSync(p, mode) {
+    call(__bento_fs_stat, [String(p)], "access", p);
+  }
   function mkdtempSync(prefix) {
-    return call(__bento_fs_mkdtemp, [String(prefix)], "mkdtemp", prefix).path;
+    // Node reports the pattern it tried rather than the prefix it was given, so a
+    // failed mkdtempSync("/nope/run-") says mkdtemp '/nope/run-XXXXXX'.
+    return call(__bento_fs_mkdtemp, [String(prefix)], "mkdtemp", String(prefix) + "XXXXXX").path;
   }
 
   class Dirent {
@@ -202,7 +231,7 @@ __bento_defineModule("fs", function (module, exports, require) {
       F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1,
       O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_APPEND: 1024,
     },
-    accessSync: function (p) { statSync(p); },
+    accessSync: accessSync,
     access: undefined,
   };
 
@@ -220,9 +249,9 @@ __bento_defineModule("fs", function (module, exports, require) {
   }
   api.access = function (p, mode, cb) {
     if (typeof mode === "function") { cb = mode; }
-    asyncify(statSync)(p, cb);
+    asyncify(accessSync)(p, cb);
   };
-  promises.access = promisifySync(statSync);
+  promises.access = promisifySync(accessSync);
 
   api.promises = promises;
   module.exports = api;
