@@ -4,8 +4,9 @@ import "testing"
 
 // A binding initialized by new Proxy holds the boxed proxy value, so a named member
 // read p.attr off it dispatches through the runtime get trap rather than an interned
-// Go struct selector the box does not carry. A handler with an undefined get trap
-// forwards the read to the target, so p.attr answers the target's own value.
+// Go struct selector the box does not carry. An undefined get trap forwards the read
+// to the target, so p.attr answers the target's own value even when the target is a
+// plain fixed-shape local, which the pre-scan boxes to a shared object.
 func TestProxyNamedReadUndefinedGetTrapForwards(t *testing.T) {
 	skipIfShort(t)
 	src := "var target = { attr: 1 };\nvar p = new Proxy(target, { get: undefined });\nconsole.log(String(p.attr));\n"
@@ -26,11 +27,26 @@ func TestProxyNamedReadGetTrapOverrides(t *testing.T) {
 }
 
 // A named write through a proxy with an undefined set trap forwards to the target, so
-// a later read of the same key off the target sees the written value.
-func TestProxyNamedWriteUndefinedSetTrapForwards(t *testing.T) {
+// a later read of the same key off the original target binding sees the written
+// value. The pre-scan boxes the fixed-shape target to a shared object, so the write
+// through the proxy and the read off target reach the same value.
+func TestProxyNamedWriteUndefinedSetTrapForwardsToTarget(t *testing.T) {
 	skipIfShort(t)
-	src := "var target: any = { attr: 1 };\nvar p = new Proxy(target, { set: undefined });\np.attr = 5;\nconsole.log(String(target.attr));\n"
-	if got := runProgramGoTolerant(t, src); got != "5\n" {
-		t.Fatalf("proxy named write with undefined set trap: got %q, want %q", got, "5\n")
+	src := "var target = { attr: 1 };\nvar p = new Proxy(target, { set: undefined });\np.attr = 2;\nconsole.log(String(target.attr));\n"
+	if got := runProgramGoTolerant(t, src); got != "2\n" {
+		t.Fatalf("proxy named write forwards to target: got %q, want %q", got, "2\n")
+	}
+}
+
+// Object.preventExtensions on the target is observed through the proxy, since the
+// two share identity after the pre-scan boxes the target: a write of a new key
+// through the proxy is refused once the shared target is non-extensible, so the
+// original property stays and a read of it off the target still answers the old
+// value rather than the dropped write.
+func TestProxyWriteRefusedOnSharedNonExtensibleTarget(t *testing.T) {
+	skipIfShort(t)
+	src := "var target = { attr: 1 };\nvar p = new Proxy(target, { set: undefined });\nObject.preventExtensions(target);\np.other = 9;\nconsole.log(String(target.other));\n"
+	if got := runProgramGoTolerant(t, src); got != "undefined\n" {
+		t.Fatalf("new key through proxy over non-extensible shared target: got %q, want undefined", got)
 	}
 }

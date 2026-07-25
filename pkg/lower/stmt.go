@@ -46,6 +46,12 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 		return nil, err
 	}
 	defer restoreNested()
+	// A binding used as a new Proxy target must box to a shared value.Value before its
+	// own declaration lowers, so the proxy aliases it rather than a detached copy. The
+	// pre-scan marks those names ahead of the statement loop; it is additive, so a
+	// nested block's proxy target declared in that block is caught by the block's own
+	// scan.
+	r.markProxyTargetLocals(nodes)
 	out := make([]ast.Stmt, 0, len(nodes))
 	for i, n := range nodes {
 		if atTop {
@@ -1770,6 +1776,22 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 		if boxed, ok, err := r.boxLiteralToDynamic(initNode); err != nil {
 			return nil, err
 		} else if ok {
+			return boxed, nil
+		}
+	}
+	// A binding the block pre-scan marked a new Proxy target boxes its object or array
+	// literal to a shared value.Value and is marked dynBound, so the proxy aliases the
+	// same live object the target binding holds. A write through the proxy and a
+	// mutation of the target then agree, the identity the [[Set]] and setPrototypeOf
+	// invariants read. Only a literal target shares this way; a target initialized by a
+	// call or another binding is left alone, so its proxy stays the handback it was.
+	if r.isProxyTargetLocal(nameNode) {
+		if boxed, ok, err := r.boxLiteralToDynamic(initNode); err != nil {
+			return nil, err
+		} else if ok {
+			if name, ok := localName(r.prog.Text(nameNode)); ok {
+				r.markDynBound(name)
+			}
 			return boxed, nil
 		}
 	}
