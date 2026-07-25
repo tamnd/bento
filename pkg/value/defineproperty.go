@@ -34,6 +34,15 @@ type descriptorInput struct {
 // its present flag stays false; the boolean attributes go through ToBoolean the way
 // the spec coerces them.
 func readDescriptorInput(descObj Value) descriptorInput {
+	// ToPropertyDescriptor step 1: a descriptor that is not an object cannot carry
+	// attributes, so a primitive descriptor (Object.defineProperty(o, k, "abc")) is a
+	// TypeError rather than a silent read of no fields. An array, a function, and a
+	// proxy are objects and pass.
+	switch descObj.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		Throw(NewTypeError(FromGoString("Property description must be an object: " + ToString(descObj).ToGoString())))
+	}
 	var in descriptorInput
 	if descObj.HasProperty(FromGoString("enumerable")) {
 		in.hasEnumerable = true
@@ -58,6 +67,14 @@ func readDescriptorInput(descObj Value) descriptorInput {
 	if descObj.HasProperty(FromGoString("set")) {
 		in.hasSet = true
 		in.set = descObj.Get(FromGoString("set"))
+	}
+	// ToPropertyDescriptor final step: a descriptor may not mix an accessor field with
+	// a data field. Naming get or set together with value or writable describes no
+	// coherent property, so the spec throws a TypeError here rather than silently
+	// letting one kind win, which is what folding a { get, writable } into an accessor
+	// would do.
+	if (in.hasGet || in.hasSet) && (in.hasValue || in.hasWritable) {
+		Throw(NewTypeError(FromGoString("Invalid property descriptor. Cannot both specify accessors and a value or writable attribute")))
 	}
 	return in
 }
