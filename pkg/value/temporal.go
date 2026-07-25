@@ -2673,21 +2673,26 @@ func durationSignsConsistent(fields ...float64) bool {
 }
 
 // durationSecondsOverflow reports whether the day-and-below fields exceed the
-// representable range: their normalized total seconds, days times 86,400 plus the hours,
-// minutes, and seconds plus the floored whole-second part of each sub-second field, must
-// have absolute value below 2^53. It works in big.Int so no intermediate product loses
-// precision at the boundary, the one place a float64 sum could round across it.
+// representable range: the exact total nanoseconds the fields denote must have an absolute
+// value below 2^53 seconds, i.e. below 2^53 times 10^9 nanoseconds. It sums in big.Int so
+// no intermediate product loses precision at the boundary. The whole sum, sub-second fields
+// included, is taken before the magnitude test: rounding each sub-second field down to whole
+// seconds first (a floor) would push a negative field's magnitude away from zero and reject a
+// value like 9007199254740991.991 s that is in range, since floor(-x/1000) rounds the
+// remainder into the wrong direction. Keeping the exact remainder makes the check symmetric
+// in sign, so a value and its negation agree.
 func durationSecondsOverflow(d, h, mi, s, ms, us, ns float64) bool {
 	total := new(big.Int)
-	total.Add(total, bigMulInt(d, 86400))
-	total.Add(total, bigMulInt(h, 3600))
-	total.Add(total, bigMulInt(mi, 60))
-	total.Add(total, bigFromFloat64(s))
-	total.Add(total, bigFloorDiv(ms, 1000))
-	total.Add(total, bigFloorDiv(us, 1_000_000))
-	total.Add(total, bigFloorDiv(ns, 1_000_000_000))
+	total.Add(total, bigMulInt(d, 86_400_000_000_000))
+	total.Add(total, bigMulInt(h, 3_600_000_000_000))
+	total.Add(total, bigMulInt(mi, 60_000_000_000))
+	total.Add(total, bigMulInt(s, 1_000_000_000))
+	total.Add(total, bigMulInt(ms, 1_000_000))
+	total.Add(total, bigMulInt(us, 1_000))
+	total.Add(total, bigFromFloat64(ns))
 	total.Abs(total)
 	limit := new(big.Int).Lsh(big.NewInt(1), 53)
+	limit.Mul(limit, big.NewInt(1_000_000_000))
 	return total.Cmp(limit) >= 0
 }
 
@@ -2715,14 +2720,6 @@ func bigFromFloat64(x float64) *big.Int {
 func bigToFloat64(n *big.Int) float64 {
 	f, _ := new(big.Float).SetInt(n).Float64()
 	return f
-}
-
-// bigFloorDiv returns floor(x / div) for an integral float64 and a positive int64
-// divisor. big.Int.Div is Euclidean division, which equals the floor for a positive
-// divisor, so this matches the specification's floor over signed inputs.
-func bigFloorDiv(x float64, div int64) *big.Int {
-	n := bigFromFloat64(x)
-	return n.Div(n, big.NewInt(div))
 }
 
 // durationSign returns the sign of the whole Duration: 1 if the first non-zero field is

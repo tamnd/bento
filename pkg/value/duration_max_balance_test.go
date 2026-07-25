@@ -54,3 +54,51 @@ func TestDurationMaxBalanceToJSON(t *testing.T) {
 		}
 	}
 }
+
+// The range check must be symmetric in sign: a valid Duration and its negation are both valid.
+// The exact total of the day-and-below fields for these maxima is 9007199254740991.something
+// seconds, below the 2^53-second limit, so neither sign goes out of range. An earlier check
+// floored each sub-second field to whole seconds before the magnitude test, which rounded a
+// negative field away from zero and pushed its magnitude up to exactly 2^53, rejecting the
+// negative arm of an otherwise valid pair.
+func TestDurationMaxBalanceSignSymmetric(t *testing.T) {
+	const maxSecs = 9007199254740991.0
+	cases := []struct {
+		name    string
+		pos     *Duration
+		neg     *Duration
+		wantPos string
+	}{
+		{
+			"ms, us, ns and s",
+			NewDuration(0, 0, 0, 0, 0, 0, maxSecs, 999, 999, 999),
+			NewDuration(0, 0, 0, 0, 0, 0, -maxSecs, -999, -999, -999),
+			"PT9007199254740991.999999999S",
+		},
+		{
+			"balance ms to s",
+			NewDuration(0, 0, 0, 0, 0, 0, maxSecs-9007199254740, maxSecs, 0, 0),
+			NewDuration(0, 0, 0, 0, 0, 0, -(maxSecs - 9007199254740), -maxSecs, 0, 0),
+			"PT9007199254740991.991S",
+		},
+		{
+			"balance ns to s",
+			NewDuration(0, 0, 0, 0, 0, 0, maxSecs-9007199, 0, 0, maxSecs),
+			NewDuration(0, 0, 0, 0, 0, 0, -(maxSecs - 9007199), 0, 0, -maxSecs),
+			"PT9007199254740991.254740991S",
+		},
+	}
+	for _, c := range cases {
+		var gotPos, gotNeg string
+		if name := catchThrow(func() { gotPos = c.pos.ToJSON().ToGoString() }); name != "" {
+			t.Errorf("%s: positive arm threw %q", c.name, name)
+		} else if gotPos != c.wantPos {
+			t.Errorf("%s: positive toJSON got %q, want %q", c.name, gotPos, c.wantPos)
+		}
+		if name := catchThrow(func() { gotNeg = c.neg.ToJSON().ToGoString() }); name != "" {
+			t.Errorf("%s: negative arm threw %q", c.name, name)
+		} else if want := "-" + c.wantPos; gotNeg != want {
+			t.Errorf("%s: negative toJSON got %q, want %q", c.name, gotNeg, want)
+		}
+	}
+}
