@@ -2336,6 +2336,13 @@ func durationUnitBoundaryNanos(rel *PlainDate, unit string, n int) *big.Int {
 // over a fixed 24-hour day; with a reference each resolves against the calendar to an endpoint.
 // The result is the sign of the first span minus the second, -1, 0, or 1.
 func DurationCompare(a, b *Duration, rel *PlainDate) float64 {
+	// Two Duration instances that agree on every field are equal, and the specification
+	// returns 0 before it reaches the relativeTo requirement (CompareTemporalDuration begins
+	// with a field-by-field identity check). Take that short-circuit so an identical pair with
+	// years, months, or weeks compares equal without a reference, matching the reference impl.
+	if durationFieldsEqual(a, b) {
+		return 0
+	}
 	var spanA, spanB *big.Int
 	if rel == nil {
 		if a.years != 0 || a.months != 0 || a.weeks != 0 || b.years != 0 || b.months != 0 || b.weeks != 0 {
@@ -2348,6 +2355,15 @@ func DurationCompare(a, b *Duration, rel *PlainDate) float64 {
 		spanB, _ = durationReferenceEndpoint(b, rel)
 	}
 	return float64(spanA.Cmp(spanB))
+}
+
+// durationFieldsEqual reports whether two Durations agree on all ten fields, the identity
+// DurationCompare short-circuits to 0 before it requires a relativeTo reference.
+func durationFieldsEqual(a, b *Duration) bool {
+	return a.years == b.years && a.months == b.months && a.weeks == b.weeks &&
+		a.days == b.days && a.hours == b.hours && a.minutes == b.minutes &&
+		a.seconds == b.seconds && a.milliseconds == b.milliseconds &&
+		a.microseconds == b.microseconds && a.nanoseconds == b.nanoseconds
 }
 
 // durationUnitRank orders the ten Duration units from coarsest to finest, year 0 through
