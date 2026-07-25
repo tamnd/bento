@@ -1173,6 +1173,13 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return star(sel("value", "TextDecoder")), nil
 		}
+		if r.isDateType(t) {
+			// A Date (21 §21.4) is the value model's instant, spelled as a pointer to
+			// value.Date. It is not a struct shape, so it routes here before renderObject
+			// would intern its getter interface as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "Date")), nil
+		}
 		if r.regExpType(t) {
 			// A RegExp (22 §22.2) is the value model's compiled pattern, spelled as a
 			// pointer to value.RegExp. It is not a struct shape, so it routes here before
