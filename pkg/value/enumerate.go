@@ -24,11 +24,27 @@ func (v Value) Assign(sources ...Value) Value {
 		case KindObject, KindArray, KindFunc:
 			o := src.object()
 			for _, k := range o.orderedStringKeysFiltered(true) {
-				v.SetKey(k, src.Get(k))
+				// Object.assign performs Set(to, key, value, Throw=true), so a copy onto a
+				// non-writable data property, an accessor with no setter, or a new key on a
+				// non-extensible target throws rather than silently dropping. A plain object or
+				// function target takes the throwing named write; an array target keeps the
+				// element-aware SetKey so a numeric key still lands in its dense store.
+				if v.kind == KindArray {
+					v.SetKey(k, src.Get(k))
+				} else {
+					v.SetStrict(k, src.Get(k))
+				}
 			}
 			for i := range o.symKeys {
 				if o.symDescs[i].enumerable {
-					v.setSymKey(o.symKeys[i], o.getSym(src, o.symKeys[i]))
+					// Object.assign performs Set with Throw=true, so a copy onto a frozen or
+					// getter-only symbol property, or a new symbol key on a non-extensible target,
+					// throws rather than dropping, the same escalation the string copy above takes.
+					if v.kind == KindArray {
+						v.setSymKey(o.symKeys[i], o.getSym(src, o.symKeys[i]))
+					} else {
+						v.setSymKeyStrict(o.symKeys[i], o.getSym(src, o.symKeys[i]))
+					}
 				}
 			}
 		case KindString:
