@@ -285,18 +285,18 @@ func TestRelativeIndexInfinity(t *testing.T) {
 		length int
 		want   int
 	}{
-		{inf, 8, 8},           // +Infinity clamps to length
-		{-inf, 8, 0},          // -Infinity clamps to 0
-		{1e300, 8, 8},         // huge finite past the end clamps to length
-		{-1e300, 8, 0},        // huge negative finite clamps to 0
-		{0x100000000, 8, 8},   // 2^32, past the end
-		{12, 8, 8},            // finite past the end
-		{3, 8, 3},             // in range
-		{-2, 8, 6},            // negative counts from the end
-		{-0.5, 8, 0},          // truncates toward zero to +0, then min(0, len)
-		{7.9, 8, 7},           // truncates toward zero, stays in range
-		{-8, 8, 0},            // exactly -length
-		{-100, 8, 0},          // well past -length
+		{inf, 8, 8},         // +Infinity clamps to length
+		{-inf, 8, 0},        // -Infinity clamps to 0
+		{1e300, 8, 8},       // huge finite past the end clamps to length
+		{-1e300, 8, 0},      // huge negative finite clamps to 0
+		{0x100000000, 8, 8}, // 2^32, past the end
+		{12, 8, 8},          // finite past the end
+		{3, 8, 3},           // in range
+		{-2, 8, 6},          // negative counts from the end
+		{-0.5, 8, 0},        // truncates toward zero to +0, then min(0, len)
+		{7.9, 8, 7},         // truncates toward zero, stays in range
+		{-8, 8, 0},          // exactly -length
+		{-100, 8, 0},        // well past -length
 	}
 	for _, c := range cases {
 		if got := relativeIndex(c.v, c.length); got != c.want {
