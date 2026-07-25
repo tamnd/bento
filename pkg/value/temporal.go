@@ -1047,7 +1047,7 @@ func durationFromDayNanos(total *big.Int, largeRank int) *Duration {
 	for i := largeRank; i < 6; i++ {
 		size := big.NewInt(sizes[i])
 		q.Quo(rem, size)
-		fields[i] = float64(q.Int64())
+		fields[i] = bigToFloat64(q)
 		rem.Rem(rem, size)
 	}
 	return NewDuration(0, 0, 0, 0, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5])
@@ -2227,7 +2227,7 @@ func balanceDayTimeNanos(total *big.Int, rank int) *Duration {
 	days := new(big.Int).Quo(total, nsPerDay)
 	rem := new(big.Int).Rem(total, nsPerDay)
 	t := durationFromDayNanos(rem, 0)
-	t.days = float64(days.Int64())
+	t.days = bigToFloat64(days)
 	return t
 }
 
@@ -2641,7 +2641,7 @@ func durationSecondsOverflow(d, h, mi, s, ms, us, ns float64) bool {
 	total.Add(total, bigMulInt(d, 86400))
 	total.Add(total, bigMulInt(h, 3600))
 	total.Add(total, bigMulInt(mi, 60))
-	total.Add(total, big.NewInt(int64(s)))
+	total.Add(total, bigFromFloat64(s))
 	total.Add(total, bigFloorDiv(ms, 1000))
 	total.Add(total, bigFloorDiv(us, 1_000_000))
 	total.Add(total, bigFloorDiv(ns, 1_000_000_000))
@@ -2651,17 +2651,36 @@ func durationSecondsOverflow(d, h, mi, s, ms, us, ns float64) bool {
 }
 
 // bigMulInt returns the exact product of an integral float64 and an int64 multiplier as
-// a big.Int. The float64 is below 2^53 in magnitude, so int64(x) is exact.
+// a big.Int. A Duration field can exceed the int64 range (a single microseconds or nanoseconds
+// value runs to Number.MAX_SAFE_INTEGER scaled by a thousand or a million), so the float64 goes
+// through bigFromFloat64 rather than int64(x), which would wrap.
 func bigMulInt(x float64, m int64) *big.Int {
-	n := big.NewInt(int64(x))
+	n := bigFromFloat64(x)
 	return n.Mul(n, big.NewInt(m))
+}
+
+// bigFromFloat64 returns the exact big.Int an integral float64 denotes, for any magnitude. It is
+// the inverse of bigToFloat64 and, unlike int64(x), does not wrap when x exceeds the int64 range.
+func bigFromFloat64(x float64) *big.Int {
+	n, _ := new(big.Float).SetFloat64(x).Int(nil)
+	return n
+}
+
+// bigToFloat64 returns the nearest float64 to a big.Int. Unlike float64(n.Int64()) it does not
+// silently wrap when the value exceeds the int64 range: a balanced Duration field can run past
+// 2^63 (adding two near-maximum durations), and the out-of-range magnitude must survive as a large
+// float64 so RejectDuration can see it and throw, rather than truncate to a small value that
+// slips through the range check.
+func bigToFloat64(n *big.Int) float64 {
+	f, _ := new(big.Float).SetInt(n).Float64()
+	return f
 }
 
 // bigFloorDiv returns floor(x / div) for an integral float64 and a positive int64
 // divisor. big.Int.Div is Euclidean division, which equals the floor for a positive
 // divisor, so this matches the specification's floor over signed inputs.
 func bigFloorDiv(x float64, div int64) *big.Int {
-	n := big.NewInt(int64(x))
+	n := bigFromFloat64(x)
 	return n.Div(n, big.NewInt(div))
 }
 
