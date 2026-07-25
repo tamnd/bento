@@ -18,10 +18,11 @@ func buildAndRunFile(t *testing.T, name, src string) string {
 		t.Fatalf("write %s: %v", name, err)
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: path, Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: path, Output: bin})
+	if err != nil {
 		t.Fatalf("build %s: %v", name, err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run %s: %v (%s)", name, err, got)
 	}

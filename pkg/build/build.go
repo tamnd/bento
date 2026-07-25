@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/tamnd/bento/pkg/cpath"
@@ -98,17 +99,22 @@ type EmitOptions struct {
 // a construct the lowerer does not yet cover, or a Go toolchain failure is
 // returned as an error, so the caller (the CLI, the benchmark harness) reports a
 // real failure rather than a binary that does not match the source.
-func Build(opts Options) error {
+//
+// It returns the path of the binary it wrote, in the operating system's own
+// spelling, which is what a caller runs. That path is not always Options.Output:
+// on Windows an executable needs a .exe extension to be one, so a name without it
+// gets one. See ExeName.
+func Build(opts Options) (string, error) {
 	// The entry and the output arrive as operating system paths, from a command
 	// line or a caller, and become checker paths here: absolute, slash-separated,
 	// Windows volume kept. Everything below holds that spelling, and the two places
 	// it goes back are the stat here and the go build argument in link. See pkg/cpath.
 	entry, err := cpath.Abs(opts.Entry)
 	if err != nil {
-		return fmt.Errorf("bento build: %s: %w", opts.Entry, err)
+		return "", fmt.Errorf("bento build: %s: %w", opts.Entry, err)
 	}
 	if _, err := os.Stat(cpath.ToOS(entry)); err != nil {
-		return fmt.Errorf("bento build: %s: %w", opts.Entry, err)
+		return "", fmt.Errorf("bento build: %s: %w", opts.Entry, err)
 	}
 
 	output := opts.Output
@@ -118,18 +124,39 @@ func Build(opts Options) error {
 	}
 	output, err = cpath.Abs(output)
 	if err != nil {
-		return fmt.Errorf("bento build: output %s: %w", opts.Output, err)
+		return "", fmt.Errorf("bento build: output %s: %w", opts.Output, err)
 	}
+	output = ExeName(output)
 
 	source, goPaths, err := compileProgram(entry, EmitOptions{})
 	if err != nil {
-		return err
+		return "", err
 	}
 	needsCgo, err := gateCgo(goPaths, opts.AllowCgo)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return link(source, output, needsCgo)
+	if err := link(source, output, needsCgo); err != nil {
+		return "", err
+	}
+	return cpath.ToOS(output), nil
+}
+
+// ExeName is a program's name with the extension the host platform needs for the
+// file to be a program. Windows decides that by extension: a binary written as
+// "hello" is a file the shell will not run and the explorer will not launch, so
+// the go toolchain appends .exe and bento does the same, for the name taken from
+// the entry module and for an explicit -o that left it off.
+//
+// A name that already ends in .exe keeps the one it has, in any case: Windows
+// does not care which case it is written in, and "hello.exe.exe" is not what
+// anyone asked for. Off Windows the name is already right, extension or not, so
+// it is returned untouched.
+func ExeName(name string) string {
+	if runtime.GOOS != "windows" || strings.HasSuffix(strings.ToLower(name), ".exe") {
+		return name
+	}
+	return name + ".exe"
 }
 
 // EmitGo type-checks the entry module, lowers it to a Go program, and returns

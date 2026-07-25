@@ -26,10 +26,11 @@ func TestRequireIsCallableAndThrows(t *testing.T) {
 		t.Fatalf("write entry: %v", err)
 	}
 	bin := filepath.Join(dir, "prog")
-	if err := Build(Options{Entry: entry, Output: bin}); err != nil {
+	prog, err := Build(Options{Entry: entry, Output: bin})
+	if err != nil {
 		t.Fatalf("build module calling require: %v", err)
 	}
-	got, err := exec.Command(bin).CombinedOutput()
+	got, err := exec.Command(prog).CombinedOutput()
 	if err != nil {
 		t.Fatalf("run program: %v (%s)", err, got)
 	}
