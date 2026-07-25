@@ -43,7 +43,12 @@ const ambientPath = "/__bento_ambient__.d.ts"
 // value.QueueMicrotask, and the assembled main drains the queue at its end.
 // structuredClone is the WHATWG global that deep-copies a data graph; the lowerer
 // boxes the argument and emits value.StructuredClone, whose clone the caller reads
-// through the dynamic model. Event and EventTarget need no declaration here: the
+// through the dynamic model. setImmediate and clearImmediate are Node's own
+// scheduling pair, declared here because the TypeScript standard library has only
+// the WHATWG timers: the other four, setTimeout and setInterval with their clears,
+// come from that library already and need no declaration. Each returns a number,
+// the id its clear takes back, which is the shape the standard library's setTimeout
+// declares and so the shape all six agree on. Event and EventTarget need no declaration here: the
 // TypeScript standard library already declares the DOM-style event pair as ambient
 // globals, so the lowerer recognizes a new Event or new EventTarget by name, builds
 // the instance with value.NewEvent or value.NewEventTarget, and lands the binding in a
@@ -68,6 +73,8 @@ declare var module: any;
 declare var exports: any;
 declare var require: any;
 declare function queueMicrotask(callback: () => void): void;
+declare function setImmediate(callback: (...args: any[]) => void, ...args: any[]): number;
+declare function clearImmediate(handle: number): void;
 declare function structuredClone(value: any): any;
 declare function __bento_os_info(): string;
 declare function __bento_inspect(value: any): string;

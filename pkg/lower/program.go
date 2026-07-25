@@ -436,7 +436,17 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// JavaScript gives a microtask. The drain is appended after the classes render so a
 	// promise minted or observed inside a class method body, which lowers there, still
 	// sets the flag in time; a program that minted no promise drains nothing.
-	if r.usesPromise || r.usesMicrotask {
+	// A program that scheduled a timer runs the event loop instead of the bare drain: the
+	// loop opens with a microtask checkpoint and takes another after every callback, so it
+	// does everything the drain did and then keeps turning until the scheduled callbacks
+	// are done. Emitting both would drain twice, which is harmless but says the wrong
+	// thing about which one owns the end of main, so the two are exclusive.
+	switch {
+	case r.usesTimers:
+		r.requireImport(valuePkg)
+		loop := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunEventLoop")}}
+		mainDecl.Body.List = append(mainDecl.Body.List, loop)
+	case r.usesPromise || r.usesMicrotask:
 		r.requireImport(valuePkg)
 		drain := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunMicrotasks")}}
 		mainDecl.Body.List = append(mainDecl.Body.List, drain)
