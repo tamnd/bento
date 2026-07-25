@@ -26,7 +26,7 @@ func (n *netBridgeState) tlsListen(args []any) (any, error) {
 
 	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
-		n.emit("__bento_tls_dispatchServerError", id, "ERR_TLS_CERT", err.Error())
+		n.emit("__bento_tls_dispatchServerError", id, err.Error(), jsCodeProps("ERR_TLS_CERT"))
 		return nil, nil
 	}
 	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}

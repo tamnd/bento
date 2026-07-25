@@ -113,3 +113,32 @@ func TestCacheEntryPathIsLegibleAndFlat(t *testing.T) {
 		t.Errorf("entry file name is not flat: %q", path)
 	}
 }
+
+// TestCachePutReplacesAnExistingEntry pins the atomic write the cache commits
+// with, which is a write to a temporary file in the same directory followed by a
+// rename over the entry.
+//
+// The point of the test is Windows, where that pattern is often said not to work:
+// the C library's rename() refuses a destination that exists there. Go's
+// os.Rename does not use it. It calls MoveFileEx with MOVEFILE_REPLACE_EXISTING,
+// which replaces the destination in one step, the same call libuv makes for
+// fs.rename, so the pattern holds on every platform bento builds for. This test
+// is what proves it on the Windows runner rather than leaving it as a claim.
+func TestCachePutReplacesAnExistingEntry(t *testing.T) {
+	c := NewCache(t.TempDir(), "go1.26.0")
+	if err := c.put("example.com/mod", "v1.0.0", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.put("example.com/mod", "v1.0.0", "second"); err != nil {
+		t.Fatalf("commit over an existing entry: %v", err)
+	}
+	got, err := c.LoadOrGenerate("example.com/mod", "v1.0.0", func() (string, error) {
+		return "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "second" {
+		t.Errorf("entry = %q, want the second write to have replaced the first", got)
+	}
+}

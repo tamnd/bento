@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+
+	"github.com/tamnd/bento/pkg/nodehost"
 )
 
 // http2 is two APIs over one wire. The compatibility API lets an ordinary
@@ -37,14 +39,15 @@ func (h *httpBridge) listenH2(args []any) (any, error) {
 
 	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
-		h.emit("__bento_http_dispatchServerError", id, "ERR_TLS_CERT", err.Error())
+		h.emit("__bento_http_dispatchServerError", id, err.Error(), jsCodeProps("ERR_TLS_CERT"))
 		return nil, nil
 	}
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		h.emit("__bento_http_dispatchServerError", id, errCode(err), err.Error())
+		msg, props := nodehost.NetError(err, "listen", host, port)
+		h.emit("__bento_http_dispatchServerError", id, msg, props)
 		return nil, nil
 	}
 

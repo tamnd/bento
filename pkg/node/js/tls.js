@@ -160,19 +160,17 @@ __bento_defineModule("tls", function (module, exports, require) {
     socket.emit("close");
   };
 
-  globalThis.__bento_tls_dispatchError = function (connId, message) {
+  globalThis.__bento_tls_dispatchError = function (connId, message, props) {
     const socket = sockets[connId];
     if (!socket) return;
     delete sockets[connId];
-    socket.emit("error", new Error(message));
+    socket.emit("error", __bento_makeNetError(message, props));
   };
 
-  globalThis.__bento_tls_dispatchServerError = function (serverId, code, message) {
+  globalThis.__bento_tls_dispatchServerError = function (serverId, message, props) {
     const server = servers[serverId];
     if (!server) return;
-    const err = new Error(message);
-    if (code) err.code = code;
-    server.emit("error", err);
+    server.emit("error", __bento_makeNetError(message, props));
   };
 
   globalThis.__bento_tls_dispatchServerClose = function (serverId) {

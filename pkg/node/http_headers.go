@@ -129,18 +129,10 @@ func httpTokenListHas(header, token string) bool {
 	return false
 }
 
-// errCode maps a listen error to a Node error code where the cause is clear, so
-// EADDRINUSE and EACCES surface with the code Node programs branch on.
-func errCode(err error) string {
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "address already in use"):
-		return "EADDRINUSE"
-	case strings.Contains(msg, "permission denied"):
-		return "EACCES"
-	case strings.Contains(msg, "cannot assign requested address"):
-		return "EADDRNOTAVAIL"
-	default:
-		return ""
-	}
+// jsCodeProps is the property bag for an error whose only Node-visible property
+// is its code, the shape the dispatchers take. It is for failures that are
+// bento's own rather than a syscall's, where nodehost.NetError has nothing to
+// classify: a certificate that will not parse is one.
+func jsCodeProps(code string) string {
+	return `{"code":` + strconv.Quote(code) + `}`
 }

@@ -125,10 +125,10 @@ __bento_defineModule("websocket", function (module, exports, require) {
     ws._dispatch("message", makeEvent("message", { data: data }));
   };
 
-  globalThis.__bento_ws_dispatchError = function (connId, message) {
+  globalThis.__bento_ws_dispatchError = function (connId, message, props) {
     const ws = instances[connId];
     if (!ws) return;
-    ws._dispatch("error", makeEvent("error", { message: message, error: new Error(message) }));
+    ws._dispatch("error", makeEvent("error", { message: message, error: __bento_makeNetError(message, props) }));
   };
 
   globalThis.__bento_ws_dispatchClose = function (connId, code, reason) {

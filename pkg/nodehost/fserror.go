@@ -6,9 +6,10 @@ import (
 	"syscall"
 )
 
-// FSError is one filesystem failure in the shape a Node program reads it: the
-// code it branches on, the number err.errno carries, and the description that
-// goes in the message.
+// UVError is one failure in the shape a Node program reads it: the code it
+// branches on, the number err.errno carries, and the description that goes in the
+// message. Filesystem and socket errors are the same shape because they are the
+// same vocabulary, libuv's, so one type answers for both.
 //
 // # Why this is not a raw errno comparison
 //
@@ -35,7 +36,7 @@ import (
 // Windows libuv does not trust the C runtime's errno values at all and assigns
 // its own block, where ENOENT is -4058. Both are in the platform files next to
 // the code translation they belong with.
-type FSError struct {
+type UVError struct {
 	// Code is libuv's name for the failure, the string err.code carries: ENOENT,
 	// EEXIST, ENOTEMPTY and so on, or UNKNOWN for a failure no table names.
 	Code string
@@ -58,7 +59,7 @@ type FSError struct {
 // sentinel at all for ENOTEMPTY, EISDIR or ENOTDIR. The sentinels still matter,
 // because an error that never came from a syscall carries no errno: one an io/fs
 // implementation returned, or a bare os.ErrNotExist a helper wrapped.
-func ClassifyFSError(err error) FSError {
+func ClassifyFSError(err error) UVError {
 	code := "UNKNOWN"
 	if en, ok := errors.AsType[syscall.Errno](err); ok {
 		code = uvCode(en)
@@ -75,62 +76,93 @@ func ClassifyFSError(err error) FSError {
 			code = "EBADF"
 		}
 	}
-	desc, known := fsErrorDesc[code]
-	if !known || code == "UNKNOWN" {
-		// Nothing named it, so say what actually happened rather than libuv's
-		// "unknown error", which throws away the only description there is.
-		desc = err.Error()
-	}
-	return FSError{Code: code, Errno: uvErrno(code), Desc: desc}
+	return UVError{Code: code, Errno: uvErrno(code), Desc: uvDesc(code, err)}
 }
 
-// fsErrorDesc is libuv's description for each code, copied from UV_ERRNO_MAP in
+// uvDesc is libuv's description of a code, or the Go error's own text when
+// nothing named the failure. Saying what actually happened is worth more than
+// libuv's "unknown error", which throws away the only description there is.
+func uvDesc(code string, err error) string {
+	if desc, known := uvErrorDesc[code]; known && code != "UNKNOWN" {
+		return desc
+	}
+	return err.Error()
+}
+
+// uvErrorDesc is libuv's description for each code, copied from UV_ERRNO_MAP in
 // libuv's include/uv.h. It is the string Node puts between the code and the
 // syscall in a filesystem error message, so it has to be libuv's wording and not
 // a paraphrase of it.
 //
-// The set is the one a filesystem call can produce. libuv's map is longer,
-// because most of the rest of it is the network stack.
-var fsErrorDesc = map[string]string{
-	"EACCES":       "permission denied",
-	"EAGAIN":       "resource temporarily unavailable",
-	"EBADF":        "bad file descriptor",
-	"EBUSY":        "resource busy or locked",
-	"ECANCELED":    "operation canceled",
-	"ECHARSET":     "invalid Unicode character",
-	"EEXIST":       "file already exists",
-	"EFAULT":       "bad address in system call argument",
-	"EFBIG":        "file too large",
-	"EFTYPE":       "inappropriate file type or format",
-	"EILSEQ":       "illegal byte sequence",
-	"EINVAL":       "invalid argument",
-	"EIO":          "i/o error",
-	"EISDIR":       "illegal operation on a directory",
-	"ELOOP":        "too many symbolic links encountered",
-	"EMFILE":       "too many open files",
-	"EMLINK":       "too many links",
-	"ENAMETOOLONG": "name too long",
-	"ENFILE":       "file table overflow",
-	"ENODEV":       "no such device",
-	"ENOENT":       "no such file or directory",
-	"ENOMEM":       "not enough memory",
-	"ENOSPC":       "no space left on device",
-	"ENOSYS":       "function not implemented",
-	"ENOTDIR":      "not a directory",
-	"ENOTEMPTY":    "directory not empty",
-	"ENOTSUP":      "operation not supported on socket",
-	"ENOTTY":       "inappropriate ioctl for device",
-	"ENXIO":        "no such device or address",
-	"EOF":          "end of file",
-	"EOVERFLOW":    "value too large for defined data type",
-	"EPERM":        "operation not permitted",
-	"EPIPE":        "broken pipe",
-	"ERANGE":       "result too large",
-	"EROFS":        "read-only file system",
-	"ESPIPE":       "invalid seek",
-	"ESRCH":        "no such process",
-	"ETIMEDOUT":    "connection timed out",
-	"ETXTBSY":      "text file is busy",
-	"EXDEV":        "cross-device link not permitted",
-	"UNKNOWN":      "unknown error",
+// The set covers what a filesystem call and a socket call can produce, which is
+// most of libuv's map.
+var uvErrorDesc = map[string]string{
+	"EACCES":          "permission denied",
+	"EADDRINUSE":      "address already in use",
+	"EADDRNOTAVAIL":   "address not available",
+	"EAFNOSUPPORT":    "address family not supported",
+	"EAGAIN":          "resource temporarily unavailable",
+	"EAI_AGAIN":       "temporary failure",
+	"EAI_FAIL":        "permanent failure",
+	"EAI_NONAME":      "unknown node or service",
+	"EALREADY":        "connection already in progress",
+	"EBADF":           "bad file descriptor",
+	"EBUSY":           "resource busy or locked",
+	"ECANCELED":       "operation canceled",
+	"ECHARSET":        "invalid Unicode character",
+	"ECONNABORTED":    "software caused connection abort",
+	"ECONNREFUSED":    "connection refused",
+	"ECONNRESET":      "connection reset by peer",
+	"EDESTADDRREQ":    "destination address required",
+	"EEXIST":          "file already exists",
+	"EFAULT":          "bad address in system call argument",
+	"EFBIG":           "file too large",
+	"EFTYPE":          "inappropriate file type or format",
+	"EHOSTUNREACH":    "host is unreachable",
+	"EILSEQ":          "illegal byte sequence",
+	"EINVAL":          "invalid argument",
+	"EIO":             "i/o error",
+	"EISCONN":         "socket is already connected",
+	"EISDIR":          "illegal operation on a directory",
+	"ELOOP":           "too many symbolic links encountered",
+	"EMFILE":          "too many open files",
+	"EMLINK":          "too many links",
+	"EMSGSIZE":        "message too long",
+	"ENAMETOOLONG":    "name too long",
+	"ENETDOWN":        "network is down",
+	"ENETUNREACH":     "network is unreachable",
+	"ENFILE":          "file table overflow",
+	"ENOBUFS":         "no buffer space available",
+	"ENODEV":          "no such device",
+	"ENOENT":          "no such file or directory",
+	"ENOMEM":          "not enough memory",
+	"ENOSPC":          "no space left on device",
+	"ENOSYS":          "function not implemented",
+	"ENOTCONN":        "socket is not connected",
+	"ENOTDIR":         "not a directory",
+	"ENOTEMPTY":       "directory not empty",
+	"ENOTSOCK":        "socket operation on non-socket",
+	"ENOTSUP":         "operation not supported on socket",
+	"ENOTTY":          "inappropriate ioctl for device",
+	"ENXIO":           "no such device or address",
+	"EOF":             "end of file",
+	"EOVERFLOW":       "value too large for defined data type",
+	"EPERM":           "operation not permitted",
+	"EPIPE":           "broken pipe",
+	"EPROTO":          "protocol error",
+	"EPROTONOSUPPORT": "protocol not supported",
+	"EPROTOTYPE":      "protocol wrong type for socket",
+	"ERANGE":          "result too large",
+	"EROFS":           "read-only file system",
+	"ESOCKTNOSUPPORT": "socket type not supported",
+	"ESPIPE":          "invalid seek",
+	"ESRCH":           "no such process",
+	"ETIMEDOUT":       "connection timed out",
+	"ETXTBSY":         "text file is busy",
+	"EXDEV":           "cross-device link not permitted",
+	"UNKNOWN":         "unknown error",
+	// ENOTFOUND is Node's own, not libuv's: a name that does not resolve reports
+	// EAI_NONAME through libuv and Node relabels it. The description is the one
+	// libuv gives EAI_NONAME, since that is the failure being described.
+	"ENOTFOUND": "unknown node or service",
 }

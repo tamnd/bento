@@ -164,7 +164,7 @@ func TestClassifySaysWhatHappenedForAnUnknownError(t *testing.T) {
 // a hole in it, and one with no number reports errno as UNKNOWN's while its code
 // says otherwise.
 func TestEveryCodeHasADescriptionAndANumber(t *testing.T) {
-	for code := range fsErrorDesc {
+	for code := range uvErrorDesc {
 		if code == "UNKNOWN" {
 			continue
 		}
