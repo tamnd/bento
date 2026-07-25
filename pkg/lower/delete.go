@@ -122,16 +122,31 @@ func (r *Renderer) deleteElement(target frontend.Node) (ast.Expr, error) {
 		return nil, err
 	}
 	r.requireImport(valuePkg)
+	// A strict-mode delete whose removal is refused (a non-configurable property or
+	// a sealed array element) is a TypeError, not a false result, so a strict
+	// program routes each key kind through its strict variant. They match the
+	// sloppy stores on a successful removal, so only a genuinely refused delete
+	// turns into the throw the language requires.
+	strict := r.programStrict
 	switch {
 	case r.isNumber(idxNode):
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DeleteIndex")}, Args: []ast.Expr{idx}}, nil
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(pick(strict, "DeleteIndexStrict", "DeleteIndex"))}, Args: []ast.Expr{idx}}, nil
 	case r.isDynamic(idxNode):
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DeleteElem")}, Args: []ast.Expr{idx}}, nil
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(pick(strict, "DeleteElemStrict", "DeleteElem"))}, Args: []ast.Expr{idx}}, nil
 	case r.isString(idxNode):
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Delete")}, Args: []ast.Expr{idx}}, nil
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(pick(strict, "DeleteStrict", "Delete"))}, Args: []ast.Expr{idx}}, nil
 	case r.isSymbol(idxNode):
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("DeleteElem")}, Args: []ast.Expr{idx}}, nil
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(pick(strict, "DeleteElemStrict", "DeleteElem"))}, Args: []ast.Expr{idx}}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "delete with a non-number, non-string index is a later slice"}
 	}
+}
+
+// pick returns a when cond holds, else b, a small helper for choosing the strict
+// or sloppy runtime method name at an emission site.
+func pick(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
 }

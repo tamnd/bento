@@ -594,6 +594,14 @@ func (o *Object) hasSym(key *Symbol) bool {
 func (o *Object) deleteSym(key *Symbol) bool {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
+			// A non-configurable symbol property refuses removal the way a
+			// non-configurable string property does in deleteOwn, so a sealed or
+			// frozen object's symbol key survives delete and reports false. Only
+			// key addition, not deletion, is what preventExtensions blocks, so a
+			// merely non-extensible object still deletes an existing symbol key.
+			if !o.symDescs[i].configurable {
+				return false
+			}
 			o.symKeys = append(o.symKeys[:i], o.symKeys[i+1:]...)
 			o.symDescs = append(o.symDescs[:i], o.symDescs[i+1:]...)
 			return true

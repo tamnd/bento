@@ -55,6 +55,26 @@ func TestPreventExtensionsSymbolStaysDeletable(t *testing.T) {
 	}
 }
 
+// A frozen object's symbol property is non-configurable, so a sloppy delete of it
+// reports false and keeps the property, the deletion sibling of the dropped write.
+func TestFrozenSymbolDeleteSloppyReturnsFalse(t *testing.T) {
+	skipIfShort(t)
+	src := "var sym = Symbol();\nvar obj: any = {};\nobj[sym] = 1;\nObject.freeze(obj);\nconsole.log(String(delete obj[sym]));\n"
+	if got := runProgramGoTolerant(t, src); got != "false\n" {
+		t.Fatalf("frozen symbol sloppy delete: got %q, want false", got)
+	}
+}
+
+// A sealed object's symbol property is non-configurable, so a strict delete of it
+// throws a TypeError, the strict escalation of the refused removal.
+func TestSealedSymbolDeleteStrictThrows(t *testing.T) {
+	skipIfShort(t)
+	src := "'use strict';\nvar symA = Symbol('A');\nvar obj: any = {};\nobj[symA] = 1;\nObject.seal(obj);\ntry {\ndelete obj[symA];\nconsole.log('nothrow');\n} catch (e) {\nconsole.log(e instanceof TypeError ? 'TypeError' : 'other');\n}\n"
+	if got := runProgramGoTolerant(t, src); got != "TypeError\n" {
+		t.Fatalf("sealed symbol strict delete: got %q, want TypeError", got)
+	}
+}
+
 // A sealed object keeps its symbol property writable, so a sloppy overwrite lands
 // while a new symbol key is dropped, matching Object.seal's data-writable state.
 func TestSealedSymbolWriteStaysWritableNewKeyDropped(t *testing.T) {

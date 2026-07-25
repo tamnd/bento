@@ -348,11 +348,44 @@ func (v Value) DeleteElem(key Value) bool {
 	return v.Delete(ToString(key))
 }
 
+// DeleteIndexStrict is the strict-mode form of DeleteIndex: a refused element
+// removal (a sealed array slot or a non-configurable numeric property) throws
+// rather than reporting false, routed through DeleteStrict like the named path.
+func (v Value) DeleteIndexStrict(i float64) bool {
+	return v.DeleteStrict(NumberToString(i))
+}
+
+// DeleteElemStrict is the strict-mode form of DeleteElem: a symbol key refused by
+// a non-configurable property throws, and every other key routes through
+// DeleteStrict so a refused string or coerced key throws too. A successful removal
+// returns true unchanged, so an ordinary strict delete matches the sloppy one.
+func (v Value) DeleteElemStrict(key Value) bool {
+	if key.kind == KindSymbol {
+		return v.deleteSymKeyStrict(key.symbol())
+	}
+	if key.kind == KindString {
+		return v.DeleteStrict(key.str())
+	}
+	return v.DeleteStrict(ToString(key))
+}
+
+// deleteSymKeyStrict is the strict-mode form of deleteSymKey. A removal refused by
+// a non-configurable symbol property is a TypeError in a strict program, the
+// symbol sibling of DeleteStrict's throw; a successful or absent removal returns
+// true unchanged.
+func (v Value) deleteSymKeyStrict(key *Symbol) bool {
+	if v.deleteSymKey(key) {
+		return true
+	}
+	Throw(NewTypeError(FromGoString("Cannot delete property '" + symKeyLabel(key) + "' of #<Object>")))
+	return false
+}
+
 // deleteSymKey removes a symbol-keyed property from an object, array, or function
-// receiver, the symbol branch of delete o[s]. Every property this model creates is
-// configurable, so a removal never fails and a primitive receiver has nothing to
-// remove, both reporting true the way delete does for a configurable or absent
-// property.
+// receiver, the symbol branch of delete o[s]. A non-configurable symbol property
+// (a sealed or frozen object's key) refuses removal and reports false, while a
+// configurable or absent property reports true and a primitive receiver has
+// nothing to remove, matching what delete yields.
 func (v Value) deleteSymKey(key *Symbol) bool {
 	switch v.kind {
 	case KindUndefined, KindNull:
@@ -578,9 +611,33 @@ func ToString(v Value) BStr {
 		return FromGoString(v.bigint().String())
 	case KindString:
 		return v.str()
+	case KindSymbol:
+		// Abstract ToString (spec 7.1.17 step 4) throws on a Symbol rather than
+		// producing text: a symbol carries no string form, so a bare String
+		// coercion of one is a TypeError. Only the String built-in and
+		// Symbol.prototype.toString render "Symbol(desc)", and both take the
+		// SymbolDescriptiveString path in ToStringMethod, not this one. Without
+		// this case a symbol fell to toPrimitiveString, which returns the symbol
+		// unchanged (a symbol is not object-like) and re-enters ToString forever.
+		Throw(NewTypeError(FromGoString("Cannot convert a Symbol value to a string")))
+		return BStr{}
 	default:
 		return toPrimitiveString(v)
 	}
+}
+
+// StringCoerce implements the String built-in called as a function, String(v),
+// which differs from abstract ToString on exactly one kind: a symbol renders as
+// its descriptive string "Symbol(desc)" (SymbolDescriptiveString) rather than
+// throwing, the special case the String constructor makes for a symbol argument.
+// Every other value coerces through the ordinary ToString, so a template
+// substitution or a bare concatenation (which take ToString directly) still throws
+// on a symbol while String(sym) reports its description.
+func StringCoerce(v Value) BStr {
+	if v.kind == KindSymbol {
+		return v.SymbolDescriptiveString()
+	}
+	return ToString(v)
 }
 
 // JoinString converts one element the way Array.prototype.join does: undefined
