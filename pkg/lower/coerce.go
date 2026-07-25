@@ -898,6 +898,40 @@ func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
 	return r.boxStaticToDynamic(e, n)
 }
 
+// boxStringIndexRead lowers a bracket read s[i] on a string receiver straight to the
+// value.BStr.StringIndexValue method, which returns the String exotic object's own
+// property for the index: the one-code-unit string in range, undefined for a
+// negative, fractional, NaN, infinite, or out-of-range index. It reports ok only for
+// a string receiver with a number index; a dynamic receiver keeps the runtime index
+// path and a non-number index is not an integer property here. The result is already
+// a value.Value, so the caller boxes nothing further. The static string slot still
+// reads through CharAt, since the checker types s[i] as string (never
+// string|undefined) and a typed consumer cannot observe the undefined an out-of-range
+// index carries; only this boxed form, flowing into a dynamic sink, needs it.
+func (r *Renderer) boxStringIndexRead(n frontend.Node) (ast.Expr, bool, error) {
+	if n.Kind() != frontend.NodeElementAccessExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	obj, idxNode := kids[0], kids[1]
+	if !r.isString(obj) || !r.isNumber(idxNode) {
+		return nil, false, nil
+	}
+	recv, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, false, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("StringIndexValue")}, Args: []ast.Expr{idx}}, true, nil
+}
+
 // forceCallbackDynParams inspects an arrow or function-expression flowing into a
 // dynamic slot and marks each parameter whose static type does not lower to a Go
 // field, so closureParamFields emits a value.Value field for it and its body reads it
@@ -967,6 +1001,21 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	// not a Go shape. This routes before the primitive cases so { x: 1 } and
 	// [1, 2] take the object path even though their own type is a fixed shape.
 	if boxed, ok, err := r.boxLiteralToDynamic(src); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
+	// A bracket read s[i] on a string receiver boxes to the JavaScript own-property
+	// value: an out-of-range, negative, fractional, NaN, or infinite index reads as
+	// undefined, not the empty string the typed CharAt slot (which lowered into expr)
+	// yields. Only the boxed form takes this path, since a dynamic sink can tell
+	// undefined from "" where the static string slot (typed string, never
+	// string|undefined by the checker) never observes the difference. This is the
+	// single chokepoint every boxing site funnels through, both boxOperand and the
+	// direct call-argument boxing, so intercepting here covers assert.sameValue(s[i],
+	// undefined) and the any-binding read alike. The already-lowered CharAt expr is
+	// discarded in favor of the exotic-read StringIndexValue.
+	if boxed, ok, err := r.boxStringIndexRead(src); err != nil {
 		return nil, err
 	} else if ok {
 		return boxed, nil
