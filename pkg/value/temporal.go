@@ -1762,7 +1762,15 @@ func (ym *PlainYearMonth) AddDuration(dur *Duration, overflow string) *PlainYear
 		day = isoDaysInMonth(ym.year, ym.month)
 	}
 	base := &PlainDate{year: ym.year, month: ym.month, day: day, cal: ym.cal}
-	return base.AddDate(dur, overflow).ToPlainYearMonth()
+	// A year-month has no day, so the reference day exists only to place the step on the calendar
+	// and is discarded when the moved date narrows back. The overflow option therefore has no
+	// effect on the result in the ISO calendar: a month step that lands in a shorter month, say the
+	// last day of March less one month, would clamp the reference day, but that day is thrown away.
+	// Add under constrain so a clamped reference day never throws under reject, matching the
+	// specification's "overflow has no effect" for year-month arithmetic. A genuine out-of-range
+	// year still throws in AddDate under either option, so the representable-range error is
+	// unchanged.
+	return base.AddDate(dur, "constrain").ToPlainYearMonth()
 }
 
 // SubtractDuration implements Temporal.PlainYearMonth.prototype.subtract as AddDuration over the

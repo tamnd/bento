@@ -1860,20 +1860,14 @@ func TestPlainYearMonthArithmetic(t *testing.T) {
 		}
 	}
 
-	// A subtract that lands on a clamped month end throws under reject.
-	throws := func(fn func()) (thrown bool) {
-		defer func() {
-			if r := recover(); r != nil {
-				if _, ok := r.(Thrown); ok {
-					thrown = true
-				}
-			}
-		}()
-		fn()
-		return false
-	}
-	if !throws(func() { ym(2024, 3).SubtractDuration(d(0, 1), "reject") }) {
-		t.Error("2024-03 subtract P1M reject did not throw")
+	// The overflow option has no effect on a year-month step in the ISO calendar: the reference day
+	// the arithmetic anchors to is discarded, so a subtract that would clamp that day (2024-03 less
+	// one month lands in February, a shorter month) gives the same year-month under constrain and
+	// reject, never throwing.
+	for _, ov := range []string{"constrain", "reject"} {
+		if got := ym(2024, 3).SubtractDuration(d(0, 1), ov).ToString().ToGoString(); got != "2024-02" {
+			t.Errorf("2024-03 subtract P1M under %s = %q, want 2024-02", ov, got)
+		}
 	}
 }
 
