@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/tamnd/bento/pkg/cpath"
 )
 
 // TestDirnameFilenameResolveModulePath pins slice G0.2a of the CommonJS module
@@ -30,7 +32,13 @@ func TestDirnameFilenameResolveModulePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run program: %v (%s)", err, got)
 	}
-	wantFile := canonicalPath(entry)
+	// __filename and __dirname are operating system paths in Node, so on Windows
+	// they are backslash-separated. canonicalPath answers in the slash form the
+	// frontend passes around, so turn it back before comparing with what the
+	// program printed. Taking filepath.Dir of the slash form instead is what this
+	// used to do, and it built an expectation with a slash __filename and a
+	// backslash __dirname, which is a shape nothing produces.
+	wantFile := cpath.ToOS(canonicalPath(entry))
 	want := wantFile + "\n" + filepath.Dir(wantFile) + "\n"
 	if string(got) != want {
 		t.Fatalf("want %q, got %q", want, got)

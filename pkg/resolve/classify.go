@@ -1,6 +1,10 @@
 package resolve
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/tamnd/bento/pkg/cpath"
+)
 
 // class is the category a specifier falls into before any filesystem access.
 type class int
@@ -48,7 +52,12 @@ func classify(specifier string) (class, string) {
 		return classRelative, specifier
 	case strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../"):
 		return classRelative, specifier
-	case strings.HasPrefix(specifier, "/"):
+	// cpath.IsAbs rather than a leading slash, because a checker path is absolute
+	// on a volume too. A specifier written by hand is never "C:/x", but a loader
+	// that already resolved an import and hands the answer back in is, and reading
+	// only the slash sent those to the bare branch, which went looking for a
+	// package named C: in node_modules.
+	case cpath.IsAbs(specifier):
 		return classAbsolute, specifier
 	case strings.HasPrefix(specifier, "#"):
 		return classImports, specifier
