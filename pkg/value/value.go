@@ -994,6 +994,19 @@ func toPrimitive(v Value, hint primHint) Value {
 	if res, ok := ordinaryToPrimitive(v, hint == hintString); ok {
 		return res
 	}
+	// Neither valueOf nor toString produced a primitive. The fallback to the ordinary
+	// string form models the inherited Object.prototype.toString, which a plain object
+	// with no coercion of its own still has. But an object that carries an own
+	// "toString" property has shadowed that inherited method: reaching here means its
+	// own toString was absent-as-callable or returned an object, so the built-in is
+	// unavailable and, with valueOf already exhausted, OrdinaryToPrimitive throws a
+	// TypeError (7.1.1.1 step 5) rather than inventing "[object Object]". This is the
+	// throw String.prototype.slice.call({toString: undefined, valueOf: undefined})
+	// raises in its ToString step.
+	if v.kind == KindObject && v.object().hasOwn(FromGoString("toString")) {
+		Throw(NewTypeError(FromGoString("Cannot convert object to primitive value")))
+		return Undefined
+	}
 	return StringValue(ordinaryToString(v))
 }
 
