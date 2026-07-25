@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 
+	"github.com/tamnd/bento/pkg/cpath"
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/node"
 	"github.com/tamnd/bento/pkg/resolve"
@@ -84,7 +84,9 @@ func (rt *Runtime) loadModule(spec, parentPath, parentFormat string) string {
 // over as raw source for the prelude to parse into an object; everything else is
 // transpiled to CommonJS so the wrapper can run it.
 func (rt *Runtime) loadFile(res resolve.Resolved) string {
-	data, err := os.ReadFile(res.Path)
+	// A resolved path is a module path, slash-separated on every platform, so it
+	// takes the operating system's spelling on the way to the disk. See pkg/cpath.
+	data, err := os.ReadFile(cpath.ToOS(res.Path))
 	if err != nil {
 		return marshalLoad(loadResult{
 			OK:      false,
@@ -93,7 +95,7 @@ func (rt *Runtime) loadFile(res resolve.Resolved) string {
 		})
 	}
 
-	dir := filepath.Dir(res.Path)
+	dir := cpath.Dir(res.Path)
 	if res.Format == resolve.FormatJSON {
 		return marshalLoad(loadResult{
 			OK:     true,
@@ -158,7 +160,7 @@ func parentModule(path, format string) *resolve.Module {
 	}
 	return &resolve.Module{
 		Path:   path,
-		Dir:    filepath.Dir(path),
+		Dir:    cpath.Dir(path),
 		Format: parseFormat(format),
 	}
 }

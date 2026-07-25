@@ -1,8 +1,9 @@
 package resolve
 
 import (
-	"path/filepath"
 	"strings"
+
+	"github.com/tamnd/bento/pkg/cpath"
 )
 
 // resolveBare resolves a bare specifier (a package name, optionally with a
@@ -24,7 +25,7 @@ func (r *Resolver) resolveBare(specifier string, parent *Module) (Resolved, erro
 
 	searched := []string{}
 	for _, nm := range nodeModulesDirs(dir) {
-		pkgDir := filepath.Join(nm, name)
+		pkgDir := cpath.Join(nm, name)
 		searched = append(searched, nm)
 		if !r.dirExists(pkgDir) {
 			continue
@@ -51,7 +52,7 @@ func (r *Resolver) resolveBare(specifier string, parent *Module) (Resolved, erro
 // loadFromPackageDir resolves a subpath inside a found package directory,
 // through exports when present and the legacy fields otherwise.
 func (r *Resolver) loadFromPackageDir(pkgDir, subpath, specifier string) (Resolved, error) {
-	pkg, err := r.readPackageJSON(filepath.Join(pkgDir, "package.json"))
+	pkg, err := r.readPackageJSON(cpath.Join(pkgDir, "package.json"))
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -71,7 +72,7 @@ func (r *Resolver) loadFromPackageDir(pkgDir, subpath, specifier string) (Resolv
 		if err != nil {
 			return Resolved{}, err
 		}
-		full := filepath.Clean(filepath.Join(pkgDir, target))
+		full := cpath.Join(pkgDir, target)
 		// exports targets are exact: no extension search, no directory index.
 		if r.fileExists(full) {
 			return real(full), nil
@@ -83,7 +84,7 @@ func (r *Resolver) loadFromPackageDir(pkgDir, subpath, specifier string) (Resolv
 	if subpath == "." {
 		if pkg != nil {
 			if main := pkg.mainEntry(r.conditions); main != "" {
-				full := filepath.Clean(filepath.Join(pkgDir, main))
+				full := cpath.Join(pkgDir, main)
 				if p, ok := r.resolveAsFile(full, true); ok {
 					return real(p), nil
 				}
@@ -100,7 +101,7 @@ func (r *Resolver) loadFromPackageDir(pkgDir, subpath, specifier string) (Resolv
 		return Resolved{}, notFound(specifier, nil, nil)
 	}
 
-	full := filepath.Clean(filepath.Join(pkgDir, subpath))
+	full := cpath.Join(pkgDir, subpath)
 	if p, ok := r.resolveAsFile(full, true); ok {
 		return real(p), nil
 	}
@@ -143,17 +144,17 @@ func nodeModulesDirs(start string) []string {
 	var dirs []string
 	dir := start
 	if dir == "" || dir == "." {
-		abs, err := filepath.Abs(".")
+		abs, err := cpath.Abs(".")
 		if err == nil {
 			dir = abs
 		}
 	}
 	for {
 		// Do not nest node_modules/node_modules while walking up.
-		if filepath.Base(dir) != "node_modules" {
-			dirs = append(dirs, filepath.Join(dir, "node_modules"))
+		if cpath.Base(dir) != "node_modules" {
+			dirs = append(dirs, cpath.Join(dir, "node_modules"))
 		}
-		parent := filepath.Dir(dir)
+		parent := cpath.Dir(dir)
 		if parent == dir {
 			break
 		}
