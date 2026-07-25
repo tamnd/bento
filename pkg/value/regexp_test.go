@@ -100,6 +100,45 @@ func TestTranslateDotLineTerminators(t *testing.T) {
 	}
 }
 
+// ECMAScript's \s and \S cover the full Unicode WhiteSpace set, wider than RE2's
+// ASCII-only \s. A standalone escape is rewritten so \S rejects NBSP, the ideographic
+// space, and U+FEFF the way Node does, and \s accepts them; inside a character class the
+// escape is left verbatim so the common [\s\S] match-any idiom is unchanged.
+func TestTranslateWhitespaceEscape(t *testing.T) {
+	fl, _ := parseRegExpFlags("")
+	// \S must not match any Unicode whitespace, and must match an ordinary letter.
+	nonWS := NewRegExpLiteral(`\S`, "")
+	for _, ws := range []rune{0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff} {
+		if nonWS.Test(FromGoString(string(ws))) {
+			t.Errorf(`\S matched whitespace U+%04X, want no match`, ws)
+		}
+	}
+	if !nonWS.Test(FromGoString("a")) {
+		t.Error(`\S did not match an ordinary letter`)
+	}
+	// \s must match every Unicode whitespace and reject an ordinary letter.
+	ws := NewRegExpLiteral(`\s`, "")
+	for _, r := range []rune{0x09, 0x0b, 0xa0, 0x3000, 0xfeff} {
+		if !ws.Test(FromGoString(string(r))) {
+			t.Errorf(`\s did not match whitespace U+%04X`, r)
+		}
+	}
+	if ws.Test(FromGoString("a")) {
+		t.Error(`\s matched an ordinary letter`)
+	}
+	// [\s\S] stays a match-any: it must accept both a letter and a newline.
+	any := NewRegExpLiteral(`^[\s\S]$`, "")
+	if !any.Test(FromGoString("a")) || !any.Test(FromGoString("\n")) {
+		t.Error(`[\s\S] did not behave as match-any`)
+	}
+	// Translation of the standalone escapes still compiles.
+	if src, ok, reason := translateRegExp(`\s\S`, fl); !ok {
+		t.Errorf(`\s\S handed back: %s`, reason)
+	} else if _, err := regexp.Compile(src); err != nil {
+		t.Errorf(`translated \s\S => %q does not compile: %v`, src, err)
+	}
+}
+
 // An inline flag modifier changes a flag for its group's scope: (?i:...) folds case,
 // (?-i:...) restores case sensitivity inside a case-insensitive regexp, and (?s:...)
 // makes the dot match a line terminator only within the group, the dot outside it
