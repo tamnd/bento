@@ -650,6 +650,22 @@ func StringCoerce(v Value) BStr {
 	return ToString(v)
 }
 
+// CoerceThisToString runs the two opening steps every String.prototype method
+// shares before it touches its receiver: RequireObjectCoercible(this value) then
+// ToString(O) (for example 22.1.3.3 steps 1-2). A null or undefined this throws a
+// TypeError before any coercion, so String.prototype.codePointAt.call(null) raises
+// the way Node does rather than stringifying the receiver to "null"/"undefined" and
+// running the method on that text. A non-nullish receiver coerces through the
+// ordinary ToString, so a number, boolean, or object this stringifies exactly as a
+// direct string-method call would.
+func CoerceThisToString(v Value) BStr {
+	if v.IsNullish() {
+		Throw(NewTypeError(FromGoString("String.prototype method called on null or undefined")))
+		return BStr{}
+	}
+	return ToString(v)
+}
+
 // JoinString converts one element the way Array.prototype.join does: undefined
 // and null contribute the empty string rather than their names, so
 // [1, null, 3].join() is "1,,3", and every other value goes through the abstract

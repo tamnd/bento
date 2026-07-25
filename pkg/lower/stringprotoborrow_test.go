@@ -6,13 +6,16 @@ import (
 )
 
 // TestStringProtoBorrowEmits pins that String.prototype.<m>.call(recv, ...) lowers
-// to the value.BStr method run on the receiver coerced with value.ToString, the
-// generic-receiver borrow the String pool exercises.
+// to the value.BStr method run on the receiver coerced with value.CoerceThisToString,
+// the generic-receiver borrow the String pool exercises. CoerceThisToString runs
+// RequireObjectCoercible before ToString, so a nullish receiver throws rather than
+// stringifying to "null"/"undefined"; a non-nullish receiver coerces exactly as
+// ToString would.
 func TestStringProtoBorrowEmits(t *testing.T) {
 	const src = "export function b(x: number): string { return String.prototype.slice.call(x, 1, 3); }\n"
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "value.ToString(") {
-		t.Errorf("borrowed slice did not coerce the receiver with ToString:\n%s", source)
+	if !strings.Contains(source, "value.CoerceThisToString(") {
+		t.Errorf("borrowed slice did not coerce the receiver with CoerceThisToString:\n%s", source)
 	}
 	if !strings.Contains(source, ".Slice(1, 3)") {
 		t.Errorf("borrowed slice did not lower to the BStr method:\n%s", source)
