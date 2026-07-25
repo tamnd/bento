@@ -1447,7 +1447,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 			continue
 		}
 		if name, ok := localName(r.prog.Text(kids[0])); ok {
-			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && !(isVar && r.scopeParams[name])
+			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && (!isVar || !r.scopeParams[name])
 		}
 	}
 	s, err := r.lowerVarStatement(n)
