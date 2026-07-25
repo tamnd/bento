@@ -50,7 +50,9 @@ func newBuildCmd() *cobra.Command {
 			// caller left off, since a script that goes on to run what it asked for
 			// would otherwise look for a file that is not there.
 			if output != "" && filepath.Base(written) != filepath.Base(output) {
-				fmt.Fprintf(cmd.ErrOrStderr(), "bento build: wrote %s\n", written)
+				// The notice is a courtesy; a stderr write that fails cannot itself be
+				// reported anywhere, so the error is deliberately dropped.
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "bento build: wrote %s\n", written)
 			}
 			return nil
 		},
