@@ -116,6 +116,27 @@ func NewArrayValue(elems []Value) Value {
 // on a non-extensible object is dropped, the failure Object.preventExtensions
 // produces. It returns the receiver value so JSON.parse can build an object in an
 // expression.
+// primitiveSetDesc renders the "TYPE 'REPR'" tail of V8's "Cannot create property
+// 'x' on ..." message a strict write to a primitive raises. Each primitive names its
+// type then its value: a number, string, boolean, and bigint quote their coercion,
+// and a symbol shows its SymbolDescriptiveString unquoted since a symbol has no
+// string coercion. It is only called for the five primitive kinds SetStrict guards.
+func primitiveSetDesc(v Value) string {
+	switch v.kind {
+	case KindNumber:
+		return "number '" + ToString(v).ToGoString() + "'"
+	case KindString:
+		return "string '" + v.str().ToGoString() + "'"
+	case KindBool:
+		return "boolean '" + ToString(v).ToGoString() + "'"
+	case KindBigInt:
+		return "bigint '" + ToString(v).ToGoString() + "'"
+	case KindSymbol:
+		return "symbol " + v.SymbolDescriptiveString().ToGoString()
+	}
+	return "primitive"
+}
+
 func (v Value) Set(key BStr, val Value) Value {
 	// undefined and null carry no property storage, so a named write to either is a
 	// TypeError the way JavaScript's PutValue is, not the nil dereference v.object()
@@ -129,6 +150,13 @@ func (v Value) Set(key BStr, val Value) Value {
 		Throw(NewTypeError(FromGoString("Cannot set properties of undefined (setting '" + key.ToGoString() + "')")))
 	case KindNull:
 		Throw(NewTypeError(FromGoString("Cannot set properties of null (setting '" + key.ToGoString() + "')")))
+	case KindBool, KindNumber, KindBigInt, KindString, KindSymbol:
+		// A named write to a primitive boxes it to a throwaway wrapper, sets the
+		// property on that wrapper, and discards it, so a sloppy assignment is a
+		// silent no-op. The primitive carries no property storage of its own, so this
+		// must return before v.object() reinterprets the primitive's ref as an
+		// *Object and dereferences garbage. Strict mode throws instead (SetStrict).
+		return v
 	}
 	if p := v.asProxy(); p != nil {
 		p.setKey(v, key, val)
@@ -173,6 +201,12 @@ func (v Value) SetStrict(key BStr, val Value) Value {
 		Throw(NewTypeError(FromGoString("Cannot set properties of undefined (setting '" + key.ToGoString() + "')")))
 	case KindNull:
 		Throw(NewTypeError(FromGoString("Cannot set properties of null (setting '" + key.ToGoString() + "')")))
+	case KindBool, KindNumber, KindBigInt, KindString, KindSymbol:
+		// A strict-mode named write to a primitive cannot create the property the
+		// throwaway wrapper would hold, so it throws rather than silently dropping the
+		// write (Set's sloppy path). The message mirrors V8's "Cannot create property
+		// 'x' on TYPE 'REPR'" so a catch reads the same text Node reports.
+		Throw(NewTypeError(FromGoString("Cannot create property '" + key.ToGoString() + "' on " + primitiveSetDesc(v))))
 	}
 	if p := v.asProxy(); p != nil {
 		p.setKey(v, key, val)
@@ -281,6 +315,14 @@ func (v Value) SetKeyStrict(key BStr, val Value) Value {
 		v.SetStrict(key, val)
 		return val
 	case KindObject, KindFunc:
+		v.SetStrict(key, val)
+		return val
+	case KindBool, KindNumber, KindBigInt, KindString, KindSymbol:
+		// A strict computed or numeric write to a primitive throws the same TypeError
+		// its named counterpart does (sym['a'+'b'] = 0, sym[62] = 0). SetStrict owns
+		// the throw and its message; routing here keeps the three strict write forms
+		// in agreement. The sloppy SetKey drops the write in its default, the no-op a
+		// primitive's throwaway wrapper produces.
 		v.SetStrict(key, val)
 		return val
 	default:
