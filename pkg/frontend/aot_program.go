@@ -155,7 +155,7 @@ func (p *Program) SourceFiles() []Node {
 	out := make([]Node, 0, len(handles))
 	for _, h := range handles {
 		n := p.wrapNode(h)
-		if n.File().Path == ambientPath {
+		if isAmbientPath(n.File().Path) {
 			continue
 		}
 		out = append(out, n)

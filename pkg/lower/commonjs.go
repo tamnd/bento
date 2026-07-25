@@ -3,9 +3,9 @@ package lower
 import (
 	"go/ast"
 	"go/token"
-	"path/filepath"
 	"strconv"
 
+	"github.com/tamnd/bento/pkg/cpath"
 	"github.com/tamnd/bento/pkg/frontend"
 )
 
@@ -28,14 +28,19 @@ import (
 // reference sits in. It reads the containing file's path off the node, so a
 // reference resolves against its own module rather than the entry, which is what
 // keeps the value right once more than one module composes into a program.
+// The file path on the node is a checker path, slash-separated on every platform,
+// and these two globals are read by the user's program, which expects what Node
+// puts there: the operating system's own spelling, so `C:\Users\x\app.js` on
+// Windows. Both go through cpath.ToOS on the way into the literal, which is the
+// identity on Unix.
 func (r *Renderer) dirnameLit(n frontend.Node) ast.Expr {
-	return r.goStringValue(filepath.Dir(n.File().Path))
+	return r.goStringValue(cpath.ToOS(cpath.Dir(n.File().Path)))
 }
 
 // filenameLit lowers a __filename reference to the absolute path of the module
 // file the reference sits in, the value Node fills its wrapper's __filename with.
 func (r *Renderer) filenameLit(n frontend.Node) ast.Expr {
-	return r.goStringValue(n.File().Path)
+	return r.goStringValue(cpath.ToOS(n.File().Path))
 }
 
 // bentoModuleName and bentoExportsName are the Go identifiers the module object

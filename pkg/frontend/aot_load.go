@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/tamnd/bento/pkg/cpath"
 	"github.com/tamnd/bento/pkg/frontend/adapter"
 	"github.com/tamnd/bento/pkg/resolve"
 )
@@ -85,6 +86,16 @@ func Load(opts LoadOptions) (*Program, error) {
 		fs = osFileSystem{}
 	}
 
+	// This is the boundary. Everything below holds checker paths: absolute,
+	// slash-separated, Windows volume kept, which is the only spelling typescript-go
+	// accepts and the only one bento carries above the file system. The roots and
+	// the working directory are where operating system paths enter, so they convert
+	// here and nowhere later. See pkg/cpath.
+	roots := make([]string, 0, len(opts.Roots)+1)
+	for _, r := range opts.Roots {
+		roots = append(roots, cpath.FromOS(r))
+	}
+
 	cwd := opts.Dir
 	if cwd == "" {
 		if wd, err := os.Getwd(); err == nil {
@@ -93,6 +104,7 @@ func Load(opts LoadOptions) (*Program, error) {
 			cwd = "/"
 		}
 	}
+	cwd = cpath.FromOS(cwd)
 
 	// The host reads through an overlay that adds bento's ambient Node
 	// declarations, while the resolver keeps the raw FS so its osFileSystem fast
@@ -112,7 +124,15 @@ func Load(opts LoadOptions) (*Program, error) {
 	co := adapter.CompilerOptions{Strict: true}
 	applyOverrides(&co, opts.Overrides)
 
-	roots := append([]string{ambientPath}, opts.Roots...)
+	// The ambient library is synthetic, so it has no volume of its own and takes the
+	// first root's. A file map whose keys are not all the same style panics the
+	// compiler, so on Windows "/__bento_ambient__.d.ts" beside "C:/Users/x/main.ts"
+	// is not a cosmetic inconsistency.
+	ambient := ambientPath
+	if len(roots) > 0 {
+		ambient = cpath.Virtual(ambientPath, roots[0])
+	}
+	roots = append([]string{ambient}, roots...)
 
 	a := adapter.NewReal()
 	h, err := a.BuildProgram(roots, co, host)
