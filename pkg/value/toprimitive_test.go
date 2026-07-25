@@ -87,6 +87,28 @@ func TestToPrimitiveSymbolReceivesHint(t *testing.T) {
 	}
 }
 
+// TestToPrimitiveShadowedToStringThrows proves that an object whose own toString
+// and valueOf are non-callable coerces to a TypeError rather than the ordinary
+// "[object Object]" form: the own toString shadows the inherited built-in, so with
+// no method producing a primitive OrdinaryToPrimitive throws (7.1.1.1 step 5). This
+// is the throw String.prototype.slice.call({toString: undefined, valueOf: undefined})
+// raises in its ToString step.
+func TestToPrimitiveShadowedToStringThrows(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("toString"), Undefined)
+	o.Set(FromGoString("valueOf"), Undefined)
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			t.Fatalf("ToString of an object with shadowed toString/valueOf did not throw")
+		}
+		if e := Caught(rec); !e.IsA("TypeError") {
+			t.Fatalf("shadowed-toString coercion threw %v, want a TypeError", e)
+		}
+	}()
+	ToString(o)
+}
+
 func TestToPrimitivePlainObjectKeepsOrdinaryString(t *testing.T) {
 	// A plain object with no coercion methods still spells "[object Object]" and an
 	// array still joins, the regression guard that the new lookup does not disturb
