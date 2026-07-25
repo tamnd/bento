@@ -1807,6 +1807,24 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 		}
 		return boxed, nil
 	}
+	// A `var p = new Proxy(target, handler)` binding holds the boxed value.Value
+	// value.NewProxy builds, the exotic object whose trap dispatch lives on the value
+	// model. The checker types the binding typeof target, a fixed shape, so a named
+	// member read p.attr off it would otherwise intern to a Go struct selector the box
+	// does not carry (p.Attr, a gobuild failure). Returning the boxed initializer
+	// straight lets := infer its value.Value slot, and the mark routes every later read
+	// and write off the proxy through the runtime Get and Set that dispatch its get and
+	// set traps, exactly the boxed-symbol sibling above.
+	if r.isProxyConstruction(initNode) {
+		boxed, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
 	// An object literal in a slot whose declared shape has an optional property
 	// must build at that shape rather than its own all-required type, the contextual
 	// typing objectLiteralContextual applies. A slot that is itself T | undefined
