@@ -269,6 +269,35 @@ func (r *Renderer) bigIntBinary(opText string, left, right frontend.Node) (ast.E
 	return nil, &NotYetLowerable{Reason: "bigint operator " + opText + " is a later slice"}
 }
 
+// bigIntExprIsSound reports whether n, a node the checker types as bigint, actually
+// lowers to a *big.Int rather than a coerced number. The arithmetic routing guard trusts
+// the checker's bigint type on the operator node, but a mixed subexpression such as
+// (year - 1970n), where year is an untyped value the checker widens to bigint through the
+// literal, lowers through the number path (ToNumber) to a float64 instead. A leaf keeps
+// the existing trust that a bigint-typed binding, literal, or call lowers to a *big.Int; a
+// compound operand is sound only when every leaf under it is, so a number that sneaks into
+// an arithmetic subexpression is caught and the caller hands the expression back rather
+// than emit a new(big.Int) call over a float64 that would not compile.
+func (r *Renderer) bigIntExprIsSound(n frontend.Node) bool {
+	n = r.unwrapParens(n)
+	switch n.Kind() {
+	case frontend.NodeBinaryExpression:
+		kids := r.prog.Children(n)
+		if len(kids) != 3 {
+			return false
+		}
+		return r.bigIntExprIsSound(kids[0]) && r.bigIntExprIsSound(kids[2])
+	case frontend.NodePrefixUnaryExpression:
+		kids := r.prog.Children(n)
+		if len(kids) == 0 {
+			return false
+		}
+		return r.bigIntExprIsSound(kids[len(kids)-1])
+	default:
+		return r.isBigInt(n)
+	}
+}
+
 // bigIntArithMethod maps a bigint operator to the *big.Int method that computes
 // it, or reports false for an operator with no direct method form. Add, Sub, and Mul
 // never trap, so they inline as a bare method; And, Or, and Xor compute on big.Int's
