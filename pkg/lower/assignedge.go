@@ -24,12 +24,27 @@ import (
 func (r *Renderer) elementStoreMethod(idxNode frontend.Node) (string, error) {
 	switch {
 	case r.isNumber(idxNode):
+		if r.programStrict {
+			return "SetIndexStrict", nil
+		}
 		return "SetIndex", nil
 	case r.isDynamic(idxNode):
+		// A dynamic key may resolve to a symbol or a string at runtime, so under a strict
+		// program it takes the throwing element store that lets both branches escalate a
+		// dropped write to the TypeError a strict assignment raises.
+		if r.programStrict {
+			return "SetElemStrict", nil
+		}
 		return "SetElem", nil
 	case r.isString(idxNode):
+		if r.programStrict {
+			return "SetKeyStrict", nil
+		}
 		return "SetKey", nil
 	case r.isSymbolKey(idxNode):
+		if r.programStrict {
+			return "SetElemStrict", nil
+		}
 		return "SetElem", nil
 	default:
 		return "", &NotYetLowerable{Reason: "a dynamic element write with a non-number, non-string index is a later slice"}

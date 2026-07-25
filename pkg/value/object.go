@@ -246,6 +246,47 @@ func (v Value) SetKey(key BStr, val Value) Value {
 	}
 }
 
+// SetKeyStrict is the strict-mode form of SetKey, the string-keyed bracket write
+// o[k] = val the lowerer emits under a "use strict" program. An array's numeric key
+// still lands in dense storage, but a write blocked by a frozen or non-extensible
+// array now throws the TypeError a strict element assignment raises instead of
+// dropping, and an object or function key routes through the throwing SetStrict, so
+// a strict computed string write fails the same way its named counterpart does.
+func (v Value) SetKeyStrict(key BStr, val Value) Value {
+	if p := v.asProxy(); p != nil {
+		p.setKey(v, key, val)
+		return val
+	}
+	switch v.kind {
+	case KindArray:
+		o := v.object()
+		if idx, ok := arrayIndex(key.ToGoString()); ok {
+			if idx < len(o.elems) {
+				if o.elemsFrozen {
+					Throw(NewTypeError(FromGoString("Cannot assign to read only property '" + key.ToGoString() + "' of object '#<Array>'")))
+				}
+				o.elems[idx] = val
+				return val
+			}
+			if o.nonExtensible {
+				Throw(NewTypeError(FromGoString("Cannot add property " + key.ToGoString() + ", object is not extensible")))
+			}
+			for len(o.elems) <= idx {
+				o.elems = append(o.elems, hole)
+			}
+			o.elems[idx] = val
+			return val
+		}
+		v.SetStrict(key, val)
+		return val
+	case KindObject, KindFunc:
+		v.SetStrict(key, val)
+		return val
+	default:
+		return val
+	}
+}
+
 // setArrayLength writes the length property of an array, the resize behind
 // a.length = n. The new length must be a valid array length, a non-negative integer
 // below 2^32 that ToUint32 leaves unchanged, else it throws a RangeError the way the
@@ -456,12 +497,59 @@ func (o *Object) hasOwn(key BStr) bool {
 func (o *Object) setSym(recv Value, key *Symbol, val Value) {
 	for i := range o.symKeys {
 		if o.symKeys[i] == key {
+			// A write to a non-writable data property is dropped, the silent failure
+			// Object.freeze produces, mirroring the string Set path so a frozen symbol
+			// property keeps its value under a sloppy assignment.
+			if o.symDescs[i].isData() && !o.symDescs[i].writable {
+				return
+			}
 			o.symDescs[i] = o.symDescs[i].write(recv, val)
 			return
 		}
 	}
+	// A new symbol key on a non-extensible object is dropped, the failure
+	// Object.preventExtensions produces, the same rule Set applies to a new string key.
+	if o.nonExtensible {
+		return
+	}
 	o.symKeys = append(o.symKeys, key)
 	o.symDescs = append(o.symDescs, defaultDataProperty(val))
+}
+
+// setSymStrict is the strict-mode form of setSym. Where setSym silently drops a
+// write that a sloppy assignment drops, setSymStrict throws the TypeError a strict
+// assignment raises: a write to a non-writable data property, a write through an
+// accessor with no setter, and a new key on a non-extensible object each throw. It
+// mirrors the string SetStrict so a strict program's symbol-keyed member store
+// fails the same way its named store does.
+func (o *Object) setSymStrict(recv Value, key *Symbol, val Value) {
+	for i := range o.symKeys {
+		if o.symKeys[i] == key {
+			if o.symDescs[i].isData() && !o.symDescs[i].writable {
+				Throw(NewTypeError(FromGoString("Cannot assign to read only property '" + symKeyLabel(key) + "' of object '#<Object>'")))
+			}
+			if o.symDescs[i].isAccessor() && o.symDescs[i].set.kind != KindFunc {
+				Throw(NewTypeError(FromGoString("Cannot set property " + symKeyLabel(key) + " of #<Object> which has only a getter")))
+			}
+			o.symDescs[i] = o.symDescs[i].write(recv, val)
+			return
+		}
+	}
+	if o.nonExtensible {
+		Throw(NewTypeError(FromGoString("Cannot add property " + symKeyLabel(key) + ", object is not extensible")))
+	}
+	o.symKeys = append(o.symKeys, key)
+	o.symDescs = append(o.symDescs, defaultDataProperty(val))
+}
+
+// symKeyLabel renders a symbol key the way V8 names it in a property-write
+// TypeError, Symbol(desc) for a described symbol and Symbol() for an anonymous one,
+// so a strict symbol-store error reads the text Node reports.
+func symKeyLabel(key *Symbol) string {
+	if key.hasDesc {
+		return "Symbol(" + key.desc.ToGoString() + ")"
+	}
+	return "Symbol()"
 }
 
 // getSym returns the value of a symbol-keyed own property, or undefined when the

@@ -239,6 +239,14 @@ func (v Value) SetIndex(i float64, val Value) Value {
 	return v.SetKey(NumberToString(i), val)
 }
 
+// SetIndexStrict is the strict-mode form of SetIndex, the numeric bracket write
+// a[i] = val the lowerer emits under a "use strict" program. It routes through the
+// throwing string store so a write blocked by a frozen or non-extensible receiver
+// raises the TypeError a strict element assignment raises instead of dropping.
+func (v Value) SetIndexStrict(i float64, val Value) Value {
+	return v.SetKeyStrict(NumberToString(i), val)
+}
+
 // SetElem writes v[key] = val for a dynamic index whose own type is not known to
 // be a number, the mirror of GetElem. The key is coerced to a property key the way
 // JavaScript does, a string used as is and any other value taken through ToString,
@@ -278,6 +286,41 @@ func (v Value) setSymKey(key *Symbol, val Value) Value {
 	case KindObject, KindArray, KindFunc:
 		v.object().setSym(v, key, val)
 	}
+	return val
+}
+
+// setSymKeyStrict is the strict-mode form of setSymKey, the symbol branch of a
+// dynamic bracket write o[s] = val under a "use strict" program. Where setSymKey
+// silently drops a write to a frozen or getter-only symbol property or a new key on
+// a non-extensible object, setSymKeyStrict throws the TypeError a strict assignment
+// raises, the same escalation SetStrict applies to a named store.
+func (v Value) setSymKeyStrict(key *Symbol, val Value) Value {
+	if p := v.asProxy(); p != nil {
+		p.setSym(v, key, val)
+		return val
+	}
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+		v.object().setSymStrict(v, key, val)
+	}
+	return val
+}
+
+// SetElemStrict is the strict-mode form of SetElem, the dynamic bracket write
+// o[key] = val the lowerer emits in place of SetElem under a "use strict" program.
+// A symbol key routes through the throwing symbol store, a string key through the
+// throwing named store, and any other key is coerced to a property key the same way
+// before the throwing named store, so a strict computed write drops nothing silently
+// the way its sloppy counterpart would.
+func (v Value) SetElemStrict(key, val Value) Value {
+	if key.kind == KindSymbol {
+		return v.setSymKeyStrict(key.symbol(), val)
+	}
+	if key.kind == KindString {
+		v.SetStrict(key.str(), val)
+		return val
+	}
+	v.SetStrict(ToString(key), val)
 	return val
 }
 
