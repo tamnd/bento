@@ -56,6 +56,72 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: go tool cover -func=coverage.out | tail -1
 
+  # Windows. This is a separate job rather than a third entry in the matrix above
+  # because bento does not pass its own suite on Windows yet: issue #742 measured
+  # 7 of 16 packages failing, and `bento build` panics before it emits anything,
+  # because we hand OS-native paths to a checker whose file system only accepts
+  # slash-separated ones. Adding windows-latest to the matrix today would make
+  # every pull request red and teach everyone to ignore it.
+  #
+  # So this job asserts exactly what is true today and nothing more. gofmt, vet
+  # and build already pass on Windows, so they are held to the same bar as the
+  # other two platforms. The test step names the packages that pass, which makes
+  # it a real regression gate for them: a change that breaks pkg/node on Windows
+  # fails here, which nothing catches at the moment.
+  #
+  # The list grows as the boxes on #742 are ticked, and this job is deleted in
+  # favor of a third matrix entry once `go test ./...` is green on Windows. Any
+  # package added to the list must stay on it.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt -s -w:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: build
+        run: go build ./...
+      # Line endings are the cheapest way to break every golden on Windows, and
+      # the failure reads as a diff between two byte-identical-looking blocks, so
+      # it is worth catching directly rather than through the test that trips on
+      # it. .gitattributes pins the working tree to LF; this proves the checkout
+      # honored it.
+      - name: goldens checked out with LF
+        shell: bash
+        run: |
+          if grep -rlU $'\r' --include='*.golden' .; then
+            echo "The goldens above were checked out with CRLF; .gitattributes is not taking effect."
+            exit 1
+          fi
+      # No -race here, unlike the other two platforms. The race detector needs cgo
+      # on Windows, and bento ships CGO_ENABLED=0 everywhere, so turning it on
+      # would test a configuration we do not release and would put a C toolchain
+      # in the way of a pure-Go build. Race coverage comes from the Linux and
+      # macOS legs, which exercise the same code.
+      - name: test the packages that pass on Windows
+        run: >
+          go test -short -count=1
+          ./labs/value/
+          ./pkg/engine/...
+          ./pkg/frontend/adapter/
+          ./pkg/goimport/...
+          ./pkg/loop/
+          ./pkg/node/
+          ./pkg/partition/
+
   # The full behavioral equivalence proof: the AOT tests that compile the
   # generated Go and run it, and the ones that evaluate the reference TypeScript in
   # the JavaScript engine, both compared to prove the two agree. This is the slow
