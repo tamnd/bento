@@ -1,0 +1,13 @@
+== stdout:
+?a=1&b=two+words
+https://example.com/p?a=1&b=two+words#f
+?a=9&b=two+words
+https://example.com/p?a=9&b=two+words#f
+
+https://example.com/p#f
+1
+?z=1
+z=1&only-on-the-copy=1
+?z=1
+== exit:
+0

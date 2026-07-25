@@ -1110,6 +1110,21 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			// so it routes here before renderObject would intern its interface as fields.
 			return r.renderTypedArray(name)
 		}
+		if r.isURLType(t) {
+			// A URL is the value model's parsed URL, spelled as a pointer to value.URL. It
+			// is not a struct shape, so it routes here before renderObject would intern its
+			// getter interface as fields.
+			r.requireImport(valuePkg)
+			return star(sel("value", "URL")), nil
+		}
+		if r.isURLSearchParamsType(t) {
+			// A URLSearchParams is the query view, spelled as a pointer to
+			// value.URLSearchParams. It carries the same get/set/has/size shape a Map does,
+			// which isMapType rules out by name; testing it ahead of the Map check here too
+			// keeps the more specific fingerprint first.
+			r.requireImport(valuePkg)
+			return star(sel("value", "URLSearchParams")), nil
+		}
 		if r.isWeakMapType(t) {
 			// A WeakMap<K, V> (25 §24.3) is the value model's weakly keyed collection,
 			// spelled as a pointer to the generic value.WeakMap header. Its fingerprint has
@@ -1859,7 +1874,17 @@ func (r *Renderer) isTypedArray(n frontend.Node) bool {
 // has no size), so the four names together are the fingerprint, read the same way
 // typedArrayName reads BYTES_PER_ELEMENT. A caller must have already ruled the type
 // out as an array, so this runs only for the non-array object shapes.
+//
+// URLSearchParams carries all four names too, so it is ruled out here rather than at
+// each call site. Doing it at the fingerprint means every Map path, the for...of
+// interception and the stored-iterator pre-pass included, sees the query view as not a
+// Map; a per-site ordering would have to be repeated at each one and would be silently
+// wrong wherever it was missed, and wrong here means emitting a p.Keys() call the query
+// view does not have.
 func (r *Renderer) isMapType(t frontend.Type) bool {
+	if r.isURLSearchParamsType(t) {
+		return false
+	}
 	var hasGet, hasSet, hasHas, hasSize bool
 	for _, p := range r.prog.Properties(t) {
 		switch p.Name {

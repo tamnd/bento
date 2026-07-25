@@ -469,6 +469,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.regExpBoxedResultCall(n) {
 		return true
 	}
+	// A params.get(name) call returns the boxed value.Value the lookup yields, the
+	// string or null. The checker types it string | null, which bento renders as a
+	// tagged sum the runtime has no way to name, so isDynamic recognizes the call by
+	// shape to keep the box on the dynamic path, where the null compare and the string
+	// use off the result dispatch through the value model.
+	if r.urlSearchParamsGetCall(n) {
+		return true
+	}
 	// JSON.stringify of a top-level value whose JSON form is undefined lowers to
 	// value.JSONStringifyUndefined, which returns the undefined Value (calls.go). The
 	// checker types JSON.stringify as string, a Go type the box does not carry, so

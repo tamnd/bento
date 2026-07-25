@@ -6,15 +6,19 @@ import (
 	"strings"
 )
 
-// URLParseJSON resolves input against an optional base and returns the parsed
-// WHATWG components as a JSON string. base is the empty string when there is no
-// base. On failure it returns {"ok":false} so the URL constructor can throw a
-// TypeError, matching the WHATWG contract that an invalid URL is a hard error
-// rather than a null result. Parsing a URL correctly (percent encoding, IDNA
-// hosts, default ports, base resolution) is a lot of surface to reimplement in
-// JavaScript, and Go's net/url already does it, so the URL class keeps its state
-// as fields the JavaScript side reads and only calls back here to (re)parse.
-func URLParseJSON(input, base string) string {
+// URLParse resolves input against an optional base and returns the parsed WHATWG
+// components. base is the empty string when there is no base. ok is false for an
+// input that is not a valid absolute URL, which both callers turn into the
+// TypeError the WHATWG contract requires: an invalid URL is a hard error, not a
+// null result.
+//
+// Parsing a URL correctly (percent encoding, IDNA hosts, default ports, base
+// resolution) is a lot of surface to reimplement, and Go's net/url already does
+// it, so this is the one implementation. The interpreter reaches it through
+// URLParseJSON below; the AOT path calls it directly, since it has no bridge to
+// cross and no reason to pay for a marshal and a parse to move a struct across a
+// package boundary.
+func URLParse(input, base string) (URLComponents, bool) {
 	input = strings.TrimSpace(input)
 
 	var u *url.URL
@@ -22,20 +26,33 @@ func URLParseJSON(input, base string) string {
 	if base != "" {
 		b, berr := url.Parse(base)
 		if berr != nil || !b.IsAbs() {
-			return urlFail()
+			return URLComponents{}, false
 		}
 		u, err = b.Parse(input)
 	} else {
 		u, err = url.Parse(input)
 	}
 	if err != nil || !u.IsAbs() {
-		return urlFail()
+		return URLComponents{}, false
 	}
 
-	return urlJSON(urlComponents(u))
+	return urlComponents(u), true
 }
 
-type urlResult struct {
+// URLParseJSON is URLParse marshaled for the interpreter's host bridge, which
+// moves strings and not structs. On failure it returns {"ok":false}.
+func URLParseJSON(input, base string) string {
+	parts, ok := URLParse(input, base)
+	if !ok {
+		return urlFail()
+	}
+	return urlJSON(parts)
+}
+
+// URLComponents is a parsed URL projected onto the WHATWG property set. The JSON
+// tags are the interpreter's wire format, so they are part of the contract with
+// pkg/node/js/url.js.
+type URLComponents struct {
 	OK       bool   `json:"ok"`
 	Href     string `json:"href"`
 	Protocol string `json:"protocol"`
@@ -50,10 +67,10 @@ type urlResult struct {
 	Origin   string `json:"origin"`
 }
 
-func urlFail() string { return urlJSON(urlResult{OK: false}) }
+func urlFail() string { return urlJSON(URLComponents{OK: false}) }
 
 // urlJSON marshals a result envelope to a string for return across the bridge.
-func urlJSON(r urlResult) string {
+func urlJSON(r URLComponents) string {
 	b, err := json.Marshal(r)
 	if err != nil {
 		return `{"ok":false}`
@@ -64,7 +81,7 @@ func urlJSON(r urlResult) string {
 // urlComponents projects a parsed URL onto the WHATWG property set. The leading
 // punctuation (":" on protocol, "?" on search, "#" on hash) is included so the
 // JavaScript getters return exactly what a browser returns.
-func urlComponents(u *url.URL) urlResult {
+func urlComponents(u *url.URL) URLComponents {
 	pathname := u.EscapedPath()
 	if pathname == "" && u.Host != "" {
 		pathname = "/"
@@ -91,7 +108,7 @@ func urlComponents(u *url.URL) urlResult {
 		origin = u.Scheme + "://" + u.Host
 	}
 
-	return urlResult{
+	return URLComponents{
 		OK:       true,
 		Href:     u.String(),
 		Protocol: u.Scheme + ":",
