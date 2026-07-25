@@ -262,7 +262,6 @@ func ReflectGetPrototypeOf(target Value) Value {
 // non-extensible object already holds succeeds, while changing it to a different one
 // is refused and reports false.
 func ReflectSetPrototypeOf(target, proto Value) bool {
-	o := reflectObject(target, "setPrototypeOf")
 	var np *Object
 	switch proto.kind {
 	case KindObject, KindArray, KindFunc:
@@ -273,6 +272,15 @@ func ReflectSetPrototypeOf(target, proto Value) bool {
 		Throw(NewTypeError(FromGoString("Reflect.setPrototypeOf called with an invalid prototype")))
 		return false
 	}
+	// A proxy target routes through its setPrototypeOf trap, which forwards to the
+	// target with no trap, refuses with false on a falsy trap, and enforces the
+	// non-extensible invariant. Object.setPrototypeOf reaches the same trap through
+	// Value.SetPrototype; the Reflect form returns the boolean instead of throwing on a
+	// plain refusal, so it dispatches here rather than operating on a proxy's own slot.
+	if p := target.asProxy(); p != nil {
+		return p.setPrototypeOfResult(proto)
+	}
+	o := reflectObject(target, "setPrototypeOf")
 	if np == o.proto {
 		return true
 	}
