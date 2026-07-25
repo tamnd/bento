@@ -739,8 +739,102 @@ func (r *Renderer) identifierBindsAGrowingObject(n frontend.Node) bool {
 		if init.Kind() == frontend.NodeObjectLiteralExpression && r.objectLiteralGrowsProperties(init) {
 			return true
 		}
+		// A binding initialized by a call to a factory that returns a growing object
+		// holds that same runtime bag, so it reads the same way. This is what makes
+		// `const m = make()` behave like the `const o = {}` inside make: the box crosses
+		// the return unchanged, and a property still absent reads undefined on either
+		// side of the call.
+		if init.Kind() == frontend.NodeCallExpression && r.callOfGrowingObjectFunc(init) {
+			return true
+		}
 	}
 	return false
+}
+
+// callOfGrowingObjectFunc reports whether a call goes to a function declaration whose
+// returns all hand back an object that grows. Such a function's Go result is a
+// value.Value, so the call is already a box even though the checker types it by the
+// shape the object finishes with.
+func (r *Renderer) callOfGrowingObjectFunc(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(kids[0])
+	if !ok || sym.Flags&frontend.SymbolFunction == 0 {
+		return false
+	}
+	for _, d := range r.prog.Declarations(sym) {
+		if d.Kind() == frontend.NodeFunctionDeclaration && r.funcReturnsGrowingObject(d) {
+			return true
+		}
+	}
+	return false
+}
+
+// funcReturnsGrowingObject reports whether every return in a function's body hands
+// back an object that grows, the `function make() { const o = {}; o.x = 1; return o }`
+// a Node module builds its exports with.
+//
+// Every return has to agree, since the Go function has one result type: a body that
+// returns the bag on one path and something else on another has no single lowering
+// here and keeps the handback it had. A body with no return at all returns undefined
+// and is not this shape either.
+//
+// The visiting set breaks the cycle a self-referential factory would otherwise spin:
+// asking whether `function f() { const o = f(); return o }` returns a growing object
+// asks the same question of f again. A function already being asked about answers
+// false, which leaves such a program on the handback path it was on.
+func (r *Renderer) funcReturnsGrowingObject(fn frontend.Node) bool {
+	if r.growthVisiting[fn] {
+		return false
+	}
+	block, ok := r.funcBodyBlock(fn)
+	if !ok {
+		return false
+	}
+	if r.growthVisiting == nil {
+		r.growthVisiting = map[frontend.Node]bool{}
+	}
+	r.growthVisiting[fn] = true
+	defer delete(r.growthVisiting, fn)
+
+	returns := r.returnsOfBody(block)
+	if len(returns) == 0 {
+		return false
+	}
+	for _, ret := range returns {
+		kids := r.prog.Children(ret)
+		if len(kids) != 1 || !r.identifierBindsAGrowingObject(kids[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+// returnsOfBody collects the return statements a function body runs, descending
+// through the nested statements but not into a nested function, whose returns belong
+// to that function rather than this one.
+func (r *Renderer) returnsOfBody(n frontend.Node) []frontend.Node {
+	var out []frontend.Node
+	var walk func(frontend.Node)
+	walk = func(n frontend.Node) {
+		switch n.Kind() {
+		case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression,
+			frontend.NodeArrowFunction, frontend.NodeMethodDeclaration, frontend.NodeClassDeclaration:
+			return
+		case frontend.NodeReturnStatement:
+			out = append(out, n)
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c)
+		}
+	}
+	walk(n)
+	return out
 }
 
 // growingObjectRead reports whether a node is a property or index read off an object
@@ -754,7 +848,12 @@ func (r *Renderer) growingObjectRead(n frontend.Node) bool {
 		return false
 	}
 	kids := r.prog.Children(n)
-	return len(kids) >= 1 && r.identifierBindsAGrowingObject(kids[0])
+	if len(kids) < 1 {
+		return false
+	}
+	// The receiver is the bag either as a binding that holds one or as the call that
+	// just built one, make().x with nothing in between.
+	return r.identifierBindsAGrowingObject(kids[0]) || r.callOfGrowingObjectFunc(kids[0])
 }
 
 func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {

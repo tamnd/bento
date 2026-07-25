@@ -496,6 +496,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 			return true
 		}
 	}
+	// A call to a factory that returns an object that grows yields the runtime bag,
+	// whose Go type is value.Value, while the checker types the call by the shape the
+	// object finishes with. So a read straight off the call, make().x with no binding
+	// in between, has to dispatch through the dynamic Get like a read off the binding
+	// does rather than select a struct field the box does not carry.
+	if r.callOfGrowingObjectFunc(n) {
+		return true
+	}
 	// A property or element read off a dynamic receiver lowers to a Get on the box,
 	// which yields a box unless the read's own type is a clean primitive that
 	// unboxDynamicRead coerces down. So the read is itself dynamic when its type is not
@@ -1352,7 +1360,7 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// this the number type would drive value.NumberToString over a value.Value, which
 	// does not compile; with it the read flows through the value model, which prints
 	// the property that has not been assigned yet as undefined.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src)
 }
 
 // isDynamicValueLogical reports whether src is a value-returning && or || whose

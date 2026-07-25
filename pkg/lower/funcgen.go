@@ -195,7 +195,17 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 		}
 		params.List = append(params.List, restField)
 	}
-	results, err := r.resultFields(sig.Return)
+	// A function that hands back an object that grows returns the runtime bag itself,
+	// so its Go result is a value.Value and its body's returns pass the box through
+	// untouched. The checker types the return by the shape the object finishes with,
+	// which as a Go struct would answer the zero value for a property assigned after
+	// the call, so the declared shape is deliberately not the result type here.
+	ret := sig.Return
+	if r.funcReturnsGrowingObject(fn) {
+		r.requireImport(valuePkg)
+		ret = frontend.Type{Flags: frontend.TypeAny}
+	}
+	results, err := r.resultFields(ret)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +217,7 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	// and restored so a later slice's nested function does not inherit the outer
 	// return type.
 	prevRet := r.retType
-	r.retType = sig.Return
+	r.retType = ret
 	defer func() { r.retType = prevRet }()
 
 	// The union-locals set is scoped to this body the same way retType is, built
