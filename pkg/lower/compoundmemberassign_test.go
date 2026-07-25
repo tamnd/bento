@@ -16,7 +16,7 @@ o.s += "b";
 console.log(o.n);
 console.log(o.s);
 `
-	if got, want := runProgramGo(t, src), "30\na" + "b\n"; got != want {
+	if got, want := runProgramGo(t, src), "30\na"+"b\n"; got != want {
 		t.Fatalf("compound object field assignment printed %q, want %q", got, want)
 	}
 }
@@ -45,7 +45,7 @@ o.s += "b";
 console.log(o.n);
 console.log(o.s);
 `
-	if got, want := runProgramGo(t, src), "30\na" + "b\n"; got != want {
+	if got, want := runProgramGo(t, src), "30\na"+"b\n"; got != want {
 		t.Fatalf("dynamic compound member assignment printed %q, want %q", got, want)
 	}
 }

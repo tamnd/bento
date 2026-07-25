@@ -29,7 +29,7 @@ func TestRegExpInitializerHandsBackWholeDecl(t *testing.T) {
 }
 
 // TestArithmeticOnStringOperandHandsBack proves an arithmetic operator with a
-// statically string operand, `1 * `abc${1}def``, hands the whole file back rather
+// statically string operand, `1 * `abc${1}def“, hands the whole file back rather
 // than emit the ToNumber coercion (`1 * value.StringToNumber(...)`) the runtime
 // runs. TypeScript rejects the program with 2363 (a string is not a valid
 // arithmetic operand), so emitting a running Go program for it is unsound: the

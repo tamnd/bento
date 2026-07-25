@@ -635,7 +635,9 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		return nil, err
 	}
 	var stmts []ast.Stmt
-	recv := func() (ast.Expr, error) { return nil, &NotYetLowerable{Reason: "a tuple destructuring drew its source with no read"} }
+	recv := func() (ast.Expr, error) {
+		return nil, &NotYetLowerable{Reason: "a tuple destructuring drew its source with no read"}
+	}
 	if anyRead {
 		prefix, r2, err := r.destructureSource(initNode)
 		if err != nil {

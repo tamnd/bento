@@ -41,8 +41,8 @@ func TestSplitLimit(t *testing.T) {
 		{"a,b,c,d", ",", []float64{-1}, []string{"a", "b", "c", "d"}}, // ToUint32(-1) is huge
 		{"a-b-c", "-", []float64{2.9}, []string{"a", "b"}},            // ToUint32 truncates toward zero
 		{"abcd", "", []float64{2}, []string{"a", "b"}},                // empty separator, single units
-		{"", "", []float64{3}, nil},                                  // empty string, empty sep is empty
-		{"x,y", ",", nil, []string{"x", "y"}},                        // no limit is unbounded
+		{"", "", []float64{3}, nil},                                   // empty string, empty sep is empty
+		{"x,y", ",", nil, []string{"x", "y"}},                         // no limit is unbounded
 	}
 	for _, c := range cases {
 		got := splitGo(c.s, c.sep, c.limit...)
