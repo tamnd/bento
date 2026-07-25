@@ -4704,9 +4704,9 @@ func stringMethod(name string) (goName string, params []argKind, minArgs int, va
 	case "split":
 		// Only the string-separator form lowers, to value.BStr.Split returning a
 		// string array; a regexp separator does not type as a string, so methodCall
-		// hands it back, and the optional limit argument is a later slice, so exactly
-		// one argument is admitted.
-		return "Split", []argKind{argString}, 1, false, true
+		// hands it back. The optional limit is a trailing number, so the guard admits
+		// one or two arguments and value.BStr.Split is Go-variadic on the limit.
+		return "Split", []argKind{argString, argNumber}, 1, false, true
 	case "startsWith":
 		return "StartsWith", []argKind{argString, argNumber}, 1, false, true
 	case "endsWith":
