@@ -13,8 +13,8 @@ func bigDec(s string) *big.Int { n, _ := new(big.Int).SetString(s, 10); return n
 // same directions they take for a post-epoch instant.
 func TestInstantRoundNegativeAsIfPositive(t *testing.T) {
 	inst := NewInstant(bigDec("-1000000000000000000")) // 1938-04-24T22:13:20Z
-	const roundedDown = "-1000000800000000000"          // 22:00:00Z, toward -inf
-	const roundedUp = "-999997200000000000"             // 23:00:00Z, toward +inf
+	const roundedDown = "-1000000800000000000"         // 22:00:00Z, toward -inf
+	const roundedUp = "-999997200000000000"            // 23:00:00Z, toward +inf
 	cases := []struct {
 		mode string
 		want string
@@ -39,9 +39,9 @@ func TestInstantRoundNegativeDirection(t *testing.T) {
 		want string
 	}{
 		{"floor", "-65261246400000000000"},      // toward Big Bang
-		{"trunc", "-65261246400000000000"},       // as-if-positive: toward -inf
-		{"ceil", "-65261246399000000000"},        // away from Big Bang
-		{"halfExpand", "-65261246399000000000"},  // tie away, as-if-positive
+		{"trunc", "-65261246400000000000"},      // as-if-positive: toward -inf
+		{"ceil", "-65261246399000000000"},       // away from Big Bang
+		{"halfExpand", "-65261246399000000000"}, // tie away, as-if-positive
 	}
 	for _, c := range cases {
 		got := inst.Round("second", 1, c.mode).EpochNanoseconds().String()
