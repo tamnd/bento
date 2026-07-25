@@ -108,10 +108,10 @@ console.log(a.getTime(), b.getTime(), Date.now());
 // components off the time value.
 func TestUncoveredDateFormsHandBack(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
-		{`const d = new Date("2023-01-01"); console.log(d.getTime());`, "new Date from a string"},
+		{"const v = Date.now() > 0 ? 1 : \"2023-01-01\";\nconst d = new Date(v);\nconsole.log(d.getTime());", "needs coercion"},
 		{`const d = new Date(2023, 0, 1); console.log(d.getTime());`, "year, month, and day components"},
 		{`const d = new Date(0); console.log(d.toDateString());`, "the Date method .toDateString"},
-		{`console.log(Date.parse("2023-01-01"));`, "Date.parse is a later slice"},
+		{`console.log(Date.UTC(2023, 0, 1));`, "Date.UTC is a later slice"},
 	} {
 		prog := compileJS(t, c.src)
 		r := NewRenderer(prog)
@@ -182,5 +182,59 @@ func TestDateSettersHandBack(t *testing.T) {
 		t.Fatal("setFullYear lowered, want a hand-back")
 	} else if !strings.Contains(err.Error(), "the Date method .setFullYear") {
 		t.Errorf("got: %v\nwant a reason naming setFullYear", err)
+	}
+}
+
+// TestDateFromAString is the ordinary JavaScript spelling of parsing: the constructor and
+// the static both read a string, and both agree with the serialization it came from.
+func TestDateFromAString(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date("2023-11-14T22:13:20.123Z");
+console.log(d.getTime(), d.toISOString());
+console.log(Date.parse("2023-11-14T22:13:20Z"));
+console.log(new Date("Tue, 14 Nov 2023 22:13:20 GMT").getTime());
+console.log(new Date(new Date(5)).getTime());
+`))
+	want := "1700000000123 2023-11-14T22:13:20.123Z\n1700000000000\n1700000000000\n5\n"
+	if got != want {
+		t.Errorf("date from a string\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestUnparsableStringIsTheInvalidDate pins that a bad date constructs rather than
+// throwing, so a program checks for it with isNaN the way it would in Node.
+func TestUnparsableStringIsTheInvalidDate(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date("nonsense");
+console.log(Number.isNaN(d.getTime()), Number.isNaN(Date.parse("nope")));
+`))
+	want := "true true\n"
+	if got != want {
+		t.Errorf("unparsable string\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestDateOnlyStringIsUTC pins the rule a program is most likely to get wrong on its own:
+// a date-only string is UTC, so its UTC components read back exactly as written no matter
+// what zone the compiled program runs in.
+func TestDateOnlyStringIsUTC(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date("2023-11-14");
+console.log(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours());
+console.log(d.toISOString());
+`))
+	want := "2023 10 14 0\n2023-11-14T00:00:00.000Z\n"
+	if got != want {
+		t.Errorf("date-only string\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestDateParseLowersToTheRuntime pins the emitted Go: the string paths reach the runtime
+// parser rather than going through any boxed value.
+func TestDateParseLowersToTheRuntime(t *testing.T) {
+	src := renderExpandoJS(t, `const d = new Date("2023-01-01");
+console.log(d.getTime(), Date.parse("2023-01-01"));
+`)
+	for _, want := range []string{"value.NewDateFromString(", "value.ParseDate("} {
+		if !strings.Contains(src, want) {
+			t.Errorf("emitted Go does not contain %q:\n%s", want, src)
+		}
 	}
 }
