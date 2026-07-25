@@ -79,14 +79,39 @@ func (r *Renderer) newDate(args []frontend.Node) (ast.Expr, error) {
 	case len(valueArgs) == 1:
 		return nil, &NotYetLowerable{Reason: "new Date from a value that is not a number, a string, or a date needs coercion, a later slice"}
 	default:
-		return nil, &NotYetLowerable{Reason: "new Date from year, month, and day components is a later slice"}
+		components, err := r.dateComponentArgs("new Date", valueArgs)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "NewDateFromComponents"), Args: components}, nil
 	}
 }
 
-// dateStaticCall lowers a static call on the global Date. now() reads the clock and
-// parse() reads a string, both giving a time value as a Number with no Date built at all.
-// Date.UTC builds a time value out of components, which is the same calendar work the
-// component constructor needs, so it waits for that slice.
+// dateComponentArgs lowers a calendar reading's arguments, the year, month and the fields
+// below them that the component constructor, Date.UTC and every setter take. They all have
+// to be numbers: a component that needs coercion hands back rather than being guessed at,
+// since a component silently read as zero is the wrong instant reported as a right one.
+func (r *Renderer) dateComponentArgs(what string, args []frontend.Node) ([]ast.Expr, error) {
+	if len(args) > 7 {
+		return nil, &NotYetLowerable{Reason: what + " takes at most seven components"}
+	}
+	out := make([]ast.Expr, 0, len(args))
+	for _, a := range args {
+		if !r.isNumber(a) {
+			return nil, &NotYetLowerable{Reason: what + " with a component that is not a number needs coercion, a later slice"}
+		}
+		lowered, err := r.lowerExpr(a)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, lowered)
+	}
+	return out, nil
+}
+
+// dateStaticCall lowers a static call on the global Date. Each of the three gives a time
+// value as a Number with no Date built at all: now() reads the clock, parse() reads a
+// string, and UTC() reads a calendar.
 func (r *Renderer) dateStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	args := r.namedArgs(argNodes)
 	switch method {
@@ -106,6 +131,13 @@ func (r *Renderer) dateStaticCall(method string, argNodes []frontend.Node) (ast.
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ParseDate"), Args: []ast.Expr{s}}, nil
+	case "UTC":
+		components, err := r.dateComponentArgs("Date.UTC", args)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "DateUTC"), Args: components}, nil
 	default:
 		return nil, &NotYetLowerable{Reason: "Date." + method + " is a later slice"}
 	}
@@ -138,21 +170,67 @@ var dateGetters = map[string]string{
 	"getUTCMilliseconds": "GetUTCMilliseconds",
 }
 
-// dateMethodCall lowers a method call on a Date receiver: the two reads that give the
-// time value, the ISO format, and the calendar getters, each of which takes no argument
-// and gives a Number. The setters mutate the time value and the other formats have their
-// own rules, so both hand back naming the slice that brings them.
+// dateSetters maps each calendar write to the runtime method that performs it. Every one
+// is variadic in the same way — it takes its own field and, optionally, the fields below
+// it — so like the getters they are a table rather than fourteen near-identical arms.
+var dateSetters = map[string]string{
+	"setFullYear":        "SetFullYear",
+	"setMonth":           "SetMonth",
+	"setDate":            "SetDate",
+	"setHours":           "SetHours",
+	"setMinutes":         "SetMinutes",
+	"setSeconds":         "SetSeconds",
+	"setMilliseconds":    "SetMilliseconds",
+	"setUTCFullYear":     "SetUTCFullYear",
+	"setUTCMonth":        "SetUTCMonth",
+	"setUTCDate":         "SetUTCDate",
+	"setUTCHours":        "SetUTCHours",
+	"setUTCMinutes":      "SetUTCMinutes",
+	"setUTCSeconds":      "SetUTCSeconds",
+	"setUTCMilliseconds": "SetUTCMilliseconds",
+}
+
+// dateMethodCall lowers a method call on a Date receiver: the reads that give the time
+// value, the ISO format, the calendar getters, and the calendar setters. The remaining
+// formats have rules of their own, so they hand back naming the slice that brings them.
 func (r *Renderer) dateMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
-	goName, ok := dateGetters[method]
-	if !ok {
+	args := r.namedArgs(argNodes)
+	_, isGetter := dateGetters[method]
+	_, isSetter := dateSetters[method]
+	if !isGetter && !isSetter && method != "setTime" {
+		// The receiver is left unlowered on this path so that a hand-back does not leave
+		// the renderer carrying an import for an expression that was never emitted.
 		return nil, &NotYetLowerable{Reason: "the Date method ." + method + " is a later slice"}
-	}
-	if len(r.namedArgs(argNodes)) != 0 {
-		return nil, &NotYetLowerable{Reason: "date." + method + " takes no argument"}
 	}
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
 		return nil, err
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}}, nil
+	if goName, ok := dateGetters[method]; ok {
+		if len(args) != 0 {
+			return nil, &NotYetLowerable{Reason: "date." + method + " takes no argument"}
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}}, nil
+	}
+	if goName, ok := dateSetters[method]; ok {
+		components, err := r.dateComponentArgs("date."+method, args)
+		if err != nil {
+			return nil, err
+		}
+		if len(components) == 0 {
+			return nil, &NotYetLowerable{Reason: "date." + method + " takes at least one component"}
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: components}, nil
+	}
+	if method == "setTime" {
+		if len(args) != 1 || !r.isNumber(args[0]) {
+			return nil, &NotYetLowerable{Reason: "date.setTime of a value that is not a number needs coercion, a later slice"}
+		}
+		ms, err := r.lowerExpr(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("SetTime")}, Args: []ast.Expr{ms}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "the Date method ." + method + " is a later slice"}
 }
