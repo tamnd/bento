@@ -279,6 +279,23 @@ func (s BStr) CharAt(i float64) BStr {
 	return FromUTF16([]uint16{s.units()[int(i)]})
 }
 
+// StringIndexValue reads s[i] with the String exotic object's own-property
+// semantics (10.4.3.1 [[GetOwnProperty]]): a canonical in-range integer index yields
+// the one-code-unit string at that position, and every other numeric index — a
+// negative, a fractional, a NaN or an infinity, or one at or past the length — is not
+// an own property of the string and reads as undefined, not the empty string CharAt
+// yields for the typed slot. It backs the boxed form of a bracket read s[i], where
+// the result flows into a dynamic sink that can tell undefined from "" (an
+// assert.sameValue against undefined, a console.log), so the read matches Node rather
+// than the string slot's zero value. The single unit may be a lone surrogate, so it
+// is rebuilt through FromUTF16.
+func (s BStr) StringIndexValue(i float64) Value {
+	if math.IsNaN(i) || math.IsInf(i, 0) || i != math.Trunc(i) || i < 0 || i >= float64(s.lengthU16) {
+		return Undefined
+	}
+	return StringValue(FromUTF16([]uint16{s.units()[int(i)]}))
+}
+
 // CharAtI reads the one-code-unit string at a Go int index, the integer-index
 // form of CharAt the lowerer emits when the checker proved the index expression
 // is an integer. The float truncation and NaN fold CharAt runs are then dead
