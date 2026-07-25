@@ -3154,12 +3154,28 @@ func resolveTimeZone(id string) (*time.Location, string) {
 	if loc, canon, ok := parseOffsetZone(id); ok {
 		return loc, canon
 	}
-	// A full Temporal date-time string is itself a valid time-zone identifier when it carries a
-	// bracketed time-zone annotation: ToTemporalTimeZoneIdentifier takes the bracket, not the
-	// string's own offset, so "…-12:12[+01:46]" resolves to +01:46. The annotation is an offset
-	// or a named zone, so it resolves through the same path, at most one level deep.
-	if p, ok := parseTemporalISOString(id); ok && p.timeZone != "" {
-		return resolveTimeZone(p.timeZone)
+	// A full Temporal date-time string is itself a valid time-zone identifier. When it carries a
+	// bracketed time-zone annotation, ToTemporalTimeZoneIdentifier takes the bracket, not the
+	// string's own offset, so "…-12:12[+01:46]" resolves to +01:46; the annotation is an offset or
+	// a named zone and resolves through the same path, at most one level deep. With no bracket the
+	// zone comes from the string's own designator: a Z is UTC, and a numeric offset is that offset,
+	// so "1994-11-05T08:15:30-05:00" resolves to -05:00 and "1994-11-05T13:15:30Z" to UTC.
+	if p, ok := parseTemporalISOString(id); ok {
+		if p.timeZone != "" {
+			return resolveTimeZone(p.timeZone)
+		}
+		if p.hasZ {
+			return time.UTC, "UTC"
+		}
+		if p.hasOffset {
+			// An offset time zone is minute precision; a sub-minute offset in the string is not a
+			// valid time-zone identifier, so it falls through to the named lookup and throws.
+			if p.offsetNanoseconds%60_000_000_000 == 0 {
+				secs := int(p.offsetNanoseconds / 1_000_000_000)
+				canon := formatOffset(secs)
+				return time.FixedZone(canon, secs), canon
+			}
+		}
 	}
 	loc, err := time.LoadLocation(id)
 	if err != nil {
