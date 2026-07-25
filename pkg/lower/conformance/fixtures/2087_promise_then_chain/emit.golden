@@ -23,7 +23,7 @@ func main() {
 	value.ThenMap(failing, func(v float64) float64 {
 		return v + 100
 	}).Catch(func(e value.Value) {
-		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.ToString(e)))
+		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.PlusToString(e)))
 	})
 	value.ConsoleLog(value.FromGoString("sync"))
 	value.RunMicrotasks()

@@ -13,10 +13,10 @@ type Box struct {
 
 func NewBox() *Box {
 	b := &Box{}
-	value.ConsoleLog(value.FromGoString("ctor sees ").ConcatN(value.ToString(b.Value), value.FromGoString("|"), value.ToString(b.Label)))
+	value.ConsoleLog(value.FromGoString("ctor sees ").ConcatN(value.PlusToString(b.Value), value.FromGoString("|"), value.PlusToString(b.Label)))
 	return b
 }
 func main() {
 	b := NewBox()
-	value.ConsoleLog(value.ToString(b.Value).ConcatN(value.FromGoString("|"), value.ToString(b.Label)))
+	value.ConsoleLog(value.PlusToString(b.Value).ConcatN(value.FromGoString("|"), value.PlusToString(b.Label)))
 }

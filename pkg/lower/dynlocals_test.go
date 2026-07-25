@@ -44,8 +44,8 @@ console.log(f("s"));
 // TestDynStringConcatEmits pins the + with a string operand over an open
 // dynamic value: the result kind is known (a string operand always
 // concatenates), so it lowers to Concat with the boxed side run through
-// ToString rather than to the boxed value.Add, and the bstr result matches the
-// string the checker types.
+// PlusToString (the + operator's default-hint coercion) rather than to the
+// boxed value.Add, and the bstr result matches the string the checker types.
 func TestDynStringConcatEmits(t *testing.T) {
 	const src = `function g(x: any): string {
   return 'v:' + x;
@@ -53,8 +53,8 @@ func TestDynStringConcatEmits(t *testing.T) {
 console.log(g(7));
 `
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "value.Concat(value.FromGoString(\"v:\"), value.ToString(x))") {
-		t.Errorf("string + dynamic did not print the ToString concat:\n%s", source)
+	if !strings.Contains(source, "value.Concat(value.FromGoString(\"v:\"), value.PlusToString(x))") {
+		t.Errorf("string + dynamic did not print the PlusToString concat:\n%s", source)
 	}
 	if strings.Contains(source, "value.Add") {
 		t.Errorf("string + dynamic leaked a boxed Add:\n%s", source)

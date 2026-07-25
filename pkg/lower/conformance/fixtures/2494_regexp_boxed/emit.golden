@@ -10,7 +10,7 @@ func main() {
 	r := value.RegExpValue(value.NewRegExpLiteral("ab+c", "gi"))
 	value.ConsoleLog(r.TypeOf())
 	value.ConsoleLog(value.StringCoerce(r))
-	value.ConsoleLog(value.Concat(value.FromGoString("x="), value.ToString(r)))
+	value.ConsoleLog(value.Concat(value.FromGoString("x="), value.PlusToString(r)))
 	value.ConsoleLog(value.FromGoString("t:").ConcatN(value.ToString(r), value.FromGoString("")))
 	value.ConsoleLog(value.ConsoleValue(r.Get(value.FromGoString("source"))))
 	value.ConsoleLog(value.ConsoleValue(r.Get(value.FromGoString("flags"))))

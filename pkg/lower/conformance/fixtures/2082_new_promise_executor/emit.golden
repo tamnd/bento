@@ -15,7 +15,7 @@ func main() {
 	value.NewPromise[float64](func(resolve func(float64), reject func(value.Value)) {
 		reject(value.StringValue(value.FromGoString("boom")))
 	}).Catch(func(e value.Value) {
-		value.ConsoleLog(value.Concat(value.FromGoString("catch:"), value.ToString(e)))
+		value.ConsoleLog(value.Concat(value.FromGoString("catch:"), value.PlusToString(e)))
 	})
 	value.ConsoleLog(value.FromGoString("sync"))
 	value.RunMicrotasks()

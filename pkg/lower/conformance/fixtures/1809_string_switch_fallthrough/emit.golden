@@ -25,7 +25,7 @@ func Tag(value_ value.Value) value.BStr {
 		return value_.TypeOf()
 	}().ToGoString() {
 	case "string":
-		return value.Concat(value.FromGoString("S:"), value.ToString(value_))
+		return value.Concat(value.FromGoString("S:"), value.PlusToString(value_))
 	case "number":
 		if value.StrictEquals(value_, value.Number(0)) {
 			return value.FromGoString("zero")

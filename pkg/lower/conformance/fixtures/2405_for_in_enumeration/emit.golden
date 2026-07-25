@@ -14,7 +14,7 @@ func Run() {
 	o.SetIndex(0, value.Number(0))
 	pairs := value.NewArray[value.BStr]()
 	for _, k := range o.ForInKeys().Elems() {
-		pairs.Push(k.ConcatN(value.FromGoString("="), value.ToString(o.Get(k))))
+		pairs.Push(k.ConcatN(value.FromGoString("="), value.PlusToString(o.Get(k))))
 	}
 	value.ConsoleLog(pairs.Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x

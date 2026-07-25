@@ -23,7 +23,7 @@ func Boom() *value.Promise[float64] {
 func main() {
 	defer value.ReportUncaught()
 	Boom().Catch(func(e value.Value) {
-		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.ToString(e.Get(value.FromGoString("message")))))
+		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.PlusToString(e.Get(value.FromGoString("message")))))
 	})
 	value.ConsoleLog(value.FromGoString("sync"))
 	value.RunMicrotasks()

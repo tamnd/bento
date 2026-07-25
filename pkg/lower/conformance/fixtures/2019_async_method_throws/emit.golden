@@ -21,7 +21,7 @@ func (b *Box) Boom() *value.Promise[float64] {
 func main() {
 	value.ConsoleLog(value.FromGoString("start"))
 	NewBox().Boom().Catch(func(e value.Value) {
-		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.ToString(e.Get(value.FromGoString("message")))))
+		value.ConsoleLog(value.Concat(value.FromGoString("caught:"), value.PlusToString(e.Get(value.FromGoString("message")))))
 	})
 	value.ConsoleLog(value.FromGoString("end"))
 	value.RunMicrotasks()
