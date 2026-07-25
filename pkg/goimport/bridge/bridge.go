@@ -40,7 +40,7 @@ func StringFromGo(s string) value.BStr { return value.FromGoString(s) }
 // small Go integer types always fit, so they convert with a plain float64() in the
 // emitted code and never call here.
 func Int64ToNumber(n int64) float64 {
-	if n > value.NumberMaxSafeInteger || n < value.NumberMinSafeInteger {
+	if float64(n) > value.NumberMaxSafeInteger || float64(n) < value.NumberMinSafeInteger {
 		panic(RangeError{Message: "go: integer result out of Number.MAX_SAFE_INTEGER range"})
 	}
 	return float64(n)
@@ -50,7 +50,7 @@ func Int64ToNumber(n int64) float64 {
 // safe-integer check as Int64ToNumber; the lower bound is zero, so only the upper
 // bound can trip.
 func Uint64ToNumber(n uint64) float64 {
-	if n > value.NumberMaxSafeInteger {
+	if float64(n) > value.NumberMaxSafeInteger {
 		panic(RangeError{Message: "go: unsigned integer result out of Number.MAX_SAFE_INTEGER range"})
 	}
 	return float64(n)
