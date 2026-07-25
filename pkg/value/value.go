@@ -125,8 +125,21 @@ func (v Value) IsNullish() bool   { return v.kind == KindUndefined || v.kind == 
 // IsArray reports whether v is a real array, the runtime brand check Array.isArray
 // makes. It asks the tag, so it says true only for an array value and false for an
 // array-like object, a typed array box, a string, or any other value, matching the
-// exotic-array brand the spec tests rather than a duck-typed length probe.
-func IsArray(v Value) bool { return v.Kind() == KindArray }
+// exotic-array brand the spec tests rather than a duck-typed length probe. A Proxy
+// is an array when its target is: the spec's IsArray reads through the
+// [[ProxyTarget]] slot rather than the proxy's own kind, so a proxy over an array,
+// or a proxy over such a proxy, brands as an array. A revoked proxy has no target
+// to read and throws a TypeError, the way IsArray rejects it.
+func IsArray(v Value) bool {
+	if v.Kind() == KindArray {
+		return true
+	}
+	if p := v.asProxy(); p != nil {
+		p.checkRevoked("isArray")
+		return IsArray(p.target)
+	}
+	return false
+}
 
 // StaticBool returns result and ignores operand, the lowering of a call whose
 // answer the checker already knows at compile time but whose operand must still be
@@ -821,6 +834,14 @@ func ClassTag(v Value) BStr {
 	default:
 		if tag, ok := toStringTagOf(v); ok {
 			return FromGoString("[object ").ConcatN(tag, FromGoString("]"))
+		}
+		// A Proxy over an array carries kind KindObject, not KindArray, so the array
+		// case above does not catch it, yet the spec's Object.prototype.toString brands
+		// it "[object Array]" because step 4 runs IsArray, which reads through the proxy
+		// target. IsArray recurses through a chain of array proxies and stays false for a
+		// proxy over a plain object, so only a genuinely array-backed proxy takes the tag.
+		if IsArray(v) {
+			return FromGoString("[object Array]")
 		}
 		return FromGoString("[object Object]")
 	}

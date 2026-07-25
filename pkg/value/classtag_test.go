@@ -24,6 +24,12 @@ func TestClassTag(t *testing.T) {
 		{"object", NewObject(), "[object Object]"},
 		{"array", NewArrayValue([]Value{Number(1), Number(2)}), "[object Array]"},
 		{"empty array", NewArrayValue(nil), "[object Array]"},
+		// A Proxy over a plain object keeps the object tag, while a Proxy over an array,
+		// or a Proxy over such a Proxy, brands "[object Array]" because the spec's
+		// Object.prototype.toString runs IsArray, which reads through the proxy target.
+		{"object proxy", NewProxy(NewObject(), NewObject()), "[object Object]"},
+		{"array proxy", NewProxy(NewArrayValue(nil), NewObject()), "[object Array]"},
+		{"array proxy proxy", NewProxy(NewProxy(NewArrayValue(nil), NewObject()), NewObject()), "[object Array]"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
