@@ -240,6 +240,25 @@ func TestArgumentsWriteWithNamedParameterHandsBack(t *testing.T) {
 	renderProgramHandBack(t, src)
 }
 
+// TestArgumentsWriteBeyondLengthHandsBack proves a write to arguments at a constant
+// index at or past the parameter arity hands back: arguments.length is fixed at the
+// call arity and an out-of-range assignment adds an indexed property without growing
+// it, but the snapshot store's Set would grow the backing and misreport the length, so
+// the function hands back rather than emit that unfaithful write. This is the shape the
+// Array.prototype.*.call over arguments tests take (arguments[2] = v in a two-parameter
+// function), where a generic array method must not see the extra slot.
+func TestArgumentsWriteBeyondLengthHandsBack(t *testing.T) {
+	const src = "var f = function(a: number, b: number): number {\n" +
+		"  arguments[2] = 9;\n" +
+		"  return arguments.length;\n" +
+		"};\n" +
+		"f(1, 2);\n"
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "arguments past its length") {
+		t.Fatalf("out-of-range arguments write handed back with %q, want the past-its-length reason", reason)
+	}
+}
+
 // TestArgumentsWithRestParameterThreads proves a body that reads arguments while its
 // signature carries a rest parameter threads the real call-site arguments: the rest
 // gathers its own tail as before, and the hidden array carries every argument, so

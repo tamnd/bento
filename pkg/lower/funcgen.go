@@ -261,7 +261,7 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	// passes one argument per parameter, and a rest, optional, or arity mismatch hands
 	// back there. Either way argsObjName is scoped to this body like retType.
 	var argsMat ast.Stmt
-	prevArgs, prevArgsWrite := r.argsObjName, r.argsWriteSafe
+	prevArgs, prevArgsWrite, prevArgsLen := r.argsObjName, r.argsWriteSafe, r.argsStoreLen
 	if sym, ok := r.prog.SymbolAt(fn); ok && r.funcSymThreadsArgs(sym) {
 		hidden := r.freshTemp()
 		r.requireImport(valuePkg)
@@ -269,6 +269,7 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 		r.argsObjName = hidden
 		block, _ := r.funcBodyBlock(fn)
 		r.argsWriteSafe = !r.bodyReferencesParam(block, sig.Params)
+		r.argsStoreLen = -1
 	} else {
 		mat, argsStoreName, argsOK, writeSafe, err := r.argumentsPlan(fn, sig)
 		if err != nil {
@@ -278,12 +279,14 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 			argsMat = mat
 			r.argsObjName = argsStoreName
 			r.argsWriteSafe = writeSafe
+			r.argsStoreLen = len(sig.Params)
 		} else {
 			r.argsObjName = ""
 			r.argsWriteSafe = false
+			r.argsStoreLen = -1
 		}
 	}
-	defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
+	defer func() { r.argsObjName, r.argsWriteSafe, r.argsStoreLen = prevArgs, prevArgsWrite, prevArgsLen }()
 
 	// The enclosing-parameter name set is set for this body so a nested function
 	// declaration lowered inside it can hand back on a Go-name collision with a
@@ -1985,15 +1988,17 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 			return nil, perr
 		}
 		argsMat = mat
-		prevArgs, prevArgsWrite := r.argsObjName, r.argsWriteSafe
+		prevArgs, prevArgsWrite, prevArgsLen := r.argsObjName, r.argsWriteSafe, r.argsStoreLen
 		if argsOK {
 			r.argsObjName = storeName
 			r.argsWriteSafe = writeSafe
+			r.argsStoreLen = len(sig.Params)
 		} else {
 			r.argsObjName = ""
 			r.argsWriteSafe = false
+			r.argsStoreLen = -1
 		}
-		defer func() { r.argsObjName, r.argsWriteSafe = prevArgs, prevArgsWrite }()
+		defer func() { r.argsObjName, r.argsWriteSafe, r.argsStoreLen = prevArgs, prevArgsWrite, prevArgsLen }()
 	}
 
 	// The dynamic-locals set rescopes to this nested body the way the named path

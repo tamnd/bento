@@ -3648,6 +3648,19 @@ func (r *Renderer) argumentsElementAssign(bin frontend.Node) (ast.Stmt, bool, er
 	if !r.isNumber(idxParts[1]) {
 		return nil, false, &NotYetLowerable{Reason: "a write to arguments with a non-number index is a later slice"}
 	}
+	// arguments.length is fixed at the call arity: assigning arguments[i] for an i at or
+	// past it adds an indexed property but never grows the length, whereas the Go store's
+	// Set grows the backing and would misreport the length to a later read (a generic
+	// array method reads length, so it would then scan the extra slot). The snapshot store
+	// cannot hold an index beyond its length without changing it, so a constant index that
+	// far hands the whole function back. This is the shape the Array.prototype.*.call over
+	// arguments tests take: `arguments[2] = v` in a two-parameter function, then
+	// Array.prototype.indexOf.call(arguments, v) must not see index 2.
+	if r.argsStoreLen >= 0 {
+		if v, ok := numericLiteralValue(r.prog.Text(idxParts[1])); ok && v >= float64(r.argsStoreLen) {
+			return nil, false, &NotYetLowerable{Reason: "a write to arguments past its length would grow the snapshot store and misreport arguments.length, a later slice"}
+		}
+	}
 	idx, err := r.lowerExpr(idxParts[1])
 	if err != nil {
 		return nil, false, err
