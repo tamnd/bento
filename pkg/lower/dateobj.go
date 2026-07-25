@@ -43,10 +43,10 @@ func (r *Renderer) isDate(n frontend.Node) bool {
 	return r.isDateType(t)
 }
 
-// newDate lowers new Date() and new Date(ms). The bare form reads the clock; a single
-// number is a time value, clipped by the runtime the way TimeClip specifies. The string
-// form has to parse a date, and the component form has to build one from year, month,
-// and day, so each is its own slice and says so.
+// newDate lowers the constructor. The bare form reads the clock, a single number is a
+// time value clipped the way TimeClip specifies, and a single string is parsed. The
+// component form has to build a date from a local calendar reading, which is its own
+// slice and says so.
 func (r *Renderer) newDate(args []frontend.Node) (ast.Expr, error) {
 	valueArgs := r.namedArgs(args)
 	r.requireImport(valuePkg)
@@ -59,26 +59,56 @@ func (r *Renderer) newDate(args []frontend.Node) (ast.Expr, error) {
 			return nil, err
 		}
 		return &ast.CallExpr{Fun: sel("value", "NewDateFromMillis"), Args: []ast.Expr{ms}}, nil
+	case len(valueArgs) == 1 && r.isString(valueArgs[0]):
+		s, err := r.lowerExpr(valueArgs[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "NewDateFromString"), Args: []ast.Expr{s}}, nil
+	case len(valueArgs) == 1 && r.isDate(valueArgs[0]):
+		d, err := r.lowerExpr(valueArgs[0])
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{
+			Fun: sel("value", "NewDateFromMillis"),
+			Args: []ast.Expr{&ast.CallExpr{
+				Fun: &ast.SelectorExpr{X: d, Sel: ident("GetTime")},
+			}},
+		}, nil
 	case len(valueArgs) == 1:
-		return nil, &NotYetLowerable{Reason: "new Date from a string or another date is a later slice"}
+		return nil, &NotYetLowerable{Reason: "new Date from a value that is not a number, a string, or a date needs coercion, a later slice"}
 	default:
 		return nil, &NotYetLowerable{Reason: "new Date from year, month, and day components is a later slice"}
 	}
 }
 
-// dateStaticCall lowers a static call on the global Date. Date.now() is the whole of the
-// covered surface: it gives the current time value as a Number, with no Date built at
-// all. Date.parse and Date.UTC each need the parsing and component work a later slice
-// brings.
+// dateStaticCall lowers a static call on the global Date. now() reads the clock and
+// parse() reads a string, both giving a time value as a Number with no Date built at all.
+// Date.UTC builds a time value out of components, which is the same calendar work the
+// component constructor needs, so it waits for that slice.
 func (r *Renderer) dateStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
-	if method != "now" {
+	args := r.namedArgs(argNodes)
+	switch method {
+	case "now":
+		if len(args) != 0 {
+			return nil, &NotYetLowerable{Reason: "Date.now takes no argument"}
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "DateNow")}, nil
+	case "parse":
+		if len(args) != 1 || !r.isString(args[0]) {
+			return nil, &NotYetLowerable{Reason: "Date.parse of a value that is not a string needs coercion, a later slice"}
+		}
+		s, err := r.lowerExpr(args[0])
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ParseDate"), Args: []ast.Expr{s}}, nil
+	default:
 		return nil, &NotYetLowerable{Reason: "Date." + method + " is a later slice"}
 	}
-	if len(r.namedArgs(argNodes)) != 0 {
-		return nil, &NotYetLowerable{Reason: "Date.now takes no argument"}
-	}
-	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "DateNow")}, nil
 }
 
 // dateGetters maps each no-argument Date read to the runtime method that answers it.
