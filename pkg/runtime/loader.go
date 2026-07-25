@@ -38,15 +38,21 @@ func newResolver() *resolve.Resolver {
 // follows the node layer's convention of a small tagged object across the
 // bridge. OK false carries a Node error code the prelude rethrows.
 type loadResult struct {
-	OK      bool   `json:"ok"`
-	Kind    string `json:"kind,omitempty"`
-	Format  string `json:"format,omitempty"`
-	Path    string `json:"path,omitempty"`
-	Dir     string `json:"dir,omitempty"`
-	Code    string `json:"code,omitempty"`
-	Source  string `json:"source,omitempty"`
-	ErrCode string `json:"errCode,omitempty"`
-	Message string `json:"message,omitempty"`
+	OK     bool   `json:"ok"`
+	Kind   string `json:"kind,omitempty"`
+	Format string `json:"format,omitempty"`
+	Path   string `json:"path,omitempty"`
+	// Filename and Dir are what the module wrapper hands the user's code as
+	// __filename and __dirname, so they carry the operating system's spelling, the
+	// way Node's do. Path stays a module path: it is the module's identity, the
+	// require cache key, and the referrer the resolver reads back, and the resolver
+	// speaks module paths. On Unix the two spellings are the same string.
+	Filename string `json:"filename,omitempty"`
+	Dir      string `json:"dir,omitempty"`
+	Code     string `json:"code,omitempty"`
+	Source   string `json:"source,omitempty"`
+	ErrCode  string `json:"errCode,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 // loadModule resolves a specifier through the resolver and, for on-disk modules,
@@ -95,14 +101,16 @@ func (rt *Runtime) loadFile(res resolve.Resolved) string {
 		})
 	}
 
-	dir := cpath.Dir(res.Path)
+	filename := cpath.ToOS(res.Path)
+	dir := cpath.ToOS(cpath.Dir(res.Path))
 	if res.Format == resolve.FormatJSON {
 		return marshalLoad(loadResult{
-			OK:     true,
-			Kind:   "json",
-			Path:   res.Path,
-			Dir:    dir,
-			Source: string(data),
+			OK:       true,
+			Kind:     "json",
+			Path:     res.Path,
+			Filename: filename,
+			Dir:      dir,
+			Source:   string(data),
 		})
 	}
 
@@ -115,12 +123,13 @@ func (rt *Runtime) loadFile(res resolve.Resolved) string {
 		})
 	}
 	return marshalLoad(loadResult{
-		OK:     true,
-		Kind:   "file",
-		Format: res.Format.String(),
-		Path:   res.Path,
-		Dir:    dir,
-		Code:   out.Code,
+		OK:       true,
+		Kind:     "file",
+		Format:   res.Format.String(),
+		Path:     res.Path,
+		Filename: filename,
+		Dir:      dir,
+		Code:     out.Code,
 	})
 }
 

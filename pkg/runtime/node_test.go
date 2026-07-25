@@ -93,7 +93,7 @@ func TestPathThroughRuntime(t *testing.T) {
 		console.log(join("x", "y"));
 		console.log(basename("/a/b.ts"));
 	`)
-	if !strings.Contains(out, "x/y") || !strings.Contains(out, "b.ts") {
+	if !strings.Contains(out, filepath.Join("x", "y")) || !strings.Contains(out, "b.ts") {
 		t.Errorf("path import failed: %q", out)
 	}
 }
