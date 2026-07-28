@@ -212,6 +212,7 @@ func HostFuncs() map[string]HostFunc {
 	maps.Copy(out, fsHostFuncs())
 	maps.Copy(out, osHostFuncs())
 	maps.Copy(out, urlHostFuncs())
+	maps.Copy(out, zlibHostFuncs())
 	return out
 }
 
