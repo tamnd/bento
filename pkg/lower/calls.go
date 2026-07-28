@@ -57,6 +57,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 		if b, ok := r.namespaceGoCall(kids[0]); ok {
 			return r.goImportCall(b, n, kids[1:])
 		}
+		// A call on a binding that stands for a whole node: module (path.join(a, b)
+		// where path came from import path from "node:path" or import * as path) is a
+		// call to a host builtin, not a method on a value, so it routes to the same
+		// builtin dispatch a named import's binding takes, before the method-call path.
+		if b, ok, err := r.namespaceNodeCall(kids[0]); err != nil {
+			return nil, err
+		} else if ok {
+			return r.nodeBuiltinCall(b, kids[1:])
+		}
 		// A call on a namespace import of a composed sibling (m.inc(1) where m is
 		// import * as m) is a direct call to the export's package-level Go func, so it
 		// routes here before the method-call path, which expects a value receiver the

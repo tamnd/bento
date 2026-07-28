@@ -53,6 +53,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if name := r.prog.Text(n); r.internalNamespaces[name] || r.dynImportNamespaces[name] {
 			return nil, &NotYetLowerable{Reason: "a module namespace used as a whole value is a later slice"}
 		}
+		// A binding that stands for a whole node: module is the same kind of
+		// compile-time name: path.join lowers at the call site, but path on its own has
+		// no runtime object behind it, since the module is a set of value helpers rather
+		// than a struct. Reaching a bare read here means the module was used as a value,
+		// so it hands back rather than name a Go symbol nothing declares.
+		if module, ok := r.nodeNamespaces[r.prog.Text(n)]; ok {
+			return nil, &NotYetLowerable{Reason: "the " + module + " module used as a whole value is a later slice"}
+		}
 		// A bare reference to a top-level function used as a value (passed as a
 		// callback, stored in a variable) is the function itself, so it lowers to the
 		// exported Go name its declaration takes, the same name a direct call uses. It

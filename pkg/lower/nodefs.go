@@ -49,10 +49,10 @@ var nodeModuleExports = map[string]map[string]bool{
 // r.nodeImports before any body is lowered. It walks the module's top-level
 // import declarations, and for each one it recognizes a supported node module and
 // its named imports, mapping each local binding to the builtin it names. An
-// import bento does not lower (an unsupported module, a default or namespace
-// import, an aliased-away shape, a listed module with an unlisted name) is a
-// NotYetLowerable so the whole unit routes to the engine rather than compiling a
-// call to a helper that does not exist.
+// import bento does not lower (an unsupported module, a listed module with an
+// unlisted name, a bare side-effect import) is a NotYetLowerable so the whole unit
+// routes to the engine rather than compiling a call to a helper that does not
+// exist.
 func (r *Renderer) collectNodeImports(entry frontend.Node) error {
 	internal := r.internalImports(entry)
 	for _, stmt := range r.prog.Children(entry) {
@@ -94,11 +94,12 @@ func (r *Renderer) internalImports(file frontend.Node) map[string]bool {
 // recordNodeImport parses one import declaration and records its bindings. The
 // declaration's children are the import clause and the module specifier string
 // literal; the specifier's text, unquoted, is the module. Only the supported
-// modules lower, and within them only the named-import form: a default or
-// namespace import has no named-imports node to walk, so it hands back. Each
-// import specifier's identifier children are the exported name and, when the
-// import is aliased, the local binding; the first is the export bento dispatches
-// on and the last is the local name a call site uses.
+// modules lower, in all three of the forms that bind something: a named list binds
+// each name to the builtin it names, and a default or namespace clause binds one
+// name to the whole module, which a member call resolves through. Each import
+// specifier's identifier children are the exported name and, when the import is
+// aliased, the local binding; the first is the export bento dispatches on and the
+// last is the local name a call site uses.
 func (r *Renderer) recordNodeImport(decl frontend.Node, internal map[string]bool) error {
 	kids := r.prog.Children(decl)
 	var module string
@@ -143,9 +144,26 @@ func (r *Renderer) recordNodeImport(decl frontend.Node, internal map[string]bool
 	if !haveClause {
 		return &NotYetLowerable{Reason: "bare import of " + module + " has no bindings to lower"}
 	}
+	// A default or namespace import binds the whole module rather than picking names
+	// out of it. Both bind the same thing here: node's core modules are CommonJS, so
+	// the default export is the module object, which is what import * as binds too.
+	// Recording either as a namespace lets a member call on the binding reach the
+	// same dispatch a named import's binding reaches, which is what makes the form
+	// most Node programs are actually written in compile.
+	//
+	// A mixed clause, import path, { join } from "node:path", carries both, so the
+	// module-object binding is recorded before the named list is walked rather than
+	// instead of it.
+	bindings := moduleObjectBindings(r.prog, clause)
+	for _, binding := range bindings {
+		r.nodeNamespaces[binding] = module
+	}
 	named, ok := namedImportsNode(r.prog, clause)
 	if !ok {
-		return &NotYetLowerable{Reason: "default or namespace import of " + module + " is a later slice"}
+		if len(bindings) > 0 {
+			return nil
+		}
+		return &NotYetLowerable{Reason: "import of " + module + " in this form is a later slice"}
 	}
 	for _, spec := range r.prog.Children(named) {
 		names := identChildren(r.prog, spec)
@@ -195,11 +213,67 @@ func (r *Renderer) recordInternalImport(module string, clause frontend.Node, hav
 	return nil
 }
 
+// namespaceNodeCall resolves a member callee against the module-object bindings of
+// the node: imports: when the callee is name.member and name stands for a whole
+// node module, it returns the nodeBuiltin for member in that module, the same pair
+// a named import of member binds. So path.join(a, b) and the join(a, b) of import
+// { join } meet at one dispatch and cannot drift apart.
+//
+// A member the module does not export, or one bento does not lower yet, is
+// reported as an error rather than as not-found: the binding is known to name a
+// node module, so falling through to the method-call path would blame a receiver
+// that is not there and lose the real reason.
+func (r *Renderer) namespaceNodeCall(access frontend.Node) (nodeBuiltin, bool, error) {
+	kids := r.prog.Children(access)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodeIdentifier || kids[1].Kind() != frontend.NodeIdentifier {
+		return nodeBuiltin{}, false, nil
+	}
+	module, ok := r.nodeNamespaces[r.prog.Text(kids[0])]
+	if !ok {
+		return nodeBuiltin{}, false, nil
+	}
+	name := r.prog.Text(kids[1])
+	if !nodeModuleExports[module][name] {
+		return nodeBuiltin{}, false, &NotYetLowerable{Reason: "call of " + name + " on " + module + " is a later slice"}
+	}
+	return nodeBuiltin{module: module, name: name}, true, nil
+}
+
+// moduleObjectBindings returns the local names in an import clause that stand for
+// the whole module object rather than for one of its exports: the binding of a
+// namespace import (import * as path), the binding of a default import (import
+// path), and both when one clause carries a default and a namespace at once. A
+// clause that only picks names out of the module returns none.
+//
+// A namespace clause is recognized by its leading star, which is what
+// namespaceBinding matches. Otherwise the default binding is the identifier
+// directly under the clause: a named list is an Unknown brace node whose
+// identifiers sit two levels down inside its specifiers, so it cannot be mistaken
+// for one, and the star form in a mixed clause is matched by its own text.
+func moduleObjectBindings(prog *frontend.Program, clause frontend.Node) []string {
+	if b, ok := namespaceBinding(prog, clause); ok {
+		return []string{b}
+	}
+	var out []string
+	for _, c := range prog.Children(clause) {
+		if c.Kind() == frontend.NodeIdentifier {
+			out = append(out, prog.Text(c))
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(prog.Text(c)), "*") {
+			if id, ok := firstIdentifier(prog, c); ok {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
 // namedImportsNode descends an import clause to its named-imports node, the brace
 // list whose children are the import specifiers. The clause of a named import
 // wraps a single named-imports child; a default or namespace import has a
-// different shape with no such child, which is reported as not found so the
-// caller hands back.
+// different shape with no such child, which is reported as not found so the caller
+// takes it as a module-object binding instead.
 func namedImportsNode(prog *frontend.Program, clause frontend.Node) (frontend.Node, bool) {
 	// The clause node and the named-imports node both render as "{ ... }"; the
 	// named-imports node is the descendant whose own children are the specifiers.
