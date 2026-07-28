@@ -30,6 +30,15 @@ import (
 // with no null member at all is not this shape: `T | undefined` stays with the
 // optional pre-pass and its value.Opt, so requiring null keeps this path off
 // shapes that already lower.
+//
+// A plain record beside null, `{ a: number } | null`, is declined for the same
+// reason even though it does lower to a pointer: internNullableObject already
+// owns that shape end to end, type, literal, narrowing and typeof alike, and it
+// holds the object arm by pointer so identity already survives. Claiming half of
+// it here would leave the tag compare in the narrowing path facing a bare
+// pointer. isPlainRecordType is the tagged sum's own gate, and it answers false
+// for a class instance and for an array, so this declines exactly the shapes
+// that path claims and nothing else.
 func (r *Renderer) nullableRef(t frontend.Type) (frontend.Type, bool) {
 	if t.Flags&frontend.TypeUnion == 0 {
 		return frontend.Type{}, false
@@ -49,7 +58,7 @@ func (r *Renderer) nullableRef(t frontend.Type) (frontend.Type, bool) {
 		if m.Flags&frontend.TypeUndefined != 0 {
 			continue
 		}
-		if found || !r.lowersToPointer(m) {
+		if found || !r.lowersToPointer(m) || r.isPlainRecordType(m) {
 			return frontend.Type{}, false
 		}
 		inner, found = m, true

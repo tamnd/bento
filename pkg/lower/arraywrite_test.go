@@ -36,13 +36,19 @@ func TestArrayElementWriteCoercesValue(t *testing.T) {
 	}
 }
 
-// TestArrayCompoundElementWriteHandsBack proves a compound element write a[i] += v
-// hands back rather than dropping the read half the compound needs.
-func TestArrayCompoundElementWriteHandsBack(t *testing.T) {
+// TestArrayCompoundElementWriteEmits pins that a compound element write a[i] += v
+// lowers to the read and the store the compound needs, both through the array's
+// own accessors and both naming the same index. It used to hand back rather than
+// drop the read half; the index is only repeatable, and so nameable twice,
+// because repeatableOperand recurses over the operator forms.
+func TestArrayCompoundElementWriteEmits(t *testing.T) {
 	const src = "export function add(a: number[], i: number, v: number): void { a[i] += v; }\n"
-	reason := renderProgramHandBack(t, src)
-	if reason == "" {
-		t.Fatal("expected a compound array element write to hand back")
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "a.Set(i, ") {
+		t.Errorf("compound element write did not lower to a Set:\n%s", source)
+	}
+	if !strings.Contains(source, "a.At(i)") {
+		t.Errorf("compound element write dropped the read half:\n%s", source)
 	}
 }
 
