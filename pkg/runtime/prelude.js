@@ -456,4 +456,63 @@
   if (typeof g.structuredClone !== "function") {
     g.structuredClone = function (v) { return JSON.parse(JSON.stringify(v)); };
   }
+
+  // ---- Error.captureStackTrace ------------------------------------------
+  // V8's, and so Node's: it puts a stack on any object, not only on an Error.
+  // Custom error classes call it in their constructor to hide the constructor
+  // from the trace, and libraries that carry a stack on a plain result object
+  // call it on that. Neither is in the language, so the engine does not have it.
+  //
+  // What it writes is V8's shape: a header line naming the object and its
+  // message, then the frames, indented. QuickJS gives the frames alone with no
+  // header, so the header is built here from the target rather than taken from
+  // the captured error.
+  if (typeof Error.captureStackTrace !== "function") {
+    // V8 defaults to ten frames and lets a program raise or lower it; a limit of
+    // zero asks for the header alone. It is a plain property, because code that
+    // sets it expects the next capture to honor the new number.
+    if (Error.stackTraceLimit === undefined) Error.stackTraceLimit = 10;
+
+    Error.captureStackTrace = function (target, constructorOpt) {
+      if (target === null || (typeof target !== "object" && typeof target !== "function")) {
+        throw new TypeError("Error.captureStackTrace requires an object");
+      }
+
+      const limit = typeof Error.stackTraceLimit === "number" ? Math.max(0, Error.stackTraceLimit) : 10;
+      const raw = new Error().stack || "";
+      let frames = raw.split("\n").filter(function (line) { return line.trim() !== ""; });
+
+      // The frame for this function is never part of the answer.
+      frames = frames.slice(1);
+
+      // constructorOpt asks for everything above and including that function to
+      // be hidden, which is how a custom error class keeps its own constructor
+      // out of the trace. QuickJS names frames but hands back no reference to
+      // the function, so the match is by name; an anonymous one has nothing to
+      // match on and is left alone rather than guessed at.
+      const hideUpTo = constructorOpt && constructorOpt.name;
+      if (hideUpTo) {
+        for (let i = 0; i < frames.length; i++) {
+          if (frames[i].indexOf(" " + hideUpTo + " ") !== -1) {
+            frames = frames.slice(i + 1);
+            break;
+          }
+        }
+      }
+
+      const name = target.name === undefined ? "Error" : String(target.name);
+      const message = target.message === undefined || target.message === "" ? "" : String(target.message);
+      const header = message === "" ? name : name + ": " + message;
+
+      const stack = [header].concat(frames.slice(0, limit)).join("\n");
+      // Writable and configurable but not enumerable, the way V8 installs it, so
+      // an object that gets a stack does not start serializing one.
+      Object.defineProperty(target, "stack", {
+        value: stack,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+      });
+    };
+  }
 })();
