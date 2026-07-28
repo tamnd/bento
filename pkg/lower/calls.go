@@ -2078,18 +2078,54 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 			return nil, err
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ValueOfMethod")}}, nil
+		call := &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("ValueOfMethod")}}
+		// A primitive wrapper's valueOf return is a known kind, a String wrapper's
+		// string, a Number wrapper's number, a Boolean wrapper's boolean, so the boxed
+		// result unboxes to that kind the way toString unboxes above. The consumer the
+		// checker typed string, number, or boolean then takes the primitive rather than a
+		// value.Value, which is what keeps new String("hi").valueOf() === "hi" a static
+		// BStr compare. A genuinely any or symbol receiver has no known kind and stays
+		// boxed below.
+		if unbox, ok := map[string]string{"String": "AsString", "Number": "AsNumber", "Boolean": "AsBool"}[r.primWrapperClass(recvNode)]; ok {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: call, Sel: ident(unbox)}}, nil
+		}
+		return call, nil
+	}
+	// A numeric-format method on a Number wrapper object, new Number(x).toFixed(d)
+	// and its toExponential and toPrecision siblings, needs the same runtime formatter
+	// the primitive number path uses. The wrapper only exposes valueOf and toString off
+	// its prototype bridge, so the dynamic member read below would find undefined for
+	// toFixed and the call would throw; this routes it to value.NumberToFixedDynamic and
+	// friends over the wrapped number instead. It runs before the dynamic fallthrough so
+	// the wrapper is caught, and hands back rather than emitting for a shape the runtime
+	// formatter does not model, never falling through to the member read that cannot
+	// answer it.
+	if e, ok, err := r.primWrapperNumberFormatCall(recvNode, method, argNodes); ok || err != nil {
+		return e, err
+	}
+	// A Number or Boolean wrapper method the Number-format intercept did not claim
+	// hands back. The wrapper is a dynamic object, so the dynamicCall path below would
+	// render m.fn(x) as a value.Value while the frontend types the result by the
+	// wrapper's static class, and the caller would drop that value.Value into a typed
+	// helper the Go cannot build. Its prototype methods beyond valueOf, toString, and
+	// the numeric formats are a later slice. A String wrapper is excluded here: it falls
+	// through to the string dispatch below, where its receiver coerces to the wrapped
+	// string and the method runs exactly as the primitive's does.
+	if c := r.primWrapperClass(recvNode); c == "Number" || c == "Boolean" {
+		return nil, &NotYetLowerable{Reason: "method call on a " + c + " wrapper object, whose prototype methods beyond the numeric formats are not modeled, is a later slice"}
 	}
 	// A method the special cases above did not claim, called on a boxed receiver,
 	// dispatches through the runtime: the member m.fn is read with a dynamic Get and
 	// the result invoked with Call, the shape m.fn(x) takes where m = require('./mod')
 	// binds a module's exports object as a box. It routes here after toString and
 	// valueOf, which the value model answers with their own dedicated helpers, and
-	// before the string gate below, which would reject a boxed receiver.
-	if r.isDynamic(recvNode) {
+	// before the string gate below, which would reject a boxed receiver. A String
+	// wrapper is dynamic too but is a string subject, so it skips this and rides the
+	// string dispatch with its receiver coerced to the wrapped string.
+	if r.isDynamic(recvNode) && !r.isStringSubject(recvNode) {
 		return r.dynamicCall(callee, argNodes)
 	}
-	if !r.isString(recvNode) {
+	if !r.isStringSubject(recvNode) {
 		return nil, &NotYetLowerable{Reason: "method call on a non-string receiver is a later slice"}
 	}
 	// toString and valueOf on a string are identity: both return the string itself,
@@ -2100,7 +2136,7 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		if len(argNodes) != 0 {
 			return nil, &NotYetLowerable{Reason: "string ." + method + " with an argument is a later slice"}
 		}
-		return r.lowerExpr(recvNode)
+		return r.lowerStringSubject(recvNode)
 	}
 	// match, search, replace, replaceAll, and split with a regexp pattern or
 	// separator route to the value.RegExp engine. replace and replaceAll keep the
@@ -2129,7 +2165,7 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if len(argNodes) < minArgs || (!variadic && len(argNodes) > len(params)) {
 		return nil, &NotYetLowerable{Reason: "string method ." + method + " with this argument count is a later slice"}
 	}
-	recv, err := r.lowerExpr(recvNode)
+	recv, err := r.lowerStringSubject(recvNode)
 	if err != nil {
 		return nil, err
 	}
@@ -3026,6 +3062,15 @@ func (r *Renderer) objectGetPrototypeOf(argNodes []frontend.Node) (ast.Expr, err
 	if !r.isDynamic(argNodes[0]) {
 		return nil, &NotYetLowerable{Reason: "Object.getPrototypeOf on a fixed-shape receiver, which has no runtime prototype slot, is a later slice"}
 	}
+	// A primitive wrapper object carries only its wrapped primitive, not the runtime
+	// prototype chain: its GetPrototype slot is unset, so reading it would answer null
+	// rather than the Number, String, or Boolean prototype the language installs, and a
+	// downstream Object.prototype.toString.call would then read the wrong class tag. The
+	// wrapper prototype is not modeled yet, so this hands back rather than emit a read
+	// that resolves wrong.
+	if r.isPrimWrapperType(argNodes[0]) {
+		return nil, &NotYetLowerable{Reason: "Object.getPrototypeOf on a primitive wrapper, whose prototype chain is not modeled, is a later slice"}
+	}
 	recv, err := r.lowerExpr(argNodes[0])
 	if err != nil {
 		return nil, err
@@ -3532,6 +3577,68 @@ func (r *Renderer) numberFormatDynamic(fn string, recvNode, countNode frontend.N
 		Fun:  sel("value", fn),
 		Args: []ast.Expr{recv, count},
 	}, nil
+}
+
+// primWrapperNumberFormatCall lowers a numeric-format method on a Number wrapper
+// object, new Number(x).toFixed(d), .toExponential(d), or .toPrecision(d), to the
+// same value.*Dynamic runtime the primitive number path uses, reading the wrapped
+// number back through value.ToNumber. It reports ok=false only when the receiver is
+// not a Number wrapper or the method is not one of these three, so an unrelated
+// receiver or method drops to the ordinary dispatch. Once the receiver and method
+// match it commits: a shape the runtime formatter does not model, more than one
+// argument, a non-number count, or the omitted-count toExponential and toPrecision
+// (which use as-many-digits-as-needed, a rule the fixed-count runtime does not
+// carry), hands the unit back rather than falling to the dynamic member read, which
+// the wrapper cannot answer and which would throw at runtime.
+func (r *Renderer) primWrapperNumberFormatCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	if r.primWrapperClass(recvNode) != "Number" {
+		return nil, false, nil
+	}
+	var fn string
+	switch method {
+	case "toFixed":
+		fn = "NumberToFixedDynamic"
+	case "toExponential":
+		fn = "NumberToExponentialDynamic"
+	case "toPrecision":
+		fn = "NumberToPrecisionDynamic"
+	default:
+		return nil, false, nil
+	}
+	if len(argNodes) > 1 {
+		return nil, true, &NotYetLowerable{Reason: "Number wrapper ." + method + " with more than one argument is a later slice"}
+	}
+	var countExpr ast.Expr
+	if len(argNodes) == 1 {
+		if !r.isNumber(argNodes[0]) {
+			return nil, true, &NotYetLowerable{Reason: "Number wrapper ." + method + " with a non-number argument is a later slice"}
+		}
+		c, err := r.lowerExpr(argNodes[0])
+		if err != nil {
+			return nil, true, err
+		}
+		countExpr = c
+	} else {
+		// toFixed with no argument means zero fraction digits; toExponential and
+		// toPrecision with no argument use as-many-digits-as-needed, which the
+		// fixed-count runtime does not model, so they hand back.
+		if method != "toFixed" {
+			return nil, true, &NotYetLowerable{Reason: "Number wrapper ." + method + " with no argument is a later slice"}
+		}
+		countExpr = &ast.BasicLit{Kind: token.INT, Value: "0"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, true, err
+	}
+	r.requireImport(valuePkg)
+	x := &ast.CallExpr{Fun: sel("value", "ToNumber"), Args: []ast.Expr{recv}}
+	// The formatter returns a BStr, and the checker types these methods string, so the
+	// call yields a value.BStr the consumer takes directly, the same static string a
+	// primitive number's toFixed lowers to. callOfDynamicMember keeps a wrapper method
+	// off the boxed path, so a console.log or a slot wraps this BStr rather than expect a
+	// box.
+	return &ast.CallExpr{Fun: sel("value", fn), Args: []ast.Expr{x, countExpr}}, true, nil
 }
 
 // literalIntArg reads a numeric-literal argument whose ToInteger value lands in

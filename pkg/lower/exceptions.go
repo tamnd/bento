@@ -201,6 +201,26 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 			return r.newTemporal(r.prog.Text(parts[1]), kids[1:])
 		}
 	}
+	// new Number(x), new String(x), and new Boolean(x) build primitive wrapper objects:
+	// typeof "object", always truthy, that coerce back to the wrapped primitive. Each is
+	// an ambient global rather than a user class (a user class of the same name was
+	// claimed by classNameRef above), so a plain-identifier constructor of these names
+	// routes to the runtime wrapper constructor. The constructor signature accepts any
+	// argument, so there is no assignability diagnostic to mark.
+	switch r.prog.Text(kids[0]) {
+	case "Number":
+		if r.isGlobalRef(kids[0], "Number") {
+			return r.newPrimWrapper("NumberObject", kids[1:])
+		}
+	case "String":
+		if r.isGlobalRef(kids[0], "String") {
+			return r.newPrimWrapper("StringObject", kids[1:])
+		}
+	case "Boolean":
+		if r.isGlobalRef(kids[0], "Boolean") {
+			return r.newPrimWrapper("BooleanObject", kids[1:])
+		}
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}
@@ -226,6 +246,24 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", ctor), Args: []ast.Expr{message}}, nil
+}
+
+// newPrimWrapper lowers new Number(x), new String(x), and new Boolean(x) to the
+// runtime constructor named by ctor, boxing the first argument into a dynamic value the
+// variadic constructor coerces. The wrapper constructors ignore arguments past the
+// first and treat a missing argument as the class default (+0, "", false), so a
+// zero-argument new is a call with no boxed argument.
+func (r *Renderer) newPrimWrapper(ctor string, args []frontend.Node) (ast.Expr, error) {
+	var callArgs []ast.Expr
+	if len(args) > 0 {
+		boxed, err := r.boxArgToValue(args[0])
+		if err != nil {
+			return nil, err
+		}
+		callArgs = []ast.Expr{boxed}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", ctor), Args: callArgs}, nil
 }
 
 // newObject lowers new Object() to the empty boxed object value.NewObject builds,

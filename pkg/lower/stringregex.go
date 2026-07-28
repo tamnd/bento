@@ -74,7 +74,7 @@ func (r *Renderer) regexReplaceCall(recvNode frontend.Node, method, pattern, fla
 	if !r.isString(argNodes[1]) {
 		return nil, &NotYetLowerable{Reason: "string ." + method + " with a non-string replacement is a later slice"}
 	}
-	recv, err := r.lowerExpr(recvNode)
+	recv, err := r.lowerStringSubject(recvNode)
 	if err != nil {
 		return nil, err
 	}

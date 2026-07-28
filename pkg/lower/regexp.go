@@ -279,7 +279,7 @@ func (r *Renderer) stringRegExpMethodCall(recvNode frontend.Node, method string,
 	if err != nil {
 		return nil, err
 	}
-	subj, err := r.lowerExpr(recvNode)
+	subj, err := r.lowerStringSubject(recvNode)
 	if err != nil {
 		return nil, err
 	}

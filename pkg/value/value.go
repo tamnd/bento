@@ -481,6 +481,15 @@ func (v Value) Get(key BStr) Value {
 				return val
 			}
 		}
+		if p := v.object().prim; p != nil {
+			// A primitive wrapper answers valueOf and toString off the wrapped primitive, and
+			// a String wrapper additionally answers .length and its index characters. A name
+			// that is not a wrapper own property climbs the ordinary chain and ends at
+			// undefined.
+			if val, ok := primWrapperGet(p, name); ok {
+				return val
+			}
+		}
 		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
@@ -794,6 +803,13 @@ func (v Value) ValueOfMethod() Value {
 	case KindNull:
 		Throw(NewTypeError(FromGoString("Cannot read properties of null (reading 'valueOf')")))
 	}
+	if p := v.asPrimWrapper(); p != nil {
+		// A primitive wrapper's prototype valueOf returns the wrapped primitive, not the
+		// receiver, so (new Boolean(1)).valueOf() is the primitive true rather than the
+		// object. Object.prototype.valueOf returns the receiver by identity, which is what
+		// every other object kind below falls through to.
+		return p.value
+	}
 	return v
 }
 
@@ -1019,6 +1035,15 @@ func toPrimitive(v Value, hint primHint) Value {
 		// template substitution, and "" + box all render the pattern the same way the
 		// concrete RegExp.prototype.toString does.
 		return StringValue(re.ToStringBStr())
+	}
+	if p := v.asPrimWrapper(); p != nil {
+		// A primitive wrapper has no Symbol.toPrimitive and its prototype valueOf returns
+		// the wrapped primitive, so OrdinaryToPrimitive would take that for the number and
+		// default hints, and its toString renders the same primitive for the string hint.
+		// Short-circuiting to the wrapped primitive here makes String(new Number(5)),
+		// +new Boolean(false), and parseFloat(new Number(1.5)) all read the primitive back
+		// the way the wrapper's prototype methods would produce it.
+		return p.value
 	}
 	exotic := v.getSymKey(symbolToPrimitive)
 	if !exotic.IsNullish() {

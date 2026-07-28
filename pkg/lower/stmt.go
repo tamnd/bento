@@ -3938,6 +3938,15 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 	// call. The value boxes through boxOperand so a primitive rides its constructor
 	// and a nested dynamic passes through. This routes before the static-shape gate
 	// below, which expects a receiver whose object type the checker pinned down.
+	// A write onto a primitive wrapper hands back. The wrapper is a dynamic box, so
+	// the store below would land the property in the wrapper's bag, but the wrapper's
+	// coercion short-circuits toPrimitive straight to the boxed primitive and never
+	// consults that bag, so overriding valueOf or toString on a new String would be
+	// stored and then ignored, giving a wrong == result. Modeling a wrapper's own
+	// valueOf and toString override is a later slice, so reject the write here.
+	if r.isPrimWrapperType(obj) {
+		return nil, false, &NotYetLowerable{Reason: "a write onto a primitive wrapper object, whose own valueOf and toString override the coercion cannot honor, is a later slice"}
+	}
 	if r.isDynamic(obj) {
 		propName := r.prog.Text(tParts[1])
 		r.requireImport(valuePkg)

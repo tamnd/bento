@@ -1,5 +1,7 @@
 package value
 
+import "math"
+
 // This file formats the number-to-string methods whose digit count is only known
 // at runtime: a non-literal or out-of-range argument to toFixed, toExponential,
 // and toPrecision. Each applies ToInteger to the count, throws the RangeError
@@ -28,15 +30,28 @@ func NumberToFixedDynamic(x, digits float64) BStr {
 
 // NumberToExponentialDynamic is n.toExponential(digits) with a runtime digit
 // count: it range-checks the count against 0..100 and formats through
-// NumberToExponential.
+// NumberToExponential. A non-finite receiver returns its "NaN" or "Infinity"
+// spelling before the range check runs, the spec order for toExponential: step 3
+// returns Number::toString(x) for a non-finite x, ahead of the step 4 range check,
+// so (Infinity).toExponential(1000) is "Infinity", not a RangeError.
 func NumberToExponentialDynamic(x, digits float64) BStr {
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return NumberToExponential(x, 0)
+	}
 	return NumberToExponential(x, formatDigits(digits, 0, 100, "toExponential() argument must be between 0 and 100"))
 }
 
 // NumberToPrecisionDynamic is n.toPrecision(precision) with a runtime precision:
 // it range-checks the precision against 1..100 (zero significant digits is not a
-// valid precision) and formats through NumberToPrecision.
+// valid precision) and formats through NumberToPrecision. A non-finite receiver
+// returns its "NaN" or "Infinity" spelling before the range check runs, the spec
+// order for toPrecision: step 4 returns Number::toString(x) for a non-finite x,
+// ahead of the step 5 range check, so (Infinity).toPrecision(1000) is "Infinity",
+// not a RangeError.
 func NumberToPrecisionDynamic(x, precision float64) BStr {
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return NumberToPrecision(x, 1)
+	}
 	return NumberToPrecision(x, formatDigits(precision, 1, 100, "toPrecision() argument must be between 1 and 100"))
 }
 

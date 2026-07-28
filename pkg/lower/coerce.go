@@ -359,6 +359,82 @@ func (r *Renderer) isWellKnownSymbolRef(n frontend.Node) bool {
 	return ok
 }
 
+// isPrimWrapperType reports whether the checker types n as a primitive wrapper object,
+// the Number, String, or Boolean interface new Number/String/Boolean produces. Such a
+// value lowers to a value.Value (the runtime wrapper constructor builds one and a
+// wrapper-typed binding stores it), so the boxing and coercion paths treat it as the
+// box it already is rather than a static primitive. The primitive number, string, and
+// boolean carry their facet flag rather than TypeObject, so they never reach here.
+func (r *Renderer) isPrimWrapperType(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	if !ok {
+		return false
+	}
+	switch sym.Name {
+	case "Number", "String", "Boolean":
+	default:
+		return false
+	}
+	// The constructor's own prototype, String.prototype and its Number and Boolean
+	// siblings, carries the same interface type as a wrapper instance but is not a
+	// runtime wrapper value: it is the borrow source a String.prototype.charAt.call(x)
+	// reads a method off, which lowers through the static prototype-borrow path rather
+	// than the value box. Excluding a .prototype read keeps that borrow on its path.
+	if n.Kind() == frontend.NodePropertyAccessExpression {
+		if kids := r.prog.Children(n); len(kids) == 2 && r.prog.Text(kids[1]) == "prototype" {
+			return false
+		}
+	}
+	return true
+}
+
+// primWrapperClass names the wrapper class the checker types n as, "Number",
+// "String", or "Boolean", or the empty string when n is not a wrapper value. It is
+// the wrapper-aware dispatch key: the numeric-format method path reads it to route
+// only a Number wrapper's toFixed and siblings to the number runtime and leave the
+// other two classes on their existing paths.
+func (r *Renderer) primWrapperClass(n frontend.Node) string {
+	if !r.isPrimWrapperType(n) {
+		return ""
+	}
+	sym, ok := r.prog.TypeSymbol(r.prog.TypeAt(n))
+	if !ok {
+		return ""
+	}
+	return sym.Name
+}
+
+// isStringSubject reports whether n is a receiver whose string-prototype methods
+// lower to the BStr method dispatch: a primitive string, or a String wrapper whose
+// prototype method is the wrapped string's method. A String wrapper is a dynamic
+// box otherwise, so this is what lets its slice, indexOf, trim, and siblings ride
+// the same path the primitive does once the receiver is coerced to its wrapped
+// string, running exactly as new String("abc").slice(1) is "abc".slice(1).
+func (r *Renderer) isStringSubject(n frontend.Node) bool {
+	return r.isString(n) || r.primWrapperClass(n) == "String"
+}
+
+// lowerStringSubject lowers a string-subject receiver to a BStr expression. A
+// primitive string lowers as itself; a String wrapper lowers to value.ToString
+// over its box, the wrapped string the prototype method runs on, so new
+// String("abc").slice(1) becomes value.ToString(box).Slice(...) and runs the same
+// code the primitive receiver would.
+func (r *Renderer) lowerStringSubject(n frontend.Node) (ast.Expr, error) {
+	expr, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	if r.primWrapperClass(n) == "String" {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{expr}}, nil
+	}
+	return expr, nil
+}
+
 // isBigInt reports whether the checker types n as bigint, the guard that routes the
 // operators and coercions to the *big.Int method forms rather than the float64
 // operator forms. It sees through a branded alias the same way isNumber does, so a
@@ -380,6 +456,15 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	// name must dispatch through the dynamic Get and Set; routing the reference
 	// here overrides the inferred shape and keeps it on the value box.
 	if r.isCommonJSModuleGlobal(n) {
+		return true
+	}
+	// A primitive wrapper object, new Number/String/Boolean and the bindings that hold
+	// one, is represented as a value.Value box, so its member reads (a String wrapper's
+	// .length and index characters, a wrapper's valueOf and toString), its truthiness,
+	// and its coercions all route through the dynamic Get and value paths the box
+	// answers rather than a static String or Number member, whose overloaded lib type
+	// renderFuncType would hand back on.
+	if r.isPrimWrapperType(n) {
 		return true
 	}
 	// A read of a caught error's .message or .name lowers to a bento string
@@ -788,6 +873,16 @@ func (r *Renderer) callOfDynamicMember(n frontend.Node) bool {
 	if len(recv) != 2 || !r.isDynamic(recv[0]) {
 		return false
 	}
+	// A primitive wrapper's method does not route through dynamicCall: a String
+	// wrapper's slice coerces to the wrapped string and rides the BStr dispatch, a
+	// Number wrapper's toFixed runs the numeric formatter, and valueOf and toString on
+	// any wrapper unbox to the wrapped kind, so each yields a static value.BStr,
+	// float64, or bool, not a box. Each must stay off the dynamic path so a console.log
+	// or a slot wraps the static result rather than hand it to value.ConsoleValue, which
+	// takes a box. Only a genuinely any or unknown receiver keeps the boxed call.
+	if r.primWrapperClass(recv[0]) != "" {
+		return false
+	}
 	// A recv.toString() on a boxed receiver whose kind the checker knows does not
 	// route through dynamicCall: the toString lowering (calls.go) unboxes it to the
 	// receiver's concrete value.BStr, since the known kind types the call string and
@@ -963,10 +1058,10 @@ func (r *Renderer) boxStringIndexRead(n frontend.Node) (ast.Expr, bool, error) {
 		return nil, false, nil
 	}
 	obj, idxNode := kids[0], kids[1]
-	if !r.isString(obj) || !r.isNumber(idxNode) {
+	if !r.isStringSubject(obj) || !r.isNumber(idxNode) {
 		return nil, false, nil
 	}
-	recv, err := r.lowerExpr(obj)
+	recv, err := r.lowerStringSubject(obj)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1193,6 +1288,12 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		// value.Undefined singletons, which are boxes, so boxing them into a dynamic
 		// slot is the identity. Gating on the literal node keeps a typed null or
 		// undefined inside a union, whose representation is not a bare box, out.
+		return expr, nil
+	case r.isPrimWrapperType(src):
+		// A primitive wrapper object, new Number/String/Boolean and the bindings that hold
+		// one, already lowers to a value.Value: value.NumberObject/StringObject/BooleanObject
+		// builds one and a wrapper-typed binding stores it. So boxing a wrapper into a
+		// dynamic slot is the identity, the way a symbol or a null literal already is a box.
 		return expr, nil
 	}
 	// A built-in error constructor named as a value (TypeError passed as an argument,
