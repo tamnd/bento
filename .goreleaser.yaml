@@ -34,11 +34,17 @@ builds:
       - -X github.com/tamnd/bento/pkg/cli.Commit={{ .ShortCommit }}
       - -X github.com/tamnd/bento/pkg/cli.Date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}"
+    # 64-bit only. A JavaScript array index runs to 2^53 - 1 and pkg/value holds
+    # that bound in an int, so on a 32-bit target the package does not compile:
+    # maxArrayLength, maxArrayCreateLength and maxAllocByteLength all overflow.
+    # Widening them to int64 would not make a 32-bit build correct either, since
+    # the length would still have to index a Go slice. So there is no linux_386
+    # and no linux_arm_7; they were listed here and had never been built, because
+    # the cross job in ci.yml only checks 64-bit targets and no tag has ever been
+    # pushed.
     targets:
       - linux_amd64
       - linux_arm64
-      - linux_arm_7
-      - linux_386
       - darwin_amd64
       - darwin_arm64
       - windows_amd64
