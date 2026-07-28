@@ -4535,24 +4535,40 @@ func (r *Renderer) booleanCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	}
 }
 
-// parseFloatCall lowers parseFloat(s) over a string argument to value.ParseFloat,
-// the lenient prefix parse. It takes exactly one string argument; a different
-// arity, or a non-string argument (which parseFloat would coerce to a string
-// first, running that conversion), hands back.
+// parseFloatCall lowers parseFloat(s) to value.ParseFloat, the lenient prefix
+// parse. It takes exactly one argument; a different arity hands back. A string
+// argument passes straight through. A non-string argument gets the ToString
+// parseFloat runs on it first: box it to a value.Value and stringify, so
+// parseFloat(true) parses "true" to NaN and parseFloat({toString(){return "1.5"}})
+// parses "1.5", the way Node does. A Symbol argument stringifies through
+// value.ToString, which throws the TypeError JavaScript throws for it.
 func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "parseFloat with this argument count is a later slice"}
 	}
 	arg := argNodes[0]
-	if !r.isString(arg) {
-		return nil, &NotYetLowerable{Reason: "parseFloat on a non-string argument is a later slice"}
+	if r.isString(arg) {
+		lowered, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{lowered}}, nil
 	}
-	lowered, err := r.lowerExpr(arg)
+	boxed, err := r.boxArgToValue(arg)
 	if err != nil {
 		return nil, err
 	}
+	// The lib signature takes a string, so a non-string argument carries a code 2345
+	// the front door tolerated. The box-and-stringify above represents any value
+	// soundly, so record the argument's span as handled; otherwise the end-of-render
+	// reconciliation would hand the whole unit back for an unguarded 2345.
+	r.notAssignableAt(arg)
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{lowered}}, nil
+	return &ast.CallExpr{
+		Fun:  sel("value", "ParseFloat"),
+		Args: []ast.Expr{&ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}},
+	}, nil
 }
 
 // unaryStringGlobal lowers a bare global that takes exactly one string and returns
