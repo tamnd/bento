@@ -916,10 +916,24 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		return v, ok
 	}
 	for _, p := range r.prog.Children(n) {
+		if p.Kind() == frontend.NodeMethodDeclaration {
+			// A plain method member ({ m() {...} }) lowers to a func-valued field, the
+			// same field a { m: function() {...} } property assignment fills, so the
+			// interned struct's method property carries its closure. A getter or setter
+			// is a different node kind and stays handed back to the descriptor model
+			// below, as does a method that reads this or super (it needs the receiver
+			// bound to the object).
+			field, val, err := r.objectLiteralMethod(p)
+			if err != nil {
+				return nil, err
+			}
+			set(field, val)
+			continue
+		}
 		if p.Kind() != frontend.NodeUnknown {
-			// A method, getter, or setter member is a function property, which the
-			// frontend names its own kind rather than a property assignment.
-			return nil, &NotYetLowerable{Reason: "object literal with a method or accessor member is a later slice"}
+			// A getter or setter member is a function property, which the frontend
+			// names its own kind rather than a property assignment.
+			return nil, &NotYetLowerable{Reason: "object literal with an accessor member is a later slice"}
 		}
 		kids := r.prog.Children(p)
 		var keyNode, valNode frontend.Node
@@ -979,6 +993,57 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: values[field]})
 	}
 	return &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(name), Elts: elts}}, nil
+}
+
+// objectLiteralMethod lowers a plain method member of an object literal to the
+// func value its interned struct field holds, so { m() { return 1 } } fills the M
+// field the same way { m: function() { return 1 } } does. The method's signature
+// gives the closure its parameters and the block body its statements, reusing the
+// same closureParamFields and blockBodyArrow the callable-object and function-value
+// paths use, so the emitted field type matches the struct field the type side
+// declares for the property.
+//
+// It keeps to the receiver-free case: a method that reads this or super needs the
+// object bound as its receiver, which a plain closure field does not carry, and an
+// async or generator method needs the coroutine machinery, so each hands back to a
+// later slice. A getter or setter never reaches here, its own node kind routing it
+// to the accessor handback, and a computed, private, or otherwise non-identifier
+// name hands back through memberName.
+func (r *Renderer) objectLiteralMethod(m frontend.Node) (string, ast.Expr, error) {
+	if r.isAsyncFunc(m) {
+		return "", nil, &NotYetLowerable{Reason: "an async method in an object literal is a later slice"}
+	}
+	if r.isGeneratorFunc(m) {
+		return "", nil, &NotYetLowerable{Reason: "a generator method in an object literal is a later slice"}
+	}
+	if subtreeHasKind(r.prog, m, frontend.NodeThisKeyword) || subtreeHasKind(r.prog, m, frontend.NodeSuperKeyword) {
+		return "", nil, &NotYetLowerable{Reason: "an object-literal method that reads this or super is a later slice"}
+	}
+	kids := r.prog.Children(m)
+	if len(kids) == 0 {
+		return "", nil, &NotYetLowerable{Reason: "an object-literal method without a name is a later slice"}
+	}
+	prop, ok := r.memberName(kids[0])
+	if !ok {
+		return "", nil, r.memberNameReason(kids[0], "method")
+	}
+	field, ok := exportedField(prop)
+	if !ok {
+		return "", nil, &NotYetLowerable{Reason: "object literal method name is not a Go identifier"}
+	}
+	sig, ok := r.prog.SignatureAt(m)
+	if !ok {
+		return "", nil, &NotYetLowerable{Reason: "an object-literal method with no call signature is a later slice"}
+	}
+	fields, err := r.closureParamFields(m, sig, "method")
+	if err != nil {
+		return "", nil, err
+	}
+	lit, err := r.blockBodyArrow(m, fields)
+	if err != nil {
+		return "", nil, err
+	}
+	return field, lit, nil
 }
 
 // objectLiteralContextual lowers an object literal whose slot declares a
