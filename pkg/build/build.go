@@ -487,6 +487,9 @@ func firstError(prog *frontend.Program, opts EmitOptions) string {
 		if toleratedLooseForm[d.Code] {
 			continue
 		}
+		if toleratedSloppyMode[d.Code] && sloppyScript(prog, d) {
+			continue
+		}
 		if toleratedArity[d.Code] {
 			continue
 		}
@@ -777,6 +780,116 @@ var toleratedArithOperand = map[int]bool{
 // absent, so delete of a bare variable still gates.
 var toleratedDeleteForm = map[int]bool{
 	2703: true, // The operand of a 'delete' operator must be a property reference.
+}
+
+// toleratedSloppyMode is the set of checker diagnostic codes bento admits in a
+// JavaScript file that is not strict-mode source. Every one of them reports a form
+// that is a SyntaxError only because the file is being read as strict, and every
+// one is legal in a sloppy script with run-time behavior the scanner already
+// produced correctly.
+//
+// The checker has no way to be told otherwise. TypeScript is strict-mode source by
+// definition, so the scanner reports the octal forms unconditionally and
+// alwaysStrict follows strict for everything else; setting strict false changes
+// neither. That is why this is a toleration here rather than an option there.
+//
+// Admitting them is value-safe because the scanner does not stop at the report. An
+// Admitting them is not by itself value-safe, and that is the trap here. bento
+// reads a literal's source text and decodes it, rather than taking the scanner's
+// token value, so tolerating the diagnostic alone would have compiled "\251" to the
+// three characters 2, 5, 1 and 010 to ten. Both decoders learned the Annex B forms
+// in the same change that added this map: decodeJSString for the escapes,
+// legacyLeadingZero for the literals. Neither is reachable from a strict file,
+// because that is what the gate below is for.
+//
+// This matters well beyond a corner: JetStream 3 fails to parse two of its
+// benchmarks here, earley-boyer on an octal escape and typescript-compiler on an
+// assignment to arguments, and a benchmark suite is made of exactly this vintage of
+// JavaScript.
+//
+// The strict-mode identifier delete (1102) is deliberately absent. It is legal in a
+// sloppy script too, but the lowerer has no form for deleting a binding, so
+// admitting it would only move the refusal later while telling toleratedDeleteForm's
+// gate the opposite of what it says.
+//
+// The "Modules are automatically in strict mode" and "Class definitions are
+// automatically in strict mode" twins (1213, 1214, 1215, 1251, 1252) are absent for
+// a stronger reason: a module and a class body are strict even inside a sloppy
+// script, so those reports are correct wherever they appear and stay errors.
+var toleratedSloppyMode = map[int]bool{
+	1100: true, // Invalid use of '{0}' in strict mode.
+	1121: true, // Octal literals are not allowed. Use the syntax '{0}'.
+	1212: true, // Identifier expected. '{0}' is a reserved word in strict mode.
+	1487: true, // Octal escape sequences are not allowed. Use the syntax '{0}'.
+	1488: true, // Escape sequence '{0}' is not allowed.
+	1489: true, // Decimals with leading zeros are not allowed.
+}
+
+// sloppyScript reports whether a diagnostic sits in a file whose code runs in
+// sloppy mode, which is what makes the toleratedSloppyMode codes admissible. Three
+// things have to hold: the file is JavaScript, since a .ts file is strict-mode
+// source by definition and its reports are correct; it opted into nothing, meaning
+// no "use strict" prologue; and it is not a module, since a module is strict
+// whatever its extension.
+//
+// The module test is IsModule, the parser's own record of the syntax that made the
+// file a module, and not the file's import edges. Those are a different question and
+// answer it wrong in both directions: a JavaScript file's edges include its require
+// calls, so every CommonJS script looks like a module, and a file that only exports
+// has no edges at all and looks like a script. The first direction is not
+// hypothetical, it is most of this suite. Octane's typescript-compiler.js is a plain
+// script that requires three files, and reading its edges kept it gated on the very
+// assignment to arguments this map exists to admit.
+func sloppyScript(prog *frontend.Program, d frontend.Diagnostic) bool {
+	if d.File == nil || (d.File.Kind != frontend.FileJS && d.File.Kind != frontend.FileJSX) {
+		return false
+	}
+	if prog.IsModule(*d.File) {
+		return false
+	}
+	for _, f := range prog.SourceFiles() {
+		if f.File().Path != d.File.Path {
+			continue
+		}
+		return !hasUseStrictPrologue(prog.Text(f))
+	}
+	return false
+}
+
+// hasUseStrictPrologue reports whether a source file opens with a "use strict"
+// directive. The directive prologue is the run of string-literal statements at the
+// top of the file, so the scan skips whitespace and comments, reads each leading
+// string literal, and stops at the first token that is not one.
+func hasUseStrictPrologue(text string) bool {
+	for {
+		text = strings.TrimLeft(text, " \t\r\n;")
+		switch {
+		case strings.HasPrefix(text, "//"):
+			_, rest, ok := strings.Cut(text, "\n")
+			if !ok {
+				return false
+			}
+			text = rest
+		case strings.HasPrefix(text, "/*"):
+			_, rest, ok := strings.Cut(text[2:], "*/")
+			if !ok {
+				return false
+			}
+			text = rest
+		case strings.HasPrefix(text, `"`), strings.HasPrefix(text, "'"):
+			quote := text[:1]
+			body, rest, ok := strings.Cut(text[1:], quote)
+			if !ok {
+				return false
+			}
+			if body == "use strict" {
+				return true
+			}
+			text = rest
+		default:
+			return false
+		}
+	}
 }
 
 // toleratedComparison is the set of checker diagnostic codes bento admits because

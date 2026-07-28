@@ -241,7 +241,7 @@ func (r *Renderer) enumStringInit(mkids []frontend.Node) ([]uint16, bool) {
 	if (quote != '"' && quote != '\'') || text[len(text)-1] != quote {
 		return nil, false
 	}
-	return decodeJSString(text[1 : len(text)-1])
+	return decodeJSString(text[1:len(text)-1], true)
 }
 
 // enumInitValue folds an enum member's initializer to its float64 value. It reads

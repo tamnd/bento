@@ -158,3 +158,32 @@ func TestRealResolvesImports(t *testing.T) {
 		t.Fatalf("resolved to %q, want /lib.ts", imps[0].ResolvedFile)
 	}
 }
+
+// TestRealSeparatesModulesFromScripts proves IsModuleFile answers a different
+// question from ImportsOf. A CommonJS file has an import edge for its require call
+// and is still a script, so a caller that needs to know whether the file is
+// strict-mode source has to ask about the syntax and not the edges.
+func TestRealSeparatesModulesFromScripts(t *testing.T) {
+	files := map[string]string{
+		"/mod.js":    "import { hi } from \"./lib.js\";\nhi();\n",
+		"/script.js": "var lib = require(\"./lib.js\");\nlib.hi();\n",
+		"/lib.js":    "export function hi() { return \"hi\"; }\n",
+	}
+	a := NewReal()
+	p, err := a.BuildProgram([]string{"/mod.js", "/script.js"},
+		CompilerOptions{Strict: true, AllowJS: true}, memHost{files: files})
+	if err != nil {
+		t.Fatalf("BuildProgram: %v", err)
+	}
+	defer prog(p).prog.Close()
+
+	if !a.IsModuleFile(p, "/mod.js") {
+		t.Error("a file with an import declaration should be a module")
+	}
+	if a.IsModuleFile(p, "/script.js") {
+		t.Error("a file that only requires should be a script")
+	}
+	if len(a.ImportsOf(p, "/script.js")) == 0 {
+		t.Error("the require should still be an import edge, or this test proves nothing")
+	}
+}

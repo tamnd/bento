@@ -92,7 +92,7 @@ func (r *Renderer) stringLiteralKey(n frontend.Node) (string, bool) {
 	if (quote != '"' && quote != '\'') || text[len(text)-1] != quote {
 		return "", false
 	}
-	units, ok := decodeJSString(text[1 : len(text)-1])
+	units, ok := decodeJSString(text[1:len(text)-1], true)
 	if !ok || hasLoneSurrogate(units) {
 		return "", false
 	}
@@ -141,7 +141,7 @@ func (r *Renderer) stringLiteral(n frontend.Node) (ast.Expr, error) {
 	if (quote != '"' && quote != '\'') || text[len(text)-1] != quote {
 		return nil, &NotYetLowerable{Reason: "unusual string literal quoting is a later slice"}
 	}
-	units, ok := decodeJSString(text[1 : len(text)-1])
+	units, ok := decodeJSString(text[1:len(text)-1], true)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "string literal has a malformed escape sequence"}
 	}
@@ -343,7 +343,7 @@ func templateCooked(text string) ([]uint16, bool) {
 	default:
 		return nil, false
 	}
-	return decodeJSString(inner)
+	return decodeJSString(inner, false)
 }
 
 // uint16SliceLit builds the AST for a []uint16{...} composite literal of the given

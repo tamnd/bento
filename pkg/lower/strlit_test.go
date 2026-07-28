@@ -39,7 +39,7 @@ func TestDecodeJSString(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, ok := decodeJSString(c.in)
+			got, ok := decodeJSString(c.in, true)
 			if !ok {
 				t.Fatalf("decodeJSString(%q) returned ok=false", c.in)
 			}
@@ -52,7 +52,7 @@ func TestDecodeJSString(t *testing.T) {
 
 // TestDecodeJSStringRejects pins the contents the decoder refuses rather than
 // guessing at: a dangling backslash, a short or non-hex \x, a malformed or
-// out-of-range \u, and a legacy octal escape that is a syntax error in a module.
+// out-of-range \u.
 func TestDecodeJSStringRejects(t *testing.T) {
 	for _, in := range []string{
 		`a\`,         // dangling backslash
@@ -62,9 +62,8 @@ func TestDecodeJSStringRejects(t *testing.T) {
 		`\u{}`,       // empty braces
 		`\u{110000}`, // past the Unicode range
 		`\u{1F600`,   // no closing brace
-		`\01`,        // legacy octal escape
 	} {
-		if _, ok := decodeJSString(in); ok {
+		if _, ok := decodeJSString(in, true); ok {
 			t.Errorf("decodeJSString(%q) = ok, want refused", in)
 		}
 	}
@@ -98,4 +97,58 @@ func TestHasLoneSurrogate(t *testing.T) {
 // to its UTF-16 code units, so the expected values read as plain strings.
 func u16(s string) []uint16 {
 	return utf16.Encode([]rune(s))
+}
+
+// TestDecodeJSStringLegacyOctal pins the Annex B escapes a sloppy script may
+// spell. The grammar's shape is that a leading digit of 3 or less admits a third
+// digit and a leading 4 through 7 does not, which is how it keeps every value
+// inside one byte, so the cases cover both the longest run each leading digit
+// allows and the digit past it that has to be left alone. "\08" and "\8" are the
+// two that read wrong under a naive octal scan: the first is NUL followed by the
+// character 8, and the second is not an octal escape at all.
+func TestDecodeJSStringLegacyOctal(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []uint16
+	}{
+		{`\251`, []uint16{0o251}},
+		{`\1`, []uint16{1}},
+		{`\17`, []uint16{0o17}},
+		{`\377`, []uint16{255}},
+		{`\0`, []uint16{0}},
+		{`\08`, []uint16{0, '8'}},
+		{`\8`, []uint16{'8'}},
+		{`\9`, []uint16{'9'}},
+		{`\400`, []uint16{0o40, '0'}}, // 4 through 7 take one more digit, not two
+		{`\3777`, []uint16{255, '7'}}, // three digits at most
+		{`\0011`, []uint16{1, '1'}},   // likewise, counted from the leading zero
+		{`a\251b`, []uint16{'a', 0o251, 'b'}},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			got, ok := decodeJSString(c.in, true)
+			if !ok {
+				t.Fatalf("decodeJSString(%q, true) returned ok=false", c.in)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("decodeJSString(%q, true) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestDecodeJSStringOctalRefusedInTemplate pins the other half of the flag. A
+// legacy octal escape is a SyntaxError inside a template literal in every mode, so
+// the template caller passes false and the decoder refuses rather than decoding.
+// The one form that stays legal there is \0 with no digit after it.
+func TestDecodeJSStringOctalRefusedInTemplate(t *testing.T) {
+	for _, in := range []string{`\251`, `\1`, `\08`} {
+		if _, ok := decodeJSString(in, false); ok {
+			t.Errorf("decodeJSString(%q, false) = ok, want refused", in)
+		}
+	}
+	got, ok := decodeJSString(`a\0b`, false)
+	if !ok || !reflect.DeepEqual(got, []uint16{'a', 0, 'b'}) {
+		t.Errorf(`decodeJSString("a\0b", false) = %v, %v, want [97 0 98], true`, got, ok)
+	}
 }

@@ -17,11 +17,15 @@ import (
 // several ways the earlier plain-decimal path did not accept: hexadecimal, binary,
 // and octal integers, underscore digit separators, and exponents. The two
 // languages' numeric grammars overlap enough that a well-formed JavaScript literal
-// with its separators stripped is also a well-formed Go literal for the same
-// value (strict-mode modules reject the one ambiguous case, a leading-zero octal
-// like 010, before it ever reaches here), so the decoder validates the value is a
-// finite number and hands the cleaned text straight to Go rather than reformatting
-// it, which keeps the emitted literal readable.
+// with its separators stripped is usually a well-formed Go literal for the same
+// value, so the decoder validates the value is a finite number and hands the
+// cleaned text straight to Go rather than reformatting it, which keeps the emitted
+// literal readable.
+//
+// The exception is the pair of leading-zero forms Annex B.1.1 keeps for sloppy
+// scripts, where the two languages disagree rather than overlap: JavaScript reads
+// 010 as 8 and 018 as 18, and Go reads the first as 8 too but rejects the second
+// outright. Those are rewritten rather than passed through, by legacyLeadingZero.
 
 // decodeNumericLiteral decodes a JavaScript numeric literal into the Go literal
 // value and token kind that denote the same number. It returns false for a literal
@@ -49,6 +53,16 @@ func decodeNumericLiteral(text string) (value string, kind token.Token, ok bool)
 			return clean, token.INT, radixIsFinite(clean[2:], 8)
 		}
 	}
+	if digits, base, ok := legacyLeadingZero(clean); ok {
+		if base == 8 {
+			return "0o" + digits, token.INT, radixIsFinite(digits, 8)
+		}
+		// A non-octal decimal keeps its value but loses the leading zeros, which Go
+		// reads as an octal prefix and would reject on the 8 or 9 that put the literal
+		// on this branch in the first place.
+		v, err := strconv.ParseFloat(digits, 64)
+		return digits, token.INT, err == nil && !math.IsInf(v, 0)
+	}
 	// A decimal integer, fraction, or exponent. ParseFloat both validates it and
 	// reports the range error that flags an overflow to Infinity.
 	v, err := strconv.ParseFloat(clean, 64)
@@ -60,6 +74,37 @@ func decodeNumericLiteral(text string) (value string, kind token.Token, ok bool)
 		kind = token.FLOAT
 	}
 	return clean, kind, true
+}
+
+// legacyLeadingZero reads the Annex B.1.1 integer literals, the ones a leading zero
+// introduces without a radix letter after it, and reports the digits and the base
+// they are written in. There are two of them and which one applies is decided by
+// the digits themselves: an all-octal run is octal, so 010 is 8, and a run carrying
+// an 8 or a 9 cannot be, so it is decimal instead and 018 is 18. The returned
+// digits have the leading zeros stripped, since neither base wants them.
+//
+// Both forms are legal only in a sloppy script. A strict one gets a SyntaxError,
+// which pkg/build's toleratedSloppyMode leaves in place for any file that is not a
+// sloppy JavaScript script, so a literal reaching here has already been cleared.
+func legacyLeadingZero(clean string) (digits string, base int, ok bool) {
+	if len(clean) < 2 || clean[0] != '0' {
+		return "", 0, false
+	}
+	base = 8
+	for i := 1; i < len(clean); i++ {
+		switch {
+		case clean[i] >= '0' && clean[i] <= '7':
+		case clean[i] == '8' || clean[i] == '9':
+			base = 10
+		default:
+			return "", 0, false // a fraction, an exponent, or a radix prefix
+		}
+	}
+	digits = strings.TrimLeft(clean, "0")
+	if digits == "" {
+		digits = "0"
+	}
+	return digits, base, true
 }
 
 // numericLiteralValue decodes a JavaScript numeric literal's source text to the
@@ -97,6 +142,14 @@ func numericLiteralValue(text string) (float64, bool) {
 			}
 			return f, true
 		}
+	}
+	if digits, base, ok := legacyLeadingZero(clean); ok {
+		i, ok := new(big.Int).SetString(digits, base)
+		if !ok {
+			return 0, false
+		}
+		f, _ := new(big.Float).SetInt(i).Float64()
+		return f, !math.IsInf(f, 0)
 	}
 	v, err := strconv.ParseFloat(clean, 64)
 	if err != nil || math.IsInf(v, 0) || math.IsNaN(v) {

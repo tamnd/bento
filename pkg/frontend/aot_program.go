@@ -457,6 +457,15 @@ func (p *Program) Imports(f SourceFile) []ResolvedImport {
 	return out
 }
 
+// IsModule reports whether a source file is an ECMAScript module rather than a
+// script. Imports does not answer this: a JavaScript file's edges include its
+// require calls, so a CommonJS script has imports and is still a script. The
+// difference decides whether the file is strict-mode source, and with it whether
+// the legacy forms Annex B keeps for sloppy scripts are legal in it.
+func (p *Program) IsModule(f SourceFile) bool {
+	return p.adapter.IsModuleFile(p.handle, f.Path)
+}
+
 // ModuleEarlyErrors returns the static-semantics early errors the program's
 // import declarations carry that the checker does not surface, each a
 // human-readable message. An AOT build rejects a module that carries one rather

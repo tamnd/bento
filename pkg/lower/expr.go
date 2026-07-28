@@ -1845,7 +1845,9 @@ func (r *Renderer) staticStringKey(n frontend.Node) (string, bool) {
 	if (quote != '"' && quote != '\'' && quote != '`') || text[len(text)-1] != quote {
 		return "", false
 	}
-	units, ok := decodeJSString(text[1 : len(text)-1])
+	// A quoted literal admits the Annex B octal escape; a backtick one does not, so
+	// the delimiter this function already matched decides.
+	units, ok := decodeJSString(text[1:len(text)-1], quote != '`')
 	if !ok {
 		return "", false
 	}
