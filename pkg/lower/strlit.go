@@ -17,11 +17,16 @@ import (
 // decodeJSString resolves the escapes in the content of a JavaScript string
 // literal (the text between the quotes) into UTF-16 code units. It returns false
 // when the content is not something this slice can soundly decode: a dangling
-// backslash, a malformed \x or \u escape, or a legacy octal escape, which is a
-// syntax error in a module anyway but is refused here rather than guessed. A
-// decoded lone surrogate is kept as its raw code unit, since that is a legal
-// JavaScript string this compiler must preserve.
-func decodeJSString(inner string) ([]uint16, bool) {
+// backslash, or a malformed \x or \u escape. A decoded lone surrogate is kept as
+// its raw code unit, since that is a legal JavaScript string this compiler must
+// preserve.
+//
+// legacyOctal admits the Annex B escape, "\251" for the copyright sign, which is
+// legal in a sloppy script and a SyntaxError anywhere else. A caller passes true
+// for a single- or double-quoted literal, whose octal escapes the build already
+// gated on the file being sloppy (toleratedSloppyMode in pkg/build), and false for
+// a template literal, where the form is a SyntaxError in every mode.
+func decodeJSString(inner string, legacyOctal bool) ([]uint16, bool) {
 	out := make([]uint16, 0, len(inner))
 	i := 0
 	for i < len(inner) {
@@ -58,14 +63,37 @@ func decodeJSString(inner string) ([]uint16, bool) {
 		case 'v':
 			out = append(out, '\v')
 			i++
-		case '0':
-			// \0 is the null character only when a digit does not follow; \01 would be
-			// a legacy octal escape, which is a syntax error in a module.
-			if i+1 < len(inner) && inner[i+1] >= '0' && inner[i+1] <= '9' {
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			// \0 with no digit after it is the null character in every mode, and is
+			// the one form here a template literal is also allowed to spell.
+			if e == '0' && (i+1 >= len(inner) || inner[i+1] < '0' || inner[i+1] > '9') {
+				out = append(out, 0)
+				i++
+				break
+			}
+			if !legacyOctal {
 				return nil, false
 			}
-			out = append(out, 0)
-			i++
+			// LegacyOctalEscapeSequence, Annex B.1.2. A leading digit of 3 or less is
+			// what admits a third digit, which is how the grammar keeps the value inside
+			// one byte without a range check: 0377 is the largest it can spell. The scan
+			// stops at the first character that is not an octal digit, so "\08" decodes
+			// as NUL followed by the character 8, and "\8" never reaches here at all
+			// because a NonOctalDecimalEscapeSequence stands for itself in the default
+			// branch below.
+			digits := 2
+			if e <= '3' {
+				digits = 3
+			}
+			code := 0
+			for range digits {
+				if i >= len(inner) || inner[i] < '0' || inner[i] > '7' {
+					break
+				}
+				code = code*8 + int(inner[i]-'0')
+				i++
+			}
+			out = append(out, uint16(code))
 		case 'x':
 			// \xHH: exactly two hex digits naming one code unit.
 			v, ok := hexN(inner, i+1, 2)

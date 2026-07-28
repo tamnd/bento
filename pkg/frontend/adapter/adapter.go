@@ -219,6 +219,15 @@ type TSAdapter interface {
 	// Module graph.
 	ImportsOf(p ProgramHandle, file string) []ResolvedImportInfo
 
+	// IsModuleFile reports whether a file is an ECMAScript module rather than a
+	// script, which the checker decides by the presence of module syntax in it.
+	// The distinction is not the same question ImportsOf answers: a JavaScript
+	// file's import edges include its require calls, and a file that requires is
+	// still a script. It matters because a module is strict-mode source wherever
+	// it appears, so the forms Annex B keeps for sloppy scripts are a SyntaxError
+	// in one and legal in the other.
+	IsModuleFile(p ProgramHandle, file string) bool
+
 	// ModuleEarlyErrors returns the static-semantics early errors the program's
 	// import declarations carry that the checker leaves unreported, each as a
 	// human-readable message. It lets an AOT front end reject a module the way an

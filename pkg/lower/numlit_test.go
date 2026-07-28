@@ -112,3 +112,59 @@ func parseGoNumber(s string) (float64, error) {
 	}
 	return strconv.ParseFloat(s, 64)
 }
+
+// TestLegacyLeadingZeroLiterals pins the pair of Annex B integer literals, where
+// the digits alone decide the base: an all-octal run after the zero is octal, so
+// 010 is 8, and a run carrying an 8 or a 9 cannot be, so 018 is decimal 18. Both
+// have to be rewritten rather than passed through, since Go reads 010 the same way
+// but rejects 018 outright.
+func TestLegacyLeadingZeroLiterals(t *testing.T) {
+	cases := []struct {
+		in    string
+		value string
+		num   float64
+	}{
+		{"010", "0o10", 8},
+		{"0777", "0o777", 511},
+		{"00", "0o0", 0},
+		{"018", "18", 18},
+		{"09", "9", 9},
+		{"0099", "99", 99},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			value, kind, ok := decodeNumericLiteral(c.in)
+			if !ok {
+				t.Fatalf("decodeNumericLiteral(%q) returned ok=false", c.in)
+			}
+			if value != c.value || kind != token.INT {
+				t.Errorf("decodeNumericLiteral(%q) = %q, %v, want %q, INT", c.in, value, kind, c.value)
+			}
+			if got, ok := numericLiteralValue(c.in); !ok || got != c.num {
+				t.Errorf("numericLiteralValue(%q) = %v, %v, want %v", c.in, got, ok, c.num)
+			}
+		})
+	}
+}
+
+// TestLegacyLeadingZeroLeavesOtherFormsAlone pins that the leading-zero read does
+// not capture a literal that merely starts with a zero: a fraction, an exponent,
+// and the radix-prefixed integers all keep the paths they had.
+func TestLegacyLeadingZeroLeavesOtherFormsAlone(t *testing.T) {
+	for _, c := range []struct {
+		in    string
+		value string
+	}{
+		{"0", "0"},
+		{"0.5", "0.5"},
+		{"0e3", "0e3"},
+		{"0x10", "0x10"},
+		{"0o17", "0o17"},
+		{"0b101", "0b101"},
+	} {
+		value, _, ok := decodeNumericLiteral(c.in)
+		if !ok || value != c.value {
+			t.Errorf("decodeNumericLiteral(%q) = %q, %v, want %q", c.in, value, ok, c.value)
+		}
+	}
+}

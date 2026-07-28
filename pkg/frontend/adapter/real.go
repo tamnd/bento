@@ -635,6 +635,18 @@ func (a *RealAdapter) ImportsOf(p ProgramHandle, file string) []ResolvedImportIn
 	return prog(p).imports[file]
 }
 
+// IsModuleFile reads the parser's own answer rather than re-deriving it. The
+// external module indicator is the statement that made the file a module, the
+// first import, export, or await at the top level, and the parser leaves it nil
+// for a script. Asking it here is what keeps a CommonJS file on the script side:
+// its require calls are import edges, so the imports map is non-empty for it, but
+// no ECMAScript module syntax is present and the parser records none.
+func (a *RealAdapter) IsModuleFile(p ProgramHandle, file string) bool {
+	rp := prog(p)
+	sf := rp.files[file]
+	return sf != nil && sf.ExternalModuleIndicator != nil
+}
+
 func (a *RealAdapter) Diagnostics(p ProgramHandle) []DiagnosticInfo {
 	rp := prog(p)
 	rp.mu.Lock()
