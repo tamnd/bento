@@ -164,6 +164,13 @@ jobs:
   # engine, so it should build for every target GoReleaser ships with
   # CGO_ENABLED=0 and no per-OS toolchain. A change that pulls in cgo (or code
   # that only builds on one OS) fails here instead of at release time.
+  #
+  # This list is every target in .goreleaser.yaml, and it has to stay that way.
+  # It used to be five of the ten listed there, and the two 32-bit ones it left
+  # out did not compile at all: pkg/value holds JavaScript's 2^53 - 1 array bound
+  # in an int. Nobody knew, because no tag had ever been pushed and this was the
+  # only thing checking. A target that ships and is not here is a target nothing
+  # builds until a release does.
   cross:
     runs-on: ubuntu-latest
     strategy:
@@ -172,9 +179,12 @@ jobs:
         target:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
           - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
           - { goos: freebsd, goarch: amd64 }
+          - { goos: freebsd, goarch: arm64 }
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v7.0.0
