@@ -219,6 +219,13 @@ type TSAdapter interface {
 	// Module graph.
 	ImportsOf(p ProgramHandle, file string) []ResolvedImportInfo
 
+	// ModuleEarlyErrors returns the static-semantics early errors the program's
+	// import declarations carry that the checker leaves unreported, each as a
+	// human-readable message. It lets an AOT front end reject a module the way an
+	// engine would (an imported binding named eval or arguments, a duplicate
+	// import-attribute key) rather than emit code that silently runs.
+	ModuleEarlyErrors(p ProgramHandle) []string
+
 	// Diagnostics and positions.
 	Diagnostics(p ProgramHandle) []DiagnosticInfo
 	LineColumnOf(p ProgramHandle, file string, at int) (line, column int)
