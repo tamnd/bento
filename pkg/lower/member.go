@@ -1115,6 +1115,16 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("CharAt")}, Args: []ast.Expr{idx}}, nil
 	}
+	// An index read off a primitive wrapper hands back. The wrapper is a dynamic box,
+	// so the read would route through the runtime GetIndex below, but the checker types
+	// the result by the wrapper's index signature (a String wrapper's [number] is
+	// string), so unboxDynamicRead would unbox a boxed undefined into that static type
+	// and turn an out-of-range s[NaN] into the string "undefined" rather than leaving it
+	// undefined. The wrapper's indexed characters beyond the coercion paths are a later
+	// slice, so reject here rather than emit the mistyped unbox.
+	if r.isPrimWrapperType(obj) {
+		return nil, &NotYetLowerable{Reason: "index read off a primitive wrapper object, whose indexed properties are not modeled, is a later slice"}
+	}
 	// A read a[i] on a dynamic receiver dispatches at runtime: the receiver is a
 	// value.Value that carries its own kind, so the read routes through GetIndex for a
 	// number index and GetElem for a dynamic one, the runtime dispatch that indexes an

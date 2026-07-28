@@ -2083,6 +2083,17 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	if e, ok, err := r.primWrapperNumberFormatCall(recvNode, method, argNodes); ok || err != nil {
 		return e, err
 	}
+	// A method the Number-format intercept did not claim, called on a primitive
+	// wrapper, hands back. The wrapper is a dynamic object, so the dynamicCall path
+	// below would render m.fn(x) as a value.Value; but the frontend still types the
+	// result by the wrapper's static class (a String wrapper's .slice is a string, its
+	// .indexOf a number), so the caller drops that value.Value straight into a typed
+	// helper like value.Concat or value.NumberToString and the Go will not build. The
+	// wrapper's prototype methods beyond valueOf, toString, and the Number formats are
+	// a later slice, so reject here rather than emit code that cannot compile.
+	if r.isPrimWrapperType(recvNode) {
+		return nil, &NotYetLowerable{Reason: "method call on a primitive wrapper object, whose prototype methods are not modeled, is a later slice"}
+	}
 	// A method the special cases above did not claim, called on a boxed receiver,
 	// dispatches through the runtime: the member m.fn is read with a dynamic Get and
 	// the result invoked with Call, the shape m.fn(x) takes where m = require('./mod')
