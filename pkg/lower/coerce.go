@@ -408,6 +408,33 @@ func (r *Renderer) primWrapperClass(n frontend.Node) string {
 	return sym.Name
 }
 
+// isStringSubject reports whether n is a receiver whose string-prototype methods
+// lower to the BStr method dispatch: a primitive string, or a String wrapper whose
+// prototype method is the wrapped string's method. A String wrapper is a dynamic
+// box otherwise, so this is what lets its slice, indexOf, trim, and siblings ride
+// the same path the primitive does once the receiver is coerced to its wrapped
+// string, running exactly as new String("abc").slice(1) is "abc".slice(1).
+func (r *Renderer) isStringSubject(n frontend.Node) bool {
+	return r.isString(n) || r.primWrapperClass(n) == "String"
+}
+
+// lowerStringSubject lowers a string-subject receiver to a BStr expression. A
+// primitive string lowers as itself; a String wrapper lowers to value.ToString
+// over its box, the wrapped string the prototype method runs on, so new
+// String("abc").slice(1) becomes value.ToString(box).Slice(...) and runs the same
+// code the primitive receiver would.
+func (r *Renderer) lowerStringSubject(n frontend.Node) (ast.Expr, error) {
+	expr, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	if r.primWrapperClass(n) == "String" {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{expr}}, nil
+	}
+	return expr, nil
+}
+
 // isBigInt reports whether the checker types n as bigint, the guard that routes the
 // operators and coercions to the *big.Int method forms rather than the float64
 // operator forms. It sees through a branded alias the same way isNumber does, so a
@@ -846,6 +873,16 @@ func (r *Renderer) callOfDynamicMember(n frontend.Node) bool {
 	if len(recv) != 2 || !r.isDynamic(recv[0]) {
 		return false
 	}
+	// A primitive wrapper's method does not route through dynamicCall: a String
+	// wrapper's slice coerces to the wrapped string and rides the BStr dispatch, a
+	// Number wrapper's toFixed runs the numeric formatter, and valueOf and toString on
+	// any wrapper unbox to the wrapped kind, so each yields a static value.BStr,
+	// float64, or bool, not a box. Each must stay off the dynamic path so a console.log
+	// or a slot wraps the static result rather than hand it to value.ConsoleValue, which
+	// takes a box. Only a genuinely any or unknown receiver keeps the boxed call.
+	if r.primWrapperClass(recv[0]) != "" {
+		return false
+	}
 	// A recv.toString() on a boxed receiver whose kind the checker knows does not
 	// route through dynamicCall: the toString lowering (calls.go) unboxes it to the
 	// receiver's concrete value.BStr, since the known kind types the call string and
@@ -1021,10 +1058,10 @@ func (r *Renderer) boxStringIndexRead(n frontend.Node) (ast.Expr, bool, error) {
 		return nil, false, nil
 	}
 	obj, idxNode := kids[0], kids[1]
-	if !r.isString(obj) || !r.isNumber(idxNode) {
+	if !r.isStringSubject(obj) || !r.isNumber(idxNode) {
 		return nil, false, nil
 	}
-	recv, err := r.lowerExpr(obj)
+	recv, err := r.lowerStringSubject(obj)
 	if err != nil {
 		return nil, false, err
 	}

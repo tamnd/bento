@@ -104,3 +104,53 @@ console.log(c.toExponential(NaN));
 		t.Fatalf("primitive wrapper number format run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestPrimWrapperStringMethodsRun pins a String wrapper's prototype methods running
+// as the wrapped string's methods: the receiver coerces to the boxed string and
+// rides the same BStr dispatch the primitive does, so new String("abcdef").slice(1,3)
+// is "bc" and .indexOf, .charAt, .toUpperCase, .trim, and .concat all match Node. The
+// slice made these lower rather than hand back, exactly the test262 substring, slice,
+// indexOf, trim, and charAt cases the earlier handback rejected.
+func TestPrimWrapperStringMethodsRun(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const s = new String("abcdef");
+console.log(s.slice(1, 3));
+console.log(s.substring(2, 4));
+console.log(s.indexOf("cd"));
+console.log(s.charAt(0));
+console.log(s.charCodeAt(0));
+console.log(s.concat("gh"));
+console.log(new String("  pad  ").trim());
+console.log(new String("Hi").toUpperCase());
+`
+	got := runProgramGoTolerant(t, src)
+	want := "bc\ncd\n2\na\n97\nabcdefgh\npad\nHI\n"
+	if got != want {
+		t.Fatalf("primitive wrapper string method run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestPrimWrapperStringIndexRuns pins a String wrapper's index read running as the
+// wrapped string's index read: the receiver coerces to the wrapped string and reads
+// the one-code-unit string through the same CharAt slot the primitive uses, so
+// new String("abc")[1] is "b" and a concatenation of two index reads joins them, both
+// matching Node. The wrapper now behaves exactly as the primitive string here,
+// including where the primitive itself hands back (an out-of-range s[i] === undefined
+// compare is a shared later slice, not a wrapper divergence). The slice made these
+// reads lower rather than hand back.
+func TestPrimWrapperStringIndexRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const s = new String("abc");
+console.log(s[1]);
+const j = s[0] + s[2];
+console.log(j);
+console.log(s[2]);
+`
+	got := runProgramGoTolerant(t, src)
+	want := "b\nac\nc\n"
+	if got != want {
+		t.Fatalf("primitive wrapper string index run mismatch:\n got %q\nwant %q", got, want)
+	}
+}

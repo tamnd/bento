@@ -1094,11 +1094,11 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// here the empty string, with charAt's integer coercion on the index. A
 	// proven-integer loop index reads through CharAtI, the same speed-only choice
 	// the array AtI makes; both forms bounds-check and read the same code unit.
-	if r.isString(obj) {
+	if r.isStringSubject(obj) {
 		if !r.isNumber(idxNode) {
 			return nil, &NotYetLowerable{Reason: "string element access with a non-number index is a later slice"}
 		}
-		recv, err := r.lowerExpr(obj)
+		recv, err := r.lowerStringSubject(obj)
 		if err != nil {
 			return nil, err
 		}
@@ -1115,15 +1115,16 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("CharAt")}, Args: []ast.Expr{idx}}, nil
 	}
-	// An index read off a primitive wrapper hands back. The wrapper is a dynamic box,
-	// so the read would route through the runtime GetIndex below, but the checker types
-	// the result by the wrapper's index signature (a String wrapper's [number] is
-	// string), so unboxDynamicRead would unbox a boxed undefined into that static type
-	// and turn an out-of-range s[NaN] into the string "undefined" rather than leaving it
-	// undefined. The wrapper's indexed characters beyond the coercion paths are a later
-	// slice, so reject here rather than emit the mistyped unbox.
+	// A String wrapper's index read already ran through the string slot above, coercing
+	// the receiver to the wrapped string and reading the same code unit the primitive
+	// does. What reaches here is a Number or Boolean wrapper index read, which has no
+	// indexed characters: the read would route through the runtime GetIndex below, but
+	// the checker types the result by the wrapper's index signature and unboxDynamicRead
+	// would unbox a boxed undefined into that static type. Those wrappers carry no
+	// indexed properties worth modeling, so reject here rather than emit the mistyped
+	// unbox.
 	if r.isPrimWrapperType(obj) {
-		return nil, &NotYetLowerable{Reason: "index read off a primitive wrapper object, whose indexed properties are not modeled, is a later slice"}
+		return nil, &NotYetLowerable{Reason: "index read off a Number or Boolean wrapper object, which carries no indexed properties, is a later slice"}
 	}
 	// A read a[i] on a dynamic receiver dispatches at runtime: the receiver is a
 	// value.Value that carries its own kind, so the read routes through GetIndex for a
