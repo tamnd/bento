@@ -405,6 +405,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// child.
 		return r.castExpr(n, 1)
 
+	case frontend.NodeNonNull:
+		// `inner!` is the third erasure form: the checker drops null and undefined
+		// from the operand's type and the run-time value is the operand's own, so it
+		// shares castExpr with the two cast forms. The coercion castExpr ends with is
+		// what bridges an assertion that does change representation, a value.Opt[T]
+		// asserted to its T; a nullable reference, whose pointer is the same either
+		// way, passes through unchanged.
+		return r.castExpr(n, 0)
+
 	case frontend.NodeAwaitExpression:
 		return r.awaitExpr(n)
 
@@ -429,11 +438,26 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if _, _, ok := r.regExpLiteralParts(n); ok {
 			return r.lowerRegExpLiteral(n)
 		}
-		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
+		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice: " + r.exprExcerpt(n)}
 
 	default:
-		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice"}
+		return nil, &NotYetLowerable{Reason: "expression kind " + kindName(n.Kind()) + " is a later slice: " + r.exprExcerpt(n)}
 	}
+}
+
+// exprExcerpt is a one-line quotation of an expression's source, which the
+// unknown-kind hand-backs carry so the message names the construct that stopped
+// the lowering rather than only its enum. The catch-all kinds are the ones the
+// adapter has no name for, so the enum alone reads as kind#0 and says nothing;
+// the source does. Newlines fold to spaces and a long expression truncates, so
+// the reason stays one readable line.
+func (r *Renderer) exprExcerpt(n frontend.Node) string {
+	text := strings.Join(strings.Fields(r.prog.Text(n)), " ")
+	const max = 60
+	if len(text) > max {
+		text = text[:max] + "..."
+	}
+	return strconv.Quote(text)
 }
 
 // castExpr lowers a type-cast expression, `inner as T` or `<T>inner`. A cast
@@ -473,6 +497,17 @@ func (r *Renderer) castExpr(n frontend.Node, innerIdx int) (ast.Expr, error) {
 	expr, err := r.lowerExpr(inner)
 	if err != nil {
 		return nil, err
+	}
+	// An assertion that strips undefined off an optional, `xs.pop() as T` or
+	// `xs.pop()!`, is the one erasure form that does change representation: the
+	// operand is a value.Opt[T] and the asserted type is T. Get is that unwrap. It
+	// reads the zero value when the operand is undefined after all, which is the
+	// assertion's own promise being wrong, the same way a wrong assertion elsewhere
+	// gives a value the type says is impossible. An operand whose read already
+	// unwrapped (a narrowed optional local, whose type at the node no longer carries
+	// undefined) does not reach here, since the test is the operand's own type.
+	if r.isOptionalType(r.prog.TypeAt(inner)) && !r.isOptionalType(r.prog.TypeAt(n)) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("Get")}}, nil
 	}
 	return r.coerceToTarget(expr, inner, n)
 }
@@ -577,6 +612,15 @@ func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, tr
 	// returns value.Value.
 	if target.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
 		return r.conditionalDynamic(cond, whenTrue, trueNode, whenFalse, falseNode, target)
+	}
+	// A ternary over reference values has no primitive branch type, but it needs no
+	// tagged sum either: the whole expression's Go type is the pointer both branches
+	// already hold, whether that is a class, an array, or the nullable reference
+	// whose null branch is nil (nullableref.go). So the IIFE returns that pointer and
+	// each branch passes through wrapToUnion, which turns a null literal into nil and
+	// leaves a real reference untouched.
+	if expr, ok, err := r.conditionalRef(cond, whenTrue, trueNode, whenFalse, falseNode, target); err != nil || ok {
+		return expr, err
 	}
 	info, ok := r.unionInfoOrIntern(target)
 	if !ok {
@@ -1152,7 +1196,7 @@ func (r *Renderer) assignValueLocal(n, left, right frontend.Node) (ast.Expr, err
 // receiver, an array element, or a typed-array/map/set member uses method access
 // rather than a plain lvalue and hands back to a later slice.
 func (r *Renderer) assignValueProperty(left, right frontend.Node) (ast.Expr, error) {
-	_, f, isField, err := r.classFieldOfTarget(left)
+	_, f, isField, err := r.classFieldOfTarget(left, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1700,6 +1744,17 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 	// a bigint mixed with a number is not number-coercible and falls through to the
 	// hand-back below.
 	if expr, handled, err := r.stringBoolArith(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
+	// A comparison of a nullable reference against null is the Go nil test, since
+	// T | null lowers to T's pointer and its null is nil (nullableref.go). It routes
+	// before the nullish path below, which would box both sides into LooseEquals and
+	// hand back on the pointer, and before the operator table, which sees a
+	// non-primitive against null and has no case for it.
+	if expr, handled, err := r.nullableRefNullCompare(opText, left, right); err != nil {
 		return nil, err
 	} else if handled {
 		return expr, nil
@@ -2387,8 +2442,8 @@ func (r *Renderer) referenceIdentityOp(opText string, left, right frontend.Node)
 	default:
 		return token.ILLEGAL, false
 	}
-	lt := r.prog.TypeAt(left)
-	rt := r.prog.TypeAt(right)
+	lt := r.identityOperandType(left)
+	rt := r.identityOperandType(right)
 	if lt.Flags&frontend.TypeObject == 0 || rt.Flags&frontend.TypeObject == 0 {
 		return token.ILLEGAL, false
 	}
@@ -2404,6 +2459,23 @@ func (r *Renderer) referenceIdentityOp(opText string, left, right frontend.Node)
 		return token.ILLEGAL, false
 	}
 	return goOp, true
+}
+
+// identityOperandType is the type an identity compare should read an operand at.
+// It is the operand's own type, except that a nullable reference reports the
+// reference inside it: `T | null` holds T's bare pointer with nil for the null
+// (nullableref.go), so `a === b` over a `Node | null` and a `Node` is the same
+// pointer comparison as one over two Nodes, and the object test above should see
+// the object either side is. Without this the union's flags carry no object bit
+// and the compare hands back even though both sides are already the same Go
+// pointer. The null-against-a-reference compare never reaches here; it is claimed
+// earlier by nullableRefNullCompare.
+func (r *Renderer) identityOperandType(n frontend.Node) frontend.Type {
+	t := r.prog.TypeAt(n)
+	if inner, ok := r.nullableRef(t); ok {
+		return inner
+	}
+	return t
 }
 
 // symbolEquality lowers an equality between two symbol-valued operands to the

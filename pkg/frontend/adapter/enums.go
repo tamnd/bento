@@ -144,6 +144,11 @@ const (
 	NodeAsExpression
 	NodeTypeAssertion
 
+	// The non-null assertion x!, the third erasure form: the checker drops null
+	// and undefined from the operand's type and the value at run time is the
+	// operand's own.
+	NodeNonNull
+
 	// Literals and keyword-valued expressions, the leaves lowering reads a
 	// constant from.
 	NodeNumericLiteral

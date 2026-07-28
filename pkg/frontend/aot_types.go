@@ -97,6 +97,7 @@ const (
 	NodeParenthesizedExpression  = adapter.NodeParenthesizedExpression
 	NodeAsExpression             = adapter.NodeAsExpression
 	NodeTypeAssertion            = adapter.NodeTypeAssertion
+	NodeNonNull                  = adapter.NodeNonNull
 
 	// Literals and keyword-valued expressions.
 	NodeNumericLiteral                = adapter.NodeNumericLiteral

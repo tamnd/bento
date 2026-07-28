@@ -3798,12 +3798,20 @@ func (r *Renderer) bytesElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 // handled by bytesElementAssign before this and is not an array in the checker's
 // vocabulary, so it never reaches here. The value coerces to the element type the
 // same way a local assignment coerces to its target, so a widening or a boxing the
-// element type needs is applied rather than dropped. Only a plain "=" is covered: a
-// compound write a[i] += v reads and writes the element and is a later slice, so it
-// hands back for the engine rather than dropping the read.
+// element type needs is applied rather than dropped. A compound write a[i] <op>= v
+// is covered too: it reads the element through the same At the read path lowers,
+// runs the operator, and stores the result, which is what the desugaring
+// a[i] = a[i] <op> v says. Because the receiver and the index are evaluated on both
+// the read and the write, a side-effecting one of either (a[i++] += 1) hands back
+// rather than run twice.
 func (r *Renderer) arrayElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	parts := r.prog.Children(bin)
-	if len(parts) != 3 || r.prog.Text(parts[1]) != "=" {
+	if len(parts) != 3 {
+		return nil, false, nil
+	}
+	opText := r.prog.Text(parts[1])
+	baseOp, compound := compoundBaseOp(opText)
+	if opText != "=" && !compound {
 		return nil, false, nil
 	}
 	target := parts[0]
@@ -3831,6 +3839,24 @@ func (r *Renderer) arrayElementAssign(bin frontend.Node) (ast.Stmt, bool, error)
 	idx, err := r.lowerExpr(idxNode)
 	if err != nil {
 		return nil, false, err
+	}
+	// A compound write's value is the element read combined with the right-hand side,
+	// which combineBinary builds from the target node itself: lowering the element
+	// access as an expression gives the At the read path emits, so a += on a number
+	// element is Go addition and a += on a string element is the same concatenation
+	// the binary operator would produce.
+	if compound {
+		if !r.repeatableOperand(recvNode) || !r.repeatableOperand(idxNode) {
+			return nil, true, &NotYetLowerable{Reason: "a compound array write with a side-effecting receiver or index is a later slice"}
+		}
+		val, err := r.combineBinary(nil, baseOp, target, parts[2])
+		if err != nil {
+			return nil, false, err
+		}
+		return &ast.ExprStmt{X: &ast.CallExpr{
+			Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
+			Args: []ast.Expr{idx, val},
+		}}, true, nil
 	}
 	val, err := r.lowerExpr(parts[2])
 	if err != nil {
@@ -4197,6 +4223,13 @@ func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
 			return &ast.IncDecStmt{X: lhs, Tok: tok}, nil
 		}
 	}
+	// ++a[i] on an array is the compound write a[i] += 1 with the result discarded,
+	// so it lowers to the same read-combine-store arrayElementAssign emits.
+	if operand.Kind() == frontend.NodeElementAccessExpression {
+		if stmt, ok, err := r.arrayElementIncDec(operand, tok); err != nil || ok {
+			return stmt, err
+		}
+	}
 	if operand.Kind() != frontend.NodeIdentifier {
 		return nil, &NotYetLowerable{Reason: "increment of a non-identifier target is a later slice"}
 	}
@@ -4216,6 +4249,55 @@ func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
 		return nil, &NotYetLowerable{Reason: "increment of a non-number needs coercion, a later slice"}
 	}
 	return &ast.IncDecStmt{X: ident(name), Tok: tok}, nil
+}
+
+// arrayElementIncDec lowers ++a[i] and --a[i] on a number element to the array's
+// Set over its At, which is what a[i] += 1 lowers to: in statement position the
+// result is discarded, so the prefix and postfix forms are the same store. It
+// reports ok=false when the target is not an element of an array, leaving the
+// typed-array, string, and dynamic receivers to lowerIncDec's own handbacks. The
+// receiver and the index are named on both the read and the write, so a
+// side-effecting one of either hands back rather than run twice, the same rule the
+// compound element write follows.
+func (r *Renderer) arrayElementIncDec(target frontend.Node, tok token.Token) (ast.Stmt, bool, error) {
+	kids := r.prog.Children(target)
+	if len(kids) != 2 {
+		return nil, false, nil
+	}
+	recvNode, idxNode := kids[0], kids[1]
+	if _, ok := r.arrayElem(recvNode); !ok {
+		return nil, false, nil
+	}
+	if !r.isNumber(idxNode) || !r.isNumber(target) {
+		return nil, false, nil
+	}
+	if !r.repeatableOperand(recvNode) || !r.repeatableOperand(idxNode) {
+		return nil, true, &NotYetLowerable{Reason: "an increment of an array element with a side-effecting receiver or index is a later slice"}
+	}
+	// The read lowers as an expression, which gives the At the read path emits for
+	// this receiver, and the store takes its own freshly lowered receiver and index so
+	// the printed form holds no shared node.
+	old, err := r.lowerExpr(target)
+	if err != nil {
+		return nil, false, err
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, false, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, false, err
+	}
+	op := token.ADD
+	if tok == token.DEC {
+		op = token.SUB
+	}
+	val := &ast.BinaryExpr{X: old, Op: op, Y: &ast.BasicLit{Kind: token.INT, Value: "1"}}
+	return &ast.ExprStmt{X: &ast.CallExpr{
+		Fun:  &ast.SelectorExpr{X: recv, Sel: ident("Set")},
+		Args: []ast.Expr{idx, val},
+	}}, true, nil
 }
 
 // dynamicIncDec lowers a ++ or -- on a dynamic target in statement position,
@@ -4257,7 +4339,7 @@ func (r *Renderer) lowerAssign(bin frontend.Node) (*ast.AssignStmt, error) {
 		return nil, &NotYetLowerable{Reason: "non-assignment expression used as a statement is a later slice"}
 	}
 	if parts[0].Kind() != frontend.NodeIdentifier {
-		return nil, &NotYetLowerable{Reason: "assignment to a non-identifier target is a later slice"}
+		return nil, &NotYetLowerable{Reason: "assignment to a non-identifier target is a later slice: " + r.exprExcerpt(bin)}
 	}
 	// An assignment whose target is an ambient global (NaN = 12, undefined = 1) is
 	// not a store into a user slot: the runtime holds no such lvalue, and in strict
@@ -5230,6 +5312,12 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 		return nil, false
 	}
 	if _, isLit := init.(*ast.BasicLit); isLit {
+		return nil, false
+	}
+	// A nil initializer names no type for := to infer, which Go rejects outright, so
+	// a binding whose null lowered to a bare nil (a nullable class reference, `let
+	// head: Node | null = null`) keeps the typed var form buildVarDecl writes.
+	if id, isIdent := init.(*ast.Ident); isIdent && id.Name == "nil" {
 		return nil, false
 	}
 	return &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{init}}, true

@@ -3883,12 +3883,46 @@ func (r *Renderer) targetProp(target frontend.Node) (frontend.Node, string, bool
 	return nil, "", false
 }
 
-func (r *Renderer) classFieldOfTarget(target frontend.Node) (*classInfo, classField, bool, error) {
+// repeatableReceiver reports whether a store target's receiver can be lowered
+// twice, which is what a compound store and an increment do: once to read the
+// old value and once to write the new one. `this` and a plain name are the base
+// cases, and a chain of field reads off one of them is repeatable too, since
+// reading a field has no effect: this.v1.a1 = v and node.next.count += 1 both
+// name the same slot however many times they are evaluated. A link served by a
+// getter is not a field read but a call, so a chain through one is excluded and
+// the store hands back rather than run a getter twice. An element access is
+// excluded as well, since its key can be an expression with an effect of its own
+// (a[i++]); the numeric and dynamic element stores claim those shapes earlier.
+func (r *Renderer) repeatableReceiver(obj frontend.Node) bool {
+	switch obj.Kind() {
+	case frontend.NodeThisKeyword, frontend.NodeIdentifier:
+		return true
+	case frontend.NodePropertyAccessExpression:
+		kids := r.prog.Children(obj)
+		if len(kids) != 2 || !r.repeatableReceiver(kids[0]) {
+			return false
+		}
+		if info, ok := r.classReceiver(kids[0]); ok {
+			if _, isGet := info.lookupGetter(r.prog.Text(kids[1])); isGet {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// classFieldOfTarget takes repeat=true from the stores that lower the receiver
+// twice, a compound store and an increment, and false from a plain one. Only the
+// repeating stores need the receiver to be free of side effects; a plain
+// `this.input().mark = mark` evaluates its receiver once, the way the source
+// says, so a call there is no different from a name.
+func (r *Renderer) classFieldOfTarget(target frontend.Node, repeat bool) (*classInfo, classField, bool, error) {
 	obj, prop, ok := r.targetProp(target)
 	if !ok {
 		return nil, classField{}, false, nil
 	}
-	if obj.Kind() != frontend.NodeThisKeyword && obj.Kind() != frontend.NodeIdentifier {
+	if repeat && !r.repeatableReceiver(obj) {
 		return nil, classField{}, false, nil
 	}
 	if obj.Kind() == frontend.NodeIdentifier {
@@ -3921,7 +3955,7 @@ func (r *Renderer) classFieldOfTarget(target frontend.Node) (*classInfo, classFi
 // when it is a class field store target, for the increment statement that needs
 // only the left-hand side.
 func (r *Renderer) classFieldTarget(target frontend.Node) (ast.Expr, bool, error) {
-	_, _, ok, err := r.classFieldOfTarget(target)
+	_, _, ok, err := r.classFieldOfTarget(target, true)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -3966,7 +4000,7 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	if stmt, ok, err := r.staticSetterStore(target, opText, parts[2]); ok || err != nil {
 		return stmt, ok, err
 	}
-	_, f, ok, err := r.classFieldOfTarget(target)
+	_, f, ok, err := r.classFieldOfTarget(target, compound)
 	if err != nil || !ok {
 		return nil, ok, err
 	}

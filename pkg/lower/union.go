@@ -20,6 +20,14 @@ import (
 func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 	members := r.prog.UnionMembers(t)
 
+	// A reference type beside null lowers to that type's bare pointer, since the
+	// pointer already carries nil as its null. It runs before the optional and
+	// tagged-sum paths so the pointer, not a wrapper, is what a `next: Node | null`
+	// field and every value that flows through it hold (nullableref.go).
+	if inner, ok := r.nullableRef(t); ok {
+		return r.typeExpr(inner)
+	}
+
 	// The optional shape T | undefined lowers to value.Opt[T'] rather than the
 	// tagged sum, because undefined is not another type to discriminate but the
 	// one missing value: a present flag beside a T slot captures it with no

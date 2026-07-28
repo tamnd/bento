@@ -33,6 +33,22 @@ func NewArray[T any](elems ...T) *Array[T] {
 	return &Array[T]{elems: backing}
 }
 
+// NewArrayLen builds an array of n elements, the lowering of new Array<T>(n).
+// JavaScript gives that call n holes, which read back as undefined; here the
+// elements are T's zero value, because the declared element type says what a
+// read of one is allowed to be and T has no undefined unless the type spelled
+// it. Under a nullable element type the zero value is nil, which is the same
+// empty slot the source is reaching for when it preallocates. The length is a
+// float64 because that is how a JavaScript number arrives; a negative or
+// fractional one is not a length, so it truncates toward zero and clamps at
+// empty rather than panic in make.
+func NewArrayLen[T any](n float64) *Array[T] {
+	if !(n > 0) {
+		return &Array[T]{elems: []T{}}
+	}
+	return &Array[T]{elems: make([]T, int(n))}
+}
+
 // ArrayFrom builds an array that takes ownership of an existing backing slice,
 // the lowering target of an array literal that splices in a spread element. The
 // spread lowering builds the backing slice with append, starting from a fresh

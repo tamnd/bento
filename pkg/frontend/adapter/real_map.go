@@ -170,6 +170,8 @@ func mapKind(k shim.Kind) NodeKind {
 		return NodeAsExpression
 	case shim.KindTypeAssertionExpression:
 		return NodeTypeAssertion
+	case shim.KindNonNullExpression:
+		return NodeNonNull
 	case shim.KindNumericLiteral:
 		return NodeNumericLiteral
 	case shim.KindStringLiteral:

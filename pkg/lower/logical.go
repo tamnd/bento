@@ -241,19 +241,56 @@ func (r *Renderer) logicalUnion(node frontend.Node, opText string, left, right f
 }
 
 // repeatableOperand reports whether an operand reads the same value every time with
-// no side effect, so it can be named more than once without a temporary. A pure
-// constructor value (an identifier, a literal, or an operator over repeatable
-// operands) qualifies, and so does a property or element read, which in this typed
-// subset is a struct field or an array index with no getter to fire, so reading it
-// twice is the read once repeated.
+// no side effect, so it can be named more than once without a temporary. An
+// identifier, a literal, and this qualify, and so does a property or element read,
+// which in this typed subset is a struct field or an array index with no getter to
+// fire, so reading it twice is the read once repeated. An operator over repeatable
+// operands is repeatable in turn, which is what lets a compound array write name an
+// index like a[this.t - 1] twice: a field read and a subtraction each repeat, so the
+// whole index does. The recursion stays here rather than deferring to pureCtorValue
+// for the operator forms, since that answers a different question, whether a value
+// is safe to fold into a constructor, and stops at the property read this one
+// allows.
+//
+// Two forms are excluded. ++x and --x write their operand, so naming one twice
+// increments twice, and an assignment or a compound assignment is the same store in
+// expression position. Everything else that could have an effect, a call above all,
+// falls through to false.
 func (r *Renderer) repeatableOperand(n frontend.Node) bool {
 	switch n.Kind() {
+	case frontend.NodeIdentifier, frontend.NodeThisKeyword,
+		frontend.NodeNumericLiteral, frontend.NodeStringLiteral, frontend.NodeBigIntLiteral,
+		frontend.NodeNoSubstitutionTemplateLiteral,
+		frontend.NodeTrueKeyword, frontend.NodeFalseKeyword, frontend.NodeNullKeyword:
+		return true
 	case frontend.NodePropertyAccessExpression:
 		kids := r.prog.Children(n)
 		return len(kids) == 2 && r.repeatableOperand(kids[0])
 	case frontend.NodeElementAccessExpression:
 		kids := r.prog.Children(n)
 		return len(kids) == 2 && r.repeatableOperand(kids[0]) && r.repeatableOperand(kids[1])
+	case frontend.NodeParenthesizedExpression:
+		kids := r.prog.Children(n)
+		return len(kids) == 1 && r.repeatableOperand(kids[0])
+	case frontend.NodePrefixUnaryExpression:
+		kids := r.prog.Children(n)
+		if len(kids) != 1 {
+			return false
+		}
+		if op := unaryOpText(r.prog.Text(n), r.prog.Text(kids[0])); op == "++" || op == "--" {
+			return false
+		}
+		return r.repeatableOperand(kids[0])
+	case frontend.NodeBinaryExpression:
+		parts := r.prog.Children(n)
+		if len(parts) != 3 {
+			return false
+		}
+		op := r.prog.Text(parts[1])
+		if _, compound := compoundBaseOp(op); op == "=" || compound {
+			return false
+		}
+		return r.repeatableOperand(parts[0]) && r.repeatableOperand(parts[2])
 	}
-	return r.pureCtorValue(n)
+	return false
 }
