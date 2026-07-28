@@ -41,6 +41,16 @@ func TestNumberToPrecision(t *testing.T) {
 		{math.Inf(1), 3, "Infinity"},
 		{math.Inf(-1), 3, "-Infinity"},
 		{math.Copysign(0, -1), 2, "0.0"}, // -0 formats without a sign
+		// The nearest double to 1e-21 is 9.9999999999999990753...e-22, sixteen leading
+		// nines then a zero. At sixteen significant digits the seventeenth digit is that
+		// zero, so it rounds down and the value stays below 1e-21: 9.999999999999999e-22,
+		// not 1.000000000000000e-21. The float log10 estimate rounds -21 to the wrong
+		// side of the power of ten, which used to carry the round up spuriously, so this
+		// pins the exact exponent path.
+		{1e-21, 16, "9.999999999999999e-22"},
+		// At fifteen significant digits the sixteenth digit is a nine, so it genuinely
+		// carries up and the value tips to the next power of ten: 1.00000000000000e-21.
+		{1e-21, 15, "1.00000000000000e-21"},
 	}
 	for _, tc := range cases {
 		got := NumberToPrecision(tc.in, tc.precision).ToGoString()

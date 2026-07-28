@@ -25,9 +25,20 @@ type primData struct {
 func NumberObject(args ...Value) Value {
 	n := 0.0
 	if len(args) > 0 {
-		n = ToNumber(args[0])
+		n = numberCtorValue(args[0])
 	}
 	return objectValue(&Object{kind: KindObject, prim: &primData{value: Number(n), class: "Number"}})
+}
+
+// numberCtorValue is the number the Number constructor derives from its argument:
+// ToNumeric, then the real value of a BigInt. A BigInt takes the non-throwing
+// BigIntToNumber the way new Number(1n) and Number(1n) both convert, where the bare
+// ToNumber the other kinds use would throw a TypeError on a bigint.
+func numberCtorValue(v Value) float64 {
+	if v.kind == KindBigInt {
+		return BigIntToNumber(&v.bigint().i)
+	}
+	return ToNumber(v)
 }
 
 // StringObject builds the wrapper new String(x) produces: an object wrapping ToString

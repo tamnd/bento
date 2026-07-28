@@ -87,7 +87,13 @@ func expDigits(x float64, f int) string {
 // the digits and the exponent out.
 func significand(x float64, sig int) (string, int) {
 	r := new(big.Rat).SetFloat64(x) // exact: a float64 is a dyadic rational
-	e := int(math.Floor(math.Log10(x)))
+	// The exponent must come from the exact rational, not math.Log10: near a power of
+	// ten the float log rounds to the wrong side, and when it overestimates e by one
+	// the scaleRound below rounds the value up at one-too-few places into a full
+	// sig-digit significand at the wrong exponent, so 9.999999999999999e-22 prints as
+	// 1.000000000000000e-21. The digit-count correction cannot catch that, since both
+	// spellings have exactly sig digits, so e is pinned exactly here up front.
+	e := ratFloorLog10(r)
 	var s string
 	for i := 0; i < 4; i++ {
 		// sig significant digits with the point after the first means rounding to
@@ -103,6 +109,36 @@ func significand(x float64, sig int) (string, int) {
 		}
 	}
 	return s, e
+}
+
+// ratFloorLog10 returns floor(log10(r)) for a positive rational r, computed exactly
+// so the significand core never trusts a float log near a power of ten. It walks
+// powers of ten from one: for r at least one it climbs until the next power would
+// exceed r, and for r below one it descends until a power is at or below r. The walk
+// is at most the number of decimal places in r, a few hundred for the smallest
+// double, so it stays cheap.
+func ratFloorLog10(r *big.Rat) int {
+	one := big.NewRat(1, 1)
+	ten := big.NewInt(10)
+	if r.Cmp(one) >= 0 {
+		e := 0
+		pow := new(big.Rat).Set(one)
+		for {
+			next := new(big.Rat).Mul(pow, new(big.Rat).SetInt(ten))
+			if next.Cmp(r) > 0 {
+				return e
+			}
+			pow = next
+			e++
+		}
+	}
+	e := -1
+	pow := big.NewRat(1, 10)
+	for pow.Cmp(r) > 0 {
+		pow = new(big.Rat).Quo(pow, new(big.Rat).SetInt(ten))
+		e--
+	}
+	return e
 }
 
 // scaleRound returns floor(r * 10^k + 1/2) for a non-negative rational r, the
