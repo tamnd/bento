@@ -94,9 +94,22 @@ jobs:
   # every pull request. The generated programs are content-addressed in a cache
   # keyed on the value runtime, so a run only rebuilds the fixtures whose behavior
   # could have moved; when pkg/value is unchanged the whole suite is a cache hit.
+  #
+  # It runs on Windows as well as Linux, because this is the half of the suite the
+  # `test` job skips, and it is the half that links a real binary and runs it. A
+  # platform whose `go run` path is never exercised is a platform where the
+  # compiler is only assumed to work.
   equivalence:
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The cache lives under os.UserCacheDir, which is ~/.cache on Linux and
+        # AppData\Local on Windows, so the path to restore differs by platform.
+        include:
+          - { os: ubuntu-latest, cache: ~/.cache/bento-aot-testcache }
+          - { os: windows-latest, cache: ~/AppData/Local/bento-aot-testcache }
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v7.0.0
@@ -107,12 +120,16 @@ jobs:
       - name: restore AOT test cache
         uses: actions/cache@v6.1.0
         with:
-          path: ~/.cache/bento-aot-testcache
+          path: ${{ matrix.cache }}
           key: bento-aot-testcache-${{ runner.os }}-${{ hashFiles('pkg/value/**/*.go', 'go.mod') }}
           restore-keys: |
             bento-aot-testcache-${{ runner.os }}-
+      # The timeout is explicit because go test defaults to 600s per package and a
+      # cold pkg/lower is 571s on the Windows box, which is close enough that a
+      # slower runner or one added fixture goes over. A run that hits this has hung,
+      # not just taken its time.
       - name: equivalence
-        run: go test -count=1 ./pkg/lower/ ./pkg/frontend/...
+        run: go test -count=1 -timeout 40m ./pkg/lower/ ./pkg/frontend/...
 
   # golangci-lint bundles staticcheck, govet, ineffassign, errcheck, unused and
   # more, so it is the main quality gate.
