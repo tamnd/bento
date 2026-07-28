@@ -257,13 +257,14 @@ f();
 	}
 }
 
-// TestForOfObjectLiteralIteratorHandsBack proves that an iterable whose
-// [Symbol.iterator]() returns an inline object literal with a next() method hands
-// back rather than mislower: an object literal that carries a method is a later
-// slice, so the whole class declines and the unit routes to the engine, keeping
-// the zero-fail invariant while the object-literal-with-a-method form waits for
-// its own slice.
-func TestForOfObjectLiteralIteratorHandsBack(t *testing.T) {
+// TestForOfObjectLiteralIteratorRuns proves that an iterable whose
+// [Symbol.iterator]() returns an inline object literal with a next() method now
+// lowers and runs: the object-literal plain-method slice fills the next field with
+// the closure that reads the captured counter, and the for...of consumes it
+// through the iterator protocol, yielding 0, 1, 2 the way Node does. It replaced a
+// handback assertion once the method member gained its own lowering.
+func TestForOfObjectLiteralIteratorRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = `
 class Seq {
   [Symbol.iterator]() {
@@ -277,5 +278,9 @@ class Seq {
 }
 for (const x of new Seq()) { console.log(x); }
 `
-	renderProgramHandBack(t, src)
+	got := runProgramGo(t, src)
+	want := "0\n1\n2\n"
+	if got != want {
+		t.Fatalf("for...of object-literal iterator run mismatch:\n got %q\nwant %q", got, want)
+	}
 }
