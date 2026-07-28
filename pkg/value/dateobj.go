@@ -62,7 +62,15 @@ func timeClip(ms float64) float64 {
 	if math.IsNaN(ms) || math.IsInf(ms, 0) || math.Abs(ms) > maxTimeValue {
 		return math.NaN()
 	}
-	return math.Trunc(ms)
+	t := math.Trunc(ms)
+	if t == 0 {
+		// TimeClip closes with ToIntegerOrInfinity, which maps -0 to +0, but
+		// math.Trunc(-0.0) and math.Trunc of a small negative fraction both yield -0.
+		// Return the positive zero so getTime, valueOf, and TimeClip itself never
+		// surface a negative zero a SameValue test can see.
+		return 0
+	}
+	return t
 }
 
 // GetTime is the time value, the lowering of date.getTime(). It is NaN for the Invalid

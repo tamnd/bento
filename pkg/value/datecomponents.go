@@ -116,6 +116,12 @@ func NewDateFromComponents(args ...float64) *Date {
 // the same construction as the component constructor with the zone left out, and like
 // Date.now it gives a Number rather than a Date.
 func DateUTC(args ...float64) float64 {
+	// The year is the one required argument. Called with none, ToNumber(undefined) is
+	// NaN, so the reading is not an instant and the whole call is the Invalid Date. The
+	// component defaults cover a missing month or day but must not invent a year.
+	if len(args) == 0 {
+		return math.NaN()
+	}
 	c := componentsWithDefaults(args)
 	c[fieldYear] = legacyYear(c[fieldYear])
 	return timeClip(timeValueFromComponents(c, true))
@@ -146,17 +152,20 @@ func (d *Date) components(utc bool) [componentCount]float64 {
 // two year setters are the exception the specification carves out, since a year is enough
 // to name a date on its own; they start from the epoch instead.
 func (d *Date) setFields(utc bool, start int, recoverInvalid bool, args []float64) float64 {
+	readUTC := utc
 	if math.IsNaN(d.ms) {
 		if !recoverInvalid {
 			return d.ms
 		}
 		d.ms = 0
-		// The recovered date is read as UTC even for a local setter, which is what the
-		// specification says: the base is the time value +0 itself, not the local reading
-		// of it.
-		utc = true
+		// The recovered base is the time value +0 itself, read as its UTC components
+		// (1970-01-01T00:00:00.000), not its local rendering: the specification sets t to
+		// +0 directly rather than to LocalTime(t). Only the read is forced to UTC. A local
+		// setter still rebuilds through the local-to-UTC conversion below, so setFullYear on
+		// an invalid date lands the given year at local midnight, an hour off the UTC one.
+		readUTC = true
 	}
-	c := d.components(utc)
+	c := d.components(readUTC)
 	for i, v := range args {
 		if start+i >= componentCount {
 			break
