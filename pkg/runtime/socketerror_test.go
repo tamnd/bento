@@ -109,7 +109,7 @@ func TestListenOnABoundPortReportsEADDRINUSE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold a port: %v", err)
 	}
-	defer held.Close()
+	defer func() { _ = held.Close() }()
 	port := held.Addr().(*net.TCPAddr).Port
 
 	out := runScript(t, fmt.Sprintf(reportError+`
