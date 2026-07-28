@@ -122,7 +122,15 @@ func TestVerdictKeyIsStableAcrossEnvOrdering(t *testing.T) {
 // text. A miss on an unknown key must be a miss rather than an error, since the caller
 // treats it as "run the golden".
 func TestVerdictRoundTrips(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
+	// os.TempDir reads TMPDIR on Unix and TMP then TEMP on Windows, so setting only
+	// TMPDIR isolated nothing there: the cache went to the real temp directory and
+	// the key, which is fixed, was still on disk from the previous run, so the miss
+	// this test opens with became a hit. Set all three and the isolation holds
+	// wherever it runs.
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp)
+	t.Setenv("TEMP", tmp)
 
 	key := "test-key-" + t.Name()
 	if _, hit := LookupVerdict(key); hit {
