@@ -29,6 +29,11 @@ Leave `-o` off and bento names the binary after the entry.
 Any `go:` imports are compiled in directly, since they are Go already.
 The result is a normal Go-built static binary: no shared libraries, no interpreter shipped alongside it.
 
+## What build needs
+
+A Go toolchain on your `PATH`, and a checkout of the bento source for the generated program to link its runtime against.
+An installed bento does not carry one; see [installation](/getting-started/installation/) for the two ways to give it one.
+
 ## Cross-compiling
 
 Building goes through the Go toolchain, so cross-compilation uses the familiar `GOOS` and `GOARCH`:
@@ -37,6 +42,8 @@ Building goes through the Go toolchain, so cross-compilation uses the familiar `
 GOOS=linux GOARCH=amd64 bento build app.ts -o app-linux
 GOOS=darwin GOARCH=arm64 bento build app.ts -o app-macos
 ```
+
+Targets are 64-bit. bento does not build for 32-bit architectures: a JavaScript array index runs to 2^53 - 1, and that bound does not fit in a 32-bit `int`.
 
 ## Ship it in a container
 

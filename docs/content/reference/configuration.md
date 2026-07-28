@@ -24,6 +24,7 @@ You do not need a bento-specific config file to run an existing Node or Bun proj
 | `GOOS` | Target operating system for `bento build`, passed to the Go toolchain (`linux`, `darwin`, `windows`, ...). |
 | `GOARCH` | Target architecture for `bento build` (`amd64`, `arm64`, ...). |
 | `GOTOOLCHAIN` | Go toolchain selection, honoured when bento invokes the compiler. |
+| `BENTO_MODULE_ROOT` | Path to a checkout of `github.com/tamnd/bento`, whose runtime packages the generated Go links against. Only needed when bento cannot find one by walking up from its own location or from your working directory. |
 
 Compile mode and `bento build` shell out to the Go compiler, so the standard Go environment applies to them.
 `bento run` in run mode needs only bento itself.

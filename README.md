@@ -8,7 +8,7 @@
 
 **bento** is a TypeScript runtime built in Go, a Bun alternative.
 It runs your existing Node.js and Bun code unchanged, compiles the typed parts of your TypeScript to Go for speed, and lets you reach into any Go library straight from TypeScript.
-The whole thing is pure Go with zero cgo, so it ships as one static binary that cross-compiles to every platform.
+The whole thing is pure Go with zero cgo, so it ships as one static binary that cross-compiles to Linux, macOS, Windows and FreeBSD without a per-OS toolchain.
 
 The JS engine is [modernc.org/quickjs](https://pkg.go.dev/modernc.org/quickjs), a pure-Go ES2023 engine, so there is no V8 to build and nothing native to link.
 That is what keeps bento a single file you can drop onto any machine and run.
@@ -32,6 +32,11 @@ brew install tamnd/tap/bento
 scoop bucket add tamnd https://github.com/tamnd/scoop-bucket
 scoop install bento
 ```
+
+`bento run` needs only bento.
+`bento build` lowers your code to Go and compiles it, so it needs a Go toolchain on your `PATH` and, for now, a checkout of this repository too: the generated program links against bento's runtime packages, and an installed binary carries no copy of them.
+Run inside the checkout or point `BENTO_MODULE_ROOT` at it.
+That is [#765](https://github.com/tamnd/bento/issues/765), and it is not how it should stay.
 
 ## Quick start
 
@@ -68,7 +73,19 @@ Speed where it counts.
 The typed parts of your TypeScript compile down to Go, so the hot paths run as compiled code instead of interpreted script.
 
 One static binary, zero cgo.
-The runtime and its JS engine are pure Go, so bento cross-compiles to every GOOS and GOARCH and installs as a single file with nothing to link and nothing to download at runtime.
+The runtime and its JS engine are pure Go, so bento cross-compiles to every platform below and installs as a single file with nothing to link and nothing to download at runtime.
+
+## Platforms
+
+Every release ships `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`, `windows/amd64`, `windows/arm64`, `freebsd/amd64` and `freebsd/arm64`.
+CI cross-builds all eight on every pull request, so a target that ships is a target something builds.
+
+64-bit only.
+A JavaScript array index runs to 2^53 - 1 and the value runtime holds that bound in an `int`, so there is no 32-bit build to ship: the length is what indexes a Go slice, and a wider constant would not change that.
+
+Linux, macOS and Windows all run the test suite on every pull request, and Linux and Windows also run the ahead-of-time equivalence suite, the slower half that compiles each fixture into a real binary and executes it.
+Every pull request unpacks the shipped Windows zip and Linux tarball, runs the binary inside, and compiles a program with it.
+Windows is held to the same bar as the other two rather than to a list of the packages that happened to pass.
 
 ## Status
 
