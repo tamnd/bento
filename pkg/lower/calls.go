@@ -4546,29 +4546,12 @@ func (r *Renderer) parseFloatCall(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "parseFloat with this argument count is a later slice"}
 	}
-	arg := argNodes[0]
-	if r.isString(arg) {
-		lowered, err := r.lowerExpr(arg)
-		if err != nil {
-			return nil, err
-		}
-		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{lowered}}, nil
-	}
-	boxed, err := r.boxArgToValue(arg)
+	str, err := r.stringArgOrToString(argNodes[0])
 	if err != nil {
 		return nil, err
 	}
-	// The lib signature takes a string, so a non-string argument carries a code 2345
-	// the front door tolerated. The box-and-stringify above represents any value
-	// soundly, so record the argument's span as handled; otherwise the end-of-render
-	// reconciliation would hand the whole unit back for an unguarded 2345.
-	r.notAssignableAt(arg)
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{
-		Fun:  sel("value", "ParseFloat"),
-		Args: []ast.Expr{&ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}},
-	}, nil
+	return &ast.CallExpr{Fun: sel("value", "ParseFloat"), Args: []ast.Expr{str}}, nil
 }
 
 // unaryStringGlobal lowers a bare global that takes exactly one string and returns
@@ -4670,34 +4653,62 @@ func (r *Renderer) symbolStaticCall(method string, argNodes []frontend.Node) (as
 }
 
 // parseIntCall lowers parseInt(s) and parseInt(s, radix) to value.ParseInt. The
-// first argument must be a string; the optional second must be a number and
-// becomes the radix, while an omitted radix lowers to the literal 0, which
-// value.ParseInt treats (as the specification does) the same as an omitted
-// argument. A different arity or an argument of the wrong type hands back.
+// first argument is the string parseInt reads: a string passes straight through,
+// and a non-string argument gets the ToString parseInt runs on it first, boxed and
+// stringified. The optional second argument is the radix: a number passes through,
+// and a non-number radix gets the ToNumber parseInt runs on it, while an omitted
+// radix lowers to the literal 0, which value.ParseInt treats (as the specification
+// does) the same as an omitted argument. Each non-matching argument is a code 2345
+// the front door tolerated, so its span is recorded as handled once the box
+// represents it soundly. A different arity hands back.
 func (r *Renderer) parseIntCall(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) < 1 || len(argNodes) > 2 {
 		return nil, &NotYetLowerable{Reason: "parseInt with this argument count is a later slice"}
 	}
-	if !r.isString(argNodes[0]) {
-		return nil, &NotYetLowerable{Reason: "parseInt on a non-string argument is a later slice"}
-	}
-	str, err := r.lowerExpr(argNodes[0])
+	str, err := r.stringArgOrToString(argNodes[0])
 	if err != nil {
 		return nil, err
 	}
 	// The radix argument, or the literal 0 when it is omitted.
 	var radix ast.Expr = &ast.BasicLit{Kind: token.FLOAT, Value: "0"}
 	if len(argNodes) == 2 {
-		if !r.isNumber(argNodes[1]) {
-			return nil, &NotYetLowerable{Reason: "parseInt with a non-number radix is a later slice"}
-		}
-		radix, err = r.lowerExpr(argNodes[1])
-		if err != nil {
-			return nil, err
+		if r.isNumber(argNodes[1]) {
+			radix, err = r.lowerExpr(argNodes[1])
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			boxed, boxErr := r.boxArgToValue(argNodes[1])
+			if boxErr != nil {
+				return nil, boxErr
+			}
+			r.notAssignableAt(argNodes[1])
+			r.requireImport(valuePkg)
+			radix = &ast.CallExpr{Fun: sel("value", "ToNumber"), Args: []ast.Expr{boxed}}
 		}
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ParseInt"), Args: []ast.Expr{str, radix}}, nil
+}
+
+// stringArgOrToString lowers a builtin's string argument: a statically string
+// argument passes straight through, and a non-string one gets the ToString the
+// builtin runs on it, boxed and stringified through value.ToString. A non-string
+// argument is a code 2345 the front door tolerated, so once the box represents it
+// soundly its span is recorded as handled and the end-of-render reconciliation
+// does not hand the unit back for it. This is the shape parseFloat and parseInt
+// both reach their string argument through.
+func (r *Renderer) stringArgOrToString(arg frontend.Node) (ast.Expr, error) {
+	if r.isString(arg) {
+		return r.lowerExpr(arg)
+	}
+	boxed, err := r.boxArgToValue(arg)
+	if err != nil {
+		return nil, err
+	}
+	r.notAssignableAt(arg)
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{boxed}}, nil
 }
 
 // argKind names the primitive type a string method expects for one argument, so
