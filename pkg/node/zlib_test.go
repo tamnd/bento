@@ -84,7 +84,10 @@ func TestZlibProducesTheStandardFramings(t *testing.T) {
 			t.Fatalf("%s: open: %v", format, err)
 		}
 		got, err := io.ReadAll(r)
-		r.Close()
+		// ReadAll consumed the stream, so a close error here is about the reader's own
+		// teardown and cannot change what was read; the read error below is the one
+		// that decides the case.
+		_ = r.Close()
 		if err != nil {
 			t.Fatalf("%s: read: %v", format, err)
 		}

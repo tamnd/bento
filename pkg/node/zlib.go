@@ -97,7 +97,10 @@ func zlibCompress(format string, data []byte, level int) ([]byte, error) {
 		return nil, err
 	}
 	if _, err := w.Write(data); err != nil {
-		w.Close()
+		// The write already failed, so the close error says nothing the caller can act
+		// on and the buffer is discarded either way. Closing is still worth doing: it
+		// releases the writer's compression state.
+		_ = w.Close()
 		return nil, err
 	}
 	// The trailer only lands on Close, so the buffer is not the stream until then.
