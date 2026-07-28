@@ -392,6 +392,22 @@ func (r *Renderer) isPrimWrapperType(n frontend.Node) bool {
 	return true
 }
 
+// primWrapperClass names the wrapper class the checker types n as, "Number",
+// "String", or "Boolean", or the empty string when n is not a wrapper value. It is
+// the wrapper-aware dispatch key: the numeric-format method path reads it to route
+// only a Number wrapper's toFixed and siblings to the number runtime and leave the
+// other two classes on their existing paths.
+func (r *Renderer) primWrapperClass(n frontend.Node) string {
+	if !r.isPrimWrapperType(n) {
+		return ""
+	}
+	sym, ok := r.prog.TypeSymbol(r.prog.TypeAt(n))
+	if !ok {
+		return ""
+	}
+	return sym.Name
+}
+
 // isBigInt reports whether the checker types n as bigint, the guard that routes the
 // operators and coercions to the *big.Int method forms rather than the float64
 // operator forms. It sees through a branded alias the same way isNumber does, so a

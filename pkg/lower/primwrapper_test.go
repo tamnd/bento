@@ -77,3 +77,30 @@ console.log(new String("hi").valueOf() === "hi");
 		t.Fatalf("primitive wrapper valueOf run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestPrimWrapperNumberFormatRuns pins the numeric-format methods on a Number wrapper:
+// toFixed, toExponential, and toPrecision route to the same runtime formatter the
+// primitive number path uses, reading the wrapped number back. The out-of-range count
+// on a non-finite receiver, new Number(Infinity).toExponential(1000), returns the
+// "Infinity" spelling rather than throwing a RangeError, the spec order that returns
+// the non-finite string ahead of the range check. Before this slice these calls read
+// undefined off the wrapper and threw at the call.
+func TestPrimWrapperNumberFormatRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const a = new Number(255);
+const b = new Number(Infinity);
+const c = new Number(NaN);
+console.log(a.toFixed(2));
+console.log(a.toExponential(1));
+console.log(a.toPrecision(2));
+console.log(b.toExponential(1000));
+console.log(b.toPrecision(1000));
+console.log(c.toExponential(NaN));
+`
+	got := runProgramGoTolerant(t, src)
+	want := "255.00\n2.6e+2\n2.6e+2\nInfinity\nInfinity\nNaN\n"
+	if got != want {
+		t.Fatalf("primitive wrapper number format run mismatch:\n got %q\nwant %q", got, want)
+	}
+}
