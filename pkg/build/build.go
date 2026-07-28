@@ -287,6 +287,15 @@ func compileProgram(entry string, opts EmitOptions) (string, []string, error) {
 	if err := r.CheckBlockScopeEarlyErrors(append([]frontend.Node{entryFile}, deps...)...); err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)
 	}
+	// Catch the import-declaration early errors typescript-go leaves unreported: an
+	// imported binding named eval or arguments, and a duplicate import-attribute
+	// key. An engine throws SyntaxError at parse time for these, so bento rejects
+	// the module rather than reach the lowerer and hand it back. The message is a
+	// plain error, not a *lower.NotYetLowerable, so a parse-phase negative test
+	// scores the rejection as a pass, not a handback.
+	if msgs := prog.ModuleEarlyErrors(); len(msgs) > 0 {
+		return "", nil, fmt.Errorf("bento build: %s: SyntaxError: %s", entry, msgs[0])
+	}
 	p, err := r.RenderProgramModules(entryFile, deps)
 	if err != nil {
 		return "", nil, fmt.Errorf("bento build: %s: %w", entry, err)

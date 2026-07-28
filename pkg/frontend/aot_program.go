@@ -457,6 +457,15 @@ func (p *Program) Imports(f SourceFile) []ResolvedImport {
 	return out
 }
 
+// ModuleEarlyErrors returns the static-semantics early errors the program's
+// import declarations carry that the checker does not surface, each a
+// human-readable message. An AOT build rejects a module that carries one rather
+// than reach the lowerer and hand it back, matching the SyntaxError an engine
+// throws before running the module.
+func (p *Program) ModuleEarlyErrors() []string {
+	return p.adapter.ModuleEarlyErrors(p.handle)
+}
+
 // Diagnostics returns all syntactic and semantic diagnostics for the program,
 // passed through from the checker so bento output matches tsc.
 func (p *Program) Diagnostics() []Diagnostic {

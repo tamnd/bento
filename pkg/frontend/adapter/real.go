@@ -685,6 +685,17 @@ func (a *RealAdapter) SourceFiles(p ProgramHandle) []NodeHandle {
 	return out
 }
 
+func (a *RealAdapter) ModuleEarlyErrors(p ProgramHandle) []string {
+	rp := prog(p)
+	var out []string
+	for _, name := range rp.order {
+		for _, e := range shim.EarlyModuleErrors(rp.files[name]) {
+			out = append(out, e.Message)
+		}
+	}
+	return out
+}
+
 func (a *RealAdapter) KindOf(n NodeHandle) NodeKind { return mapKind(nodeOf(n).Kind) }
 
 func (a *RealAdapter) ChildrenOf(n NodeHandle) []NodeHandle {
