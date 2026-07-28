@@ -41,6 +41,139 @@ jobs:
           version: "~> v2"
           args: check
 
+  # Build the real archives without publishing anything, so the smoke job below
+  # has the same bytes a user downloads. --snapshot turns off every publish step;
+  # the skips drop the three that need tools this job does not install (cosign,
+  # syft, buildx). The archives are what we are after, and they are built from the
+  # same builds and archives blocks a tag uses.
+  snapshot:
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - uses: goreleaser/goreleaser-action@v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean --skip=docker,sign,sbom,publish,announce
+      - uses: actions/upload-artifact@v5.0.0
+        with:
+          name: snapshot-archives
+          path: |
+            dist/bento_*_linux_amd64.tar.gz
+            dist/bento_*_windows_amd64.zip
+          retention-days: 1
+
+  # Unpack a shipped archive and use the binary in it. Nothing had ever done this:
+  # the release produced a Windows zip on every tag and no job ever opened one, so
+  # a binary that could not start would have reached users before anyone noticed.
+  #
+  # Linux is here as the control. If a step fails on Windows and passes on Linux,
+  # the archive is not the problem, the platform is.
+  #
+  # windows_arm64 and the other targets are still unproven. GitHub has arm64
+  # Windows runners now, so that is worth adding, but it is a separate change and
+  # the amd64 zip is the one every Scoop install pulls.
+  smoke:
+    if: github.ref_type != 'tag'
+    needs: snapshot
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, archive: linux_amd64.tar.gz, bento: bento, out: hello, platform: linux, joined: a/b/c }
+          - { os: windows-latest, archive: windows_amd64.zip, bento: bento.exe, out: hello.exe, platform: win32, joined: a\b\c }
+    runs-on: ${{ matrix.os }}
+    # bash on both, so there is one script rather than two. Every path below is
+    # relative: RUNNER_TEMP and GITHUB_WORKSPACE are backslash paths on Windows,
+    # which the MSYS coreutils in Git Bash read as filenames rather than as
+    # directories, so a mkdir -p "$RUNNER_TEMP/x" there makes one oddly named
+    # directory instead of the tree it looks like it makes.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The checkout is not what is under test; it is here because an AOT build
+      # needs the module source to link the runtime against. See below.
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - uses: actions/download-artifact@v6.0.0
+        with:
+          name: snapshot-archives
+          path: archives
+      # Unpack beside the checkout rather than inside it, so the binary sits where
+      # a user would put it. The difference is not cosmetic: an AOT build looks for
+      # the bento module by walking up from the executable, so unpacking into the
+      # source tree would answer the question this job is asking.
+      - name: unpack the archive
+        run: |
+          rm -rf ../smoke && mkdir -p ../smoke
+          archive=$(ls archives/bento_*_${{ matrix.archive }})
+          echo "unpacking $archive"
+          case "$archive" in
+            *.zip)
+              # Git Bash has no unzip, and its tar is GNU tar, which does not read
+              # zip. PowerShell is on the image and does. cygpath because this is
+              # the one call that crosses into a native program that wants a
+              # Windows path.
+              powershell -NoProfile -Command "Expand-Archive -Path '$(cygpath -w "$archive")' -DestinationPath '$(cygpath -w ../smoke)' -Force"
+              ;;
+            *)
+              tar -xzf "$archive" -C ../smoke
+              ;;
+          esac
+          ls -l ../smoke
+      - name: the binary starts and knows its version
+        run: ../smoke/${{ matrix.bento }} --version
+      # The archive holds the binary, LICENSE and README, and nothing else. An AOT
+      # build compiles the generated Go against the value runtime, so it needs that
+      # source, and a downloaded bento has no way to find it: moduleRoot walks up
+      # from the executable and from the working directory looking for bento's
+      # go.mod and finds neither. That is a real hole, tracked in #765. Pin it
+      # here rather than let the next step hide it behind an environment variable.
+      - name: an unpacked binary cannot AOT-build on its own
+        run: |
+          rm -rf ../bare && mkdir -p ../bare
+          echo 'console.log("hi");' > ../bare/hello.ts
+          cd ../bare
+          if out=$(../smoke/${{ matrix.bento }} build hello.ts 2>&1); then
+            echo "It built. That is good news, and this step is now the wrong shape: delete it."
+            exit 1
+          fi
+          case "$out" in
+            *"cannot locate the bento module source"*) echo "expected: $out" ;;
+            *) echo "failed for another reason: $out"; exit 1 ;;
+          esac
+      - name: it compiles a program and the program runs
+        run: |
+          rm -rf ../hello && mkdir -p ../hello
+          # Named imports, because a default or namespace import of a core module
+          # does not lower yet. path.join is the point: it is the one call whose
+          # answer is the platform's rather than the compiler's, so the output says
+          # which platform the program was compiled for and not just that it ran.
+          cat > ../hello/hello.ts <<'TS'
+          import { join } from "node:path";
+          console.log(`hello from ${process.platform}`);
+          console.log(join("a", "b", "c"));
+          TS
+          { echo "hello from ${{ matrix.platform }}"; echo '${{ matrix.joined }}'; } > ../hello/want.txt
+          cd ../hello
+          BENTO_MODULE_ROOT="$GITHUB_WORKSPACE" ../smoke/${{ matrix.bento }} build hello.ts
+          ./${{ matrix.out }} > got.txt
+          cat got.txt
+          diff --strip-trailing-cr want.txt got.txt
+
   # The real release, only on a version tag.
   release:
     if: github.ref_type == 'tag'
