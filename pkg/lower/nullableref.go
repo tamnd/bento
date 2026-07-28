@@ -31,14 +31,21 @@ import (
 // optional pre-pass and its value.Opt, so requiring null keeps this path off
 // shapes that already lower.
 //
-// A plain record beside null, `{ a: number } | null`, is declined for the same
-// reason even though it does lower to a pointer: internNullableObject already
-// owns that shape end to end, type, literal, narrowing and typeof alike, and it
+// The member must be a class instance or an array, the two shapes whose pointer
+// the lowerer hands out everywhere and whose declaration something else is
+// already responsible for emitting. Every other object type is declined even
+// though it renders as a pointer too, and for two separate reasons:
+//
+// A plain record, `{ a: number } | null`, belongs to internNullableObject, which
+// owns that shape end to end, type, literal, narrowing and typeof alike, and
 // holds the object arm by pointer so identity already survives. Claiming half of
 // it here would leave the tag compare in the narrowing path facing a bare
-// pointer. isPlainRecordType is the tagged sum's own gate, and it answers false
-// for a class instance and for an array, so this declines exactly the shapes
-// that path claims and nothing else.
+// pointer, which is Go that does not build.
+//
+// A method bundle, the `{ addEventListener, dispatchEvent } | null` an object of
+// closures has, renders as a pointer to a struct that only renderObject emits.
+// Naming the pointer here without going through the path that interns the decl
+// leaves the emitted Go referring to a type that was never declared.
 func (r *Renderer) nullableRef(t frontend.Type) (frontend.Type, bool) {
 	if t.Flags&frontend.TypeUnion == 0 {
 		return frontend.Type{}, false
@@ -58,7 +65,7 @@ func (r *Renderer) nullableRef(t frontend.Type) (frontend.Type, bool) {
 		if m.Flags&frontend.TypeUndefined != 0 {
 			continue
 		}
-		if found || !r.lowersToPointer(m) || r.isPlainRecordType(m) {
+		if found || !r.classOrArray(m) || !r.lowersToPointer(m) {
 			return frontend.Type{}, false
 		}
 		inner, found = m, true
@@ -69,12 +76,24 @@ func (r *Renderer) nullableRef(t frontend.Type) (frontend.Type, bool) {
 	return inner, true
 }
 
+// classOrArray reports whether a type is a class instance or an array, the two
+// shapes this path admits. Both hand out a pointer the lowerer already passes
+// around by identity, and both have their declaration emitted by the class and
+// array paths rather than by whoever names the type, so spelling the pointer
+// here leaves nothing undeclared.
+func (r *Renderer) classOrArray(t frontend.Type) bool {
+	if _, ok := r.classOfType(t); ok {
+		return true
+	}
+	_, ok := r.prog.ElementType(t)
+	return ok
+}
+
 // lowersToPointer reports whether a type's Go form is a pointer, which is what
 // makes nil available as its null. The test is the rendered type itself rather
-// than a list of type flags, so every shape that already lowers to a pointer (a
-// registered class, an array) is admitted on the same footing and a shape that
-// does not (a string, a number, a struct-shaped union) is not. A type that hands
-// back has no Go form at all and is not this case.
+// than a list of type flags, so a class and an array are admitted on the same
+// footing, and a shape whose Go form turns out not to be a pointer after all is
+// not. A type that hands back has no Go form at all and is not this case.
 func (r *Renderer) lowersToPointer(t frontend.Type) bool {
 	rendered, err := r.RenderType(t)
 	if err != nil {
