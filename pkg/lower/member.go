@@ -132,6 +132,17 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	// in for the call bridging, hands back through the resolver so the unit routes to
 	// the engine. A call m.inc(1) is intercepted on the call path before it reaches
 	// here, so only a value read routes through this guard.
+	// A member of a node: module binding read as a value rather than called, const j =
+	// path.join, wants the export as a function value. Each export lowers as a call
+	// shape, an argument bridge around a value helper, not as a bare Go func of the
+	// right signature, so there is nothing to hand out here. The call path intercepts
+	// path.join(a, b) before this, so only a value read lands here, and it hands back
+	// naming the module, which is more use than the dynamic path's reason.
+	if obj.Kind() == frontend.NodeIdentifier {
+		if module, ok := r.nodeNamespaces[r.prog.Text(obj)]; ok {
+			return nil, &NotYetLowerable{Reason: "reading " + prop + " off " + module + " as a value is a later slice"}
+		}
+	}
 	if obj.Kind() == frontend.NodeIdentifier && r.internalNamespaces[r.prog.Text(obj)] {
 		name, err := r.namespaceMemberValue(nameNode)
 		if err != nil {
