@@ -250,6 +250,14 @@ func (r *Renderer) boxArgToValue(a frontend.Node) (ast.Expr, error) {
 	} else if ok {
 		return boxed, nil
 	}
+	// A value the dynamic paths already hold as a value.Value box (an any binding, a
+	// primitive wrapper object, a boxed member read) needs no further boxing: its lowered
+	// form is the box. Routing it through bridgeArg against an any target would land in the
+	// bridge's both-sides-dynamic gap and hand back on a spurious representation mismatch,
+	// so it lowers straight through here instead.
+	if r.isDynamic(a) {
+		return r.lowerExpr(a)
+	}
 	lowered, err := r.lowerExpr(a)
 	if err != nil {
 		return nil, err
