@@ -86,6 +86,11 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 			return r.newClass(info, kids[1:])
 		}
 	}
+	// new Array<T>(n) builds the same *value.Array a literal does, so it is claimed
+	// here rather than reaching the generic hand-back below (newarray.go).
+	if r.prog.Text(kids[0]) == "Array" && r.isGlobalRef(kids[0], "Array") {
+		return r.newArray(n, kids[1:])
+	}
 	if r.prog.Text(kids[0]) == "Uint8Array" {
 		return r.newTypedArray("Uint8Array", kids[1:])
 	}

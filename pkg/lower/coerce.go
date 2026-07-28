@@ -2990,7 +2990,12 @@ func (r *Renderer) bridgeClassBinding(expr ast.Expr, src frontend.Node, target f
 		}
 		return expr, nil
 	}
-	srcInfo, ok := r.classOfNode(src)
+	// `this` inside a lowered class body is an instance of that class, which the
+	// checker spells as the polymorphic this type rather than the class, so
+	// classOfNode does not see it. It is the source of the upcast every time a
+	// method hands itself to something that takes the base, `this.owner.add(this)`,
+	// so it resolves the way a member receiver does.
+	srcInfo, ok := r.classReceiver(src)
 	if !ok {
 		// The source node may carry a polymorphic type the checker types as a type
 		// parameter rather than a class: a super call invoking a this-returning arrow,

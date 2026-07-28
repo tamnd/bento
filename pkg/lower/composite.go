@@ -121,7 +121,13 @@ func (r *Renderer) wrapUnionElem(e ast.Expr, elem frontend.Node, elemT frontend.
 	if elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 && !r.isDynamic(elem) {
 		return r.boxStaticToDynamic(e, elem)
 	}
-	return e, nil
+	// An element of a derived class going into an array of its base, the
+	// `shapes: Shape[]` a renderer pushes a Sphere onto, is the same upcast a
+	// base-typed parameter takes: the address of the embedded base, which keeps the
+	// vtable pointer so the loop over the array still dispatches to the override.
+	// Every other element passes through, since the bridge answers with the
+	// expression it was given whenever neither side is a class or the two agree.
+	return r.bridgeClassBinding(e, elem, elemT)
 }
 
 // arraySpread lowers an array literal that splices in one or more spread

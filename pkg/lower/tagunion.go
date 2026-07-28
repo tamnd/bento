@@ -763,6 +763,27 @@ func (r *Renderer) unionStringValued(n frontend.Node) (*unionInfo, bool) {
 // to a union passes through unwrapped), leaving the caller on its existing path. A
 // source whose type is not one of the union's arms hands back rather than guess.
 func (r *Renderer) wrapToUnion(expr ast.Expr, src frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	// A nullable reference target holds a bare pointer (nullableref.go), so a null
+	// literal flowing into it is nil rather than a tagged arm. The lowered source is
+	// dropped the way the tag-only arm below drops it, which is sound because the
+	// null keyword has no side effect to lose. A non-null source is already the
+	// pointer the target wants and passes through untouched.
+	if inner, ok := r.nullableRef(target); ok {
+		if src.Kind() == frontend.NodeNullKeyword {
+			return ident("nil"), true, nil
+		}
+		// A derived instance flowing into a `Base | null` slot, the `info.shape = this`
+		// a shape's intersect writes, still needs the upcast the non-null slot would
+		// take: the pointer the target holds is the base's, not the derived class's. The
+		// bridge answers with the expression it was given for every other source, and
+		// only a source it actually changed is claimed here, so a dynamic or otherwise
+		// unbridged value keeps falling through to the coercions below.
+		bridged, err := r.bridgeClassBinding(expr, src, inner)
+		if err != nil {
+			return nil, false, err
+		}
+		return bridged, bridged != expr, nil
+	}
 	info, ok := r.unionInfoOrIntern(target)
 	if !ok {
 		return expr, false, nil
