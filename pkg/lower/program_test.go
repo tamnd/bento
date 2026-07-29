@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/tamnd/bento/pkg/engine"
@@ -74,6 +75,7 @@ func TestRenderProgramGoldens(t *testing.T) {
 		{"stdoutWrite", "prog_stdout_write", "prog_stdout_write.golden"},
 		{"object", "prog_object", "prog_object.golden"},
 		{"readwrite", "prog_readwrite", "prog_readwrite.golden"},
+		{"path", "prog_path", "prog_path.golden"},
 		{"tuple", "prog_tuple", "prog_tuple.golden"},
 	}
 	for _, tc := range cases {
@@ -100,6 +102,31 @@ func TestReadWriteProgramRuns(t *testing.T) {
 	got := runProgramGo(t, readTS(t, "prog_readwrite"))
 	if got != "307200\n" {
 		t.Fatalf("readwrite printed %q, want %q", got, "307200\n")
+	}
+}
+
+// TestPathProgramRuns proves the node:path surface end to end: the fixture calls
+// every path function bento lowers and prints each answer, so the compiled
+// program's output is checkable against what Node prints for the same calls.
+//
+// The expectations below are Node's own output, taken from node v24 for both
+// variants, which is why they are spelled out per platform rather than built with
+// filepath: filepath is not path, and an expectation written with it would agree
+// with a wrong answer for the same reason a wrong implementation would give one.
+// The engine cannot serve this fixture the way TestProgramTSAndGoAgree serves the
+// others, because that harness runs the module in a bare engine with no module
+// registry, so the compiled side is checked against Node directly instead.
+func TestPathProgramRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the node:path test builds and runs generated Go")
+	}
+	want := "a/b/c.txt\na/c\n.\na/c/\n/a/c\n/a/b\n.\nc.txt\nc\n\n.txt\n\n.\ntrue\nfalse\nc/d\n../../x\n\n"
+	if runtime.GOOS == "windows" {
+		want = "a\\b\\c.txt\na\\c\n.\na\\c\\\n\\a\\c\n/a/b\n.\nc.txt\nc\n\n.txt\n\n.\ntrue\nfalse\nc\\d\n..\\..\\x\n\n"
+	}
+	if got := runProgramGo(t, readTS(t, "prog_path")); got != want {
+		t.Fatalf("path program printed\n%q\nwant\n%q", got, want)
 	}
 }
 

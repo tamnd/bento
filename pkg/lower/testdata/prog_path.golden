@@ -1,0 +1,26 @@
+package main
+
+import (
+	"github.com/tamnd/bento/pkg/value"
+)
+
+func main() {
+	value.ConsoleLog(value.PathJoin(value.FromGoString("a"), value.FromGoString("b"), value.FromGoString("c.txt")))
+	value.ConsoleLog(value.PathJoin(value.FromGoString("a/b/"), value.FromGoString("../c")))
+	value.ConsoleLog(value.PathJoin())
+	value.ConsoleLog(value.PathNormalize(value.FromGoString("a/./b/../c/")))
+	value.ConsoleLog(value.PathNormalize(value.FromGoString("/a//b/../c")))
+	value.ConsoleLog(value.PathDirname(value.FromGoString("/a/b/c.txt")))
+	value.ConsoleLog(value.PathDirname(value.FromGoString("a")))
+	value.ConsoleLog(value.PathBasename(value.FromGoString("/a/b/c.txt")))
+	value.ConsoleLog(value.PathBasenameSuffix(value.FromGoString("/a/b/c.txt"), value.FromGoString(".txt")))
+	value.ConsoleLog(value.PathBasename(value.FromGoString("")))
+	value.ConsoleLog(value.PathExtname(value.FromGoString("/a/b/c.txt")))
+	value.ConsoleLog(value.PathExtname(value.FromGoString("/a/.bashrc")))
+	value.ConsoleLog(value.PathExtname(value.FromGoString("file.")))
+	value.ConsoleLog(value.BoolToString(value.PathIsAbsolute(value.FromGoString("/a"))))
+	value.ConsoleLog(value.BoolToString(value.PathIsAbsolute(value.FromGoString("a"))))
+	value.ConsoleLog(value.PathRelative(value.FromGoString("/a/b"), value.FromGoString("/a/b/c/d")))
+	value.ConsoleLog(value.PathRelative(value.FromGoString("/a/b/c"), value.FromGoString("/a/x")))
+	value.ConsoleLog(value.PathRelative(value.FromGoString("/a/b"), value.FromGoString("/a/b")))
+}
