@@ -126,15 +126,23 @@ func RequireBuiltin(specifier string) Value {
 // does not yet. The module core module was the first real entry, since it is the seam
 // a program uses to read the registry itself rather than a data-bearing library, and
 // os is the second: it is the module that answers questions about the machine, and
-// answering them needed the per-platform measurements to exist first. Each later
-// slice adds a case here that returns a real module and drops the name from the
-// stub path.
+// answering them needed the per-platform measurements to exist first. path is the
+// third, and the three specifiers it answers are one module each rather than three
+// copies: path/posix and path/win32 name the two variants directly and path names
+// whichever of them matches the host. Each later slice adds a case here that returns
+// a real module and drops the name from the stub path.
 func buildBuiltinModule(name string) Value {
 	switch name {
 	case "module":
 		return newModuleModule()
 	case "os":
 		return newOSModule()
+	case "path":
+		return newPathModule()
+	case "path/posix":
+		return newPathPosixModule()
+	case "path/win32":
+		return newPathWin32Module()
 	default:
 		return newStubModule(name)
 	}

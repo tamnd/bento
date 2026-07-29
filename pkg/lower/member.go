@@ -190,6 +190,17 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Message")}}, nil
 			case "name":
 				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("Name")}}, nil
+			case "code":
+				// A caught error's .code is the identifier a Node built-in put on it, the
+				// property a program actually branches on: `if (err.code === 'ENOENT')` is
+				// how Node code is written, because the message is prose that changes
+				// between releases and the code is the contract. It lowers to a boxed
+				// value rather than a string because an error the program threw itself has
+				// no code at all, and that has to read back as undefined rather than as
+				// the empty string, which would compare equal to nothing a program tests
+				// for but would still be a string.
+				r.requireImport(valuePkg)
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("CodeValue")}}, nil
 			case "constructor":
 				// A caught error's .constructor is the constructor value for its name, the
 				// same interned value the built-in constructor boxes to, so a comparison
