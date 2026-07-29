@@ -2,10 +2,13 @@
 // into. A factory in pkg/node/js references a bare __bento_* callee for work that
 // needs the Go runtime, os detail or an object inspector, and the lowerer emits a
 // call to the matching function here. The package imports only the standard
-// library and pkg/value, never pkg/engine, so an AOT binary that calls into it
-// stays free of the interpreter the way the whole AOT path is; the interpreter's
-// own pkg/node host layer delegates to the same functions so the two share one
-// implementation and never drift. It also reaches for golang.org/x/sys, which is
+// library, never pkg/engine, so an AOT binary that calls into it stays free of the
+// interpreter the way the whole AOT path is; the interpreter's own pkg/node host
+// layer delegates to the same functions so the two share one implementation and
+// never drift. pkg/value depends on this package rather than the other way about,
+// which is what lets a value helper answer os.freemem from the same measurement
+// the interpreter reads, so nothing here may import it back. It also reaches for
+// golang.org/x/sys, which is
 // where the per-platform system calls the os module's numbers come from live; that
 // is the standard library by another name and not a step toward the interpreter.
 package nodehost
@@ -38,22 +41,9 @@ type osInfo struct {
 	Uptime            float64               `json:"uptime"`
 	Loadavg           [3]float64            `json:"loadavg"`
 	CPUs              []cpuInfo             `json:"cpus"`
+	Parallelism       int                   `json:"availableParallelism"`
 	NetworkInterfaces map[string][]netIface `json:"networkInterfaces"`
 	UserInfo          userInfo              `json:"userInfo"`
-}
-
-type cpuInfo struct {
-	Model string   `json:"model"`
-	Speed int      `json:"speed"`
-	Times cpuTimes `json:"times"`
-}
-
-type cpuTimes struct {
-	User int `json:"user"`
-	Nice int `json:"nice"`
-	Sys  int `json:"sys"`
-	Idle int `json:"idle"`
-	IRQ  int `json:"irq"`
 }
 
 type netIface struct {
@@ -105,6 +95,7 @@ func collectOSInfo() osInfo {
 		Uptime:            facts.Uptime,
 		Loadavg:           facts.Loadavg,
 		CPUs:              cpuList(),
+		Parallelism:       availableParallelism(),
 		NetworkInterfaces: networkInterfaces(),
 		UserInfo:          currentUser(home),
 	}
@@ -150,15 +141,6 @@ func endianness() string {
 		return "LE"
 	}
 	return "BE"
-}
-
-func cpuList() []cpuInfo {
-	n := runtime.NumCPU()
-	out := make([]cpuInfo, n)
-	for i := range out {
-		out[i] = cpuInfo{Model: "unknown", Speed: 0}
-	}
-	return out
 }
 
 func networkInterfaces() map[string][]netIface {

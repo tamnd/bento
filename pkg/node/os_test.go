@@ -68,3 +68,42 @@ func TestOSFactsReachTheModule(t *testing.T) {
 		}
 	}
 }
+
+// TestCPUsReachTheModule pins that the processor list the snapshot now reads off
+// the machine arrives in the module. Every entry used to be an unknown model at
+// zero megahertz, which a program that prints os.cpus()[0].model would have
+// printed without anything failing.
+//
+// The values are checked against the kernel where they are measured, in
+// pkg/nodehost. What matters here is that the module reports them, and that
+// availableParallelism is answered on its own rather than from the length of this
+// array, which is a different question with the same answer on most machines.
+func TestCPUsReachTheModule(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux", "darwin", "windows":
+	default:
+		t.Skipf("no processor list is read on %s yet", runtime.GOOS)
+	}
+	eng := harness(t)
+	for _, expr := range []string{
+		`require("os").cpus().length > 0`,
+		`require("os").cpus()[0].model.length > 0`,
+		`require("os").cpus()[0].model !== "unknown"`,
+		`typeof require("os").cpus()[0].speed === "number"`,
+		`typeof require("os").cpus()[0].times.idle === "number"`,
+		`require("os").availableParallelism() > 0`,
+		`require("os").availableParallelism() <= require("os").cpus().length`,
+	} {
+		if got := evalString(t, eng, expr); got != "true" {
+			t.Errorf("%s = %q, want true", expr, got)
+		}
+	}
+	// Every key of the times object is one Node reports, and a program that sums them
+	// reads all five, so a missing one is undefined rather than absent.
+	for _, key := range []string{"user", "nice", "sys", "idle", "irq"} {
+		expr := `typeof require("os").cpus()[0].times.` + key + ` === "number"`
+		if got := evalString(t, eng, expr); got != "true" {
+			t.Errorf("os.cpus()[0].times.%s is not a number", key)
+		}
+	}
+}
