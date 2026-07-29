@@ -221,14 +221,19 @@ func TestForOfObjectDestructureUnusedHandsBack(t *testing.T) {
 	}
 }
 
-// TestForOfDynamicEntriesDestructureHandsBack proves a destructuring for...of over
-// Object.entries on a dynamic receiver hands back rather than emit box.Elems(), which
-// does not compile: the checker types the entries result as a tuple array, but its
-// dynamic receiver lowers the whole result to a boxed value.Value with no backing
-// slice for the range to walk. The fixed-shape receiver keeps its concrete fold.
-func TestForOfDynamicEntriesDestructureHandsBack(t *testing.T) {
+// TestForOfDynamicEntriesDestructureWalksAtRuntime proves a destructuring for...of over
+// Object.entries on a dynamic receiver is walked by the runtime. The checker types the
+// entries result as a tuple array, but its dynamic receiver lowers the whole result to a
+// boxed value.Value with no backing slice, so emitting box.Elems() would not compile.
+// This used to hand back for that reason; now the walk is deferred to value.Iterate,
+// which asks the value what it is. The fixed-shape receiver keeps its concrete fold.
+func TestForOfDynamicEntriesDestructureWalksAtRuntime(t *testing.T) {
 	const src = "const o: any = { a: 1, b: 2 };\nfor (const [k, v] of Object.entries(o)) {\n  console.log(k, String(v));\n}\n"
-	if reason := renderProgramHandBack(t, src); !strings.Contains(reason, "boxed value") {
-		t.Fatalf("dynamic entries for-of handback reason = %q, want a boxed-value reason", reason)
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "value.Iterate(") {
+		t.Fatalf("dynamic entries for-of emitted:\n%s\nwant a walk over value.Iterate", got)
+	}
+	if strings.Contains(got, ".Elems()") {
+		t.Fatalf("dynamic entries for-of emitted:\n%s\nwant no range over Elems, which a box does not answer", got)
 	}
 }

@@ -11,6 +11,12 @@ import "testing"
 // TestMappingWhatABuiltinAnsweredWorks is the exact reproducer note 352 recorded, the
 // line that threw "undefined is not a function". It reads a real machine's cpus, so
 // the assertions are about shape rather than about particular numbers.
+//
+// The reduce sums model name lengths rather than idle times. Summing c.times.idle
+// reads the same nested box and is the more natural thing to write, but Darwin reports
+// no times, so it answers 0 on a mac and a positive number on Linux. A test that says
+// the total is positive is then asserting which machine it ran on. The type of the
+// idle read is still checked, which is the part that was broken.
 func TestMappingWhatABuiltinAnsweredWorks(t *testing.T) {
 	got := buildAndRunFile(t, "main.js",
 		"const os = require('os');\n"+
@@ -18,9 +24,10 @@ func TestMappingWhatABuiltinAnsweredWorks(t *testing.T) {
 			"const models = cpus.map(function (c) { return c.model; });\n"+
 			"console.log(models.length === cpus.length);\n"+
 			"console.log(typeof models[0]);\n"+
-			"const idle = cpus.reduce(function (a, c) { return a + c.times.idle; }, 0);\n"+
-			"console.log(typeof idle, idle > 0);\n")
-	if want := "true\nstring\nnumber true\n"; got != want {
+			"const chars = cpus.reduce(function (a, c) { return a + c.model.length; }, 0);\n"+
+			"console.log(typeof chars, chars > 0);\n"+
+			"console.log(typeof cpus[0].times.idle);\n")
+	if want := "true\nstring\nnumber true\nnumber\n"; got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
 }

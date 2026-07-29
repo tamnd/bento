@@ -1266,6 +1266,31 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 		}
 		shape, ok := r.symbolIteratorShape(r.prog.TypeAt(operand))
 		if !ok {
+			// A spread of a boxed value is drained at run time by the same value.Iterate
+			// the for...of and the array-literal spread use, so `f(...os.cpus())` reaches a
+			// rest parameter the same way `[...os.cpus()]` reaches a literal. The drained
+			// values are value.Value, so this stands only where the rest element type is
+			// value.Value too; a boxed spread into a typed rest would need each element
+			// coerced, a different question, and hands back.
+			if r.isDynamic(operand) || r.producesBoxedValue(operand) {
+				same, err := sameGoType(elemGo, sel("value", "Value"))
+				if err != nil {
+					return nil, err
+				}
+				if !same {
+					return nil, &NotYetLowerable{Reason: "a spread of a boxed value into a typed rest parameter is a later slice"}
+				}
+				src, err := r.lowerExpr(operand)
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, r.iterateToSliceCall(src, operand)}, Ellipsis: token.Pos(1)}
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "a spread of a non-iterable into a rest parameter is a later slice"}
 		}
 		iterElemGo, err := r.typeExpr(shape.elem)

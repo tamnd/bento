@@ -343,6 +343,31 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, points}, Ellipsis: token.Pos(1)}
 				continue
 			}
+			// A spread of a boxed value is the for...of case in expression position: what
+			// it is cannot be settled here, so it is drained at run time by the same
+			// value.Iterate the loop drives, and the drained values splice like any other
+			// slice. They are value.Value, so this only stands where the literal's element
+			// type is value.Value too; a boxed spread into a typed array would need each
+			// element coerced, which is a different question and hands back.
+			if r.isDynamic(operand) || r.producesBoxedValue(operand) {
+				same, err := sameGoType(elemType, sel("value", "Value"))
+				if err != nil {
+					return nil, err
+				}
+				if !same {
+					return nil, &NotYetLowerable{Reason: "spread of a boxed value into a typed array is a later slice"}
+				}
+				src, err := r.lowerExpr(operand)
+				if err != nil {
+					return nil, err
+				}
+				flush()
+				if acc == nil {
+					acc = &ast.CompositeLit{Type: seedType}
+				}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, r.iterateToSliceCall(src, operand)}, Ellipsis: token.Pos(1)}
+				continue
+			}
 			return nil, &NotYetLowerable{Reason: "spread of a non-array value in an array literal is a later slice"}
 		}
 		same, err := sameGoType(elemType, opElemType)
