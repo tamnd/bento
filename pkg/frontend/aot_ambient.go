@@ -112,6 +112,14 @@ declare module "node:os" {
 }
 declare module "node:path" {
 	export function join(...parts: string[]): string;
+	export function resolve(...parts: string[]): string;
+	export function normalize(p: string): string;
+	export function dirname(p: string): string;
+	export function basename(p: string, suffix?: string): string;
+	export function extname(p: string): string;
+	export function isAbsolute(p: string): boolean;
+	export function relative(from: string, to: string): string;
+	export function toNamespacedPath(p: string): string;
 }
 `
 

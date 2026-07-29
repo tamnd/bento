@@ -83,8 +83,8 @@ func TestModuleObjectHandbacks(t *testing.T) {
 		{
 			"a member the module does not export",
 			`import path from "node:path";
-const p: any = path.resolve("a");`,
-			"call of resolve on node:path is a later slice",
+const p: any = path.parse("a");`,
+			"call of parse on node:path is a later slice",
 		},
 		{
 			"an export read as a value rather than called",

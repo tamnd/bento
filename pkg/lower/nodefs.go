@@ -41,8 +41,32 @@ var nodeModuleExports = map[string]map[string]bool{
 		"readFileSync":  true,
 		"rmSync":        true,
 	},
-	"node:os":   {"tmpdir": true},
-	"node:path": {"join": true},
+	"node:os": {"tmpdir": true},
+	"node:path": {
+		"join":             true,
+		"resolve":          true,
+		"normalize":        true,
+		"dirname":          true,
+		"basename":         true,
+		"extname":          true,
+		"isAbsolute":       true,
+		"relative":         true,
+		"toNamespacedPath": true,
+	},
+}
+
+// pathHelpers maps a node:path export to the value helper that implements it, for
+// the entries whose lowering differs only in the name called. The helpers are a
+// port of Node's own path module rather than a wrapper over path/filepath, so the
+// mapping is one to one and the argument order is Node's.
+var pathHelpers = map[string]string{
+	"join":             "PathJoin",
+	"resolve":          "PathResolve",
+	"normalize":        "PathNormalize",
+	"dirname":          "PathDirname",
+	"extname":          "PathExtname",
+	"isAbsolute":       "PathIsAbsolute",
+	"toNamespacedPath": "PathToNamespacedPath",
 }
 
 // collectNodeImports records every node: import binding in the entry module into
@@ -344,13 +368,50 @@ func (r *Renderer) nodeBuiltinCall(b nodeBuiltin, argNodes []frontend.Node) (ast
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "Tmpdir")}, nil
 
-	case "node:path.join":
-		args, err := r.stringArgs("path.join", argNodes)
+	case "node:path.join", "node:path.resolve":
+		// join and resolve are the two variadic ones. Neither has a lower bound on
+		// its argument count: path.join() is "." and path.resolve() is the working
+		// directory, and the helpers answer both.
+		args, err := r.stringArgs("path."+b.name, argNodes)
 		if err != nil {
 			return nil, err
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "PathJoin"), Args: args}, nil
+		return &ast.CallExpr{Fun: sel("value", pathHelpers[b.name]), Args: args}, nil
+
+	case "node:path.normalize", "node:path.dirname", "node:path.extname",
+		"node:path.isAbsolute", "node:path.toNamespacedPath":
+		args, err := r.stringArgsN("path."+b.name, argNodes, 1)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", pathHelpers[b.name]), Args: args}, nil
+
+	case "node:path.relative":
+		args, err := r.stringArgsN("path.relative", argNodes, 2)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "PathRelative"), Args: args}, nil
+
+	case "node:path.basename":
+		// basename takes an optional suffix to strip, and the two arities are
+		// different helpers rather than one with a default, because a BStr has no
+		// spelling for "no suffix" that is not also a real empty suffix.
+		if len(argNodes) != 1 && len(argNodes) != 2 {
+			return nil, &NotYetLowerable{Reason: "path.basename with this argument count is a later slice"}
+		}
+		args, err := r.stringArgs("path.basename", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		if len(args) == 2 {
+			return &ast.CallExpr{Fun: sel("value", "PathBasenameSuffix"), Args: args}, nil
+		}
+		return &ast.CallExpr{Fun: sel("value", "PathBasename"), Args: args}, nil
 
 	case "node:fs.mkdtempSync":
 		args, err := r.stringArgsN("fs.mkdtempSync", argNodes, 1)

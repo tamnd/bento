@@ -117,28 +117,3 @@ func RmSync(pathArg BStr, recursive, force bool) {
 func Tmpdir() BStr {
 	return FromGoString(os.TempDir())
 }
-
-// PathJoin joins the parts with the platform separator and normalizes the
-// result, the lowering of path.join. It collapses redundant separators and
-// resolves the "." and ".." segments, so a compiled program builds the same
-// path string Node's path.join builds.
-//
-// The separator is the platform's, which is what Node does: its path module is
-// path.win32 on Windows and path.posix elsewhere, so path.join("a","b") is
-// "a\b" there and "a/b" here. This is the one helper where bento must not hold
-// the compiler's slash convention, because the string is the user program's
-// answer rather than the compiler's bookkeeping. filepath is exactly that rule.
-//
-// With no parts it returns ".", path.join's empty-input result, which
-// filepath.Join spells as the empty string instead.
-func PathJoin(parts ...BStr) BStr {
-	segs := make([]string, len(parts))
-	for i, p := range parts {
-		segs[i] = p.ToGoString()
-	}
-	joined := filepath.Join(segs...)
-	if joined == "" {
-		return FromGoString(".")
-	}
-	return FromGoString(joined)
-}
