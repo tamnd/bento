@@ -12,9 +12,9 @@ func Run() {
 	a.Set(2, 30)
 	a.Set(a.Len(), 4)
 	for i := 0.0; i < a.Len(); i++ {
-		value.ConsoleLog(value.NumberToString(a.At(i)))
+		value.ConsoleLog(value.NumberToConsole(a.At(i)))
 	}
-	value.ConsoleLog(value.NumberToString(a.Len()))
+	value.ConsoleLog(value.NumberToConsole(a.Len()))
 	s := value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("b"))
 	s.Set(1, value.FromGoString("B"))
 	s.Set(s.Len(), value.FromGoString("c"))

@@ -8,8 +8,8 @@ import (
 )
 
 func main() {
-	value.ConsoleLog(value.NumberToString(math.Inf(1)))
-	value.ConsoleLog(value.NumberToString(math.Inf(1)))
-	value.ConsoleLog(value.NumberToString(math.Inf(-1)))
+	value.ConsoleLog(value.NumberToConsole(math.Inf(1)))
+	value.ConsoleLog(value.NumberToConsole(math.Inf(1)))
+	value.ConsoleLog(value.NumberToConsole(math.Inf(-1)))
 	value.ConsoleLog(value.BoolToString(float64((1)%1) == 0))
 }

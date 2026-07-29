@@ -9,10 +9,10 @@ import (
 func main() {
 	buf := value.NewArrayBuffer(16)
 	view := value.Int32ArrayView(buf, 4, 2)
-	value.ConsoleLog(value.NumberToString(view.Len()))
-	value.ConsoleLog(value.NumberToString(view.ByteOffset()))
-	value.ConsoleLog(value.NumberToString(view.ByteLength()))
-	value.ConsoleLog(value.NumberToString(view.Buffer().ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(view.Len()))
+	value.ConsoleLog(value.NumberToConsole(view.ByteOffset()))
+	value.ConsoleLog(value.NumberToConsole(view.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(view.Buffer().ByteLength()))
 	u := value.NewUint8Array(8)
-	value.ConsoleLog(value.NumberToString(u.Len()), value.NumberToString(u.ByteOffset()), value.NumberToString(u.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(u.Len()), value.NumberToConsole(u.ByteOffset()), value.NumberToConsole(u.ByteLength()))
 }

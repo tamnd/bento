@@ -12,18 +12,18 @@ func main() {
 	for _, x := range a.Floats() {
 		sum += x
 	}
-	value.ConsoleLog(value.NumberToString(sum))
+	value.ConsoleLog(value.NumberToConsole(sum))
 	prod := 1.0
 	for _, v := range a.Floats() {
 		prod *= v
 	}
-	value.ConsoleLog(value.NumberToString(prod))
+	value.ConsoleLog(value.NumberToConsole(prod))
 	ksum := 0.0
 	for _bt0 := range a.Floats() {
 		i := float64(_bt0)
 		ksum += i
 	}
-	value.ConsoleLog(value.NumberToString(ksum))
+	value.ConsoleLog(value.NumberToConsole(ksum))
 	for _bt1, v := range a.Floats() {
 		i := float64(_bt1)
 		value.ConsoleLog(value.NumberToString(i).ConcatN(value.FromGoString(":"), value.NumberToString(v)))

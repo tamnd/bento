@@ -20,5 +20,5 @@ func main() {
 	start = Base()
 	next = start + 5
 	total = next * 2
-	value.ConsoleLog(value.NumberToString(Report()))
+	value.ConsoleLog(value.NumberToConsole(Report()))
 }

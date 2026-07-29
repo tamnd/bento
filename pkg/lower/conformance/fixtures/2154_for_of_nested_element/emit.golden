@@ -15,6 +15,6 @@ func main() {
 		_bt2 := _bt0.AtI(1)
 		c := _bt2.AtI(0)
 		d := _bt2.AtI(1)
-		value.ConsoleLog(value.NumberToString(a + b + c + d))
+		value.ConsoleLog(value.NumberToConsole(a + b + c + d))
 	}
 }

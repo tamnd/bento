@@ -14,6 +14,6 @@ func Box(w float64, h float64) float64 {
 	return r.Width * r.Height
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Box(3, 4)))
-	value.ConsoleLog(value.NumberToString(Box(5, 6)))
+	value.ConsoleLog(value.NumberToConsole(Box(3, 4)))
+	value.ConsoleLog(value.NumberToConsole(Box(5, 6)))
 }

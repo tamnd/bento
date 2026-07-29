@@ -15,7 +15,7 @@ func Run() {
 	wr := value.NewWeakRef[ObjId](a)
 	o := wr.Deref()
 	if !o.IsUndefined() {
-		value.ConsoleLog(value.NumberToString(o.Get().Id))
+		value.ConsoleLog(value.NumberToConsole(o.Get().Id))
 		value.ConsoleLog(value.BoolToString(o.Get() == a))
 	} else {
 		value.ConsoleLog(value.FromGoString("collected"))

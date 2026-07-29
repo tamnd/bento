@@ -11,10 +11,10 @@ func SizeOf(b *value.ArrayBuffer) float64 {
 }
 func main() {
 	buf := value.NewArrayBuffer(8)
-	value.ConsoleLog(value.NumberToString(buf.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(buf.ByteLength()))
 	empty := value.NewArrayBuffer(0)
-	value.ConsoleLog(value.NumberToString(empty.ByteLength()))
-	value.ConsoleLog(value.NumberToString(SizeOf(buf)))
+	value.ConsoleLog(value.NumberToConsole(empty.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(SizeOf(buf)))
 	wide := value.NewArrayBuffer(1024)
-	value.ConsoleLog(value.NumberToString(wide.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(wide.ByteLength()))
 }

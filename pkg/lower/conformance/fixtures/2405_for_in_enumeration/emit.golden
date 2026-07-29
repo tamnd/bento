@@ -23,7 +23,7 @@ func Run() {
 	for range o.ForInKeys().Elems() {
 		count++
 	}
-	value.ConsoleLog(value.NumberToString(count))
+	value.ConsoleLog(value.NumberToConsole(count))
 	proto := value.NewObject().Set(value.FromGoString("inherited"), value.Number(9)).Set(value.FromGoString("shared"), value.Number(1))
 	child := value.ObjectCreate(proto)
 	child.Set(value.FromGoString("own"), value.Number(7))

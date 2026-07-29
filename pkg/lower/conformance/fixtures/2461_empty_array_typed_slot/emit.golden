@@ -16,11 +16,11 @@ func Names(a *value.Array[value.BStr]) float64 {
 	return a.Len()
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Count(value.NewArray[float64](1, 2, 3))))
-	value.ConsoleLog(value.NumberToString(Count(value.NewArray[float64]())))
-	value.ConsoleLog(value.NumberToString(Empty().Len()))
+	value.ConsoleLog(value.NumberToConsole(Count(value.NewArray[float64](1, 2, 3))))
+	value.ConsoleLog(value.NumberToConsole(Count(value.NewArray[float64]())))
+	value.ConsoleLog(value.NumberToConsole(Empty().Len()))
 	xs := value.NewArray[float64](10, 20)
 	xs = value.NewArray[float64]()
-	value.ConsoleLog(value.NumberToString(xs.Len()))
-	value.ConsoleLog(value.NumberToString(Names(value.NewArray[value.BStr]())))
+	value.ConsoleLog(value.NumberToConsole(xs.Len()))
+	value.ConsoleLog(value.NumberToConsole(Names(value.NewArray[value.BStr]())))
 }

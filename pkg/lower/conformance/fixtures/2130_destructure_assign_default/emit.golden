@@ -27,8 +27,8 @@ func main() {
 			b = _bt1.Get()
 		}
 	}
-	value.ConsoleLog(value.NumberToString(a))
-	value.ConsoleLog(value.NumberToString(b))
+	value.ConsoleLog(value.NumberToConsole(a))
+	value.ConsoleLog(value.NumberToConsole(b))
 	o := &ObjXY{X: 1, Y: value.None[float64]()}
 	x := 0.0
 	y := 0.0
@@ -40,6 +40,6 @@ func main() {
 			y = _bt2.Get()
 		}
 	}
-	value.ConsoleLog(value.NumberToString(x))
-	value.ConsoleLog(value.NumberToString(y))
+	value.ConsoleLog(value.NumberToConsole(x))
+	value.ConsoleLog(value.NumberToConsole(y))
 }

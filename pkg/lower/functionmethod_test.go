@@ -129,7 +129,7 @@ func TestFunctionLengthLowersToConstant(t *testing.T) {
 	if strings.Contains(source, "MissingProperty") {
 		t.Errorf(".length folded to the missing-property path instead of a constant:\n%s", source)
 	}
-	if !strings.Contains(source, "NumberToString(2.0)") {
+	if !strings.Contains(source, "NumberToConsole(2.0)") {
 		t.Errorf(".length did not lower to the constant 2:\n%s", source)
 	}
 }

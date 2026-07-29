@@ -16,7 +16,7 @@ func Run() {
 	for _, v := range s.Members() {
 		sum += v
 	}
-	value.ConsoleLog(value.NumberToString(sum))
+	value.ConsoleLog(value.NumberToConsole(sum))
 	a := value.FromGoString("")
 	for _, v := range s.Members() {
 		a = value.Concat(a, value.NumberToString(v))
@@ -29,7 +29,7 @@ func Run() {
 	value.ConsoleLog(b)
 	for _, x := range s.Members() {
 		y := x
-		value.ConsoleLog(value.NumberToString(x), value.NumberToString(y))
+		value.ConsoleLog(value.NumberToConsole(x), value.NumberToConsole(y))
 	}
 	s.Delete(1)
 	s.Add(1)

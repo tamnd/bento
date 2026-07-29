@@ -14,7 +14,7 @@ func main() {
 	value.ConsoleLog(value.ConsoleValue(b.ValueOfMethod()))
 	value.ConsoleLog(value.ConsoleValue(s.ValueOfMethod()))
 	doubled := (value.ToNumber(n.ValueOfMethod())) * 2
-	value.ConsoleLog(value.NumberToString(doubled))
+	value.ConsoleLog(value.NumberToConsole(doubled))
 	u := value.Undefined
 	func() {
 		defer func() {

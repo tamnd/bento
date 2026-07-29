@@ -30,7 +30,7 @@ func Collect() *value.Promise[float64] {
 }
 func main() {
 	Collect().Then(func(v float64) {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	})
 	value.RunMicrotasks()
 	value.ReportUnhandledRejections()

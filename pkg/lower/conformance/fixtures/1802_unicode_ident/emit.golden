@@ -11,5 +11,5 @@ func U2118_value(n float64) float64 {
 }
 func main() {
 	U2118_x := U2118_value(21)
-	value.ConsoleLog(value.NumberToString(U2118_x))
+	value.ConsoleLog(value.NumberToConsole(U2118_x))
 }

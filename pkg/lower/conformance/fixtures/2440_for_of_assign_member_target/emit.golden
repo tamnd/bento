@@ -16,7 +16,7 @@ func main() {
 	nums := value.NewArray[float64](1, 2, 3)
 	for _, _bt0 := range nums.Elems() {
 		o.Last = _bt0
-		value.ConsoleLog(value.NumberToString(o.Last))
+		value.ConsoleLog(value.NumberToConsole(o.Last))
 	}
 	words := value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("b"), value.FromGoString("c"))
 	for _, _bt1 := range words.Elems() {

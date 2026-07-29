@@ -16,6 +16,6 @@ func main() {
 	a := 0.0
 	b := 0.0
 	a, b = o.X, o.Y
-	value.ConsoleLog(value.NumberToString(a))
-	value.ConsoleLog(value.NumberToString(b))
+	value.ConsoleLog(value.NumberToConsole(a))
+	value.ConsoleLog(value.NumberToConsole(b))
 }

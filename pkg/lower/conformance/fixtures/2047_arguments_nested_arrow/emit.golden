@@ -21,6 +21,6 @@ func First(a float64, b float64) value.Value {
 	return get()
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Count(1, 2, 3)))
+	value.ConsoleLog(value.NumberToConsole(Count(1, 2, 3)))
 	value.ConsoleLog(value.ConsoleValue(First(9, 8)))
 }

@@ -17,10 +17,10 @@ func Dist(p *ObjXY) float64 {
 func Run() {
 	a := &ObjXY{X: 3, Y: value.None[float64]()}
 	b := &ObjXY{X: 3, Y: value.Some[float64](4)}
-	value.ConsoleLog(value.NumberToString(Dist(a)))
-	value.ConsoleLog(value.NumberToString(Dist(b)))
-	value.ConsoleLog(value.NumberToString(a.Y.Or(-1)))
-	value.ConsoleLog(value.NumberToString(b.Y.Or(-1)))
+	value.ConsoleLog(value.NumberToConsole(Dist(a)))
+	value.ConsoleLog(value.NumberToConsole(Dist(b)))
+	value.ConsoleLog(value.NumberToConsole(a.Y.Or(-1)))
+	value.ConsoleLog(value.NumberToConsole(b.Y.Or(-1)))
 }
 func main() {
 	Run()

@@ -21,5 +21,5 @@ func staticInitRegistry() {
 }
 func main() {
 	staticInitRegistry()
-	value.ConsoleLog(value.NumberToString(registryTotal))
+	value.ConsoleLog(value.NumberToConsole(registryTotal))
 }

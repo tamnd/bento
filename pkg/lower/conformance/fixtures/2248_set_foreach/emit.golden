@@ -16,11 +16,11 @@ func Run() {
 	s.ForEach(func(v float64) {
 		total += v
 	})
-	value.ConsoleLog(value.NumberToString(total))
+	value.ConsoleLog(value.NumberToConsole(total))
 	s.Delete(2)
 	s.Add(2)
 	s.ForEach(func(v float64) {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	})
 }
 func main() {

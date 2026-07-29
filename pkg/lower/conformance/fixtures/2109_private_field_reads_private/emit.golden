@@ -24,5 +24,5 @@ func (r *Rect) Area() float64 {
 }
 func main() {
 	r := NewRect()
-	value.ConsoleLog(value.NumberToString(r.Area()))
+	value.ConsoleLog(value.NumberToConsole(r.Area()))
 }

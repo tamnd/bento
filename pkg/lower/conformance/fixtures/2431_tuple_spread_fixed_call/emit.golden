@@ -33,7 +33,7 @@ func main() {
 	nums := Tuple_num_num_num{E0: 1, E1: 2, E2: 3}
 	strs := Tuple_str_str{E0: value.FromGoString("he"), E1: value.FromGoString("llo")}
 	pair := Tuple_num_num{E0: 4, E1: 5}
-	value.ConsoleLog(value.NumberToString(Add3(nums.E0, nums.E1, nums.E2)))
+	value.ConsoleLog(value.NumberToConsole(Add3(nums.E0, nums.E1, nums.E2)))
 	value.ConsoleLog(Join2(strs.E0, strs.E1))
 	value.ConsoleLog(Tag(value.FromGoString("sum"), pair.E0, pair.E1))
 }

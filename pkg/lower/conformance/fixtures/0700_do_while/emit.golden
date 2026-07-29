@@ -30,9 +30,9 @@ func DrainTruthy() float64 {
 	return steps
 }
 func Run() {
-	value.ConsoleLog(value.NumberToString(CountUp()))
-	value.ConsoleLog(value.NumberToString(RunsOnce()))
-	value.ConsoleLog(value.NumberToString(DrainTruthy()))
+	value.ConsoleLog(value.NumberToConsole(CountUp()))
+	value.ConsoleLog(value.NumberToConsole(RunsOnce()))
+	value.ConsoleLog(value.NumberToConsole(DrainTruthy()))
 }
 func main() {
 	Run()

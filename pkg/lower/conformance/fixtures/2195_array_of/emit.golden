@@ -8,9 +8,9 @@ import (
 
 func main() {
 	one := value.NewArray[float64](7)
-	value.ConsoleLog(value.NumberToString(one.Len()))
-	value.ConsoleLog(value.NumberToString(one.At(0)))
+	value.ConsoleLog(value.NumberToConsole(one.Len()))
+	value.ConsoleLog(value.NumberToConsole(one.At(0)))
 	trio := value.NewArray[float64](1, 2, 3)
-	value.ConsoleLog(value.NumberToString(trio.Len()))
-	value.ConsoleLog(value.NumberToString(trio.At(2)))
+	value.ConsoleLog(value.NumberToConsole(trio.Len()))
+	value.ConsoleLog(value.NumberToConsole(trio.At(2)))
 }

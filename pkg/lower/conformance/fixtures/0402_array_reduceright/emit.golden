@@ -22,10 +22,10 @@ func SubRightNoInit(a *value.Array[float64]) float64 {
 	})
 }
 func Run() {
-	value.ConsoleLog(value.NumberToString(SubRight(value.NewArray[float64](1, 2, 3))))
+	value.ConsoleLog(value.NumberToConsole(SubRight(value.NewArray[float64](1, 2, 3))))
 	value.ConsoleLog(SpellRight(value.NewArray[float64](1, 2, 3)))
-	value.ConsoleLog(value.NumberToString(SubRightNoInit(value.NewArray[float64](1, 2, 3, 10))))
-	value.ConsoleLog(value.NumberToString(SubRightNoInit(value.NewArray[float64](42))))
+	value.ConsoleLog(value.NumberToConsole(SubRightNoInit(value.NewArray[float64](1, 2, 3, 10))))
+	value.ConsoleLog(value.NumberToConsole(SubRightNoInit(value.NewArray[float64](42))))
 }
 func main() {
 	Run()

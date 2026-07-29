@@ -25,7 +25,7 @@ func Span(start float64, _bt0 ...float64) float64 {
 	return start + end + step
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Span(3)))
-	value.ConsoleLog(value.NumberToString(Span(3, 10)))
-	value.ConsoleLog(value.NumberToString(Span(3, 10, 2)))
+	value.ConsoleLog(value.NumberToConsole(Span(3)))
+	value.ConsoleLog(value.NumberToConsole(Span(3, 10)))
+	value.ConsoleLog(value.NumberToConsole(Span(3, 10, 2)))
 }

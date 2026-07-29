@@ -49,7 +49,7 @@ func Run() {
 	for range m.Keys() {
 		count++
 	}
-	value.ConsoleLog(value.NumberToString(count))
+	value.ConsoleLog(value.NumberToConsole(count))
 }
 func main() {
 	Run()

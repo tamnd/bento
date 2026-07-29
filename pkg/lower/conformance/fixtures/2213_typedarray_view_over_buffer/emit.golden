@@ -9,11 +9,11 @@ import (
 func main() {
 	buf := value.NewArrayBuffer(16)
 	whole := value.Int32ArrayView(buf, 0)
-	value.ConsoleLog(value.NumberToString(whole.Len()))
+	value.ConsoleLog(value.NumberToConsole(whole.Len()))
 	tail := value.Int32ArrayView(buf, 8)
-	value.ConsoleLog(value.NumberToString(tail.Len()))
+	value.ConsoleLog(value.NumberToConsole(tail.Len()))
 	two := value.Int32ArrayView(buf, 4, 2)
-	value.ConsoleLog(value.NumberToString(two.Len()))
+	value.ConsoleLog(value.NumberToConsole(two.Len()))
 	bytes := value.Uint8ArrayView(buf, 2, 4)
-	value.ConsoleLog(value.NumberToString(bytes.Len()))
+	value.ConsoleLog(value.NumberToConsole(bytes.Len()))
 }

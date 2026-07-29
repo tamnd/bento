@@ -33,7 +33,7 @@ func Box(__0 *ObjHW) float64 {
 }
 func main() {
 	full := &ObjHW{W: value.Some[float64](3), H: 4}
-	value.ConsoleLog(value.NumberToString(Head(value.NewArray[float64](10, 5))))
-	value.ConsoleLog(value.NumberToString(Head(value.NewArray[float64](10))))
-	value.ConsoleLog(value.NumberToString(Box(full)))
+	value.ConsoleLog(value.NumberToConsole(Head(value.NewArray[float64](10, 5))))
+	value.ConsoleLog(value.NumberToConsole(Head(value.NewArray[float64](10))))
+	value.ConsoleLog(value.NumberToConsole(Box(full)))
 }

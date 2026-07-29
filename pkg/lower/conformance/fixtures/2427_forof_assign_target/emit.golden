@@ -54,9 +54,9 @@ func SumTyped(view *value.TypedArray[float64]) float64 {
 	return total
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(SumInto(value.NewArray[float64](1, 2, 3, 4))))
+	value.ConsoleLog(value.NumberToConsole(SumInto(value.NewArray[float64](1, 2, 3, 4))))
 	value.ConsoleLog(JoinInto(value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("b"), value.FromGoString("c"))))
-	value.ConsoleLog(value.NumberToString(CountTruthy(value.NewArray[bool](true, false, true, true))))
+	value.ConsoleLog(value.NumberToConsole(CountTruthy(value.NewArray[bool](true, false, true, true))))
 	value.ConsoleLog(CodePoints(value.FromGoString("hé!")))
-	value.ConsoleLog(value.NumberToString(SumTyped(value.Float64ArrayOf(1.5, 2.5, 3))))
+	value.ConsoleLog(value.NumberToConsole(SumTyped(value.Float64ArrayOf(1.5, 2.5, 3))))
 }

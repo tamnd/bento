@@ -7,11 +7,11 @@ import (
 )
 
 func main() {
-	value.ConsoleLog(value.NumberToString(1))
-	value.ConsoleLog(value.NumberToString(4))
-	value.ConsoleLog(value.NumberToString(8))
+	value.ConsoleLog(value.NumberToConsole(1))
+	value.ConsoleLog(value.NumberToConsole(4))
+	value.ConsoleLog(value.NumberToConsole(8))
 	b := value.NewUint16Array(2)
-	value.ConsoleLog(value.NumberToString(b.BytesPerElement()))
-	value.ConsoleLog(value.NumberToString(value.NewFloat32Array(0).BytesPerElement()))
-	value.ConsoleLog(value.NumberToString(value.NewUint8Array(3).BytesPerElement()))
+	value.ConsoleLog(value.NumberToConsole(b.BytesPerElement()))
+	value.ConsoleLog(value.NumberToConsole(value.NewFloat32Array(0).BytesPerElement()))
+	value.ConsoleLog(value.NumberToConsole(value.NewUint8Array(3).BytesPerElement()))
 }

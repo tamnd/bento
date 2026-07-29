@@ -9,13 +9,13 @@ import (
 func main() {
 	a := value.Int32ArrayOf(1, 2, 3, 4, 5)
 	sub := a.Subarray(1, 4)
-	value.ConsoleLog(value.NumberToString(sub.Len()))
+	value.ConsoleLog(value.NumberToConsole(sub.Len()))
 	value.ConsoleLog(sub.Join(value.FromGoString(",")))
 	sub.SetAt(0, 99)
 	value.ConsoleLog(a.Join(value.FromGoString(",")))
 	a.Data()[3] = 88
 	value.ConsoleLog(sub.Join(value.FromGoString(",")))
-	value.ConsoleLog(value.NumberToString(sub.ByteOffset()))
+	value.ConsoleLog(value.NumberToConsole(sub.ByteOffset()))
 	tail := a.Subarray(-2)
 	value.ConsoleLog(tail.Join(value.FromGoString(",")))
 }

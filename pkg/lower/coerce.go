@@ -1137,6 +1137,19 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{expr}}, nil
 	}
+	// An array whose Go shape is a slice, a number[] or string[] binding flowing into a
+	// dynamic slot, boxes element by element into a live array Value, so the box reads
+	// as an array with the same members: console.log(nums) prints "[ 1, 2, 3 ]" rather
+	// than handing the build back for want of a box. Like the struct case above it
+	// copies, so the box is a snapshot rather than a view; that is what a dynamic sink
+	// takes today, and a slot that writes back through the box would need an array the
+	// slice and the box share, which is a later slice. An array of a shape with no box
+	// of its own (an array of objects, an array of arrays) hands back rather than guess.
+	if boxed, ok, err := r.boxArrayToDynamic(expr, src); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	// A typed-array element read flowing into a dynamic slot boxes through GetIndex,
 	// the read that answers the undefined an out-of-range or non-canonical index
 	// gives, rather than value.Number over the numeric At, which would box a stand-in
@@ -1229,6 +1242,39 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		}, nil
 	}
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
+}
+
+// boxArrayToDynamic boxes an array whose Go shape is a slice into a live array
+// Value through value.ArrayValueOf, which walks the slice applying the element's own
+// box constructor: value.Number over a number[], value.StringValue over a string[],
+// value.Bool over a boolean[]. Each already has the func(T) value.Value shape
+// ArrayValueOf wants, so it passes as the element boxer directly with no closure, the
+// same way boxOptionalToDynamic passes one to OptToValue.
+//
+// It reports ok=false when the source is not an array, so a non-array type falls on
+// through the boxing chain. An array of a shape with no box of its own, an array of
+// objects or an array of arrays, hands back: boxing those means emitting a closure
+// per element type, which the element boxes above do not need and which the nested
+// case would have to build recursively. A typed array is not an ElementType array,
+// so a Uint8Array does not reach here; it has its own box.
+func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, bool, error) {
+	elem, ok := r.prog.ElementType(r.prog.TypeAt(src))
+	if !ok {
+		return nil, false, nil
+	}
+	var box ast.Expr
+	switch flags := r.primitiveFlagsOfType(elem); {
+	case flags&frontend.TypeNumber != 0:
+		box = sel("value", "Number")
+	case flags&frontend.TypeString != 0:
+		box = sel("value", "StringValue")
+	case flags&frontend.TypeBoolean != 0:
+		box = sel("value", "Bool")
+	default:
+		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ArrayValueOf"), Args: []ast.Expr{expr, box}}, true, nil
 }
 
 // boxOptionalToDynamic boxes a T | undefined result into a dynamic value.Value. The
@@ -1331,7 +1377,44 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 		},
 		Body: &ast.BlockStmt{List: body},
 	}
-	return &ast.CallExpr{Fun: sel("value", "NewFunc"), Args: []ast.Expr{thunk}}, nil
+	box := &ast.CallExpr{Fun: sel("value", "NewFunc"), Args: []ast.Expr{thunk}}
+	// The box carries the name the function value has in JavaScript, so a read of
+	// .name off it answers and console.log of it prints "[Function: foo]" rather than
+	// "[Function (anonymous)]". The name is the binding the reference resolves to,
+	// which is the name the language gives a function declaration and the one named
+	// evaluation gives `const f = () => {}`. An inline function expression written at
+	// the boxing site resolves to no binding and stays anonymous, which is also what
+	// the language says: passed straight as an argument, it never gets named.
+	if name := r.boxedFuncName(src); name != "" {
+		return &ast.CallExpr{
+			Fun:  sel("value", "WithName"),
+			Args: []ast.Expr{box, &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}},
+		}, nil
+	}
+	return box, nil
+}
+
+// boxedFuncName is the name a function value carries into a dynamic slot, the
+// Function.prototype.name a read off the box or an inspection of it reports. A
+// reference to a binding answers that binding's name: `function foo() {}` referenced
+// as foo is "foo", and `const f = () => {}` is "f", the name named evaluation gives
+// the arrow when it is assigned. Anything else, an inline literal or a call result,
+// is anonymous.
+//
+// A binding that aliases another, `const g = f`, reports "g" where the language
+// reports "f": the name travelled with the function object at the original
+// assignment and this reads the reference instead. Following the chain means
+// resolving through every declaration form that can hold a function, which is a
+// later slice; the label is the only thing that differs.
+func (r *Renderer) boxedFuncName(src frontend.Node) string {
+	if src.Kind() != frontend.NodeIdentifier {
+		return ""
+	}
+	sym, ok := r.prog.SymbolAt(src)
+	if !ok {
+		return ""
+	}
+	return sym.Name
 }
 
 // boxStaticToDynamicFlags boxes a static primitive result into a value.Value by its

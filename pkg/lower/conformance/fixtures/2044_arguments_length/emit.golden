@@ -15,6 +15,6 @@ func One(x float64) float64 {
 	return _bt1.Len()
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Two(10, 20)))
-	value.ConsoleLog(value.NumberToString(One(7)))
+	value.ConsoleLog(value.NumberToConsole(Two(10, 20)))
+	value.ConsoleLog(value.NumberToConsole(One(7)))
 }

@@ -17,5 +17,5 @@ func main() {
 		}
 		return -x
 	}()
-	value.ConsoleLog(value.NumberToString(x))
+	value.ConsoleLog(value.NumberToConsole(x))
 }

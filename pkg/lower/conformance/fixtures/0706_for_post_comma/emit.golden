@@ -28,9 +28,9 @@ func ThreeCounters() float64 {
 	return last
 }
 func Run() {
-	value.ConsoleLog(value.NumberToString(MeetInMiddle()))
-	value.ConsoleLog(value.NumberToString(StridedPair()))
-	value.ConsoleLog(value.NumberToString(ThreeCounters()))
+	value.ConsoleLog(value.NumberToConsole(MeetInMiddle()))
+	value.ConsoleLog(value.NumberToConsole(StridedPair()))
+	value.ConsoleLog(value.NumberToConsole(ThreeCounters()))
 }
 func main() {
 	Run()

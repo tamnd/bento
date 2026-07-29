@@ -14,5 +14,5 @@ func main() {
 	o := &ObjA{A: 0}
 	s := &ObjA{A: 5}
 	o.A = s.A
-	value.ConsoleLog(value.NumberToString(o.A))
+	value.ConsoleLog(value.NumberToConsole(o.A))
 }

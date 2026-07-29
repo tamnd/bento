@@ -28,10 +28,10 @@ func Run() {
 		_bt2 := _bt0.Values()
 		for _bt3, k := range _bt1 {
 			v := _bt2[_bt3]
-			value.ConsoleLog(k, value.NumberToString(v))
+			value.ConsoleLog(k, value.NumberToConsole(v))
 		}
 	}
-	value.ConsoleLog(value.NumberToString(m.Size()))
+	value.ConsoleLog(value.NumberToConsole(m.Size()))
 }
 func main() {
 	Run()

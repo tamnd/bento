@@ -61,9 +61,9 @@ func TestGenericRestStringLiteralUnionSpecializes(t *testing.T) {
 
 // TestGenericRestBodyStringifiesTypeParameter proves the specialization body reads a
 // bare type parameter as the concrete type: a print of an element in the number
-// instantiation coerces through value.NumberToString, while the string instantiation
-// prints the value.BStr directly, the type-parameter resolution the coercion
-// predicates gained for a monomorphized body.
+// instantiation renders through value.NumberToConsole, the console's own number
+// renderer, while the string instantiation prints the value.BStr directly, the
+// type-parameter resolution the coercion predicates gained for a monomorphized body.
 func TestGenericRestBodyStringifiesTypeParameter(t *testing.T) {
 	const src = "function logAll<T>(...xs: T[]): void {\n" +
 		"  for (const x of xs) { console.log(x); }\n" +
@@ -72,8 +72,8 @@ func TestGenericRestBodyStringifiesTypeParameter(t *testing.T) {
 		"logAll(1, 2);\n" +
 		"logAll(s);\n"
 	source := renderProgram(t, src)
-	if !strings.Contains(source, "value.ConsoleLog(value.NumberToString(x))") {
-		t.Errorf("the number instantiation did not stringify its element through NumberToString:\n%s", source)
+	if !strings.Contains(source, "value.ConsoleLog(value.NumberToConsole(x))") {
+		t.Errorf("the number instantiation did not render its element through NumberToConsole:\n%s", source)
 	}
 	if !strings.Contains(source, "value.ConsoleLog(x)") {
 		t.Errorf("the string instantiation did not print its element directly:\n%s", source)

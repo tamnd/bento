@@ -132,17 +132,26 @@ func BigIntToConsole(b *big.Int) BStr {
 	return FromGoString(b.String() + "n")
 }
 
-// ConsoleValue renders a dynamic value the way console.log inspects it at the top
-// level. It matches ToString for every kind but the bigint: console.log(5n) prints
-// "5n" where String(5n) is "5", so a boxed bigint takes the "n" suffix BigIntToConsole
-// adds while every other kind renders exactly as ToString. It is the boxed sibling of
-// BigIntToConsole, used where console.log takes a value whose kind is known only at run
-// time, such as an any-typed slot that a bigint flowed into.
+// ConsoleValue renders a dynamic value the way console.log renders one argument.
+// A string prints as itself, with no quotes: console.log("hi") is hi, which is why
+// the string is not sent through the inspector. Everything else is inspected, the
+// way Node's console does, so an object reads as its properties rather than as
+// "[object Object]" and a symbol renders instead of throwing the way a string
+// coercion would.
 func ConsoleValue(v Value) BStr {
-	if v.kind == KindBigInt {
-		return FromGoString(v.bigint().String() + "n")
+	if v.kind == KindString {
+		return v.str()
 	}
-	return ToString(v)
+	return NodeInspect(v)
+}
+
+// NumberToConsole renders a float64 the way console.log inspects a number, which
+// is NumberToString everywhere but at negative zero: console.log(-0) prints "-0"
+// while String(-0) and `${-0}` are "0". The sign is the only thing telling the two
+// zeros apart, and a program logging one is usually logging it to find out which
+// it got, so the console keeps the sign the string coercion drops.
+func NumberToConsole(f float64) BStr {
+	return FromGoString(inspectNumber(f))
 }
 
 // maxBigIntBits caps how large a bigint an operator may build, the same order of

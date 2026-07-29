@@ -20,7 +20,7 @@ console.log(Color.Red, Color.Green, Color.Blue);
 		"ColorGreen float64 = 5",
 		"float64 = 0",
 		"float64 = 6",
-		"value.NumberToString(ColorRed)",
+		"value.NumberToConsole(ColorRed)",
 	} {
 		if !strings.Contains(source, want) {
 			t.Errorf("enum emit did not print %q:\n%s", want, source)

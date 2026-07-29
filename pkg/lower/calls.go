@@ -4300,13 +4300,61 @@ func (r *Renderer) consoleStringify(arg frontend.Node) (ast.Expr, error) {
 	if r.producesBoxedValue(arg) {
 		return r.consoleInspect(arg)
 	}
-	if r.isString(arg) || r.isNumber(arg) || r.isBool(arg) {
+	if r.isString(arg) || r.isBool(arg) {
 		return r.stringify(arg)
+	}
+	if r.isNumber(arg) {
+		// A number is its string form everywhere but at negative zero, which the console
+		// prints signed and a string coercion does not, so it takes the console's own
+		// number renderer rather than stringify's. Nothing is boxed for it: the operand is
+		// already a float64 and value.NumberToConsole reads it directly.
+		lowered, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NumberToConsole"), Args: []ast.Expr{lowered}}, nil
 	}
 	if r.isDynamic(arg) {
 		return r.consoleInspect(arg)
 	}
+	// A statically typed object, array, function or symbol is inspected rather than
+	// coerced: console.log({ a: 1 }) prints "{ a: 1 }" where a string coercion gives
+	// "[object Object]", and over a symbol the coercion throws outright. The value is
+	// boxed into the value model first, since the inspector reads the runtime shape,
+	// which is the only thing that knows a nested value's kind. This routes after the
+	// primitives so a number or a string keeps its direct rendering with no box, and
+	// after the dynamic case, which is already a box.
+	if r.consoleInspectsStatically(arg) {
+		boxed, err := r.boxOperand(arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ConsoleValue"), Args: []ast.Expr{boxed}}, nil
+	}
 	return r.stringify(arg)
+}
+
+// consoleInspectsStatically reports whether a console argument the checker gave a
+// static non-primitive type reads through the inspector rather than through a
+// string coercion. The kinds here are the ones whose console form is not their
+// string form: an object, an array, a function and a symbol.
+//
+// A regexp is left out because the two agree on it, "/a/g" either way, and its
+// direct lowering needs no box. So are an optional and a tagged union, which
+// stringify renders arm by arm today; inspecting those means boxing an arm whose
+// kind is only known at run time, which is the union boxing slice rather than this
+// one, and their arms are primitives in the programs that have one.
+func (r *Renderer) consoleInspectsStatically(arg frontend.Node) bool {
+	if r.isRegExp(arg) || r.isOptional(arg) {
+		return false
+	}
+	if _, ok := r.unionStringValued(arg); ok {
+		return false
+	}
+	flags := r.prog.TypeAt(arg).Flags
+	return flags&(frontend.TypeObject|frontend.TypeSymbol) != 0
 }
 
 // consoleInspect lowers a boxed or dynamic console argument through value.ConsoleValue,

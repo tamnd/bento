@@ -31,7 +31,7 @@ func main() {
 	e := NewAppError(value.FromGoString("boom"), 42)
 	value.ConsoleLog(e.Message)
 	value.ConsoleLog(e.Name)
-	value.ConsoleLog(value.NumberToString(e.Code))
+	value.ConsoleLog(value.NumberToConsole(e.Code))
 	value.ConsoleLog(value.BoolToString(true))
 	func() {
 		defer func() {

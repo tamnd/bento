@@ -16,5 +16,5 @@ func main() {
 	D_DONE(value.FromGoString("first"))
 	D_DONE(value.FromGoString("second"))
 	D_status := D_D_twice(21)
-	value.ConsoleLog(value.NumberToString(D_status))
+	value.ConsoleLog(value.NumberToConsole(D_status))
 }

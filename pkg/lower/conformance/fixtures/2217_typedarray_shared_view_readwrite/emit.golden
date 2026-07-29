@@ -11,9 +11,9 @@ func main() {
 	a := value.Int32ArrayView(buf, 0)
 	b := value.Uint8ArrayView(buf, 0)
 	a.SetAt(0, 513)
-	value.ConsoleLog(value.NumberToString(b.At(0)), value.NumberToString(b.At(1)), value.NumberToString(b.At(2)), value.NumberToString(b.At(3)))
+	value.ConsoleLog(value.NumberToConsole(b.At(0)), value.NumberToConsole(b.At(1)), value.NumberToConsole(b.At(2)), value.NumberToConsole(b.At(3)))
 	b.SetAt(4, 255)
-	value.ConsoleLog(value.NumberToString(a.At(1)))
+	value.ConsoleLog(value.NumberToConsole(a.At(1)))
 	a.SetAt(1, 256)
-	value.ConsoleLog(value.NumberToString(b.At(4)), value.NumberToString(b.At(5)))
+	value.ConsoleLog(value.NumberToConsole(b.At(4)), value.NumberToConsole(b.At(5)))
 }

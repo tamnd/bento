@@ -14,12 +14,12 @@ func main() {
 			break
 		}
 	}
-	value.ConsoleLog(value.NumberToString(i))
+	value.ConsoleLog(value.NumberToConsole(i))
 	j := 0.0
 	for j < 3 {
 		j++
 	}
-	value.ConsoleLog(value.NumberToString(j))
+	value.ConsoleLog(value.NumberToConsole(j))
 	s := 0.0
 	for k := 0.0; ; k++ {
 		s += k
@@ -27,11 +27,11 @@ func main() {
 			break
 		}
 	}
-	value.ConsoleLog(value.NumberToString(s))
+	value.ConsoleLog(value.NumberToConsole(s))
 	t := 0.0
 	for m := 0.0; m < 4; {
 		t += m
 		m++
 	}
-	value.ConsoleLog(value.NumberToString(t))
+	value.ConsoleLog(value.NumberToConsole(t))
 }

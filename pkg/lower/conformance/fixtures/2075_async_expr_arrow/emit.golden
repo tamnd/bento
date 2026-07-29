@@ -19,10 +19,10 @@ func main() {
 	}
 	value.ConsoleLog(value.FromGoString("start"))
 	triple(4).Then(func(v float64) {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	})
 	inc(9).Then(func(v float64) {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	})
 	value.ConsoleLog(value.FromGoString("end"))
 	value.RunMicrotasks()

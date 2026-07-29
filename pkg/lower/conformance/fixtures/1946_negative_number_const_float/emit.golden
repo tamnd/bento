@@ -8,11 +8,11 @@ import (
 
 func main() {
 	INT32_MIN := -2147483648.0
-	value.ConsoleLog(value.NumberToString(value.Pow(2, INT32_MIN)))
-	value.ConsoleLog(value.NumberToString(value.Pow(1, INT32_MIN)))
+	value.ConsoleLog(value.NumberToConsole(value.Pow(2, INT32_MIN)))
+	value.ConsoleLog(value.NumberToConsole(value.Pow(1, INT32_MIN)))
 	neg := -5.0
-	value.ConsoleLog(value.NumberToString(value.Pow(2, neg)))
-	value.ConsoleLog(value.NumberToString(neg + 1))
+	value.ConsoleLog(value.NumberToConsole(value.Pow(2, neg)))
+	value.ConsoleLog(value.NumberToConsole(neg + 1))
 	e := -3.0
-	value.ConsoleLog(value.NumberToString(value.Pow(2, e)))
+	value.ConsoleLog(value.NumberToConsole(value.Pow(2, e)))
 }

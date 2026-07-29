@@ -55,9 +55,9 @@ func Overridden() float64 {
 }
 func main() {
 	defer value.ReportUncaught()
-	value.ConsoleLog(value.NumberToString(SafeInvert(4)))
-	value.ConsoleLog(value.NumberToString(SafeInvert(0)))
+	value.ConsoleLog(value.NumberToConsole(SafeInvert(4)))
+	value.ConsoleLog(value.NumberToConsole(SafeInvert(0)))
 	value.ConsoleLog(Guard(1))
 	value.ConsoleLog(Guard(-1))
-	value.ConsoleLog(value.NumberToString(Overridden()))
+	value.ConsoleLog(value.NumberToConsole(Overridden()))
 }

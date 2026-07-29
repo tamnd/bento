@@ -15,6 +15,6 @@ func main() {
 	o := &ObjAB{A: 0, B: 0}
 	xs := value.NewArray[float64](1, 2)
 	o.A, o.B = xs.AtI(0), xs.AtI(1)
-	value.ConsoleLog(value.NumberToString(o.A))
-	value.ConsoleLog(value.NumberToString(o.B))
+	value.ConsoleLog(value.NumberToConsole(o.A))
+	value.ConsoleLog(value.NumberToConsole(o.B))
 }

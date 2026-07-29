@@ -22,15 +22,15 @@ func Run() {
 	p := &ObjXY{X: 1, Y: 2}
 	p.X = 10
 	p.Y = 20
-	value.ConsoleLog(value.NumberToString(p.X))
-	value.ConsoleLog(value.NumberToString(p.Y))
+	value.ConsoleLog(value.NumberToConsole(p.X))
+	value.ConsoleLog(value.NumberToConsole(p.Y))
 	Move(p, 5)
-	value.ConsoleLog(value.NumberToString(p.X))
+	value.ConsoleLog(value.NumberToConsole(p.X))
 	o := &ObjCountName{Name: value.FromGoString("a"), Count: 0}
 	o.Name = value.FromGoString("b")
 	o.Count = 3
 	value.ConsoleLog(o.Name)
-	value.ConsoleLog(value.NumberToString(o.Count))
+	value.ConsoleLog(value.NumberToConsole(o.Count))
 }
 func main() {
 	Run()

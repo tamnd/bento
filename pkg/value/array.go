@@ -60,6 +60,23 @@ func ArrayFrom[T any](elems []T) *Array[T] {
 	return &Array[T]{elems: elems}
 }
 
+// ArrayValueOf boxes a typed array into a live array Value, one element at a time
+// through the element's own box constructor, so a *Array[float64] or *Array[BStr]
+// can flow into a dynamic slot the way an array literal boxed straight to a Value
+// does. It is the array sibling of ObjectFromStruct, and it copies for the same
+// reason: the box holds its own elements, so a write through the box does not reach
+// the typed array it was built from. That is why it is reached from the dynamic
+// boundary, where the box is what the program works with from then on, rather than
+// being how an array is represented.
+func ArrayValueOf[T any](a *Array[T], box func(T) Value) Value {
+	elems := a.Elems()
+	boxed := make([]Value, len(elems))
+	for i, e := range elems {
+		boxed[i] = box(e)
+	}
+	return NewArrayValue(boxed)
+}
+
 // Len is the array's length. JavaScript's .length is a Number, so it is a
 // float64 here to match the type the checker gives the property and to compose
 // with the rest of the numeric path with no conversion at the use site. It is

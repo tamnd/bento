@@ -10,5 +10,5 @@ func main() {
 	for i := 0.0; i < width; i++ {
 		total += i
 	}
-	value.ConsoleLog(value.NumberToString(total))
+	value.ConsoleLog(value.NumberToConsole(total))
 }

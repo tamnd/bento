@@ -13,7 +13,7 @@ func main() {
 	a.ForEach(func(x float64) {
 		sum += x
 	})
-	value.ConsoleLog(value.NumberToString(sum))
+	value.ConsoleLog(value.NumberToConsole(sum))
 	doubled := a.Map(func(x float64) float64 {
 		return x * 2
 	})
@@ -35,37 +35,37 @@ func main() {
 	value.ConsoleLog(value.BoolToString(a.Every(func(x float64) bool {
 		return x > 3
 	})))
-	value.ConsoleLog(value.NumberToString(a.Find(func(x float64) bool {
+	value.ConsoleLog(value.NumberToConsole(a.Find(func(x float64) bool {
 		return x > 2
 	}).Or(0)))
-	value.ConsoleLog(value.NumberToString(a.FindIndex(func(x float64) bool {
+	value.ConsoleLog(value.NumberToConsole(a.FindIndex(func(x float64) bool {
 		return x > 2
 	})))
-	value.ConsoleLog(value.NumberToString(a.FindLast(func(x float64) bool {
+	value.ConsoleLog(value.NumberToConsole(a.FindLast(func(x float64) bool {
 		return x > 2
 	}).Or(0)))
-	value.ConsoleLog(value.NumberToString(a.FindLastIndex(func(x float64) bool {
+	value.ConsoleLog(value.NumberToConsole(a.FindLastIndex(func(x float64) bool {
 		return x > 2
 	})))
-	value.ConsoleLog(value.NumberToString(a.Find(func(x float64) bool {
+	value.ConsoleLog(value.NumberToConsole(a.Find(func(x float64) bool {
 		return x > 9
 	}).Or(0)))
-	value.ConsoleLog(value.NumberToString(a.FindIndex(func(x float64) bool {
+	value.ConsoleLog(value.NumberToConsole(a.FindIndex(func(x float64) bool {
 		return x > 9
 	})))
-	value.ConsoleLog(value.NumberToString(value.ReduceTypedArray[int32, float64](a, func(acc float64, x float64) float64 {
+	value.ConsoleLog(value.NumberToConsole(value.ReduceTypedArray[int32, float64](a, func(acc float64, x float64) float64 {
 		return acc + x
 	}, 100)))
-	value.ConsoleLog(value.NumberToString(value.ReduceRightTypedArray[int32, float64](a, func(acc float64, x float64) float64 {
+	value.ConsoleLog(value.NumberToConsole(value.ReduceRightTypedArray[int32, float64](a, func(acc float64, x float64) float64 {
 		return acc + x
 	}, 0)))
 	value.ConsoleLog(value.BoolToString(value.ReduceTypedArray[int32, bool](a, func(acc bool, x float64) bool {
 		return acc && x > 0
 	}, true)))
-	value.ConsoleLog(value.NumberToString(a.ReduceNoInit(func(acc float64, x float64) float64 {
+	value.ConsoleLog(value.NumberToConsole(a.ReduceNoInit(func(acc float64, x float64) float64 {
 		return acc + x
 	})))
-	value.ConsoleLog(value.NumberToString(a.ReduceRightNoInit(func(acc float64, x float64) float64 {
+	value.ConsoleLog(value.NumberToConsole(a.ReduceRightNoInit(func(acc float64, x float64) float64 {
 		return acc - x
 	})))
 }

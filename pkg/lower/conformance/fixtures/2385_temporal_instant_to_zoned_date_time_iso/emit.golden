@@ -16,7 +16,7 @@ func main() {
 	z := i.ToZonedDateTimeISO("Asia/Tokyo")
 	value.ConsoleLog(z.CalendarId())
 	value.ConsoleLog(z.TimeZoneId())
-	value.ConsoleLog(value.NumberToString(z.Hour()))
+	value.ConsoleLog(value.NumberToConsole(z.Hour()))
 	value.ConsoleLog(z.Offset())
 	func() {
 		defer func() {

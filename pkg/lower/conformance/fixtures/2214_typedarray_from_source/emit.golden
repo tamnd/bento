@@ -9,12 +9,12 @@ import (
 func main() {
 	nums := value.NewArray[float64](1, 2, 300)
 	fromArr := value.Int32ArrayOf(nums.Elems()...)
-	value.ConsoleLog(value.NumberToString(fromArr.At(0)), value.NumberToString(fromArr.At(1)), value.NumberToString(fromArr.At(2)))
+	value.ConsoleLog(value.NumberToConsole(fromArr.At(0)), value.NumberToConsole(fromArr.At(1)), value.NumberToConsole(fromArr.At(2)))
 	src := value.Int32ArrayOf(1, 2, 300)
 	asBytes := value.Uint8ArrayOf(src.Floats()...)
-	value.ConsoleLog(value.NumberToString(asBytes.At(0)), value.NumberToString(asBytes.At(1)), value.NumberToString(asBytes.At(2)))
+	value.ConsoleLog(value.NumberToConsole(asBytes.At(0)), value.NumberToConsole(asBytes.At(1)), value.NumberToConsole(asBytes.At(2)))
 	asF64 := value.Float64ArrayOf(src.Floats()...)
-	value.ConsoleLog(value.NumberToString(asF64.At(2)))
+	value.ConsoleLog(value.NumberToConsole(asF64.At(2)))
 	src.Data()[0] = 99
-	value.ConsoleLog(value.NumberToString(asBytes.At(0)))
+	value.ConsoleLog(value.NumberToConsole(asBytes.At(0)))
 }

@@ -21,14 +21,14 @@ func Run() {
 	for _, v := range m.Values() {
 		total += v
 	}
-	value.ConsoleLog(value.NumberToString(total))
+	value.ConsoleLog(value.NumberToConsole(total))
 	{
 		_bt0 := m
 		_bt1 := _bt0.Keys()
 		_bt2 := _bt0.Values()
 		for _bt3, k := range _bt1 {
 			v := _bt2[_bt3]
-			value.ConsoleLog(k, value.NumberToString(v))
+			value.ConsoleLog(k, value.NumberToConsole(v))
 		}
 	}
 	{

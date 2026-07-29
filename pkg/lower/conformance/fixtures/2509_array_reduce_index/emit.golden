@@ -8,16 +8,16 @@ import (
 
 func main() {
 	var _sb0 value.StrBuilder
-	value.ConsoleLog(value.NumberToString(value.ReduceIndex[float64, float64](value.NewArray[float64](1, 2, 3, 4), func(acc float64, x float64, i float64) float64 {
+	value.ConsoleLog(value.NumberToConsole(value.ReduceIndex[float64, float64](value.NewArray[float64](1, 2, 3, 4), func(acc float64, x float64, i float64) float64 {
 		return acc + x*i
 	}, 0)))
-	value.ConsoleLog(value.NumberToString(value.NewArray[float64](1, 2, 3, 4).ReduceNoInitIndex(func(acc float64, x float64, i float64) float64 {
+	value.ConsoleLog(value.NumberToConsole(value.NewArray[float64](1, 2, 3, 4).ReduceNoInitIndex(func(acc float64, x float64, i float64) float64 {
 		return acc + x*i
 	})))
 	value.ConsoleLog(value.ReduceRightIndex[value.BStr, value.BStr](value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("b"), value.FromGoString("c")), func(acc value.BStr, x value.BStr, i float64) value.BStr {
 		return acc.ConcatN(x, value.NumberToString(i))
 	}, value.FromGoString("")))
-	value.ConsoleLog(value.NumberToString(value.NewArray[float64](1, 2, 3, 4).ReduceRightNoInitIndex(func(acc float64, x float64, i float64) float64 {
+	value.ConsoleLog(value.NumberToConsole(value.NewArray[float64](1, 2, 3, 4).ReduceRightNoInitIndex(func(acc float64, x float64, i float64) float64 {
 		return acc + x*i
 	})))
 	value.ConsoleLog(value.ReduceIndex[value.BStr, value.BStr](value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("b"), value.FromGoString("c")), func(acc value.BStr, x value.BStr, i float64) value.BStr {

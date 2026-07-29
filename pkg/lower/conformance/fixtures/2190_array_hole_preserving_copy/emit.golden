@@ -11,18 +11,18 @@ func main() {
 	_ = a.DeleteIndex(1)
 	s := value.GenericSlice(a)
 	value.ConsoleLog(value.ConsoleValue(s.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.NumberToString(s.OwnEnumerableKeys().Len()))
+	value.ConsoleLog(value.NumberToConsole(s.OwnEnumerableKeys().Len()))
 	m := value.GenericMap(a, value.NewFunc(func(__a []value.Value) value.Value {
 		return value.Number((func(x value.Value) float64 {
 			return value.ToNumber(x) * 2
 		})(value.Arg(__a, 0)))
 	}))
 	value.ConsoleLog(value.ConsoleValue(m.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.NumberToString(m.OwnEnumerableKeys().Len()))
+	value.ConsoleLog(value.NumberToConsole(m.OwnEnumerableKeys().Len()))
 	value.ConsoleLog(value.ConsoleValue(m.GetIndex(0)))
 	value.ConsoleLog(value.ConsoleValue(m.GetIndex(2)))
 	c := value.GenericConcat(a, value.Number(9))
 	value.ConsoleLog(value.ConsoleValue(c.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.NumberToString(c.OwnEnumerableKeys().Len()))
+	value.ConsoleLog(value.NumberToConsole(c.OwnEnumerableKeys().Len()))
 	value.ConsoleLog(value.ConsoleValue(c.GetIndex(3)))
 }

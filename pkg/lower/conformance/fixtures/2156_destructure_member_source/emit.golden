@@ -23,6 +23,6 @@ func main() {
 	_bt1 := o.Pair
 	a := _bt1.AtI(0)
 	b := _bt1.AtI(1)
-	value.ConsoleLog(value.NumberToString(x + y))
-	value.ConsoleLog(value.NumberToString(a + b))
+	value.ConsoleLog(value.NumberToConsole(x + y))
+	value.ConsoleLog(value.NumberToConsole(a + b))
 }

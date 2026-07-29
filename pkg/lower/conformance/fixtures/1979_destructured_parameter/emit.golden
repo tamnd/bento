@@ -38,8 +38,8 @@ func Shift(base float64, __1 *ObjBy) float64 {
 	return base + by
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Area(&ObjHW{W: 3, H: 4})))
-	value.ConsoleLog(value.NumberToString(Diff(value.NewArray[float64](9, 4))))
+	value.ConsoleLog(value.NumberToConsole(Area(&ObjHW{W: 3, H: 4})))
+	value.ConsoleLog(value.NumberToConsole(Diff(value.NewArray[float64](9, 4))))
 	value.ConsoleLog(Label(&ObjIdName{Name: value.FromGoString("n"), Id: 7}))
-	value.ConsoleLog(value.NumberToString(Shift(10, &ObjBy{By: 5})))
+	value.ConsoleLog(value.NumberToConsole(Shift(10, &ObjBy{By: 5})))
 }

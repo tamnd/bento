@@ -21,11 +21,11 @@ func main() {
 	_bt0 := Pair()
 	a := _bt0.AtI(0)
 	b := _bt0.AtI(1)
-	value.ConsoleLog(value.NumberToString(a + b))
+	value.ConsoleLog(value.NumberToConsole(a + b))
 	_bt1 := Point()
 	x := _bt1.X
 	y := _bt1.Y
-	value.ConsoleLog(value.NumberToString(x * y))
+	value.ConsoleLog(value.NumberToConsole(x * y))
 	csv := value.FromGoString("one,two,three")
 	_bt2 := csv.Split(value.FromGoString(","))
 	first := _bt2.AtI(0)

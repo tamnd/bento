@@ -26,6 +26,6 @@ func main() {
 		y = value.Number(value.ToNumber(y) - 2)
 		return y
 	}()))
-	value.ConsoleLog(value.NumberToString(r))
+	value.ConsoleLog(value.NumberToConsole(r))
 	value.ConsoleLog(value.ConsoleValue(y))
 }

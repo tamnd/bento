@@ -51,10 +51,10 @@ func main() {
 		}
 	}
 	asyncFn(&ObjX{X: 5}).Then(func(v float64) {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	})
 	asyncArrow(&ObjY{Y: 10}).Then(func(v float64) {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	})
 	value.ConsoleLog(value.FromGoString("end"))
 	value.RunMicrotasks()

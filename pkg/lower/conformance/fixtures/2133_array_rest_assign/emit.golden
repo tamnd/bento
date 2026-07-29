@@ -14,8 +14,8 @@ func main() {
 		a = arr.AtI(0)
 		rest = arr.Slice(1)
 	}
-	value.ConsoleLog(value.NumberToString(a))
-	value.ConsoleLog(value.NumberToString(rest.Len()))
-	value.ConsoleLog(value.NumberToString(rest.At(0)))
-	value.ConsoleLog(value.NumberToString(rest.At(2)))
+	value.ConsoleLog(value.NumberToConsole(a))
+	value.ConsoleLog(value.NumberToConsole(rest.Len()))
+	value.ConsoleLog(value.NumberToConsole(rest.At(0)))
+	value.ConsoleLog(value.NumberToConsole(rest.At(2)))
 }

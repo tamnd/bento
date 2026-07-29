@@ -29,6 +29,6 @@ func main() {
 		}
 		return f
 	}()
-	value.ConsoleLog(value.NumberToString(add(&ObjXY{X: 3, Y: 4})))
-	value.ConsoleLog(value.NumberToString(fac(value.NewArray[float64](5, 1))))
+	value.ConsoleLog(value.NumberToConsole(add(&ObjXY{X: 3, Y: 4})))
+	value.ConsoleLog(value.NumberToConsole(fac(value.NewArray[float64](5, 1))))
 }

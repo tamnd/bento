@@ -21,5 +21,5 @@ func F(__0 *ObjP) float64 {
 	return x + y
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(F(&ObjP{P: &ObjXY{X: 1, Y: 2}})))
+	value.ConsoleLog(value.NumberToConsole(F(&ObjP{P: &ObjXY{X: 1, Y: 2}})))
 }

@@ -11,11 +11,11 @@ func Pow(a float64, b float64) float64 {
 	return value.Pow(a, b)
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Pow(2, 10)))
-	value.ConsoleLog(value.NumberToString(Pow(9, 0.5)))
-	value.ConsoleLog(value.NumberToString(Pow(1, math.NaN())))
-	value.ConsoleLog(value.NumberToString(Pow(-1, math.Inf(1))))
-	value.ConsoleLog(value.NumberToString(Pow(1, -math.Inf(1))))
-	value.ConsoleLog(value.NumberToString(value.Pow(1, math.NaN())))
-	value.ConsoleLog(value.NumberToString(value.Pow(-1, -math.Inf(1))))
+	value.ConsoleLog(value.NumberToConsole(Pow(2, 10)))
+	value.ConsoleLog(value.NumberToConsole(Pow(9, 0.5)))
+	value.ConsoleLog(value.NumberToConsole(Pow(1, math.NaN())))
+	value.ConsoleLog(value.NumberToConsole(Pow(-1, math.Inf(1))))
+	value.ConsoleLog(value.NumberToConsole(Pow(1, -math.Inf(1))))
+	value.ConsoleLog(value.NumberToConsole(value.Pow(1, math.NaN())))
+	value.ConsoleLog(value.NumberToConsole(value.Pow(-1, -math.Inf(1))))
 }

@@ -40,8 +40,8 @@ func Run() {
 	value.ConsoleLog(UserName(value.None[*ObjCityName]()))
 	value.ConsoleLog(CityName(value.Some[*ObjCityName](u)))
 	value.ConsoleLog(CityName(value.None[*ObjCityName]()))
-	value.ConsoleLog(value.NumberToString(Population(value.Some[*ObjCityName](u))))
-	value.ConsoleLog(value.NumberToString(Population(value.None[*ObjCityName]())))
+	value.ConsoleLog(value.NumberToConsole(Population(value.Some[*ObjCityName](u))))
+	value.ConsoleLog(value.NumberToConsole(Population(value.None[*ObjCityName]())))
 }
 func main() {
 	Run()

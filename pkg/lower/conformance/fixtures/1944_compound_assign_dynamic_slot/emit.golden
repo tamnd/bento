@@ -14,7 +14,7 @@ func main() {
 	n = value.Number(n.AsNumber() * 2)
 	n = value.Number(n.AsNumber() / 7)
 	n = value.Number(math.Mod(n.AsNumber(), 1.5))
-	value.ConsoleLog(value.NumberToString(n.AsNumber()))
+	value.ConsoleLog(value.NumberToConsole(n.AsNumber()))
 	var s value.Value
 	s = value.StringValue(value.FromGoString("a"))
 	s = value.StringValue(value.Concat(s.AsString(), value.FromGoString("b")))

@@ -19,9 +19,9 @@ func Positive(n float64) bool {
 	return n > 0
 }
 func Run() {
-	value.ConsoleLog(value.NumberToString(Rank(7)))
-	value.ConsoleLog(value.NumberToString(Rank(3)))
-	value.ConsoleLog(value.NumberToString(Rank(-1)))
+	value.ConsoleLog(value.NumberToConsole(Rank(7)))
+	value.ConsoleLog(value.NumberToConsole(Rank(3)))
+	value.ConsoleLog(value.NumberToConsole(Rank(-1)))
 	value.ConsoleLog(value.BoolToString(Positive(3)))
 	value.ConsoleLog(value.BoolToString(Positive(-1)))
 }

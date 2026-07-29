@@ -19,8 +19,8 @@ func main() {
 		return 3
 	}())
 	result := Scale(seed, 4)
-	value.ConsoleLog(value.NumberToString(calls))
-	value.ConsoleLog(value.NumberToString(result))
+	value.ConsoleLog(value.NumberToConsole(calls))
+	value.ConsoleLog(value.NumberToConsole(result))
 	step := 0.0
 	total := (func() float64 {
 		_ = func() float64 {
@@ -35,6 +35,6 @@ func main() {
 		}()
 		return Scale(step, 2)
 	}())
-	value.ConsoleLog(value.NumberToString(step))
-	value.ConsoleLog(value.NumberToString(total))
+	value.ConsoleLog(value.NumberToConsole(step))
+	value.ConsoleLog(value.NumberToConsole(total))
 }

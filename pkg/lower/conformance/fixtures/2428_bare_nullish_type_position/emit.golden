@@ -23,13 +23,13 @@ type Tuple_num_null struct {
 
 func main() {
 	undefs := value.NewArray[value.Value](value.Undefined, value.Undefined, value.Undefined)
-	value.ConsoleLog(value.NumberToString(undefs.Len()))
+	value.ConsoleLog(value.NumberToConsole(undefs.Len()))
 	nulls := value.NewArray[value.Value](value.Null, value.Null)
-	value.ConsoleLog(value.NumberToString(nulls.Len()))
+	value.ConsoleLog(value.NumberToConsole(nulls.Len()))
 	s := &ObjNNoteTag_2{Tag: value.Null, Note: value.Undefined, N: 7}
-	value.ConsoleLog(value.NumberToString(s.N))
+	value.ConsoleLog(value.NumberToConsole(s.N))
 	empty := value.NewArray[value.Value]()
-	value.ConsoleLog(value.NumberToString(empty.Len()))
+	value.ConsoleLog(value.NumberToConsole(empty.Len()))
 	pair := Tuple_num_null{E0: 3, E1: value.Null}
-	value.ConsoleLog(value.NumberToString(pair.E0))
+	value.ConsoleLog(value.NumberToConsole(pair.E0))
 }

@@ -26,13 +26,13 @@ func (b *Box) Store(v float64) float64 {
 }
 func main() {
 	b := NewBox()
-	value.ConsoleLog(value.NumberToString(b.Store(7)), value.NumberToString(b.Value))
+	value.ConsoleLog(value.NumberToConsole(b.Store(7)), value.NumberToConsole(b.Value))
 	o := &ObjLabelN{N: 0, Label: value.FromGoString("")}
-	value.ConsoleLog(value.NumberToString((func() float64 {
+	value.ConsoleLog(value.NumberToConsole((func() float64 {
 		var _bt0 float64 = 5
 		o.N = _bt0
 		return _bt0
-	}())), value.NumberToString(o.N))
+	}())), value.NumberToConsole(o.N))
 	value.ConsoleLog((func() value.BStr {
 		var _bt1 value.BStr = value.FromGoString("hi")
 		o.Label = _bt1
@@ -40,13 +40,13 @@ func main() {
 	}()), o.Label)
 	x := 0.0
 	y := 0.0
-	value.ConsoleLog(value.NumberToString(func() float64 {
+	value.ConsoleLog(value.NumberToConsole(func() float64 {
 		x = func() float64 {
 			y = 9
 			return y
 		}()
 		return x
-	}()), value.NumberToString(x), value.NumberToString(y))
+	}()), value.NumberToConsole(x), value.NumberToConsole(y))
 	s := value.FromGoString("")
 	value.ConsoleLog(func() value.BStr {
 		s = value.FromGoString("set")

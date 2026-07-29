@@ -35,10 +35,10 @@ func AndObj(o *ObjA) float64 {
 	return o.A
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(OrNum(0)))
-	value.ConsoleLog(value.NumberToString(OrNum(3)))
-	value.ConsoleLog(value.NumberToString(AndNum(0)))
-	value.ConsoleLog(value.NumberToString(AndNum(5)))
+	value.ConsoleLog(value.NumberToConsole(OrNum(0)))
+	value.ConsoleLog(value.NumberToConsole(OrNum(3)))
+	value.ConsoleLog(value.NumberToConsole(AndNum(0)))
+	value.ConsoleLog(value.NumberToConsole(AndNum(5)))
 	value.ConsoleLog(OrStr(value.FromGoString("")))
-	value.ConsoleLog(value.NumberToString(AndObj(&ObjA{A: 1})))
+	value.ConsoleLog(value.NumberToConsole(AndObj(&ObjA{A: 1})))
 }

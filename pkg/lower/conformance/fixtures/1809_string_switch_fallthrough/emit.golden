@@ -55,7 +55,7 @@ func main() {
 	value.ConsoleLog(Tag(value.Number(0)))
 	value.ConsoleLog(Tag(value.Number(3)))
 	value.ConsoleLog(Tag(value.Bool(true)))
-	value.ConsoleLog(value.NumberToString(Accumulate(1)))
-	value.ConsoleLog(value.NumberToString(Accumulate(2)))
-	value.ConsoleLog(value.NumberToString(Accumulate(5)))
+	value.ConsoleLog(value.NumberToConsole(Accumulate(1)))
+	value.ConsoleLog(value.NumberToConsole(Accumulate(2)))
+	value.ConsoleLog(value.NumberToConsole(Accumulate(5)))
 }

@@ -15,8 +15,8 @@ var fromArray func(*value.Array[float64]) *value.Promise[float64]
 
 func Main() *value.Promise[value.Unit] {
 	return value.RunAsyncVoid(func(_bt0 *value.AsyncCo) {
-		value.ConsoleLog(value.NumberToString(value.Await(_bt0, fromObject(&ObjX{X: 41}))))
-		value.ConsoleLog(value.NumberToString(value.Await(_bt0, fromArray(value.NewArray[float64](6, 7)))))
+		value.ConsoleLog(value.NumberToConsole(value.Await(_bt0, fromObject(&ObjX{X: 41}))))
+		value.ConsoleLog(value.NumberToConsole(value.Await(_bt0, fromArray(value.NewArray[float64](6, 7)))))
 	})
 }
 func main() {

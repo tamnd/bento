@@ -126,8 +126,8 @@ func Truthy(x NumOrNull) value.BStr {
 func main() {
 	value.ConsoleLog(Num(NumOrNullOfNum(5)))
 	value.ConsoleLog(Num(NumOrNullOfNull()))
-	value.ConsoleLog(value.NumberToString(Str(StrOrNullOfStr(value.FromGoString("hello")))))
-	value.ConsoleLog(value.NumberToString(Str(StrOrNullOfNull())))
+	value.ConsoleLog(value.NumberToConsole(Str(StrOrNullOfStr(value.FromGoString("hello")))))
+	value.ConsoleLog(value.NumberToConsole(Str(StrOrNullOfNull())))
 	value.ConsoleLog(Bool(BoolOrNullOfBool(true)))
 	value.ConsoleLog(Bool(BoolOrNullOfNull()))
 	value.ConsoleLog(Truthy(NumOrNullOfNum(0)))

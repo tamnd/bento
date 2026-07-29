@@ -11,14 +11,14 @@ func main() {
 	for i := 1.0; i <= 100000; i++ {
 		sum += int64(i) * int64(i)
 	}
-	value.ConsoleLog(value.NumberToString(float64(sum)))
+	value.ConsoleLog(value.NumberToConsole(float64(sum)))
 	var neg int64 = 0
 	for j := 1.0; j <= 100000; j++ {
 		neg -= int64(j) * int64(j)
 	}
-	value.ConsoleLog(value.NumberToString(float64(neg)))
+	value.ConsoleLog(value.NumberToConsole(float64(neg)))
 	var big_ int64 = 5000000000
 	big_++
-	value.ConsoleLog(value.NumberToString(float64(big_)))
-	value.ConsoleLog(value.NumberToString(float64(sum) + float64(big_)))
+	value.ConsoleLog(value.NumberToConsole(float64(big_)))
+	value.ConsoleLog(value.NumberToConsole(float64(sum) + float64(big_)))
 }

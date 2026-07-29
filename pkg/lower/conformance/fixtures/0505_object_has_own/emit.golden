@@ -14,7 +14,7 @@ type ObjABC struct {
 
 func Run() {
 	o := &ObjABC{A: 1, B: value.FromGoString("x"), C: true}
-	value.ConsoleLog(value.NumberToString(o.A))
+	value.ConsoleLog(value.NumberToConsole(o.A))
 	value.ConsoleLog(value.BoolToString(true))
 	value.ConsoleLog(value.BoolToString(true))
 	value.ConsoleLog(value.BoolToString(true))

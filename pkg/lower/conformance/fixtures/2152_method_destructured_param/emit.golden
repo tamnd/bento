@@ -28,6 +28,6 @@ func (r *Rect) Diff(__0 *value.Array[float64]) float64 {
 }
 func main() {
 	r := NewRect()
-	value.ConsoleLog(value.NumberToString(r.Area(&ObjHW{W: 3, H: 4})))
-	value.ConsoleLog(value.NumberToString(r.Diff(value.NewArray[float64](9, 4))))
+	value.ConsoleLog(value.NumberToConsole(r.Area(&ObjHW{W: 3, H: 4})))
+	value.ConsoleLog(value.NumberToConsole(r.Diff(value.NewArray[float64](9, 4))))
 }

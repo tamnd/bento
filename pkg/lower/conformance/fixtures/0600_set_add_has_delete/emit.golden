@@ -11,11 +11,11 @@ func Run() {
 	s.Add(value.FromGoString("a"))
 	s.Add(value.FromGoString("b"))
 	s.Add(value.FromGoString("a"))
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 	value.ConsoleLog(value.BoolToString(s.Has(value.FromGoString("a"))))
 	s.Delete(value.FromGoString("a"))
 	value.ConsoleLog(value.BoolToString(s.Has(value.FromGoString("a"))))
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 }
 func main() {
 	Run()

@@ -17,5 +17,5 @@ func Add(U5F_ float64) float64 {
 }
 func main() {
 	U5F_ := 1.0
-	value.ConsoleLog(value.NumberToString(U5F_ + Add(3)))
+	value.ConsoleLog(value.NumberToConsole(U5F_ + Add(3)))
 }

@@ -22,13 +22,13 @@ func Pick(x float64, on bool) float64 {
 	return 0
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Inc(5, 1)))
-	value.ConsoleLog(value.NumberToString(Inc(5, 3)))
+	value.ConsoleLog(value.NumberToConsole(Inc(5, 1)))
+	value.ConsoleLog(value.NumberToConsole(Inc(5, 3)))
 	value.ConsoleLog(Greet(value.FromGoString("sam"), value.FromGoString("hi")))
 	value.ConsoleLog(Greet(value.FromGoString("sam"), value.FromGoString("yo")))
-	value.ConsoleLog(value.NumberToString(Box(2, 3)))
-	value.ConsoleLog(value.NumberToString(Box(5, 3)))
-	value.ConsoleLog(value.NumberToString(Box(5, 6)))
-	value.ConsoleLog(value.NumberToString(Pick(9, true)))
-	value.ConsoleLog(value.NumberToString(Pick(9, false)))
+	value.ConsoleLog(value.NumberToConsole(Box(2, 3)))
+	value.ConsoleLog(value.NumberToConsole(Box(5, 3)))
+	value.ConsoleLog(value.NumberToConsole(Box(5, 6)))
+	value.ConsoleLog(value.NumberToConsole(Pick(9, true)))
+	value.ConsoleLog(value.NumberToConsole(Pick(9, false)))
 }

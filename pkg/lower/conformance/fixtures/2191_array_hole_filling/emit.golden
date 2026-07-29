@@ -14,11 +14,11 @@ func main() {
 	f := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3)})
 	_ = f.DeleteIndex(1)
 	value.GenericFill(f, value.Number(0))
-	value.ConsoleLog(value.NumberToString(f.OwnEnumerableKeys().Len()))
+	value.ConsoleLog(value.NumberToConsole(f.OwnEnumerableKeys().Len()))
 	value.ConsoleLog(value.ConsoleValue(f.GetIndex(1)))
 	c := value.NewArrayValue([]value.Value{value.Number(1), value.Number(2), value.Number(3)})
 	_ = c.DeleteIndex(1)
 	value.GenericCopyWithin(c, value.Number(0), value.Number(1))
-	value.ConsoleLog(value.NumberToString(c.OwnEnumerableKeys().Len()))
+	value.ConsoleLog(value.NumberToConsole(c.OwnEnumerableKeys().Len()))
 	value.ConsoleLog(value.ConsoleValue(c.GetIndex(1)))
 }

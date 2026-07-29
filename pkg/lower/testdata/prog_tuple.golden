@@ -29,14 +29,14 @@ func Minmax(xs *value.Array[float64]) Tuple_num_num {
 func main() {
 	pair := Tuple_str_num{E0: value.FromGoString("age"), E1: 42}
 	value.ConsoleLog(pair.E0)
-	value.ConsoleLog(value.NumberToString(pair.E1))
+	value.ConsoleLog(value.NumberToConsole(pair.E1))
 	label := pair.E0
 	value_ := pair.E1
 	value.ConsoleLog(label)
-	value.ConsoleLog(value.NumberToString(value_))
+	value.ConsoleLog(value.NumberToConsole(value_))
 	_bt0 := Minmax(value.NewArray[float64](3, 1, 4, 1, 5, 9, 2, 6))
 	lo := _bt0.E0
 	hi := _bt0.E1
-	value.ConsoleLog(value.NumberToString(lo))
-	value.ConsoleLog(value.NumberToString(hi))
+	value.ConsoleLog(value.NumberToConsole(lo))
+	value.ConsoleLog(value.NumberToConsole(hi))
 }

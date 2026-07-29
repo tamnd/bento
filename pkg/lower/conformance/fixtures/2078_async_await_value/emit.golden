@@ -16,7 +16,7 @@ func Run() *value.Promise[float64] {
 func main() {
 	value.ConsoleLog(value.FromGoString("before"))
 	Run().Then(func(v float64) {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	})
 	value.ConsoleLog(value.FromGoString("after-call"))
 	value.RunMicrotasks()

@@ -21,8 +21,8 @@ func main() {
 		}()
 		return 5
 	}())
-	value.ConsoleLog(value.NumberToString(a))
-	value.ConsoleLog(value.NumberToString(b))
+	value.ConsoleLog(value.NumberToConsole(a))
+	value.ConsoleLog(value.NumberToConsole(b))
 	x := (func() float64 {
 		_ = func() float64 {
 			_ = 1
@@ -30,7 +30,7 @@ func main() {
 		}()
 		return 3
 	}())
-	value.ConsoleLog(value.NumberToString(x))
+	value.ConsoleLog(value.NumberToConsole(x))
 	n := 0.0
 	last := (func() float64 {
 		_ = func() float64 {
@@ -51,5 +51,5 @@ func main() {
 		}()
 		return n
 	}())
-	value.ConsoleLog(value.NumberToString(last))
+	value.ConsoleLog(value.NumberToConsole(last))
 }

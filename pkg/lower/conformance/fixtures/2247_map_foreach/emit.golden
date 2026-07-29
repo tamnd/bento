@@ -16,9 +16,9 @@ func Run() {
 	m.ForEachValue(func(v float64) {
 		sum += v
 	})
-	value.ConsoleLog(value.NumberToString(sum))
+	value.ConsoleLog(value.NumberToConsole(sum))
 	m.ForEach(func(v float64, k value.BStr) {
-		value.ConsoleLog(k, value.NumberToString(v))
+		value.ConsoleLog(k, value.NumberToConsole(v))
 	})
 }
 func main() {

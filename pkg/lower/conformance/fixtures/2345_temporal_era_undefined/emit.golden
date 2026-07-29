@@ -12,7 +12,7 @@ func main() {
 	value.ConsoleLog(value.ToString(value.OptToValue(d.EraYear(), value.Number)))
 	w := d.WeekOfYear()
 	if !w.IsUndefined() {
-		value.ConsoleLog(value.NumberToString(w.Get() + 100))
+		value.ConsoleLog(value.NumberToConsole(w.Get() + 100))
 	}
 	dt := value.NewPlainDateTime(2020, 3, 15, 10, 30, 0, 0, 0, 0)
 	value.ConsoleLog(value.ToString(value.OptToValue(dt.Era(), value.StringValue)))

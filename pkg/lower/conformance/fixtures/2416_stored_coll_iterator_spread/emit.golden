@@ -22,9 +22,9 @@ func main() {
 		return _bt0
 	}()
 	ka := value.ArrayFrom(append([]value.BStr{}, m.Keys()...))
-	value.ConsoleLog(value.NumberToString(ka.Len()), ka.At(0), ka.At(1))
+	value.ConsoleLog(value.NumberToConsole(ka.Len()), ka.At(0), ka.At(1))
 	va := value.ArrayFrom(append([]float64{}, m.Values()...))
-	value.ConsoleLog(value.NumberToString(va.Len()), value.NumberToString(va.At(0)), value.NumberToString(va.At(1)))
+	value.ConsoleLog(value.NumberToConsole(va.Len()), value.NumberToConsole(va.At(0)), value.NumberToConsole(va.At(1)))
 	ea := value.ArrayFrom(append([]Tuple_str_num{}, func() []Tuple_str_num {
 		_bt2 := m
 		_bt3 := _bt2.Keys()
@@ -35,7 +35,7 @@ func main() {
 		}
 		return _bt1
 	}()...))
-	value.ConsoleLog(value.NumberToString(ea.Len()), ea.At(0).E0, value.NumberToString(ea.At(0).E1))
+	value.ConsoleLog(value.NumberToConsole(ea.Len()), ea.At(0).E0, value.NumberToConsole(ea.At(0).E1))
 	s := func() *value.Set[float64] {
 		_bt7 := value.NewNumberSet()
 		for _, _bt8 := range value.NewArray[float64](7, 8, 9).Elems() {
@@ -43,5 +43,5 @@ func main() {
 		}
 		return _bt7
 	}()
-	value.ConsoleLog(value.NumberToString(Count(value.ArrayFrom(append([]float64{}, s.Members()...)))))
+	value.ConsoleLog(value.NumberToConsole(Count(value.ArrayFrom(append([]float64{}, s.Members()...)))))
 }

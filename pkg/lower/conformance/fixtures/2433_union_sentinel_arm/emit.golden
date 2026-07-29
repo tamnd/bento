@@ -89,7 +89,7 @@ func main() {
 	value.ConsoleLog(Classify(NumOrStrOrUndefOfStr(value.FromGoString("hi"))))
 	value.ConsoleLog(Classify(NumOrStrOrUndefOfUndef()))
 	slot := NumOrStrOrNullOfNum(3)
-	value.ConsoleLog(value.NumberToString(slot.num))
+	value.ConsoleLog(value.NumberToConsole(slot.num))
 	slot = NumOrStrOrNullOfStr(value.FromGoString("text"))
 	value.ConsoleLog(slot.str)
 	slot = NumOrStrOrNullOfNull()

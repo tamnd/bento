@@ -31,10 +31,10 @@ func Tally(base float64, rest *value.Array[float64]) float64 {
 	return t
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Sum(value.NewArray[float64](1, 2, 3, 4))))
-	value.ConsoleLog(value.NumberToString(Sum(value.NewArray[float64]())))
+	value.ConsoleLog(value.NumberToConsole(Sum(value.NewArray[float64](1, 2, 3, 4))))
+	value.ConsoleLog(value.NumberToConsole(Sum(value.NewArray[float64]())))
 	value.ConsoleLog(Join(value.FromGoString("-"), value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("b"), value.FromGoString("c"))))
 	value.ConsoleLog(Join(value.FromGoString("+"), value.NewArray[value.BStr](value.FromGoString("x"))))
-	value.ConsoleLog(value.NumberToString(Tally(100, value.NewArray[float64]())))
-	value.ConsoleLog(value.NumberToString(Tally(1, value.NewArray[float64](2, 3))))
+	value.ConsoleLog(value.NumberToConsole(Tally(100, value.NewArray[float64]())))
+	value.ConsoleLog(value.NumberToConsole(Tally(1, value.NewArray[float64](2, 3))))
 }
