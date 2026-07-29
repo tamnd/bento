@@ -477,9 +477,16 @@ func (o *Object) getChained(recv Value, key BStr) Value {
 		}
 	}
 	// Nothing on the receiver's own chain overrode the name, so fall back to the
-	// Object.prototype method every ordinary object inherits. This runs only on a
-	// genuine miss, after the override check above, so a user-declared property of
-	// the same name still wins.
+	// prototype method the receiver inherits. This runs only on a genuine miss, after
+	// the override check above, so a user-declared property of the same name still wins.
+	// An array is asked Array.prototype first, since its methods sit nearer on the chain
+	// than Object.prototype's and a name the two share (toString, toLocaleString) must
+	// resolve to the array's.
+	if recv.kind == KindArray {
+		if b, ok := arrayProtoBuiltin(recv, key); ok {
+			return b
+		}
+	}
 	if b, ok := objectProtoBuiltin(recv, key); ok {
 		return b
 	}
