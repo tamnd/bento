@@ -1231,11 +1231,25 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		// its parameters (argumentsPlan). Boxed into a dynamic value it is invoked through
 		// value.Call with a call-varying argument slice the fixed snapshot cannot track,
 		// so the snapshot would read the wrong length and slots at any call that does not
-		// pass exactly one argument per parameter. The boxed convention makes that arity
-		// unknowable here, so an arguments-reading function boxed to dynamic hands back
-		// rather than emit a snapshot decoupled from the real call.
+		// pass exactly one argument per parameter.
 		if r.boxedFuncReadsArguments(src) {
-			return nil, &NotYetLowerable{Reason: "arguments in a function boxed into a dynamic value needs the call-site count, a later slice"}
+			// A directly boxed function expression of a threadable shape reads arguments
+			// from the real call instead: the mark is set and the expression is re-lowered
+			// so its body takes a hidden trailing arguments parameter (blockBodyArrow), the
+			// pre-lowered snapshot form discarded, and boxFuncToDynamic fills the parameter
+			// with the arguments the dynamic call passed. Any other shape (a named function
+			// boxed by reference, a rest or optional parameter) has no single wrapper to
+			// carry the hidden parameter, so it keeps the handback.
+			if !r.funcExprBoxThreadsArgs(src) {
+				return nil, &NotYetLowerable{Reason: "arguments in a function boxed into a dynamic value needs the call-site count, a later slice"}
+			}
+			r.boxThreadArgs[src] = true
+			threaded, err := r.lowerExpr(src)
+			if err != nil {
+				delete(r.boxThreadArgs, src)
+				return nil, err
+			}
+			return r.boxFuncToDynamic(threaded, calls[0], src)
 		}
 		return r.boxFuncToDynamic(expr, calls[0], src)
 	}
@@ -1382,6 +1396,21 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 			return nil, err
 		}
 		callArgs = append(callArgs, coerced)
+	}
+	// A function expression that reads arguments took a hidden trailing parameter when
+	// it lowered (blockBodyArrow, gated on the same boxThreadArgs mark), so the wrapper
+	// passes the real call-site arguments as that parameter: the whole __a slice the
+	// dynamic call handed in, boxed into a *value.Array[value.Value]. Its Len and At
+	// answer arguments.length and arguments[i] against the true call arity, not the
+	// parameter count the snapshot would have frozen. The mark is cleared here so the
+	// node's boxing is accounted once.
+	if r.boxThreadArgs[src] {
+		delete(r.boxThreadArgs, src)
+		callArgs = append(callArgs, &ast.CallExpr{
+			Fun:      index(sel("value", "NewArray"), sel("value", "Value")),
+			Args:     []ast.Expr{ident(argsName)},
+			Ellipsis: token.Pos(1),
+		})
 	}
 	// The lowered func is called inline; a bare func literal needs parentheses to sit
 	// in call position, and wrapping a plain identifier callee too is harmless.

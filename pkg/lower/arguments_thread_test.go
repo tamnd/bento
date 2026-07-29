@@ -92,17 +92,19 @@ console.log(g(3));
 	}
 }
 
-// TestArgumentsBoxedCalleeHandsBack proves an arguments-reading function boxed into a
-// dynamic value still hands back: the boxed call convention hides the call-site count,
-// so there is no call site to thread the real arguments through and emitting a
-// snapshot would be wrong.
-func TestArgumentsBoxedCalleeHandsBack(t *testing.T) {
+// TestArgumentsBoxedCalleeThreads proves an arguments-reading function expression
+// boxed directly into a dynamic value threads the real call-site arguments through a
+// hidden trailing parameter the boxed wrapper fills, rather than handing back. The
+// wrapper is the call site the boxed convention exposes: value.Call hands it the whole
+// argument slice, so arguments reads the arity actually passed, not the parameter
+// count a snapshot would freeze.
+func TestArgumentsBoxedCalleeThreads(t *testing.T) {
 	const src = `const a: any = function (x: number): number { return arguments.length; };
 a(1, 2, 3);
 `
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "boxed into a dynamic value") {
-		t.Errorf("hand-back reason %q does not name the boxed-callee case", reason)
+	source := renderProgramTolerant(t, src)
+	if !strings.Contains(source, "value.NewArray[value.Value](__a...)") {
+		t.Errorf("the boxed callee did not thread the real call-site arguments:\n%s", source)
 	}
 }
 

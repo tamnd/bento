@@ -1983,20 +1983,35 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	// plan cannot back a read the whole expression hands back through the error.
 	var argsMat ast.Stmt
 	if n.Kind() == frontend.NodeFunctionExpression {
-		mat, storeName, argsOK, writeSafe, perr := r.argumentsPlan(n, sig)
-		if perr != nil {
-			return nil, perr
-		}
-		argsMat = mat
 		prevArgs, prevArgsWrite, prevArgsLen := r.argsObjName, r.argsWriteSafe, r.argsStoreLen
-		if argsOK {
-			r.argsObjName = storeName
-			r.argsWriteSafe = writeSafe
-			r.argsStoreLen = len(sig.Params)
-		} else {
-			r.argsObjName = ""
-			r.argsWriteSafe = false
+		if r.boxThreadArgs[n] {
+			// The expression is boxed directly and reads arguments, so it threads the real
+			// call-site arguments through a hidden trailing parameter the boxed wrapper
+			// fills (boxFuncToDynamic), the same store shape argumentsPlan builds but fed by
+			// the actual call rather than the parameter snapshot. No entry materialization
+			// runs; the store is the parameter itself, and its length is call-varying.
+			hidden := r.freshTemp()
+			r.requireImport(valuePkg)
+			fields = append(fields, hiddenArgsField(hidden))
+			block, _ := r.funcBodyBlock(n)
+			r.argsObjName = hidden
+			r.argsWriteSafe = !r.bodyReferencesParam(block, sig.Params)
 			r.argsStoreLen = -1
+		} else {
+			mat, storeName, argsOK, writeSafe, perr := r.argumentsPlan(n, sig)
+			if perr != nil {
+				return nil, perr
+			}
+			argsMat = mat
+			if argsOK {
+				r.argsObjName = storeName
+				r.argsWriteSafe = writeSafe
+				r.argsStoreLen = len(sig.Params)
+			} else {
+				r.argsObjName = ""
+				r.argsWriteSafe = false
+				r.argsStoreLen = -1
+			}
 		}
 		defer func() { r.argsObjName, r.argsWriteSafe, r.argsStoreLen = prevArgs, prevArgsWrite, prevArgsLen }()
 	}

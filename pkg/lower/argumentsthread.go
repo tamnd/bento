@@ -125,6 +125,60 @@ func (r *Renderer) funcNodeThreadsArgs(fn frontend.Node, sig frontend.Signature)
 	return true
 }
 
+// funcExprBoxThreadsArgs reports whether a function expression boxed directly into a
+// dynamic value threads its real call-site arguments through a hidden trailing
+// parameter rather than the parameter snapshot. It is the expression analogue of
+// funcNodeThreadsArgs, gated to the shape the boxed wrapper already fills: an
+// all-required, rest-free, non-generic, synchronous function whose body reads
+// arguments in a supported way and does not write a named parameter alongside an
+// element read. Unlike the declaration form it needs no whole-program reference
+// walk: a directly boxed function expression has exactly one reference, the boxing
+// site, so the wrapper is the sole caller and always passes the hidden array. A rest
+// or optional parameter, an async or generator body, a generic signature, or a
+// parameter write beside an element read keeps the existing handback.
+func (r *Renderer) funcExprBoxThreadsArgs(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeFunctionExpression {
+		return false
+	}
+	sig, ok := r.prog.SignatureAt(n)
+	if !ok {
+		return false
+	}
+	// The boxed wrapper coerces one argument per declared parameter, so only an
+	// all-required, rest-free signature fits it. A rest or optional parameter stays on
+	// the wrapper's own rest and optional handbacks.
+	if sig.RestParam != nil || sig.MinArgs != len(sig.Params) {
+		return false
+	}
+	if len(sig.TypeParams) != 0 {
+		return false
+	}
+	if r.isAsyncFunc(n) || r.isGeneratorFunc(n) {
+		return false
+	}
+	if r.isCallableObject(r.prog.TypeAt(n)) {
+		return false
+	}
+	block, ok := r.funcBodyBlock(n)
+	if !ok {
+		return false
+	}
+	reads, supported, indexed := false, true, false
+	for _, stmt := range r.prog.Children(block) {
+		r.scanArguments(stmt, &reads, &supported, &indexed)
+	}
+	if !reads || !supported {
+		return false
+	}
+	// A write to a named parameter alongside an element read is the mapped-arguments
+	// aliasing the unmapped hidden array does not mirror, the same handback the
+	// snapshot plan keeps.
+	if indexed && r.bodyWritesParam(block, sig.Params) {
+		return false
+	}
+	return true
+}
+
 // funcSymCallShape walks the whole program and reports whether every reference to a
 // function symbol is a direct call this pass can rewrite (clean), and whether any of
 // those calls passes an argument count other than the parameter count (anyLoose).
