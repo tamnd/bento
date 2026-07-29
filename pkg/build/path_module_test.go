@@ -1,6 +1,26 @@
 package build
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
+
+// hostPathIsWin32 is whether require('path') on the machine running this test is the
+// win32 variant, which is the choice Node's own module makes and the one the module
+// here copies. The tests that call the host module rather than a named variant have
+// to expect its answers, and the two variants disagree about ordinary input: a
+// backslash separates segments on one and is a filename character on the other.
+var hostPathIsWin32 = runtime.GOOS == "windows"
+
+// wantForHost picks between the two variants' expected output. Both strings came from
+// real Node, the posix one from the host module and the win32 one from
+// require('path').win32, which is the same code Node runs as `path` on Windows.
+func wantForHost(posix, win32 string) string {
+	if hostPathIsWin32 {
+		return win32
+	}
+	return posix
+}
 
 // require('path') answered a throw-on-use stub until this slice, so a compiled
 // program that reached for the most-used Node module of all built successfully and
@@ -24,16 +44,32 @@ func TestRequiringPathAnswersTheRealModule(t *testing.T) {
 			"console.log(path.normalize('a/./b//c/../d'));\n"+
 			"console.log(path.isAbsolute('/a'), path.isAbsolute('a'));\n"+
 			"console.log(path.relative('/a/b', '/a/c'));\n"+
-			"console.log(path.resolve('/a', 'b', 'c'));\n"+
+			// resolve is checked by an identity rather than a literal because the win32
+			// half of it prepends the working directory's drive, which is whatever drive
+			// the test happens to run from. The posix answer is pinned outright on the
+			// next line, where no working directory is involved.
+			"console.log(path.resolve('/a', 'b', 'c') === path.resolve('/a/b/c'));\n"+
+			"console.log(path.posix.resolve('/a', 'b', 'c'));\n"+
 			"console.log(JSON.stringify(path.sep), JSON.stringify(path.delimiter));\n")
-	want := "a/c\n" +
-		"/a/b c.txt .txt\n" +
-		"c\n" +
-		"a/b/d\n" +
-		"true false\n" +
-		"../c\n" +
-		"/a/b/c\n" +
-		"\"/\" \":\"\n"
+	want := wantForHost(
+		"a/c\n"+
+			"/a/b c.txt .txt\n"+
+			"c\n"+
+			"a/b/d\n"+
+			"true false\n"+
+			"../c\n"+
+			"true\n"+
+			"/a/b/c\n"+
+			"\"/\" \":\"\n",
+		"a\\c\n"+
+			"/a/b c.txt .txt\n"+
+			"c\n"+
+			"a\\b\\d\n"+
+			"true false\n"+
+			"..\\c\n"+
+			"true\n"+
+			"/a/b/c\n"+
+			"\"\\\\\" \";\"\n")
 	if got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
@@ -55,12 +91,21 @@ func TestParseAndFormatWorkInABinary(t *testing.T) {
 			"p.base = undefined;\n"+
 			"p.ext = '.md';\n"+
 			"console.log(path.format(p));\n")
-	want := "/ /home/user/dir file.txt .txt file\n" +
-		`{"root":"","dir":"","base":".bashrc","ext":"","name":".bashrc"}` + "\n" +
-		"/a/b/f.txt\n" +
-		"/f.js\n" +
-		"f.js\n" +
-		"/home/user/dir/file.md\n"
+	// parse reads the same on both variants here, since a forward slash separates
+	// segments on either. format differs, because it joins with the host separator.
+	want := wantForHost(
+		"/ /home/user/dir file.txt .txt file\n"+
+			`{"root":"","dir":"","base":".bashrc","ext":"","name":".bashrc"}`+"\n"+
+			"/a/b/f.txt\n"+
+			"/f.js\n"+
+			"f.js\n"+
+			"/home/user/dir/file.md\n",
+		"/ /home/user/dir file.txt .txt file\n"+
+			`{"root":"","dir":"","base":".bashrc","ext":"","name":".bashrc"}`+"\n"+
+			"/a/b\\f.txt\n"+
+			"/f.js\n"+
+			"f.js\n"+
+			"/home/user/dir\\file.md\n")
 	if got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
@@ -105,8 +150,10 @@ func TestThePathIdentitiesHoldInABinary(t *testing.T) {
 			"console.log(require('path/posix') === path.posix, require('node:path/win32') === path.win32);\n"+
 			"console.log(path.posix.posix === path.posix, path.win32.posix === path.posix);\n"+
 			"console.log(path.posix !== path.win32);\n"+
-			"console.log(path === path.posix);\n")
-	want := "true true\ntrue true\ntrue true\ntrue\ntrue\n"
+			// The core module is one of the two variants rather than a third object, and
+			// which one it is follows the host, the same choice Node's own module makes.
+			"console.log(path === path.win32 ? 'win32' : path === path.posix ? 'posix' : 'neither');\n")
+	want := "true true\ntrue true\ntrue true\ntrue\n" + wantForHost("posix\n", "win32\n")
 	if got != want {
 		t.Fatalf("want %q, got %q", want, got)
 	}
