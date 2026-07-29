@@ -909,7 +909,15 @@ func (r *Renderer) combineIsDynamic(opText string, left, right frontend.Node) bo
 	if r.isString(left) || r.isString(right) {
 		return false
 	}
-	return r.isDynamic(left) || r.isDynamic(right)
+	// An operand whose lowering is a box counts as dynamic here whatever the checker
+	// called it, which is what makes a chain of sums over boxed reads lower rather
+	// than hand back at its second term. `busy += c.times.user + c.times.sys` is the
+	// shape: the inner + is itself a value.Add, so the outer + has a boxed operand
+	// even though the checker types the inner sum a number. boxOperand and
+	// boxStaticToDynamic already pass such an operand through untouched, so the two
+	// ends of the decision agree.
+	return r.isDynamic(left) || r.isDynamic(right) ||
+		r.producesBoxedValue(left) || r.producesBoxedValue(right)
 }
 
 // boxOperand lowers an operand to a value.Value so a dynamic operator can take it.
@@ -1508,6 +1516,28 @@ func (r *Renderer) isBoxedStaticFieldRead(src frontend.Node) bool {
 		return false
 	}
 	return strings.HasPrefix(f.prop, "#")
+}
+
+// boxedFieldIdent reports whether n is the declaration name node of a class field
+// whose Go slot is a value.Value rather than the type the checker read off its
+// declaration. A private static field is that case, and it is the read side of the
+// same fact isBoxedStaticFieldRead answers: `static #count: number = 0` types as a
+// number and is held in a box.
+//
+// A store routes its coercion through the field's ident rather than through the
+// property access it was written as (classFieldAssign), so neither of the two
+// predicates above sees a box there, and the bridge would coerce a boxed source
+// down through ToNumber into a slot that holds a box. That does not compile, which
+// is the same failure this bridge was widened to fix, with its two sides swapped.
+func (r *Renderer) boxedFieldIdent(n frontend.Node) bool {
+	for _, info := range r.classes {
+		for _, f := range info.statics {
+			if f.ident == n {
+				return strings.HasPrefix(f.prop, "#")
+			}
+		}
+	}
+	return false
 }
 
 // isIterTerminalBoxedCall reports whether src is a terminal iterator helper whose
@@ -2694,8 +2724,25 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	if err := r.guardJSONStringifyUndefinedIntoString(src, r.prog.TypeAt(target).Flags); err != nil {
 		return nil, err
 	}
-	srcDyn := r.isDynamic(src)
-	tgtDyn := r.isDynamic(target)
+	// A source whose lowering is a box but whose checker type is a concrete primitive
+	// is dynamic for the purpose of this bridge, whatever the checker called it. The
+	// motivating case is a + over a boxed operand: `let n = 0; n = n + os.totalmem()`
+	// lowers to value.Add, a value.Value, while the checker types the sum number, so
+	// without this the bridge saw static-to-static, emitted the box straight into a
+	// float64 slot, and the build failed at the Go compiler with the reason lost.
+	// producesBoxedValue is the predicate that already answers which lowerings are
+	// boxes, and is the same one the opposite direction reads to know that boxing
+	// such a source again would be the identity, so the two directions cannot
+	// disagree about what a box is.
+	// The target is asked the same question, and for the same reason. A slot can be a
+	// box while the checker types it a primitive: a static private field declared
+	// `static #count: number = 0` is held in a value.Value. Widening only the source
+	// would make the bridge see dynamic-to-static there and coerce the box down through
+	// ToNumber into a slot that holds a box, which is the original bug with its two
+	// sides swapped. Both sides read the same predicate, so neither can be wrong about
+	// the other.
+	srcDyn := r.isDynamic(src) || r.producesBoxedValue(src)
+	tgtDyn := r.isDynamic(target) || r.producesBoxedValue(target) || r.boxedFieldIdent(target)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStatic(expr, target)
