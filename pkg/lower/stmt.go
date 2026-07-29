@@ -1848,6 +1848,33 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding fed by a read or a call off one of those module bindings is the
+		// next line of the same program: `const os = require('os')` followed by
+		// `const cpus = os.cpus()`, which is how every CommonJS program that uses a
+		// built-in is written. The module binding is a box with no declaration behind
+		// it, so the checker has no type for anything read off it and typeExpr on the
+		// binding hands back with "no type at this position"; but the read itself
+		// lowers through the value model and yields a value.Value, so the binding has
+		// a Go type after all, the same one the module binding took. Marking it
+		// dynamic carries that through to its own later reads, so a chain as long as
+		// os.cpus()[0].times.idle stays on the value model the whole way down.
+		//
+		// The guard is the flagless type rather than the shape of the initializer, so
+		// a read off a module the checker does have a type for keeps its typed slot.
+		if r.prog.TypeAt(kids[0]).Flags == 0 && r.isRootedInDynBound(kids[initIdx]) {
+			dynInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{dynInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		// new Event(...), new EventTarget(), and new AbortController() build value objects
 		// the runtime reads through the dynamic member and call path, but the checker types
 		// the binding by the standard library's static interfaces, which would route the

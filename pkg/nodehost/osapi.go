@@ -73,3 +73,20 @@ func OSUptime() float64 { return readHostFacts().Uptime }
 // OSAvailableParallelism is os.availableParallelism(), the count of cores this
 // process may run on.
 func OSAvailableParallelism() float64 { return float64(availableParallelism()) }
+
+// OSLoadavg is os.loadavg(), the one, five and fifteen minute run queue averages.
+// Windows keeps no such thing and Node reports three zeros there.
+func OSLoadavg() [3]float64 { return readHostFacts().Loadavg }
+
+// OSCPUs is os.cpus(), one entry per core the machine has. It is measured on each
+// call, since the times in it climb while a program runs and a program that wants
+// a utilization figure reads it twice and subtracts.
+func OSCPUs() []CPUInfo { return cpuList() }
+
+// OSNetworkInterfaces is os.networkInterfaces(), the addresses of each interface
+// keyed by its name, measured on each call because an interface can come up or go
+// away while a program runs.
+func OSNetworkInterfaces() map[string][]NetInterface { return networkInterfaces() }
+
+// OSUserInfo is os.userInfo(), the user this process runs as.
+func OSUserInfo() UserInfo { return currentUser(OSHomedir()) }

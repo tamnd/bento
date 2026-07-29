@@ -17,7 +17,7 @@ const appleSiliconSpeed = 2400
 // no sysctl in front of it and no route to it from a pure Go build, and this
 // repository builds without cgo so that its output cross-compiles. Reporting zeros
 // is the honest shape of not knowing; a plausible invented number would not be.
-func readCPUs() []cpuInfo {
+func readCPUs() []CPUInfo {
 	n, err := unix.SysctlUint32("hw.logicalcpu")
 	if err != nil || n == 0 {
 		return nil
@@ -30,9 +30,9 @@ func readCPUs() []cpuInfo {
 	if hz, err := unix.SysctlUint64("hw.cpufrequency"); err == nil && hz > 0 {
 		speed = int(hz / 1e6)
 	}
-	out := make([]cpuInfo, n)
+	out := make([]CPUInfo, n)
 	for i := range out {
-		out[i] = cpuInfo{Model: model, Speed: speed}
+		out[i] = CPUInfo{Model: model, Speed: speed}
 	}
 	return out
 }

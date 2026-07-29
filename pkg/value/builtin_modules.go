@@ -123,14 +123,18 @@ func RequireBuiltin(specifier string) Value {
 
 // buildBuiltinModule constructs the module value for a canonical built-in name: a
 // real implementation for a name bento carries, or the throw-on-use stub for one it
-// does not yet. The module core module is the first real entry, since it is the seam
-// a program uses to read the registry itself rather than a data-bearing library. Each
-// later slice adds a case here that returns a real module and drops the name from the
+// does not yet. The module core module was the first real entry, since it is the seam
+// a program uses to read the registry itself rather than a data-bearing library, and
+// os is the second: it is the module that answers questions about the machine, and
+// answering them needed the per-platform measurements to exist first. Each later
+// slice adds a case here that returns a real module and drops the name from the
 // stub path.
 func buildBuiltinModule(name string) Value {
 	switch name {
 	case "module":
 		return newModuleModule()
+	case "os":
+		return newOSModule()
 	default:
 		return newStubModule(name)
 	}

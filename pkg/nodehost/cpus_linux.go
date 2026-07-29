@@ -19,13 +19,13 @@ const msPerTick = 1000 / 100
 //
 // /proc/stat is what decides how many cores there are, since it lists the cores
 // the machine has rather than the ones this process is allowed on.
-func readCPUs() []cpuInfo {
+func readCPUs() []CPUInfo {
 	stat, err := os.ReadFile("/proc/stat")
 	if err != nil {
 		return nil
 	}
 	models, speeds := readCPUInfoFile()
-	var out []cpuInfo
+	var out []CPUInfo
 	for _, line := range strings.Split(string(stat), "\n") {
 		// The first line is the whole machine's total, named "cpu" with no number, and
 		// is not a core. The per-core lines are cpu0, cpu1 and so on, in order.
@@ -42,7 +42,7 @@ func readCPUs() []cpuInfo {
 		if len(fields) < 8 {
 			continue
 		}
-		info := cpuInfo{Model: "unknown"}
+		info := CPUInfo{Model: "unknown"}
 		if m, ok := models[n]; ok {
 			info.Model = m
 		}
@@ -50,7 +50,7 @@ func readCPUs() []cpuInfo {
 		if info.Speed == 0 {
 			info.Speed = readCPUFreq(n)
 		}
-		info.Times = cpuTimes{
+		info.Times = CPUTimes{
 			User: ticksToMS(fields[1]),
 			Nice: ticksToMS(fields[2]),
 			Sys:  ticksToMS(fields[3]),
