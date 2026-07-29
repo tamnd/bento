@@ -326,6 +326,13 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 		if shape, ok := r.symbolIteratorShape(r.prog.TypeAt(kids[1])); ok {
 			return r.forOfIterator(kids[1], dkids[0], name, kids[2], shape)
 		}
+		// The iterable lowers to a boxed value, so what it is cannot be settled here: it
+		// is whatever the built-in that produced it answered. It is asked at run time
+		// instead. This is the shape every `for (const c of os.cpus())` takes, since a
+		// node built-in hands back a value.Value and the checker knows only that.
+		if stmt, handled, err := r.forOfDynamic(kids[1], dkids[0], name, kids[2]); handled {
+			return stmt, err
+		}
 		return nil, &NotYetLowerable{Reason: "for...of over a non-array, non-string iterable is a later slice"}
 	}
 	if iter == nil {
@@ -816,7 +823,7 @@ func (r *Renderer) forOfDestructure(iterable, pattern, bodyNode frontend.Node) (
 	// concrete any[] whose elements are boxed is not dynamic here (its Go storage is a
 	// value.Array), so the dynamic-element path below still fires for it.
 	if r.isDynamic(iterable) {
-		return nil, &NotYetLowerable{Reason: "a destructuring for...of over an iterable that lowers to a boxed value is a later slice"}
+		return r.forOfDynamicPatternIter(iterable, pattern, bodyNode)
 	}
 	if !isArrayElem(r, iterable) {
 		return nil, &NotYetLowerable{Reason: "a destructuring for...of over a non-array iterable is a later slice"}

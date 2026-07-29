@@ -29,6 +29,19 @@ func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
 	if r.callOfDynamicStorage(n) {
 		return frontend.TypeAny
 	}
+	// A binding whose Go slot holds a box reports no primitive facet whatever the
+	// checker read off its declaration, for the same reason: the slot is a value.Value
+	// and every static coercion over it would mistype it. This reaches a name the
+	// checker typed a primitive, which the older dynBound sources never produced (they
+	// bind object shapes) but a pattern destructured out of a boxed element does:
+	// `for (const [k, v] of Object.entries(box))` types k a string while its slot holds
+	// the box GetIndex answered. Without this, console.log(k) would pass a value.Value
+	// where the string path expects a value.BStr, which does not compile.
+	if n.Kind() == frontend.NodeIdentifier {
+		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
+			return frontend.TypeAny
+		}
+	}
 	return r.primitiveFlagsOfType(r.prog.TypeAt(n))
 }
 
