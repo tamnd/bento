@@ -5,7 +5,9 @@
 // library and pkg/value, never pkg/engine, so an AOT binary that calls into it
 // stays free of the interpreter the way the whole AOT path is; the interpreter's
 // own pkg/node host layer delegates to the same functions so the two share one
-// implementation and never drift.
+// implementation and never drift. It also reaches for golang.org/x/sys, which is
+// where the per-platform system calls the os module's numbers come from live; that
+// is the standard library by another name and not a step toward the interpreter.
 package nodehost
 
 import (
@@ -26,6 +28,7 @@ type osInfo struct {
 	Type              string                `json:"type"`
 	Release           string                `json:"release"`
 	Version           string                `json:"version"`
+	Machine           string                `json:"machine"`
 	Hostname          string                `json:"hostname"`
 	Homedir           string                `json:"homedir"`
 	Tmpdir            string                `json:"tmpdir"`
@@ -85,20 +88,22 @@ func OSInfoJSON() string {
 func collectOSInfo() osInfo {
 	hostname, _ := os.Hostname()
 	home, _ := os.UserHomeDir()
+	facts := readHostFacts()
 	return osInfo{
 		Platform:          nodePlatform(),
 		Arch:              nodeArch(),
 		Type:              osType(),
-		Release:           "",
-		Version:           "",
+		Release:           facts.Release,
+		Version:           facts.Version,
+		Machine:           facts.Machine,
 		Hostname:          hostname,
 		Homedir:           home,
 		Tmpdir:            os.TempDir(),
 		Endianness:        endianness(),
-		Totalmem:          0,
-		Freemem:           0,
-		Uptime:            0,
-		Loadavg:           [3]float64{0, 0, 0},
+		Totalmem:          facts.TotalMem,
+		Freemem:           facts.FreeMem,
+		Uptime:            facts.Uptime,
+		Loadavg:           facts.Loadavg,
 		CPUs:              cpuList(),
 		NetworkInterfaces: networkInterfaces(),
 		UserInfo:          currentUser(home),
