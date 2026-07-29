@@ -109,6 +109,8 @@ declare module "node:fs" {
 }
 declare module "node:os" {
 	export function tmpdir(): string;
+	export const EOL: string;
+	export const devNull: string;
 }
 declare module "node:path" {
 	export function join(...parts: string[]): string;
@@ -120,6 +122,8 @@ declare module "node:path" {
 	export function isAbsolute(p: string): boolean;
 	export function relative(from: string, to: string): string;
 	export function toNamespacedPath(p: string): string;
+	export const sep: string;
+	export const delimiter: string;
 }
 `
 

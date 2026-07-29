@@ -1,0 +1,14 @@
+package main
+
+import (
+	"github.com/tamnd/bento/pkg/value"
+)
+
+func main() {
+	value.ConsoleLog(value.PathSep())
+	value.ConsoleLog(value.PathDelimiter())
+	value.ConsoleLog(value.BoolToString(value.PathSep().Equal(value.PathSep())))
+	value.ConsoleLog(value.OSDevNull())
+	value.ConsoleLog(value.NumberToString(value.OSEOL().Length()))
+	value.ConsoleLog(value.BoolToString(value.PathJoin(value.FromGoString("a"), value.FromGoString("b")).Equal(value.FromGoString("a").ConcatN(value.PathSep(), value.FromGoString("b")))))
+}

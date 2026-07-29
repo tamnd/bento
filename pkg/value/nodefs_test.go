@@ -3,6 +3,7 @@ package value
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -143,5 +144,22 @@ func TestPathJoinUsesThePlatformSeparator(t *testing.T) {
 func TestTmpdirNonEmpty(t *testing.T) {
 	if Tmpdir().ToGoString() == "" {
 		t.Fatal("Tmpdir returned empty")
+	}
+}
+
+// TestOSConstantsMatchNode pins os.EOL and os.devNull against the spellings Node
+// reports, per platform. They are the two facts about the host a program reads
+// off node:os rather than computing, and Node's win32 devNull is a device
+// namespace path rather than a file path, which is the part worth writing down.
+func TestOSConstantsMatchNode(t *testing.T) {
+	wantEOL, wantDevNull := "\n", "/dev/null"
+	if runtime.GOOS == "windows" {
+		wantEOL, wantDevNull = "\r\n", `\\.\nul`
+	}
+	if got := OSEOL().ToGoString(); got != wantEOL {
+		t.Errorf("OSEOL = %q, want %q on %s", got, wantEOL, runtime.GOOS)
+	}
+	if got := OSDevNull().ToGoString(); got != wantDevNull {
+		t.Errorf("OSDevNull = %q, want %q on %s", got, wantDevNull, runtime.GOOS)
 	}
 }

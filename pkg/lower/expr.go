@@ -61,6 +61,20 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if module, ok := r.nodeNamespaces[r.prog.Text(n)]; ok {
 			return nil, &NotYetLowerable{Reason: "the " + module + " module used as a whole value is a later slice"}
 		}
+		// A binding a node: import bound to one of the module's exports reads here when
+		// it is used as a value rather than called; the call path intercepts join(a, b)
+		// before this. A data export, import { sep } from "node:path", is a value, so it
+		// reads as the helper that answers it, the same one path.sep reads through. A
+		// function export has no Go func behind it, only a call shape the call path
+		// builds, so it hands back rather than emit the local name, which nothing in the
+		// generated package declares. It is checked before the local-name path for that
+		// reason: without it the read compiled to an undefined identifier.
+		if b, ok := r.nodeImports[r.prog.Text(n)]; ok {
+			if expr, ok := r.nodeConstantRead(b.module, b.name); ok {
+				return expr, nil
+			}
+			return nil, &NotYetLowerable{Reason: "the " + b.module + " export " + b.name + " used as a function value is a later slice"}
+		}
 		// A bare reference to a top-level function used as a value (passed as a
 		// callback, stored in a variable) is the function itself, so it lowers to the
 		// exported Go name its declaration takes, the same name a direct call uses. It

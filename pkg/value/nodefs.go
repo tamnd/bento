@@ -117,3 +117,24 @@ func RmSync(pathArg BStr, recursive, force bool) {
 func Tmpdir() BStr {
 	return FromGoString(os.TempDir())
 }
+
+// OSEOL is os.EOL, the line ending the host platform writes: a carriage return
+// and a line feed on Windows, a line feed everywhere else. It is a function
+// rather than a Go const because the compiled program is built for its target,
+// so the platform is a build-time fact of that binary and not of the compiler.
+func OSEOL() BStr {
+	if onWindows {
+		return FromGoString("\r\n")
+	}
+	return FromGoString("\n")
+}
+
+// OSDevNull is os.devNull, the path of the null device. Windows spells it as a
+// device namespace path rather than as a file, which is the spelling Node
+// reports there, so a program that opens it gets the device on both platforms.
+func OSDevNull() BStr {
+	if onWindows {
+		return FromGoString(`\\.\nul`)
+	}
+	return FromGoString("/dev/null")
+}

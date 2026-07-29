@@ -41,8 +41,14 @@ var nodeModuleExports = map[string]map[string]bool{
 		"readFileSync":  true,
 		"rmSync":        true,
 	},
-	"node:os": {"tmpdir": true},
+	"node:os": {
+		"tmpdir":  true,
+		"EOL":     true,
+		"devNull": true,
+	},
 	"node:path": {
+		"sep":              true,
+		"delimiter":        true,
 		"join":             true,
 		"resolve":          true,
 		"normalize":        true,
@@ -67,6 +73,41 @@ var pathHelpers = map[string]string{
 	"extname":          "PathExtname",
 	"isAbsolute":       "PathIsAbsolute",
 	"toNamespacedPath": "PathToNamespacedPath",
+}
+
+// nodeModuleConstants lists, per module, the exports that are values rather than
+// functions, and the value helper each one reads through. They are the module's
+// data members, path.sep and path.delimiter, os.EOL and os.devNull, and they are
+// read rather than called, so they take their own path through the lowerer: a
+// bare reference to one is the value itself, where a bare reference to an
+// exported function is a function value bento has nothing to hand out for.
+//
+// Each is a helper call and not a compile-time literal, because the value is a
+// fact about the platform the program is built for, which the compiler running on
+// a Mac cannot decide for a Windows target. The helper is compiled into the
+// target binary and answers there.
+var nodeModuleConstants = map[string]map[string]string{
+	"node:os": {
+		"EOL":     "OSEOL",
+		"devNull": "OSDevNull",
+	},
+	"node:path": {
+		"sep":       "PathSep",
+		"delimiter": "PathDelimiter",
+	},
+}
+
+// nodeConstantRead lowers a read of one of a node module's data exports to the
+// value helper that answers it, and reports whether the name is one. Both the
+// member read (path.sep) and the bare read of a named import (import { sep })
+// come through here, so the two forms cannot answer differently.
+func (r *Renderer) nodeConstantRead(module, name string) (ast.Expr, bool) {
+	helper, ok := nodeModuleConstants[module][name]
+	if !ok {
+		return nil, false
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", helper)}, true
 }
 
 // collectNodeImports records every node: import binding in the entry module into
@@ -360,6 +401,13 @@ func unquote(s string) string {
 // at compile time for a remove. A shape the helper does not accept hands back
 // rather than emitting a mistyped call.
 func (r *Renderer) nodeBuiltinCall(b nodeBuiltin, argNodes []frontend.Node) (ast.Expr, error) {
+	// A data export of the module is not callable. The checker rejects calling one
+	// in a well-typed program, but the lowerer sees programs whose diagnostics were
+	// tolerated, so the shape is named here rather than falling through to the
+	// default, which would report it as an unimplemented function.
+	if _, ok := nodeModuleConstants[b.module][b.name]; ok {
+		return nil, &NotYetLowerable{Reason: b.module + "." + b.name + " is a value, not a function"}
+	}
 	switch b.module + "." + b.name {
 	case "node:os.tmpdir":
 		if len(argNodes) != 0 {
