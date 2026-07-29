@@ -2829,6 +2829,31 @@ func (r *Renderer) objectIntegrityUnary(apiName, runtimeMethod string, argNodes 
 		return nil, &NotYetLowerable{Reason: "Object." + apiName + " with other than one argument is a later slice"}
 	}
 	if !r.isDynamic(argNodes[0]) {
+		// A read-only integrity predicate (isExtensible, isSealed, isFrozen) on a
+		// fixed-shape receiver reads its default state, which is fixed: a fixed-shape
+		// object is always extensible, never sealed, never frozen. The three mutators
+		// that could change that (preventExtensions, seal, freeze, and their Reflect
+		// forms) all hand the whole unit back on a fixed-shape receiver, so no lowered
+		// unit ever lowered a change to this object's integrity level. Boxing a
+		// throwaway copy and reading the predicate off it gives that default (a fresh
+		// bag is extensible, so IsSealed and IsFrozen are false and IsExtensible is
+		// true), so the answer matches without a runtime bag on the original. The copy
+		// is read-only here, so a callable member the box would drop does not matter,
+		// but the callable guard is kept so ObjectFromStruct only ever walks the data
+		// shapes it already boxes elsewhere. The mutators keep their handback: they must
+		// return the receiver itself with its integrity changed, which a copy cannot do.
+		if runtimeMethod == "IsExtensible" || runtimeMethod == "IsSealed" || runtimeMethod == "IsFrozen" {
+			objType := r.prog.TypeAt(argNodes[0])
+			if r.isFixedObjectShape(objType) && !r.fixedShapeHasCallableMember(objType, nil) {
+				recv, err := r.lowerExpr(argNodes[0])
+				if err != nil {
+					return nil, err
+				}
+				r.requireImport(valuePkg)
+				boxed := &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{recv}}
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: boxed, Sel: ident(runtimeMethod)}}, nil
+			}
+		}
 		return nil, &NotYetLowerable{Reason: "Object." + apiName + " on a fixed-shape receiver, which has no runtime integrity state, is a later slice"}
 	}
 	recv, err := r.lowerExpr(argNodes[0])
