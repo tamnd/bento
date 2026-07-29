@@ -1982,7 +1982,14 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	// form plans a store here and the arrow inherits argsObjName untouched. When the
 	// plan cannot back a read the whole expression hands back through the error.
 	var argsMat ast.Stmt
-	if n.Kind() == frontend.NodeFunctionExpression {
+	// A function-declaration node reaches here only through boxedNamedArgFunc, which
+	// inlines the declaration's body into a boxed wrapper and sets boxThreadArgs on the
+	// declaration node so the real call-site arguments thread through the hidden trailing
+	// parameter the wrapper fills, the same mechanism a directly boxed function
+	// expression uses. Every other declaration lowering goes through funcDeclNamed, not
+	// this path, and boxThreadArgs is only ever set for a node being boxed, so admitting
+	// the declaration kind here is inert unless boxThreadArgs[n] is set.
+	if n.Kind() == frontend.NodeFunctionExpression || n.Kind() == frontend.NodeFunctionDeclaration {
 		prevArgs, prevArgsWrite, prevArgsLen := r.argsObjName, r.argsWriteSafe, r.argsStoreLen
 		if r.boxThreadArgs[n] {
 			// The expression is boxed directly and reads arguments, so it threads the real

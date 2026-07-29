@@ -359,6 +359,41 @@ func (d *declSet) reserveName(base string) string {
 	return name
 }
 
+// addVar registers a module-level `var name value.Value = init` declaration under a
+// name already claimed through reserveName, storing it as both go/ast node and
+// gofmt-clean source in the same node/source/order tables an interned struct uses, so
+// it emits at the top of the file with the generated types. It is how a named function
+// boxed by reference into a dynamic value is materialized once as a shared value.Value
+// (boxedNamedArgFunc), so two boxes of the same function compare equal. The name must
+// already be reserved; addVar only appends the ordered declaration.
+func (d *declSet) addVar(name string, init ast.Expr) error {
+	decl := &ast.GenDecl{
+		Tok: token.VAR,
+		Specs: []ast.Spec{&ast.ValueSpec{
+			Names:  []*ast.Ident{ident(name)},
+			Type:   sel("value", "Value"),
+			Values: []ast.Expr{init},
+		}},
+	}
+	body, err := printDecl(decl)
+	if err != nil {
+		return err
+	}
+	d.source[name] = body
+	d.node[name] = decl
+	d.order = append(d.order, name)
+	return nil
+}
+
+// releaseName drops a name claimed through reserveName that never became a
+// declaration, so a failed wrapper build (a var whose init handed back) does not
+// permanently push a later shape sharing the base name to a numbered suffix. It only
+// undoes the used-set entry reserveName added, since reserveName enters no emission
+// order.
+func (d *declSet) releaseName(name string) {
+	delete(d.used, name)
+}
+
 // emit returns the declarations in first-seen order.
 func (d *declSet) emit() []Decl {
 	out := make([]Decl, 0, len(d.order))

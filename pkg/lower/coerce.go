@@ -1241,6 +1241,19 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 			// boxed by reference, a rest or optional parameter) has no single wrapper to
 			// carry the hidden parameter, so it keeps the handback.
 			if !r.funcExprBoxThreadsArgs(src) {
+				// A named top-level function boxed by reference (const g: any = f) has no
+				// single wrapper at the boxing site to carry the hidden parameter, but it
+				// does have a stable declaration: it materializes once as a shared
+				// module-level value.Value whose wrapper inlines the body and threads the
+				// real call-site arguments, and every box of the same function reads that
+				// var so reference identity holds. A shape this cannot back (a binding-held
+				// function, a rest or optional parameter, an unsupported body) still keeps
+				// the handback.
+				if boxed, ok, err := r.boxNamedFuncReadingArgs(src); err != nil {
+					return nil, err
+				} else if ok {
+					return boxed, nil
+				}
 				return nil, &NotYetLowerable{Reason: "arguments in a function boxed into a dynamic value needs the call-site count, a later slice"}
 			}
 			r.boxThreadArgs[src] = true

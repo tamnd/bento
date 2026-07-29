@@ -179,6 +179,121 @@ func (r *Renderer) funcExprBoxThreadsArgs(n frontend.Node) bool {
 	return true
 }
 
+// boxNamedFuncReadingArgs boxes a named top-level function that reads its arguments
+// object and flows into a dynamic slot by reference (const g: any = f) into a shared
+// module-level value.Value. It routes only when src is an identifier resolving to a
+// single top-level function declaration whose shape the hidden-parameter threading
+// backs (funcNodeThreadsArgs) and whose signature the boxed wrapper can bridge
+// (all-required, rest-free). ok is false for every other shape, so a binding-held
+// function, a rest or optional parameter, or an unsupported body falls through to the
+// existing handback. Once it commits to the boxed shape, a wrapper build that hands
+// back is propagated as the error, not swallowed. It uses the declaration's own
+// signature, not the reference site's, so the wrapper coerces one argument per declared
+// parameter.
+func (r *Renderer) boxNamedFuncReadingArgs(src frontend.Node) (ast.Expr, bool, error) {
+	if src.Kind() != frontend.NodeIdentifier {
+		return nil, false, nil
+	}
+	sym, ok := r.prog.SymbolAt(src)
+	if !ok {
+		return nil, false, nil
+	}
+	sym = r.derefAlias(sym)
+	nodes := r.symFuncNodes(sym)
+	if len(nodes) != 1 {
+		return nil, false, nil
+	}
+	decl := nodes[0]
+	if decl.Kind() != frontend.NodeFunctionDeclaration {
+		return nil, false, nil
+	}
+	sig, ok := r.prog.SignatureAt(decl)
+	if !ok {
+		return nil, false, nil
+	}
+	if !r.funcNodeThreadsArgs(decl, sig) {
+		return nil, false, nil
+	}
+	// The boxed wrapper coerces exactly one argument per declared parameter, so it fits
+	// only an all-required, rest-free signature, the same constraint boxFuncToDynamic
+	// enforces. A rest or optional parameter keeps the existing handback.
+	if sig.RestParam != nil || sig.MinArgs != len(sig.Params) {
+		return nil, false, nil
+	}
+	boxed, err := r.boxedNamedArgFunc(sym, decl, sig)
+	if err != nil {
+		return nil, false, err
+	}
+	return boxed, true, nil
+}
+
+// boxedNamedArgFunc returns a reference to the one module-level value.Value a named
+// function declaration is boxed into, generating that var the first time the function
+// is boxed and memoizing it by symbol so every later box of the same function reads the
+// same var. Sharing the var is what preserves JavaScript reference identity: g === h
+// when both bind f, because both boxes lower to the same package-level name rather than
+// to two fresh wrapper closures.
+//
+// The wrapper inlines the declaration's body (blockBodyArrow with boxThreadArgs set) and
+// does not call the named Go function, so the declaration's own lowering and its
+// direct-call and value-use paths are untouched; a recursive call inside the inlined
+// body still lowers to the package function. The name is reserved and the memo entry
+// set before the body lowers, so a self-box inside the body resolves to the same var
+// rather than recursing. A wrapper build that hands back rolls the reservation and the
+// memo entry back, so the failure stays a clean handback that a later lowerable use can
+// retry, and never memoizes a half-built var.
+func (r *Renderer) boxedNamedArgFunc(sym frontend.Symbol, decl frontend.Node, sig frontend.Signature) (ast.Expr, error) {
+	if name, ok := r.boxedArgFuncs[sym]; ok {
+		return ident(name), nil
+	}
+	base, ok := exportedField(sym.Name)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a named function boxed into a dynamic value whose name is not a Go identifier is a later slice"}
+	}
+	name := r.decls.reserveName(base + "__argbox")
+	r.boxedArgFuncs[sym] = name
+	wrapper, err := r.namedArgFuncWrapper(decl, sig)
+	if err != nil {
+		delete(r.boxedArgFuncs, sym)
+		r.decls.releaseName(name)
+		return nil, err
+	}
+	if err := r.decls.addVar(name, wrapper); err != nil {
+		delete(r.boxedArgFuncs, sym)
+		r.decls.releaseName(name)
+		return nil, err
+	}
+	return ident(name), nil
+}
+
+// namedArgFuncWrapper builds the value.NewFunc closure a boxed named function is
+// materialized as: it lowers the declaration's parameter fields, marks the declaration
+// so its body threads the real call-site arguments through a hidden trailing parameter
+// (blockBodyArrow reads the mark), inlines the body into a Go closure, and wraps that in
+// the boxing thunk boxFuncToDynamic builds, which fills the hidden parameter with the
+// arguments the dynamic call passed. The mark is cleared on every exit: boxFuncToDynamic
+// clears it on the success path, and this deletes it defensively so a handback anywhere
+// in the build leaves no stale mark on the declaration node.
+func (r *Renderer) namedArgFuncWrapper(decl frontend.Node, sig frontend.Signature) (ast.Expr, error) {
+	fields, err := r.closureParamFields(decl, sig, "function")
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	r.boxThreadArgs[decl] = true
+	inner, err := r.blockBodyArrow(decl, fields)
+	if err != nil {
+		delete(r.boxThreadArgs, decl)
+		return nil, err
+	}
+	wrapper, err := r.boxFuncToDynamic(inner, sig, decl)
+	if err != nil {
+		delete(r.boxThreadArgs, decl)
+		return nil, err
+	}
+	return wrapper, nil
+}
+
 // funcSymCallShape walks the whole program and reports whether every reference to a
 // function symbol is a direct call this pass can rewrite (clean), and whether any of
 // those calls passes an argument count other than the parameter count (anyLoose).

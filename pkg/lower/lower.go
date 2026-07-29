@@ -170,6 +170,16 @@ type Renderer struct {
 	// carries its own entry, set by boxOperand before the expression lowers and read
 	// by both the body lowering and the wrapper that fills the hidden parameter.
 	boxThreadArgs map[frontend.Node]bool
+	// boxedArgFuncs memoizes the module-level Go var a named top-level function
+	// declaration is boxed into when it reads its arguments object and flows into a
+	// dynamic slot by reference (const g: any = f). JavaScript reference identity
+	// requires that boxing the same function at two sites yield the same value.Value
+	// (g === h when both bind f), so a single package-level `var name value.Value =
+	// <wrapper>` is emitted per function symbol and every box of that symbol reads it,
+	// rather than a fresh wrapper closure per site. It is keyed by the deref-aliased
+	// function symbol so the two sites reach the same var, and populated the first time
+	// a box of the symbol is lowered (see boxedNamedArgFunc).
+	boxedArgFuncs map[frontend.Symbol]string
 	// genCo is the Go name of the *value.GenCo handle the current generator body
 	// yields through, or "" when the body being lowered is not a generator. It is set
 	// around a generator function or method body, and a yield expression in that body
@@ -764,7 +774,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, boxThreadArgs: map[frontend.Node]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, boxThreadArgs: map[frontend.Node]bool{}, boxedArgFuncs: map[frontend.Symbol]string{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a
