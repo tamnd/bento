@@ -61,19 +61,31 @@ console.log(String(o.x));
 	}
 }
 
-// TestObjectUndeclaredFieldWriteHandsBack proves a write to a property the fixed
-// shape never declared hands back rather than emitting an assignment to the
-// value.MissingProperty read fallback, which is not addressable and would fail
-// the go build. The shape interns to a struct with only its declared fields, so
-// there is no lvalue for a property it never declared; adding one is a runtime
-// shape mutation this path does not model. The write draws the 2339 "property
-// does not exist" diagnostic the AOT front door tolerates, so the test reaches
-// the renderer through the same tolerant path build.Compile uses.
-func TestObjectUndeclaredFieldWriteHandsBack(t *testing.T) {
+// TestObjectUndeclaredFieldWriteBoxes proves a write to a property the fixed shape
+// never declared boxes the binding to a dynamic bag from its literal rather than
+// emitting an assignment to the value.MissingProperty read fallback, which is not
+// addressable and would fail the go build. The binding grows a key the checker did
+// not fold into its type, the JavaScript expando, so it lives as a value.Object: the
+// literal builds via NewObject, the undeclared write lands through Set, and both the
+// declared and the grown property read back through Get. The write draws the 2339
+// "property does not exist" diagnostic the AOT front door tolerates, so the test
+// reaches the renderer through the same tolerant path build.Compile uses.
+func TestObjectUndeclaredFieldWriteBoxes(t *testing.T) {
 	const src = "const o = { x: 1 };\no.y = 5;\n"
-	reason := renderProgramTolerantHandBack(t, src)
-	if reason == "" {
-		t.Fatal("expected a write to an undeclared property to hand back")
+	source := renderProgramTolerant(t, src)
+	if !strings.Contains(source, `o.Set(value.FromGoString("y"), value.Number(5))`) {
+		t.Fatalf("undeclared field write did not land through Set on the box:\n%s", source)
+	}
+}
+
+// TestObjectUndeclaredFieldWriteRuns proves the boxed binding runs against the Node
+// oracle: the grown key reads back the value written and the declared key survives the
+// growth, so const o = { x: 1 }; o.y = 5 prints the new and the old property in order.
+func TestObjectUndeclaredFieldWriteRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const o = { x: 1 };\no.y = 5;\nconsole.log(o.y);\nconsole.log(o.x);\n"
+	if got, want := runProgramGoTolerant(t, src), "5\n1\n"; got != want {
+		t.Fatalf("undeclared field write run = %q, want %q", got, want)
 	}
 }
 

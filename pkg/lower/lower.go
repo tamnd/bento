@@ -308,6 +308,18 @@ type Renderer struct {
 	// return an object that grows" reaches f's own body, and a function already on the
 	// stack answers false rather than ask again. A nil map (the default) holds nothing.
 	growthVisiting map[frontend.Node]bool
+	// undeclaredWriteSyms is the set of object-binding symbols that receive a property
+	// write o.k = v naming a key their declared shape never had, the JavaScript expando
+	// the checker did not fold into the type. Such a binding cannot ride a Go struct: the
+	// struct interns only the declared fields, so the write has no field to land in and
+	// would emit a non-addressable value.MissingProperty(o) = v. Routing the binding to
+	// the dynamic bag from its literal gives the write a Set to land in and every read a
+	// Get, the same path an object typed any takes. The set is filled once by
+	// scanUndeclaredWrites over every source file, lazily on the first query, so a read of
+	// the binding and its declaration agree on the routing. A nil map means not yet
+	// scanned; undeclaredWriteScanned distinguishes a scanned-empty program from that.
+	undeclaredWriteSyms    map[frontend.Symbol]bool
+	undeclaredWriteScanned bool
 	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
 	// the block currently lowering. A proxy holds its target by identity and dispatches
 	// its traps off the live object, so a write through the proxy and a mutation of the

@@ -1937,7 +1937,8 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 	// runtime object rather than on a struct field holding a zero that JavaScript would
 	// read as undefined.
 	if initNode.Kind() == frontend.NodeObjectLiteralExpression &&
-		(r.objectLiteralNotFixed(initNode) || r.objectLiteralGrowsProperties(initNode)) {
+		(r.objectLiteralNotFixed(initNode) || r.objectLiteralGrowsProperties(initNode) ||
+			r.bindingObjectLiteralGetsUndeclaredWrite(nameNode, initNode)) {
 		boxed, err := r.boxObjectLiteral(initNode)
 		if err != nil {
 			return nil, err

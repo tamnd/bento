@@ -745,6 +745,17 @@ func (r *Renderer) identifierBindsAGrowingObject(n frontend.Node) bool {
 		if init.Kind() == frontend.NodeObjectLiteralExpression && r.objectLiteralGrowsProperties(init) {
 			return true
 		}
+		// A binding whose literal builds a fixed shape but that a later o.k = v writes a
+		// key the shape never named grows the same way a `const o = {}` does, only the
+		// checker did not fold the key into the type. It routes to the dynamic bag from its
+		// literal so the write lands in a Set and every read takes a Get, rather than hand
+		// back at the write for want of a struct field. The literal must itself be one the
+		// struct path would otherwise take (a fixed object shape), so a computed-key or
+		// spread literal, already handled above, is not double-routed here.
+		if init.Kind() == frontend.NodeObjectLiteralExpression && r.symGetsUndeclaredWrite(sym) &&
+			r.isFixedObjectShape(r.prog.TypeAt(init)) {
+			return true
+		}
 		// A binding initialized by a call to a factory that returns a growing object
 		// holds that same runtime bag, so it reads the same way. This is what makes
 		// `const m = make()` behave like the `const o = {}` inside make: the box crosses
@@ -755,6 +766,104 @@ func (r *Renderer) identifierBindsAGrowingObject(n frontend.Node) bool {
 		}
 	}
 	return false
+}
+
+// bindingObjectLiteralGetsUndeclaredWrite reports whether an object-literal initializer
+// bound to nameNode is the receiver of a later undeclared-key write, the same condition
+// identifierBindsAGrowingObject routes a read on. The init-boxing site asks it so the
+// binding's literal boxes to a dynamic bag from creation, keeping the object on one
+// representation for both its write and every read. The literal must be a fixed object
+// shape the struct path would otherwise take, so a computed-key or spread literal that
+// already boxes on its own is not double-routed here.
+func (r *Renderer) bindingObjectLiteralGetsUndeclaredWrite(nameNode, initNode frontend.Node) bool {
+	if initNode.Kind() != frontend.NodeObjectLiteralExpression {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(nameNode)
+	if !ok {
+		return false
+	}
+	return r.symGetsUndeclaredWrite(sym) && r.isFixedObjectShape(r.prog.TypeAt(initNode))
+}
+
+// symGetsUndeclaredWrite reports whether an object binding receives a property write
+// naming a key its declared shape never had, the JavaScript expando the checker did not
+// fold into the type. It scans every source file once, on the first query, and answers
+// from the recorded set, so a read of the binding and the binding's own declaration ask
+// the routing question the same way and land the object on one representation.
+func (r *Renderer) symGetsUndeclaredWrite(sym frontend.Symbol) bool {
+	if !r.undeclaredWriteScanned {
+		r.scanUndeclaredWrites()
+	}
+	return r.undeclaredWriteSyms[sym]
+}
+
+// scanUndeclaredWrites walks every source file for a property write o.k = v whose
+// receiver is a plain identifier bound to a fixed object shape that does not name k, and
+// records that receiver's binding symbol. A compound write o.k <op>= v counts the same,
+// since it too has no struct field to load and store. The scan runs once; the result is
+// a closed set the routing predicates read without walking again.
+func (r *Renderer) scanUndeclaredWrites() {
+	r.undeclaredWriteScanned = true
+	set := map[frontend.Symbol]bool{}
+	var walk func(n frontend.Node)
+	walk = func(n frontend.Node) {
+		if sym, ok := r.undeclaredWriteReceiver(n); ok {
+			set[sym] = true
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c)
+		}
+	}
+	for _, sf := range r.prog.SourceFiles() {
+		walk(sf)
+	}
+	r.undeclaredWriteSyms = set
+}
+
+// undeclaredWriteReceiver returns the binding symbol a node writes an undeclared key
+// onto, when the node is a property write o.k = v (or a compound o.k <op>= v) whose
+// receiver is a plain identifier bound to a fixed object shape that does not name k. A
+// write onto a receiver that is already dynamic, an array, or any non-fixed-object type
+// is left to the paths that own it, so only a genuine expando onto a struct-shaped
+// binding is reported.
+func (r *Renderer) undeclaredWriteReceiver(n frontend.Node) (frontend.Symbol, bool) {
+	var zero frontend.Symbol
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return zero, false
+	}
+	parts := r.prog.Children(n)
+	if len(parts) != 3 {
+		return zero, false
+	}
+	opText := r.prog.Text(parts[1])
+	if _, compound := compoundBaseOp(opText); opText != "=" && !compound {
+		return zero, false
+	}
+	target := parts[0]
+	if target.Kind() != frontend.NodePropertyAccessExpression {
+		return zero, false
+	}
+	tParts := r.prog.Children(target)
+	if len(tParts) != 2 {
+		return zero, false
+	}
+	obj := tParts[0]
+	if obj.Kind() != frontend.NodeIdentifier {
+		return zero, false
+	}
+	objType := r.prog.TypeAt(obj)
+	if !r.isFixedObjectShape(objType) {
+		return zero, false
+	}
+	if _, present := r.shapeProp(objType, r.prog.Text(tParts[1])); present {
+		return zero, false
+	}
+	sym, ok := r.prog.SymbolAt(obj)
+	if !ok {
+		return zero, false
+	}
+	return sym, true
 }
 
 // callOfGrowingObjectFunc reports whether a call goes to a function declaration whose
