@@ -3960,6 +3960,16 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 			if err != nil {
 				return nil, false, err
 			}
+			// A receiver that lowers to a fresh value.ObjectFromStruct(...) box is a
+			// throwaway copy of a fixed-shape object struct, not a persistent bag: the
+			// coerce path makes a new copy at every mention, so a Set onto it mutates the
+			// copy and the write is lost, which prints undefined where the language reads
+			// the value back. A genuine dynamic bag lowers to a stored identifier, never to
+			// this box, so the check catches exactly the copy-aliasing store. Emitting a
+			// lost write would be a wrong result, worse than a handback, so it hands back.
+			if isFreshStructBox(recv) {
+				return nil, false, &NotYetLowerable{Reason: "a write onto a fixed-shape object widened to a dynamic value would mutate a throwaway copy, a later slice"}
+			}
 			val, err := r.boxOperand(parts[2])
 			if err != nil {
 				return nil, false, err
@@ -4010,6 +4020,12 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 		recvStore, err := r.lowerExpr(obj)
 		if err != nil {
 			return nil, false, err
+		}
+		// The compound store lands through recvStore.Set; if that receiver is a fresh
+		// value.ObjectFromStruct(...) copy of a fixed-shape struct, the write is lost the
+		// same way the plain store's is, so it hands back rather than emit a wrong result.
+		if isFreshStructBox(recvStore) {
+			return nil, false, &NotYetLowerable{Reason: "a write onto a fixed-shape object widened to a dynamic value would mutate a throwaway copy, a later slice"}
 		}
 		// A strict-mode compound store throws on a failed write the same way a
 		// plain strict store does, so it routes through SetStrict; a sloppy
@@ -4125,6 +4141,33 @@ func (r *Renderer) objectFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) 
 // on both sides. It reports ok=false when the statement is not a bracket write on a
 // dynamic receiver, so lowerUpdate falls through to the paths that own the other
 // targets.
+// isFreshStructBox reports whether a lowered expression is a value.ObjectFromStruct(...)
+// call, the fresh copy the coerce path emits when it widens a fixed-shape object struct
+// to a dynamic value. The copy is made anew at every mention of the object, so a Set
+// onto it mutates the throwaway and the write is lost. A property store whose receiver
+// is one of these is not a faithful lowering, so its caller hands the unit back rather
+// than emit a store that reads undefined afterward. A genuine dynamic bag lowers to a
+// stored identifier, never to this box, so the check singles out the copy-aliasing store.
+func isFreshStructBox(e ast.Expr) bool {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		e = p.X
+	}
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	fun, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := fun.X.(*ast.Ident)
+	return ok && pkg.Name == "value" && fun.Sel.Name == "ObjectFromStruct"
+}
+
 func (r *Renderer) dynamicElementAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 	parts := r.prog.Children(bin)
 	if len(parts) != 3 {
