@@ -84,6 +84,26 @@ func TestDynamicArithmeticIsNotJustPlus(t *testing.T) {
 	}
 }
 
+// TestBoxedSumIntoABoxedSlotStaysABox pins the target side of the same bridge. A
+// private static field types as a number and is held in a value.Value, and a store
+// routes its coercion through the field's declaration ident rather than through the
+// property access, so widening only the source made the bridge coerce the box down
+// through ToNumber into a slot that holds a box. That is the original failure with
+// its two sides swapped, and the Go compiler rejects it the same way.
+func TestBoxedSumIntoABoxedSlotStaysABox(t *testing.T) {
+	got := renderProgram(t, "class Counter {\n"+
+		"  static #count: number = 0;\n"+
+		"  static bump(): number {\n"+
+		"    Counter.#count = Counter.#count + 1;\n"+
+		"    return Counter.#count;\n"+
+		"  }\n"+
+		"}\n"+
+		"console.log(Counter.bump());\n")
+	if strings.Contains(got, "value.ToNumber(value.Add(") {
+		t.Errorf("a store into a boxed static field emitted:\n%s\nwant the sum stored as the box the slot holds", got)
+	}
+}
+
 // TestStaticAddKeepsTheGoOperator pins the guard. The widening keys off a lowering
 // that is a box, so a sum of two ordinary numbers must be untouched: it keeps Go's
 // own + and never reaches the value model, which is the whole reason the static

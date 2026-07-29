@@ -1518,6 +1518,28 @@ func (r *Renderer) isBoxedStaticFieldRead(src frontend.Node) bool {
 	return strings.HasPrefix(f.prop, "#")
 }
 
+// boxedFieldIdent reports whether n is the declaration name node of a class field
+// whose Go slot is a value.Value rather than the type the checker read off its
+// declaration. A private static field is that case, and it is the read side of the
+// same fact isBoxedStaticFieldRead answers: `static #count: number = 0` types as a
+// number and is held in a box.
+//
+// A store routes its coercion through the field's ident rather than through the
+// property access it was written as (classFieldAssign), so neither of the two
+// predicates above sees a box there, and the bridge would coerce a boxed source
+// down through ToNumber into a slot that holds a box. That does not compile, which
+// is the same failure this bridge was widened to fix, with its two sides swapped.
+func (r *Renderer) boxedFieldIdent(n frontend.Node) bool {
+	for _, info := range r.classes {
+		for _, f := range info.statics {
+			if f.ident == n {
+				return strings.HasPrefix(f.prop, "#")
+			}
+		}
+	}
+	return false
+}
+
 // isIterTerminalBoxedCall reports whether src is a terminal iterator helper whose
 // result lowers to a value.Value box: reduce folds the source to the accumulator and
 // toArray collects it into an array, both returned as boxes (see value.IterReduce and
@@ -2712,8 +2734,15 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	// boxes, and is the same one the opposite direction reads to know that boxing
 	// such a source again would be the identity, so the two directions cannot
 	// disagree about what a box is.
+	// The target is asked the same question, and for the same reason. A slot can be a
+	// box while the checker types it a primitive: a static private field declared
+	// `static #count: number = 0` is held in a value.Value. Widening only the source
+	// would make the bridge see dynamic-to-static there and coerce the box down through
+	// ToNumber into a slot that holds a box, which is the original bug with its two
+	// sides swapped. Both sides read the same predicate, so neither can be wrong about
+	// the other.
 	srcDyn := r.isDynamic(src) || r.producesBoxedValue(src)
-	tgtDyn := r.isDynamic(target)
+	tgtDyn := r.isDynamic(target) || r.producesBoxedValue(target) || r.boxedFieldIdent(target)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStatic(expr, target)
