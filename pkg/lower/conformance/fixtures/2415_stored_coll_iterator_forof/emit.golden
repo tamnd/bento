@@ -19,7 +19,7 @@ func main() {
 		_bt3 := _bt1.Values()
 		for _bt4, k := range _bt2 {
 			v := _bt3[_bt4]
-			value.ConsoleLog(k, value.NumberToConsole(v))
+			value.ConsoleLog(value.ConsoleFormat(value.StringValue(k), value.Number(v)))
 		}
 	}
 	for _, k := range m.Keys() {

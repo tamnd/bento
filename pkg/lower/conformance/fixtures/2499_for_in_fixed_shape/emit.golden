@@ -50,6 +50,6 @@ func main() {
 	rec := value.NewObject().Set(value.FromGoString("d"), value.Number(4)).Set(value.FromGoString("e"), value.Number(5))
 	rec.Set(value.FromGoString("f"), value.Number(6))
 	for _, k := range rec.ForInKeys().Elems() {
-		value.ConsoleLog(k, value.NumberToConsole(value.ToNumber(rec.Get(k))))
+		value.ConsoleLog(value.ConsoleFormat(value.StringValue(k), value.Number(value.ToNumber(rec.Get(k)))))
 	}
 }

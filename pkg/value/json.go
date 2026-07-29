@@ -16,6 +16,7 @@ package value
 import (
 	"reflect"
 	"strings"
+	"unsafe"
 )
 
 // jsonArray is the hook a *Array exposes to the encoder so the walk can read its
@@ -127,7 +128,7 @@ func encodeJSON(b *strings.Builder, v any) {
 		}
 		b.WriteByte(']')
 	case Value:
-		encodeBoxedJSON(b, x)
+		encodeBoxedJSON(b, x, nil)
 	case jsonArmer:
 		// A tagged-sum union carries its value in whichever arm its tag selects, and
 		// the arm fields are unexported machinery, so reflecting the struct would write
@@ -229,7 +230,22 @@ func jsonUndefinedGo(v any) bool {
 // object serializes its own properties in insertion order with a JSON-undefined
 // value omitting the key. A number that is not finite renders as null, matching the
 // static number arm.
-func encodeBoxedJSON(b *strings.Builder, v Value) {
+//
+// stack is the chain of containers being serialized, which is how a cycle is caught:
+// JSON has no spelling for one, so the specification's SerializeJSONProperty throws
+// rather than recursing, and without the check the walk would run out of stack
+// instead. util.format's %j specifier reads the first line of that error to print
+// "[Circular]" in its place, so the wording of the line matters as much as the throw.
+func encodeBoxedJSON(b *strings.Builder, v Value, stack []unsafe.Pointer) {
+	switch v.kind {
+	case KindArray, KindObject:
+		for _, seen := range stack {
+			if seen == v.ref {
+				Throw(NewTypeError(FromGoString("Converting circular structure to JSON")))
+			}
+		}
+		stack = append(stack, v.ref)
+	}
 	switch v.kind {
 	case KindNull:
 		b.WriteString("null")
@@ -259,7 +275,7 @@ func encodeBoxedJSON(b *strings.Builder, v Value) {
 				b.WriteString("null")
 				continue
 			}
-			encodeBoxedJSON(b, e)
+			encodeBoxedJSON(b, e, stack)
 		}
 		b.WriteByte(']')
 	case KindObject:
@@ -280,7 +296,7 @@ func encodeBoxedJSON(b *strings.Builder, v Value) {
 			first = false
 			encodeJSONString(b, o.keys[i])
 			b.WriteByte(':')
-			encodeBoxedJSON(b, val)
+			encodeBoxedJSON(b, val, stack)
 		}
 		b.WriteByte('}')
 	default:

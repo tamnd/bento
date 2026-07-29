@@ -8,17 +8,17 @@ import (
 
 func main() {
 	a := value.PlainDateFromString("2024-06-30")
-	value.ConsoleLog(a.ToString(), value.NumberToConsole(a.Year()), value.NumberToConsole(a.Month()), value.NumberToConsole(a.Day()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(a.ToString()), value.Number(a.Year()), value.Number(a.Month()), value.Number(a.Day())))
 	basic := value.PlainDateFromString("20240630")
 	value.ConsoleLog(basic.ToString())
 	expanded := value.PlainDateFromString("+002024-06-30")
 	value.ConsoleLog(expanded.ToString())
 	negative := value.PlainDateFromString("-000005-06-30")
-	value.ConsoleLog(negative.ToString(), value.NumberToConsole(negative.Year()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(negative.ToString()), value.Number(negative.Year())))
 	withTime := value.PlainDateFromString("2024-06-30T12:00:00+05:30[America/New_York]")
 	value.ConsoleLog(withTime.ToString())
 	greg := value.PlainDateFromString("2024-06-30[u-ca=gregory]")
-	value.ConsoleLog(greg.ToString(), greg.CalendarId(), value.ToString(value.OptToValue(greg.Era(), value.StringValue)))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(greg.ToString()), value.StringValue(greg.CalendarId()), value.OptToValue(greg.Era(), value.StringValue)))
 	roc := value.PlainDateFromString("2024-06-30T23:59:59[u-ca=roc]")
-	value.ConsoleLog(roc.ToString(), roc.CalendarId(), value.NumberToConsole(roc.Year()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(roc.ToString()), value.StringValue(roc.CalendarId()), value.Number(roc.Year())))
 }

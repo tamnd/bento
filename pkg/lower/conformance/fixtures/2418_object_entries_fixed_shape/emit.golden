@@ -29,15 +29,15 @@ func main() {
 	for _, _bt0 := range value.NewArray[Tuple_str_num](Tuple_str_num{E0: value.FromGoString("a"), E1: nums.A}, Tuple_str_num{E0: value.FromGoString("b"), E1: nums.B}, Tuple_str_num{E0: value.FromGoString("c"), E1: nums.C}).Elems() {
 		k := _bt0.E0
 		v := _bt0.E1
-		value.ConsoleLog(k, value.NumberToConsole(v))
+		value.ConsoleLog(value.ConsoleFormat(value.StringValue(k), value.Number(v)))
 	}
 	e := value.NewArray[Tuple_str_num](Tuple_str_num{E0: value.FromGoString("a"), E1: nums.A}, Tuple_str_num{E0: value.FromGoString("b"), E1: nums.B}, Tuple_str_num{E0: value.FromGoString("c"), E1: nums.C})
 	value.ConsoleLog(value.NumberToConsole(e.Len()))
-	value.ConsoleLog(e.At(0).E0, value.NumberToConsole(e.At(0).E1))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(e.At(0).E0), value.Number(e.At(0).E1)))
 	words := &ObjFirstSecond{First: value.FromGoString("hello"), Second: value.FromGoString("world")}
 	for _, _bt1 := range value.NewArray[Tuple_str_str](Tuple_str_str{E0: value.FromGoString("first"), E1: words.First}, Tuple_str_str{E0: value.FromGoString("second"), E1: words.Second}).Elems() {
 		k := _bt1.E0
 		v := _bt1.E1
-		value.ConsoleLog(k, v)
+		value.ConsoleLog(value.ConsoleFormat(value.StringValue(k), value.StringValue(v)))
 	}
 }

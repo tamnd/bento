@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"errors"
 	"go/ast"
 	"strings"
 
@@ -8,8 +9,8 @@ import (
 	"github.com/tamnd/bento/pkg/goimport"
 )
 
-// This file lowers the small node:fs, node:os, and node:path surface a syscall
-// workload uses (the readwrite benchmark) to the value package's host helpers.
+// This file lowers the small node:fs, node:os, node:path and node:util surface a
+// syscall workload uses (the readwrite benchmark) to the value package's host helpers.
 // A node: import binds a set of local names to module functions; the frontend
 // resolves each binding to an alias symbol, so a call to one of those names is
 // not a call to a user function. The renderer records the bindings once from the
@@ -58,6 +59,11 @@ var nodeModuleExports = map[string]map[string]bool{
 		"availableParallelism": true,
 		"EOL":                  true,
 		"devNull":              true,
+	},
+	"node:util": {
+		"format":            true,
+		"formatWithOptions": true,
+		"inspect":           true,
 	},
 	"node:path": {
 		"sep":              true,
@@ -540,6 +546,39 @@ func (r *Renderer) nodeBuiltinCall(b nodeBuiltin, argNodes []frontend.Node) (ast
 	case "node:fs.rmSync":
 		return r.rmSyncCall(argNodes)
 
+	case "node:util.format", "node:util.inspect":
+		// util's two renderers take values of any type, so every argument boxes rather
+		// than being checked against a shape. The helpers are variadic and read their
+		// own argument list, format for the specifiers in its first argument and inspect
+		// for the options in its second, so the lowering passes the arguments through
+		// unchanged and does no arity checking of its own.
+		args, err := r.boxedArgs("util."+b.name, argNodes)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		helper := "NodeFormat"
+		if b.name == "inspect" {
+			helper = "NodeInspectArgs"
+		}
+		return &ast.CallExpr{Fun: sel("value", helper), Args: args}, nil
+
+	case "node:util.formatWithOptions":
+		// formatWithOptions takes the options object first and the format arguments
+		// after, which the helper spells as one required parameter and a variadic rest.
+		// A call with no arguments at all cannot name that shape, so the options
+		// argument is emitted as undefined, which is what the helper rejects with
+		// Node's ERR_INVALID_ARG_TYPE rather than formatting nothing.
+		args, err := r.boxedArgs("util.formatWithOptions", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		if len(args) == 0 {
+			args = []ast.Expr{sel("value", "Undefined")}
+		}
+		return &ast.CallExpr{Fun: sel("value", "NodeFormatWithOptions"), Args: args}, nil
+
 	default:
 		return nil, &NotYetLowerable{Reason: b.module + "." + b.name + " is a later slice"}
 	}
@@ -625,6 +664,28 @@ func (r *Renderer) stringArgs(what string, argNodes []frontend.Node) ([]ast.Expr
 			return nil, err
 		}
 		args = append(args, lowered)
+	}
+	return args, nil
+}
+
+// boxedArgs lowers a variadic list of arguments of any type into boxed values, the
+// shape util.format and util.inspect take. Where a path helper needs each argument
+// to be a string, these render whatever they are given, so each argument boxes into
+// a value.Value instead. An argument bento cannot box yet (an array of objects, a
+// Map) hands the whole call back, since a util call that dropped one of its
+// arguments would print something other than what the program asked for.
+func (r *Renderer) boxedArgs(what string, argNodes []frontend.Node) ([]ast.Expr, error) {
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		boxed, err := r.boxOperand(a)
+		if err != nil {
+			var nyl *NotYetLowerable
+			if errors.As(err, &nyl) {
+				return nil, &NotYetLowerable{Reason: what + " with an argument that does not box yet (" + nyl.Reason + ")"}
+			}
+			return nil, err
+		}
+		args = append(args, boxed)
 	}
 	return args, nil
 }

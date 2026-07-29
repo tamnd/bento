@@ -9,9 +9,9 @@ import (
 
 func main() {
 	abs := value.JSONParse(value.FromGoString(nodehost.URLParseJSON(value.FromGoString("http://user@host.com:8080/a/b?x=1#h").ToGoString(), value.FromGoString("").ToGoString())))
-	value.ConsoleLog(value.ConsoleValue(abs.Get(value.FromGoString("protocol"))), value.ConsoleValue(abs.Get(value.FromGoString("hostname"))), value.ConsoleValue(abs.Get(value.FromGoString("port"))), value.ConsoleValue(abs.Get(value.FromGoString("pathname"))), value.ConsoleValue(abs.Get(value.FromGoString("search"))), value.ConsoleValue(abs.Get(value.FromGoString("hash"))), value.ConsoleValue(abs.Get(value.FromGoString("origin"))), value.ConsoleValue(abs.Get(value.FromGoString("username"))))
+	value.ConsoleLog(value.ConsoleFormat(abs.Get(value.FromGoString("protocol")), abs.Get(value.FromGoString("hostname")), abs.Get(value.FromGoString("port")), abs.Get(value.FromGoString("pathname")), abs.Get(value.FromGoString("search")), abs.Get(value.FromGoString("hash")), abs.Get(value.FromGoString("origin")), abs.Get(value.FromGoString("username"))))
 	rel := value.JSONParse(value.FromGoString(nodehost.URLParseJSON(value.FromGoString("../c?y=2").ToGoString(), value.FromGoString("http://host.com/a/b/").ToGoString())))
-	value.ConsoleLog(value.ConsoleValue(rel.Get(value.FromGoString("href"))), value.ConsoleValue(rel.Get(value.FromGoString("pathname"))), value.ConsoleValue(rel.Get(value.FromGoString("search"))), value.ConsoleValue(rel.Get(value.FromGoString("origin"))))
+	value.ConsoleLog(value.ConsoleFormat(rel.Get(value.FromGoString("href")), rel.Get(value.FromGoString("pathname")), rel.Get(value.FromGoString("search")), rel.Get(value.FromGoString("origin"))))
 	bad := value.JSONParse(value.FromGoString(nodehost.URLParseJSON(value.FromGoString("not a url").ToGoString(), value.FromGoString("").ToGoString())))
 	value.ConsoleLog(value.ConsoleValue(bad.Get(value.FromGoString("ok"))))
 }

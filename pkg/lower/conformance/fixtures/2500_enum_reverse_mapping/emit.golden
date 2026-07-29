@@ -22,7 +22,7 @@ const (
 )
 
 func main() {
-	value.ConsoleLog(value.FromGoString("R"), value.FromGoString("G"), value.FromGoString("B"))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(value.FromGoString("R")), value.StringValue(value.FromGoString("G")), value.StringValue(value.FromGoString("B"))))
 	var n int32 = 2
 	value.ConsoleLog(func(_bt0 float64) value.BStr {
 		switch _bt0 {
@@ -47,7 +47,7 @@ func main() {
 		return value.FromGoString("")
 	}(ColorG))
 	var m int32 = 5
-	value.ConsoleLog(func(_bt2 float64) value.BStr {
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(func(_bt2 float64) value.BStr {
 		switch _bt2 {
 		case 1:
 			return value.FromGoString("A")
@@ -57,6 +57,6 @@ func main() {
 			return value.FromGoString("C")
 		}
 		return value.FromGoString("")
-	}(float64(m)), value.FromGoString("C"), value.FromGoString("A"))
+	}(float64(m))), value.StringValue(value.FromGoString("C")), value.StringValue(value.FromGoString("A"))))
 	value.ConsoleLog(value.FromGoString("B"))
 }

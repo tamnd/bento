@@ -85,8 +85,11 @@ func isAmbientPath(p string) bool { return devolume(p) == ambientPath }
 // read and write surface a syscall workload uses without a caller installing
 // @types/node, each function typed exactly as bento lowers it (readFileSync only
 // in its encoding-and-string form, rmSync with the recursive and force options a
-// benchmark passes). The surface is deliberately small: it grows one entry at a
-// time as the lowerer learns to emit each one, so a declared name is always a
+// benchmark passes). node:util declares the three members bento's util module
+// carries, format, formatWithOptions and inspect, each typed with any for the
+// values it renders, since rendering a value is the one thing util does that does
+// not care what type it is. The surface is deliberately small: it grows one entry
+// at a time as the lowerer learns to emit each one, so a declared name is always a
 // lowerable one.
 const ambientSource = `declare var process: any;
 declare var __dirname: string;
@@ -124,6 +127,11 @@ declare module "node:os" {
 	export function availableParallelism(): number;
 	export const EOL: string;
 	export const devNull: string;
+}
+declare module "node:util" {
+	export function format(format?: any, ...args: any[]): string;
+	export function formatWithOptions(inspectOptions: any, format?: any, ...args: any[]): string;
+	export function inspect(value: any, options?: any): string;
 }
 declare module "node:path" {
 	export function join(...parts: string[]): string;

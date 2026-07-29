@@ -37,10 +37,10 @@ func Truthy(x value.Opt[bool]) value.BStr {
 	return value.FromGoString("n")
 }
 func main() {
-	value.ConsoleLog(F(value.None[bool]()), F(value.Some[bool](true)), F(value.Some[bool](false)))
-	value.ConsoleLog(G(value.None[bool]()), G(value.Some[bool](true)), G(value.Some[bool](false)))
-	value.ConsoleLog(H(value.None[bool]()), H(value.Some[bool](true)))
-	value.ConsoleLog(Truthy(value.None[bool]()), Truthy(value.Some[bool](true)), Truthy(value.Some[bool](false)))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(F(value.None[bool]())), value.StringValue(F(value.Some[bool](true))), value.StringValue(F(value.Some[bool](false)))))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(G(value.None[bool]())), value.StringValue(G(value.Some[bool](true))), value.StringValue(G(value.Some[bool](false)))))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(H(value.None[bool]())), value.StringValue(H(value.Some[bool](true)))))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(Truthy(value.None[bool]())), value.StringValue(Truthy(value.Some[bool](true))), value.StringValue(Truthy(value.Some[bool](false)))))
 	var b value.Opt[bool]
 	value.ConsoleLog(func() value.BStr {
 		if b.IsUndefined() {
