@@ -227,3 +227,37 @@ try {
 		t.Fatalf("caught error guard run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+// TestCaughtErrorCodeLowers pins that a caught error's .code lowers to the CodeValue
+// method rather than handing back. It is the property a program actually branches on
+// when it catches something a Node built-in raised, since the message is prose and
+// the code is the contract, so a require('path') a program can use needs the read to
+// compile.
+func TestCaughtErrorCodeLowers(t *testing.T) {
+	src := "try { throw new TypeError(\"x\"); } catch (e: any) { let c: any = e.code; console.log(c === \"ENOENT\"); }"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, ".CodeValue()") {
+		t.Fatalf("caught error .code did not lower to the CodeValue method:\n%s", out)
+	}
+}
+
+// TestCaughtErrorCodeRuns builds and runs the read both ways round. An error a
+// program threw itself has no code and must answer undefined rather than the empty
+// string: a program tests the code against a name, and an empty string is still a
+// string, so it would compare unequal to everything and read as present.
+func TestCaughtErrorCodeRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+try {
+  throw new TypeError("boom");
+} catch (thrown: any) {
+  console.log(thrown.code === undefined);
+  console.log(typeof thrown.code);
+}
+`
+	got := runProgramGo(t, src)
+	want := "true\nundefined\n"
+	if got != want {
+		t.Fatalf("caught error code printed %q, want %q", got, want)
+	}
+}

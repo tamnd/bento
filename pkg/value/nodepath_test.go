@@ -43,8 +43,22 @@ type nodePathVariantRef struct {
 	Join        map[string]string `json:"join"`
 	Relative    map[string]string `json:"relative"`
 	Resolve     map[string]string `json:"resolve"`
-	Sep         string            `json:"sep"`
-	Delimiter   string            `json:"delimiter"`
+	// Parse is what path.parse answered for each of the same paths, one object of
+	// five fields, and Format is what path.format answered for each of a set of
+	// objects keyed by the object's JSON.
+	Parse     map[string]nodeParsedPath `json:"parse"`
+	Format    map[string]string         `json:"format"`
+	Sep       string                    `json:"sep"`
+	Delimiter string                    `json:"delimiter"`
+}
+
+// nodeParsedPath is one path.parse result as the reference records it.
+type nodeParsedPath struct {
+	Root string `json:"root"`
+	Dir  string `json:"dir"`
+	Base string `json:"base"`
+	Ext  string `json:"ext"`
+	Name string `json:"name"`
 }
 
 // loadNodePathRef reads the checked-in Node output.
@@ -261,6 +275,97 @@ func TestPathResolveReadsTheDriveWorkingDirectory(t *testing.T) {
 	}
 	if got := pathResolveWin32([]string{"C:a"}, `C:\cwd`, drives); got != `C:\cwd\a` {
 		t.Errorf("resolve(C:a) = %q, want C:\\cwd\\a, the process directory being on C:", got)
+	}
+}
+
+// TestPathParseMatchesNode holds both variants of parse to Node's answers over the
+// same path list the rest of the port is checked against. All five fields are
+// compared on every case rather than the one the case was chosen for, because parse
+// decides them together: whether a dot starts an extension changes base, ext and
+// name at once, and a test that only read ext would miss a name that disagreed
+// with it.
+func TestPathParseMatchesNode(t *testing.T) {
+	ref := loadNodePathRef(t)
+	for _, v := range []struct {
+		name  string
+		parse func(string) pathParts
+		cases map[string]nodeParsedPath
+	}{
+		{"posix", pathParsePosix, ref.Posix.Parse},
+		{"win32", pathParseWin32, ref.Win32.Parse},
+	} {
+		if len(v.cases) == 0 {
+			t.Fatalf("%s reference has no parse cases", v.name)
+		}
+		for in, want := range v.cases {
+			got := v.parse(in)
+			if got.root != want.Root || got.dir != want.Dir || got.base != want.Base ||
+				got.ext != want.Ext || got.name != want.Name {
+				t.Errorf("%s parse(%q) = {root:%q dir:%q base:%q ext:%q name:%q}, node says {root:%q dir:%q base:%q ext:%q name:%q}",
+					v.name, in, got.root, got.dir, got.base, got.ext, got.name,
+					want.Root, want.Dir, want.Base, want.Ext, want.Name)
+			}
+		}
+	}
+}
+
+// TestPathFormatMatchesNode holds format to Node's answers. The cases are objects
+// rather than paths, and each one is keyed by its own JSON so the test drives the
+// port with exactly the fields Node saw. They are chosen for the precedence rules,
+// which are the whole of what format does beyond concatenation: base beats name and
+// ext, dir beats root, and a dir equal to the root joins without a separator.
+func TestPathFormatMatchesNode(t *testing.T) {
+	ref := loadNodePathRef(t)
+	for _, v := range []struct {
+		name  string
+		sep   string
+		cases map[string]string
+	}{
+		{"posix", "/", ref.Posix.Format},
+		{"win32", `\`, ref.Win32.Format},
+	} {
+		if len(v.cases) == 0 {
+			t.Fatalf("%s reference has no format cases", v.name)
+		}
+		for key, want := range v.cases {
+			var o map[string]string
+			if err := json.Unmarshal([]byte(key), &o); err != nil {
+				t.Fatalf("bad reference key %q: %v", key, err)
+			}
+			got := pathFormat(v.sep, o["dir"], o["root"], o["base"], o["name"], o["ext"])
+			if got != want {
+				t.Errorf("%s format(%s) = %q, node says %q", v.name, key, got, want)
+			}
+		}
+	}
+}
+
+// TestPathParseRoundTripsThroughFormat proves the two fit together over every path
+// in the reference: formatting what parse answered gives a path that parses to the
+// same five fields. It is not that format inverts parse exactly, since parse
+// normalizes nothing and format joins with one separator where the input may have
+// had several, but the pair has to be stable, because rewriting one field of a
+// parsed path and formatting it back is what a program uses them for.
+func TestPathParseRoundTripsThroughFormat(t *testing.T) {
+	ref := loadNodePathRef(t)
+	for _, v := range []struct {
+		name  string
+		sep   string
+		parse func(string) pathParts
+		cases map[string]nodeParsedPath
+	}{
+		{"posix", "/", pathParsePosix, ref.Posix.Parse},
+		{"win32", `\`, pathParseWin32, ref.Win32.Parse},
+	} {
+		for in := range v.cases {
+			p := v.parse(in)
+			formatted := pathFormat(v.sep, p.dir, p.root, p.base, p.name, p.ext)
+			again := v.parse(formatted)
+			if again != p {
+				t.Errorf("%s parse(%q) -> format -> %q -> parse gave %+v, want %+v",
+					v.name, in, formatted, again, p)
+			}
+		}
 	}
 }
 

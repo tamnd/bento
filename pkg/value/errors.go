@@ -82,6 +82,14 @@ type Error struct {
 	suppressed    Value
 	suppressor    Value
 	hasSuppressed bool
+	// code is the stable identifier Node puts on every error a built-in raises, the
+	// ERR_INVALID_ARG_TYPE or ENOENT a program branches on. It is what makes a Node
+	// error handleable: the message is prose meant for a human and changes between
+	// releases, while the code is the contract. An error the program threw itself has
+	// none, so hasCode marks its presence rather than treating the empty string as
+	// absent, which would make a deliberate `err.code = ''` unrepresentable.
+	code    BStr
+	hasCode bool
 }
 
 // Name reports the error's constructor name as a bento string, the lowering of
@@ -164,6 +172,13 @@ func (e *Error) ToValue() Value {
 			keys = append(keys, FromGoString("error"), FromGoString("suppressed"))
 			descs = append(descs, defaultDataProperty(e.suppressor), defaultDataProperty(e.suppressed))
 		}
+		// An error a Node built-in raised also exposes its code, which is the property a
+		// caller actually branches on: `if (err.code === 'ENOENT')` is how Node code is
+		// written, because the message is prose and the code is the contract.
+		if e.hasCode {
+			keys = append(keys, FromGoString("code"))
+			descs = append(descs, defaultDataProperty(StringValue(e.code)))
+		}
 		e.boxed = &Object{kind: KindObject, keys: keys, descs: descs}
 	}
 	return Value{kind: KindObject, ref: unsafe.Pointer(e.boxed)}
@@ -207,6 +222,36 @@ func ErrorMessageString(v Value) BStr {
 // the error a failed type guard raises.
 func NewTypeError(message BStr) *Error {
 	return &Error{name: FromGoString("TypeError"), message: message}
+}
+
+// NewNodeError constructs the error a Node built-in raises: an ordinary error of
+// the given constructor name carrying the code that identifies it. Node builds
+// these from one internal factory so that every built-in reports a failure the same
+// way, and this is that factory. The name is the constructor a program tests with
+// instanceof (TypeError for a bad argument type, RangeError for a bad value, Error
+// for everything else), and the code is what it branches on.
+func NewNodeError(name, code string, message BStr) *Error {
+	return &Error{
+		name:    FromGoString(name),
+		message: message,
+		code:    FromGoString(code),
+		hasCode: true,
+	}
+}
+
+// Code reports the error's Node code as a bento string and whether it has one, the
+// read behind err.code on an error a built-in raised.
+func (e *Error) Code() (BStr, bool) { return e.code, e.hasCode }
+
+// CodeValue is err.code as a program reads it: the string a Node built-in put
+// there, or undefined for an error with no code, which is what a property that was
+// never set answers in JavaScript. It is the boxed form because a catch binding is
+// typed unknown, so every property read off it is dynamic.
+func (e *Error) CodeValue() Value {
+	if !e.hasCode {
+		return Undefined
+	}
+	return StringValue(e.code)
 }
 
 // NewRangeError constructs a RangeError, the lowering of new RangeError(message)

@@ -31,6 +31,37 @@ const PATHS = [
 const SUFFIXES = ['', '.txt', '.c.txt', 'b', '/', '.bashrc'];
 const SECONDS = ['b', '..', '/b', 'C:\\a', '', 'a/b'];
 
+// The objects format is driven with. Most of them are there for one precedence
+// rule each: base beats name and ext, dir beats root, and a dir that is the root
+// joins without a separator because the root already ends in one.
+const FORMATS = [
+  {},
+  { root: '/' },
+  { root: 'C:\\' },
+  { dir: '/a' },
+  { base: 'f.txt' },
+  { name: 'f' },
+  { ext: '.txt' },
+  { ext: 'txt' },
+  { name: 'f', ext: '.txt' },
+  { name: 'f', ext: 'txt' },
+  { dir: '/a', base: 'f.txt' },
+  { dir: '/a/b', name: 'f', ext: '.txt' },
+  { root: '/', base: 'f.txt' },
+  { root: '/', name: 'f', ext: '.txt' },
+  { dir: '/', base: 'f.txt' },
+  { dir: '/a', root: '/', base: 'f.txt' },
+  { dir: '/a', base: 'b.txt', name: 'f', ext: '.js' },
+  { root: 'C:\\', base: 'f.txt' },
+  { dir: 'C:\\a', base: 'f.txt' },
+  { dir: 'C:\\', base: 'f.txt' },
+  { dir: 'C:\\', root: 'C:\\', base: 'f.txt' },
+  { dir: '', base: '' },
+  { name: '', ext: '' },
+  { dir: 'a', base: 'b' },
+  { dir: 'a', name: 'b' },
+];
+
 function variant(impl, cwd) {
   const realCwd = process.cwd;
   process.cwd = () => cwd;
@@ -38,8 +69,12 @@ function variant(impl, cwd) {
     if (key.startsWith('=')) delete process.env[key];
   }
   try {
-    const out = { cwd, unary: {}, basenameExt: {}, join: {}, resolve: {}, relative: {} };
+    const out = { cwd, unary: {}, basenameExt: {}, join: {}, resolve: {}, relative: {}, parse: {}, format: {} };
+    for (const f of FORMATS) {
+      out.format[JSON.stringify(f)] = impl.format(f);
+    }
     for (const p of PATHS) {
+      out.parse[p] = impl.parse(p);
       out.unary[p] = {
         normalize: impl.normalize(p),
         dirname: impl.dirname(p),

@@ -1663,6 +1663,385 @@
    "[\"a/b\\\\c\",\"\"]": "../..",
    "[\"a/b\\\\c\",\"a/b\"]": "../b"
   },
+  "parse": {
+   "": {
+    "root": "",
+    "dir": "",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   ".": {
+    "root": "",
+    "dir": "",
+    "base": ".",
+    "ext": "",
+    "name": "."
+   },
+   "..": {
+    "root": "",
+    "dir": "",
+    "base": "..",
+    "ext": "",
+    "name": ".."
+   },
+   "/": {
+    "root": "/",
+    "dir": "/",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "//": {
+    "root": "/",
+    "dir": "/",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "///": {
+    "root": "/",
+    "dir": "/",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "a": {
+    "root": "",
+    "dir": "",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "a/b": {
+    "root": "",
+    "dir": "a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a/b/": {
+    "root": "",
+    "dir": "a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "/a": {
+    "root": "/",
+    "dir": "/",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "/a/": {
+    "root": "/",
+    "dir": "/",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "/a/b": {
+    "root": "/",
+    "dir": "/a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a//b": {
+    "root": "",
+    "dir": "a/",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a/./b": {
+    "root": "",
+    "dir": "a/.",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a/../b": {
+    "root": "",
+    "dir": "a/..",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "../a": {
+    "root": "",
+    "dir": "..",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "a/..": {
+    "root": "",
+    "dir": "a",
+    "base": "..",
+    "ext": "",
+    "name": ".."
+   },
+   "a/../..": {
+    "root": "",
+    "dir": "a/..",
+    "base": "..",
+    "ext": "",
+    "name": ".."
+   },
+   "/..": {
+    "root": "/",
+    "dir": "/",
+    "base": "..",
+    "ext": ".",
+    "name": "."
+   },
+   "/../a": {
+    "root": "/",
+    "dir": "/..",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "./a": {
+    "root": "",
+    "dir": ".",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "a/b/c.txt": {
+    "root": "",
+    "dir": "a/b",
+    "base": "c.txt",
+    "ext": ".txt",
+    "name": "c"
+   },
+   "c.txt": {
+    "root": "",
+    "dir": "",
+    "base": "c.txt",
+    "ext": ".txt",
+    "name": "c"
+   },
+   ".bashrc": {
+    "root": "",
+    "dir": "",
+    "base": ".bashrc",
+    "ext": "",
+    "name": ".bashrc"
+   },
+   "a/.bashrc": {
+    "root": "",
+    "dir": "a",
+    "base": ".bashrc",
+    "ext": "",
+    "name": ".bashrc"
+   },
+   "file.": {
+    "root": "",
+    "dir": "",
+    "base": "file.",
+    "ext": ".",
+    "name": "file"
+   },
+   "file..": {
+    "root": "",
+    "dir": "",
+    "base": "file..",
+    "ext": ".",
+    "name": "file."
+   },
+   "a.b.c": {
+    "root": "",
+    "dir": "",
+    "base": "a.b.c",
+    "ext": ".c",
+    "name": "a.b"
+   },
+   "/a/b/c.txt": {
+    "root": "/",
+    "dir": "/a/b",
+    "base": "c.txt",
+    "ext": ".txt",
+    "name": "c"
+   },
+   "a/b/../c": {
+    "root": "",
+    "dir": "a/b/..",
+    "base": "c",
+    "ext": "",
+    "name": "c"
+   },
+   "foo/bar//baz": {
+    "root": "",
+    "dir": "foo/bar/",
+    "base": "baz",
+    "ext": "",
+    "name": "baz"
+   },
+   " ": {
+    "root": "",
+    "dir": "",
+    "base": " ",
+    "ext": "",
+    "name": " "
+   },
+   "a b/c d": {
+    "root": "",
+    "dir": "a b",
+    "base": "c d",
+    "ext": "",
+    "name": "c d"
+   },
+   "C:": {
+    "root": "",
+    "dir": "",
+    "base": "C:",
+    "ext": "",
+    "name": "C:"
+   },
+   "C:\\": {
+    "root": "",
+    "dir": "",
+    "base": "C:\\",
+    "ext": "",
+    "name": "C:\\"
+   },
+   "C:\\a": {
+    "root": "",
+    "dir": "",
+    "base": "C:\\a",
+    "ext": "",
+    "name": "C:\\a"
+   },
+   "C:\\a\\b": {
+    "root": "",
+    "dir": "",
+    "base": "C:\\a\\b",
+    "ext": "",
+    "name": "C:\\a\\b"
+   },
+   "C:/a/b": {
+    "root": "",
+    "dir": "C:/a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "\\\\server\\share": {
+    "root": "",
+    "dir": "",
+    "base": "\\\\server\\share",
+    "ext": "",
+    "name": "\\\\server\\share"
+   },
+   "\\\\server\\share\\a": {
+    "root": "",
+    "dir": "",
+    "base": "\\\\server\\share\\a",
+    "ext": "",
+    "name": "\\\\server\\share\\a"
+   },
+   "\\a": {
+    "root": "",
+    "dir": "",
+    "base": "\\a",
+    "ext": "",
+    "name": "\\a"
+   },
+   "\\a\\b": {
+    "root": "",
+    "dir": "",
+    "base": "\\a\\b",
+    "ext": "",
+    "name": "\\a\\b"
+   },
+   "a\\b": {
+    "root": "",
+    "dir": "",
+    "base": "a\\b",
+    "ext": "",
+    "name": "a\\b"
+   },
+   "a\\b\\": {
+    "root": "",
+    "dir": "",
+    "base": "a\\b\\",
+    "ext": "",
+    "name": "a\\b\\"
+   },
+   "\\": {
+    "root": "",
+    "dir": "",
+    "base": "\\",
+    "ext": "",
+    "name": "\\"
+   },
+   "\\\\": {
+    "root": "",
+    "dir": "",
+    "base": "\\\\",
+    "ext": "",
+    "name": "\\\\"
+   },
+   "C:a": {
+    "root": "",
+    "dir": "",
+    "base": "C:a",
+    "ext": "",
+    "name": "C:a"
+   },
+   "c:\\A\\..\\b": {
+    "root": "",
+    "dir": "",
+    "base": "c:\\A\\..\\b",
+    "ext": ".\\b",
+    "name": "c:\\A\\."
+   },
+   "//server/share/x": {
+    "root": "/",
+    "dir": "//server/share",
+    "base": "x",
+    "ext": "",
+    "name": "x"
+   },
+   "a/b\\c": {
+    "root": "",
+    "dir": "a",
+    "base": "b\\c",
+    "ext": "",
+    "name": "b\\c"
+   }
+  },
+  "format": {
+   "{}": "",
+   "{\"root\":\"/\"}": "/",
+   "{\"root\":\"C:\\\\\"}": "C:\\",
+   "{\"dir\":\"/a\"}": "/a/",
+   "{\"base\":\"f.txt\"}": "f.txt",
+   "{\"name\":\"f\"}": "f",
+   "{\"ext\":\".txt\"}": ".txt",
+   "{\"ext\":\"txt\"}": ".txt",
+   "{\"name\":\"f\",\"ext\":\".txt\"}": "f.txt",
+   "{\"name\":\"f\",\"ext\":\"txt\"}": "f.txt",
+   "{\"dir\":\"/a\",\"base\":\"f.txt\"}": "/a/f.txt",
+   "{\"dir\":\"/a/b\",\"name\":\"f\",\"ext\":\".txt\"}": "/a/b/f.txt",
+   "{\"root\":\"/\",\"base\":\"f.txt\"}": "/f.txt",
+   "{\"root\":\"/\",\"name\":\"f\",\"ext\":\".txt\"}": "/f.txt",
+   "{\"dir\":\"/\",\"base\":\"f.txt\"}": "//f.txt",
+   "{\"dir\":\"/a\",\"root\":\"/\",\"base\":\"f.txt\"}": "/a/f.txt",
+   "{\"dir\":\"/a\",\"base\":\"b.txt\",\"name\":\"f\",\"ext\":\".js\"}": "/a/b.txt",
+   "{\"root\":\"C:\\\\\",\"base\":\"f.txt\"}": "C:\\f.txt",
+   "{\"dir\":\"C:\\\\a\",\"base\":\"f.txt\"}": "C:\\a/f.txt",
+   "{\"dir\":\"C:\\\\\",\"base\":\"f.txt\"}": "C:\\/f.txt",
+   "{\"dir\":\"C:\\\\\",\"root\":\"C:\\\\\",\"base\":\"f.txt\"}": "C:\\f.txt",
+   "{\"dir\":\"\",\"base\":\"\"}": "",
+   "{\"name\":\"\",\"ext\":\"\"}": "",
+   "{\"dir\":\"a\",\"base\":\"b\"}": "a/b",
+   "{\"dir\":\"a\",\"name\":\"b\"}": "a/b"
+  },
   "sep": "/",
   "delimiter": ":"
  },
@@ -3328,6 +3707,385 @@
    "[\"a/b\\\\c\",\"C:\\\\a\"]": "..\\..\\..\\..\\a",
    "[\"a/b\\\\c\",\"\"]": "..\\..\\..",
    "[\"a/b\\\\c\",\"a/b\"]": ".."
+  },
+  "parse": {
+   "": {
+    "root": "",
+    "dir": "",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   ".": {
+    "root": "",
+    "dir": "",
+    "base": ".",
+    "ext": "",
+    "name": "."
+   },
+   "..": {
+    "root": "",
+    "dir": "",
+    "base": "..",
+    "ext": "",
+    "name": ".."
+   },
+   "/": {
+    "root": "/",
+    "dir": "/",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "//": {
+    "root": "/",
+    "dir": "/",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "///": {
+    "root": "/",
+    "dir": "/",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "a": {
+    "root": "",
+    "dir": "",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "a/b": {
+    "root": "",
+    "dir": "a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a/b/": {
+    "root": "",
+    "dir": "a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "/a": {
+    "root": "/",
+    "dir": "/",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "/a/": {
+    "root": "/",
+    "dir": "/",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "/a/b": {
+    "root": "/",
+    "dir": "/a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a//b": {
+    "root": "",
+    "dir": "a/",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a/./b": {
+    "root": "",
+    "dir": "a/.",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a/../b": {
+    "root": "",
+    "dir": "a/..",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "../a": {
+    "root": "",
+    "dir": "..",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "a/..": {
+    "root": "",
+    "dir": "a",
+    "base": "..",
+    "ext": "",
+    "name": ".."
+   },
+   "a/../..": {
+    "root": "",
+    "dir": "a/..",
+    "base": "..",
+    "ext": "",
+    "name": ".."
+   },
+   "/..": {
+    "root": "/",
+    "dir": "/",
+    "base": "..",
+    "ext": "",
+    "name": ".."
+   },
+   "/../a": {
+    "root": "/",
+    "dir": "/..",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "./a": {
+    "root": "",
+    "dir": ".",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "a/b/c.txt": {
+    "root": "",
+    "dir": "a/b",
+    "base": "c.txt",
+    "ext": ".txt",
+    "name": "c"
+   },
+   "c.txt": {
+    "root": "",
+    "dir": "",
+    "base": "c.txt",
+    "ext": ".txt",
+    "name": "c"
+   },
+   ".bashrc": {
+    "root": "",
+    "dir": "",
+    "base": ".bashrc",
+    "ext": "",
+    "name": ".bashrc"
+   },
+   "a/.bashrc": {
+    "root": "",
+    "dir": "a",
+    "base": ".bashrc",
+    "ext": "",
+    "name": ".bashrc"
+   },
+   "file.": {
+    "root": "",
+    "dir": "",
+    "base": "file.",
+    "ext": ".",
+    "name": "file"
+   },
+   "file..": {
+    "root": "",
+    "dir": "",
+    "base": "file..",
+    "ext": ".",
+    "name": "file."
+   },
+   "a.b.c": {
+    "root": "",
+    "dir": "",
+    "base": "a.b.c",
+    "ext": ".c",
+    "name": "a.b"
+   },
+   "/a/b/c.txt": {
+    "root": "/",
+    "dir": "/a/b",
+    "base": "c.txt",
+    "ext": ".txt",
+    "name": "c"
+   },
+   "a/b/../c": {
+    "root": "",
+    "dir": "a/b/..",
+    "base": "c",
+    "ext": "",
+    "name": "c"
+   },
+   "foo/bar//baz": {
+    "root": "",
+    "dir": "foo/bar/",
+    "base": "baz",
+    "ext": "",
+    "name": "baz"
+   },
+   " ": {
+    "root": "",
+    "dir": "",
+    "base": " ",
+    "ext": "",
+    "name": " "
+   },
+   "a b/c d": {
+    "root": "",
+    "dir": "a b",
+    "base": "c d",
+    "ext": "",
+    "name": "c d"
+   },
+   "C:": {
+    "root": "C:",
+    "dir": "C:",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "C:\\": {
+    "root": "C:\\",
+    "dir": "C:\\",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "C:\\a": {
+    "root": "C:\\",
+    "dir": "C:\\",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "C:\\a\\b": {
+    "root": "C:\\",
+    "dir": "C:\\a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "C:/a/b": {
+    "root": "C:/",
+    "dir": "C:/a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "\\\\server\\share": {
+    "root": "\\\\server\\share",
+    "dir": "\\\\server\\share",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "\\\\server\\share\\a": {
+    "root": "\\\\server\\share\\",
+    "dir": "\\\\server\\share\\",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "\\a": {
+    "root": "\\",
+    "dir": "\\",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "\\a\\b": {
+    "root": "\\",
+    "dir": "\\a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a\\b": {
+    "root": "",
+    "dir": "a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "a\\b\\": {
+    "root": "",
+    "dir": "a",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "\\": {
+    "root": "\\",
+    "dir": "\\",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "\\\\": {
+    "root": "\\",
+    "dir": "\\",
+    "base": "",
+    "ext": "",
+    "name": ""
+   },
+   "C:a": {
+    "root": "C:",
+    "dir": "C:",
+    "base": "a",
+    "ext": "",
+    "name": "a"
+   },
+   "c:\\A\\..\\b": {
+    "root": "c:\\",
+    "dir": "c:\\A\\..",
+    "base": "b",
+    "ext": "",
+    "name": "b"
+   },
+   "//server/share/x": {
+    "root": "//server/share/",
+    "dir": "//server/share/",
+    "base": "x",
+    "ext": "",
+    "name": "x"
+   },
+   "a/b\\c": {
+    "root": "",
+    "dir": "a/b",
+    "base": "c",
+    "ext": "",
+    "name": "c"
+   }
+  },
+  "format": {
+   "{}": "",
+   "{\"root\":\"/\"}": "/",
+   "{\"root\":\"C:\\\\\"}": "C:\\",
+   "{\"dir\":\"/a\"}": "/a\\",
+   "{\"base\":\"f.txt\"}": "f.txt",
+   "{\"name\":\"f\"}": "f",
+   "{\"ext\":\".txt\"}": ".txt",
+   "{\"ext\":\"txt\"}": ".txt",
+   "{\"name\":\"f\",\"ext\":\".txt\"}": "f.txt",
+   "{\"name\":\"f\",\"ext\":\"txt\"}": "f.txt",
+   "{\"dir\":\"/a\",\"base\":\"f.txt\"}": "/a\\f.txt",
+   "{\"dir\":\"/a/b\",\"name\":\"f\",\"ext\":\".txt\"}": "/a/b\\f.txt",
+   "{\"root\":\"/\",\"base\":\"f.txt\"}": "/f.txt",
+   "{\"root\":\"/\",\"name\":\"f\",\"ext\":\".txt\"}": "/f.txt",
+   "{\"dir\":\"/\",\"base\":\"f.txt\"}": "/\\f.txt",
+   "{\"dir\":\"/a\",\"root\":\"/\",\"base\":\"f.txt\"}": "/a\\f.txt",
+   "{\"dir\":\"/a\",\"base\":\"b.txt\",\"name\":\"f\",\"ext\":\".js\"}": "/a\\b.txt",
+   "{\"root\":\"C:\\\\\",\"base\":\"f.txt\"}": "C:\\f.txt",
+   "{\"dir\":\"C:\\\\a\",\"base\":\"f.txt\"}": "C:\\a\\f.txt",
+   "{\"dir\":\"C:\\\\\",\"base\":\"f.txt\"}": "C:\\\\f.txt",
+   "{\"dir\":\"C:\\\\\",\"root\":\"C:\\\\\",\"base\":\"f.txt\"}": "C:\\f.txt",
+   "{\"dir\":\"\",\"base\":\"\"}": "",
+   "{\"name\":\"\",\"ext\":\"\"}": "",
+   "{\"dir\":\"a\",\"base\":\"b\"}": "a\\b",
+   "{\"dir\":\"a\",\"name\":\"b\"}": "a\\b"
   },
   "sep": "\\",
   "delimiter": ";"
