@@ -32,7 +32,11 @@ __bento_defineModule("os", function (module, exports, require) {
     networkInterfaces: function () { return fresh().networkInterfaces || {}; },
     userInfo: function () { return info.userInfo; },
     availableParallelism: function () { return info.cpus ? info.cpus.length : 1; },
-    machine: function () { return info.arch; },
+    // machine is what uname reports, which is not what arch reports: an x64
+    // machine is "x86_64" to uname and "x64" to Node's arch. A platform whose
+    // facts nothing measures yet answers the empty string rather than arch, which
+    // would be a wrong answer dressed as a right one.
+    machine: function () { return info.machine; },
     constants: { signals: {}, errno: {}, priority: {} },
     devNull: info.platform === "win32" ? "\\\\.\\nul" : "/dev/null",
   };

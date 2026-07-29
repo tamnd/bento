@@ -1,6 +1,9 @@
 package node
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 // node:os has two data exports a program reads for a platform fact rather than
 // calls: EOL, the line ending, and devNull, the path of the null device. The
@@ -22,5 +25,46 @@ func TestOSConstantsMatchNode(t *testing.T) {
 	}
 	if got := evalString(t, eng, `require("os").devNull`); got != devNull {
 		t.Errorf("os.devNull = %q, want %q on %s", got, devNull, nodePlatform())
+	}
+}
+
+// TestOSFactsReachTheModule pins that the host facts the snapshot now measures
+// arrive in the module rather than stopping at the bridge. Each one used to be a
+// zero or an empty string, which is a shape a program cannot tell from a real
+// answer, so what is checked here is that they are no longer that.
+//
+// The values themselves are checked where they are measured, in pkg/nodehost,
+// against uname and the kernel's own counters. Here the question is only whether
+// the module reports what was measured.
+func TestOSFactsReachTheModule(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux", "darwin", "windows":
+	default:
+		t.Skipf("no host facts are measured on %s yet", runtime.GOOS)
+	}
+	eng := harness(t)
+	for _, expr := range []string{
+		`require("os").release().length > 0`,
+		`require("os").machine().length > 0`,
+		`require("os").totalmem() > 0`,
+		`require("os").freemem() > 0`,
+		`require("os").freemem() <= require("os").totalmem()`,
+		`require("os").uptime() > 0`,
+		`Array.isArray(require("os").loadavg()) && require("os").loadavg().length === 3`,
+	} {
+		if got := evalString(t, eng, expr); got != "true" {
+			t.Errorf("%s = %q, want true", expr, got)
+		}
+	}
+	// machine is uname's name for the hardware, which is not arch's name for it on a
+	// 64-bit Intel machine: uname says x86_64 and Node says x64. The module used to
+	// answer arch for both, so this is the case that was wrong.
+	if runtime.GOARCH == "amd64" {
+		if got := evalString(t, eng, `require("os").machine()`); got != "x86_64" {
+			t.Errorf("os.machine() = %q on amd64, want %q", got, "x86_64")
+		}
+		if got := evalString(t, eng, `require("os").arch()`); got != "x64" {
+			t.Errorf("os.arch() = %q on amd64, want %q", got, "x64")
+		}
 	}
 }
