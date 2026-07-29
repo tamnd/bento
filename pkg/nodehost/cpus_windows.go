@@ -29,21 +29,21 @@ const hundredNSPerMS = 10000
 // firmware wrote to the registry at boot, one key per core, and the times come
 // from the undocumented system call that is the only interface to them, which is
 // the same one libuv uses.
-func readCPUs() []cpuInfo {
+func readCPUs() []CPUInfo {
 	n := int(nativeSystemInfo().NumberOfProcessors)
 	if n <= 0 {
 		return nil
 	}
 	times := processorTimes(n)
-	out := make([]cpuInfo, n)
+	out := make([]CPUInfo, n)
 	for i := range out {
-		out[i] = cpuInfo{Model: "unknown"}
+		out[i] = CPUInfo{Model: "unknown"}
 		if model, mhz, ok := registryCPU(i); ok {
 			out[i].Model, out[i].Speed = model, mhz
 		}
 		if i < len(times) {
 			t := times[i]
-			out[i].Times = cpuTimes{
+			out[i].Times = CPUTimes{
 				User: int(t.UserTime / hundredNSPerMS),
 				// Windows does not schedule by niceness and keeps no count for it, and Node
 				// reports zero there rather than folding it into another state.

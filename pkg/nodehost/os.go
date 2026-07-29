@@ -26,27 +26,30 @@ import (
 // across the bridge on each OSInfoJSON call so the JavaScript side stays free of
 // platform detail.
 type osInfo struct {
-	Platform          string                `json:"platform"`
-	Arch              string                `json:"arch"`
-	Type              string                `json:"type"`
-	Release           string                `json:"release"`
-	Version           string                `json:"version"`
-	Machine           string                `json:"machine"`
-	Hostname          string                `json:"hostname"`
-	Homedir           string                `json:"homedir"`
-	Tmpdir            string                `json:"tmpdir"`
-	Endianness        string                `json:"endianness"`
-	Totalmem          uint64                `json:"totalmem"`
-	Freemem           uint64                `json:"freemem"`
-	Uptime            float64               `json:"uptime"`
-	Loadavg           [3]float64            `json:"loadavg"`
-	CPUs              []cpuInfo             `json:"cpus"`
-	Parallelism       int                   `json:"availableParallelism"`
-	NetworkInterfaces map[string][]netIface `json:"networkInterfaces"`
-	UserInfo          userInfo              `json:"userInfo"`
+	Platform          string                    `json:"platform"`
+	Arch              string                    `json:"arch"`
+	Type              string                    `json:"type"`
+	Release           string                    `json:"release"`
+	Version           string                    `json:"version"`
+	Machine           string                    `json:"machine"`
+	Hostname          string                    `json:"hostname"`
+	Homedir           string                    `json:"homedir"`
+	Tmpdir            string                    `json:"tmpdir"`
+	Endianness        string                    `json:"endianness"`
+	Totalmem          uint64                    `json:"totalmem"`
+	Freemem           uint64                    `json:"freemem"`
+	Uptime            float64                   `json:"uptime"`
+	Loadavg           [3]float64                `json:"loadavg"`
+	CPUs              []CPUInfo                 `json:"cpus"`
+	Parallelism       int                       `json:"availableParallelism"`
+	NetworkInterfaces map[string][]NetInterface `json:"networkInterfaces"`
+	UserInfo          UserInfo                  `json:"userInfo"`
 }
 
-type netIface struct {
+// NetInterface is one address of one interface, an entry of the arrays
+// os.networkInterfaces() keys by interface name. An interface with four addresses
+// is four of these under one key, which is the shape Node reports.
+type NetInterface struct {
 	Address  string `json:"address"`
 	Netmask  string `json:"netmask"`
 	Family   string `json:"family"`
@@ -55,7 +58,10 @@ type netIface struct {
 	CIDR     string `json:"cidr"`
 }
 
-type userInfo struct {
+// UserInfo is what os.userInfo() answers about the user this process runs as.
+// The two Windows fields have no meaning there and Node reports minus one for
+// them, which is what the platform's own lookup answers.
+type UserInfo struct {
 	Username string `json:"username"`
 	UID      int    `json:"uid"`
 	GID      int    `json:"gid"`
@@ -143,8 +149,8 @@ func endianness() string {
 	return "BE"
 }
 
-func networkInterfaces() map[string][]netIface {
-	out := map[string][]netIface{}
+func networkInterfaces() map[string][]NetInterface {
+	out := map[string][]NetInterface{}
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return out
@@ -165,7 +171,7 @@ func networkInterfaces() map[string][]netIface {
 				family = "IPv6"
 			}
 			ones, _ := ipnet.Mask.Size()
-			out[iface.Name] = append(out[iface.Name], netIface{
+			out[iface.Name] = append(out[iface.Name], NetInterface{
 				Address:  ipnet.IP.String(),
 				Netmask:  net.IP(ipnet.Mask).String(),
 				Family:   family,
@@ -178,13 +184,13 @@ func networkInterfaces() map[string][]netIface {
 	return out
 }
 
-func currentUser(home string) userInfo {
+func currentUser(home string) UserInfo {
 	name := os.Getenv("USER")
 	if name == "" {
 		name = os.Getenv("USERNAME")
 	}
 	uid, gid := os.Getuid(), os.Getgid()
-	return userInfo{
+	return UserInfo{
 		Username: name,
 		UID:      uid,
 		GID:      gid,

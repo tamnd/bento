@@ -2,19 +2,19 @@ package nodehost
 
 import "runtime"
 
-// cpuInfo is one entry of the array os.cpus() answers: the processor's model
+// CPUInfo is one entry of the array os.cpus() answers: the processor's model
 // name, its clock in megahertz, and the time its core has spent in each of the
 // scheduler's states since the machine booted.
-type cpuInfo struct {
+type CPUInfo struct {
 	Model string   `json:"model"`
 	Speed int      `json:"speed"`
-	Times cpuTimes `json:"times"`
+	Times CPUTimes `json:"times"`
 }
 
-// cpuTimes counts milliseconds, which is the unit Node reports and not the unit
+// CPUTimes counts milliseconds, which is the unit Node reports and not the unit
 // any kernel keeps. Every platform counts in something else, ticks on Linux and
 // hundreds of nanoseconds on Windows, and converts on the way out.
-type cpuTimes struct {
+type CPUTimes struct {
 	User int `json:"user"`
 	Nice int `json:"nice"`
 	Sys  int `json:"sys"`
@@ -31,13 +31,13 @@ type cpuTimes struct {
 // falls back to a row per runtime core with an unknown model. That keeps the
 // length of the array right, which is the one thing about it programs read
 // without checking, and says plainly that the rest is not known.
-func cpuList() []cpuInfo {
+func cpuList() []CPUInfo {
 	if cpus := readCPUs(); len(cpus) > 0 {
 		return cpus
 	}
-	out := make([]cpuInfo, runtime.NumCPU())
+	out := make([]CPUInfo, runtime.NumCPU())
 	for i := range out {
-		out[i] = cpuInfo{Model: "unknown"}
+		out[i] = CPUInfo{Model: "unknown"}
 	}
 	return out
 }

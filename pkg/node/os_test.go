@@ -2,6 +2,7 @@ package node
 
 import (
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -104,6 +105,39 @@ func TestCPUsReachTheModule(t *testing.T) {
 		expr := `typeof require("os").cpus()[0].times.` + key + ` === "number"`
 		if got := evalString(t, eng, expr); got != "true" {
 			t.Errorf("os.cpus()[0].times.%s is not a number", key)
+		}
+	}
+}
+
+// nodeOSExportOrder is what Object.keys(require('os')) reports in Node v24, in
+// Node's own order, minus getPriority and setPriority, which bento does not
+// measure yet.
+var nodeOSExportOrder = []string{
+	"arch", "availableParallelism", "cpus", "endianness", "freemem", "homedir",
+	"hostname", "loadavg", "networkInterfaces", "platform", "release", "tmpdir",
+	"totalmem", "type", "userInfo", "uptime", "version", "machine", "constants",
+	"EOL", "devNull",
+}
+
+// TestOSExportOrderMatchesNode pins the interpreter's os module against Node's key
+// order. The compiled path builds its own os module in pkg/value out of the same
+// measurements, and it is pinned to the same list there. Both are pinned rather
+// than one deriving from the other, because they are written in different
+// languages and the only thing holding them together is that each is checked
+// against Node.
+//
+// The order is checked and not only the set: a program that enumerates the module,
+// or prints it, sees what Node's prints.
+func TestOSExportOrderMatchesNode(t *testing.T) {
+	eng := harness(t)
+	got := evalString(t, eng, `Object.keys(require("os")).join(",")`)
+	if want := strings.Join(nodeOSExportOrder, ","); got != want {
+		t.Errorf("Object.keys(require('os')) is\n%s\nwant Node's order\n%s", got, want)
+	}
+	for _, name := range []string{"getPriority", "setPriority"} {
+		expr := `typeof require("os").` + name
+		if got := evalString(t, eng, expr); got != "undefined" {
+			t.Errorf("os.%s is %s; if it is implemented now it belongs in the export list", name, got)
 		}
 	}
 }

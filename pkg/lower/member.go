@@ -986,6 +986,32 @@ func (r *Renderer) isDynBoundReceiver(n frontend.Node) bool {
 	return ok && r.dynBoundLocals[name]
 }
 
+// isRootedInDynBound reports whether n is a chain of reads, index reads, and calls
+// that bottoms out at a dynBound identifier: os.cpus(), os.cpus()[0].model,
+// mod.builtinModules. Every step of such a chain lowers through the value model and
+// yields a boxed value.Value, whatever the checker made of it, so a binding fed by
+// one holds a box and must be declared as one.
+//
+// The walk stops at the first node that is not one of the three chaining shapes, so
+// a chain rooted at anything else, a typed local or a global, answers false and
+// keeps its own handling.
+func (r *Renderer) isRootedInDynBound(n frontend.Node) bool {
+	for {
+		switch n.Kind() {
+		case frontend.NodeIdentifier:
+			return r.isDynBoundReceiver(n)
+		case frontend.NodePropertyAccessExpression, frontend.NodeElementAccessExpression, frontend.NodeCallExpression:
+			kids := r.prog.Children(n)
+			if len(kids) == 0 {
+				return false
+			}
+			n = kids[0]
+		default:
+			return false
+		}
+	}
+}
+
 // elementAccess lowers an index expression a[i] to the receiver's index read: the
 // array's At method, the typed array's At, or the string's CharAt code-unit read.
 // arrayElem confirms an array receiver's element type lowers, and the index must

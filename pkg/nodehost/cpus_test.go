@@ -183,13 +183,13 @@ func TestCPUTimesMatchTheKernel(t *testing.T) {
 // procStatTimes reads the per-core counters straight out of /proc/stat and
 // converts them the way the kernel documents rather than the way the code under
 // test does, so the two arrive at the same milliseconds by different routes.
-func procStatTimes(t *testing.T) []cpuTimes {
+func procStatTimes(t *testing.T) []CPUTimes {
 	t.Helper()
 	b, err := os.ReadFile("/proc/stat")
 	if err != nil {
 		t.Skipf("read /proc/stat: %v", err)
 	}
-	var out []cpuTimes
+	var out []CPUTimes
 	for _, line := range strings.Split(string(b), "\n") {
 		f := strings.Fields(line)
 		if len(f) < 8 || !strings.HasPrefix(f[0], "cpu") || f[0] == "cpu" {
@@ -203,7 +203,7 @@ func procStatTimes(t *testing.T) []cpuTimes {
 			// The kernel counts in ticks of USER_HZ, which is 100, so a tick is 10 ms.
 			return n * 10
 		}
-		out = append(out, cpuTimes{
+		out = append(out, CPUTimes{
 			User: ms(f[1]),
 			Nice: ms(f[2]),
 			Sys:  ms(f[3]),
