@@ -76,6 +76,7 @@ func TestRenderProgramGoldens(t *testing.T) {
 		{"object", "prog_object", "prog_object.golden"},
 		{"readwrite", "prog_readwrite", "prog_readwrite.golden"},
 		{"path", "prog_path", "prog_path.golden"},
+		{"nodeConst", "prog_nodeconst", "prog_nodeconst.golden"},
 		{"tuple", "prog_tuple", "prog_tuple.golden"},
 	}
 	for _, tc := range cases {
@@ -127,6 +128,27 @@ func TestPathProgramRuns(t *testing.T) {
 	}
 	if got := runProgramGo(t, readTS(t, "prog_path")); got != want {
 		t.Fatalf("path program printed\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestModuleConstantProgramRuns proves the data exports end to end. Each one is a
+// helper call in the generated Go rather than a literal the compiler baked in,
+// because the compiler and the binary it produces need not be for the same
+// platform, so the answers are the target's and are spelled out here per platform
+// as Node reports them: "\\" and ";" and "\\\\.\\nul" and a two-character line
+// ending on Windows, "/" and ":" and "/dev/null" and a one-character line ending
+// everywhere else.
+func TestModuleConstantProgramRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the node module constant test builds and runs generated Go")
+	}
+	want := "/\n:\ntrue\n/dev/null\n1\ntrue\n"
+	if runtime.GOOS == "windows" {
+		want = "\\\n;\ntrue\n\\\\.\\nul\n2\ntrue\n"
+	}
+	if got := runProgramGo(t, readTS(t, "prog_nodeconst")); got != want {
+		t.Fatalf("node module constant program printed\n%q\nwant\n%q", got, want)
 	}
 }
 
