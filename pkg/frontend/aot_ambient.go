@@ -109,6 +109,19 @@ declare module "node:fs" {
 }
 declare module "node:os" {
 	export function tmpdir(): string;
+	export function platform(): string;
+	export function arch(): string;
+	export function type(): string;
+	export function release(): string;
+	export function version(): string;
+	export function machine(): string;
+	export function hostname(): string;
+	export function homedir(): string;
+	export function endianness(): string;
+	export function totalmem(): number;
+	export function freemem(): number;
+	export function uptime(): number;
+	export function availableParallelism(): number;
 	export const EOL: string;
 	export const devNull: string;
 }

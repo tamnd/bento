@@ -31,7 +31,10 @@ __bento_defineModule("os", function (module, exports, require) {
     loadavg: function () { return fresh().loadavg; },
     networkInterfaces: function () { return fresh().networkInterfaces || {}; },
     userInfo: function () { return info.userInfo; },
-    availableParallelism: function () { return info.cpus ? info.cpus.length : 1; },
+    // availableParallelism counts the cores this process may run on, which is not
+    // the length of the cpus array: that lists the cores the machine has, and a
+    // process pinned to two cores of a machine with sixteen is told two here.
+    availableParallelism: function () { return info.availableParallelism || 1; },
     // machine is what uname reports, which is not what arch reports: an x64
     // machine is "x86_64" to uname and "x64" to Node's arch. A platform whose
     // facts nothing measures yet answers the empty string rather than arch, which

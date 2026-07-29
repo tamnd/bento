@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/tamnd/bento/pkg/engine"
@@ -77,6 +78,7 @@ func TestRenderProgramGoldens(t *testing.T) {
 		{"readwrite", "prog_readwrite", "prog_readwrite.golden"},
 		{"path", "prog_path", "prog_path.golden"},
 		{"nodeConst", "prog_nodeconst", "prog_nodeconst.golden"},
+		{"nodeOS", "prog_nodeos", "prog_nodeos.golden"},
 		{"tuple", "prog_tuple", "prog_tuple.golden"},
 	}
 	for _, tc := range cases {
@@ -149,6 +151,44 @@ func TestModuleConstantProgramRuns(t *testing.T) {
 	}
 	if got := runProgramGo(t, readTS(t, "prog_nodeconst")); got != want {
 		t.Fatalf("node module constant program printed\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestOSProgramRuns proves the node:os surface end to end. Every one of these
+// answers is a fact about whatever machine the test runs on, so none of them can
+// be spelled out the way the path fixture's are; what the fixture prints instead
+// is what each answer must be true of, and the expectation is that all of them
+// hold.
+//
+// That is a weaker oracle than a literal, and it is the strongest one available
+// for a question like "how much memory does this machine have". It is not a weak
+// one: every field it covers reported zero or the empty string until recently, so
+// each line here is a line that would have failed.
+func TestOSProgramRuns(t *testing.T) {
+	skipIfShort(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found on PATH; the node:os test builds and runs generated Go")
+	}
+	switch runtime.GOOS {
+	case "linux", "darwin", "windows":
+	default:
+		t.Skipf("no host facts are measured on %s yet, so release and its kin are still empty", runtime.GOOS)
+	}
+	got := runProgramGo(t, readTS(t, "prog_nodeos"))
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	// The fixture's lines are in source order, and naming them here is what turns a
+	// failure into the name of the call that answered wrongly.
+	names := []string{
+		"platform", "arch", "type", "release", "version", "machine", "hostname",
+		"homedir", "endianness", "totalmem", "freemem", "uptime", "availableParallelism",
+	}
+	if len(lines) != len(names) {
+		t.Fatalf("os program printed %d lines, want %d:\n%s", len(lines), len(names), got)
+	}
+	for i, line := range lines {
+		if line != "true" {
+			t.Errorf("os.%s answered something the check rejected (printed %q)", names[i], line)
+		}
 	}
 }
 

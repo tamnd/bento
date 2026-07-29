@@ -1,0 +1,21 @@
+package main
+
+import (
+	"github.com/tamnd/bento/pkg/value"
+)
+
+func main() {
+	value.ConsoleLog(value.BoolToString(value.OSPlatform().Length() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSArch().Equal(value.OSArch())))
+	value.ConsoleLog(value.BoolToString(value.OSType().Length() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSRelease().Length() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSVersion().Length() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSMachine().Length() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSHostname().Length() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSHomedir().Length() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSEndianness().Equal(value.FromGoString("LE")) || value.OSEndianness().Equal(value.FromGoString("BE"))))
+	value.ConsoleLog(value.BoolToString(value.OSTotalmem() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSFreemem() > 0 && value.OSFreemem() <= value.OSTotalmem()))
+	value.ConsoleLog(value.BoolToString(value.OSUptime() > 0))
+	value.ConsoleLog(value.BoolToString(value.OSAvailableParallelism() >= 1))
+}

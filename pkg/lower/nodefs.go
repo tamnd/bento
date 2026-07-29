@@ -42,9 +42,22 @@ var nodeModuleExports = map[string]map[string]bool{
 		"rmSync":        true,
 	},
 	"node:os": {
-		"tmpdir":  true,
-		"EOL":     true,
-		"devNull": true,
+		"tmpdir":               true,
+		"platform":             true,
+		"arch":                 true,
+		"type":                 true,
+		"release":              true,
+		"version":              true,
+		"machine":              true,
+		"hostname":             true,
+		"homedir":              true,
+		"endianness":           true,
+		"totalmem":             true,
+		"freemem":              true,
+		"uptime":               true,
+		"availableParallelism": true,
+		"EOL":                  true,
+		"devNull":              true,
 	},
 	"node:path": {
 		"sep":              true,
@@ -59,6 +72,31 @@ var nodeModuleExports = map[string]map[string]bool{
 		"relative":         true,
 		"toNamespacedPath": true,
 	},
+}
+
+// osHelpers maps a node:os export to the value helper that answers it. Every one
+// of them takes no arguments and reports one fact about the machine, so the
+// lowering is the same for all of them and only the name differs.
+//
+// The exports missing from this map are the ones that answer with an object
+// rather than a string or a number: os.cpus, os.networkInterfaces, os.userInfo,
+// os.loadavg and os.constants. An import of one of those hands back and the unit
+// routes to the engine, which still answers it correctly.
+var osHelpers = map[string]string{
+	"tmpdir":               "Tmpdir",
+	"platform":             "OSPlatform",
+	"arch":                 "OSArch",
+	"type":                 "OSType",
+	"release":              "OSRelease",
+	"version":              "OSVersion",
+	"machine":              "OSMachine",
+	"hostname":             "OSHostname",
+	"homedir":              "OSHomedir",
+	"endianness":           "OSEndianness",
+	"totalmem":             "OSTotalmem",
+	"freemem":              "OSFreemem",
+	"uptime":               "OSUptime",
+	"availableParallelism": "OSAvailableParallelism",
 }
 
 // pathHelpers maps a node:path export to the value helper that implements it, for
@@ -408,14 +446,18 @@ func (r *Renderer) nodeBuiltinCall(b nodeBuiltin, argNodes []frontend.Node) (ast
 	if _, ok := nodeModuleConstants[b.module][b.name]; ok {
 		return nil, &NotYetLowerable{Reason: b.module + "." + b.name + " is a value, not a function"}
 	}
-	switch b.module + "." + b.name {
-	case "node:os.tmpdir":
+	// Every node:os function bento lowers asks one question about the machine and
+	// takes nothing, so they all lower the same way and differ only in the helper
+	// named. An argument passed to one is not a call bento understands, so it hands
+	// back rather than dropping the argument on the floor.
+	if helper, ok := osHelpers[b.name]; ok && b.module == "node:os" {
 		if len(argNodes) != 0 {
-			return nil, &NotYetLowerable{Reason: "os.tmpdir takes no arguments"}
+			return nil, &NotYetLowerable{Reason: "os." + b.name + " takes no arguments"}
 		}
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "Tmpdir")}, nil
-
+		return &ast.CallExpr{Fun: sel("value", helper)}, nil
+	}
+	switch b.module + "." + b.name {
 	case "node:path.join", "node:path.resolve":
 		// join and resolve are the two variadic ones. Neither has a lower bound on
 		// its argument count: path.join() is "." and path.resolve() is the working

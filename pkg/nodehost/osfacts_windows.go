@@ -100,16 +100,20 @@ func windowsProductName() string {
 	return name
 }
 
-// windowsMachine spells the processor architecture the way uname does on a Unix,
-// which is what os.machine() answers on every platform. The native architecture is
-// read rather than the process one, so a 32-bit binary on a 64-bit machine reports
-// the machine and not itself.
-func windowsMachine() string {
+// nativeSystemInfo describes the machine rather than the process, so a 32-bit
+// binary on a 64-bit machine is told about the machine and not about itself.
+func nativeSystemInfo() systemInfo {
 	var si systemInfo
 	// GetNativeSystemInfo returns nothing and cannot fail, so there is no result to
 	// read; the struct it filled in is the whole answer.
 	_, _, _ = procGetNativeSystemInfo.Call(uintptr(unsafe.Pointer(&si)))
-	switch si.ProcessorArchitecture {
+	return si
+}
+
+// windowsMachine spells the processor architecture the way uname does on a Unix,
+// which is what os.machine() answers on every platform.
+func windowsMachine() string {
+	switch nativeSystemInfo().ProcessorArchitecture {
 	case archAMD64:
 		return "x86_64"
 	case archIntel:

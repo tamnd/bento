@@ -3,6 +3,8 @@ package value
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/tamnd/bento/pkg/nodehost"
 )
 
 // This file is the value-model side of the small node:fs, node:os, and node:path
@@ -138,3 +140,61 @@ func OSDevNull() BStr {
 	}
 	return FromGoString("/dev/null")
 }
+
+// The rest of node:os is a set of questions about the machine the program is
+// running on, each answered by one measurement. The measuring lives in
+// pkg/nodehost, which owns the per-platform system calls and is the same code the
+// interpreter's os module reads its snapshot from; these are the thin wrappers
+// that put the answers in the value model the compiled program works in.
+//
+// So a program gets one answer whether it was run or built, and the platform work
+// is written once. The two exports that are not here are the ones that answer with
+// an object rather than a string or a number: os.cpus and os.networkInterfaces
+// still route to the engine.
+
+// OSPlatform is os.platform(), the operating system name Node uses: darwin,
+// linux, win32.
+func OSPlatform() BStr { return FromGoString(nodehost.OSPlatform()) }
+
+// OSArch is os.arch(), Node's name for the processor architecture this binary was
+// built for: x64, arm64, ia32.
+func OSArch() BStr { return FromGoString(nodehost.OSArch()) }
+
+// OSType is os.type(), the operating system name uname reports rather than the one
+// Node coined: Linux, Darwin, Windows_NT.
+func OSType() BStr { return FromGoString(nodehost.OSType()) }
+
+// OSRelease is os.release(), the kernel release string.
+func OSRelease() BStr { return FromGoString(nodehost.OSRelease()) }
+
+// OSVersion is os.version(), the kernel version string, which is the product name
+// on Windows because there is no kernel version string there.
+func OSVersion() BStr { return FromGoString(nodehost.OSVersion()) }
+
+// OSMachine is os.machine(), the hardware name uname reports, which is not
+// os.arch(): uname says x86_64 where arch says x64.
+func OSMachine() BStr { return FromGoString(nodehost.OSMachine()) }
+
+// OSHostname is os.hostname(), the name this machine answers to.
+func OSHostname() BStr { return FromGoString(nodehost.OSHostname()) }
+
+// OSHomedir is os.homedir(), the current user's home directory.
+func OSHomedir() BStr { return FromGoString(nodehost.OSHomedir()) }
+
+// OSEndianness is os.endianness(), the byte order of this processor: LE or BE.
+func OSEndianness() BStr { return FromGoString(nodehost.OSEndianness()) }
+
+// OSTotalmem is os.totalmem(), the machine's physical memory in bytes.
+func OSTotalmem() float64 { return nodehost.OSTotalmem() }
+
+// OSFreemem is os.freemem(), the memory not currently in use, in bytes. It is
+// measured on each call, since it is the one of these that moves while a program
+// runs.
+func OSFreemem() float64 { return nodehost.OSFreemem() }
+
+// OSUptime is os.uptime(), the seconds since the machine booted.
+func OSUptime() float64 { return nodehost.OSUptime() }
+
+// OSAvailableParallelism is os.availableParallelism(), the count of cores this
+// process may run on, which is what a program sizes a worker pool by.
+func OSAvailableParallelism() float64 { return nodehost.OSAvailableParallelism() }
