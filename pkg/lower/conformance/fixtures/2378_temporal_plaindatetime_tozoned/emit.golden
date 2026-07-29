@@ -9,7 +9,7 @@ import (
 func main() {
 	dt := value.NewPlainDateTime(2020, 3, 14, 15, 30, 45, 0, 0, 0)
 	value.ConsoleLog(dt.ToZonedDateTime("UTC", "compatible").ToString())
-	value.ConsoleLog(value.NumberToString(dt.ToZonedDateTime("America/New_York", "compatible").EpochMilliseconds()))
+	value.ConsoleLog(value.NumberToConsole(dt.ToZonedDateTime("America/New_York", "compatible").EpochMilliseconds()))
 	gap := value.NewPlainDateTime(2020, 3, 8, 2, 30, 0, 0, 0, 0)
 	value.ConsoleLog(gap.ToZonedDateTime("America/New_York", "compatible").ToString())
 	value.ConsoleLog(gap.ToZonedDateTime("America/New_York", "earlier").ToString())

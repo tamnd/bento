@@ -24,6 +24,6 @@ func Latest() float64 {
 	return g()
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(First()))
-	value.ConsoleLog(value.NumberToString(Latest()))
+	value.ConsoleLog(value.NumberToConsole(First()))
+	value.ConsoleLog(value.NumberToConsole(Latest()))
 }

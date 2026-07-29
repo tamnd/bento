@@ -21,12 +21,12 @@ func Run() {
 	o := &ObjActiveAgeName{Name: value.FromGoString("hi"), Age: 3, Active: true}
 	ks := value.NewArray[value.BStr](value.FromGoString("name"), value.FromGoString("age"), value.FromGoString("active"))
 	value.ConsoleLog(o.Name)
-	value.ConsoleLog(value.NumberToString(ks.Len()))
+	value.ConsoleLog(value.NumberToConsole(ks.Len()))
 	value.ConsoleLog(ks.Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))
 	scores := &ObjAMZ{Z: 1, A: 2, M: 3}
-	value.ConsoleLog(value.NumberToString(scores.Z))
+	value.ConsoleLog(value.NumberToConsole(scores.Z))
 	value.ConsoleLog(value.NewArray[value.BStr](value.FromGoString("z"), value.FromGoString("a"), value.FromGoString("m")).Join(value.FromGoString(","), func(x value.BStr) value.BStr {
 		return x
 	}))

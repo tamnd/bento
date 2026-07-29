@@ -8,9 +8,9 @@ import (
 
 func main() {
 	n := 5.0
-	value.ConsoleLog(value.NumberToString(n + 1))
+	value.ConsoleLog(value.NumberToConsole(n + 1))
 	raw := value.Number(7)
-	value.ConsoleLog(value.NumberToString((value.ToNumber(raw)) + 1))
+	value.ConsoleLog(value.NumberToConsole((value.ToNumber(raw)) + 1))
 	m := 10.0
-	value.ConsoleLog(value.NumberToString(m + 2))
+	value.ConsoleLog(value.NumberToConsole(m + 2))
 }

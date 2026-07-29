@@ -40,9 +40,9 @@ func UnusedLabel() float64 {
 	return n
 }
 func Run() {
-	value.ConsoleLog(value.NumberToString(SkipInnerRest()))
-	value.ConsoleLog(value.NumberToString(LeaveNest()))
-	value.ConsoleLog(value.NumberToString(UnusedLabel()))
+	value.ConsoleLog(value.NumberToConsole(SkipInnerRest()))
+	value.ConsoleLog(value.NumberToConsole(LeaveNest()))
+	value.ConsoleLog(value.NumberToConsole(UnusedLabel()))
 }
 func main() {
 	Run()

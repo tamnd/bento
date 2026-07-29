@@ -12,21 +12,21 @@ func main() {
 		x = 5
 		return x
 	}())
-	value.ConsoleLog(value.NumberToString(r), value.NumberToString(x))
+	value.ConsoleLog(value.NumberToConsole(r), value.NumberToConsole(x))
 	i := 0.0
 	n := 3.0
 	for (func() float64 {
 		i = i + 1
 		return i
 	}()) < n {
-		value.ConsoleLog(value.NumberToString(i))
+		value.ConsoleLog(value.NumberToConsole(i))
 	}
-	value.ConsoleLog(value.FromGoString("done"), value.NumberToString(i))
+	value.ConsoleLog(value.FromGoString("done"), value.NumberToConsole(i))
 	a := value.NewArray[float64](0, 0)
 	y := 0.0
 	a.Set(0, (func() float64 {
 		y = 7
 		return y
 	}()))
-	value.ConsoleLog(value.NumberToString(a.At(0)), value.NumberToString(y))
+	value.ConsoleLog(value.NumberToConsole(a.At(0)), value.NumberToConsole(y))
 }

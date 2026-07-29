@@ -8,17 +8,17 @@ import (
 
 func Run() {
 	s := value.NewNumberSet()
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 	s.Add(1)
 	s.Add(2)
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 	s.Add(2)
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 	s.Delete(1)
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 	value.ConsoleLog(value.NamedClassTag(s, "Set"))
 	s.Clear()
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 	value.ConsoleLog(value.NamedClassTag(s, "Set"))
 }
 func main() {

@@ -15,7 +15,7 @@ func Run() {
 	s.Add(value.NumberNaN())
 	s.Add(0)
 	s.Add(math.Copysign(0, -1))
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 }
 func main() {
 	Run()

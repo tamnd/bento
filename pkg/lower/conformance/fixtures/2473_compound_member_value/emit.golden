@@ -30,20 +30,20 @@ func main() {
 		o.SetKey(key, value.Number(value.ToNumber(o.Get(key))*2))
 		return o.Get(key)
 	}()))
-	value.ConsoleLog(value.NumberToString(b))
+	value.ConsoleLog(value.NumberToConsole(b))
 	value.ConsoleLog(value.ConsoleValue(o.Get(key)))
 	p := &ObjC{C: 4}
 	d := (func() float64 {
 		p.C--
 		return p.C
 	}())
-	value.ConsoleLog(value.NumberToString(d))
+	value.ConsoleLog(value.NumberToConsole(d))
 	inst := NewC()
 	e := (func() float64 {
 		inst.X /= 4
 		return inst.X
 	}())
-	value.ConsoleLog(value.NumberToString(e))
+	value.ConsoleLog(value.NumberToConsole(e))
 	s := value.NewObject().Set(value.FromGoString("t"), value.StringValue(value.FromGoString("a")))
 	g := (value.ToString(func() value.Value {
 		s.Set(value.FromGoString("t"), value.Add(s.Get(value.FromGoString("t")), value.StringValue(value.FromGoString("b"))))

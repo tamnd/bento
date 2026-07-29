@@ -19,8 +19,8 @@ func FirstOf_num(a float64, b float64) float64 {
 	return a
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Identity_num(5)))
+	value.ConsoleLog(value.NumberToConsole(Identity_num(5)))
 	value.ConsoleLog(Identity_str(value.FromGoString("hi")))
 	value.ConsoleLog(value.BoolToString(FirstOf_bool(true, false)))
-	value.ConsoleLog(value.NumberToString(FirstOf_num(10, 20)))
+	value.ConsoleLog(value.NumberToConsole(FirstOf_num(10, 20)))
 }

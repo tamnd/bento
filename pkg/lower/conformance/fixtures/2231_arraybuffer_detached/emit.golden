@@ -9,13 +9,13 @@ import (
 func main() {
 	buf := value.NewArrayBuffer(8)
 	value.ConsoleLog(value.BoolToString(buf.Detached()))
-	value.ConsoleLog(value.NumberToString(buf.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(buf.ByteLength()))
 	buf.Transfer()
 	value.ConsoleLog(value.BoolToString(buf.Detached()))
-	value.ConsoleLog(value.NumberToString(buf.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(buf.ByteLength()))
 	buf2 := value.NewArrayBuffer(4)
 	value.ConsoleLog(value.BoolToString(buf2.Detached()))
 	buf2.TransferToFixedLength()
 	value.ConsoleLog(value.BoolToString(buf2.Detached()))
-	value.ConsoleLog(value.NumberToString(buf2.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(buf2.ByteLength()))
 }

@@ -16,7 +16,7 @@ func Sum(first float64, rest *value.Array[float64]) float64 {
 	return first + rest.Len()
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(2.0))
-	value.ConsoleLog(value.NumberToString(1.0))
-	value.ConsoleLog(value.NumberToString(1.0))
+	value.ConsoleLog(value.NumberToConsole(2.0))
+	value.ConsoleLog(value.NumberToConsole(1.0))
+	value.ConsoleLog(value.NumberToConsole(1.0))
 }

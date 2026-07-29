@@ -16,6 +16,6 @@ func main() {
 	rows := value.NewArray[*value.Array[float64]](value.NewArray[float64](10, 100), value.NewArray[float64](20, 200))
 	for _, _bt1 := range rows.Elems() {
 		b := _bt1.AtI(1)
-		value.ConsoleLog(value.NumberToString(b))
+		value.ConsoleLog(value.NumberToConsole(b))
 	}
 }

@@ -16,6 +16,6 @@ func Pair(a float64, _bt0 ...float64) float64 {
 	return a*10 + b
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Pair(4)))
-	value.ConsoleLog(value.NumberToString(Pair(4, 7)))
+	value.ConsoleLog(value.NumberToConsole(Pair(4)))
+	value.ConsoleLog(value.NumberToConsole(Pair(4, 7)))
 }

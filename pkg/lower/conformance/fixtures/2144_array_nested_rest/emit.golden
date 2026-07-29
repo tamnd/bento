@@ -13,7 +13,7 @@ func main() {
 	rest := _bt0.Slice(1)
 	_bt1 := grid.AtI(1)
 	b := _bt1.AtI(0)
-	value.ConsoleLog(value.NumberToString(a))
-	value.ConsoleLog(value.NumberToString(rest.Len()))
-	value.ConsoleLog(value.NumberToString(b))
+	value.ConsoleLog(value.NumberToConsole(a))
+	value.ConsoleLog(value.NumberToConsole(rest.Len()))
+	value.ConsoleLog(value.NumberToConsole(b))
 }

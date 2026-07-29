@@ -14,7 +14,7 @@ func FirstOf_str(xs *value.Array[value.BStr]) value.BStr {
 }
 func LogAll_num(xs *value.Array[float64]) {
 	for _, x := range xs.Elems() {
-		value.ConsoleLog(value.NumberToString(x))
+		value.ConsoleLog(value.NumberToConsole(x))
 	}
 }
 func LogAll_str(xs *value.Array[value.BStr]) {
@@ -23,7 +23,7 @@ func LogAll_str(xs *value.Array[value.BStr]) {
 	}
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(FirstOf_num(value.NewArray[float64](10, 20, 30))))
+	value.ConsoleLog(value.NumberToConsole(FirstOf_num(value.NewArray[float64](10, 20, 30))))
 	value.ConsoleLog(FirstOf_str(value.NewArray[value.BStr](value.FromGoString("lo"), value.FromGoString("hi"))))
 	LogAll_num(value.NewArray[float64](1, 2, 3))
 	LogAll_str(value.NewArray[value.BStr](value.FromGoString("a"), value.FromGoString("b")))

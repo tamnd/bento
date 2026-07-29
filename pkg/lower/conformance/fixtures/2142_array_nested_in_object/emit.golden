@@ -19,8 +19,8 @@ func main() {
 	_bt1 := o.Q
 	c := _bt1.AtI(0)
 	d := _bt1.AtI(1)
-	value.ConsoleLog(value.NumberToString(a))
-	value.ConsoleLog(value.NumberToString(b))
-	value.ConsoleLog(value.NumberToString(c))
-	value.ConsoleLog(value.NumberToString(d))
+	value.ConsoleLog(value.NumberToConsole(a))
+	value.ConsoleLog(value.NumberToConsole(b))
+	value.ConsoleLog(value.NumberToConsole(c))
+	value.ConsoleLog(value.NumberToConsole(d))
 }

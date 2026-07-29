@@ -25,5 +25,5 @@ func staticInitCounter() {
 }
 func main() {
 	staticInitCounter()
-	value.ConsoleLog(value.NumberToString(counterInstances))
+	value.ConsoleLog(value.NumberToConsole(counterInstances))
 }

@@ -34,6 +34,7 @@ type Object struct {
 	elemsFrozen   bool         // set once Object.freeze marks an array's elements non-writable, so a write drops
 	proxy         *proxyData   // non-nil marks this Object a Proxy exotic object; every internal method routes through its handler
 	regexp        *RegExp      // non-nil marks this Object the dynamic box of a RegExp; typeof is "object" and its reads and string form route to the regexp
+	err           *Error       // non-nil marks this Object the dynamic box of an Error; the inspector renders it as an error rather than as its properties
 }
 
 // isExtensible reports whether new properties may still be added, the state
@@ -68,7 +69,22 @@ func NewFunc(fn callFn) Value {
 // untouched, since only a function carries a name.
 func WithName(f Value, name string) Value {
 	if f.kind == KindFunc {
-		f.Set(FromGoString("name"), StringValue(FromGoString(name)))
+		// The name is defined rather than assigned, because Function.prototype.name is
+		// not enumerable: Object.keys(function foo() {}) is empty in JavaScript, and a
+		// plain write would put "name" in every walk of the function's own properties,
+		// so a logged callback would read as "[Function: foo] { name: 'foo' }" and
+		// JSON.stringify of an object holding one would grow a field the language does
+		// not have. It stays writable and configurable, the two attributes the spec
+		// leaves a name free to be renamed through.
+		o := f.object()
+		for i := range o.keys {
+			if o.keys[i].ToGoString() == "name" {
+				o.descs[i] = dataProperty(StringValue(FromGoString(name)), true, false, true)
+				return f
+			}
+		}
+		o.keys = append(o.keys, FromGoString("name"))
+		o.descs = append(o.descs, dataProperty(StringValue(FromGoString(name)), true, false, true))
 	}
 	return f
 }

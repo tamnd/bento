@@ -20,8 +20,8 @@ func BoxMake(w float64) float64 {
 }
 func main() {
 	b := NewBox()
-	value.ConsoleLog(value.NumberToString(b.Scale(5, 2)))
-	value.ConsoleLog(value.NumberToString(b.Scale(5, 3)))
-	value.ConsoleLog(value.NumberToString(BoxMake(3)))
-	value.ConsoleLog(value.NumberToString(BoxMake(4)))
+	value.ConsoleLog(value.NumberToConsole(b.Scale(5, 2)))
+	value.ConsoleLog(value.NumberToConsole(b.Scale(5, 3)))
+	value.ConsoleLog(value.NumberToConsole(BoxMake(3)))
+	value.ConsoleLog(value.NumberToConsole(BoxMake(4)))
 }

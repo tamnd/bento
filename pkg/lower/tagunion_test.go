@@ -84,7 +84,7 @@ run();
 	if !strings.Contains(source, "value.ConsoleLog(v.str)") {
 		t.Fatalf("string-narrowed read did not select the str field\n%s", source)
 	}
-	if !strings.Contains(source, "value.NumberToString(v.num)") {
+	if !strings.Contains(source, "value.NumberToConsole(v.num)") {
 		t.Fatalf("number-narrowed read did not select the num field\n%s", source)
 	}
 }

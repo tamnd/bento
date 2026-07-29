@@ -18,5 +18,5 @@ func main() {
 		}
 	}
 	value.RmSync(dir, true, true)
-	value.ConsoleLog(value.NumberToString(bytes))
+	value.ConsoleLog(value.NumberToConsole(bytes))
 }

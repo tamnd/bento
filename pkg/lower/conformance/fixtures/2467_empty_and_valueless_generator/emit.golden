@@ -31,7 +31,7 @@ func main() {
 			count++
 		}
 	}
-	value.ConsoleLog(value.NumberToString(count))
+	value.ConsoleLog(value.NumberToConsole(count))
 	value.ConsoleLog(value.BoolToString(value.GenNext(Empty(), value.Undefined, func(_bt4 float64) value.Value {
 		return value.Number(_bt4)
 	}).Done))
@@ -46,5 +46,5 @@ func main() {
 			ticks++
 		}
 	}
-	value.ConsoleLog(value.NumberToString(ticks))
+	value.ConsoleLog(value.NumberToConsole(ticks))
 }

@@ -22,7 +22,7 @@ func Run() {
 		order = value.Concat(order, value.NumberToString(v))
 	}
 	value.ConsoleLog(order)
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 }
 func main() {
 	Run()

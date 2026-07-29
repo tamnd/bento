@@ -10,7 +10,7 @@ func main() {
 	value.ConsoleLog(value.FromGoString("a,b,c,d").Split(value.FromGoString(","), 2).Join(value.FromGoString("|"), func(x value.BStr) value.BStr {
 		return x
 	}))
-	value.ConsoleLog(value.NumberToString(value.FromGoString("a,b,c,d").Split(value.FromGoString(","), 0).Len()))
+	value.ConsoleLog(value.NumberToConsole(value.FromGoString("a,b,c,d").Split(value.FromGoString(","), 0).Len()))
 	value.ConsoleLog(value.FromGoString("a,b,c,d").Split(value.FromGoString(","), 10).Join(value.FromGoString("|"), func(x value.BStr) value.BStr {
 		return x
 	}))

@@ -19,9 +19,9 @@ func main() {
 	}
 	counter.Total = 5
 	counter.Bump = func(by float64) {
-		value.ConsoleLog(value.NumberToString(by))
+		value.ConsoleLog(value.NumberToConsole(by))
 	}
 	counter.Call(value.FromGoString("start"))
 	counter.Bump(3)
-	value.ConsoleLog(value.NumberToString(counter.Total))
+	value.ConsoleLog(value.NumberToConsole(counter.Total))
 }

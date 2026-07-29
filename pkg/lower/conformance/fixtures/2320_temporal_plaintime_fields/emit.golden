@@ -8,10 +8,10 @@ import (
 
 func main() {
 	t := value.NewPlainTime(1, 2, 3, 4, 5, 6)
-	value.ConsoleLog(value.NumberToString(t.Hour()))
-	value.ConsoleLog(value.NumberToString(t.Minute()))
-	value.ConsoleLog(value.NumberToString(t.Second()))
-	value.ConsoleLog(value.NumberToString(t.Millisecond()))
-	value.ConsoleLog(value.NumberToString(t.Microsecond()))
-	value.ConsoleLog(value.NumberToString(t.Nanosecond()))
+	value.ConsoleLog(value.NumberToConsole(t.Hour()))
+	value.ConsoleLog(value.NumberToConsole(t.Minute()))
+	value.ConsoleLog(value.NumberToConsole(t.Second()))
+	value.ConsoleLog(value.NumberToConsole(t.Millisecond()))
+	value.ConsoleLog(value.NumberToConsole(t.Microsecond()))
+	value.ConsoleLog(value.NumberToConsole(t.Nanosecond()))
 }

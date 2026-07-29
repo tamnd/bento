@@ -102,11 +102,11 @@ func H(v NumOrNull) float64 {
 	}()
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(F(NumOrNullOfNull())))
-	value.ConsoleLog(value.NumberToString(F(NumOrNullOfNum(7))))
+	value.ConsoleLog(value.NumberToConsole(F(NumOrNullOfNull())))
+	value.ConsoleLog(value.NumberToConsole(F(NumOrNullOfNum(7))))
 	value.ConsoleLog(G(StrOrUndefOrNullOfNull()))
 	value.ConsoleLog(G(StrOrUndefOrNullOfUndef()))
 	value.ConsoleLog(G(StrOrUndefOrNullOfStr(value.FromGoString("keep"))))
-	value.ConsoleLog(value.NumberToString(H(NumOrNullOfNum(3))), value.NumberToString(hits))
-	value.ConsoleLog(value.NumberToString(H(NumOrNullOfNull())), value.NumberToString(hits))
+	value.ConsoleLog(value.NumberToConsole(H(NumOrNullOfNum(3))), value.NumberToConsole(hits))
+	value.ConsoleLog(value.NumberToConsole(H(NumOrNullOfNull())), value.NumberToConsole(hits))
 }

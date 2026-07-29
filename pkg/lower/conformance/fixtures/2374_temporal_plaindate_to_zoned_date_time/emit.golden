@@ -9,7 +9,7 @@ import (
 func main() {
 	d := value.NewPlainDate(2020, 3, 14)
 	value.ConsoleLog(d.ToZonedDateTime("UTC", nil).ToString())
-	value.ConsoleLog(value.NumberToString(d.ToZonedDateTime("UTC", nil).EpochMilliseconds()))
+	value.ConsoleLog(value.NumberToConsole(d.ToZonedDateTime("UTC", nil).EpochMilliseconds()))
 	t := value.NewPlainTime(15, 30, 45, 0, 0, 0)
 	value.ConsoleLog(d.ToZonedDateTime("America/New_York", t).ToString())
 	gap := value.NewPlainDate(2020, 3, 8)
@@ -18,5 +18,5 @@ func main() {
 	rz := roc.ToZonedDateTime("UTC", nil)
 	value.ConsoleLog(rz.ToString())
 	value.ConsoleLog(rz.CalendarId())
-	value.ConsoleLog(value.NumberToString(rz.Year()))
+	value.ConsoleLog(value.NumberToConsole(rz.Year()))
 }

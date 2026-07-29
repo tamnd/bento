@@ -20,7 +20,7 @@ func main() {
 	pt := &ObjXY{X: 10, Y: 20}
 	x := pt.X
 	y := pt.Y
-	value.ConsoleLog(value.NumberToString(x + y))
+	value.ConsoleLog(value.NumberToConsole(x + y))
 	rec := &ObjActiveAgeLabel{Label: value.FromGoString("sam"), Age: 30, Active: true}
 	label := rec.Label
 	age := rec.Age

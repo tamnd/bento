@@ -25,7 +25,7 @@ func Show(x float64) {
 		}
 		return value.FromGoString("yo")
 	}())))
-	value.ConsoleLog(value.NumberToString((func() value.BStr {
+	value.ConsoleLog(value.NumberToConsole((func() value.BStr {
 		if x > 0 {
 			return value.FromGoString("hi")
 		}

@@ -35,7 +35,7 @@ func main() {
 			n++
 		}
 	}
-	value.ConsoleLog(value.FromGoString("count"), value.NumberToString(n))
+	value.ConsoleLog(value.FromGoString("count"), value.NumberToConsole(n))
 	p := &ObjXY{X: 10, Y: 20}
 	keys := value.NewArray[value.BStr]()
 	{
@@ -50,6 +50,6 @@ func main() {
 	rec := value.NewObject().Set(value.FromGoString("d"), value.Number(4)).Set(value.FromGoString("e"), value.Number(5))
 	rec.Set(value.FromGoString("f"), value.Number(6))
 	for _, k := range rec.ForInKeys().Elems() {
-		value.ConsoleLog(k, value.NumberToString(value.ToNumber(rec.Get(k))))
+		value.ConsoleLog(k, value.NumberToConsole(value.ToNumber(rec.Get(k))))
 	}
 }

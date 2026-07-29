@@ -22,7 +22,7 @@ func main() {
 	mid = func() float64 {
 		return later
 	}
-	value.ConsoleLog(value.NumberToString(Run()))
-	value.ConsoleLog(value.NumberToString(Run()))
-	value.ConsoleLog(value.NumberToString(calls))
+	value.ConsoleLog(value.NumberToConsole(Run()))
+	value.ConsoleLog(value.NumberToConsole(Run()))
+	value.ConsoleLog(value.NumberToConsole(calls))
 }

@@ -12,5 +12,5 @@ func main() {
 	for i := 1.0; i <= 3; i++ {
 		sum += Area(i, i)
 	}
-	value.ConsoleLog(value.FromGoString("total area"), value.NumberToString(sum))
+	value.ConsoleLog(value.FromGoString("total area"), value.NumberToConsole(sum))
 }

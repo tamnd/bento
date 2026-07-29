@@ -13,7 +13,7 @@ func Pi() float64 {
 	return 3
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Add(2, 3)))
-	value.ConsoleLog(value.NumberToString(Add(4, 5)))
-	value.ConsoleLog(value.NumberToString(Pi()))
+	value.ConsoleLog(value.NumberToConsole(Add(2, 3)))
+	value.ConsoleLog(value.NumberToConsole(Add(4, 5)))
+	value.ConsoleLog(value.NumberToConsole(Pi()))
 }

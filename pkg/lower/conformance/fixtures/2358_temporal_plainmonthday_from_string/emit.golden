@@ -8,7 +8,7 @@ import (
 
 func main() {
 	bare := value.PlainMonthDayFromString("06-15")
-	value.ConsoleLog(bare.ToString(), bare.MonthCode(), value.NumberToString(bare.Day()))
+	value.ConsoleLog(bare.ToString(), bare.MonthCode(), value.NumberToConsole(bare.Day()))
 	basic := value.PlainMonthDayFromString("0615")
 	value.ConsoleLog(basic.ToString())
 	dashed := value.PlainMonthDayFromString("--06-15")

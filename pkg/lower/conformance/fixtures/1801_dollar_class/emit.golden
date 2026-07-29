@@ -19,7 +19,7 @@ func (d *D_Counter) D_bump(by float64) float64 {
 }
 func main() {
 	D_c := NewD_Counter(10)
-	value.ConsoleLog(value.NumberToString(D_c.D_bump(5)))
-	value.ConsoleLog(value.NumberToString(D_c.D_bump(7)))
-	value.ConsoleLog(value.NumberToString(D_c.D_count))
+	value.ConsoleLog(value.NumberToConsole(D_c.D_bump(5)))
+	value.ConsoleLog(value.NumberToConsole(D_c.D_bump(7)))
+	value.ConsoleLog(value.NumberToConsole(D_c.D_count))
 }

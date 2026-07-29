@@ -150,9 +150,9 @@ func TestTypedArrayFromSourceLowering(t *testing.T) {
 // the receiver referenced so a binding read only through this stays used.
 func TestBytesPerElementLowering(t *testing.T) {
 	cases := map[string]string{
-		`console.log(Int8Array.BYTES_PER_ELEMENT);`:                       "value.NumberToString(1)",
-		`console.log(Int32Array.BYTES_PER_ELEMENT);`:                      "value.NumberToString(4)",
-		`console.log(Float64Array.BYTES_PER_ELEMENT);`:                    "value.NumberToString(8)",
+		`console.log(Int8Array.BYTES_PER_ELEMENT);`:                       "value.NumberToConsole(1)",
+		`console.log(Int32Array.BYTES_PER_ELEMENT);`:                      "value.NumberToConsole(4)",
+		`console.log(Float64Array.BYTES_PER_ELEMENT);`:                    "value.NumberToConsole(8)",
 		`const b = new Uint16Array(2); console.log(b.BYTES_PER_ELEMENT);`: "b.BytesPerElement()",
 		`const b = new Uint8Array(2); console.log(b.BYTES_PER_ELEMENT);`:  "b.BytesPerElement()",
 	}

@@ -16,6 +16,6 @@ func main() {
 	_bt0 := Make()
 	a := _bt0.AtI(0)
 	b := _bt0.AtI(1)
-	value.ConsoleLog(value.NumberToString(a + b))
-	value.ConsoleLog(value.NumberToString(calls))
+	value.ConsoleLog(value.NumberToConsole(a + b))
+	value.ConsoleLog(value.NumberToConsole(calls))
 }

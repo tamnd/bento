@@ -9,11 +9,11 @@ import (
 func main() {
 	r := value.NewResizableArrayBuffer(8, 16)
 	value.ConsoleLog(value.BoolToString(r.Resizable()))
-	value.ConsoleLog(value.NumberToString(r.MaxByteLength()))
+	value.ConsoleLog(value.NumberToConsole(r.MaxByteLength()))
 	f := value.NewArrayBuffer(8)
 	value.ConsoleLog(value.BoolToString(f.Resizable()))
-	value.ConsoleLog(value.NumberToString(f.MaxByteLength()))
+	value.ConsoleLog(value.NumberToConsole(f.MaxByteLength()))
 	r.Resize(16)
-	value.ConsoleLog(value.NumberToString(r.MaxByteLength()))
-	value.ConsoleLog(value.NumberToString(r.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(r.MaxByteLength()))
+	value.ConsoleLog(value.NumberToConsole(r.ByteLength()))
 }

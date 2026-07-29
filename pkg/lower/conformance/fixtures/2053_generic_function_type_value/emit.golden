@@ -21,9 +21,9 @@ func Twice_num(x float64) func() float64 {
 	}
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Apply_num(Inc, 5)))
+	value.ConsoleLog(value.NumberToConsole(Apply_num(Inc, 5)))
 	value.ConsoleLog(Apply_str(func(s value.BStr) value.BStr {
 		return s
 	}, value.FromGoString("hi")))
-	value.ConsoleLog(value.NumberToString(Twice_num(9)()))
+	value.ConsoleLog(value.NumberToConsole(Twice_num(9)()))
 }

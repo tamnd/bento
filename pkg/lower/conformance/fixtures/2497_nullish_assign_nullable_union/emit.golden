@@ -79,12 +79,12 @@ func main() {
 	if a.tag == NumOrNullNull {
 		a = NumOrNullOfNum(5)
 	}
-	value.ConsoleLog(value.NumberToString(a.num))
+	value.ConsoleLog(value.NumberToConsole(a.num))
 	b := NumOrNullOfNum(7)
 	if b.tag == NumOrNullNull {
 		b = NumOrNullOfNum(99)
 	}
-	value.ConsoleLog(value.NumberToString(b.num))
+	value.ConsoleLog(value.NumberToConsole(b.num))
 	c := StrOrUndefOrNullOfNull()
 	if c.tag == StrOrUndefOrNullNull || c.tag == StrOrUndefOrNullUndef {
 		c = StrOrUndefOrNullOfStr(value.FromGoString("x"))
@@ -104,5 +104,5 @@ func main() {
 	if f.tag == NumOrNullNull {
 		f = NumOrNullOfNum(Bump())
 	}
-	value.ConsoleLog(value.NumberToString(f.num), value.NumberToString(hits))
+	value.ConsoleLog(value.NumberToConsole(f.num), value.NumberToConsole(hits))
 }

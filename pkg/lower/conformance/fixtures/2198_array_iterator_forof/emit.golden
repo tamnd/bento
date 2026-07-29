@@ -12,17 +12,17 @@ func main() {
 	for _, v := range a.Elems() {
 		sum += v
 	}
-	value.ConsoleLog(value.NumberToString(sum))
+	value.ConsoleLog(value.NumberToConsole(sum))
 	ksum := 0.0
 	for _bt0 := range a.Elems() {
 		i := float64(_bt0)
 		ksum += i
 	}
-	value.ConsoleLog(value.NumberToString(ksum))
+	value.ConsoleLog(value.NumberToConsole(ksum))
 	esum := 0.0
 	for _bt1, v := range a.Elems() {
 		i := float64(_bt1)
 		esum += i*100 + v
 	}
-	value.ConsoleLog(value.NumberToString(esum))
+	value.ConsoleLog(value.NumberToConsole(esum))
 }

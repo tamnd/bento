@@ -89,7 +89,7 @@ func main() {
 	slot := ObjAOrNullOfObjA(&ObjA{A: 1})
 	value.ConsoleLog(Describe(slot))
 	if slot.tag != ObjAOrNullNull {
-		value.ConsoleLog(value.NumberToString(slot.objA.A))
+		value.ConsoleLog(value.NumberToConsole(slot.objA.A))
 	}
 	slot = ObjAOrNullOfNull()
 	value.ConsoleLog(Describe(slot))

@@ -14,7 +14,7 @@ func main() {
 	for i := 0.0; i < nums.Len(); i++ {
 		total += nums.At(i).AsNumber()
 	}
-	value.ConsoleLog(value.NumberToString(total))
+	value.ConsoleLog(value.NumberToConsole(total))
 	strs := value.NewArray[value.Value]()
 	strs.Set(0, value.StringValue(value.FromGoString("a")))
 	strs.Set(1, value.StringValue(value.FromGoString("b")))

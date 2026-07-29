@@ -16,6 +16,6 @@ func main() {
 	for _, _bt0 := range items.Elems() {
 		a := _bt0.A
 		b := _bt0.B
-		value.ConsoleLog(value.NumberToString(a + b))
+		value.ConsoleLog(value.NumberToConsole(a + b))
 	}
 }

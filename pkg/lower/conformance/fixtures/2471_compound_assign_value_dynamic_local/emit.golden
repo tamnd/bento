@@ -17,6 +17,6 @@ func main() {
 		x = value.Add(x, value.Number(3))
 		return x
 	}()))
-	value.ConsoleLog(value.NumberToString(n))
+	value.ConsoleLog(value.NumberToConsole(n))
 	value.ConsoleLog(value.ConsoleValue(x))
 }

@@ -9,7 +9,7 @@ import (
 func main() {
 	x := 1.0
 	x = 2
-	value.ConsoleLog(value.NumberToString(x))
+	value.ConsoleLog(value.NumberToConsole(x))
 	s := value.FromGoString("first")
 	s = value.FromGoString("second")
 	value.ConsoleLog(s)

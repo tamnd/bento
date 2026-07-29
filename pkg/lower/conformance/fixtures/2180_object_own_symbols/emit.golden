@@ -14,7 +14,7 @@ func main() {
 	o.SetElem(s2, value.Number(2))
 	o.Set(value.FromGoString("plain"), value.Number(3))
 	syms := o.OwnSymbols()
-	value.ConsoleLog(value.NumberToString(syms.Len()))
+	value.ConsoleLog(value.NumberToConsole(syms.Len()))
 	value.ConsoleLog(value.BoolToString(value.StrictEquals(syms.At(0), s1)))
 	value.ConsoleLog(value.BoolToString(value.StrictEquals(syms.At(1), s2)))
 }

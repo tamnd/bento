@@ -15,7 +15,7 @@ func Run() {
 		_bt0.Set(3, value.FromGoString("C"))
 		return _bt0
 	}()
-	value.ConsoleLog(value.NumberToString(m.Size()))
+	value.ConsoleLog(value.NumberToConsole(m.Size()))
 	value.ConsoleLog(value.BoolToString(m.Has(2)))
 	value.ConsoleLog(value.BoolToString(m.Has(4)))
 	v := m.Get(3)

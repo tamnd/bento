@@ -23,7 +23,7 @@ func main() {
 				break
 			}
 			x := value.ToNumber(_bt2.Value)
-			value.ConsoleLog(value.NumberToString(x))
+			value.ConsoleLog(value.NumberToConsole(x))
 		}
 	}
 	{
@@ -40,7 +40,7 @@ func main() {
 				break
 			}
 			y := value.ToNumber(_bt5.Value)
-			value.ConsoleLog(value.NumberToString(y))
+			value.ConsoleLog(value.NumberToConsole(y))
 		}
 	}
 	{
@@ -61,7 +61,7 @@ func main() {
 				break
 			}
 			z := value.ToNumber(_bt8.Value)
-			value.ConsoleLog(value.NumberToString(z))
+			value.ConsoleLog(value.NumberToConsole(z))
 		}
 	}
 	it := value.IterMap(value.ArrayIterFromTyped(a, value.ArrayIterValues, func(_bt9 float64) value.Value {

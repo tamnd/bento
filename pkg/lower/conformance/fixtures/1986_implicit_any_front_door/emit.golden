@@ -26,5 +26,5 @@ func main() {
 	joined = Add(value.StringValue(value.FromGoString("a")), value.StringValue(value.FromGoString("b")))
 	value.ConsoleLog(value.ConsoleValue(sum))
 	value.ConsoleLog(value.ConsoleValue(joined))
-	value.ConsoleLog(value.NumberToString(NewBox().Twice()))
+	value.ConsoleLog(value.NumberToConsole(NewBox().Twice()))
 }

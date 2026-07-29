@@ -10,9 +10,9 @@ func main() {
 	iso := value.FromGoString("1976-11-18")
 	_ = iso
 	d := value.PlainDateFromString("1976-11-18")
-	value.ConsoleLog(value.NumberToString(d.Year()))
-	value.ConsoleLog(value.NumberToString(d.Month()))
-	value.ConsoleLog(value.NumberToString(d.Day()))
+	value.ConsoleLog(value.NumberToConsole(d.Year()))
+	value.ConsoleLog(value.NumberToConsole(d.Month()))
+	value.ConsoleLog(value.NumberToConsole(d.Day()))
 	value.ConsoleLog(d.CalendarId())
 	zone := value.FromGoString("UTC")
 	_ = zone

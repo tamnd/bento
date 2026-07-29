@@ -9,7 +9,7 @@ import (
 func main() {
 	d := value.NewPlainDateCal(2024, 6, 30, "gregory")
 	value.ConsoleLog(d.CalendarId())
-	value.ConsoleLog(value.NumberToString(d.Year()))
+	value.ConsoleLog(value.NumberToConsole(d.Year()))
 	value.ConsoleLog(value.ToString(value.OptToValue(d.Era(), value.StringValue)))
 	value.ConsoleLog(value.ToString(value.OptToValue(d.EraYear(), value.Number)))
 	value.ConsoleLog(d.ToString())
@@ -19,7 +19,7 @@ func main() {
 	zero := value.NewPlainDateCal(0, 1, 1, "gregory")
 	value.ConsoleLog(value.ToString(value.OptToValue(zero.EraYear(), value.Number)))
 	iso := value.NewPlainDate(2024, 6, 30)
-	value.ConsoleLog(value.NumberToString(value.PlainDateCompare(d, iso)))
+	value.ConsoleLog(value.NumberToConsole(value.PlainDateCompare(d, iso)))
 	value.ConsoleLog(value.BoolToString(d.Equals(iso)))
 	value.ConsoleLog(value.BoolToString(d.Equals(value.PlainDateWithCalendar(d, "gregory"))))
 	upper := value.NewPlainDateCal(2024, 6, 30, "gregory")

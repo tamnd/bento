@@ -16,17 +16,17 @@ func Run() {
 	for range value.FromGoString("a😀b").CodePoints() {
 		points++
 	}
-	value.ConsoleLog(value.NumberToString(points))
+	value.ConsoleLog(value.NumberToConsole(points))
 	letters := 0.0
 	for range value.FromGoString("hello").CodePoints() {
 		letters++
 	}
-	value.ConsoleLog(value.NumberToString(letters))
+	value.ConsoleLog(value.NumberToConsole(letters))
 	sum := 0.0
 	for range value.NewArray[float64](10, 20, 30).Elems() {
 		sum++
 	}
-	value.ConsoleLog(value.NumberToString(sum))
+	value.ConsoleLog(value.NumberToConsole(sum))
 }
 func main() {
 	Run()

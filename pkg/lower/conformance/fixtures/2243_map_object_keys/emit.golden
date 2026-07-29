@@ -19,12 +19,12 @@ func Run() {
 	m.Set(b, value.FromGoString("b"))
 	value.ConsoleLog(value.BoolToString(m.Has(a)))
 	value.ConsoleLog(value.BoolToString(m.Has(c)))
-	value.ConsoleLog(value.NumberToString(m.Size()))
+	value.ConsoleLog(value.NumberToConsole(m.Size()))
 	m.Set(a, value.FromGoString("A"))
-	value.ConsoleLog(value.NumberToString(m.Size()))
+	value.ConsoleLog(value.NumberToConsole(m.Size()))
 	m.Delete(a)
 	value.ConsoleLog(value.BoolToString(m.Has(a)))
-	value.ConsoleLog(value.NumberToString(m.Size()))
+	value.ConsoleLog(value.NumberToConsole(m.Size()))
 }
 func main() {
 	Run()

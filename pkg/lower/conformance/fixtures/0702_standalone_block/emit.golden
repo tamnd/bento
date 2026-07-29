@@ -19,7 +19,7 @@ func ScopedSum() float64 {
 	return s
 }
 func Run() {
-	value.ConsoleLog(value.NumberToString(ScopedSum()))
+	value.ConsoleLog(value.NumberToConsole(ScopedSum()))
 }
 func main() {
 	Run()

@@ -17,12 +17,12 @@ func main() {
 	if !(n != 0 && n == n) {
 		n = 5
 	}
-	value.ConsoleLog(value.NumberToString(n))
+	value.ConsoleLog(value.NumberToConsole(n))
 	m := 3.0
 	if !(m != 0 && m == m) {
 		m = 9
 	}
-	value.ConsoleLog(value.NumberToString(m))
+	value.ConsoleLog(value.NumberToConsole(m))
 	s := value.FromGoString("")
 	if !(s.Length() > 0) {
 		s = value.FromGoString("filled")
@@ -37,7 +37,7 @@ func main() {
 	if z != 0 && z == z {
 		z = 8
 	}
-	value.ConsoleLog(value.NumberToString(z))
-	value.ConsoleLog(value.NumberToString(OrDyn(value.Number(0))))
-	value.ConsoleLog(value.NumberToString(OrDyn(value.Number(2))))
+	value.ConsoleLog(value.NumberToConsole(z))
+	value.ConsoleLog(value.NumberToConsole(OrDyn(value.Number(0))))
+	value.ConsoleLog(value.NumberToConsole(OrDyn(value.Number(2))))
 }

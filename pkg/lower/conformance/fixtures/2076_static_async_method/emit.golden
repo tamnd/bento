@@ -20,7 +20,7 @@ func CalcOf(v float64) *value.Promise[float64] {
 func main() {
 	value.ConsoleLog(value.FromGoString("start"))
 	CalcOf(41).Then(func(r float64) {
-		value.ConsoleLog(value.NumberToString(r))
+		value.ConsoleLog(value.NumberToConsole(r))
 	})
 	value.ConsoleLog(value.FromGoString("end"))
 	value.RunMicrotasks()

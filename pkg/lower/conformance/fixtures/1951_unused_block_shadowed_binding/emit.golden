@@ -14,7 +14,7 @@ func main() {
 	}
 	if true {
 		z := 1.0
-		value.ConsoleLog(value.NumberToString(z))
+		value.ConsoleLog(value.NumberToConsole(z))
 	}
-	value.ConsoleLog(value.NumberToString(z))
+	value.ConsoleLog(value.NumberToConsole(z))
 }

@@ -18,12 +18,12 @@ func Run() {
 	s.Add(a)
 	s.Add(a)
 	s.Add(b)
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 	value.ConsoleLog(value.BoolToString(s.Has(a)))
 	value.ConsoleLog(value.BoolToString(s.Has(c)))
 	s.Delete(a)
 	value.ConsoleLog(value.BoolToString(s.Has(a)))
-	value.ConsoleLog(value.NumberToString(s.Size()))
+	value.ConsoleLog(value.NumberToConsole(s.Size()))
 }
 func main() {
 	Run()

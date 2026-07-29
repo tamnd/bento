@@ -10,6 +10,6 @@ func Inc(x float64, by float64) float64 {
 	return x + by
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Inc(5, 1)))
-	value.ConsoleLog(value.NumberToString(Inc(5, 3)))
+	value.ConsoleLog(value.NumberToConsole(Inc(5, 1)))
+	value.ConsoleLog(value.NumberToConsole(Inc(5, 3)))
 }

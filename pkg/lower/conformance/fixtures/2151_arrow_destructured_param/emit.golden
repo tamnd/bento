@@ -22,6 +22,6 @@ func main() {
 		y := __0.AtI(1)
 		return x - y
 	}
-	value.ConsoleLog(value.NumberToString(area(&ObjHW{W: 3, H: 4})))
-	value.ConsoleLog(value.NumberToString(diff(value.NewArray[float64](9, 4))))
+	value.ConsoleLog(value.NumberToConsole(area(&ObjHW{W: 3, H: 4})))
+	value.ConsoleLog(value.NumberToConsole(diff(value.NewArray[float64](9, 4))))
 }

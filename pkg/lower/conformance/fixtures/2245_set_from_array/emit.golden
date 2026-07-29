@@ -14,7 +14,7 @@ func Run() {
 		}
 		return _bt0
 	}()
-	value.ConsoleLog(value.NumberToString(a.Size()))
+	value.ConsoleLog(value.NumberToConsole(a.Size()))
 	value.ConsoleLog(value.BoolToString(a.Has(2)))
 	value.ConsoleLog(value.BoolToString(a.Has(4)))
 	src := value.NewArray[float64](10, 20, 20, 30)
@@ -25,7 +25,7 @@ func Run() {
 		}
 		return _bt2
 	}()
-	value.ConsoleLog(value.NumberToString(b.Size()))
+	value.ConsoleLog(value.NumberToConsole(b.Size()))
 	value.ConsoleLog(value.BoolToString(b.Has(20)))
 }
 func main() {

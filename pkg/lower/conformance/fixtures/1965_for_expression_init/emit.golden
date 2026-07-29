@@ -12,13 +12,13 @@ func main() {
 	for i = 0; i < 4; i++ {
 		sum += i
 	}
-	value.ConsoleLog(value.NumberToString(sum))
-	value.ConsoleLog(value.NumberToString(i))
+	value.ConsoleLog(value.NumberToConsole(sum))
+	value.ConsoleLog(value.NumberToConsole(i))
 	a := 0.0
 	b := 0.0
 	steps := 0.0
 	for a, b = 0, 10; a < b; a++ {
 		steps++
 	}
-	value.ConsoleLog(value.NumberToString(steps))
+	value.ConsoleLog(value.NumberToConsole(steps))
 }

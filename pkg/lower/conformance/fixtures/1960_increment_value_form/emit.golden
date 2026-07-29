@@ -26,7 +26,7 @@ func main() {
 		n--
 		return n
 	}()
-	value.ConsoleLog(value.NumberToString(a), value.NumberToString(b), value.NumberToString(c), value.NumberToString(d), value.NumberToString(n))
+	value.ConsoleLog(value.NumberToConsole(a), value.NumberToConsole(b), value.NumberToConsole(c), value.NumberToConsole(d), value.NumberToConsole(n))
 	arr := value.NewArray[float64](10, 20, 30)
 	i := 0.0
 	first := arr.At(func() float64 {
@@ -39,5 +39,5 @@ func main() {
 		i++
 		return prev
 	}())
-	value.ConsoleLog(value.NumberToString(first), value.NumberToString(second), value.NumberToString(i))
+	value.ConsoleLog(value.NumberToConsole(first), value.NumberToConsole(second), value.NumberToConsole(i))
 }

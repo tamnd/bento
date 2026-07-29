@@ -22,7 +22,7 @@ func Run() {
 		return value.NumberToString(x)
 	}))
 	c := value.NewArray[float64](1, 2, 3)
-	value.ConsoleLog(value.NumberToString(c.Splice(1, 0, 42).Len()))
+	value.ConsoleLog(value.NumberToConsole(c.Splice(1, 0, 42).Len()))
 	value.ConsoleLog(c.Join(value.FromGoString(","), func(x float64) value.BStr {
 		return value.NumberToString(x)
 	}))

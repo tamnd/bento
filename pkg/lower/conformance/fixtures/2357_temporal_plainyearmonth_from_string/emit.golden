@@ -8,7 +8,7 @@ import (
 
 func main() {
 	bare := value.PlainYearMonthFromString("2024-06")
-	value.ConsoleLog(bare.ToString(), value.NumberToString(bare.Year()), value.NumberToString(bare.Month()))
+	value.ConsoleLog(bare.ToString(), value.NumberToConsole(bare.Year()), value.NumberToConsole(bare.Month()))
 	basic := value.PlainYearMonthFromString("202406")
 	value.ConsoleLog(basic.ToString())
 	fromDate := value.PlainYearMonthFromString("2024-06-30")
@@ -20,5 +20,5 @@ func main() {
 	expanded := value.PlainYearMonthFromString("-000005-06")
 	value.ConsoleLog(expanded.ToString())
 	code := value.PlainYearMonthFromString("2024-06")
-	value.ConsoleLog(code.MonthCode(), value.NumberToString(code.DaysInMonth()), value.BoolToString(code.InLeapYear()))
+	value.ConsoleLog(code.MonthCode(), value.NumberToConsole(code.DaysInMonth()), value.BoolToString(code.InLeapYear()))
 }

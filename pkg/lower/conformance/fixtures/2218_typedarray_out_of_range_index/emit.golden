@@ -14,6 +14,6 @@ func main() {
 	value.ConsoleLog(value.BoolToString(y.IsUndefined()))
 	ta.SetAt(100, 999)
 	ta.SetAt(1.5, 999)
-	value.ConsoleLog(value.NumberToString(float64(ta.Data()[0])), value.NumberToString(float64(ta.Data()[1])), value.NumberToString(float64(ta.Data()[2])))
-	value.ConsoleLog(value.NumberToString(ta.Len()))
+	value.ConsoleLog(value.NumberToConsole(float64(ta.Data()[0])), value.NumberToConsole(float64(ta.Data()[1])), value.NumberToConsole(float64(ta.Data()[2])))
+	value.ConsoleLog(value.NumberToConsole(ta.Len()))
 }

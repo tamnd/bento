@@ -9,11 +9,11 @@ import (
 func main() {
 	src := value.NewArray[float64](1, 2, 3)
 	copy := value.ArrayFrom(append([]float64{}, src.Elems()...))
-	value.ConsoleLog(value.NumberToString(copy.Len()))
+	value.ConsoleLog(value.NumberToConsole(copy.Len()))
 	copy.Set(0, 9)
-	value.ConsoleLog(value.NumberToString(src.At(0)))
-	value.ConsoleLog(value.NumberToString(copy.At(0)))
+	value.ConsoleLog(value.NumberToConsole(src.At(0)))
+	value.ConsoleLog(value.NumberToConsole(copy.At(0)))
 	chars := value.ArrayFrom(value.FromGoString("hi").CodePoints())
-	value.ConsoleLog(value.NumberToString(chars.Len()))
+	value.ConsoleLog(value.NumberToConsole(chars.Len()))
 	value.ConsoleLog(chars.At(1))
 }

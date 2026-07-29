@@ -8,19 +8,19 @@ import (
 
 func Run() {
 	b := value.NewSharedArrayBuffer(8)
-	value.ConsoleLog(value.NumberToString(b.ByteLength()))
-	value.ConsoleLog(value.NumberToString(b.MaxByteLength()))
+	value.ConsoleLog(value.NumberToConsole(b.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(b.MaxByteLength()))
 	value.ConsoleLog(value.BoolToString(b.Growable()))
 	c := b.Slice(2, 6)
-	value.ConsoleLog(value.NumberToString(c.ByteLength()))
-	value.ConsoleLog(value.NumberToString(b.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(c.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(b.ByteLength()))
 	g := value.NewGrowableSharedArrayBuffer(8, 16)
-	value.ConsoleLog(value.NumberToString(g.ByteLength()))
-	value.ConsoleLog(value.NumberToString(g.MaxByteLength()))
+	value.ConsoleLog(value.NumberToConsole(g.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(g.MaxByteLength()))
 	value.ConsoleLog(value.BoolToString(g.Growable()))
 	g.Grow(12)
-	value.ConsoleLog(value.NumberToString(g.ByteLength()))
-	value.ConsoleLog(value.NumberToString(g.MaxByteLength()))
+	value.ConsoleLog(value.NumberToConsole(g.ByteLength()))
+	value.ConsoleLog(value.NumberToConsole(g.MaxByteLength()))
 }
 func main() {
 	Run()

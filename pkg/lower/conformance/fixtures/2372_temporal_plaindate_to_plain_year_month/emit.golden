@@ -9,8 +9,8 @@ import (
 func main() {
 	d := value.NewPlainDate(2020, 5, 15)
 	value.ConsoleLog(d.ToPlainYearMonth().ToString())
-	value.ConsoleLog(value.NumberToString(d.ToPlainYearMonth().Year()))
+	value.ConsoleLog(value.NumberToConsole(d.ToPlainYearMonth().Year()))
 	value.ConsoleLog(value.PlainDateWithCalendar(d, "roc").ToPlainYearMonth().ToString())
-	value.ConsoleLog(value.NumberToString(value.PlainDateWithCalendar(d, "roc").ToPlainYearMonth().Year()))
+	value.ConsoleLog(value.NumberToConsole(value.PlainDateWithCalendar(d, "roc").ToPlainYearMonth().Year()))
 	value.ConsoleLog(value.PlainDateWithCalendar(d, "gregory").ToPlainYearMonth().ToString())
 }

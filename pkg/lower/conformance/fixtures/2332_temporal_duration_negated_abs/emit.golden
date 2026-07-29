@@ -9,9 +9,9 @@ import (
 func main() {
 	d := value.NewDuration(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 	value.ConsoleLog(d.Negated().ToString())
-	value.ConsoleLog(value.NumberToString(d.Negated().Sign()))
+	value.ConsoleLog(value.NumberToConsole(d.Negated().Sign()))
 	value.ConsoleLog(d.Abs().ToString())
 	neg := value.NewDuration(0, 0, 0, -4, 0, 0, 0, 0, 0, 0)
 	value.ConsoleLog(neg.Abs().ToString())
-	value.ConsoleLog(value.NumberToString(neg.Abs().Sign()))
+	value.ConsoleLog(value.NumberToConsole(neg.Abs().Sign()))
 }

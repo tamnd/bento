@@ -20,6 +20,6 @@ func main() {
 	} else {
 		y = _bt0.Get()
 	}
-	value.ConsoleLog(value.NumberToString(x))
-	value.ConsoleLog(value.NumberToString(y))
+	value.ConsoleLog(value.NumberToConsole(x))
+	value.ConsoleLog(value.NumberToConsole(y))
 }

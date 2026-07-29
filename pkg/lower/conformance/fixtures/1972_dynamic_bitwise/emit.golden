@@ -16,8 +16,8 @@ func Pow(a value.Value, b value.Value) float64 {
 	return value.Pow(value.ToNumber(a), value.ToNumber(b))
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(And(value.Number(6), value.Number(3))))
-	value.ConsoleLog(value.NumberToString(And(value.StringValue(value.FromGoString("12")), value.Number(10))))
-	value.ConsoleLog(value.NumberToString(Ushr(value.Number(-1), value.Number(28))))
-	value.ConsoleLog(value.NumberToString(Pow(value.Number(2), value.Number(10))))
+	value.ConsoleLog(value.NumberToConsole(And(value.Number(6), value.Number(3))))
+	value.ConsoleLog(value.NumberToConsole(And(value.StringValue(value.FromGoString("12")), value.Number(10))))
+	value.ConsoleLog(value.NumberToConsole(Ushr(value.Number(-1), value.Number(28))))
+	value.ConsoleLog(value.NumberToConsole(Pow(value.Number(2), value.Number(10))))
 }

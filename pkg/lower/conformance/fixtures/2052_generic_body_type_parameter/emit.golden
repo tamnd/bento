@@ -17,6 +17,6 @@ func Box_str(x value.BStr) *value.Array[value.BStr] {
 	return pair
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Box_num(5).Len()))
-	value.ConsoleLog(value.NumberToString(Box_str(value.FromGoString("hi")).Len()))
+	value.ConsoleLog(value.NumberToConsole(Box_num(5).Len()))
+	value.ConsoleLog(value.NumberToConsole(Box_str(value.FromGoString("hi")).Len()))
 }

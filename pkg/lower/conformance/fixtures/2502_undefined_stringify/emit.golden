@@ -12,5 +12,5 @@ func main() {
 	x := value.Undefined
 	value.ConsoleLog(value.FromGoString("val=").ConcatN(value.ToString(x), value.FromGoString("")))
 	value.ConsoleLog(value.ToString(x))
-	value.ConsoleLog(value.ToString(value.Undefined), value.FromGoString("a"), value.NumberToString(1))
+	value.ConsoleLog(value.ToString(value.Undefined), value.FromGoString("a"), value.NumberToConsole(1))
 }

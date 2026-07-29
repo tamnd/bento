@@ -19,14 +19,14 @@ func main() {
 		_bt3 := _bt1.Values()
 		for _bt4, k := range _bt2 {
 			v := _bt3[_bt4]
-			value.ConsoleLog(k, value.NumberToString(v))
+			value.ConsoleLog(k, value.NumberToConsole(v))
 		}
 	}
 	for _, k := range m.Keys() {
 		value.ConsoleLog(k)
 	}
 	for _, v := range m.Values() {
-		value.ConsoleLog(value.NumberToString(v))
+		value.ConsoleLog(value.NumberToConsole(v))
 	}
 	s := func() *value.Set[float64] {
 		_bt5 := value.NewNumberSet()
@@ -36,10 +36,10 @@ func main() {
 		return _bt5
 	}()
 	for _, x := range s.Members() {
-		value.ConsoleLog(value.NumberToString(x))
+		value.ConsoleLog(value.NumberToConsole(x))
 	}
 	for _, a := range s.Members() {
 		b := a
-		value.ConsoleLog(value.NumberToString(a), value.NumberToString(b))
+		value.ConsoleLog(value.NumberToConsole(a), value.NumberToConsole(b))
 	}
 }

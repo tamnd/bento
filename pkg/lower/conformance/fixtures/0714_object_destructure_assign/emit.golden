@@ -23,10 +23,10 @@ func main() {
 	y := 0.0
 	z := 0.0
 	x, y, z = o.X, o.Y, o.Z
-	value.ConsoleLog(value.NumberToString(x + y + z))
+	value.ConsoleLog(value.NumberToConsole(x + y + z))
 	next := &ObjXYZ{X: 1, Y: 2, Z: 3}
 	x, y, z = next.X, next.Y, next.Z
-	value.ConsoleLog(value.NumberToString(x + y + z))
+	value.ConsoleLog(value.NumberToConsole(x + y + z))
 	rec := &ObjActiveAgeLabel{Label: value.FromGoString("sam"), Age: 30, Active: true}
 	label := value.FromGoString("")
 	active := false

@@ -13,6 +13,6 @@ func First(a float64) float64 {
 	return a
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Add(2, 3)))
-	value.ConsoleLog(value.NumberToString(First(7)))
+	value.ConsoleLog(value.NumberToConsole(Add(2, 3)))
+	value.ConsoleLog(value.NumberToConsole(First(7)))
 }

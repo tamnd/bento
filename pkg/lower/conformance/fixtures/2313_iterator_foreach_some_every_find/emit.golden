@@ -13,7 +13,7 @@ func main() {
 		return value.Number(_bt0)
 	}).Next, value.NewFunc(func(__a []value.Value) value.Value {
 		(func(n float64) {
-			value.ConsoleLog(value.NumberToString(n))
+			value.ConsoleLog(value.NumberToConsole(n))
 		})(value.ToNumber(value.Arg(__a, 0)))
 		return value.Undefined
 	}))

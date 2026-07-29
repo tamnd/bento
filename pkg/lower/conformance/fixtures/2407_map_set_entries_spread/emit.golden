@@ -30,7 +30,7 @@ func Run() {
 		}
 		return _bt0
 	}()...))
-	value.ConsoleLog(value.NumberToString(pairs.Len()))
+	value.ConsoleLog(value.NumberToConsole(pairs.Len()))
 	value.ConsoleLog(pairs.At(0).E0.ConcatN(value.FromGoString("="), value.NumberToString(pairs.At(0).E1)))
 	value.ConsoleLog(pairs.At(2).E0.ConcatN(value.FromGoString("="), value.NumberToString(pairs.At(2).E1)))
 	ents := value.ArrayFrom(append([]Tuple_str_num{}, func() []Tuple_str_num {
@@ -55,7 +55,7 @@ func Run() {
 		}
 		return _bt12
 	}()...))
-	value.ConsoleLog(value.NumberToString(svs.Len()))
+	value.ConsoleLog(value.NumberToConsole(svs.Len()))
 	value.ConsoleLog(value.NumberToString(svs.At(0).E0).ConcatN(value.FromGoString(","), value.NumberToString(svs.At(0).E1)))
 	for _, _bt22 := range value.ArrayFrom(append([]Tuple_str_num{}, func() []Tuple_str_num {
 		_bt17 := m

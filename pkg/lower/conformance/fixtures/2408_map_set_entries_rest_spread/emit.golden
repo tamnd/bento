@@ -29,7 +29,7 @@ func Run() {
 	m.Set(value.FromGoString("a"), 1)
 	m.Set(value.FromGoString("b"), 2)
 	m.Set(value.FromGoString("c"), 3)
-	value.ConsoleLog(value.NumberToString(Count(value.ArrayFrom(append([]Tuple_str_num{}, func() []Tuple_str_num {
+	value.ConsoleLog(value.NumberToConsole(Count(value.ArrayFrom(append([]Tuple_str_num{}, func() []Tuple_str_num {
 		_bt1 := m
 		_bt2 := _bt1.Keys()
 		_bt3 := _bt1.Values()
@@ -49,7 +49,7 @@ func Run() {
 		}
 		return _bt6
 	}()...))))
-	value.ConsoleLog(value.NumberToString(Count(value.ArrayFrom(append([]Tuple_str_num{}, func() []Tuple_str_num {
+	value.ConsoleLog(value.NumberToConsole(Count(value.ArrayFrom(append([]Tuple_str_num{}, func() []Tuple_str_num {
 		_bt13 := m
 		_bt14 := _bt13.Keys()
 		_bt15 := _bt13.Values()
@@ -71,7 +71,7 @@ func Run() {
 		return _bt18
 	}()...))))
 	lead := Tuple_str_num{E0: value.FromGoString("lead"), E1: 0}
-	value.ConsoleLog(value.NumberToString(Count(value.ArrayFrom(append([]Tuple_str_num{lead}, func() []Tuple_str_num {
+	value.ConsoleLog(value.NumberToConsole(Count(value.ArrayFrom(append([]Tuple_str_num{lead}, func() []Tuple_str_num {
 		_bt23 := m
 		_bt24 := _bt23.Keys()
 		_bt25 := _bt23.Values()

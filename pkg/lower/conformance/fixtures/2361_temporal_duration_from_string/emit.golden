@@ -8,13 +8,13 @@ import (
 
 func main() {
 	full := value.DurationFromString("P1Y2M3W4DT5H6M7.5S")
-	value.ConsoleLog(full.ToString(), value.NumberToString(full.Days()), value.NumberToString(full.Seconds()), value.NumberToString(full.Milliseconds()))
+	value.ConsoleLog(full.ToString(), value.NumberToConsole(full.Days()), value.NumberToConsole(full.Seconds()), value.NumberToConsole(full.Milliseconds()))
 	frac := value.DurationFromString("PT1.5H")
-	value.ConsoleLog(frac.ToString(), value.NumberToString(frac.Hours()), value.NumberToString(frac.Minutes()))
+	value.ConsoleLog(frac.ToString(), value.NumberToConsole(frac.Hours()), value.NumberToConsole(frac.Minutes()))
 	neg := value.DurationFromString("-P2DT30M")
-	value.ConsoleLog(neg.ToString(), value.NumberToString(neg.Sign()))
+	value.ConsoleLog(neg.ToString(), value.NumberToConsole(neg.Sign()))
 	sub := value.DurationFromString("PT1.234567891S")
-	value.ConsoleLog(sub.ToString(), value.NumberToString(sub.Milliseconds()), value.NumberToString(sub.Microseconds()), value.NumberToString(sub.Nanoseconds()))
+	value.ConsoleLog(sub.ToString(), value.NumberToConsole(sub.Milliseconds()), value.NumberToConsole(sub.Microseconds()), value.NumberToConsole(sub.Nanoseconds()))
 	zero := value.DurationFromString("P0D")
 	value.ConsoleLog(zero.ToString(), value.BoolToString(zero.Blank()))
 }

@@ -179,7 +179,11 @@ func (e *Error) ToValue() Value {
 			keys = append(keys, FromGoString("code"))
 			descs = append(descs, defaultDataProperty(StringValue(e.code)))
 		}
-		e.boxed = &Object{kind: KindObject, keys: keys, descs: descs}
+		// The box is branded with the error it came from so the console inspector can
+		// tell it from a plain object carrying a name and a message. Node prints an
+		// error as "[TypeError: bad]" rather than as "{ name: 'TypeError', ... }", and
+		// the properties alone cannot distinguish the two.
+		e.boxed = &Object{kind: KindObject, keys: keys, descs: descs, err: e}
 	}
 	return Value{kind: KindObject, ref: unsafe.Pointer(e.boxed)}
 }

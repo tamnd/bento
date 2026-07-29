@@ -22,10 +22,10 @@ func main() {
 	if a.IsUndefined() {
 		a = value.Some[float64](5)
 	}
-	value.ConsoleLog(value.NumberToString(a.Get() + 1))
+	value.ConsoleLog(value.NumberToConsole(a.Get() + 1))
 	b := value.Some[float64](10)
 	if b.IsUndefined() {
 		b = value.Some[float64](99)
 	}
-	value.ConsoleLog(value.NumberToString(b.Get() + 1))
+	value.ConsoleLog(value.NumberToConsole(b.Get() + 1))
 }

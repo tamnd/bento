@@ -11,7 +11,7 @@ func Run() {
 	value.ConsoleLog(value.BoolToString(s.Equal(s)))
 	value.ConsoleLog(value.BoolToString(s.Equal(s)))
 	value.ConsoleLog(value.FromGoString("WORLD").ToLowerCase())
-	value.ConsoleLog(value.NumberToString((value.Concat(value.FromGoString("a"), value.FromGoString("b"))).Length()))
+	value.ConsoleLog(value.NumberToConsole((value.Concat(value.FromGoString("a"), value.FromGoString("b"))).Length()))
 }
 func main() {
 	Run()

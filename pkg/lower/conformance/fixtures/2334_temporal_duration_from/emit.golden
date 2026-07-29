@@ -10,5 +10,5 @@ func main() {
 	a := value.NewDuration(1, 2, 3, 4, 0, 0, 0, 0, 0, 0)
 	b := value.DurationFrom(a)
 	value.ConsoleLog(b.ToString())
-	value.ConsoleLog(value.NumberToString(b.Days()))
+	value.ConsoleLog(value.NumberToConsole(b.Days()))
 }

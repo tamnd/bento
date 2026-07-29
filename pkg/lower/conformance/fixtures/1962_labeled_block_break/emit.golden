@@ -17,7 +17,7 @@ block:
 		out = 2
 		break
 	}
-	value.ConsoleLog(value.NumberToString(out))
+	value.ConsoleLog(value.NumberToConsole(out))
 	found := -1.0
 search:
 	for {
@@ -30,7 +30,7 @@ search:
 		found = 99
 		break
 	}
-	value.ConsoleLog(value.NumberToString(found))
+	value.ConsoleLog(value.NumberToConsole(found))
 	log := value.NewArray[float64]()
 blk:
 	for {

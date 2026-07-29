@@ -13,12 +13,12 @@ func main() {
 		total += i
 		i++
 	}
-	value.ConsoleLog(value.NumberToString(total))
+	value.ConsoleLog(value.NumberToConsole(total))
 	once := 0.0
 	for _bt1 := true; _bt1; _bt1 = false {
 		once++
 	}
-	value.ConsoleLog(value.NumberToString(once))
+	value.ConsoleLog(value.NumberToConsole(once))
 	n := 0.0
 outer:
 	for a := 0.0; a < 3; a++ {
@@ -29,5 +29,5 @@ outer:
 			n++
 		}
 	}
-	value.ConsoleLog(value.NumberToString(n))
+	value.ConsoleLog(value.NumberToConsole(n))
 }

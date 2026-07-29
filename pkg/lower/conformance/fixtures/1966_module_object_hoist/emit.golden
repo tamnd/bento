@@ -32,6 +32,6 @@ func Total() float64 {
 	return s
 }
 func main() {
-	value.ConsoleLog(value.NumberToString(Area()))
-	value.ConsoleLog(value.NumberToString(Total()))
+	value.ConsoleLog(value.NumberToConsole(Area()))
+	value.ConsoleLog(value.NumberToConsole(Total()))
 }
