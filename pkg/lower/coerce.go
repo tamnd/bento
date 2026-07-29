@@ -909,7 +909,15 @@ func (r *Renderer) combineIsDynamic(opText string, left, right frontend.Node) bo
 	if r.isString(left) || r.isString(right) {
 		return false
 	}
-	return r.isDynamic(left) || r.isDynamic(right)
+	// An operand whose lowering is a box counts as dynamic here whatever the checker
+	// called it, which is what makes a chain of sums over boxed reads lower rather
+	// than hand back at its second term. `busy += c.times.user + c.times.sys` is the
+	// shape: the inner + is itself a value.Add, so the outer + has a boxed operand
+	// even though the checker types the inner sum a number. boxOperand and
+	// boxStaticToDynamic already pass such an operand through untouched, so the two
+	// ends of the decision agree.
+	return r.isDynamic(left) || r.isDynamic(right) ||
+		r.producesBoxedValue(left) || r.producesBoxedValue(right)
 }
 
 // boxOperand lowers an operand to a value.Value so a dynamic operator can take it.
@@ -2694,7 +2702,17 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	if err := r.guardJSONStringifyUndefinedIntoString(src, r.prog.TypeAt(target).Flags); err != nil {
 		return nil, err
 	}
-	srcDyn := r.isDynamic(src)
+	// A source whose lowering is a box but whose checker type is a concrete primitive
+	// is dynamic for the purpose of this bridge, whatever the checker called it. The
+	// motivating case is a + over a boxed operand: `let n = 0; n = n + os.totalmem()`
+	// lowers to value.Add, a value.Value, while the checker types the sum number, so
+	// without this the bridge saw static-to-static, emitted the box straight into a
+	// float64 slot, and the build failed at the Go compiler with the reason lost.
+	// producesBoxedValue is the predicate that already answers which lowerings are
+	// boxes, and is the same one the opposite direction reads to know that boxing
+	// such a source again would be the identity, so the two directions cannot
+	// disagree about what a box is.
+	srcDyn := r.isDynamic(src) || r.producesBoxedValue(src)
 	tgtDyn := r.isDynamic(target)
 	switch {
 	case srcDyn && !tgtDyn:
