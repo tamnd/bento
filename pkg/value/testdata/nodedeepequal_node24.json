@@ -1,0 +1,457 @@
+{
+  "identical numbers": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different numbers": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "zero and negative zero": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "negative zero twice": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "nan and nan": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "nan and number": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "number and numeric string": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "number and true": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "null and undefined": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "null and null": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "empty string and zero": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "identical strings": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different strings": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "identical bigints": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "bigint and number": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "same symbol": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different symbols": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "same function": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "two functions": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "object and number": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "null and object": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "object and null": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "empty objects": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "same one key": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different value": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "loose value": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "extra key": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "missing key": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "key order": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "nested objects": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "nested difference": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "undefined value and missing key": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "undefined values": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "null prototypes": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "null prototype and plain": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "non enumerable key ignored": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "accessor and data": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "accessor different": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "same symbol key": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "symbol key one side": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "symbol key different value": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "different symbol keys": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "to string tag same": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "to string tag different": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "to string tag one side": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "function property same": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "function property different": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "same class instances": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different classes": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "class instance and plain object": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "empty arrays": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "same elements": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different length": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "different element": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "loose element": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "nested arrays": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "array and object": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "object and array": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "array named property one side": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "array named property both": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "hole and undefined element": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "holes both sides": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "hole and value": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "null and undefined element": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "array of objects": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "same regexps": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different source": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "different flags": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "different last index": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "regexp and object": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "regexp named property both": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "regexp named property one side": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "same errors": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "different messages": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "different error names": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "error and plain object": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "plain object and error": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "errors with same code": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "errors with different code": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "aggregate errors": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "aggregate different reasons": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "shared subobject one side": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "deep nesting": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "deep nesting difference": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "self referencing objects": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "mutually referencing objects": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "cycle and deeper cycle": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "self referencing arrays": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "proxy over object and object": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "proxy over object and different object": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "proxy over array and array": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  }
+}

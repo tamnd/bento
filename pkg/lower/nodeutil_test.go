@@ -89,6 +89,44 @@ const s: string = format();`)
 	}
 }
 
+// TestUtilIsDeepStrictEqualLowersToTheComparison covers the member that answers a
+// boolean rather than a string, in all three import forms, since a comparison of two
+// object literals is the call the deep equality engine exists for.
+func TestUtilIsDeepStrictEqualLowersToTheComparison(t *testing.T) {
+	forms := []struct {
+		name string
+		src  string
+	}{
+		{"named", `import { isDeepStrictEqual } from "node:util";
+const eq: boolean = isDeepStrictEqual({ a: 1 }, { a: 1 });`},
+		{"default", `import util from "node:util";
+const eq: boolean = util.isDeepStrictEqual({ a: 1 }, { a: 1 });`},
+		{"namespace", `import * as util from "node:util";
+const eq: boolean = util.isDeepStrictEqual({ a: 1 }, { a: 1 });`},
+	}
+	want := `value.NodeIsDeepStrictEqual(value.NewObject().Set(value.FromGoString("a"), value.Number(1)), value.NewObject().Set(value.FromGoString("a"), value.Number(1)))`
+	for _, f := range forms {
+		t.Run(f.name, func(t *testing.T) {
+			if got := renderProgram(t, f.src); !strings.Contains(got, want) {
+				t.Errorf("%s import did not emit %s:\n%s", f.name, want, got)
+			}
+		})
+	}
+}
+
+// TestUtilIsDeepStrictEqualComparesPrimitivesBoxed pins that the arguments box even
+// when the checker knows both are numbers. What the comparison answers depends on the
+// runtime kind of each value (0 and -0 are different numbers to it, and a number is
+// never equal to a numeric string), so the lowering must not shortcut a primitive
+// pair into a Go comparison.
+func TestUtilIsDeepStrictEqualComparesPrimitivesBoxed(t *testing.T) {
+	got := renderProgram(t, `import { isDeepStrictEqual } from "node:util";
+const eq: boolean = isDeepStrictEqual(0, -0);`)
+	if !strings.Contains(got, "value.NodeIsDeepStrictEqual(value.Number(0), value.Number(math.Copysign(0, -1)))") {
+		t.Errorf("did not box both primitives:\n%s", got)
+	}
+}
+
 // TestUtilHandbacks pins what is not there yet. A member util does not carry must
 // name itself in the reason, since the module now exists and a reader would otherwise
 // be told the whole import was the problem.
@@ -116,6 +154,13 @@ const f: any = util.format;`,
 const m = new Map<string, number>();
 const s: string = format("%s", m);`,
 			"util.format with an argument that does not box yet",
+		},
+		{
+			"a comparison of a value that does not box yet",
+			`import { isDeepStrictEqual } from "node:util";
+const m = new Map<string, number>();
+const eq: boolean = isDeepStrictEqual(m, m);`,
+			"util.isDeepStrictEqual with an argument that does not box yet",
 		},
 	}
 	for _, tc := range cases {
