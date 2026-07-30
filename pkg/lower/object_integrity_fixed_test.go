@@ -6,13 +6,13 @@ import (
 )
 
 // A read-only integrity predicate on a fixed-shape object reads its default state.
-// A fixed-shape object is always extensible, never sealed, never frozen, because the
-// mutators that could change that (Object.preventExtensions, seal, freeze, and the
-// Reflect forms) all hand the whole unit back on a fixed-shape receiver. So
-// Object.isExtensible, isSealed, and isFrozen box a throwaway copy and read the
-// predicate off it rather than hand back, and the answer matches the JavaScript
-// default. The mutators keep their handback, since a copy cannot return the receiver
-// with its own integrity changed.
+// A fixed-shape object with no mutator use is always extensible, never sealed, never
+// frozen, so Object.isExtensible, isSealed, and isFrozen box a throwaway copy and read
+// the predicate off it rather than hand back, and the answer matches the JavaScript
+// default. A binding that a mutator (Object.preventExtensions, seal, freeze) does touch
+// is a different case: the objectdynshape routing boxes that binding from its literal, so
+// the mutator lowers to the runtime integrity call on the real object and a later read
+// sees the changed state. The copy path here covers only bindings no mutator names.
 
 // TestFixedShapeIsFrozenLowers proves Object.isFrozen on a fixed-shape receiver
 // lowers to the boxed-copy predicate rather than handing back.
@@ -43,16 +43,19 @@ console.log(Object.isExtensible({}));
 	}
 }
 
-// TestFixedShapeIntegrityMutatorHandsBack proves the mutating side keeps its
-// handback: Object.freeze on a fixed-shape receiver cannot return the receiver with
-// its integrity changed off a copy, so the whole unit hands back rather than emit a
-// wrong result.
-func TestFixedShapeIntegrityMutatorHandsBack(t *testing.T) {
+// TestFixedShapeIntegrityMutatorBoxesAndRuns proves the mutating side no longer hands
+// back: a binding handed to Object.freeze boxes from its literal, so the freeze lowers
+// to the runtime Freeze on the real object. A later write is dropped and isFrozen reads
+// true, matching the JavaScript the runtime object honors.
+func TestFixedShapeIntegrityMutatorBoxesAndRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = `const o = { a: 1 };
 Object.freeze(o);
+o.a = 99;
+console.log(o.a);
+console.log(Object.isFrozen(o));
 `
-	reason := renderProgramTolerantHandBack(t, src)
-	if !strings.Contains(reason, "no runtime integrity state") {
-		t.Errorf("hand-back reason %q does not name the fixed-shape integrity guard", reason)
+	if got, want := runProgramGoTolerant(t, src), "1\ntrue\n"; got != want {
+		t.Fatalf("frozen boxed binding printed %q, want %q", got, want)
 	}
 }

@@ -329,6 +329,17 @@ type Renderer struct {
 	// means not yet scanned; dataCtorScanned distinguishes a scanned-empty program from that.
 	dataCtorSyms    map[frontend.Symbol]bool
 	dataCtorScanned bool
+	// dynObjectReceiverSyms is the set of object-binding symbols the program hands to an
+	// Object static that only a runtime object can answer (defineProperty, seal, freeze,
+	// setPrototypeOf, getPrototypeOf, and their kin). Such a binding cannot ride a Go
+	// struct: the struct carries no descriptor bag, prototype slot, or integrity state, so
+	// the op hands back. Routing the binding to the dynamic bag from its literal gives the
+	// op the runtime object it needs. The set is filled once by scanDynObjectReceivers over
+	// every source file, lazily on the first query, so a read of the binding and its
+	// declaration agree on the routing. A nil map means not yet scanned;
+	// dynObjectReceiverScanned distinguishes a scanned-empty program from that.
+	dynObjectReceiverSyms    map[frontend.Symbol]bool
+	dynObjectReceiverScanned bool
 	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
 	// the block currently lowering. A proxy holds its target by identity and dispatches
 	// its traps off the live object, so a write through the proxy and a mutation of the

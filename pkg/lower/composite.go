@@ -756,6 +756,15 @@ func (r *Renderer) identifierBindsAGrowingObject(n frontend.Node) bool {
 			r.isFixedObjectShape(r.prog.TypeAt(init)) {
 			return true
 		}
+		// A binding the program hands to an Object static that only a runtime object can
+		// answer (defineProperty, seal, freeze, setPrototypeOf, and their kin) boxes to the
+		// dynamic bag from its literal so the op has the descriptor bag, prototype slot, and
+		// integrity state it needs. Its reads route the dynamic way for the same reason a
+		// grown object's do: the binding is one bag, read and written through the value model.
+		if init.Kind() == frontend.NodeObjectLiteralExpression && r.symIsDynObjectReceiver(sym) &&
+			r.isFixedObjectShape(r.prog.TypeAt(init)) {
+			return true
+		}
 		// A binding initialized by a call to a factory that returns a growing object
 		// holds that same runtime bag, so it reads the same way. This is what makes
 		// `const m = make()` behave like the `const o = {}` inside make: the box crosses
