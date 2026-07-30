@@ -90,6 +90,20 @@ type Error struct {
 	// absent, which would make a deliberate `err.code = ''` unrepresentable.
 	code    BStr
 	hasCode bool
+	// extras are the own properties an error carries beyond name, message and code.
+	// Node's errors are not all shaped alike: an AssertionError carries the two values
+	// it compared and the operator between them, a filesystem error carries the path it
+	// failed on, and a program reads those properties off the caught error. They are
+	// held as a key list rather than as fields so that adding one is a call rather than
+	// a change to this struct, and in insertion order so the boxed form enumerates them
+	// the way the error that raised them wrote them.
+	extras []errorExtra
+}
+
+// errorExtra is one of the additional own properties an error carries.
+type errorExtra struct {
+	name  BStr
+	value Value
 }
 
 // Name reports the error's constructor name as a bento string, the lowering of
@@ -179,6 +193,13 @@ func (e *Error) ToValue() Value {
 			keys = append(keys, FromGoString("code"))
 			descs = append(descs, defaultDataProperty(StringValue(e.code)))
 		}
+		// The properties this particular error adds come last, in the order they were
+		// set, so a caught AssertionError answers err.actual and err.operator and a
+		// caught filesystem error answers err.path.
+		for _, x := range e.extras {
+			keys = append(keys, x.name)
+			descs = append(descs, defaultDataProperty(x.value))
+		}
 		// The box is branded with the error it came from so the console inspector can
 		// tell it from a plain object carrying a name and a message. Node prints an
 		// error as "[TypeError: bad]" rather than as "{ name: 'TypeError', ... }", and
@@ -241,6 +262,47 @@ func NewNodeError(name, code string, message BStr) *Error {
 		code:    FromGoString(code),
 		hasCode: true,
 	}
+}
+
+// SetProperty adds an own property to the error, the write a built-in makes when the
+// error it raises carries more than a name, a message and a code: an AssertionError's
+// actual, expected and operator, or a filesystem error's path. The property is
+// enumerable and writable the way an assigned one is in Node, since that is what the
+// built-in does there too.
+//
+// The boxed form is updated as well when it already exists, so a property set after
+// the error crossed into the dynamic world is visible through the box a program is
+// already holding rather than lost.
+func (e *Error) SetProperty(name string, v Value) {
+	key := FromGoString(name)
+	for i := range e.extras {
+		if e.extras[i].name.Equal(key) {
+			e.extras[i].value = v
+			if e.boxed != nil {
+				objectValue(e.boxed).Set(key, v)
+			}
+			return
+		}
+	}
+	e.extras = append(e.extras, errorExtra{name: key, value: v})
+	if e.boxed != nil {
+		objectValue(e.boxed).Set(key, v)
+	}
+}
+
+// PropertyValue is the read that answers err.actual, err.operator and the other
+// properties a built-in put on the error with SetProperty, the counterpart of that
+// write. An error that carries no such property answers undefined, which is what a
+// property that was never set answers in JavaScript: a plain Error has no operator,
+// and a program that reads one there gets the same undefined Node gives it.
+func (e *Error) PropertyValue(name string) Value {
+	key := FromGoString(name)
+	for i := range e.extras {
+		if e.extras[i].name.Equal(key) {
+			return e.extras[i].value
+		}
+	}
+	return Undefined
 }
 
 // Code reports the error's Node code as a bento string and whether it has one, the

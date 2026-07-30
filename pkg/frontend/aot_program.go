@@ -102,15 +102,33 @@ func (p *Program) unwrapNode(n Node) adapter.NodeHandle { return n.(nodeRef).h }
 // wrapType turns an opaque handle into a bento Type, reading the coarse flags
 // eagerly and stashing the handle behind an id for later structural queries. A
 // nil handle (a query with no answer) becomes the zero Type.
+//
+// The stored id is the interner id plus one, so that zero means absent and no
+// real type ever wears it. Type is the only handle-backed value a caller can
+// hold without an accompanying ok, since TypeAt answers every node with a Type
+// and answers a node the checker has no type for with the zero one, so the zero
+// Type has to be distinguishable from the first type the program interned. It was
+// not: it read back as that type's handle once one existed, which is a wrong
+// answer rather than an empty one, and read back as a panic before then.
 func (p *Program) wrapType(h adapter.TypeHandle) Type {
 	if h == nil {
 		return Type{}
 	}
 	id := p.types.intern(h)
-	return Type{Flags: p.adapter.TypeFlagsOf(p.handle, h), id: typeID(id)}
+	return Type{Flags: p.adapter.TypeFlagsOf(p.handle, h), id: typeID(id + 1)}
 }
 
-func (p *Program) typeHandle(t Type) adapter.TypeHandle { return p.types.lookup(int(t.id)) }
+// typeHandle returns the adapter handle a structural query asks about, and nil
+// for the absent type. Every query below turns that nil into the empty answer
+// rather than passing it to the checker, so a lowering that asks the signatures
+// or the properties of a type the checker did not answer for is told there are
+// none.
+func (p *Program) typeHandle(t Type) adapter.TypeHandle {
+	if t.id == 0 {
+		return nil
+	}
+	return p.types.lookup(int(t.id) - 1)
+}
 
 func (p *Program) wrapSymbol(h adapter.SymbolHandle) Symbol {
 	id := p.symbols.intern(h)
@@ -236,6 +254,9 @@ func (p *Program) TypeOfSymbol(s Symbol) Type {
 // Widen returns the widened type of a literal type, turning the literal 42 into
 // number, which the partitioner uses when a literal escapes its context.
 func (p *Program) Widen(t Type) Type {
+	if t.absent() {
+		return Type{}
+	}
 	return p.wrapType(p.adapter.WidenType(p.handle, p.typeHandle(t)))
 }
 
@@ -265,6 +286,9 @@ func (p *Program) ShorthandValueSymbolAt(n Node) (Symbol, bool) {
 // anonymous type. Lowering uses it to walk from a class instance type back to
 // the class declaration that names it.
 func (p *Program) TypeSymbol(t Type) (Symbol, bool) {
+	if t.absent() {
+		return Symbol{}, false
+	}
 	h, ok := p.adapter.SymbolOfType(p.handle, p.typeHandle(t))
 	if !ok {
 		return Symbol{}, false
@@ -302,6 +326,9 @@ func (p *Program) SignatureAt(n Node) (Signature, bool) {
 // type separately, because lowering emits a Go func for the former and a
 // constructor for the latter.
 func (p *Program) Signatures(t Type) (call, construct []Signature) {
+	if t.absent() {
+		return nil, nil
+	}
 	callInfos, ctorInfos := p.adapter.SignaturesOf(p.handle, p.typeHandle(t))
 	for _, si := range callInfos {
 		call = append(call, p.wrapSignature(si))
@@ -315,6 +342,9 @@ func (p *Program) Signatures(t Type) (call, construct []Signature) {
 // UnionMembers returns the constituent types of a union, or a single-element
 // slice for a non-union.
 func (p *Program) UnionMembers(t Type) []Type {
+	if t.absent() {
+		return nil
+	}
 	handles := p.adapter.UnionOf(p.handle, p.typeHandle(t))
 	out := make([]Type, len(handles))
 	for i, h := range handles {
@@ -328,6 +358,9 @@ func (p *Program) UnionMembers(t Type) []Type {
 // branded alias (number & { __brand }) to the underlying primitive a go: defined
 // type projects to (section 6.11).
 func (p *Program) IntersectionMembers(t Type) []Type {
+	if t.absent() {
+		return nil
+	}
 	handles := p.adapter.IntersectionOf(p.handle, p.typeHandle(t))
 	out := make([]Type, len(handles))
 	for i, h := range handles {
@@ -339,6 +372,9 @@ func (p *Program) IntersectionMembers(t Type) []Type {
 // Properties returns the named members of an object type, each with its own type
 // and optionality.
 func (p *Program) Properties(t Type) []Property {
+	if t.absent() {
+		return nil
+	}
 	infos := p.adapter.PropertiesOf(p.handle, p.typeHandle(t))
 	out := make([]Property, len(infos))
 	for i, pi := range infos {
@@ -360,6 +396,9 @@ func (p *Program) Properties(t Type) []Property {
 // index-signature object lowers to a dynamic bag rather than a struct that would
 // drop the signature.
 func (p *Program) StringIndexType(t Type) (Type, bool) {
+	if t.absent() {
+		return Type{}, false
+	}
 	h, ok := p.adapter.StringIndexOf(p.handle, p.typeHandle(t))
 	if !ok {
 		return Type{}, false
@@ -373,6 +412,9 @@ func (p *Program) StringIndexType(t Type) (Type, bool) {
 // lowering can materialize a tuple as a value.Array when an array method is borrowed
 // on it.
 func (p *Program) NumberIndexType(t Type) (Type, bool) {
+	if t.absent() {
+		return Type{}, false
+	}
 	h, ok := p.adapter.NumberIndexOf(p.handle, p.typeHandle(t))
 	if !ok {
 		return Type{}, false
@@ -383,6 +425,9 @@ func (p *Program) NumberIndexType(t Type) (Type, bool) {
 // ElementType returns the element type of an array or tuple type, and ok=false
 // for a non-array.
 func (p *Program) ElementType(t Type) (Type, bool) {
+	if t.absent() {
+		return Type{}, false
+	}
 	h, ok := p.adapter.ElementOf(p.handle, p.typeHandle(t))
 	if !ok {
 		return Type{}, false
@@ -396,6 +441,9 @@ func (p *Program) ElementType(t Type) (Type, bool) {
 // the Go representation the generic maps to. A non-generic type returns no
 // arguments.
 func (p *Program) TypeArguments(t Type) []Type {
+	if t.absent() {
+		return nil
+	}
 	hs := p.adapter.TypeArgsOf(p.handle, p.typeHandle(t))
 	if len(hs) == 0 {
 		return nil
@@ -414,6 +462,9 @@ func (p *Program) TypeArguments(t Type) []Type {
 // that separates a tuple from the array ElementType reports on: an array has one
 // element type for every index, a tuple has a fixed sequence of them.
 func (p *Program) TupleElements(t Type) ([]TupleElem, bool) {
+	if t.absent() {
+		return nil, false
+	}
 	elems, ok := p.adapter.TupleElemsOf(p.handle, p.typeHandle(t))
 	if !ok {
 		return nil, false
@@ -431,12 +482,11 @@ func (p *Program) TupleElements(t Type) ([]TupleElem, bool) {
 }
 
 // LiteralValue returns the literal value of a literal type, so lowering can fold
-// closed unions into integer tags and refine integers. The no-answer zero Type
-// (Flags 0, the value wrapType returns for a nil handle, as from an error-typed
-// node like a computed key over an unresolved symbol) has no literal and no
-// handle to resolve; folding it must decline, not index the type interner.
+// closed unions into integer tags and refine integers. The no-answer zero Type,
+// which is what an error-typed node like a computed key over an unresolved symbol
+// answers with, has no literal and no handle to resolve, so folding it declines.
 func (p *Program) LiteralValue(t Type) (LiteralValue, bool) {
-	if t == (Type{}) {
+	if t.absent() {
 		return LiteralValue{}, false
 	}
 	return p.adapter.LiteralOf(p.handle, p.typeHandle(t))

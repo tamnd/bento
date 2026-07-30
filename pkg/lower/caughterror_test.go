@@ -261,3 +261,69 @@ try {
 		t.Fatalf("caught error code printed %q, want %q", got, want)
 	}
 }
+
+// TestCaughtErrorAssertionPropertiesLower pins that the four properties an
+// AssertionError carries beyond the message lower to the generic extra-property read
+// rather than handing back. They are what a test reads after it catches an assertion:
+// the operator names the method that failed, generatedMessage says whose message it
+// is, and actual and expected are the values that were compared.
+func TestCaughtErrorAssertionPropertiesLower(t *testing.T) {
+	for _, prop := range []string{"actual", "expected", "operator", "generatedMessage"} {
+		src := "try { throw new TypeError(\"x\"); } catch (e: any) { let v: any = e." + prop + "; console.log(v); }"
+		out := renderProgram(t, src)
+		want := `e.PropertyValue("` + prop + `")`
+		if !strings.Contains(out, want) {
+			t.Fatalf("caught error .%s did not lower to %s:\n%s", prop, want, out)
+		}
+	}
+}
+
+// TestCaughtErrorAssertionPropertiesRun builds and runs the read on an error that
+// carries none of them, which must answer undefined the way an unset property does in
+// JavaScript rather than a stand-in value.
+func TestCaughtErrorAssertionPropertiesRun(t *testing.T) {
+	skipIfShort(t)
+	src := `
+try {
+  throw new TypeError("boom");
+} catch (thrown: any) {
+  console.log(thrown.operator === undefined, thrown.generatedMessage === undefined);
+  console.log(thrown.actual === undefined, thrown.expected === undefined);
+}
+`
+	got := runProgramGo(t, src)
+	want := "true true\ntrue true\n"
+	if got != want {
+		t.Fatalf("caught error assertion properties printed %q, want %q", got, want)
+	}
+}
+
+// TestNewErrorBoxesIntoDynamic pins that a freshly constructed built-in error flowing
+// into a dynamic slot boxes through the error's own ToValue. Before this the build
+// handed back, which meant a program could construct an error and throw it but not
+// pass it to anything dynamic, and assert.ifError(new Error('boom')) is exactly that
+// call.
+func TestNewErrorBoxesIntoDynamic(t *testing.T) {
+	src := "let v: any = new Error(\"boom\"); console.log(v);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, `value.NewError(value.FromGoString("boom")).ToValue()`) {
+		t.Fatalf("new Error boxed into a dynamic slot did not lower through ToValue:\n%s", out)
+	}
+}
+
+// TestNewErrorBoxedRuns builds and runs the boxed error: it prints the way the
+// inspector prints an error, and it reads its own name and message back through the
+// box rather than through the typed error the constructor produced.
+func TestNewErrorBoxedRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+const v: any = new TypeError("boom");
+console.log(v.name, v.message);
+console.log(typeof v);
+`
+	got := runProgramGo(t, src)
+	want := "TypeError boom\nobject\n"
+	if got != want {
+		t.Fatalf("boxed error printed %q, want %q", got, want)
+	}
+}
