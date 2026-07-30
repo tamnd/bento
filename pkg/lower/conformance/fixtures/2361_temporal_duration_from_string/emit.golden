@@ -8,13 +8,13 @@ import (
 
 func main() {
 	full := value.DurationFromString("P1Y2M3W4DT5H6M7.5S")
-	value.ConsoleLog(full.ToString(), value.NumberToConsole(full.Days()), value.NumberToConsole(full.Seconds()), value.NumberToConsole(full.Milliseconds()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(full.ToString()), value.Number(full.Days()), value.Number(full.Seconds()), value.Number(full.Milliseconds())))
 	frac := value.DurationFromString("PT1.5H")
-	value.ConsoleLog(frac.ToString(), value.NumberToConsole(frac.Hours()), value.NumberToConsole(frac.Minutes()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(frac.ToString()), value.Number(frac.Hours()), value.Number(frac.Minutes())))
 	neg := value.DurationFromString("-P2DT30M")
-	value.ConsoleLog(neg.ToString(), value.NumberToConsole(neg.Sign()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(neg.ToString()), value.Number(neg.Sign())))
 	sub := value.DurationFromString("PT1.234567891S")
-	value.ConsoleLog(sub.ToString(), value.NumberToConsole(sub.Milliseconds()), value.NumberToConsole(sub.Microseconds()), value.NumberToConsole(sub.Nanoseconds()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(sub.ToString()), value.Number(sub.Milliseconds()), value.Number(sub.Microseconds()), value.Number(sub.Nanoseconds())))
 	zero := value.DurationFromString("P0D")
-	value.ConsoleLog(zero.ToString(), value.BoolToString(zero.Blank()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(zero.ToString()), value.Bool(zero.Blank())))
 }

@@ -33,11 +33,11 @@ func main() {
 		o.N = _bt0
 		return _bt0
 	}())), value.NumberToConsole(o.N))
-	value.ConsoleLog((func() value.BStr {
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue((func() value.BStr {
 		var _bt1 value.BStr = value.FromGoString("hi")
 		o.Label = _bt1
 		return _bt1
-	}()), o.Label)
+	}())), value.StringValue(o.Label)))
 	x := 0.0
 	y := 0.0
 	value.ConsoleLog(value.NumberToConsole(func() float64 {

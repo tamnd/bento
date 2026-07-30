@@ -24,5 +24,5 @@ func main() {
 	value.ConsoleLog(value.StringCoerce(o.Get(value.FromGoString("x"))))
 	d := o.GetOwnPropertyDescriptor(value.StringValue(value.FromGoString("x")))
 	_ = d
-	value.ConsoleLog(d.Get(value.FromGoString("get")).TypeOf(), d.Get(value.FromGoString("set")).TypeOf())
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(d.Get(value.FromGoString("get")).TypeOf()), value.StringValue(d.Get(value.FromGoString("set")).TypeOf())))
 }

@@ -143,6 +143,8 @@ func buildBuiltinModule(name string) Value {
 		return newPathPosixModule()
 	case "path/win32":
 		return newPathWin32Module()
+	case "util":
+		return newUtilModule()
 	default:
 		return newStubModule(name)
 	}
@@ -187,11 +189,34 @@ func builtinModulesArray() Value {
 // member. A later slice replaces the RequireBuiltin entry for a given name with a
 // real module, at which point that name no longer reaches this stub.
 func newStubModule(name string) Value {
+	return newPartialModule(name, NewObject())
+}
+
+// newPartialModule wraps a module whose members bento carries only some of, so a read
+// of one it does not carry throws the same honest-stub error a fully unimplemented
+// module throws. util is the first of these: format and inspect are real, and the
+// twenty-odd other members are not, and answering undefined for promisify would turn
+// a missing implementation into "undefined is not a function" several lines later.
+// The empty module is the degenerate case, which is what newStubModule is.
+//
+// A symbol read is answered rather than refused. A symbol-keyed read of a module is
+// the language looking for a hook (Symbol.iterator when the module is spread,
+// Symbol.toPrimitive when it is coerced), not a program reaching for a member, and
+// throwing on those would make an unimplemented module unspreadable rather than
+// unusable.
+func newPartialModule(name string, mod Value) Value {
 	handler := NewObject()
 	handler.Set(FromGoString("get"), NewFunc(func(args []Value) Value {
-		member := ToString(Arg(args, 1)).ToGoString()
-		Throw(NewError(FromGoString("The built-in module '" + name + "' is registered but not implemented in bento yet (reading '" + member + "')")))
+		target, key := Arg(args, 0), Arg(args, 1)
+		if key.Kind() == KindSymbol {
+			return target.GetElem(key)
+		}
+		member := ToString(key)
+		if target.object().hasOwn(member) {
+			return target.Get(member)
+		}
+		Throw(NewError(FromGoString("The built-in module '" + name + "' is registered but not implemented in bento yet (reading '" + member.ToGoString() + "')")))
 		return Undefined
 	}))
-	return NewProxy(NewObject(), handler)
+	return NewProxy(mod, handler)
 }

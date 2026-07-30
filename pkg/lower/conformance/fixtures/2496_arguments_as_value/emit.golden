@@ -21,7 +21,7 @@ func Forward(x float64, y float64) float64 {
 func main() {
 	args := Pack(10, 20, 30)
 	value.ConsoleLog(value.ConsoleValue(args.Get(value.FromGoString("length"))))
-	value.ConsoleLog(value.ConsoleValue(args.GetIndex(0)), value.ConsoleValue(args.GetIndex(1)), value.ConsoleValue(args.GetIndex(2)))
+	value.ConsoleLog(value.ConsoleFormat(args.GetIndex(0), args.GetIndex(1), args.GetIndex(2)))
 	value.ConsoleLog(args.TypeOf())
 	total := 0.0
 	for i := 0.0; value.Less(value.Number(i), args.Get(value.FromGoString("length"))); i++ {

@@ -23,6 +23,7 @@ package value
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -58,6 +59,28 @@ const (
 	kArrayExtrasType
 )
 
+// The three spellings compact takes. A number is the default and the interesting
+// one: it caps how many levels deep a subtree may be and still collapse onto one
+// line. false turns that off, so every entry gets its own line. true is the oldest
+// form, which lays entries out on one line whenever they fit and indents
+// differently when they do not, and it is a separate layout rather than a limit,
+// which is why it is a mode here rather than a number.
+const (
+	compactNumber = iota
+	compactFalse
+	compactTrue
+)
+
+// The three spellings getters takes: off, on for every accessor, or on for one
+// side of the pair only. Reading a getter runs the program's own code, which is
+// why it is off by default and why the mode has to travel with the options.
+const (
+	gettersOff = iota
+	gettersAll
+	gettersGet
+	gettersSet
+)
+
 // inspectCtx is Node's ctx object: the options plus the mutable bookkeeping the
 // recursion threads through itself. seen is the stack of references currently
 // being formatted, which is how a cycle is caught; circular numbers the references
@@ -66,15 +89,57 @@ const (
 // reached, which is what decides whether a level may collapse onto one line, and
 // it is deliberately not restored on the way back up, matching Node.
 type inspectCtx struct {
-	indentationLvl  int
-	seen            []unsafe.Pointer
-	currentDepth    int
-	circular        map[unsafe.Pointer]int
-	depth           int
-	breakLength     int
-	compact         int
-	maxArrayLength  int
-	maxStringLength int
+	inspectOptions
+	indentationLvl int
+	seen           []unsafe.Pointer
+	currentDepth   int
+	circular       map[unsafe.Pointer]int
+}
+
+// inspectOptions is the option half of Node's ctx, split out because util.format
+// re-inspects an argument with a few options changed and the rest carried over:
+// %s asks for depth 0 and %o for a hidden-property view, both starting from
+// whatever the caller passed. Keeping the options in their own value makes that a
+// copy with two fields written rather than a field-by-field rebuild.
+type inspectOptions struct {
+	depth            int
+	breakLength      int
+	compact          int
+	compactKind      int
+	maxArrayLength   int
+	maxStringLength  int
+	showHidden       bool
+	showProxy        bool
+	numericSeparator bool
+	sorted           bool
+	sortComparator   Value
+	getters          int
+}
+
+// defaultInspectOptions is what util.inspect.defaultOptions reports, which is also
+// what console.log passes.
+func defaultInspectOptions() inspectOptions {
+	return inspectOptions{
+		depth:           inspectDepth,
+		breakLength:     inspectBreakLength,
+		compact:         inspectCompact,
+		maxArrayLength:  inspectMaxArrayLength,
+		maxStringLength: inspectMaxStringLength,
+	}
+}
+
+// newInspectCtx starts a fresh recursion over the default options.
+func newInspectCtx() *inspectCtx {
+	return &inspectCtx{inspectOptions: defaultInspectOptions()}
+}
+
+// inspectWith renders a value under a given set of options, the one entry point
+// util.format's specifiers reach: each of them inspects with its own options and
+// needs its own recursion state, which is what makes this a new context every time
+// rather than a reused one.
+func inspectWith(o inspectOptions, v Value) string {
+	c := &inspectCtx{inspectOptions: o}
+	return c.formatValue(v, 0)
 }
 
 // NodeInspect renders a value the way Node's util.inspect does with its default
@@ -83,14 +148,166 @@ type inspectCtx struct {
 // reads as its properties instead of "[object Object]", a string nested in a
 // container is quoted, and a bigint carries its "n".
 func NodeInspect(v Value) BStr {
-	c := &inspectCtx{
-		depth:           inspectDepth,
-		breakLength:     inspectBreakLength,
-		compact:         inspectCompact,
-		maxArrayLength:  inspectMaxArrayLength,
-		maxStringLength: inspectMaxStringLength,
+	return FromGoString(newInspectCtx().formatValue(v, 0))
+}
+
+// NodeInspectArgs is util.inspect called with its own argument list, so the module
+// entry point and this port read the options in one place. Node still accepts the
+// positional form inspect(value, showHidden, depth, colors) it started with, and
+// reads it before the options object, so both are handled here in that order. It is
+// variadic because the lowerer emits a call to it for an imported node:util inspect,
+// one boxed argument per source argument, and a variadic signature is what an emitted
+// call can name without building a slice literal.
+func NodeInspectArgs(args ...Value) BStr {
+	o := defaultInspectOptions()
+	if len(args) > 2 {
+		if args[2].kind != KindUndefined {
+			o.setDepth(args[2])
+		}
+		if len(args) > 3 && args[3].kind != KindUndefined {
+			o.setColors(args[3])
+		}
 	}
-	return FromGoString(c.formatValue(v, 0))
+	if len(args) > 1 {
+		switch opts := args[1]; {
+		case opts.kind == KindBool:
+			o.showHidden = opts.AsBool()
+		case ToBoolean(opts):
+			o.readOptions(opts)
+		}
+	}
+	return FromGoString(inspectWith(o, Arg(args, 0)))
+}
+
+// readOptions copies an options object onto the options, the loop inspect runs over
+// ObjectKeys(opts). A key outside the option set is kept by Node only to pass on to
+// a value's own inspect function, which bento does not call yet, so it is ignored
+// here rather than rejected: an unknown key changes nothing about the output.
+func (o *inspectOptions) readOptions(opts Value) {
+	for _, k := range opts.OwnEnumerableKeys().Elems() {
+		v := opts.Get(k)
+		switch k.ToGoString() {
+		case "showHidden":
+			o.showHidden = ToBoolean(v)
+		case "depth":
+			o.setDepth(v)
+		case "colors":
+			o.setColors(v)
+		case "showProxy":
+			o.showProxy = ToBoolean(v)
+		case "maxArrayLength":
+			o.maxArrayLength = inspectLimit(v)
+		case "maxStringLength":
+			o.maxStringLength = inspectLimit(v)
+		case "breakLength":
+			o.breakLength = inspectLimit(v)
+		case "compact":
+			o.setCompact(v)
+		case "sorted":
+			o.setSorted(v)
+		case "getters":
+			o.setGetters(v)
+		case "numericSeparator":
+			o.numericSeparator = ToBoolean(v)
+		case "customInspect":
+			// Accepted and ignored. The default is on, so rejecting it would reject the
+			// option every caller that spells the defaults out passes, and bento does not
+			// call a value's own inspect function yet either way, so on and off agree
+			// until it does.
+		}
+	}
+}
+
+// setDepth reads the depth option, which is a count of levels or null for no limit
+// at all. Node spells the limit as null and tests for it everywhere it compares a
+// depth; the same effect here is a limit no recursion can reach, so the comparisons
+// stay plain.
+func (o *inspectOptions) setDepth(v Value) {
+	if v.kind == KindNull {
+		o.depth = math.MaxInt
+		return
+	}
+	o.depth = inspectLimit(v)
+}
+
+// setColors rejects the one option this port cannot honor. Coloring is a style
+// function threaded through every token the formatter emits, which is a change to
+// every line of it rather than a flag, so a caller asking for colors is told that
+// rather than handed uncolored text it did not ask for.
+func (o *inspectOptions) setColors(v Value) {
+	if ToBoolean(v) {
+		Throw(NewError(FromGoString("util.inspect with colors is not implemented in bento yet")))
+	}
+}
+
+// setCompact reads the compact option in its three spellings, a number, false, or
+// true, each of which is a different layout rather than a different limit.
+func (o *inspectOptions) setCompact(v Value) {
+	switch v.kind {
+	case KindBool:
+		if v.AsBool() {
+			o.compactKind = compactTrue
+		} else {
+			o.compactKind = compactFalse
+		}
+	default:
+		o.compactKind = compactNumber
+		o.compact = inspectLimit(v)
+	}
+}
+
+// setSorted reads the sorted option: true sorts the entries the way the language's
+// own sort does, and a function sorts them through that comparator, which is called
+// with the two already-rendered entries.
+func (o *inspectOptions) setSorted(v Value) {
+	switch v.kind {
+	case KindFunc:
+		o.sorted = true
+		o.sortComparator = v
+	default:
+		o.sorted = ToBoolean(v)
+		o.sortComparator = Value{}
+	}
+}
+
+// setGetters reads the getters option, which decides whether an accessor is read
+// or only reported. "get" and "set" name one side of the pair, so an object whose
+// getter is cheap can be shown while its setter's partner is left alone.
+func (o *inspectOptions) setGetters(v Value) {
+	if v.kind == KindString {
+		switch v.str().ToGoString() {
+		case "get":
+			o.getters = gettersGet
+			return
+		case "set":
+			o.getters = gettersSet
+			return
+		}
+	}
+	if ToBoolean(v) {
+		o.getters = gettersAll
+		return
+	}
+	o.getters = gettersOff
+}
+
+// inspectLimit reads one of the numeric options. Node spells "no limit" as null and
+// accepts Infinity for the same thing, and both become the largest int here so the
+// comparison that uses it can stay a plain one.
+func inspectLimit(v Value) int {
+	if v.kind == KindNull {
+		return math.MaxInt
+	}
+	f := ToNumber(v)
+	switch {
+	case f != f:
+		return 0
+	case f >= float64(math.MaxInt):
+		return math.MaxInt
+	case f <= float64(math.MinInt):
+		return math.MinInt
+	}
+	return int(f)
 }
 
 // formatValue is Node's formatValue: primitives render directly, null is its own
@@ -117,6 +334,9 @@ func (c *inspectCtx) formatValue(v Value, recurseTimes int) string {
 		if p.revoked {
 			return "<Revoked Proxy>"
 		}
+		if c.showProxy {
+			return c.formatProxy(p, recurseTimes)
+		}
 		v = p.target
 		switch v.kind {
 		case KindObject, KindArray, KindFunc:
@@ -139,6 +359,42 @@ func (c *inspectCtx) formatValue(v Value, recurseTimes int) string {
 		}
 	}
 	return c.formatRaw(v, recurseTimes)
+}
+
+// sortOutput orders already-rendered entries in place, the sorted option. With no
+// comparator it is the language's own rule, the entries compared as strings by code
+// unit, which is what Array.prototype.sort does with no argument; a comparator is
+// called with the two entries the way sort calls one.
+func (c *inspectCtx) sortOutput(output []string) {
+	if c.sortComparator.kind == KindFunc {
+		sort.SliceStable(output, func(i, j int) bool {
+			a := StringValue(FromGoString(output[i]))
+			b := StringValue(FromGoString(output[j]))
+			return ToNumber(c.sortComparator.Call(a, b)) < 0
+		})
+		return
+	}
+	sort.SliceStable(output, func(i, j int) bool {
+		return FromGoString(output[i]).Compare(FromGoString(output[j])) < 0
+	})
+}
+
+// formatProxy is Node's formatProxy, what showProxy asks for: the target and the
+// handler side by side rather than the object the proxy stands for. It is the only
+// view that shows a proxy is there at all, which is why a program debugging one
+// turns the option on, and it is what the %o specifier passes.
+func (c *inspectCtx) formatProxy(p *proxyData, recurseTimes int) string {
+	if recurseTimes > c.depth {
+		return "Proxy [Array]"
+	}
+	recurseTimes++
+	c.indentationLvl += 2
+	output := []string{
+		c.formatValue(p.target, recurseTimes),
+		c.formatValue(p.handler, recurseTimes),
+	}
+	c.indentationLvl -= 2
+	return c.reduceToSingleString(output, "", [2]string{"Proxy [", "]"}, kArrayExtrasType, recurseTimes, Undefined)
 }
 
 // inspectKey is one entry of the key list a formatted object walks. A string key
@@ -170,7 +426,7 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		if constructor != "Array" || ctorNull {
 			prefix = inspectPrefix(constructor, ctorNull, "Array", "("+strconv.Itoa(len(o.elems))+")")
 		}
-		keys = inspectNonIndexKeys(o)
+		keys = inspectNonIndexKeys(o, c.showHidden)
 		braces = [2]string{prefix + "[", "]"}
 		if len(o.elems) == 0 && len(keys) == 0 {
 			return braces[0] + "]"
@@ -182,28 +438,28 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		formatter = func() []string { return c.formatArray(v, recurseTimes) }
 
 	case v.kind == KindFunc:
-		keys = inspectObjectKeys(o)
+		keys = inspectObjectKeys(o, c.showHidden)
 		base = inspectFunctionBase(v, constructor, ctorNull)
 		if len(keys) == 0 {
 			return base
 		}
 
 	case v.asRegExp() != nil:
-		keys = inspectObjectKeys(o)
+		keys = inspectObjectKeys(o, c.showHidden)
 		base = v.asRegExp().ToStringBStr().ToGoString()
 		if len(keys) == 0 || recurseTimes > c.depth {
 			return base
 		}
 
 	case o.err != nil:
-		keys = inspectErrorKeys(o)
+		keys = inspectErrorKeys(o, c.showHidden)
 		base = inspectErrorBase(o.err)
 		if len(keys) == 0 {
 			return base
 		}
 
 	default:
-		keys = inspectObjectKeys(o)
+		keys = inspectObjectKeys(o, c.showHidden)
 		if ctorNull || constructor != "Object" {
 			braces[0] = inspectPrefix(constructor, ctorNull, "Object", "") + "{"
 		}
@@ -245,6 +501,18 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		}
 	}
 	c.seen = c.seen[:len(c.seen)-1]
+
+	if c.sorted {
+		// The entries are sorted after they are rendered, so the order is the order of
+		// the printed text rather than of the keys. An array sorts only its named extras
+		// and leaves the elements where they are, since an element's position is part of
+		// what it means.
+		if extrasType == kObjectType {
+			c.sortOutput(output)
+		} else if len(keys) > 1 {
+			c.sortOutput(output[len(output)-len(keys):])
+		}
+	}
 
 	return c.reduceToSingleString(output, base, braces, extrasType, recurseTimes, v)
 }
@@ -346,8 +614,8 @@ func inspectErrorBase(e *Error) string {
 // drops name and message because both already appear inside the brackets, and
 // repeating them would make the common case, an error with a code, three times as
 // long as it needs to be.
-func inspectErrorKeys(o *Object) []inspectKey {
-	keys := inspectObjectKeys(o)
+func inspectErrorKeys(o *Object, showHidden bool) []inspectKey {
+	keys := inspectObjectKeys(o, showHidden)
 	out := keys[:0]
 	for _, k := range keys {
 		if k.sym == nil {
@@ -361,18 +629,19 @@ func inspectErrorKeys(o *Object) []inspectKey {
 	return out
 }
 
-// inspectObjectKeys is Node's getKeys with showHidden off: the own enumerable
-// string keys in the enumeration order the language fixes, canonical indices
-// ascending before the rest in insertion order, followed by the own enumerable
-// symbol keys.
-func inspectObjectKeys(o *Object) []inspectKey {
-	names := o.orderedStringKeysFiltered(true)
+// inspectObjectKeys is Node's getKeys: the own string keys in the enumeration
+// order the language fixes, canonical indices ascending before the rest in
+// insertion order, followed by the own symbol keys. showHidden is what decides
+// whether a non-enumerable key is one of them, since a key hidden from
+// Object.keys is exactly what that option asks to see.
+func inspectObjectKeys(o *Object, showHidden bool) []inspectKey {
+	names := o.orderedStringKeysFiltered(!showHidden)
 	keys := make([]inspectKey, 0, len(names)+len(o.symKeys))
 	for _, n := range names {
 		keys = append(keys, inspectKey{str: n})
 	}
 	for i, s := range o.symKeys {
-		if o.symDescs[i].enumerable {
+		if showHidden || o.symDescs[i].enumerable {
 			keys = append(keys, inspectKey{sym: s})
 		}
 	}
@@ -380,22 +649,31 @@ func inspectObjectKeys(o *Object) []inspectKey {
 }
 
 // inspectNonIndexKeys is Node's getOwnNonIndexProperties: an array's own
-// enumerable properties minus its indices, which the element formatter has already
-// rendered. Without the filter an array with a named property would print every
-// element twice.
-func inspectNonIndexKeys(o *Object) []inspectKey {
-	keys := make([]inspectKey, 0, len(o.keys)+len(o.symKeys))
+// properties minus its indices, which the element formatter has already rendered.
+// Without the filter an array with a named property would print every element
+// twice. An array's length is one of those properties, own and non-enumerable, so
+// showHidden reports it and prints "[length]: 3" after the elements; bento keeps
+// the length implicit in the element slice rather than in the property bag, so it
+// is named here rather than found there.
+func inspectNonIndexKeys(o *Object, showHidden bool) []inspectKey {
+	keys := make([]inspectKey, 0, len(o.keys)+len(o.symKeys)+1)
+	if showHidden {
+		keys = append(keys, inspectKey{str: FromGoString("length")})
+	}
 	for i, k := range o.keys {
-		if !o.descs[i].enumerable {
+		if !showHidden && !o.descs[i].enumerable {
 			continue
 		}
 		if _, isIndex := arrayIndex(k.ToGoString()); isIndex {
 			continue
 		}
+		if showHidden && k.ToGoString() == "length" {
+			continue // already named above, and naming it twice would print it twice
+		}
 		keys = append(keys, inspectKey{str: k})
 	}
 	for i, s := range o.symKeys {
-		if o.symDescs[i].enumerable {
+		if showHidden || o.symDescs[i].enumerable {
 			keys = append(keys, inspectKey{sym: s})
 		}
 	}
@@ -410,21 +688,34 @@ func inspectNonIndexKeys(o *Object) []inspectKey {
 func (c *inspectCtx) formatProperty(v Value, recurseTimes int, k inspectKey, typ int) string {
 	desc, ok := inspectOwnDesc(v.object(), k)
 	var str string
+	extra := " "
 	switch {
 	case !ok:
 		str = "undefined"
-	case desc.accessor && desc.get.kind != KindUndefined && desc.set.kind != KindUndefined:
-		str = "[Getter/Setter]"
 	case desc.accessor && desc.get.kind != KindUndefined:
-		str = "[Getter]"
+		label := "Getter"
+		if desc.set.kind != KindUndefined {
+			label = "Getter/Setter"
+		}
+		str = c.formatAccessor(v, recurseTimes, desc, label)
 	case desc.accessor && desc.set.kind != KindUndefined:
 		str = "[Setter]"
 	case desc.accessor:
 		str = "undefined"
 	default:
-		c.indentationLvl += 2
+		// Under compact: true an object property is indented three rather than two, and
+		// a value too wide for the line moves below its key instead of beside it. Every
+		// other layout indents two and keeps the single space.
+		diff := 2
+		if c.compactKind == compactTrue && typ == kObjectType {
+			diff = 3
+		}
+		c.indentationLvl += diff
 		str = c.formatValue(desc.value, recurseTimes)
-		c.indentationLvl -= 2
+		if diff == 3 && c.breakLength < stringWidth(str) {
+			extra = "\n" + strings.Repeat(" ", c.indentationLvl)
+		}
+		c.indentationLvl -= diff
 	}
 	if typ == kArrayType {
 		return str
@@ -443,7 +734,67 @@ func (c *inspectCtx) formatProperty(v Value, recurseTimes int, k inspectKey, typ
 	default:
 		name = strEscape(k.str)
 	}
-	return name + ": " + str
+	// A key hidden from Object.keys is bracketed, so the reader can tell the
+	// properties an ordinary walk would find from the ones only showHidden reported.
+	if ok && !desc.enumerable {
+		name = "[" + name + "]"
+	}
+	return name + ":" + extra + str
+}
+
+// formatAccessor renders one accessor property. With getters off it reports what
+// the property is and stops there, which is the default because reading a getter
+// runs the program's own code at a point the program did not ask for it: a lazy
+// property would be forced, a counter would tick, and printing a value would have
+// changed the run. With getters on the accessor is read and its result formatted,
+// and a throw from the read is reported in place rather than escaping the inspect,
+// since a value that cannot be looked at is still worth naming.
+func (c *inspectCtx) formatAccessor(v Value, recurseTimes int, desc descriptor, label string) string {
+	read := false
+	switch c.getters {
+	case gettersAll:
+		read = true
+	case gettersGet:
+		read = desc.set.kind == KindUndefined
+	case gettersSet:
+		read = desc.set.kind != KindUndefined
+	}
+	if !read {
+		return "[" + label + "]"
+	}
+	c.indentationLvl += 2
+	defer func() { c.indentationLvl -= 2 }()
+	tmp, threw := c.callGetter(desc, v)
+	switch {
+	case threw:
+		return "[" + label + ": <Inspection threw (" + c.formatValue(tmp, recurseTimes) + ")>]"
+	case tmp.kind == KindNull:
+		return "[" + label + ": null]"
+	case tmp.kind == KindObject || tmp.kind == KindArray || tmp.kind == KindFunc:
+		return "[" + label + "] " + c.formatValue(tmp, recurseTimes)
+	default:
+		return "[" + label + ": " + c.formatPrimitive(tmp) + "]"
+	}
+}
+
+// callGetter reads an accessor and reports its result, or what it threw and that it
+// threw. A throw arrives as the panic Throw raises, so it is recovered here; a panic
+// that is not a JavaScript throw is a bug in the runtime rather than a value the
+// program can see, so it keeps unwinding. The flag rather than a nil result is what
+// tells the two apart, since a getter is free to throw undefined.
+func (c *inspectCtx) callGetter(desc descriptor, receiver Value) (result Value, threw bool) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		t, ok := r.(Thrown)
+		if !ok {
+			panic(r)
+		}
+		result, threw = Caught(t).ToValue(), true
+	}()
+	return desc.read(receiver), false
 }
 
 // inspectOwnDesc reads the descriptor behind a key, whichever bag holds it.
@@ -463,6 +814,12 @@ func inspectOwnDesc(o *Object, k inspectKey) (descriptor, bool) {
 	// a key that names one resolves through the element read.
 	if n, isIndex := arrayIndex(k.str.ToGoString()); isIndex && o.kind == KindArray && n < len(o.elems) {
 		return dataProperty(o.elems[n], true, true, true), true
+	}
+	// So does an array's length, which showHidden reports as a property: it is own,
+	// writable, and neither enumerable nor configurable, the attributes the spec fixes
+	// for it.
+	if o.kind == KindArray && k.str.ToGoString() == "length" {
+		return dataProperty(Number(float64(len(o.elems))), true, false, false), true
 	}
 	return descriptor{}, false
 }
@@ -581,9 +938,9 @@ func (c *inspectCtx) formatPrimitive(v Value) string {
 	case KindString:
 		return c.formatString(v.str())
 	case KindNumber:
-		return inspectNumber(math.Float64frombits(v.scalar))
+		return c.formatNumberNoColor(math.Float64frombits(v.scalar))
 	case KindBigInt:
-		return v.bigint().String() + "n"
+		return c.formatBigIntNoColor(v)
 	case KindBool:
 		if v.scalar != 0 {
 			return "true"
@@ -608,6 +965,62 @@ func inspectNumber(f float64) string {
 	return NumberToString(f).ToGoString()
 }
 
+// inspectNumberSeparated is the other half of Node's formatNumber, the one the
+// numericSeparator option asks for: the digits grouped in threes by underscores, so
+// a long count reads as 1_000_000 rather than as a run to be counted by eye. The
+// grouping runs from the decimal point outward in both directions, which is why the
+// two halves are separated by different helpers, and it leaves a number spelled with
+// an exponent alone. Negative zero prints as "0" here, not "-0", because Node
+// reaches this path through a plain string coercion, which drops the sign; that is
+// the behavior of the option rather than a gap in the port.
+func inspectNumberSeparated(f float64) string {
+	s := NumberToString(f).ToGoString()
+	if math.Trunc(f) == f {
+		if math.IsInf(f, 0) || strings.Contains(s, "e") {
+			return s
+		}
+		return addNumericSeparator(s)
+	}
+	if f != f {
+		return s
+	}
+	dot := strings.IndexByte(s, '.')
+	return addNumericSeparator(s[:dot]) + "." + addNumericSeparatorEnd(s[dot+1:])
+}
+
+// addNumericSeparator groups an integer's digits in threes from the right, the side
+// of the decimal point where the thousands are. A leading minus sign is not a digit
+// and is skipped, so -1000 reads as -1_000.
+func addNumericSeparator(integerString string) string {
+	result := ""
+	i := len(integerString)
+	start := 0
+	if len(integerString) > 0 && integerString[0] == '-' {
+		start = 1
+	}
+	for ; i >= start+4; i -= 3 {
+		result = "_" + integerString[i-3:i] + result
+	}
+	if i == len(integerString) {
+		return integerString
+	}
+	return integerString[:i] + result
+}
+
+// addNumericSeparatorEnd groups a fraction's digits in threes from the left, since
+// the digit next to the point is the significant one on that side.
+func addNumericSeparatorEnd(integerString string) string {
+	result := ""
+	i := 0
+	for ; i < len(integerString)-3; i += 3 {
+		result += integerString[i:i+3] + "_"
+	}
+	if i == 0 {
+		return integerString
+	}
+	return result + integerString[i:]
+}
+
 // formatString is Node's string branch of formatPrimitive: a string longer than
 // maxStringLength is cut with the remainder counted, and a long multi-line string
 // is broken after each newline into quoted pieces joined with " +", so a logged
@@ -620,7 +1033,8 @@ func (c *inspectCtx) formatString(s BStr) string {
 		units = units[:c.maxStringLength]
 		trailer = "... " + strconv.Itoa(remaining) + " more character" + plural(remaining)
 	}
-	if len(units) > kMinLineLength && len(units) > c.breakLength-c.indentationLvl-4 {
+	if c.compactKind != compactTrue &&
+		len(units) > kMinLineLength && len(units) > c.breakLength-c.indentationLvl-4 {
 		lines := splitAfterNewlines(units)
 		parts := make([]string, len(lines))
 		for i, line := range lines {
@@ -795,24 +1209,54 @@ func (c *inspectCtx) isBelowBreakLength(output []string, start int, base string)
 // while an object holding deep structure spreads out, and it reads currentDepth,
 // the deepest level this subtree reached, rather than the current level.
 func (c *inspectCtx) reduceToSingleString(output []string, base string, braces [2]string, extrasType, recurseTimes int, v Value) string {
-	entries := len(output)
-	if extrasType == kArrayExtrasType && entries > 6 {
-		output = c.groupArrayElements(output, v)
+	if c.compactKind == compactTrue {
+		return c.reduceCompact(output, base, braces)
 	}
-	if c.currentDepth-recurseTimes < c.compact && entries == len(output) {
-		// The added ten is Node's constant, standing in for the other things that eat
-		// into the width before the entries are reached.
-		start := len(output) + c.indentationLvl + u16Len(braces[0]) + u16Len(base) + 10
-		if c.isBelowBreakLength(output, start, base) {
-			joined := strings.Join(output, ", ")
-			if !strings.Contains(joined, "\n") {
-				return basePrefix(base) + braces[0] + " " + joined + " " + braces[1]
+	if c.compactKind == compactNumber && c.compact >= 1 {
+		entries := len(output)
+		if extrasType == kArrayExtrasType && entries > 6 {
+			output = c.groupArrayElements(output, v)
+		}
+		if c.currentDepth-recurseTimes < c.compact && entries == len(output) {
+			// The added ten is Node's constant, standing in for the other things that eat
+			// into the width before the entries are reached.
+			start := len(output) + c.indentationLvl + u16Len(braces[0]) + u16Len(base) + 10
+			if c.isBelowBreakLength(output, start, base) {
+				joined := strings.Join(output, ", ")
+				if !strings.Contains(joined, "\n") {
+					return basePrefix(base) + braces[0] + " " + joined + " " + braces[1]
+				}
 			}
 		}
 	}
 	indentation := "\n" + strings.Repeat(" ", c.indentationLvl)
 	return basePrefix(base) + braces[0] + indentation + "  " +
 		strings.Join(output, ","+indentation+"  ") + indentation + braces[1]
+}
+
+// reduceCompact is the compact: true layout, the oldest of the three. It puts every
+// entry on one line whenever they fit, however deep the structure is, and when they
+// do not it indents them under a first line that carries the brace, which is what
+// keeps the entries lined up when the opening brace is a word rather than a bracket.
+func (c *inspectCtx) reduceCompact(output []string, base string, braces [2]string) string {
+	if c.isBelowBreakLength(output, 0, base) {
+		return braces[0] + basePrefixInner(base) + " " + strings.Join(output, ", ") + " " + braces[1]
+	}
+	indentation := strings.Repeat(" ", c.indentationLvl)
+	ln := " "
+	if base != "" || u16Len(braces[0]) != 1 {
+		ln = basePrefixInner(base) + "\n" + indentation + "  "
+	}
+	return braces[0] + ln + strings.Join(output, ",\n"+indentation+"  ") + " " + braces[1]
+}
+
+// basePrefixInner is the base as it reads after the opening brace rather than
+// before it, the spacing the compact: true layout uses.
+func basePrefixInner(base string) string {
+	if base == "" {
+		return ""
+	}
+	return " " + base
 }
 
 func basePrefix(base string) string {

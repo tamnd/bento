@@ -8,13 +8,13 @@ import (
 
 func main() {
 	utc := value.InstantFromString("2020-01-01T12:30:45Z")
-	value.ConsoleLog(utc.ToString(), value.NumberToConsole(utc.EpochMilliseconds()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(utc.ToString()), value.Number(utc.EpochMilliseconds())))
 	west := value.InstantFromString("2020-01-01T12:30:45-05:00")
-	value.ConsoleLog(west.ToString(), value.NumberToConsole(west.EpochMilliseconds()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(west.ToString()), value.Number(west.EpochMilliseconds())))
 	subMinute := value.InstantFromString("2020-01-01T00:00:00+05:00:30")
-	value.ConsoleLog(subMinute.ToString(), value.NumberToConsole(subMinute.EpochMilliseconds()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(subMinute.ToString()), value.Number(subMinute.EpochMilliseconds())))
 	expanded := value.InstantFromString("-000001-01-01T00:00:00Z")
-	value.ConsoleLog(expanded.ToString(), value.NumberToConsole(expanded.EpochMilliseconds()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(expanded.ToString()), value.Number(expanded.EpochMilliseconds())))
 	annotated := value.InstantFromString("2020-01-01T00:00:00Z[u-ca=hebrew]")
-	value.ConsoleLog(annotated.ToString(), value.NumberToConsole(annotated.EpochMilliseconds()))
+	value.ConsoleLog(value.ConsoleFormat(value.StringValue(annotated.ToString()), value.Number(annotated.EpochMilliseconds())))
 }

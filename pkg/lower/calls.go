@@ -1,9 +1,11 @@
 package lower
 
 import (
+	"errors"
 	"go/ast"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
 )
@@ -4235,12 +4237,13 @@ func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Exp
 
 // consoleCall lowers a call on the global console. The methods that write to
 // standard output (log, info, debug) lower to value.ConsoleLog, and the ones that
-// write to standard error (error, warn) to value.ConsoleError. Each argument is
-// stringified with the same ECMAScript ToString a String() call uses, so a
-// number, boolean, or string prints exactly as Node's console does for that
-// primitive, and the parts join with a space and a trailing newline inside the
-// helper. An argument this slice cannot stringify (an object, whose inspect runs
-// richer formatting) hands back rather than printing the wrong text.
+// write to standard error (error, warn) to value.ConsoleError. A call whose first
+// argument can carry format specifiers goes through value.ConsoleFormat as one
+// part; every other call stringifies its arguments one at a time, so a number,
+// boolean, or string prints exactly as Node's console does for that primitive and
+// the parts join with a space and a trailing newline inside the helper. An argument
+// this slice cannot stringify (an object, whose inspect runs richer formatting)
+// hands back rather than printing the wrong text.
 func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	var goName string
 	switch method {
@@ -4250,6 +4253,11 @@ func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Exp
 		goName = "ConsoleError"
 	default:
 		return nil, &NotYetLowerable{Reason: "console." + method + " is a later slice"}
+	}
+	if formatted, ok, err := r.consoleFormatCall(method, goName, argNodes); err != nil {
+		return nil, err
+	} else if ok {
+		return formatted, nil
 	}
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {
@@ -4261,6 +4269,64 @@ func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Exp
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
+}
+
+// consoleFormatCall lowers a console call whose first argument can carry format
+// specifiers, console.log('%s: %d', name, n), to one value.ConsoleFormat over the
+// boxed arguments. It reports handled=false when the call is not one of those, so
+// the caller keeps the per-argument path.
+//
+// Three shapes route here, and the third is why the decision cannot be made on the
+// literal alone:
+//
+//	console.log('%s: %d', name, n)   a literal that spells a specifier
+//	console.log(prefix, value)       a string whose text is known only at run time
+//	console.log(anything, value)     a dynamic first argument that may hold a string
+//
+// A literal with no percent sign is deliberately left on the per-argument path, even
+// though ConsoleFormat would print exactly the same line for it: that is the shape
+// most console calls have, and routing it would rewrite the emitted call in every
+// program for no change in output.
+//
+// The format path needs every argument boxed, since a specifier's rendering depends
+// on the runtime kind of what it consumes. When an argument cannot box, what happens
+// next depends on the first argument. A literal that spells a specifier hands the
+// whole call back: printing '%s' where the value belongs is wrong output, and a
+// build failure is the better answer. A first argument whose text is unknown may or
+// may not hold a specifier, so it falls back to the per-argument join, which is what
+// bento printed for it before this path existed.
+func (r *Renderer) consoleFormatCall(method, goName string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	if len(argNodes) < 2 {
+		return nil, false, nil
+	}
+	first := argNodes[0]
+	if !r.isString(first) && !r.isDynamic(first) {
+		return nil, false, nil
+	}
+	text, isLiteral := r.staticStringKey(first)
+	if isLiteral && !strings.Contains(text, "%") {
+		return nil, false, nil
+	}
+	boxed := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
+		e, err := r.boxOperand(a)
+		if err != nil {
+			var nyl *NotYetLowerable
+			if !errors.As(err, &nyl) {
+				return nil, false, err
+			}
+			if isLiteral {
+				return nil, false, &NotYetLowerable{Reason: "console." + method +
+					" with a format string and an argument that does not box yet (" + nyl.Reason + ")"}
+			}
+			return nil, false, nil
+		}
+		boxed = append(boxed, e)
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{
+		&ast.CallExpr{Fun: sel("value", "ConsoleFormat"), Args: boxed},
+	}}, true, nil
 }
 
 // consoleStringify lowers one console argument to its inspected string form, which
