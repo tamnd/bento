@@ -439,7 +439,7 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 		})
 	}
 	for _, p := range props {
-		if p.Optional && !r.isOptionalType(p.Type) {
+		if p.Optional && !r.isOptionalType(p.Type) && p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
 			// An optional property x?: T types as T | undefined, which lowers to a
 			// value.Opt[T'] field below through the ordinary typeExpr, with the Opt's
 			// zero value standing for the absent member (05_type_lowering section 17).
@@ -449,7 +449,12 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 			// type below through the ordinary typeExpr and the construction path fills
 			// an omitted or explicit-undefined field with the undefined-arm
 			// constructor (composite.go). A union that does not intern (an object-mixed
-			// one) still hands back.
+			// one) still hands back. An optional whose type is bare any or unknown never
+			// reaches here: the checker folds any | undefined back to any, so the field
+			// carries no union flag and typeExpr lowers it to a value.Value slot below,
+			// with undefined a first-class value in the box. That is the same room a
+			// dynamic optional parameter takes (funcTypeOf), so the construction path
+			// fills an omitted or explicit-undefined member with value.Undefined.
 			if _, ok := r.optionalUnionInfo(p); !ok {
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property outside the T | undefined shape needs the tagged sum, a later slice"}
 			}

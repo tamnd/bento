@@ -1288,6 +1288,15 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 		// the lowered undefined would store the boxed Undefined in a typed slot,
 		// which does not compile, so this case is handled before the general path.
 		if hasProp && sp.Optional && r.prog.TypeAt(valNode).Flags == frontend.TypeUndefined {
+			// An explicit undefined filling an optional any or unknown field is the
+			// value.Undefined singleton, undefined a first-class value in the box the
+			// field became, no optional wrap involved.
+			if sp.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+				r.requireImport(valuePkg)
+				elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: sel("value", "Undefined")})
+				seen[field] = true
+				continue
+			}
 			// An explicit undefined filling an optional tagged-sum union field is the
 			// undefined arm, the same value an omitted field takes; a value.Opt field
 			// takes value.None.
@@ -1333,10 +1342,13 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 		// A member filling an optional field is wrapped in value.Some so it lands in
 		// the value.Opt slot the field became, unless the member is already an optional
 		// of that type, which passes through as the Opt it is.
-		if hasProp && sp.Optional && !r.isOptional(valNode) {
+		if hasProp && sp.Optional && !r.isOptional(valNode) && sp.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 {
 			// A present value filling an optional tagged-sum union field wraps into its
 			// number or string arm constructor, the same coercion a required union field
-			// applies; a value.Opt field wraps in value.Some.
+			// applies; a value.Opt field wraps in value.Some. An optional any or unknown
+			// field is a bare value.Value slot with no wrap: the present value already
+			// boxed into it through the coerceToType above, so it is excluded here and
+			// lands as the plain box.
 			if _, ok := r.optionalUnionInfo(sp); ok {
 				val, err = r.coerceToType(val, valNode, sp.Type)
 				if err != nil {
@@ -1376,6 +1388,13 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 				continue
 			}
 			return nil, &NotYetLowerable{Reason: "object literal missing a required field is a later slice"}
+		}
+		// An omitted optional any or unknown field takes value.Undefined, the absent
+		// member as a first-class value in the box the field became.
+		if tp.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+			r.requireImport(valuePkg)
+			elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: sel("value", "Undefined")})
+			continue
 		}
 		// An omitted optional tagged-sum union field takes its undefined arm; a
 		// value.Opt field takes the empty value.None.
