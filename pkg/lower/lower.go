@@ -320,6 +320,15 @@ type Renderer struct {
 	// scanned; undeclaredWriteScanned distinguishes a scanned-empty program from that.
 	undeclaredWriteSyms    map[frontend.Symbol]bool
 	undeclaredWriteScanned bool
+	// dataCtorSyms is the set of function-declaration symbols that are ES5 data
+	// constructors used only through new: a body that does nothing but assign this.<name>,
+	// with every reference the constructor position of a new expression. Such a function
+	// lowers to a NewF bag builder rather than a plain func, and new F() calls NewF, so the
+	// newExpr router and the top-level decl emitter must agree on the set. It is computed
+	// once by scanDataCtors over every source file, lazily on the first query. A nil map
+	// means not yet scanned; dataCtorScanned distinguishes a scanned-empty program from that.
+	dataCtorSyms    map[frontend.Symbol]bool
+	dataCtorScanned bool
 	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
 	// the block currently lowering. A proxy holds its target by identity and dispatches
 	// its traps off the live object, so a write through the proxy and a mutation of the

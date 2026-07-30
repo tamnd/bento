@@ -221,6 +221,17 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 			return r.newPrimWrapper("BooleanObject", kids[1:])
 		}
 	}
+	// new F() where F is an ES5 data constructor, a plain function used only through
+	// new whose body does nothing but assign this.<name>, builds the same value.Object
+	// bag F's generated NewF returns. The instance has no field types the checker folded
+	// in, so it lives as a bag from creation the way an object typed any does. Only the
+	// no-argument form is claimed here; a data constructor invoked with arguments hands
+	// back inside dataCtorCall until the parameter-carrying slice lands.
+	if kids[0].Kind() == frontend.NodeIdentifier {
+		if sym, ok := r.prog.SymbolAt(kids[0]); ok && r.isDataCtor(sym) {
+			return r.dataCtorCall(n)
+		}
+	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}

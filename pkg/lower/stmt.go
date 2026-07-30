@@ -1948,6 +1948,22 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 		}
 		return boxed, nil
 	}
+	// A binding initialized by new F() where F is a data constructor holds the
+	// value.Object bag NewF returns, whose Go type is value.Value. The checker gives the
+	// instance no field types, so without this the binding would land in a struct slot
+	// the bag cannot fill. Returning the boxed initializer straight lets := infer the
+	// value.Value slot, and the mark routes every later read and write off the binding
+	// through the value model, so o.x reads the field NewF set through Get.
+	if initNode.Kind() == frontend.NodeNewExpression && r.newExprIsDataCtor(initNode) {
+		boxed, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return boxed, nil
+	}
 	// A binding initialized by a call to a factory that returns an object that grows
 	// holds the runtime bag the callee handed back, whose Go type is value.Value. The
 	// checker types the binding by the shape the object finishes with, so without this

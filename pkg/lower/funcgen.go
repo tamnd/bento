@@ -67,6 +67,18 @@ func (r *Renderer) funcDecl(fn frontend.Node) (*ast.FuncDecl, error) {
 // unspecialized generic has no single Go form. It is the program assembler's entry
 // point; RenderFunc keeps funcDecl for the single-declaration path.
 func (r *Renderer) funcDecls(fn frontend.Node) ([]ast.Decl, error) {
+	// A data constructor, a function used only through new whose body does nothing but
+	// assign this.<name>, has no plain-func form: its instance is an opaque bag the
+	// checker gives no field types, so the declaration becomes a NewF bag builder rather
+	// than a func the way new F() lowers to NewF(). The decl-emit sites route here for
+	// every function, so this is the one place both of them pick up the constructor form.
+	if sym, ok := r.prog.SymbolAt(fn); ok && r.isDataCtor(sym) {
+		decl, err := r.dataCtorDecl(fn)
+		if err != nil {
+			return nil, err
+		}
+		return []ast.Decl{decl}, nil
+	}
 	sym, name, sig, err := r.funcDeclHead(fn)
 	if err != nil {
 		return nil, err
