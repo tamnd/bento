@@ -132,6 +132,7 @@ declare module "node:util" {
 	export function format(format?: any, ...args: any[]): string;
 	export function formatWithOptions(inspectOptions: any, format?: any, ...args: any[]): string;
 	export function inspect(value: any, options?: any): string;
+	export function isDeepStrictEqual(a: any, b: any): boolean;
 }
 declare module "node:path" {
 	export function join(...parts: string[]): string;

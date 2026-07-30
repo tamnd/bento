@@ -64,6 +64,7 @@ var nodeModuleExports = map[string]map[string]bool{
 		"format":            true,
 		"formatWithOptions": true,
 		"inspect":           true,
+		"isDeepStrictEqual": true,
 	},
 	"node:path": {
 		"sep":              true,
@@ -578,6 +579,19 @@ func (r *Renderer) nodeBuiltinCall(b nodeBuiltin, argNodes []frontend.Node) (ast
 			args = []ast.Expr{sel("value", "Undefined")}
 		}
 		return &ast.CallExpr{Fun: sel("value", "NodeFormatWithOptions"), Args: args}, nil
+
+	case "node:util.isDeepStrictEqual":
+		// Both arguments box for the same reason format's do: what the comparison
+		// answers depends on the runtime kind of each value, not on the static type the
+		// checker gave it. The helper is variadic and reads its own argument list, so a
+		// call with fewer than two arguments compares against undefined the way Node's
+		// does rather than failing to compile.
+		args, err := r.boxedArgs("util.isDeepStrictEqual", argNodes)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "NodeIsDeepStrictEqual"), Args: args}, nil
 
 	default:
 		return nil, &NotYetLowerable{Reason: b.module + "." + b.name + " is a later slice"}
