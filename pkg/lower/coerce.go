@@ -1241,6 +1241,16 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 			Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}},
 		}, nil
 	}
+	// A freshly constructed built-in error flowing into a dynamic slot boxes through
+	// the *value.Error's own ToValue, the same box a catch binding presents, so
+	// assert.ifError(new Error('boom')) and console.log(new Error('boom')) pass the
+	// error itself rather than handing the build back. Only the new expression is
+	// claimed here, not an error held in a local: a local typed Error still hands back
+	// earlier for want of its type flowing through, so there is no second shape to
+	// recognize yet.
+	if r.isThrowable(src) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
+	}
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
 }
 

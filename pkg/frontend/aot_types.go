@@ -225,6 +225,11 @@ type Type struct {
 // traversal.
 func (t Type) Identity() int { return int(t.id) }
 
+// absent reports whether the type carries no handle, which is the zero Type TypeAt
+// answers with for a node the checker has no type for. Every structural query on
+// Program declines such a type rather than asking the checker about nothing.
+func (t Type) absent() bool { return t.id == 0 }
+
 // Symbol is bento's view of a bound declaration. Identity is by the opaque id,
 // so two Symbol values name the same symbol when their ids are equal.
 type Symbol struct {

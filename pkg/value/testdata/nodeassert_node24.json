@@ -1,0 +1,633 @@
+{
+ "ok(false, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The expression evaluated to a falsy value:\n\n  assert.ok(a)\n",
+  "generatedMessage": true,
+  "operator": "=="
+ },
+ "ok(zero, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The expression evaluated to a falsy value:\n\n  assert.ok(a)\n",
+  "generatedMessage": true,
+  "operator": "=="
+ },
+ "ok(null, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The expression evaluated to a falsy value:\n\n  assert.ok(a)\n",
+  "generatedMessage": true,
+  "operator": "=="
+ },
+ "ok(empty object, undefined)": {
+  "threw": false
+ },
+ "ok message(false, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "custom",
+  "generatedMessage": false,
+  "operator": "=="
+ },
+ "fail nothing(undefined, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Failed",
+  "generatedMessage": true,
+  "operator": "fail"
+ },
+ "fail(string a, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "a",
+  "generatedMessage": false,
+  "operator": "fail"
+ },
+ "fail(null, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Failed",
+  "generatedMessage": true,
+  "operator": "fail"
+ },
+ "equal(one, two)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "1 == 2",
+  "generatedMessage": true,
+  "operator": "=="
+ },
+ "equal(string a, string b)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "'a' == 'b'",
+  "generatedMessage": true,
+  "operator": "=="
+ },
+ "equal(nan, one)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "NaN == 1",
+  "generatedMessage": true,
+  "operator": "=="
+ },
+ "equal(object a1, object a2)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "{\n  a: 1\n} == {\n  a: 2\n}",
+  "generatedMessage": true,
+  "operator": "=="
+ },
+ "equal(one, one)": {
+  "threw": false
+ },
+ "equal(nan, nan)": {
+  "threw": false
+ },
+ "notEqual(one, one)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "1 != 1",
+  "generatedMessage": true,
+  "operator": "!="
+ },
+ "notEqual(nan, nan)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "NaN != NaN",
+  "generatedMessage": true,
+  "operator": "!="
+ },
+ "notEqual(zero, false)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "0 != false",
+  "generatedMessage": true,
+  "operator": "!="
+ },
+ "notEqual(shared object, shared object)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "{\n  a: 1\n} != {\n  a: 1\n}",
+  "generatedMessage": true,
+  "operator": "!="
+ },
+ "notEqual(one, two)": {
+  "threw": false
+ },
+ "strictEqual(one, two)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly equal:\n\n1 !== 2\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(zero, negative zero)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 0\n- -0\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(string a, string b)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly equal:\n\n'a' !== 'b'\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(string abcdefghij, string abcdefghik)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'abcdefghij'\n- 'abcdefghik'\n            ^\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(long number, other long number)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 1234567890123\n- 1234567890124\n              ^\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(one, string a)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly equal:\n\n1 !== 'a'\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(null, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly equal:\n+ actual - expected\n\n+ null\n- undefined\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(object a1, object a1)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Values have same structure but are not reference-equal:\n\n{\n  a: 1\n}\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(object a1, object a2)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" to be reference-equal to \"expected\":\n+ actual - expected\n\n  {\n+   a: 1\n-   a: 2\n  }\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(empty object, empty object)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Values have same structure but are not reference-equal:\n\n{}\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(function, other function)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" to be reference-equal to \"expected\":\n+ actual - expected\n\n+ [Function: foo]\n- [Function: bar]\n             ^\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual(error a, error b)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" to be reference-equal to \"expected\":\n+ actual - expected\n\n+ [Error: a]\n- [Error: b]\n",
+  "generatedMessage": true,
+  "operator": "strictEqual"
+ },
+ "strictEqual message(one, two)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "custom\n\n1 !== 2\n",
+  "generatedMessage": false,
+  "operator": "strictEqual"
+ },
+ "strictEqual message(object a1, object a2)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "custom\n+ actual - expected\n\n  {\n+   a: 1\n-   a: 2\n  }\n",
+  "generatedMessage": false,
+  "operator": "strictEqual"
+ },
+ "strictEqual(one, one)": {
+  "threw": false
+ },
+ "notStrictEqual(one, one)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" to be strictly unequal to: 1",
+  "generatedMessage": true,
+  "operator": "notStrictEqual"
+ },
+ "notStrictEqual(nan, nan)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" to be strictly unequal to: NaN",
+  "generatedMessage": true,
+  "operator": "notStrictEqual"
+ },
+ "notStrictEqual(string a, string a)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" to be strictly unequal to: 'a'",
+  "generatedMessage": true,
+  "operator": "notStrictEqual"
+ },
+ "notStrictEqual(shared nested object, shared nested object)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be reference-equal to \"expected\":\n\n{\n  a: {\n    b: {\n      c: 1\n    }\n  }\n}\n",
+  "generatedMessage": true,
+  "operator": "notStrictEqual"
+ },
+ "notStrictEqual(shared function, shared function)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be reference-equal to \"expected\":\n\n[Function: foo]",
+  "generatedMessage": true,
+  "operator": "notStrictEqual"
+ },
+ "notStrictEqual(shared error, shared error)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be reference-equal to \"expected\":\n\n[Error: a]",
+  "generatedMessage": true,
+  "operator": "notStrictEqual"
+ },
+ "notStrictEqual(one, two)": {
+  "threw": false
+ },
+ "deepEqual(object a1, object a2)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be loosely deep-equal:\n\n{\n  a: 1\n}\n\nshould loosely deep-equal\n\n{\n  a: 2\n}",
+  "generatedMessage": true,
+  "operator": "deepEqual"
+ },
+ "deepEqual(array 123, array 124)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be loosely deep-equal:\n\n[\n  1,\n  2,\n  3\n]\n\nshould loosely deep-equal\n\n[\n  1,\n  2,\n  4\n]",
+  "generatedMessage": true,
+  "operator": "deepEqual"
+ },
+ "deepEqual(object a1, array 123)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be loosely deep-equal:\n\n{\n  a: 1\n}\n\nshould loosely deep-equal\n\n[\n  1,\n  2,\n  3\n]",
+  "generatedMessage": true,
+  "operator": "deepEqual"
+ },
+ "deepEqual(error a, error b)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be loosely deep-equal:\n\n[Error: a]\n\nshould loosely deep-equal\n\n[Error: b]",
+  "generatedMessage": true,
+  "operator": "deepEqual"
+ },
+ "notDeepEqual(object a1, object a1)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be loosely deep-equal to:\n\n{\n  a: 1\n}",
+  "generatedMessage": true,
+  "operator": "notDeepEqual"
+ },
+ "notDeepEqual(object ab, object out of order)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be loosely deep-equal to:\n\n{\n  a: 1,\n  b: 2\n}",
+  "generatedMessage": true,
+  "operator": "notDeepEqual"
+ },
+ "notDeepEqual(zero, false)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values not to be loosely deep-equal:\n\n0\n\nshould not loosely deep-equal\n\nfalse",
+  "generatedMessage": true,
+  "operator": "notDeepEqual"
+ },
+ "notDeepEqual(array 123, array 123)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be loosely deep-equal to:\n\n[\n  1,\n  2,\n  3\n]",
+  "generatedMessage": true,
+  "operator": "notDeepEqual"
+ },
+ "notDeepEqual(object a1, object a2)": {
+  "threw": false
+ },
+ "deepStrictEqual(object a1, object a2)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   a: 1\n-   a: 2\n  }\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(object a1, object ab)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    a: 1,\n-   b: 2\n  }\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(object ab, object abc)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    a: 1,\n    b: 2,\n-   c: 3\n  }\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(object a1, object out of order)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    a: 1,\n-   b: 2\n  }\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(nested object, other nested object)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    a: {\n      b: {\n+       c: 1\n-       c: 2\n      }\n    }\n  }\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(array 123, array 124)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n    1,\n    2,\n+   3\n-   4\n  ]\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(array 123, array 1234)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  [\n    1,\n    2,\n    3,\n-   4\n  ]\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(empty array, array 123)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ []\n- [\n-   1,\n-   2,\n-   3\n- ]\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(ten line object, ten line object changed)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n    a: 1,\n    b: 2,\n    c: 3,\n    d: 4,\n+   e: 5,\n-   e: 9,\n    f: 6,\n    g: 7,\n    h: 8\n  }\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(twenty line object, twenty line object changed)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n... Skipped lines\n\n  {\n    k0: 0,\n    k10: 10,\n    k11: 11,\n    k12: 12,\n...\n    k18: 18,\n+   k19: 19,\n-   k19: 99,\n    k1: 1,\n    k2: 2,\n    k3: 3,\n    k4: 4,\n    k5: 5,\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(object a1, empty object)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ {\n+   a: 1\n+ }\n- {}\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(one, string a)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n\n1 !== 'a'\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(error a, error b)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ [Error: a]\n- [Error: b]\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(array 123, object a1)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ [\n+   1,\n+   2,\n+   3\n+ ]\n- {\n-   a: 1\n- }\n",
+  "generatedMessage": true,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual message(object a1, object a2)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "custom\n+ actual - expected\n\n  {\n+   a: 1\n-   a: 2\n  }\n",
+  "generatedMessage": false,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual message(one, two)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "custom\n\n1 !== 2\n",
+  "generatedMessage": false,
+  "operator": "deepStrictEqual"
+ },
+ "deepStrictEqual(object a1, object a1)": {
+  "threw": false
+ },
+ "notDeepStrictEqual(object a1, object a1)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be strictly deep-equal to:\n\n{\n  a: 1\n}\n",
+  "generatedMessage": true,
+  "operator": "notDeepStrictEqual"
+ },
+ "notDeepStrictEqual(object ab, object out of order)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be strictly deep-equal to:\n\n{\n  a: 1,\n  b: 2\n}\n",
+  "generatedMessage": true,
+  "operator": "notDeepStrictEqual"
+ },
+ "notDeepStrictEqual(nested object, nested object)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be strictly deep-equal to:\n\n{\n  a: {\n    b: {\n      c: 1\n    }\n  }\n}\n",
+  "generatedMessage": true,
+  "operator": "notDeepStrictEqual"
+ },
+ "notDeepStrictEqual(array 123, array 123)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be strictly deep-equal to:\n\n[\n  1,\n  2,\n  3\n]\n",
+  "generatedMessage": true,
+  "operator": "notDeepStrictEqual"
+ },
+ "notDeepStrictEqual(one, one)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be strictly deep-equal to: 1",
+  "generatedMessage": true,
+  "operator": "notDeepStrictEqual"
+ },
+ "notDeepStrictEqual(string a, string a)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be strictly deep-equal to: 'a'",
+  "generatedMessage": true,
+  "operator": "notDeepStrictEqual"
+ },
+ "notDeepStrictEqual(twenty line object, twenty line object)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected \"actual\" not to be strictly deep-equal to:\n\n{\n  k0: 0,\n  k10: 10,\n  k11: 11,\n  k12: 12,\n  k13: 13,\n  k14: 14,\n  k15: 15,\n  k16: 16,\n  k17: 17,\n  k18: 18,\n  k19: 19,\n  k1: 1,\n  k2: 2,\n  k3: 3,\n  k4: 4,\n  k5: 5,\n  k6: 6,\n  k7: 7,\n  k8: 8,\n  k9: 9\n}\n",
+  "generatedMessage": true,
+  "operator": "notDeepStrictEqual"
+ },
+ "notDeepStrictEqual(object a1, object a2)": {
+  "threw": false
+ },
+ "ifError(error a, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "ifError got unwanted exception: a",
+  "generatedMessage": false,
+  "operator": "ifError"
+ },
+ "ifError(one, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "ifError got unwanted exception: 1",
+  "generatedMessage": false,
+  "operator": "ifError"
+ },
+ "ifError(string a, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "ifError got unwanted exception: 'a'",
+  "generatedMessage": false,
+  "operator": "ifError"
+ },
+ "ifError(false, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "ifError got unwanted exception: false",
+  "generatedMessage": false,
+  "operator": "ifError"
+ },
+ "ifError(object a1, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "ifError got unwanted exception: { a: 1 }",
+  "generatedMessage": false,
+  "operator": "ifError"
+ },
+ "ifError(null, undefined)": {
+  "threw": false
+ },
+ "ifError(undefined, undefined)": {
+  "threw": false
+ },
+ "match(string b, regexp)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The input did not match the regular expression /a+/. Input:\n\n'b'\n",
+  "generatedMessage": true,
+  "operator": "match"
+ },
+ "match(one, regexp)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The \"string\" argument must be of type string. Received type number (1)",
+  "generatedMessage": true,
+  "operator": "match"
+ },
+ "match(string a, regexp)": {
+  "threw": false
+ },
+ "doesNotMatch(string a, regexp)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The input was expected to not match the regular expression /a+/. Input:\n\n'a'\n",
+  "generatedMessage": true,
+  "operator": "doesNotMatch"
+ },
+ "doesNotMatch(string b, regexp)": {
+  "threw": false
+ }
+}

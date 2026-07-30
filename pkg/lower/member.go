@@ -201,6 +201,19 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 				// for but would still be a string.
 				r.requireImport(valuePkg)
 				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("CodeValue")}}, nil
+			case "actual", "expected", "operator", "generatedMessage":
+				// These four are what an AssertionError carries beyond the message, and a
+				// test that catches an assertion reads them: the operator names the method
+				// that failed, generatedMessage says whether the message is assert's own or
+				// the caller's, and actual and expected are the compared values. They lower
+				// to the generic extra-property read, so an error that carries none of them
+				// answers undefined rather than handing back at build time, which is what a
+				// program reading .operator off an error it threw itself gets in Node.
+				r.requireImport(valuePkg)
+				return &ast.CallExpr{
+					Fun:  &ast.SelectorExpr{X: ident(name), Sel: ident("PropertyValue")},
+					Args: []ast.Expr{stringLit(prop)},
+				}, nil
 			case "constructor":
 				// A caught error's .constructor is the constructor value for its name, the
 				// same interned value the built-in constructor boxes to, so a comparison

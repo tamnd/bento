@@ -133,6 +133,10 @@ func RequireBuiltin(specifier string) Value {
 // a real module and drops the name from the stub path.
 func buildBuiltinModule(name string) Value {
 	switch name {
+	case "assert", "assert/strict":
+		// The two assert specifiers are built together and both registered, since each
+		// module names the other and neither can be finished first.
+		return newAssertModules(name)
 	case "module":
 		return newModuleModule()
 	case "os":
