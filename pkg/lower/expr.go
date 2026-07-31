@@ -2323,6 +2323,20 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		if _, ok := r.unionStringValued(n); ok {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToString")}}, nil
 		}
+		// An instance of a class that writes its own valueOf or toString coerces by
+		// running that method rather than by reading its box, which carries the fields
+		// and the class name but none of the methods. The order is the one + asks for,
+		// valueOf before toString, which is the whole reason a hint-sensitive class
+		// concatenates differently from the way String() reads it. This is the concat
+		// sibling of the same arms in stringify.
+		if expr, ok, err := r.classPrimitiveConcat(e, n); err != nil {
+			return nil, err
+		} else if ok {
+			return expr, nil
+		}
+		if !r.stringBoxFaithful(r.prog.TypeAt(n)) {
+			return nil, &NotYetLowerable{Reason: "coercing a value that holds an instance writing its own toString is a later slice"}
+		}
 		// A non-primitive operand coerces through the same value.PlusToString protocol
 		// the dynamic case uses: ToPrimitive with the default hint on the object or
 		// array, then ToString on the result, so { a: 1 } becomes "[object Object]" and
