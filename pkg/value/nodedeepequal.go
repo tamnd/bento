@@ -1,6 +1,7 @@
 package value
 
 import (
+	"bytes"
 	"math"
 	"unsafe"
 )
@@ -211,6 +212,29 @@ func deepObjectComparisonStart(a, b Value, mode deepMode, memos *deepMemos) bool
 		}
 
 	case b.asDate() != nil:
+		return false
+
+	case a.asBuffer() != nil:
+		// A buffer is its bytes: two buffers are equal when they hold the same run,
+		// whatever else was done to either of them, and a detached one holds none. The tag
+		// test above has already kept an ArrayBuffer and a SharedArrayBuffer apart, since
+		// each names itself, so this only ever compares two of a kind.
+		if b.asBuffer() == nil || !bytes.Equal(a.asBuffer().jsBufferBytes(), b.asBuffer().jsBufferBytes()) {
+			return false
+		}
+
+	case b.asBuffer() != nil:
+		return false
+
+	case a.asDataView() != nil:
+		// A view is compared by the bytes it can see rather than by the buffer under it or
+		// where in that buffer its window starts, so two views onto different buffers at
+		// different offsets are equal when they read the same run.
+		if b.asDataView() == nil || !bytes.Equal(dataViewWindow(a.asDataView()), dataViewWindow(b.asDataView())) {
+			return false
+		}
+
+	case b.asDataView() != nil:
 		return false
 
 	case a.asSet() != nil:

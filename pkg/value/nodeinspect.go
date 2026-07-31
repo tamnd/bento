@@ -487,6 +487,24 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 			return base
 		}
 
+	case o.jsBuffer != nil:
+		// A buffer renders its bytes and its length, both spelled as the bracketed internal
+		// names node uses for a slot that is not a property. It has no properties of its
+		// own, so an empty buffer is still "ArrayBuffer { [Uint8Contents]: <>, [byteLength]:
+		// 0 }" rather than an empty pair, which is why there is no early return here.
+		prefix := inspectPrefix(constructor, ctorNull, o.jsBuffer.jsBufferName(), "")
+		keys = inspectObjectKeys(o, c.showHidden)
+		braces = [2]string{prefix + "{", "}"}
+		formatter = func() []string { return c.formatBufferSlots(o.jsBuffer) }
+
+	case o.jsView != nil:
+		// A view renders its window and the buffer under it, the buffer one level deeper so
+		// it is cut off by the depth limit while the two numbers naming the window are not.
+		prefix := inspectPrefix(constructor, ctorNull, "DataView", "")
+		keys = inspectObjectKeys(o, c.showHidden)
+		braces = [2]string{prefix + "{", "}"}
+		formatter = func() []string { return c.formatViewSlots(o.jsView, recurseTimes) }
+
 	case o.err != nil:
 		keys = inspectErrorKeys(o, c.showHidden)
 		base = inspectErrorBase(o.err)
@@ -602,6 +620,12 @@ func inspectConstructorName(v Value) (string, bool) {
 	}
 	if o.jsDate != nil {
 		return "Date", false
+	}
+	if o.jsBuffer != nil {
+		return o.jsBuffer.jsBufferName(), false
+	}
+	if o.jsView != nil {
+		return "DataView", false
 	}
 	for cur := o; ; {
 		if cur.protoNull {
@@ -977,6 +1001,43 @@ func (c *inspectCtx) formatSetMembers(s setBacking, recurseTimes int) []string {
 	}
 	c.indentationLvl -= 2
 	return output
+}
+
+// formatBufferSlots is Node's formatArrayBuffer plus the byte length it unshifts onto
+// the key list: the bytes in hex and then how many there are. Both are internal slots
+// rather than properties, so both are written in the brackets node reserves for a name a
+// program cannot read off the object. A detached buffer has no bytes to show and says so
+// instead, since an empty run would read as an empty buffer, which is a different thing.
+func (c *inspectCtx) formatBufferSlots(b bufferBacking) []string {
+	contents := "[Uint8Contents]: <" + bufferHexContents(b.jsBufferBytes(), c.maxArrayLength) + ">"
+	if b.jsBufferDetached() {
+		contents = "(detached)"
+	}
+	return []string{contents, "[byteLength]: " + inspectNumber(float64(len(b.jsBufferBytes())))}
+}
+
+// formatViewSlots is Node's formatDataView: the window's length and where it starts,
+// then the buffer it reads. The buffer is formatted through the ordinary value path, so
+// it carries its own contents, wraps its own lines, and is cut off as "[ArrayBuffer]"
+// once it sits past the depth limit.
+func (c *inspectCtx) formatViewSlots(d *DataView, recurseTimes int) []string {
+	c.indentationLvl += 2
+	buffer := c.formatValue(d.Buffer().ToValue(), recurseTimes)
+	c.indentationLvl -= 2
+	// The geometry is read off the view's live state rather than through its getters,
+	// which throw once a detach or a shrink has put the view out of bounds. Printing a
+	// value is not a place to raise from, so an out-of-bounds view reports the zero span
+	// it now has and an offset of undefined, the same pair node prints for one.
+	n, outOfBounds := d.liveByteLength()
+	offset := inspectNumber(float64(d.byteOffset))
+	if outOfBounds {
+		offset = "undefined"
+	}
+	return []string{
+		"[byteLength]: " + inspectNumber(float64(n)),
+		"[byteOffset]: " + offset,
+		"[buffer]: " + buffer,
+	}
 }
 
 // formatElement renders one array element, which is formatProperty's array mode:

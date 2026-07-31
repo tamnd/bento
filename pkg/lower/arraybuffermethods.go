@@ -26,6 +26,8 @@ func (r *Renderer) arrayBufferMethodCall(recvNode frontend.Node, method string, 
 		return r.arrayBufferTransfer(recvNode, "TransferToFixedLength", argNodes)
 	case "resize":
 		return r.arrayBufferResize(recvNode, argNodes)
+	case "slice":
+		return r.arrayBufferSlice(recvNode, argNodes)
 	default:
 		return nil, &NotYetLowerable{Reason: "ArrayBuffer method ." + method + " is a later slice"}
 	}
@@ -81,4 +83,33 @@ func (r *Renderer) arrayBufferTransfer(recvNode frontend.Node, runtimeName strin
 		args = append(args, arg)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(runtimeName)}, Args: args}, nil
+}
+
+// arrayBufferSlice lowers ArrayBuffer.prototype.slice to the runtime Slice, which
+// copies the bytes in [start, end) into a fresh buffer (25 §25.1.6). Both bounds are
+// optional Numbers, so the call lowers to the variadic Go method: none for a copy of
+// the whole buffer, one for a start with the end running to the current length, and two
+// for an explicit span. A non-number bound is a later slice, held back rather than
+// coerced here so the covered subset stays the one the number path proves. It is the
+// ArrayBuffer spelling of sharedArrayBufferSlice and reads the same way.
+func (r *Renderer) arrayBufferSlice(recvNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) > 2 {
+		return nil, &NotYetLowerable{Reason: "ArrayBuffer slice takes at most a start and an end"}
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	var args []ast.Expr
+	for _, argNode := range argNodes {
+		if !r.isNumber(argNode) {
+			return nil, &NotYetLowerable{Reason: "ArrayBuffer slice with a non-number bound is a later slice"}
+		}
+		arg, err := r.lowerExpr(argNode)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, arg)
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Slice")}, Args: args}, nil
 }
