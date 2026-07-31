@@ -40,6 +40,36 @@ func compileJS(t *testing.T, src string) *frontend.Program {
 	return prog
 }
 
+// renderUncheckedJS renders src the way the AOT front door builds a .js entry: allowJs
+// on so the checker types the file, checkJs off so its JavaScript-specific reports never
+// arise (build.go compileProgram). That is the mode a form TypeScript rejects but
+// JavaScript runs has to be read in, arithmetic on a date being one: with checkJs on the
+// checker reports 2362 and the renderer hands the whole unit back for it, which is the
+// deliberate rule for a program TypeScript does not accept, while a plain .js program
+// carries no such report and lowers.
+func renderUncheckedJS(t *testing.T, src string) string {
+	t.Helper()
+	yes, no := true, false
+	prog, err := frontend.Load(frontend.LoadOptions{
+		Dir:       "/",
+		Roots:     []string{"/m.js"},
+		Overrides: frontend.ConfigOverrides{AllowJS: &yes, CheckJS: &no, NoImplicitAny: &no},
+		FS:        realFS{files: map[string]string{"/m.js": src}},
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	r.SetGoConstants(testGoConstants())
+	r.SetGoErrorVars(testGoErrorVars())
+	p, err := r.RenderProgram(entryFile(t, prog))
+	if err != nil {
+		t.Fatalf("RenderProgram: %v", err)
+	}
+	return p.Source
+}
+
 func renderExpandoJS(t *testing.T, src string) string {
 	t.Helper()
 	prog := compileJS(t, src)

@@ -1,0 +1,148 @@
+// Generates the long time-zone name table zonenames.go carries.
+//
+// Run it with the Node the runtime targets and redirect into the Go file:
+//
+//   node pkg/value/testdata/gen_zonenames.js > pkg/value/zonenames.go
+//
+// Date.prototype.toString ends with the zone's long name in parentheses, "Sun Jan 15
+// 2023 03:04:05 GMT+0000 (Coordinated Universal Time)". That name is CLDR data, not
+// anything the tzdata a Go program links carries: tzdata knows the abbreviation EST
+// and Node prints "Eastern Standard Time". So the names are lifted out of the Node
+// the port matches, once, into a table the runtime reads with no ICU of its own.
+//
+// Two names per zone, since the name changes with daylight saving and the runtime
+// picks between them by the flag Go's tzdata sets on the instant. A zone CLDR has no
+// name for reports the GMT offset form instead, which is what Node prints for it too,
+// and the table keeps those as the empty string so the runtime falls back.
+//
+// The zone list is every name the host's zoneinfo carries, aliases included, because
+// TZ=US/Eastern is a spelling a program may run under and Go reports it back verbatim.
+
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+const ZONEINFO = '/usr/share/zoneinfo';
+
+// zoneNames walks the zoneinfo tree for every identifier it defines. The directory
+// carries a few files that are not zones (the tab files, the leap second lists, the
+// version stamp), and they are skipped by name.
+function zoneNames(dir, prefix, out) {
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const name = prefix ? prefix + '/' + entry.name : entry.name;
+		if (entry.isDirectory()) {
+			zoneNames(path.join(dir, entry.name), name, out);
+			continue;
+		}
+		if (/\.tab$/.test(entry.name) || entry.name === 'leapseconds' || entry.name === 'tzdata.zi' ||
+			entry.name === 'leap-seconds.list' || entry.name === '+VERSION' || entry.name === 'localtime') {
+			continue;
+		}
+		out.push(name);
+	}
+	return out;
+}
+
+// longName is the parenthesized name Node puts at the end of toString for an instant
+// in a zone. It is read through the same formatter Node's own Date.prototype.toString
+// reads it through, so the two cannot drift; a zone with no CLDR name formats as
+// "GMT-07:00", which is reported as absent so the runtime spells it itself.
+function longName(zone, ms) {
+	const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'long' })
+		.formatToParts(new Date(ms));
+	const name = parts.find((p) => p.type === 'timeZoneName').value;
+	return /^GMT[+-]/.test(name) ? '' : name;
+}
+
+// offsetMinutes is the zone's offset from UTC at an instant, which is how a probe is
+// told apart as the standard one or the daylight one: the larger offset is the
+// daylight side wherever a zone has two.
+function offsetMinutes(zone, ms) {
+	const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'longOffset' })
+		.formatToParts(new Date(ms));
+	const text = parts.find((p) => p.type === 'timeZoneName').value;
+	const m = /^GMT([+-])(\d\d):(\d\d)$/.exec(text);
+	if (!m) return 0;
+	const sign = m[1] === '-' ? -1 : 1;
+	return sign * (Number(m[2]) * 60 + Number(m[3]));
+}
+
+// The probes are the first of each month across two years, which finds a zone's
+// daylight side wherever in the calendar it falls: the northern switch in March, the
+// southern one in October, and the Ramadan-driven switches that move every year.
+const PROBES = [];
+for (const year of [2023, 2024]) {
+	for (let month = 0; month < 12; month++) PROBES.push(Date.UTC(year, month, 1));
+}
+
+const rows = [];
+for (const zone of zoneNames(ZONEINFO, '', []).sort()) {
+	let standard = null, daylight = null, standardOffset = null, daylightOffset = null;
+	try {
+		for (const ms of PROBES) {
+			const off = offsetMinutes(zone, ms);
+			const name = longName(zone, ms);
+			if (standardOffset === null || off < standardOffset) {
+				standardOffset = off;
+				standard = name;
+			}
+			if (daylightOffset === null || off > daylightOffset) {
+				daylightOffset = off;
+				daylight = name;
+			}
+		}
+	} catch {
+		continue; // a name the host's zoneinfo carries and this Node's ICU does not
+	}
+	rows.push([zone, standard, daylightOffset === standardOffset ? standard : daylight]);
+}
+
+// The names repeat heavily, a hundred and seventy or so across six hundred zones, so
+// they are interned into one slice and each row holds two indices into it. That keeps
+// the generated file a table of small integers rather than of repeated string
+// literals.
+const names = [];
+const nameIndex = new Map();
+function intern(s) {
+	if (!nameIndex.has(s)) {
+		nameIndex.set(s, names.length);
+		names.push(s);
+	}
+	return nameIndex.get(s);
+}
+intern(''); // index zero is the absent name, the zone CLDR does not name
+const indexed = rows.map(([zone, standard, daylight]) => [zone, intern(standard), intern(daylight)]);
+
+const out = [];
+out.push('package value');
+out.push('');
+out.push('// Code generated by testdata/gen_zonenames.js. DO NOT EDIT.');
+out.push('');
+out.push('// The long time-zone names Date.prototype.toString prints in parentheses. They are');
+out.push('// CLDR data rather than anything tzdata carries, so they are lifted out of Node');
+out.push('// once and read here: tzdata knows the abbreviation EST, and what Node prints is');
+out.push('// "Eastern Standard Time". Each zone names its standard side and its daylight side,');
+out.push('// and the runtime picks between them by the flag Go sets on the instant.');
+out.push('//');
+out.push('// The empty name is a zone CLDR does not name, for which Node prints the GMT offset');
+out.push('// form instead; zoneLongName spells that itself rather than storing six hundred');
+out.push('// copies of a string it can compute.');
+out.push('');
+out.push('// zoneNameText is every distinct long name, interned so the table below is indices.');
+out.push('var zoneNameText = []string{');
+for (const s of names) out.push('\t' + JSON.stringify(s) + ',');
+out.push('}');
+out.push('');
+out.push('// zoneNamePair is a zone\'s standard and daylight name, as indices into zoneNameText.');
+out.push('type zoneNamePair struct{ standard, daylight uint16 }');
+out.push('');
+out.push('// zoneLongNames maps a zone identifier, alias spellings included, to its name pair.');
+out.push('// A program runs under whatever TZ names, and Go reports that name back verbatim,');
+out.push('// so TZ=US/Eastern has to resolve here the way TZ=America/New_York does.');
+out.push('var zoneLongNames = map[string]zoneNamePair{');
+for (const [zone, standard, daylight] of indexed) {
+	out.push('\t' + JSON.stringify(zone) + ': {' + standard + ', ' + daylight + '},');
+}
+out.push('}');
+out.push('');
+process.stdout.write(out.join('\n'));

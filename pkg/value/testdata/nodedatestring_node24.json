@@ -1,0 +1,1052 @@
+{
+	"UTC / epoch": {
+		"zone": "UTC",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"UTC / winter": {
+		"zone": "UTC",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 03:04:05 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "03:04:05 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"UTC / summer": {
+		"zone": "UTC",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 03:04:05 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "03:04:05 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"UTC / before spring forward": {
+		"zone": "UTC",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 06:59:59 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "06:59:59 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"UTC / after spring forward": {
+		"zone": "UTC",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 07:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "07:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"UTC / before epoch": {
+		"zone": "UTC",
+		"ms": -999,
+		"toString": "Wed Dec 31 1969 23:59:59 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "23:59:59 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"UTC / end of year": {
+		"zone": "UTC",
+		"ms": 1735689599999,
+		"toString": "Tue Dec 31 2024 23:59:59 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Tue Dec 31 2024",
+		"toTimeString": "23:59:59 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"America/New_York / epoch": {
+		"zone": "America/New_York",
+		"ms": 0,
+		"toString": "Wed Dec 31 1969 19:00:00 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "19:00:00 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"America/New_York / winter": {
+		"zone": "America/New_York",
+		"ms": 1673751845006,
+		"toString": "Sat Jan 14 2023 22:04:05 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Sat Jan 14 2023",
+		"toTimeString": "22:04:05 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"America/New_York / summer": {
+		"zone": "America/New_York",
+		"ms": 1689390245006,
+		"toString": "Fri Jul 14 2023 23:04:05 GMT-0400 (Eastern Daylight Time)",
+		"toDateString": "Fri Jul 14 2023",
+		"toTimeString": "23:04:05 GMT-0400 (Eastern Daylight Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"America/New_York / before spring forward": {
+		"zone": "America/New_York",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 01:59:59 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "01:59:59 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"America/New_York / after spring forward": {
+		"zone": "America/New_York",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 03:00:00 GMT-0400 (Eastern Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "03:00:00 GMT-0400 (Eastern Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"America/New_York / before epoch": {
+		"zone": "America/New_York",
+		"ms": -999,
+		"toString": "Wed Dec 31 1969 18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"America/New_York / end of year": {
+		"zone": "America/New_York",
+		"ms": 1735689599999,
+		"toString": "Tue Dec 31 2024 18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Tue Dec 31 2024",
+		"toTimeString": "18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Europe/Paris / epoch": {
+		"zone": "Europe/Paris",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 01:00:00 GMT+0100 (Central European Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "01:00:00 GMT+0100 (Central European Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Europe/Paris / winter": {
+		"zone": "Europe/Paris",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 04:04:05 GMT+0100 (Central European Standard Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "04:04:05 GMT+0100 (Central European Standard Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Europe/Paris / summer": {
+		"zone": "Europe/Paris",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 05:04:05 GMT+0200 (Central European Summer Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "05:04:05 GMT+0200 (Central European Summer Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Europe/Paris / before spring forward": {
+		"zone": "Europe/Paris",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 07:59:59 GMT+0100 (Central European Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "07:59:59 GMT+0100 (Central European Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Europe/Paris / after spring forward": {
+		"zone": "Europe/Paris",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 08:00:00 GMT+0100 (Central European Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "08:00:00 GMT+0100 (Central European Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Europe/Paris / before epoch": {
+		"zone": "Europe/Paris",
+		"ms": -999,
+		"toString": "Thu Jan 01 1970 00:59:59 GMT+0100 (Central European Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "00:59:59 GMT+0100 (Central European Standard Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Europe/Paris / end of year": {
+		"zone": "Europe/Paris",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 00:59:59 GMT+0100 (Central European Standard Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "00:59:59 GMT+0100 (Central European Standard Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Asia/Tokyo / epoch": {
+		"zone": "Asia/Tokyo",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 09:00:00 GMT+0900 (Japan Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "09:00:00 GMT+0900 (Japan Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Asia/Tokyo / winter": {
+		"zone": "Asia/Tokyo",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 12:04:05 GMT+0900 (Japan Standard Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "12:04:05 GMT+0900 (Japan Standard Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Asia/Tokyo / summer": {
+		"zone": "Asia/Tokyo",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 12:04:05 GMT+0900 (Japan Standard Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "12:04:05 GMT+0900 (Japan Standard Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Asia/Tokyo / before spring forward": {
+		"zone": "Asia/Tokyo",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 15:59:59 GMT+0900 (Japan Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "15:59:59 GMT+0900 (Japan Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Asia/Tokyo / after spring forward": {
+		"zone": "Asia/Tokyo",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 16:00:00 GMT+0900 (Japan Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "16:00:00 GMT+0900 (Japan Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Asia/Tokyo / before epoch": {
+		"zone": "Asia/Tokyo",
+		"ms": -999,
+		"toString": "Thu Jan 01 1970 08:59:59 GMT+0900 (Japan Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "08:59:59 GMT+0900 (Japan Standard Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Asia/Tokyo / end of year": {
+		"zone": "Asia/Tokyo",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 08:59:59 GMT+0900 (Japan Standard Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "08:59:59 GMT+0900 (Japan Standard Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Australia/Sydney / epoch": {
+		"zone": "Australia/Sydney",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 10:00:00 GMT+1000 (Australian Eastern Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "10:00:00 GMT+1000 (Australian Eastern Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Australia/Sydney / winter": {
+		"zone": "Australia/Sydney",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 14:04:05 GMT+1100 (Australian Eastern Daylight Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "14:04:05 GMT+1100 (Australian Eastern Daylight Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Australia/Sydney / summer": {
+		"zone": "Australia/Sydney",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 13:04:05 GMT+1000 (Australian Eastern Standard Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "13:04:05 GMT+1000 (Australian Eastern Standard Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Australia/Sydney / before spring forward": {
+		"zone": "Australia/Sydney",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 17:59:59 GMT+1100 (Australian Eastern Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "17:59:59 GMT+1100 (Australian Eastern Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Australia/Sydney / after spring forward": {
+		"zone": "Australia/Sydney",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 18:00:00 GMT+1100 (Australian Eastern Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "18:00:00 GMT+1100 (Australian Eastern Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Australia/Sydney / before epoch": {
+		"zone": "Australia/Sydney",
+		"ms": -999,
+		"toString": "Thu Jan 01 1970 09:59:59 GMT+1000 (Australian Eastern Daylight Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "09:59:59 GMT+1000 (Australian Eastern Daylight Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Australia/Sydney / end of year": {
+		"zone": "Australia/Sydney",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 10:59:59 GMT+1100 (Australian Eastern Daylight Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "10:59:59 GMT+1100 (Australian Eastern Daylight Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Asia/Kolkata / epoch": {
+		"zone": "Asia/Kolkata",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 05:30:00 GMT+0530 (India Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "05:30:00 GMT+0530 (India Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Asia/Kolkata / winter": {
+		"zone": "Asia/Kolkata",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 08:34:05 GMT+0530 (India Standard Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "08:34:05 GMT+0530 (India Standard Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Asia/Kolkata / summer": {
+		"zone": "Asia/Kolkata",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 08:34:05 GMT+0530 (India Standard Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "08:34:05 GMT+0530 (India Standard Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Asia/Kolkata / before spring forward": {
+		"zone": "Asia/Kolkata",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 12:29:59 GMT+0530 (India Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "12:29:59 GMT+0530 (India Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Asia/Kolkata / after spring forward": {
+		"zone": "Asia/Kolkata",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 12:30:00 GMT+0530 (India Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "12:30:00 GMT+0530 (India Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Asia/Kolkata / before epoch": {
+		"zone": "Asia/Kolkata",
+		"ms": -999,
+		"toString": "Thu Jan 01 1970 05:29:59 GMT+0530 (India Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "05:29:59 GMT+0530 (India Standard Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Asia/Kolkata / end of year": {
+		"zone": "Asia/Kolkata",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 05:29:59 GMT+0530 (India Standard Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "05:29:59 GMT+0530 (India Standard Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Asia/Kathmandu / epoch": {
+		"zone": "Asia/Kathmandu",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 05:30:00 GMT+0530 (Nepal Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "05:30:00 GMT+0530 (Nepal Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Asia/Kathmandu / winter": {
+		"zone": "Asia/Kathmandu",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 08:49:05 GMT+0545 (Nepal Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "08:49:05 GMT+0545 (Nepal Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Asia/Kathmandu / summer": {
+		"zone": "Asia/Kathmandu",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 08:49:05 GMT+0545 (Nepal Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "08:49:05 GMT+0545 (Nepal Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Asia/Kathmandu / before spring forward": {
+		"zone": "Asia/Kathmandu",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 12:44:59 GMT+0545 (Nepal Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "12:44:59 GMT+0545 (Nepal Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Asia/Kathmandu / after spring forward": {
+		"zone": "Asia/Kathmandu",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 12:45:00 GMT+0545 (Nepal Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "12:45:00 GMT+0545 (Nepal Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Asia/Kathmandu / before epoch": {
+		"zone": "Asia/Kathmandu",
+		"ms": -999,
+		"toString": "Thu Jan 01 1970 05:29:59 GMT+0530 (Nepal Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "05:29:59 GMT+0530 (Nepal Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Asia/Kathmandu / end of year": {
+		"zone": "Asia/Kathmandu",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 05:44:59 GMT+0545 (Nepal Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "05:44:59 GMT+0545 (Nepal Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"America/St_Johns / epoch": {
+		"zone": "America/St_Johns",
+		"ms": 0,
+		"toString": "Wed Dec 31 1969 20:30:00 GMT-0330 (Newfoundland Standard Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "20:30:00 GMT-0330 (Newfoundland Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"America/St_Johns / winter": {
+		"zone": "America/St_Johns",
+		"ms": 1673751845006,
+		"toString": "Sat Jan 14 2023 23:34:05 GMT-0330 (Newfoundland Standard Time)",
+		"toDateString": "Sat Jan 14 2023",
+		"toTimeString": "23:34:05 GMT-0330 (Newfoundland Standard Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"America/St_Johns / summer": {
+		"zone": "America/St_Johns",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 00:34:05 GMT-0230 (Newfoundland Daylight Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "00:34:05 GMT-0230 (Newfoundland Daylight Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"America/St_Johns / before spring forward": {
+		"zone": "America/St_Johns",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 04:29:59 GMT-0230 (Newfoundland Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "04:29:59 GMT-0230 (Newfoundland Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"America/St_Johns / after spring forward": {
+		"zone": "America/St_Johns",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 04:30:00 GMT-0230 (Newfoundland Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "04:30:00 GMT-0230 (Newfoundland Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"America/St_Johns / before epoch": {
+		"zone": "America/St_Johns",
+		"ms": -999,
+		"toString": "Wed Dec 31 1969 20:29:59 GMT-0330 (Newfoundland Standard Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "20:29:59 GMT-0330 (Newfoundland Standard Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"America/St_Johns / end of year": {
+		"zone": "America/St_Johns",
+		"ms": 1735689599999,
+		"toString": "Tue Dec 31 2024 20:29:59 GMT-0330 (Newfoundland Standard Time)",
+		"toDateString": "Tue Dec 31 2024",
+		"toTimeString": "20:29:59 GMT-0330 (Newfoundland Standard Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Pacific/Chatham / epoch": {
+		"zone": "Pacific/Chatham",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 12:45:00 GMT+1245 (Chatham Standard Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "12:45:00 GMT+1245 (Chatham Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Pacific/Chatham / winter": {
+		"zone": "Pacific/Chatham",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 16:49:05 GMT+1345 (Chatham Daylight Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "16:49:05 GMT+1345 (Chatham Daylight Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Pacific/Chatham / summer": {
+		"zone": "Pacific/Chatham",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 15:49:05 GMT+1245 (Chatham Standard Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "15:49:05 GMT+1245 (Chatham Standard Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Pacific/Chatham / before spring forward": {
+		"zone": "Pacific/Chatham",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 20:44:59 GMT+1345 (Chatham Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "20:44:59 GMT+1345 (Chatham Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Pacific/Chatham / after spring forward": {
+		"zone": "Pacific/Chatham",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 20:45:00 GMT+1345 (Chatham Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "20:45:00 GMT+1345 (Chatham Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Pacific/Chatham / before epoch": {
+		"zone": "Pacific/Chatham",
+		"ms": -999,
+		"toString": "Thu Jan 01 1970 12:44:59 GMT+1245 (Chatham Daylight Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "12:44:59 GMT+1245 (Chatham Daylight Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Pacific/Chatham / end of year": {
+		"zone": "Pacific/Chatham",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 13:44:59 GMT+1345 (Chatham Daylight Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "13:44:59 GMT+1345 (Chatham Daylight Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Pacific/Kiritimati / epoch": {
+		"zone": "Pacific/Kiritimati",
+		"ms": 0,
+		"toString": "Wed Dec 31 1969 13:20:00 GMT-1040 (Line Islands Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "13:20:00 GMT-1040 (Line Islands Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Pacific/Kiritimati / winter": {
+		"zone": "Pacific/Kiritimati",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 17:04:05 GMT+1400 (Line Islands Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "17:04:05 GMT+1400 (Line Islands Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Pacific/Kiritimati / summer": {
+		"zone": "Pacific/Kiritimati",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 17:04:05 GMT+1400 (Line Islands Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "17:04:05 GMT+1400 (Line Islands Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Pacific/Kiritimati / before spring forward": {
+		"zone": "Pacific/Kiritimati",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 20:59:59 GMT+1400 (Line Islands Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "20:59:59 GMT+1400 (Line Islands Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Pacific/Kiritimati / after spring forward": {
+		"zone": "Pacific/Kiritimati",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 21:00:00 GMT+1400 (Line Islands Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "21:00:00 GMT+1400 (Line Islands Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Pacific/Kiritimati / before epoch": {
+		"zone": "Pacific/Kiritimati",
+		"ms": -999,
+		"toString": "Wed Dec 31 1969 13:19:59 GMT-1040 (Line Islands Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "13:19:59 GMT-1040 (Line Islands Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Pacific/Kiritimati / end of year": {
+		"zone": "Pacific/Kiritimati",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 13:59:59 GMT+1400 (Line Islands Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "13:59:59 GMT+1400 (Line Islands Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Antarctica/Troll / epoch": {
+		"zone": "Antarctica/Troll",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 00:00:00 GMT+0000 (Greenwich Mean Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "00:00:00 GMT+0000 (Greenwich Mean Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Antarctica/Troll / winter": {
+		"zone": "Antarctica/Troll",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 03:04:05 GMT+0000 (Greenwich Mean Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "03:04:05 GMT+0000 (Greenwich Mean Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Antarctica/Troll / summer": {
+		"zone": "Antarctica/Troll",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 05:04:05 GMT+0200 (GMT+02:00)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "05:04:05 GMT+0200 (GMT+02:00)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Antarctica/Troll / before spring forward": {
+		"zone": "Antarctica/Troll",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 06:59:59 GMT+0000 (Greenwich Mean Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "06:59:59 GMT+0000 (Greenwich Mean Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Antarctica/Troll / after spring forward": {
+		"zone": "Antarctica/Troll",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 07:00:00 GMT+0000 (Greenwich Mean Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "07:00:00 GMT+0000 (Greenwich Mean Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Antarctica/Troll / before epoch": {
+		"zone": "Antarctica/Troll",
+		"ms": -999,
+		"toString": "Wed Dec 31 1969 23:59:59 GMT+0000 (Greenwich Mean Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "23:59:59 GMT+0000 (Greenwich Mean Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Antarctica/Troll / end of year": {
+		"zone": "Antarctica/Troll",
+		"ms": 1735689599999,
+		"toString": "Tue Dec 31 2024 23:59:59 GMT+0000 (Greenwich Mean Time)",
+		"toDateString": "Tue Dec 31 2024",
+		"toTimeString": "23:59:59 GMT+0000 (Greenwich Mean Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Etc/GMT+7 / epoch": {
+		"zone": "Etc/GMT+7",
+		"ms": 0,
+		"toString": "Wed Dec 31 1969 17:00:00 GMT-0700 (GMT-07:00)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "17:00:00 GMT-0700 (GMT-07:00)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Etc/GMT+7 / winter": {
+		"zone": "Etc/GMT+7",
+		"ms": 1673751845006,
+		"toString": "Sat Jan 14 2023 20:04:05 GMT-0700 (GMT-07:00)",
+		"toDateString": "Sat Jan 14 2023",
+		"toTimeString": "20:04:05 GMT-0700 (GMT-07:00)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Etc/GMT+7 / summer": {
+		"zone": "Etc/GMT+7",
+		"ms": 1689390245006,
+		"toString": "Fri Jul 14 2023 20:04:05 GMT-0700 (GMT-07:00)",
+		"toDateString": "Fri Jul 14 2023",
+		"toTimeString": "20:04:05 GMT-0700 (GMT-07:00)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Etc/GMT+7 / before spring forward": {
+		"zone": "Etc/GMT+7",
+		"ms": 1678604399999,
+		"toString": "Sat Mar 11 2023 23:59:59 GMT-0700 (GMT-07:00)",
+		"toDateString": "Sat Mar 11 2023",
+		"toTimeString": "23:59:59 GMT-0700 (GMT-07:00)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Etc/GMT+7 / after spring forward": {
+		"zone": "Etc/GMT+7",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 00:00:00 GMT-0700 (GMT-07:00)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "00:00:00 GMT-0700 (GMT-07:00)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Etc/GMT+7 / before epoch": {
+		"zone": "Etc/GMT+7",
+		"ms": -999,
+		"toString": "Wed Dec 31 1969 16:59:59 GMT-0700 (GMT-07:00)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "16:59:59 GMT-0700 (GMT-07:00)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Etc/GMT+7 / end of year": {
+		"zone": "Etc/GMT+7",
+		"ms": 1735689599999,
+		"toString": "Tue Dec 31 2024 16:59:59 GMT-0700 (GMT-07:00)",
+		"toDateString": "Tue Dec 31 2024",
+		"toTimeString": "16:59:59 GMT-0700 (GMT-07:00)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"US/Eastern / epoch": {
+		"zone": "US/Eastern",
+		"ms": 0,
+		"toString": "Wed Dec 31 1969 19:00:00 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "19:00:00 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"US/Eastern / winter": {
+		"zone": "US/Eastern",
+		"ms": 1673751845006,
+		"toString": "Sat Jan 14 2023 22:04:05 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Sat Jan 14 2023",
+		"toTimeString": "22:04:05 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"US/Eastern / summer": {
+		"zone": "US/Eastern",
+		"ms": 1689390245006,
+		"toString": "Fri Jul 14 2023 23:04:05 GMT-0400 (Eastern Daylight Time)",
+		"toDateString": "Fri Jul 14 2023",
+		"toTimeString": "23:04:05 GMT-0400 (Eastern Daylight Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"US/Eastern / before spring forward": {
+		"zone": "US/Eastern",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 01:59:59 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "01:59:59 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"US/Eastern / after spring forward": {
+		"zone": "US/Eastern",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 03:00:00 GMT-0400 (Eastern Daylight Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "03:00:00 GMT-0400 (Eastern Daylight Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"US/Eastern / before epoch": {
+		"zone": "US/Eastern",
+		"ms": -999,
+		"toString": "Wed Dec 31 1969 18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Wed Dec 31 1969",
+		"toTimeString": "18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"US/Eastern / end of year": {
+		"zone": "US/Eastern",
+		"ms": 1735689599999,
+		"toString": "Tue Dec 31 2024 18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toDateString": "Tue Dec 31 2024",
+		"toTimeString": "18:59:59 GMT-0500 (Eastern Standard Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"Asia/Ho_Chi_Minh / epoch": {
+		"zone": "Asia/Ho_Chi_Minh",
+		"ms": 0,
+		"toString": "Thu Jan 01 1970 08:00:00 GMT+0800 (Indochina Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "08:00:00 GMT+0800 (Indochina Time)",
+		"toUTCString": "Thu, 01 Jan 1970 00:00:00 GMT",
+		"toISOString": "1970-01-01T00:00:00.000Z",
+		"toJSON": "1970-01-01T00:00:00.000Z"
+	},
+	"Asia/Ho_Chi_Minh / winter": {
+		"zone": "Asia/Ho_Chi_Minh",
+		"ms": 1673751845006,
+		"toString": "Sun Jan 15 2023 10:04:05 GMT+0700 (Indochina Time)",
+		"toDateString": "Sun Jan 15 2023",
+		"toTimeString": "10:04:05 GMT+0700 (Indochina Time)",
+		"toUTCString": "Sun, 15 Jan 2023 03:04:05 GMT",
+		"toISOString": "2023-01-15T03:04:05.006Z",
+		"toJSON": "2023-01-15T03:04:05.006Z"
+	},
+	"Asia/Ho_Chi_Minh / summer": {
+		"zone": "Asia/Ho_Chi_Minh",
+		"ms": 1689390245006,
+		"toString": "Sat Jul 15 2023 10:04:05 GMT+0700 (Indochina Time)",
+		"toDateString": "Sat Jul 15 2023",
+		"toTimeString": "10:04:05 GMT+0700 (Indochina Time)",
+		"toUTCString": "Sat, 15 Jul 2023 03:04:05 GMT",
+		"toISOString": "2023-07-15T03:04:05.006Z",
+		"toJSON": "2023-07-15T03:04:05.006Z"
+	},
+	"Asia/Ho_Chi_Minh / before spring forward": {
+		"zone": "Asia/Ho_Chi_Minh",
+		"ms": 1678604399999,
+		"toString": "Sun Mar 12 2023 13:59:59 GMT+0700 (Indochina Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "13:59:59 GMT+0700 (Indochina Time)",
+		"toUTCString": "Sun, 12 Mar 2023 06:59:59 GMT",
+		"toISOString": "2023-03-12T06:59:59.999Z",
+		"toJSON": "2023-03-12T06:59:59.999Z"
+	},
+	"Asia/Ho_Chi_Minh / after spring forward": {
+		"zone": "Asia/Ho_Chi_Minh",
+		"ms": 1678604400000,
+		"toString": "Sun Mar 12 2023 14:00:00 GMT+0700 (Indochina Time)",
+		"toDateString": "Sun Mar 12 2023",
+		"toTimeString": "14:00:00 GMT+0700 (Indochina Time)",
+		"toUTCString": "Sun, 12 Mar 2023 07:00:00 GMT",
+		"toISOString": "2023-03-12T07:00:00.000Z",
+		"toJSON": "2023-03-12T07:00:00.000Z"
+	},
+	"Asia/Ho_Chi_Minh / before epoch": {
+		"zone": "Asia/Ho_Chi_Minh",
+		"ms": -999,
+		"toString": "Thu Jan 01 1970 07:59:59 GMT+0800 (Indochina Time)",
+		"toDateString": "Thu Jan 01 1970",
+		"toTimeString": "07:59:59 GMT+0800 (Indochina Time)",
+		"toUTCString": "Wed, 31 Dec 1969 23:59:59 GMT",
+		"toISOString": "1969-12-31T23:59:59.001Z",
+		"toJSON": "1969-12-31T23:59:59.001Z"
+	},
+	"Asia/Ho_Chi_Minh / end of year": {
+		"zone": "Asia/Ho_Chi_Minh",
+		"ms": 1735689599999,
+		"toString": "Wed Jan 01 2025 06:59:59 GMT+0700 (Indochina Time)",
+		"toDateString": "Wed Jan 01 2025",
+		"toTimeString": "06:59:59 GMT+0700 (Indochina Time)",
+		"toUTCString": "Tue, 31 Dec 2024 23:59:59 GMT",
+		"toISOString": "2024-12-31T23:59:59.999Z",
+		"toJSON": "2024-12-31T23:59:59.999Z"
+	},
+	"UTC / max time value": {
+		"zone": "UTC",
+		"ms": 8640000000000000,
+		"toString": "Sat Sep 13 275760 00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Sat Sep 13 275760",
+		"toTimeString": "00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Sat, 13 Sep 275760 00:00:00 GMT",
+		"toISOString": "+275760-09-13T00:00:00.000Z",
+		"toJSON": "+275760-09-13T00:00:00.000Z"
+	},
+	"UTC / min time value": {
+		"zone": "UTC",
+		"ms": -8640000000000000,
+		"toString": "Tue Apr 20 -271821 00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Tue Apr 20 -271821",
+		"toTimeString": "00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Tue, 20 Apr -271821 00:00:00 GMT",
+		"toISOString": "-271821-04-20T00:00:00.000Z",
+		"toJSON": "-271821-04-20T00:00:00.000Z"
+	},
+	"UTC / year one": {
+		"zone": "UTC",
+		"ms": -62135596800000,
+		"toString": "Mon Jan 01 0001 00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Mon Jan 01 0001",
+		"toTimeString": "00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Mon, 01 Jan 0001 00:00:00 GMT",
+		"toISOString": "0001-01-01T00:00:00.000Z",
+		"toJSON": "0001-01-01T00:00:00.000Z"
+	},
+	"UTC / year zero": {
+		"zone": "UTC",
+		"ms": -62167219200000,
+		"toString": "Sat Jan 01 0000 00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Sat Jan 01 0000",
+		"toTimeString": "00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Sat, 01 Jan 0000 00:00:00 GMT",
+		"toISOString": "0000-01-01T00:00:00.000Z",
+		"toJSON": "0000-01-01T00:00:00.000Z"
+	},
+	"UTC / negative year": {
+		"zone": "UTC",
+		"ms": -62198755200000,
+		"toString": "Fri Jan 01 -0001 00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Fri Jan 01 -0001",
+		"toTimeString": "00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Fri, 01 Jan -0001 00:00:00 GMT",
+		"toISOString": "-000001-01-01T00:00:00.000Z",
+		"toJSON": "-000001-01-01T00:00:00.000Z"
+	},
+	"UTC / five digit year": {
+		"zone": "UTC",
+		"ms": 317242051200000,
+		"toString": "Sun Jan 01 12023 00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toDateString": "Sun Jan 01 12023",
+		"toTimeString": "00:00:00 GMT+0000 (Coordinated Universal Time)",
+		"toUTCString": "Sun, 01 Jan 12023 00:00:00 GMT",
+		"toISOString": "+012023-01-01T00:00:00.000Z",
+		"toJSON": "+012023-01-01T00:00:00.000Z"
+	},
+	"UTC / invalid": {
+		"zone": "UTC",
+		"ms": null,
+		"toString": "Invalid Date",
+		"toDateString": "Invalid Date",
+		"toTimeString": "Invalid Date",
+		"toUTCString": "Invalid Date",
+		"toISOString": "<throws>",
+		"toJSON": null
+	}
+}

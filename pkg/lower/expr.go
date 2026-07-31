@@ -1490,7 +1490,11 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 	// operator table so the string path emits a call rather than reaching the
 	// number/bool dispatch, and a string operand against a non-primitive (an object
 	// or array, whose ToString is a later slice) hands back through stringifyOperand.
-	if opText == "+" && (r.isString(left) || r.isString(right)) {
+	// A date operand joins the string case for the same reason it takes ToString in
+	// stringifyOperand: its default ToPrimitive hint is string, so + concatenates as
+	// soon as one side is a date, and d + 1 reads the local time followed by a "1"
+	// rather than adding a millisecond.
+	if opText == "+" && (r.isString(left) || r.isString(right) || r.isDate(left) || r.isDate(right)) {
 		// Flatten a left-leaning chain of string + into the operands of one ConcatN,
 		// so "a" + x + "b" + y builds in a single strings.Builder pass and one
 		// allocation rather than folding pairwise through Concat, which allocates a
@@ -1508,10 +1512,21 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 			pieces[i] = p
 		}
 		r.requireImport(valuePkg)
+		concat := &ast.CallExpr{Fun: &ast.SelectorExpr{X: pieces[0], Sel: ident("ConcatN")}, Args: pieces[1:]}
+		var joined ast.Expr = concat
 		if len(pieces) == 2 {
-			return &ast.CallExpr{Fun: sel("value", "Concat"), Args: pieces}, nil
+			joined = &ast.CallExpr{Fun: sel("value", "Concat"), Args: pieces}
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: pieces[0], Sel: ident("ConcatN")}, Args: pieces[1:]}, nil
+		if node != nil && !r.isString(node) {
+			// The checker has no type for a date in a +: it reports the operator as an
+			// error and leaves the node any, so d + 1 reaches its consumer through a
+			// dynamic slot and the concatenation has to box to fill one. A node the
+			// checker does type string, the ordinary "" + d, hands back the bare BStr,
+			// and so does a compound assignment, which passes no node at all and whose
+			// target is the string slot it writes back into.
+			return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{joined}}, nil
+		}
+		return joined, nil
 	}
 
 	// typeof x === "string" on a tagged-sum union lowers to a discriminant compare,
@@ -1766,6 +1781,19 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 	// a bigint mixed with a number is not number-coercible and falls through to the
 	// hand-back below.
 	if expr, handled, err := r.stringBoolArith(opText, left, right); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
+	// An arithmetic or relational operator with a date on one side reads the date as
+	// its time value, the number ToPrimitive hands back for the number hint, so a
+	// difference of two dates is a duration and a comparison of two dates orders the
+	// instants. It routes here, after the string and boolean coercion above, since the
+	// two are disjoint (that one needs both operands number-coercible primitives, which
+	// a date is not) and before the operator table, which sees a non-primitive operand
+	// and would hand back.
+	if expr, handled, err := r.dateArith(opText, left, right); err != nil {
 		return nil, err
 	} else if handled {
 		return expr, nil
@@ -2264,6 +2292,13 @@ func (r *Renderer) stringifyOperand(n frontend.Node) (ast.Expr, error) {
 		// + flags, the same literal form String(re) and a template substitution produce,
 		// so "x" + re reads off the concrete *value.RegExp with no boxing.
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToStringBStr")}}, nil
+	case r.isDate(n):
+		// A date operand coerces through Date.prototype.toString, the local reading with
+		// the zone name, because a date is the one built-in whose default ToPrimitive
+		// hint is string rather than number. That is the whole reason "" + d gives the
+		// reading while d - 0 gives the time value, and it reads off the concrete
+		// *value.Date with no boxing.
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ToString")}}, nil
 	case r.isDynamic(n) || r.producesBoxedValue(r.unwrapParens(n)):
 		// A dynamic operand coerces at runtime through the value model's + branch,
 		// value.PlusToString, which routes an object or array through ToPrimitive with

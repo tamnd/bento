@@ -143,6 +143,69 @@ func (r *Renderer) dateStaticCall(method string, argNodes []frontend.Node) (ast.
 	}
 }
 
+// dateArith lowers an operator that reads a date as its time value: the arithmetic
+// operators, which ToNumber both sides, and the relational ones, which run the
+// Abstract Relational Comparison and get a number from a date because that comparison
+// asks ToPrimitive with the number hint. So d2 - d1 is a duration in milliseconds and
+// d1 < d2 orders two instants, both on the float64 the runtime's ValueOf answers.
+//
+// It fires only when a date is on one side and the other side is a date or a
+// number-coercible primitive, which keeps it off the pairs the number, string and
+// boolean paths already own. + is deliberately not here: a date is the one built-in
+// whose default hint is string, so d + x concatenates and goes through
+// stringifyOperand instead.
+func (r *Renderer) dateArith(opText string, left, right frontend.Node) (ast.Expr, bool, error) {
+	_, isRelational := relationalToken(opText)
+	if !isToNumberArithOp(opText) && !isRelational {
+		return nil, false, nil
+	}
+	if !r.isDate(left) && !r.isDate(right) {
+		return nil, false, nil
+	}
+	if !r.isDateArithOperand(left) || !r.isDateArithOperand(right) {
+		return nil, false, nil
+	}
+	l, err := r.unaryOperandToNumber(left)
+	if err != nil {
+		return nil, false, err
+	}
+	rr, err := r.unaryOperandToNumber(right)
+	if err != nil {
+		return nil, false, err
+	}
+	expr, ok := r.numericOpFromFloats(opText, l, rr)
+	return expr, ok, nil
+}
+
+// isDateArithOperand reports whether n can sit opposite a date in an operator that
+// reads both sides as numbers: another date, or one of the primitives ToNumber
+// converts at compile-known cost. Anything else, a dynamic value or an object with a
+// valueOf of its own, needs the boxing coercion and is left to its own path.
+func (r *Renderer) isDateArithOperand(n frontend.Node) bool {
+	return r.isDate(n) || r.isNumberCoercible(n)
+}
+
+// dateToJSONCall reports whether n is a no-argument date.toJSON() call, the shape
+// dateMethodCall lowers to value.DateToJSON. That runtime call answers a value.Value
+// because null is one of its two answers, while the checker types the method as
+// returning a string, so isDynamic recognizes the call by shape and keeps the box on
+// the dynamic path. It must stay in lockstep with the emit guard in dateMethodCall:
+// same receiver test, same argument count.
+func (r *Renderer) dateToJSONCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 1 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 || r.prog.Text(parts[1]) != "toJSON" {
+		return false
+	}
+	return r.isDate(parts[0])
+}
+
 // dateGetters maps each no-argument Date read to the runtime method that answers it.
 // The calendar getters come in a local pair and a UTC pair for every component, which is
 // most of the surface, and each is a straight rename, so the dispatch is a table rather
@@ -151,6 +214,10 @@ var dateGetters = map[string]string{
 	"getTime":            "GetTime",
 	"valueOf":            "ValueOf",
 	"toISOString":        "ToISOString",
+	"toString":           "ToString",
+	"toDateString":       "ToDateString",
+	"toTimeString":       "ToTimeString",
+	"toUTCString":        "ToUTCString",
 	"getTimezoneOffset":  "GetTimezoneOffset",
 	"getFullYear":        "GetFullYear",
 	"getMonth":           "GetMonth",
@@ -197,7 +264,7 @@ func (r *Renderer) dateMethodCall(recvNode frontend.Node, method string, argNode
 	args := r.namedArgs(argNodes)
 	_, isGetter := dateGetters[method]
 	_, isSetter := dateSetters[method]
-	if !isGetter && !isSetter && method != "setTime" {
+	if !isGetter && !isSetter && method != "setTime" && method != "toJSON" {
 		// The receiver is left unlowered on this path so that a hand-back does not leave
 		// the renderer carrying an import for an expression that was never emitted.
 		return nil, &NotYetLowerable{Reason: "the Date method ." + method + " is a later slice"}
@@ -221,6 +288,18 @@ func (r *Renderer) dateMethodCall(recvNode frontend.Node, method string, argNode
 			return nil, &NotYetLowerable{Reason: "date." + method + " takes at least one component"}
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: components}, nil
+	}
+	if method == "toJSON" {
+		if len(args) != 0 {
+			return nil, &NotYetLowerable{Reason: "date.toJSON takes no argument"}
+		}
+		// toJSON answers null for a date with no representable instant, so the runtime
+		// hands back a value.Value rather than a BStr even though the checker types the
+		// method as returning a string. dateToJSONCall marks the call node dynamic, which
+		// is what keeps the truthful value on the dynamic path: it flows into an any slot
+		// and hands the build back in a string slot rather than shipping "" for null.
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "DateToJSON"), Args: []ast.Expr{recv}}, nil
 	}
 	if method == "setTime" {
 		if len(args) != 1 || !r.isNumber(args[0]) {

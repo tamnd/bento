@@ -4646,6 +4646,13 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 		// itself, so the method reads its own source and flags with no boxing, the same
 		// way .source and .flags read off the concrete receiver.
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("ToStringBStr")}}, nil
+	case r.isDate(arg):
+		// A Date stringifies through Date.prototype.toString, the local reading with the
+		// zone name, and not through its time value: a date is the one built-in whose
+		// default coercion hint is string, which is why `d + ""` gives the reading and
+		// `d - 0` gives the number. The lowered expr is the *value.Date itself, so the
+		// method reads the instant with no boxing, the way the regexp case above does.
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("ToString")}}, nil
 	case r.isDynamic(arg):
 		// A dynamic argument defers the whole ToString to the value model,
 		// which dispatches on the runtime kind.
