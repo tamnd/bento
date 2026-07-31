@@ -4653,6 +4653,18 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 		// `d - 0` gives the number. The lowered expr is the *value.Date itself, so the
 		// method reads the instant with no boxing, the way the regexp case above does.
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("ToString")}}, nil
+	case r.isBufferBacked(arg):
+		// A buffer and a view carry no toString of their own, so each falls back to
+		// Object.prototype.toString and reads "[object ArrayBuffer]" and its two neighbors.
+		// The tag is on the box rather than on the concrete Go value, so this one boxes
+		// first and lets the value model read it, unlike the regexp and date above whose
+		// readings are methods on the runtime struct.
+		boxed, err := r.boxStaticToDynamic(lowered, arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", coerceFn), Args: []ast.Expr{boxed}}, nil
 	case r.isDynamic(arg):
 		// A dynamic argument defers the whole ToString to the value model,
 		// which dispatches on the runtime kind.

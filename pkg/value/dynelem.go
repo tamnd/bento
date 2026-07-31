@@ -33,6 +33,15 @@ func dynBox[T any](x T) Value {
 		// A date boxes to its own view rather than to a fresh object, so a date read out
 		// of a boxed collection is the same date the typed side holds and === says so.
 		return e.ToValue()
+	case *ArrayBuffer:
+		// The three byte-buffer kinds box to their own views for the same reason, and for
+		// them it matters twice over: a copy would be a second run of bytes, so a write
+		// made through the collection's view would land where nobody reads it.
+		return e.ToValue()
+	case *SharedArrayBuffer:
+		return e.ToValue()
+	case *DataView:
+		return e.ToValue()
 	}
 	Throw(NewTypeError(FromGoString("bento: this collection's element type has no dynamic form")))
 	return Undefined
@@ -67,6 +76,22 @@ func dynUnbox[T any](v Value) (T, bool) {
 		// Only a date box unboxes to a date. Any other object, including one carrying the
 		// same properties, is not a date and could never be a member of this collection.
 		if d := v.asDate(); d != nil {
+			return any(d).(T), true
+		}
+	case *ArrayBuffer:
+		// Only the matching box unboxes, and the two buffer kinds are told apart by which
+		// concrete backing the box carries rather than by their shared bytes: a
+		// SharedArrayBuffer is not a member of a Set<ArrayBuffer> however its storage is
+		// spelled underneath.
+		if b, ok := v.asBuffer().(*ArrayBuffer); ok {
+			return any(b).(T), true
+		}
+	case *SharedArrayBuffer:
+		if s, ok := v.asBuffer().(*SharedArrayBuffer); ok {
+			return any(s).(T), true
+		}
+	case *DataView:
+		if d := v.asDataView(); d != nil {
 			return any(d).(T), true
 		}
 	}

@@ -25,6 +25,10 @@ package value
 // than in the shared storage.
 type SharedArrayBuffer struct {
 	buf *ArrayBuffer
+	// boxed is this buffer's dynamic view, kept for the same reason the ArrayBuffer's is
+	// (buffervalue.go). It is the wrapper's own box rather than the storage's, so a shared
+	// buffer and the ArrayBuffer behind it are two values, which they are in JavaScript.
+	boxed *Object
 }
 
 // NewSharedArrayBuffer builds a zeroed fixed-length shared buffer of the given byte

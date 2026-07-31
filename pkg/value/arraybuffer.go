@@ -72,6 +72,11 @@ type ArrayBuffer struct {
 	detached      bool
 	resizable     bool
 	maxByteLength int
+	// boxed is this buffer's dynamic view, built on the first crossing into a value.Value
+	// and kept so every later crossing hands back the same object. A buffer is the storage
+	// its views alias, so two boxes of one buffer would compare unequal under ===
+	// (buffervalue.go).
+	boxed *Object
 }
 
 // NewArrayBuffer builds a zeroed buffer of the given byte length, the lowering of
@@ -120,6 +125,36 @@ func (b *ArrayBuffer) Resize(newLength float64) {
 	next := allocBytes(n)
 	copy(next, b.data)
 	b.data = next
+}
+
+// Slice copies the bytes in [start, end) into a fresh fixed-length buffer, the lowering
+// of ArrayBuffer.prototype.slice (25 §25.1.6). start and end are optional Numbers; a
+// negative index counts from the end and an omitted end runs to the current byte length,
+// the same relative-index rule Array.prototype.slice takes, and an end before the start
+// yields an empty buffer rather than a negative length. The result owns its bytes and
+// does not alias the receiver, so a later write through either shows only in that one,
+// and it is never resizable even when the receiver is, which is what the spec's
+// species-free allocation does. Slicing a detached buffer is a TypeError, since there
+// are no bytes left to copy.
+func (b *ArrayBuffer) Slice(bounds ...float64) *ArrayBuffer {
+	if b.detached {
+		Throw(NewTypeError(FromGoString("Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer")))
+	}
+	n := len(b.data)
+	start := 0
+	if len(bounds) > 0 {
+		start = relativeIndex(bounds[0], n)
+	}
+	end := n
+	if len(bounds) > 1 {
+		end = relativeIndex(bounds[1], n)
+	}
+	if end < start {
+		end = start
+	}
+	out := NewArrayBuffer(float64(end - start))
+	copy(out.data, b.data[start:end])
+	return out
 }
 
 // MaxByteLength is the largest byte length the buffer may hold, the .maxByteLength

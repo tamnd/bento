@@ -76,3 +76,32 @@ func TestArrayBufferHandsBackUnsupportedForms(t *testing.T) {
 	handsBack(t, "const n: any = 8; const b = new ArrayBuffer(n); console.log(b.byteLength);\n")
 	handsBack(t, "const opts: any = { maxByteLength: 16 }; const b = new ArrayBuffer(8, opts); console.log(b.byteLength);\n")
 }
+
+// TestArrayBufferSliceLoweringShape pins the Go slice lowers to: a Slice call on the
+// buffer carrying whichever bounds the call gave, since the runtime method reads its
+// variadic bounds by length and an omitted one has to stay omitted rather than arrive
+// as a NaN.
+func TestArrayBufferSliceLoweringShape(t *testing.T) {
+	const src = `const b = new ArrayBuffer(8);
+console.log(b.slice(2, 6).byteLength);
+console.log(b.slice(2).byteLength);
+console.log(b.slice().byteLength);
+`
+	source := renderProgram(t, src)
+	for _, want := range []string{
+		"b.Slice(2, 6)",
+		"b.Slice(2)",
+		"b.Slice()",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("ArrayBuffer slice lowering missing %q:\n%s", want, source)
+		}
+	}
+}
+
+// TestArrayBufferSliceHandsBackUnsupportedForms proves the slice lowering claims the
+// forms it covers and hands the rest back. A bound that is not a number is a later
+// slice, since it would need the ToNumber coercion the runtime method does not take.
+func TestArrayBufferSliceHandsBackUnsupportedForms(t *testing.T) {
+	handsBack(t, "const n: any = 2; const b = new ArrayBuffer(8); console.log(b.slice(n).byteLength);\n")
+}

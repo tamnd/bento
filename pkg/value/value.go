@@ -257,6 +257,19 @@ func (v Value) getSymKey(key *Symbol) Value {
 				return val
 			}
 		}
+		// A byte buffer and a data view each name themselves through Symbol.toStringTag,
+		// which they carry for real rather than through an internal slot, so a plain read
+		// of it answers "ArrayBuffer" the way node's does.
+		if b := v.object().jsBuffer; b != nil {
+			if val, ok := bufferSymGet(b, key); ok {
+				return val
+			}
+		}
+		if v.object().jsView != nil {
+			if val, ok := dataViewSymGet(key); ok {
+				return val
+			}
+		}
 		return v.object().getSymChained(v, key)
 	default:
 		return Undefined
@@ -527,6 +540,19 @@ func (v Value) Get(key BStr) Value {
 				return val
 			}
 		}
+		if b := v.object().jsBuffer; b != nil {
+			// A boxed buffer answers its own accessors and methods off the live bytes, so a
+			// dynamic b.byteLength reads what the typed side holds and a dynamic b.resize
+			// reshapes the storage every view over it aliases.
+			if val, ok := bufferGet(b, name); ok {
+				return val
+			}
+		}
+		if d := v.object().jsView; d != nil {
+			if val, ok := dataViewGet(d, name); ok {
+				return val
+			}
+		}
 		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
@@ -594,6 +620,16 @@ func (v Value) HasProperty(key BStr) bool {
 		}
 		if d := v.object().jsDate; d != nil {
 			if _, ok := dateGet(d, name); ok {
+				return true
+			}
+		}
+		if b := v.object().jsBuffer; b != nil {
+			if _, ok := bufferGet(b, name); ok {
+				return true
+			}
+		}
+		if d := v.object().jsView; d != nil {
+			if _, ok := dataViewGet(d, name); ok {
 				return true
 			}
 		}

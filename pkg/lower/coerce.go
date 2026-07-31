@@ -1133,6 +1133,13 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if r.isDate(src) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
 	}
+	// An ArrayBuffer, a SharedArrayBuffer or a DataView boxes through its own ToValue for
+	// the same reason a date does: the box is a view of the live bytes, so a write through
+	// one view is seen by every other, and two boxes of one buffer are one value under ===.
+	// A copy would be a second buffer, which is the one thing a backing store must not be.
+	if r.isArrayBuffer(src) || r.isSharedArrayBuffer(src) || r.isDataView(src) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
+	}
 	// A Map or a Set flowing into a dynamic slot boxes through the collection's own
 	// ToValue, which hands back a live view of it rather than a copy, so console.log
 	// prints the entries it holds now and a write through the box is visible to the
@@ -1316,6 +1323,12 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 		// same func(T) value.Value shape ArrayValueOf wants. The elements are views: the
 		// array copies, but each date in it is the one the typed slice holds.
 		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "Date"))}, Sel: ident("ToValue")}
+	case r.arrayBufferType(elem):
+		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "ArrayBuffer"))}, Sel: ident("ToValue")}
+	case r.sharedArrayBufferType(elem):
+		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "SharedArrayBuffer"))}, Sel: ident("ToValue")}
+	case r.dataViewType(elem):
+		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "DataView"))}, Sel: ident("ToValue")}
 	default:
 		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
 	}
@@ -1370,11 +1383,13 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 // answers where the static path would try to read fields off a Map type that has
 // none. A date is one for the same reason: its methods live on its prototype and its
 // own property table is empty, so Object.keys of one is the empty array in Node and the
-// box is what answers that rather than the Date interface's member list. Anything else
-// reports false and leaves the caller's static path alone.
+// box is what answers that rather than the Date interface's member list. A buffer and a
+// DataView are ones on the same ground: their bytes are not properties, so their own
+// tables are empty too. Anything else reports false and leaves the caller's static path
+// alone.
 func (r *Renderer) lowerAsDynamicReceiver(n frontend.Node) (ast.Expr, bool, error) {
 	dynamic := r.isDynamic(n)
-	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) {
+	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) && !r.isBufferBacked(n) {
 		return nil, false, nil
 	}
 	expr, err := r.lowerExpr(n)
@@ -1404,10 +1419,23 @@ func (r *Renderer) dynBoxableElem(t frontend.Type) bool {
 	if r.primitiveFlagsOfType(t)&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
 		return true
 	}
-	// A date is the one object type with a box of its own the view can present, so a
-	// Map<string, Date> reads its values through the same live boxes the typed side
-	// holds. Every other object type still hands back for want of an element box.
-	return t.Flags&frontend.TypeObject != 0 && r.isDateType(t)
+	// A date and the three byte-buffer kinds are the object types with a box of their
+	// own the view can present, so a Map<string, Date> or a Set<ArrayBuffer> reads its
+	// members through the same live boxes the typed side holds. Every other object type
+	// still hands back for want of an element box.
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	return r.isDateType(t) || r.arrayBufferType(t) || r.sharedArrayBufferType(t) || r.dataViewType(t)
+}
+
+// isBufferBacked reports whether a node's type is one of the three byte-buffer kinds
+// that box into a dynamic value through their own ToValue: an ArrayBuffer, a
+// SharedArrayBuffer, or a DataView. The three are asked together everywhere, since what
+// they share, a box over live bytes rather than over a property table, is exactly what
+// the boxing path cares about.
+func (r *Renderer) isBufferBacked(n frontend.Node) bool {
+	return r.isArrayBuffer(n) || r.isSharedArrayBuffer(n) || r.isDataView(n)
 }
 
 // boxOptionalToDynamic boxes a T | undefined result into a dynamic value.Value. The

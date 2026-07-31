@@ -28,6 +28,9 @@ type DataView struct {
 	byteOffset     int
 	byteLength     int
 	lengthTracking bool
+	// boxed is this view's dynamic view, kept for the same reason the buffer's is
+	// (buffervalue.go).
+	boxed *Object
 }
 
 // NewDataView builds a DataView over an existing ArrayBuffer, the lowering of new

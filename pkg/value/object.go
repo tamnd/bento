@@ -20,24 +20,26 @@ import (
 // not go through the property map. One struct backs both so an array can still
 // carry a named property without changing representation.
 type Object struct {
-	kind          Kind         // KindObject or KindArray
-	keys          []BStr       // string property names in insertion order (named properties)
-	descs         []descriptor // property descriptors, parallel to keys
-	symKeys       []*Symbol    // symbol property keys in insertion order, kept apart from string keys
-	symDescs      []descriptor // symbol property descriptors, parallel to symKeys
-	elems         []Value      // dense element storage for an array
-	call          callFn       // the invocable body of a callable, nil for a plain object
-	proto         *Object      // the [[Prototype]] a read climbs on an own miss; nil is the end of the user chain
-	protoNull     bool         // distinguishes an explicit null [[Prototype]] from the default when proto is nil; read only by SetPrototype's change test
-	nonExtensible bool         // set once Object.preventExtensions blocks new keys; zero value is extensible
-	elemsSealed   bool         // set once Object.seal marks an array's elements non-configurable, so a delete fails
-	elemsFrozen   bool         // set once Object.freeze marks an array's elements non-writable, so a write drops
-	proxy         *proxyData   // non-nil marks this Object a Proxy exotic object; every internal method routes through its handler
-	regexp        *RegExp      // non-nil marks this Object the dynamic box of a RegExp; typeof is "object" and its reads and string form route to the regexp
-	err           *Error       // non-nil marks this Object the dynamic box of an Error; the inspector renders it as an error rather than as its properties
-	jsMap         mapBacking   // non-nil marks this Object the dynamic box of a Map; its members and its rendering route to the live map
-	jsSet         setBacking   // non-nil marks this Object the dynamic box of a Set; the Set half of jsMap
-	jsDate        *Date        // non-nil marks this Object the dynamic box of a Date; its members, its class tag, its coercions and its rendering route to the live date
+	kind          Kind          // KindObject or KindArray
+	keys          []BStr        // string property names in insertion order (named properties)
+	descs         []descriptor  // property descriptors, parallel to keys
+	symKeys       []*Symbol     // symbol property keys in insertion order, kept apart from string keys
+	symDescs      []descriptor  // symbol property descriptors, parallel to symKeys
+	elems         []Value       // dense element storage for an array
+	call          callFn        // the invocable body of a callable, nil for a plain object
+	proto         *Object       // the [[Prototype]] a read climbs on an own miss; nil is the end of the user chain
+	protoNull     bool          // distinguishes an explicit null [[Prototype]] from the default when proto is nil; read only by SetPrototype's change test
+	nonExtensible bool          // set once Object.preventExtensions blocks new keys; zero value is extensible
+	elemsSealed   bool          // set once Object.seal marks an array's elements non-configurable, so a delete fails
+	elemsFrozen   bool          // set once Object.freeze marks an array's elements non-writable, so a write drops
+	proxy         *proxyData    // non-nil marks this Object a Proxy exotic object; every internal method routes through its handler
+	regexp        *RegExp       // non-nil marks this Object the dynamic box of a RegExp; typeof is "object" and its reads and string form route to the regexp
+	err           *Error        // non-nil marks this Object the dynamic box of an Error; the inspector renders it as an error rather than as its properties
+	jsMap         mapBacking    // non-nil marks this Object the dynamic box of a Map; its members and its rendering route to the live map
+	jsSet         setBacking    // non-nil marks this Object the dynamic box of a Set; the Set half of jsMap
+	jsDate        *Date         // non-nil marks this Object the dynamic box of a Date; its members, its class tag, its coercions and its rendering route to the live date
+	jsBuffer      bufferBacking // non-nil marks this Object the dynamic box of an ArrayBuffer or a SharedArrayBuffer; its members and its rendering route to the live bytes
+	jsView        *DataView     // non-nil marks this Object the dynamic box of a DataView; the window half of jsBuffer
 }
 
 // isExtensible reports whether new properties may still be added, the state
