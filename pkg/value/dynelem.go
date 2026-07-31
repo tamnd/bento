@@ -50,6 +50,13 @@ func dynBox[T any](x T) Value {
 		// buffers they box to their own view, so a write through the collection's element
 		// lands in the bytes the typed side reads.
 		return e.jsTypedBox()
+	case dynSelfBoxing:
+		// A container holding a container reaches this arm: a Map, a Set and an Array each
+		// carry their own no-argument box, and matching the method rather than the type
+		// keeps the generic instantiations, of which there is one per element type in the
+		// program, from each needing a case. A Map and a Set box to a view the way the
+		// kinds above do; an array copies, which is what its box does everywhere.
+		return e.ToValue()
 	}
 	// A class instance is matched by its registration rather than by a case, since its Go
 	// type is generated and cannot be named here. Its box is a view too: the fields are
@@ -60,6 +67,14 @@ func dynBox[T any](x T) Value {
 	}
 	Throw(NewTypeError(FromGoString("bento: this collection's element type has no dynamic form")))
 	return Undefined
+}
+
+// dynSelfBoxing is an element that already knows how to box itself with no boxer handed
+// in. A Map, a Set and an Array have that method, which is what lets a collection hold
+// another collection: the outer box reaches an element with only its Go type in hand, so
+// a box needing an element boxer as an argument would have nowhere to get one.
+type dynSelfBoxing interface {
+	ToValue() Value
 }
 
 // classDynBox boxes a class instance element, reporting false when the element is not
@@ -131,6 +146,21 @@ func dynUnbox[T any](v Value) (T, bool) {
 			}
 		}
 	default:
+		// A Map and a Set come back through the backing their box carries. Their box is a
+		// view kept on the collection itself, so this hands back the very collection the
+		// typed side holds, which is what a Map keyed by Maps needs. An array has no arm
+		// here on purpose: its box is a copy with no way back, so a Set<number[]> asked
+		// whether it holds a boxed array cannot answer yes and does not pretend to.
+		if m := v.asMap(); m != nil {
+			if e, ok := any(m).(T); ok {
+				return e, true
+			}
+		}
+		if s := v.asSet(); s != nil {
+			if e, ok := any(s).(T); ok {
+				return e, true
+			}
+		}
 		// A class instance comes back through the pointer its view carries, so a value read
 		// out of a boxed collection is the instance the typed side holds rather than an
 		// object that merely looks like one. A plain object with the same fields carries no

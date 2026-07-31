@@ -57,8 +57,8 @@ func TestOptionalBoxHandsBack(t *testing.T) {
 		want string
 	}{
 		{
-			"collectionElement",
-			"const outer = new Map<string, Map<string, number>>();\nconsole.log(outer.get('a'));\n",
+			"tupleElement",
+			"const outer = new Map<string, [number, string]>();\nconsole.log(outer.get('a'));\n",
 			"boxing an optional of this type into a dynamic value is a later slice",
 		},
 		{
