@@ -127,6 +127,18 @@ const eq: boolean = isDeepStrictEqual(0, -0);`)
 	}
 }
 
+// TestUtilTakesACollection pins that a typed collection reaches util now that it
+// boxes. It used to be the stand-in for an argument with no dynamic form, which is
+// why the hand-back cases below reach for an array of objects instead.
+func TestUtilTakesACollection(t *testing.T) {
+	got := renderProgram(t, `import { format } from "node:util";
+const m = new Map<string, number>();
+const s: string = format("%s", m);`)
+	if !strings.Contains(got, ".ToValue()") {
+		t.Errorf("a map handed to util.format did not box through ToValue:\n%s", got)
+	}
+}
+
 // TestUtilHandbacks pins what is not there yet. A member util does not carry must
 // name itself in the reason, since the module now exists and a reader would otherwise
 // be told the whole import was the problem.
@@ -151,15 +163,15 @@ const f: any = util.format;`,
 		{
 			"an argument that does not box yet",
 			`import { format } from "node:util";
-const m = new Map<string, number>();
-const s: string = format("%s", m);`,
+const rows = [{ a: 1 }];
+const s: string = format("%s", rows);`,
 			"util.format with an argument that does not box yet",
 		},
 		{
 			"a comparison of a value that does not box yet",
 			`import { isDeepStrictEqual } from "node:util";
-const m = new Map<string, number>();
-const eq: boolean = isDeepStrictEqual(m, m);`,
+const rows = [{ a: 1 }];
+const eq: boolean = isDeepStrictEqual(rows, rows);`,
 			"util.isDeepStrictEqual with an argument that does not box yet",
 		},
 	}

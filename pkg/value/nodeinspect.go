@@ -14,10 +14,10 @@
 // that decides how many columns a grouped array gets.
 //
 // The port covers the value kinds bento can box: the primitives, plain objects,
-// arrays, functions, regexps, errors, and proxies. Map, Set, Date and the typed
-// arrays are concrete Go types that do not box into a Value yet, so their
-// branches in Node's formatRaw have no counterpart here and are named in the
-// implementation note rather than half-written.
+// arrays, functions, regexps, errors, proxies, and the two collections, a Map and a
+// Set. Date, the typed arrays and the rest are concrete Go types that do not box into
+// a Value yet, so their branches in Node's formatRaw have no counterpart here and are
+// named in the implementation note rather than half-written.
 
 package value
 
@@ -451,6 +451,29 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 			return base
 		}
 
+	case o.jsMap != nil:
+		// A Map renders its entries rather than its properties, since it has none: the
+		// size rides the prefix and each entry reads "key => value". An empty map with no
+		// properties of its own is the whole output, "Map(0) {}", so it returns here
+		// before the depth handling the way an empty array does.
+		prefix := inspectPrefix(constructor, ctorNull, "Map", "("+strconv.Itoa(o.jsMap.jsSize())+")")
+		keys = inspectObjectKeys(o, c.showHidden)
+		braces = [2]string{prefix + "{", "}"}
+		if o.jsMap.jsSize() == 0 && len(keys) == 0 {
+			return prefix + "{}"
+		}
+		formatter = func() []string { return c.formatMapEntries(o.jsMap, recurseTimes) }
+
+	case o.jsSet != nil:
+		// A Set is the Map case with one value per entry instead of a pair.
+		prefix := inspectPrefix(constructor, ctorNull, "Set", "("+strconv.Itoa(o.jsSet.jsSize())+")")
+		keys = inspectObjectKeys(o, c.showHidden)
+		braces = [2]string{prefix + "{", "}"}
+		if o.jsSet.jsSize() == 0 && len(keys) == 0 {
+			return prefix + "{}"
+		}
+		formatter = func() []string { return c.formatSetMembers(o.jsSet, recurseTimes) }
+
 	case o.err != nil:
 		keys = inspectErrorKeys(o, c.showHidden)
 		base = inspectErrorBase(o.err)
@@ -557,6 +580,12 @@ func inspectConstructorName(v Value) (string, bool) {
 	o := v.object()
 	if o.err != nil {
 		return o.err.ErrorName(), false
+	}
+	if o.jsMap != nil {
+		return "Map", false
+	}
+	if o.jsSet != nil {
+		return "Set", false
 	}
 	for cur := o; ; {
 		if cur.protoNull {
@@ -905,6 +934,32 @@ func (c *inspectCtx) formatSpecialArray(v Value, recurseTimes, maxLength int, ou
 	} else if remaining > 0 {
 		output = append(output, remainingText(remaining))
 	}
+	return output
+}
+
+// formatMapEntries is Node's formatMap: one entry per line of output, spelled
+// "key => value", both rendered one level deeper in so a nested container that wraps
+// lines up inside the braces. The entries are read off the live map in insertion
+// order, which is the order a Map enumerates in.
+func (c *inspectCtx) formatMapEntries(m mapBacking, recurseTimes int) []string {
+	output := make([]string, 0, m.jsSize())
+	c.indentationLvl += 2
+	for i := 0; i < m.jsSize(); i++ {
+		k, v := m.jsEntry(i)
+		output = append(output, c.formatValue(k, recurseTimes)+" => "+c.formatValue(v, recurseTimes))
+	}
+	c.indentationLvl -= 2
+	return output
+}
+
+// formatSetMembers is Node's formatSet, the Map case with a bare value per entry.
+func (c *inspectCtx) formatSetMembers(s setBacking, recurseTimes int) []string {
+	output := make([]string, 0, s.jsSize())
+	c.indentationLvl += 2
+	for i := 0; i < s.jsSize(); i++ {
+		output = append(output, c.formatValue(s.jsMember(i), recurseTimes))
+	}
+	c.indentationLvl -= 2
 	return output
 }
 

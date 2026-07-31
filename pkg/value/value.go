@@ -235,6 +235,21 @@ func (v Value) getSymKey(key *Symbol) Value {
 	}
 	switch v.kind {
 	case KindObject, KindArray, KindFunc:
+		// A boxed collection answers the two symbol-keyed members a Map and a Set carry,
+		// the default iterator and the toStringTag Object.prototype.toString reads, off
+		// the live collection. They are answered here rather than installed as own symbol
+		// properties so the key walks that back console.log and Object.keys stay empty,
+		// the way a real Map's and Set's do.
+		if m := v.object().jsMap; m != nil {
+			if val, ok := mapSymGet(m, key); ok {
+				return val
+			}
+		}
+		if s := v.object().jsSet; s != nil {
+			if val, ok := setSymGet(s, key); ok {
+				return val
+			}
+		}
 		return v.object().getSymChained(v, key)
 	default:
 		return Undefined
@@ -481,6 +496,20 @@ func (v Value) Get(key BStr) Value {
 				return val
 			}
 		}
+		if m := v.object().jsMap; m != nil {
+			// A boxed Map answers its own members, .size and the methods, off the live map
+			// rather than an empty property bag, so a dynamic read reaches the same entries
+			// the typed path holds. A name that is not a Map member climbs the ordinary
+			// chain and ends at undefined, which is what such a read does in JavaScript.
+			if val, ok := mapGet(m, name); ok {
+				return val
+			}
+		}
+		if s := v.object().jsSet; s != nil {
+			if val, ok := setGet(s, name); ok {
+				return val
+			}
+		}
 		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
@@ -532,6 +561,19 @@ func (v Value) HasProperty(key BStr) bool {
 		}
 		return o.hasChained(key)
 	case KindObject, KindFunc:
+		// A boxed collection carries its members the way a real Map and Set carry theirs
+		// on their prototype, so `'size' in map` and `'add' in set` answer true, which
+		// the property read above already agrees with.
+		if m := v.object().jsMap; m != nil {
+			if _, ok := mapGet(m, name); ok {
+				return true
+			}
+		}
+		if s := v.object().jsSet; s != nil {
+			if _, ok := setGet(s, name); ok {
+				return true
+			}
+		}
 		return v.object().hasChained(key)
 	default:
 		Throw(NewTypeError(FromGoString("Cannot use 'in' operator to search for '" + name + "' in a non-object")))
@@ -1101,11 +1143,13 @@ func toPrimitiveString(v Value) BStr   { return ToString(toPrimitive(v, hintStri
 
 // ordinaryToString spells an object the way the default Object.prototype.toString
 // and Array.prototype.toString do: an array is its elements joined by commas with
-// null and undefined rendered empty, and any other object is the "[object Object]"
-// tag.
+// null and undefined rendered empty, and any other object is its class tag. The tag
+// is ClassTag rather than a flat "[object Object]" because Object.prototype.toString
+// honors Symbol.toStringTag, so String(new Map()) reads "[object Map]" and an object
+// that names itself reads by that name, both of which the engine prints.
 func ordinaryToString(v Value) BStr {
 	if v.kind != KindArray {
-		return FromGoString("[object Object]")
+		return ClassTag(v)
 	}
 	o := v.object()
 	var b []uint16

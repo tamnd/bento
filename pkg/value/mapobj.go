@@ -25,6 +25,16 @@ type Map[K any, V any] struct {
 	keys []K
 	vals []V
 	eq   func(K, K) bool
+	// norm folds a key to the form the map stores it in, for the one case where
+	// SameValueZero calls two distinct keys the same: Map.prototype.set replaces -0
+	// with +0 before it stores, so a map built from -0 reads back and prints 0. It is
+	// nil for a key type that has no such fold, which is every kind but a number.
+	norm func(K) K
+	// boxed is the dynamic view of this map, built on the first crossing into a
+	// value.Value slot and kept so every later crossing hands back the same object.
+	// A JavaScript Map is a reference, so two boxes of one map would compare unequal
+	// under === and print as two values; mapvalue.go owns what the box carries.
+	boxed *Object
 }
 
 // NewNumberMap builds an empty Map with number keys, the lowering of new Map<number,
@@ -34,7 +44,7 @@ type Map[K any, V any] struct {
 func NewNumberMap[V any]() *Map[float64, V] {
 	return &Map[float64, V]{eq: func(a, b float64) bool {
 		return a == b || (a != a && b != b)
-	}}
+	}, norm: normZero}
 }
 
 // NewStringMap builds an empty Map with string keys, the lowering of new Map<string,
@@ -71,7 +81,26 @@ func NewRefMap[K comparable, V any]() *Map[K, V] {
 // object by identity, exactly as the kind-specific constructors above do for the
 // keys they each admit.
 func NewDynMap[V any]() *Map[Value, V] {
-	return &Map[Value, V]{eq: SameValueZero}
+	return &Map[Value, V]{eq: SameValueZero, norm: normZeroValue}
+}
+
+// normZero is the -0 to +0 fold Map.prototype.set and Set.prototype.add apply to a
+// number key. Comparing against 0 catches both zeroes and nothing else, and adding
+// them is what turns -0 into +0 without touching any other number.
+func normZero(k float64) float64 {
+	if k == 0 {
+		return 0
+	}
+	return k
+}
+
+// normZeroValue is normZero for a dynamically keyed collection, where the number is
+// boxed and every other kind passes through untouched.
+func normZeroValue(k Value) Value {
+	if k.kind == KindNumber && k.AsNumber() == 0 {
+		return Number(0)
+	}
+	return k
 }
 
 // find returns the index of the entry whose key matches k, or -1 when the map has
@@ -91,6 +120,9 @@ func (m *Map[K, V]) find(k K) int {
 // position and takes the new value, matching JavaScript, and the map itself is the
 // result so a chained set lowers with no temporary.
 func (m *Map[K, V]) Set(k K, v V) *Map[K, V] {
+	if m.norm != nil {
+		k = m.norm(k)
+	}
 	if i := m.find(k); i >= 0 {
 		m.vals[i] = v
 		return m
@@ -193,5 +225,5 @@ func (m *Map[K, V]) Values() []V {
 // the members copy needs no dedup and the new Set shares the same eq, giving it the same
 // SameValueZero identity the map keys had.
 func (m *Map[K, V]) KeySet() *Set[K] {
-	return &Set[K]{members: append([]K(nil), m.keys...), eq: m.eq}
+	return &Set[K]{members: append([]K(nil), m.keys...), eq: m.eq, norm: m.norm}
 }

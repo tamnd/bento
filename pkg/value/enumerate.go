@@ -80,6 +80,26 @@ func (v Value) Entries() Value {
 	return NewArrayValue(pairs)
 }
 
+// EntryPairs is Entries for a caller that has a Go type for the pair. The lowerer
+// reaches for it when the checker gave Object.entries a typed pair array, which is
+// what it gives for a receiver whose type it knows, and hands the pair constructor
+// for the tuple struct it interned for that type. The walk is the one Entries makes,
+// so the two agree on which properties an object contributes and in what order; only
+// the shape of what comes back differs, a typed array rather than a boxed one.
+func EntryPairs[T any](v Value, pair func(BStr, Value) T) *Array[T] {
+	switch v.kind {
+	case KindObject, KindArray, KindFunc:
+	default:
+		return NewArray[T]()
+	}
+	keys := v.object().orderedStringKeysFiltered(true)
+	pairs := make([]T, len(keys))
+	for i, k := range keys {
+		pairs[i] = pair(k, v.Get(k))
+	}
+	return NewArray(pairs...)
+}
+
 // OwnSymbols returns the receiver's own symbol-keyed property keys as a value array
 // in insertion order, the value Object.getOwnPropertySymbols builds for a dynamic
 // receiver. Both enumerable and non-enumerable symbol keys appear, since the spec

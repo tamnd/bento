@@ -693,9 +693,9 @@ func (r *Renderer) stringArgs(what string, argNodes []frontend.Node) ([]ast.Expr
 // boxedArgs lowers a variadic list of arguments of any type into boxed values, the
 // shape util.format and util.inspect take. Where a path helper needs each argument
 // to be a string, these render whatever they are given, so each argument boxes into
-// a value.Value instead. An argument bento cannot box yet (an array of objects, a
-// Map) hands the whole call back, since a util call that dropped one of its
-// arguments would print something other than what the program asked for.
+// a value.Value instead. An argument bento cannot box yet (an array of objects) hands
+// the whole call back, since a util call that dropped one of its arguments would
+// print something other than what the program asked for.
 func (r *Renderer) boxedArgs(what string, argNodes []frontend.Node) ([]ast.Expr, error) {
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {

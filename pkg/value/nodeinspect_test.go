@@ -73,6 +73,47 @@ func inspectCases(t *testing.T) map[string]Value {
 	symbolKeyed.SetElem(NewSymbol(FromGoString("k")), Number(1))
 	symbolKeyed.Set(FromGoString("plain"), Number(2))
 
+	// The collections are built through the dynamic constructors, which is what a
+	// `new Map()` with no key type lowers to and so the box these cases render.
+	mapOf := func(kv ...Value) Value {
+		m := NewDynMap[Value]()
+		for i := 0; i < len(kv); i += 2 {
+			m.Set(kv[i], kv[i+1])
+		}
+		return m.ToValue()
+	}
+	setOf := func(members ...Value) Value {
+		s := NewDynSet()
+		for _, v := range members {
+			s.Add(v)
+		}
+		return s.ToValue()
+	}
+	counted := func(n int) []Value {
+		out := make([]Value, n)
+		for i := range out {
+			out[i] = Number(float64(i))
+		}
+		return out
+	}
+	countedPairs := func(n int) []Value {
+		out := make([]Value, 0, 2*n)
+		for i := 0; i < n; i++ {
+			out = append(out, Number(float64(i)), Number(float64(i)))
+		}
+		return out
+	}
+	mapWithProp := mapOf(Number(1), Number(2))
+	mapWithProp.Set(FromGoString("x"), Number(5))
+	setWithProp := setOf(Number(1))
+	setWithProp.Set(FromGoString("x"), Number(5))
+	circularMap := NewDynMap[Value]()
+	circularMapValue := circularMap.ToValue()
+	circularMap.Set(str("self"), circularMapValue)
+	circularSet := NewDynSet()
+	circularSetValue := circularSet.ToValue()
+	circularSet.Add(circularSetValue)
+
 	errWithCode := NewNodeError("TypeError", "E1", FromGoString("bad"))
 	errWithProps := NewError(FromGoString("x")).ToValue()
 	errWithProps.Set(FromGoString("foo"), Number(1))
@@ -170,7 +211,35 @@ func inspectCases(t *testing.T) map[string]Value {
 		"error in array":        NewArrayValue([]Value{NewError(FromGoString("x")).ToValue()}),
 		"error with properties": errWithProps,
 
+		"empty map":               mapOf(),
+		"map of numbers":          mapOf(Number(1), Number(2), Number(3), Number(4)),
+		"map of strings":          mapOf(str("a"), str("x"), str("b"), str("y")),
+		"map with object value":   mapOf(str("a"), obj("b", Number(1))),
+		"map with object key":     mapOf(obj("a", Number(1)), str("v")),
+		"map with named property": mapWithProp,
+		"nested maps past depth": mapOf(str("a"), mapOf(str("b"),
+			mapOf(str("c"), mapOf(str("d"), Number(1))))),
+		"long map": mapOf(
+			str("alpha"), str("aaaaaaaaaaaaaaa"),
+			str("beta"), str("bbbbbbbbbbbbbbb"),
+			str("gamma"), str("ccccccccccccccc")),
+		"map in object":    obj("m", mapOf(Number(1), Number(2))),
+		"map in array":     NewArrayValue([]Value{mapOf(Number(1), Number(2))}),
+		"twenty entry map": mapOf(countedPairs(20)...),
+
+		"empty set":               setOf(),
+		"set of numbers":          setOf(Number(1), Number(2), Number(3)),
+		"set of strings":          setOf(str("a"), str("b")),
+		"set of objects":          setOf(obj("a", Number(1)), obj("b", Number(2))),
+		"set with named property": setWithProp,
+		"nested sets past depth":  setOf(setOf(setOf(setOf(Number(1))))),
+		"thirty number set":       setOf(counted(30)...),
+		"set in object":           obj("s", setOf(Number(1))),
+		"map of sets":             mapOf(str("a"), setOf(Number(1), Number(2))),
+
 		"circular object":              circularObject,
+		"circular map":                 circularMapValue,
+		"circular set":                 circularSetValue,
 		"circular array":               circularArray,
 		"deep circular":                deepCircular,
 		"two references to one object": obj("a", sharedNested, "b", sharedNested),

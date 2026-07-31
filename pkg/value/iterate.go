@@ -91,6 +91,24 @@ func protocolIter(it Value) *IterHelper {
 	})
 }
 
+// iterObject wraps a pull closure in the object JavaScript expects an iterator to be:
+// a next() answering { value, done }, and a Symbol.iterator answering itself so the
+// result can be handed straight to anything that takes an iterable. It is what a
+// collection's keys(), values() and entries() hand back, and what an array's three
+// iterator methods build on through iterValue.
+func iterObject(next func() IterResult) Value {
+	obj := NewObject()
+	obj.Set(FromGoString("next"), NewFunc(func(args []Value) Value {
+		r := next()
+		res := NewObject()
+		res.Set(FromGoString("value"), r.Value)
+		res.Set(FromGoString("done"), Bool(r.Done))
+		return res
+	}))
+	obj.setSymKey(symbolIterator, NewFunc(func(args []Value) Value { return obj }))
+	return obj
+}
+
 // IterateToSlice drains an iterable into a Go slice, the eager form a spread and an
 // array destructuring need where a loop will not stand: `[...it]` and
 // `const [a, b] = it` both want every element at once. It is Iterate driven to

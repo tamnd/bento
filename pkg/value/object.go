@@ -35,6 +35,8 @@ type Object struct {
 	proxy         *proxyData   // non-nil marks this Object a Proxy exotic object; every internal method routes through its handler
 	regexp        *RegExp      // non-nil marks this Object the dynamic box of a RegExp; typeof is "object" and its reads and string form route to the regexp
 	err           *Error       // non-nil marks this Object the dynamic box of an Error; the inspector renders it as an error rather than as its properties
+	jsMap         mapBacking   // non-nil marks this Object the dynamic box of a Map; its members and its rendering route to the live map
+	jsSet         setBacking   // non-nil marks this Object the dynamic box of a Set; the Set half of jsMap
 }
 
 // isExtensible reports whether new properties may still be added, the state

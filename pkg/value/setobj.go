@@ -25,6 +25,13 @@ import "slices"
 type Set[T any] struct {
 	members []T
 	eq      func(T, T) bool
+	// norm folds a member to the form the set stores it in, the -0 to +0 fold
+	// Set.prototype.add applies before it stores, for the reason Map.norm exists.
+	norm func(T) T
+	// boxed is the dynamic view of this set, built on the first crossing into a
+	// value.Value slot and kept so every later crossing hands back the same object,
+	// for the reason Map.boxed is kept. setvalue.go owns what the box carries.
+	boxed *Object
 }
 
 // NewNumberSet builds an empty Set with number members, the lowering of new
@@ -35,7 +42,7 @@ type Set[T any] struct {
 func NewNumberSet() *Set[float64] {
 	return &Set[float64]{eq: func(a, b float64) bool {
 		return a == b || (a != a && b != b)
-	}}
+	}, norm: normZero}
 }
 
 // NewStringSet builds an empty Set with string members, the lowering of new
@@ -69,7 +76,7 @@ func NewRefSet[T comparable]() *Set[T] {
 // Members compare by SameValueZero over the boxed value, the one comparison that
 // covers every kind at once, exactly as NewDynMap does for its keys.
 func NewDynSet() *Set[Value] {
-	return &Set[Value]{eq: SameValueZero}
+	return &Set[Value]{eq: SameValueZero, norm: normZeroValue}
 }
 
 // find returns the index of the member that matches v, or -1 when the set has no
@@ -89,6 +96,9 @@ func (s *Set[T]) find(v T) int {
 // leaves the set unchanged and keeps its position, matching JavaScript, and the set
 // itself is the result so a chained add lowers with no temporary.
 func (s *Set[T]) Add(v T) *Set[T] {
+	if s.norm != nil {
+		v = s.norm(v)
+	}
 	if s.find(v) < 0 {
 		s.members = append(s.members, v)
 	}
@@ -156,7 +166,7 @@ func (s *Set[T]) Members() []T {
 // operands do. The members are left empty for the caller to fill in the order the
 // operation requires.
 func (s *Set[T]) newLike() *Set[T] {
-	return &Set[T]{eq: s.eq}
+	return &Set[T]{eq: s.eq, norm: s.norm}
 }
 
 // Union returns a new set of the members in this set or the other, the lowering of

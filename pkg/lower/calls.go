@@ -2906,6 +2906,68 @@ func (r *Renderer) objectEntries(argNodes []frontend.Node) (ast.Expr, error) {
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Entries")}}, nil
 }
 
+// objectEntriesCollection lowers Object.entries(m) for a Map or a Set receiver. A
+// collection keeps its entries off its property table, so what Object.entries answers
+// for one is its own named properties, which is the empty array for the collections a
+// program builds and exactly what the box already walks. The result is the typed pair
+// array the checker gave the call rather than the boxed array the dynamic path
+// returns, so a .length read off it lowers to the array's own Len; the pairs are
+// built by the runtime walk through the interned tuple's constructor, which keeps the
+// answer honest for a box that did pick up a property through a dynamic write.
+func (r *Renderer) objectEntriesCollection(call frontend.Node, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	recv, ok, err := r.lowerAsDynamicReceiver(argNodes[0])
+	if err != nil {
+		return nil, true, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	tupleT, ok := r.prog.ElementType(r.prog.TypeAt(call))
+	if !ok {
+		return nil, true, &NotYetLowerable{Reason: "Object.entries whose result is not an array is a later slice"}
+	}
+	elems, ok := r.prog.TupleElements(tupleT)
+	if !ok || len(elems) != 2 {
+		return nil, true, &NotYetLowerable{Reason: "Object.entries whose result is not a two-element tuple array is a later slice"}
+	}
+	keyType, err := r.typeExpr(elems[0].Type)
+	if err != nil {
+		return nil, true, err
+	}
+	valType, err := r.typeExpr(elems[1].Type)
+	if err != nil {
+		return nil, true, err
+	}
+	// The walk hands the pair constructor a key string and a boxed value, so the
+	// tuple's slots have to be those two types. The checker types the call over a
+	// collection as [string, any][], which is exactly that; anything else hands back
+	// rather than emit a constructor whose arguments would not fit.
+	if goTypeString(keyType) != "value.BStr" || goTypeString(valType) != "value.Value" {
+		return nil, true, &NotYetLowerable{Reason: "Object.entries of a collection whose pair is not [string, any] is a later slice"}
+	}
+	tname, err := r.decls.internTuple(r, tupleT, elems)
+	if err != nil {
+		return nil, true, err
+	}
+	r.requireImport(valuePkg)
+	pair := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params: &ast.FieldList{List: []*ast.Field{
+				{Names: []*ast.Ident{ident("k")}, Type: sel("value", "BStr")},
+				{Names: []*ast.Ident{ident("v")}, Type: sel("value", "Value")},
+			}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(tname)}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.CompositeLit{Type: ident(tname), Elts: []ast.Expr{
+				&ast.KeyValueExpr{Key: ident("E0"), Value: ident("k")},
+				&ast.KeyValueExpr{Key: ident("E1"), Value: ident("v")},
+			}},
+		}}}},
+	}
+	return &ast.CallExpr{Fun: sel("value", "EntryPairs"), Args: []ast.Expr{recv, pair}}, true, nil
+}
+
 // objectEntriesShapeCall lowers Object.entries(o) on a fixed-shape object to the
 // array of [name, value] pairs the checker types the call as, built at compile
 // time from the struct's fields the way Object.values already builds its value
@@ -2932,6 +2994,12 @@ func (r *Renderer) objectEntriesShapeCall(call, callee frontend.Node, argNodes [
 	}
 	if len(argNodes) != 1 || r.isDynamic(argNodes[0]) {
 		return nil, false, nil
+	}
+	// A Map or a Set is not dynamic and has no fields to pair, so the shape walk
+	// below would read a struct a collection type does not have. Its entries live off
+	// its property table, which is what its box models, so it pairs from the box.
+	if r.isMap(argNodes[0]) || r.isSet(argNodes[0]) {
+		return r.objectEntriesCollection(call, argNodes)
 	}
 	props, err := r.objectShapeArg("entries", argNodes)
 	if err != nil {
@@ -3337,18 +3405,20 @@ func (r *Renderer) objectGetOwnPropertyDescriptors(argNodes []frontend.Node) (as
 // match (a missing optional field is not a key), which objectShapeArg already
 // gates through internStruct.
 func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (ast.Expr, error) {
-	if len(argNodes) == 1 && r.isDynamic(argNodes[0]) {
-		recv, err := r.lowerExpr(argNodes[0])
+	if len(argNodes) == 1 {
+		recv, ok, err := r.lowerAsDynamicReceiver(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		// keys drops the non-enumerable properties defineProperty can create;
-		// getOwnPropertyNames keeps them, so each routes to its own bag walk.
-		walk := "OwnKeys"
-		if method == "keys" {
-			walk = "OwnEnumerableKeys"
+		if ok {
+			// keys drops the non-enumerable properties defineProperty can create;
+			// getOwnPropertyNames keeps them, so each routes to its own bag walk.
+			walk := "OwnKeys"
+			if method == "keys" {
+				walk = "OwnEnumerableKeys"
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(walk)}}, nil
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(walk)}}, nil
 	}
 	props, err := r.objectShapeArg(method, argNodes)
 	if err != nil {
@@ -3371,12 +3441,14 @@ func (r *Renderer) objectOwnNameArray(method string, argNodes []frontend.Node) (
 // field types are compared through their rendered Go source so a number-literal
 // field type and a widened number field type read as the same element type.
 func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
-	if len(argNodes) == 1 && r.isDynamic(argNodes[0]) {
-		recv, err := r.lowerExpr(argNodes[0])
+	if len(argNodes) == 1 {
+		recv, ok, err := r.lowerAsDynamicReceiver(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}}, nil
+		if ok {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}}, nil
+		}
 	}
 	props, err := r.objectShapeArg("values", argNodes)
 	if err != nil {
