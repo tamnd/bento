@@ -1181,6 +1181,23 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{expr}}, nil
 	}
+	// A class instance flowing into a dynamic slot boxes into a live value.Object
+	// carrying its fields under the class's interned prototype, so console.log prints
+	// "P { x: 1 }" with the class named and a strict deep comparison holds it apart
+	// from another class and from a plain object with the same fields. It routes after
+	// isFixedObjectShape, which excludes a class instance by design, and reuses the same
+	// ObjectFromStruct call: the name and the prototype come from the runtime registry
+	// the class registers itself in, keyed by its Go type, so nothing has to be threaded
+	// through the call. Like the fixed-shape and array cases the box copies the fields,
+	// so it is a snapshot rather than a view.
+	if info, ok := r.classOfType(r.prog.TypeAt(src)); ok {
+		if err := r.classBoxable(info); err != nil {
+			return nil, err
+		}
+		info.boxed = true
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{expr}}, nil
+	}
 	// An array whose Go shape is a slice, a number[] or string[] binding flowing into a
 	// dynamic slot, boxes element by element into a live array Value, so the box reads
 	// as an array with the same members: console.log(nums) prints "[ 1, 2, 3 ]" rather
@@ -1298,6 +1315,54 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
 }
 
+// classBoxable reports whether a class's instances can be boxed into a dynamic value
+// faithfully, returning the hand-back that names the reason when they cannot.
+//
+// The box is built by reflection over the instance struct, which sees the class's
+// fields and nothing else. That is the right set: a method, a getter and a setter all
+// live on the prototype in JavaScript and are not own properties, so Node's console.log
+// of an instance does not print them either, and a private field lowers to an
+// unexported Go field which the reflection walk already skips the way JavaScript keeps
+// a #field out of Object.keys.
+//
+// A field holding a function is the exception. It is a real own property, printed as
+// "F { f: [Function: f] }", but the reflection walk reads a Go func as the value
+// undefined, so the callable would be silently dropped. That is the same wrong the
+// fixed-shape path refuses to ship, and it hands back here for the same reason.
+func (r *Renderer) classBoxable(info *classInfo) error {
+	for c := info; c != nil; c = c.base {
+		for _, f := range c.fields {
+			if f.ident == nil {
+				continue
+			}
+			if calls, _ := r.prog.Signatures(r.prog.TypeAt(f.ident)); len(calls) > 0 {
+				return &NotYetLowerable{Reason: "boxing class " + c.name + " into a dynamic value would drop its function-valued field ." + f.prop + ", a later slice"}
+			}
+		}
+	}
+	return nil
+}
+
+// classElemBoxable reports whether an array's element type is a class whose instances
+// box faithfully, the test the array boxer uses to decide it can name value.ClassToValue
+// as the element boxer. A class that hands back on its own hands back inside an array
+// too, by answering false here and letting the array's own message name the element
+// type; the two hand-backs would otherwise disagree about the same array.
+func (r *Renderer) classElemBoxable(elem frontend.Type) bool {
+	info, ok := r.classOfType(elem)
+	return ok && r.classBoxable(info) == nil
+}
+
+// markClassBoxed records that an element type's class is boxed, so it registers its Go
+// type with the runtime and its instances are named wherever the array is printed. The
+// switch case that names value.ClassToValue is what calls it, rather than the test above,
+// so a class is only marked when the boxer is really emitted for it.
+func (r *Renderer) markClassBoxed(elem frontend.Type) {
+	if info, ok := r.classOfType(elem); ok {
+		info.boxed = true
+	}
+}
+
 // boxArrayToDynamic boxes an array whose Go shape is a slice into a live array
 // Value through value.ArrayValueOf, which walks the slice applying the element's own
 // box constructor: value.Number over a number[], value.StringValue over a string[],
@@ -1342,6 +1407,14 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 		// (*value.Uint8Array).ToValue for a Uint8Array. The helper renders the Go type the
 		// name maps to and hangs ToValue off it.
 		box = r.typedArrayElemBox(elem)
+	case r.classElemBoxable(elem):
+		r.markClassBoxed(elem)
+		// An array of class instances boxes each element the way a lone instance boxes,
+		// through the reflection walk that reads its fields and the registry that names its
+		// class, so console.log(people) prints "[ P { x: 1 }, P { x: 2 } ]". The boxer is the
+		// generic value.ClassToValue with its type argument left to inference from the
+		// slice, which is why this needs no closure where an arbitrary element type would.
+		box = sel("value", "ClassToValue")
 	default:
 		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
 	}

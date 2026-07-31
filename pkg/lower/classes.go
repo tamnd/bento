@@ -76,6 +76,14 @@ type classInfo struct {
 	// the inherited fields and methods; registration rejects a derived member
 	// sharing a base member's name, so promotion never has to break a tie.
 	base *classInfo
+	// boxed marks a class some expression boxes into a dynamic value, which is what
+	// decides whether the class registers its Go type with the runtime. Only a
+	// registered class can be named when it is printed or held apart by a deep
+	// comparison, and only a boxed one is ever asked to be, so a program whose classes
+	// stay on the typed side emits no registration and pulls in no runtime for it. The
+	// flag is set while expressions lower and read after every class has rendered, since
+	// a boxing inside one class's method body can be the first use of another class.
+	boxed bool
 	// superArgs are the argument nodes of the constructor's super(...) call,
 	// validated to sit at the point past any this-free leading statements. They
 	// stay nil when the class has no constructor of its own; the synthesized
@@ -1923,6 +1931,14 @@ func (r *Renderer) renderClasses() ([]ast.Decl, error) {
 		}
 		out = append(out, decls...)
 	}
+	// The registrations go last, after every class body has lowered, because a boxing
+	// written inside one class's method is the first the renderer hears of another class
+	// being boxed and the classes render in source order.
+	for _, name := range r.classOrder {
+		if info := r.classes[name]; info.boxed {
+			out = append(out, r.classRegisterDecl(info))
+		}
+	}
 	return out, nil
 }
 
@@ -2347,6 +2363,38 @@ func (r *Renderer) staticInitRHS(rhs ast.Expr, f classField, boxed bool) (ast.Ex
 		return r.boxStaticToDynamic(rhs, f.init)
 	}
 	return r.coerceToTarget(rhs, f.init, f.ident)
+}
+
+// classRegisterDecl emits the class's registration with the runtime: a package-level
+// var whose initializer records the instance struct's Go type against the source class
+// name, so a boxed instance can be named without the boxing site having to say which
+// class it is. That matters because most positions have no boxing site at all: an
+// instance held in a field of another instance or in an array is reached by the
+// reflection walk, which sees only a Go type.
+//
+// It rides a var rather than an init function because Go runs package var initializers
+// before main either way, and the registration returns a bool for exactly that reason.
+// Every class registers, whether or not the program ever boxes one: the cost is one
+// small object per class and the alternative is deciding at render time whether some
+// later-lowered expression will box it.
+func (r *Renderer) classRegisterDecl(info *classInfo) ast.Decl {
+	r.requireImport(valuePkg)
+	return &ast.GenDecl{
+		Tok: token.VAR,
+		Specs: []ast.Spec{&ast.ValueSpec{
+			Names: []*ast.Ident{ident("_")},
+			Values: []ast.Expr{&ast.CallExpr{
+				Fun: sel("value", "RegisterClass"),
+				Args: []ast.Expr{
+					&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(info.name)},
+					&ast.CallExpr{
+						Fun:  &ast.ParenExpr{X: star(ident(info.goName))},
+						Args: []ast.Expr{ident("nil")},
+					},
+				},
+			}},
+		}},
+	}
 }
 
 // classStruct emits the struct: one field per instance field, in declaration

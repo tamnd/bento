@@ -259,6 +259,29 @@ func jsonToValue(v any) Value {
 		return x
 	case typedArrayBacking:
 		return x.jsTypedBox()
+	case *Date:
+		// The built-in kinds that carry a box of their own take it here rather than falling
+		// to the reflection walk below, which would read their unexported storage as an
+		// empty object. That matters most where the lift is a boxing rather than a JSON
+		// step: a class or an object shape holding a date is boxed field by field through
+		// this function, so without these a logged { d: new Date(0) } printed the date's
+		// quoted ISO string, picked up from its ToJSON, and a logged Map field printed {}.
+		// The JSON output does not move: the serializer applies toJSON to each value it
+		// writes, so the date still serializes to its ISO string, and a map's box has no
+		// own enumerable key, so it still serializes to {}.
+		return x.ToValue()
+	case *RegExp:
+		return RegExpValue(x)
+	case *ArrayBuffer:
+		return x.ToValue()
+	case *SharedArrayBuffer:
+		return x.ToValue()
+	case *DataView:
+		return x.ToValue()
+	case mapBacking:
+		return x.jsBox()
+	case setBacking:
+		return x.jsBox()
 	case jsonArray:
 		elems := x.jsonElements()
 		out := make([]Value, len(elems))
@@ -284,11 +307,23 @@ func jsonToValue(v any) Value {
 // skipped, an anonymous field flattens its own fields into the same object, an
 // absent optional property is dropped, and a present optional contributes the
 // value it wraps.
+//
+// A struct that is a registered class instance also takes that class's interned
+// prototype, which is what names it when it is printed and what holds it apart from
+// another class and from a plain object under a strict deep comparison. This is the
+// one funnel every struct boxing goes through, so a class instance is named wherever
+// it is reached: at the top, as a field of another instance, as an array element, or
+// as a member of a boxed collection.
 func jsonStructToValue(rv reflect.Value) Value {
 	if rv.Kind() == reflect.Pointer {
 		rv = rv.Elem()
 	}
 	obj := NewObject()
+	if rv.IsValid() {
+		if proto := classPrototypeFor(rv.Type()); proto != nil {
+			obj.object().proto = proto
+		}
+	}
 	jsonStructFields(obj, rv)
 	return obj
 }
