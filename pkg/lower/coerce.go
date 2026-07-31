@@ -499,6 +499,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.jsonStringifyUndefinedCall(n) {
 		return true
 	}
+	// date.toJSON() is the same shape of lie: the checker types it as returning a
+	// string, and the method answers null for a date with no representable instant, so
+	// it lowers to value.DateToJSON, which gives a Value. Recognizing the call by shape
+	// keeps the box on the dynamic path the way the JSON.stringify case above does.
+	if r.dateToJSONCall(n) {
+		return true
+	}
 	// A .value read off an IteratorResult whose type is not a clean primitive, the
 	// array iterator's `number | undefined` value being the first, stays the boxed
 	// value.Value the IterResult carries: there is no single Go type to coerce it to,
@@ -671,14 +678,16 @@ func (r *Renderer) jsonStringifyUndefinedCall(n frontend.Node) bool {
 	return len(args) == 1 && r.jsonStringifyIsUndefinedResult(r.prog.TypeAt(args[0]))
 }
 
-// guardJSONStringifyUndefinedIntoString hands back when a JSON.stringify call whose
-// JSON form is undefined flows into a clean string slot. The call lowers to the
-// undefined Value box, and coercing it into a string would run value.ToString, which
-// renders "undefined" — a value whose typeof is "string" where Node keeps a value
-// whose typeof is "undefined". There is no BStr that equals undefined, so the only
-// sound result is a handback. A slot that is any, unknown, or a union keeps the box
-// and is not guarded here.
-func (r *Renderer) guardJSONStringifyUndefinedIntoString(src frontend.Node, targetFlags frontend.TypeFlags) error {
+// guardNonStringBoxIntoString hands back when a call the checker types as returning a
+// string, but that actually answers a value no string can hold, flows into a clean
+// string slot. Two calls have that shape, and both are the standard library's type
+// lying rather than bento's: JSON.stringify of a value whose JSON form is undefined
+// answers undefined, and date.toJSON of a date with no representable instant answers
+// null. Coercing either would run value.ToString and produce "undefined" or "null", a
+// value whose typeof is "string" where Node keeps one whose typeof is not, so the only
+// sound result is a handback. A slot that is any, unknown, or a union keeps the box and
+// is not guarded here.
+func (r *Renderer) guardNonStringBoxIntoString(src frontend.Node, targetFlags frontend.TypeFlags) error {
 	if targetFlags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
 		return nil
 	}
@@ -687,6 +696,9 @@ func (r *Renderer) guardJSONStringifyUndefinedIntoString(src frontend.Node, targ
 	}
 	if r.jsonStringifyUndefinedCall(src) {
 		return &NotYetLowerable{Reason: "JSON.stringify of a top-level value whose JSON form is undefined bound into a string slot cannot be represented as a string, a later slice"}
+	}
+	if r.dateToJSONCall(src) {
+		return &NotYetLowerable{Reason: "date.toJSON bound into a string slot cannot be represented as a string, since an invalid date serializes as null"}
 	}
 	return nil
 }
@@ -1599,7 +1611,7 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// this the number type would drive value.NumberToString over a value.Value, which
 	// does not compile; with it the read flows through the value model, which prints
 	// the property that has not been assigned yet as undefined.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.dateToJSONCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
 }
 
 // isBoxedArrayElemRead reports whether src is an element read a[i] off an evolving
@@ -2862,7 +2874,7 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	if err := r.guardOptionalShapeCrossTypes(r.prog.TypeAt(srcNode), r.retType); err != nil {
 		return nil, err
 	}
-	if err := r.guardJSONStringifyUndefinedIntoString(srcNode, r.retType.Flags); err != nil {
+	if err := r.guardNonStringBoxIntoString(srcNode, r.retType.Flags); err != nil {
 		return nil, err
 	}
 	srcDyn := r.isDynamic(srcNode)
@@ -2924,7 +2936,7 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	if err := r.guardOptionalShapeCross(src, r.prog.TypeAt(target)); err != nil {
 		return nil, err
 	}
-	if err := r.guardJSONStringifyUndefinedIntoString(src, r.prog.TypeAt(target).Flags); err != nil {
+	if err := r.guardNonStringBoxIntoString(src, r.prog.TypeAt(target).Flags); err != nil {
 		return nil, err
 	}
 	// A source whose lowering is a box but whose checker type is a concrete primitive

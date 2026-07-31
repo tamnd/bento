@@ -109,8 +109,8 @@ console.log(a.getTime(), b.getTime(), Date.now());
 func TestUncoveredDateFormsHandBack(t *testing.T) {
 	for _, c := range []struct{ src, want string }{
 		{"const v = Date.now() > 0 ? 1 : \"2023-01-01\";\nconst d = new Date(v);\nconsole.log(d.getTime());", "needs coercion"},
-		{`const d = new Date(0); console.log(d.toDateString());`, "the Date method .toDateString"},
-		{`const d = new Date(0); console.log(d.toJSON());`, "the Date method .toJSON"},
+		{`const d = new Date(0); console.log(d.toLocaleDateString());`, "the Date method .toLocaleDateString"},
+		{`const d = new Date(0); console.log(d.toLocaleString());`, "the Date method .toLocaleString"},
 	} {
 		prog := compileJS(t, c.src)
 		r := NewRenderer(prog)
@@ -305,5 +305,123 @@ console.log(d.getTime(), Date.UTC(2023, 0, 1));
 		if !strings.Contains(src, want) {
 			t.Errorf("emitted Go does not contain %q:\n%s", want, src)
 		}
+	}
+}
+
+// TestDateFormatsLowerToTheRuntime pins the emission for the five formats this slice
+// brings. The four that answer a string are straight method calls on the *value.Date, so
+// they read the instant with no boxing; toJSON is the one that is not, since it answers
+// null for an invalid date and so goes through the function form that gives a Value.
+func TestDateFormatsLowerToTheRuntime(t *testing.T) {
+	src := renderExpandoJS(t, `const d = new Date(0);
+console.log(d.toString(), d.toDateString(), d.toTimeString(), d.toUTCString());
+console.log(d.toJSON());
+console.log(String(d), `+"`${d}`"+`);
+`)
+	for _, want := range []string{".ToString()", ".ToDateString()", ".ToTimeString()", ".ToUTCString()", "value.DateToJSON("} {
+		if !strings.Contains(src, want) {
+			t.Errorf("emitted Go does not contain %q:\n%s", want, src)
+		}
+	}
+}
+
+// TestDateFormatsAgreeWithEachOther is the run rather than the emission. It cannot pin
+// the local reading, which depends on the zone the compiled program runs in, so it pins
+// the relationships that hold in every zone: the two coercions reach toString, the two
+// halves of the reading compose back into it, and the UTC format does not move.
+func TestDateFormatsAgreeWithEachOther(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(1673751845006);
+console.log(String(d) === d.toString(), `+"`${d}`"+` === d.toString());
+console.log(d.toDateString() + " " + d.toTimeString() === d.toString());
+console.log(d.toUTCString());
+console.log(d.toISOString());
+const bad = new Date(NaN);
+console.log(bad.toString(), bad.toDateString(), bad.toTimeString(), bad.toUTCString());
+`))
+	want := "true true\ntrue\nSun, 15 Jan 2023 03:04:05 GMT\n2023-01-15T03:04:05.006Z\n" +
+		"Invalid Date Invalid Date Invalid Date Invalid Date\n"
+	if got != want {
+		t.Errorf("date formats\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestDateToJSONStaysDynamic pins the reason toJSON is lowered the way it is. It answers
+// null for a date with no representable instant, which no string can hold, so the call
+// keeps its box: it prints as null and hands the build back where a program binds it into
+// a string slot rather than shipping the empty string.
+func TestDateToJSONStaysDynamic(t *testing.T) {
+	got := goRunSource(t, renderExpandoJS(t, `const d = new Date(0);
+console.log(d.toJSON());
+console.log(new Date(NaN).toJSON());
+`))
+	want := "1970-01-01T00:00:00.000Z\nnull\n"
+	if got != want {
+		t.Errorf("toJSON\n got: %q\nwant: %q", got, want)
+	}
+
+	prog := compile(t, `const d = new Date(0);
+const s: string = d.toJSON();
+console.log(s);
+`)
+	r := NewRenderer(prog)
+	r.SetGoSignatures(testGoSignatures())
+	if _, err := r.RenderProgram(entryFile(t, prog)); err == nil {
+		t.Fatal("toJSON bound into a string slot lowered, want a hand-back")
+	}
+}
+
+// TestDateCoercionsSplitByHint pins the split that makes a date unlike every other
+// object. ToPrimitive takes the string hint by default on a date and the number hint
+// only when an operator asks for one, so + concatenates the local reading while -, *
+// and the relationals read the time value. Both sides read off the concrete
+// *value.Date, so neither coercion needs a box.
+func TestDateCoercionsSplitByHint(t *testing.T) {
+	src := renderUncheckedJS(t, `const a = new Date(1000);
+const b = new Date(2000);
+console.log("" + a);
+console.log(b - a, a < b, a * 2, +b);
+`)
+	for _, want := range []string{".ToString()", ".ValueOf()"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("emitted Go does not contain %q:\n%s", want, src)
+		}
+	}
+	got := goRunSource(t, src)
+	if !strings.HasSuffix(got, "1000 true 2000 2000\n") {
+		t.Errorf("date coercions\n got: %q", got)
+	}
+}
+
+// TestDateArithmeticMatchesTheEngine runs the coercions rather than reading them. Every
+// line here is zone independent, since a time value is the same number everywhere, which
+// is what lets the expected output be written down.
+func TestDateArithmeticMatchesTheEngine(t *testing.T) {
+	got := goRunSource(t, renderUncheckedJS(t, `const a = new Date(1000);
+const b = new Date(2000);
+console.log(b - a, a - b, b / a, b % a, a <= b, b > a, a >= b);
+console.log(+a, -a, a * 2, a - "500", a - true);
+const bad = new Date(NaN);
+console.log(+bad, bad - a, bad < a, bad > a);
+`))
+	want := "1000 -1000 2 0 true true false\n" +
+		"1000 -1000 2000 500 999\n" +
+		"NaN NaN false false\n"
+	if got != want {
+		t.Errorf("date arithmetic\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestDatePlusIsAConcatenation pins the other half of the split: + on a date is never
+// addition, so a date and a number join as text. The checker has no type for that
+// operator, so the concatenation boxes on its way out, which is what lets it print.
+func TestDatePlusIsAConcatenation(t *testing.T) {
+	got := goRunSource(t, renderUncheckedJS(t, `const d = new Date(0);
+console.log((d + 1) === (d.toString() + "1"));
+console.log(("x" + d) === ("x" + d.toString()));
+console.log((d + d) === (d.toString() + d.toString()));
+`))
+	want := "true\ntrue\ntrue\n"
+	if got != want {
+		t.Errorf("date concatenation\n got: %q\nwant: %q", got, want)
 	}
 }

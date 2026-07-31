@@ -755,13 +755,19 @@ var toleratedArity = map[int]bool{
 // run-time behavior the lowerer reproduces. 2362 ("The left-hand side of an
 // arithmetic operation must be of type 'any', 'number', 'bigint' or an enum
 // type") and 2363 (its right-hand-side twin) flag a statically typed string or
-// boolean used with -, *, /, %, **, or a bitwise operator. JavaScript coerces
-// each such operand through ToNumber before the numeric operation, so the
-// renderer lowers a string through value.StringToNumber and a boolean through
-// value.BoolToNumber and applies the operator to the two float64 results. An
-// operand that is not a number-coercible primitive, an object or a bigint mixed
-// with a number, is not this case and still hands back, so admitting the code
-// lets the runnable forms through and never emits Go that fails to compile.
+// boolean used with -, *, /, %, **, or a bitwise operator, and a date used with
+// any of them. JavaScript coerces each such operand through ToNumber before the
+// numeric operation, so the renderer lowers a string through
+// value.StringToNumber, a boolean through value.BoolToNumber, and a date through
+// its ValueOf, then applies the operator to the two float64 results. An operand
+// that is neither a date nor a number-coercible primitive, an object or a bigint
+// mixed with a number, is not this case and still hands back, so admitting the
+// code lets the runnable forms through and never emits Go that fails to compile.
+// The unit still hands back when such a diagnostic is present at all (lower's
+// unguardedNotAssign), so what the codes being here really buys is that the
+// report reaches the renderer to make that decision rather than stopping the
+// build with a type error. A .js entry, loaded with checkJs off, draws no such
+// report and lowers the coercion.
 var toleratedArithOperand = map[int]bool{
 	2362: true, // The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 	2363: true, // The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.

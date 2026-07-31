@@ -214,6 +214,17 @@ func (r *Renderer) unaryOperandToNumber(n frontend.Node) (ast.Expr, error) {
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BoolToNumber"), Args: []ast.Expr{e}}, nil
+	case r.isDate(n):
+		// A date in a numeric position reads its time value, because ToNumber runs
+		// ToPrimitive with the number hint and that takes valueOf. It reads off the
+		// concrete *value.Date, the numeric sibling of the ToString case in
+		// stringifyOperand, so +d and d - 0 are the millisecond count while "" + d is
+		// the local reading.
+		e, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: e, Sel: ident("ValueOf")}}, nil
 	}
 	return r.operandToNumber(n)
 }
@@ -249,22 +260,33 @@ func (r *Renderer) stringBoolArith(opText string, left, right frontend.Node) (as
 	if err != nil {
 		return nil, false, err
 	}
+	expr, ok := r.numericOpFromFloats(opText, l, rr)
+	return expr, ok, nil
+}
+
+// numericOpFromFloats builds the emit for an operator whose two operands have
+// already been coerced to float64, the shape every path that ToNumbers its operands
+// ends in: math.Mod for %, value.Pow for **, the int32-coercing form for a bitwise
+// operator, and a plain Go operator for the arithmetic and relational rest. It
+// reports false for an operator with no numeric Go form, which leaves the caller
+// unhandled and the expression to hand back.
+func (r *Renderer) numericOpFromFloats(opText string, l, rr ast.Expr) (ast.Expr, bool) {
 	switch opText {
 	case "%":
 		r.requireImport("math")
-		return &ast.CallExpr{Fun: sel("math", "Mod"), Args: []ast.Expr{l, rr}}, true, nil
+		return &ast.CallExpr{Fun: sel("math", "Mod"), Args: []ast.Expr{l, rr}}, true
 	case "**":
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "Pow"), Args: []ast.Expr{l, rr}}, true, nil
+		return &ast.CallExpr{Fun: sel("value", "Pow"), Args: []ast.Expr{l, rr}}, true
 	}
 	if goOp, shift, unsignedLeft, ok := bitwiseOp(opText); ok {
-		return r.bitwiseFromFloat(goOp, shift, unsignedLeft, l, rr), true, nil
+		return r.bitwiseFromFloat(goOp, shift, unsignedLeft, l, rr), true
 	}
 	goOp, ok := numericBinaryOp(opText)
 	if !ok {
-		return nil, false, nil
+		return nil, false
 	}
-	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, true, nil
+	return &ast.BinaryExpr{X: l, Op: goOp, Y: rr}, true
 }
 
 // isToNumberArithOp reports whether an operator coerces both operands through
