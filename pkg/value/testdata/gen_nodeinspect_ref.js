@@ -7,8 +7,10 @@
 // Each case has a name the Go test builds the same value for, so the two sides are
 // matched by name rather than by position and a case added here is a compile error
 // on the Go side until it is built there too. Every value is one bento can box into
-// a value.Value; Map, Set, Date and the typed arrays are left out because they have
-// no boxed form yet, not because Node renders them uninterestingly.
+// a value.Value; Date and the typed arrays are left out because they have no boxed
+// form yet, not because Node renders them uninterestingly. Map and Set are in, since
+// they box now, and they bring rendering of their own: a size in the prefix, the
+// "key => value" spelling, and the same line breaking the object form gets.
 
 'use strict';
 const util = require('util');
@@ -44,6 +46,16 @@ const stacklessError = (e) => {
 const symbolKeyed = {};
 symbolKeyed[Symbol('k')] = 1;
 symbolKeyed.plain = 2;
+
+const mapWithProp = new Map([[1, 2]]);
+mapWithProp.x = 5;
+const setWithProp = new Set([1]);
+setWithProp.x = 5;
+const circularMap = new Map();
+circularMap.set('self', circularMap);
+const circularSet = new Set();
+circularSet.add(circularSet);
+const counted = (n) => Array.from({ length: n }, (_, i) => i);
 
 const cases = {
   // Primitives on their own.
@@ -135,8 +147,34 @@ const cases = {
   'error in array': [stacklessError(new Error('x'))],
   'error with properties': Object.assign(stacklessError(new Error('x')), { foo: 1, bar: 'y' }),
 
+  // Maps and sets, which print their size, their entries and any property put on
+  // them on top of the entries.
+  'empty map': new Map(),
+  'map of numbers': new Map([[1, 2], [3, 4]]),
+  'map of strings': new Map([['a', 'x'], ['b', 'y']]),
+  'map with object value': new Map([['a', { b: 1 }]]),
+  'map with object key': new Map([[{ a: 1 }, 'v']]),
+  'map with named property': mapWithProp,
+  'nested maps past depth': new Map([['a', new Map([['b', new Map([['c', new Map([['d', 1]])]])]])]]),
+  'long map': new Map([['alpha', 'aaaaaaaaaaaaaaa'], ['beta', 'bbbbbbbbbbbbbbb'], ['gamma', 'ccccccccccccccc']]),
+  'map in object': { m: new Map([[1, 2]]) },
+  'map in array': [new Map([[1, 2]])],
+  'twenty entry map': new Map(counted(20).map((i) => [i, i])),
+
+  'empty set': new Set(),
+  'set of numbers': new Set([1, 2, 3]),
+  'set of strings': new Set(['a', 'b']),
+  'set of objects': new Set([{ a: 1 }, { b: 2 }]),
+  'set with named property': setWithProp,
+  'nested sets past depth': new Set([new Set([new Set([new Set([1])])])]),
+  'thirty number set': new Set(counted(30)),
+  'set in object': { s: new Set([1]) },
+  'map of sets': new Map([['a', new Set([1, 2])]]),
+
   // Cycles.
   'circular object': circularObject,
+  'circular map': circularMap,
+  'circular set': circularSet,
   'circular array': circularArray,
   'deep circular': deepCircular,
   'two references to one object': twoRefs,

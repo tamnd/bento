@@ -1113,6 +1113,16 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "RegExpValue"), Args: []ast.Expr{expr}}, nil
 	}
+	// A Map or a Set flowing into a dynamic slot boxes through the collection's own
+	// ToValue, which hands back a live view of it rather than a copy, so console.log
+	// prints the entries it holds now and a write through the box is visible to the
+	// typed side. It routes before the primitive switch, whose kind tests a collection
+	// type would fall past to the handback.
+	if boxed, ok, err := r.boxCollectionToDynamic(expr, src); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	// A value whose Go shape is a fixed-object struct, a { x: string } binding flowing
 	// into a dynamic slot (an any, an index-signature dictionary), boxes into a live
 	// value.Object copying its fields, so the box carries the same properties the struct
@@ -1285,6 +1295,84 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ArrayValueOf"), Args: []ast.Expr{expr, box}}, true, nil
+}
+
+// boxCollectionToDynamic boxes a Map or a Set into a dynamic value.Value through the
+// collection's own ToValue method. Unlike the array and the struct, which copy their
+// members into a fresh box, a collection's box is a view: the runtime keeps it on the
+// collection and hands back the same object every time, so two boxes of one map are
+// one value under === and a boxed map.set(k, v) is visible to the typed map.get(k)
+// that follows it. That is what a JavaScript Map is, a reference, and a copy would be
+// a different collection wearing the same entries.
+//
+// The element types decide whether the box can be emitted at all. The view presents
+// each key, value and member as a boxed value, which the runtime can do for a number,
+// a string, a boolean, and the dynamic value a collection written with no element type
+// already stores. A collection of anything else, an object-keyed map or a set of
+// arrays, hands back rather than emit a view whose reads would raise; boxing those
+// needs the element box the array path also lacks, which is one slice for both.
+func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, bool, error) {
+	switch {
+	case r.isMap(src):
+		k, v, ok := r.mapKeyVal(r.prog.TypeAt(src))
+		if !ok {
+			return nil, false, &NotYetLowerable{Reason: "boxing a Map that did not expose its key and value types is a later slice"}
+		}
+		if !r.dynBoxableElem(k) || !r.dynBoxableElem(v) {
+			return nil, false, &NotYetLowerable{Reason: "boxing a Map whose keys or values are not a number, string, boolean, or dynamic value into a dynamic value is a later slice"}
+		}
+	case r.isSet(src):
+		elem, ok := r.setElem(r.prog.TypeAt(src))
+		if !ok {
+			return nil, false, &NotYetLowerable{Reason: "boxing a Set that did not expose its member type is a later slice"}
+		}
+		if !r.dynBoxableElem(elem) {
+			return nil, false, &NotYetLowerable{Reason: "boxing a Set whose members are not a number, string, boolean, or dynamic value into a dynamic value is a later slice"}
+		}
+	default:
+		return nil, false, nil
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, true, nil
+}
+
+// lowerAsDynamicReceiver lowers a node into the value.Value a built-in that walks its
+// argument as a live object needs, and reports whether the node has such a form. A
+// node the checker already types dynamic is one; a Map or a Set is one through its
+// box, which is the whole reason to ask here. Object.keys of a Map answers the empty
+// array in JavaScript because a Map keeps its entries off its property table, and the
+// box models exactly that, so routing the collection through it answers what Node
+// answers where the static path would try to read fields off a Map type that has
+// none. Anything else reports false and leaves the caller's static path alone.
+func (r *Renderer) lowerAsDynamicReceiver(n frontend.Node) (ast.Expr, bool, error) {
+	dynamic := r.isDynamic(n)
+	if !dynamic && !r.isMap(n) && !r.isSet(n) {
+		return nil, false, nil
+	}
+	expr, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, false, err
+	}
+	if dynamic {
+		return expr, true, nil
+	}
+	boxed, err := r.boxStaticToDynamic(expr, n)
+	if err != nil {
+		return nil, false, err
+	}
+	return boxed, true, nil
+}
+
+// dynBoxableElem reports whether a collection's element type has a dynamic form the
+// runtime's view can present. The three primitives lower to the Go types the runtime
+// boxes directly (float64, value.BStr, bool), and any or unknown lowers to a
+// value.Value that is already a box, which is what a collection written the JavaScript
+// way (new Map(), new Set()) holds. It is the element gate boxArrayToDynamic applies
+// with its own switch, asked as a question here because a Map asks it twice.
+func (r *Renderer) dynBoxableElem(t frontend.Type) bool {
+	if t.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return true
+	}
+	return r.primitiveFlagsOfType(t)&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0
 }
 
 // boxOptionalToDynamic boxes a T | undefined result into a dynamic value.Value. The

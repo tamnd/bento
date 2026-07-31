@@ -439,6 +439,176 @@
     "loose": true,
     "skipPrototype": true
   },
+  "empty maps": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "same map entries": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map entries out of order": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map different size": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "map different value": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "map different key": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "map loose key": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "map loose value": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "map nan key": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map zero keys": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map object keys": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map object keys different": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "map object values": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map undefined value": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map undefined value other key": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "nested maps": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map and object": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "object and map": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "map and set": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "map named property both": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "map named property one side": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "self referencing maps": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "empty sets": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "same set members": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "set members out of order": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "set different size": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "set different member": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "set loose member": {
+    "strict": false,
+    "loose": true,
+    "skipPrototype": false
+  },
+  "set nan member": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "set object members": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
+  "set object members different": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "set and array": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "array and set": {
+    "strict": false,
+    "loose": false,
+    "skipPrototype": false
+  },
+  "self referencing sets": {
+    "strict": true,
+    "loose": true,
+    "skipPrototype": true
+  },
   "proxy over object and object": {
     "strict": true,
     "loose": true,

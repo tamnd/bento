@@ -152,6 +152,44 @@ func deepCases(t *testing.T) map[string]deepPair {
 	nested := func(leaf float64) Value {
 		return obj("a", obj("b", obj("c", obj("d", obj("e", Number(leaf))))))
 	}
+	// A Map and a Set built the JavaScript way carry no key or member type, so the
+	// dynamic constructors are the ones a `new Map()` lowers to and the ones whose
+	// box these pairs compare. The entries are given flat, key then value, because a
+	// pair of slices reads worse than the list the JavaScript literal is.
+	mapOf := func(kv ...Value) Value {
+		m := NewDynMap[Value]()
+		for i := 0; i < len(kv); i += 2 {
+			m.Set(kv[i], kv[i+1])
+		}
+		return m.ToValue()
+	}
+	setOf := func(members ...Value) Value {
+		s := NewDynSet()
+		for _, v := range members {
+			s.Add(v)
+		}
+		return s.ToValue()
+	}
+	mapWithNamed := func() Value {
+		m := mapOf(Number(1), Number(2))
+		m.Set(FromGoString("x"), Number(1))
+		return m
+	}
+	// A collection that holds itself is boxed first, so the value stored is the same
+	// box the comparison starts from and the memo has a cycle to find.
+	selfRefMap := func() Value {
+		m := NewDynMap[Value]()
+		v := m.ToValue()
+		m.Set(str("self"), v)
+		return v
+	}
+	selfRefSet := func() Value {
+		s := NewDynSet()
+		v := s.ToValue()
+		s.Add(v)
+		return v
+	}
+
 	proxyOf := func(target Value) Value { return NewProxy(target, NewObject()) }
 
 	mutualA, mutualB := mutual()
@@ -259,6 +297,45 @@ func deepCases(t *testing.T) map[string]deepPair {
 		"mutually referencing objects": pair(mutualA, mutualB),
 		"cycle and deeper cycle":       pair(selfRef(), deeperCycle()),
 		"self referencing arrays":      pair(selfRefArray(), selfRefArray()),
+
+		// Maps, which are unordered, so an entry is paired against a candidate rather
+		// than lined up by position.
+		"empty maps":                    pair(mapOf(), mapOf()),
+		"same map entries":              pair(mapOf(Number(1), Number(2)), mapOf(Number(1), Number(2))),
+		"map entries out of order":      pair(mapOf(Number(1), Number(2), Number(3), Number(4)), mapOf(Number(3), Number(4), Number(1), Number(2))),
+		"map different size":            pair(mapOf(Number(1), Number(2)), mapOf(Number(1), Number(2), Number(3), Number(4))),
+		"map different value":           pair(mapOf(Number(1), Number(2)), mapOf(Number(1), Number(3))),
+		"map different key":             pair(mapOf(Number(1), Number(2)), mapOf(Number(3), Number(2))),
+		"map loose key":                 pair(mapOf(Number(1), Number(2)), mapOf(str("1"), Number(2))),
+		"map loose value":               pair(mapOf(Number(1), Number(2)), mapOf(Number(1), str("2"))),
+		"map nan key":                   pair(mapOf(Number(nan()), Number(1)), mapOf(Number(nan()), Number(1))),
+		"map zero keys":                 pair(mapOf(Number(0), Number(1)), mapOf(Number(negZero()), Number(1))),
+		"map object keys":               pair(mapOf(obj("a", Number(1)), Number(1)), mapOf(obj("a", Number(1)), Number(1))),
+		"map object keys different":     pair(mapOf(obj("a", Number(1)), Number(1)), mapOf(obj("a", Number(2)), Number(1))),
+		"map object values":             pair(mapOf(Number(1), obj("a", Number(1))), mapOf(Number(1), obj("a", Number(1)))),
+		"map undefined value":           pair(mapOf(str("a"), Undefined), mapOf(str("a"), Undefined)),
+		"map undefined value other key": pair(mapOf(str("a"), Undefined), mapOf(str("b"), Undefined)),
+		"nested maps":                   pair(mapOf(Number(1), mapOf(Number(2), Number(3))), mapOf(Number(1), mapOf(Number(2), Number(3)))),
+		"map and object":                pair(mapOf(), NewObject()),
+		"object and map":                pair(NewObject(), mapOf()),
+		"map and set":                   pair(mapOf(), setOf()),
+		"map named property both":       pair(mapWithNamed(), mapWithNamed()),
+		"map named property one side":   pair(mapWithNamed(), mapOf(Number(1), Number(2))),
+		"self referencing maps":         pair(selfRefMap(), selfRefMap()),
+
+		// Sets, which are the same problem with one column instead of two.
+		"empty sets":                    pair(setOf(), setOf()),
+		"same set members":              pair(setOf(Number(1), Number(2)), setOf(Number(1), Number(2))),
+		"set members out of order":      pair(setOf(Number(1), Number(2)), setOf(Number(2), Number(1))),
+		"set different size":            pair(setOf(Number(1)), setOf(Number(1), Number(2))),
+		"set different member":          pair(setOf(Number(1)), setOf(Number(2))),
+		"set loose member":              pair(setOf(Number(1)), setOf(str("1"))),
+		"set nan member":                pair(setOf(Number(nan())), setOf(Number(nan()))),
+		"set object members":            pair(setOf(obj("a", Number(1))), setOf(obj("a", Number(1)))),
+		"set object members different":  pair(setOf(obj("a", Number(1))), setOf(obj("a", Number(2)))),
+		"set and array":                 pair(setOf(), arr()),
+		"array and set":                 pair(arr(), setOf()),
+		"self referencing sets":         pair(selfRefSet(), selfRefSet()),
 
 		// Proxies, which are compared as whatever their traps answer.
 		"proxy over object and object":           pair(proxyOf(obj("a", Number(1))), obj("a", Number(1))),

@@ -16,16 +16,17 @@ import (
 // Three of node's modes are here. kLoose and kStrict are the two a program asks for,
 // and kStrictWithoutPrototypes is the strict comparison with the constructor check
 // dropped, which assert uses when it compares two errors it built itself. kPartial,
-// the mode behind assert.partialDeepStrictEqual, is not: its Set and Map matching is
-// most of that mode, and bento cannot box either kind yet.
+// the mode behind assert.partialDeepStrictEqual, is not: it is a mode of its own on
+// top of these, and it is a later slice.
 //
 // The branches for the kinds that do not box into a Value are left out rather than
-// written and left unreachable: Map, Set, Date, the typed arrays, ArrayBuffer,
-// DataView, Promise, WeakMap, WeakSet, a boxed primitive, a URL, and a crypto key.
-// What survives is every branch a boxed value can reach: an array, a plain object, a
-// regexp, an error, and the tag comparisons that keep those five apart. When the
-// boxing wall falls, the missing branches come back one kind at a time, and the shape
-// they slot into is node's, unchanged.
+// written and left unreachable: Date, the typed arrays, ArrayBuffer, DataView,
+// Promise, WeakMap, WeakSet, a boxed primitive, a URL, and a crypto key. What
+// survives is every branch a boxed value can reach: an array, a plain object, a
+// regexp, an error, a Set, a Map, and the tag comparisons that keep those apart. The
+// Set and Map walks live in nodedeepcollections.go. As the rest of the boxing wall
+// falls, the missing branches come back one kind at a time, and the shape they slot
+// into is node's, unchanged.
 //
 // One divergence is deliberate. Node runs the whole comparison once with no cycle
 // tracking at all and catches the stack overflow a cyclic value raises, then retries
@@ -47,13 +48,14 @@ const (
 )
 
 // deepIter is node's iteration type, which says what a pair carries beyond its named
-// properties. Only kNoIterator and kIsArray are here; kIsSet and kIsMap wait on the
-// boxed forms of Set and Map.
+// properties: nothing, an array's elements, a set's members, or a map's entries.
 type deepIter int
 
 const (
 	deepIterNone deepIter = iota
 	deepIterArray
+	deepIterSet
+	deepIterMap
 )
 
 // deepMemos holds the object pairs the comparison is already inside, which is how a
@@ -196,6 +198,26 @@ func deepObjectComparisonStart(a, b Value, mode deepMode, memos *deepMemos) bool
 		}
 
 	case deepSlowHasUnequalTag(tag1, a, b) || IsArray(b):
+		return false
+
+	case a.asSet() != nil:
+		// Two sets of different sizes cannot match however their members compare, which
+		// is the one cheap test before the pairwise hunt setEquiv does. The tag test
+		// above has already rejected a set against anything that names itself
+		// differently, but a plain object can carry the Set toStringTag, so the second
+		// value is still asked whether it is really a set.
+		if b.asSet() == nil || a.asSet().jsSize() != b.asSet().jsSize() {
+			return false
+		}
+		return deepKeyCheck(a, b, mode, memos, deepIterSet, nil, false)
+
+	case a.asMap() != nil:
+		if b.asMap() == nil || a.asMap().jsSize() != b.asMap().jsSize() {
+			return false
+		}
+		return deepKeyCheck(a, b, mode, memos, deepIterMap, nil, false)
+
+	case b.asSet() != nil || b.asMap() != nil:
 		return false
 
 	case a.object().err != nil:
@@ -404,6 +426,13 @@ func deepObjEquiv(a, b Value, mode deepMode, keys1, keys2 []inspectKey, memos *d
 				return false
 			}
 		}
+	}
+
+	if iter == deepIterSet {
+		return deepSetEquiv(a.asSet(), b.asSet(), mode, memos)
+	}
+	if iter == deepIterMap {
+		return deepMapEquiv(a.asMap(), b.asMap(), mode, memos)
 	}
 
 	if iter == deepIterArray {

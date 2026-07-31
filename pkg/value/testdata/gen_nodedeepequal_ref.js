@@ -11,10 +11,12 @@
 // the loose one assert.deepEqual makes, and the strict one with the prototype check
 // dropped, which is assert's skipPrototype option.
 //
-// Every value is one bento can box into a value.Value. Map, Set, Date, the typed
-// arrays and the boxed primitives are left out because they have no boxed form yet,
-// and a revoked proxy is left out because Array.isArray throws on one, so the pair
-// has no answer to record rather than a false one.
+// Every value is one bento can box into a value.Value. Date, the typed arrays and
+// the boxed primitives are left out because they have no boxed form yet, and a
+// revoked proxy is left out because Array.isArray throws on one, so the pair has no
+// answer to record rather than a false one. Map and Set are in: they box now, and
+// their comparison is the one with rules of its own, since an unordered container
+// has to pair each entry against a candidate rather than walk two lists in step.
 
 'use strict';
 const assert = require('assert');
@@ -98,6 +100,24 @@ const deeperCycle = () => {
 
 const [mutualA, mutualB] = mutual();
 const shared = { v: 1 };
+
+const mapWithNamed = () => {
+  const m = new Map([[1, 2]]);
+  m.x = 1;
+  return m;
+};
+
+const selfRefMap = () => {
+  const m = new Map();
+  m.set('self', m);
+  return m;
+};
+
+const selfRefSet = () => {
+  const s = new Set();
+  s.add(s);
+  return s;
+};
 
 const cases = {
   // Primitives, which every comparison settles before it looks at an object.
@@ -206,6 +226,46 @@ const cases = {
   'mutually referencing objects': [mutualA, mutualB],
   'cycle and deeper cycle': [selfRef(), deeperCycle()],
   'self referencing arrays': [selfRefArray(), selfRefArray()],
+
+  // Maps, which are unordered, so an entry is paired against a candidate rather
+  // than lined up by position, and a key that is not a primitive has to be searched
+  // for by shape.
+  'empty maps': [new Map(), new Map()],
+  'same map entries': [new Map([[1, 2]]), new Map([[1, 2]])],
+  'map entries out of order': [new Map([[1, 2], [3, 4]]), new Map([[3, 4], [1, 2]])],
+  'map different size': [new Map([[1, 2]]), new Map([[1, 2], [3, 4]])],
+  'map different value': [new Map([[1, 2]]), new Map([[1, 3]])],
+  'map different key': [new Map([[1, 2]]), new Map([[3, 2]])],
+  'map loose key': [new Map([[1, 2]]), new Map([['1', 2]])],
+  'map loose value': [new Map([[1, 2]]), new Map([[1, '2']])],
+  'map nan key': [new Map([[NaN, 1]]), new Map([[NaN, 1]])],
+  'map zero keys': [new Map([[0, 1]]), new Map([[-0, 1]])],
+  'map object keys': [new Map([[{ a: 1 }, 1]]), new Map([[{ a: 1 }, 1]])],
+  'map object keys different': [new Map([[{ a: 1 }, 1]]), new Map([[{ a: 2 }, 1]])],
+  'map object values': [new Map([[1, { a: 1 }]]), new Map([[1, { a: 1 }]])],
+  'map undefined value': [new Map([['a', undefined]]), new Map([['a', undefined]])],
+  'map undefined value other key': [new Map([['a', undefined]]), new Map([['b', undefined]])],
+  'nested maps': [new Map([[1, new Map([[2, 3]])]]), new Map([[1, new Map([[2, 3]])]])],
+  'map and object': [new Map(), {}],
+  'object and map': [{}, new Map()],
+  'map and set': [new Map(), new Set()],
+  'map named property both': [mapWithNamed(), mapWithNamed()],
+  'map named property one side': [mapWithNamed(), new Map([[1, 2]])],
+  'self referencing maps': [selfRefMap(), selfRefMap()],
+
+  // Sets, which are the same problem with one column instead of two.
+  'empty sets': [new Set(), new Set()],
+  'same set members': [new Set([1, 2]), new Set([1, 2])],
+  'set members out of order': [new Set([1, 2]), new Set([2, 1])],
+  'set different size': [new Set([1]), new Set([1, 2])],
+  'set different member': [new Set([1]), new Set([2])],
+  'set loose member': [new Set([1]), new Set(['1'])],
+  'set nan member': [new Set([NaN]), new Set([NaN])],
+  'set object members': [new Set([{ a: 1 }]), new Set([{ a: 1 }])],
+  'set object members different': [new Set([{ a: 1 }]), new Set([{ a: 2 }])],
+  'set and array': [new Set(), []],
+  'array and set': [[], new Set()],
+  'self referencing sets': [selfRefSet(), selfRefSet()],
 
   // Proxies, which are compared as whatever their traps answer.
   'proxy over object and object': [new Proxy({ a: 1 }, {}), { a: 1 }],

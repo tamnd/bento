@@ -526,17 +526,8 @@ func GenericEntries(recv Value) Value {
 }
 
 // iterValue wraps a running array walk in the object JavaScript expects an iterator to
-// be: a next() answering { value, done }, and a Symbol.iterator answering itself so the
-// result of arr.values() can be handed straight to anything that takes an iterable.
+// be, so the result of arr.values() can be handed straight to anything that takes an
+// iterable. The object itself is iterObject's, which a collection's iterators share.
 func iterValue(it *ArrayIter) Value {
-	obj := NewObject()
-	obj.Set(FromGoString("next"), NewFunc(func(args []Value) Value {
-		r := it.Next()
-		res := NewObject()
-		res.Set(FromGoString("value"), r.Value)
-		res.Set(FromGoString("done"), Bool(r.Done))
-		return res
-	}))
-	obj.setSymKey(symbolIterator, NewFunc(func(args []Value) Value { return obj }))
-	return obj
+	return iterObject(it.Next)
 }
