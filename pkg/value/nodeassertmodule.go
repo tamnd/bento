@@ -13,14 +13,12 @@ package value
 //
 // What is here is every method whose failure is a comparison: ok, equal, notEqual,
 // strictEqual, notStrictEqual, the four deep forms, ifError, match, doesNotMatch and
-// fail. What is not here is the three that need machinery this port does not have
-// yet, and each throws the honest-stub error naming itself rather than answering
+// fail, plus the two whose subject is a function, throws and doesNotThrow, which live in
+// nodeassertthrows.go. What is not here is the four that need machinery this port does
+// not have yet, and each throws the honest-stub error naming itself rather than answering
 // undefined:
 //
-//   - throws and doesNotThrow need to call a function and inspect what it raised
-//     against an error class, a validation object or a predicate, which is error-class
-//     identity in the boxed world and is its own slice.
-//   - rejects and doesNotReject are those two over a promise.
+//   - rejects and doesNotReject are throws and doesNotThrow over a promise.
 //   - partialDeepStrictEqual needs the partial comparison mode, which needs boxed Map
 //     and Set to be worth having.
 //   - CallTracker is deprecated in Node and is not planned.
@@ -101,7 +99,7 @@ func assertCallable(name string) Value {
 var assertMethodNames = []string{
 	"fail", "equal", "notEqual", "deepEqual", "notDeepEqual",
 	"deepStrictEqual", "notDeepStrictEqual", "strictEqual", "notStrictEqual",
-	"match", "doesNotMatch", "ifError",
+	"match", "doesNotMatch", "throws", "doesNotThrow", "ifError",
 }
 
 // assertSetMethods hangs the module's methods off the plain module's callable.
@@ -118,6 +116,8 @@ func assertSetMethods(mod Value) {
 		"notStrictEqual":     assertNotStrictEqual,
 		"match":              func(args []Value) Value { return assertMatch(args, true) },
 		"doesNotMatch":       func(args []Value) Value { return assertMatch(args, false) },
+		"throws":             assertThrows,
+		"doesNotThrow":       assertDoesNotThrow,
 		"ifError":            assertIfError,
 	}
 	for _, name := range assertMethodNames {

@@ -1020,6 +1020,18 @@ func toPrimitive(v Value, hint primHint) Value {
 		// concrete RegExp.prototype.toString does.
 		return StringValue(re.ToStringBStr())
 	}
+	if v.kind == KindObject {
+		if e := v.object().err; e != nil {
+			// A boxed error is the regexp case again: no Symbol.toPrimitive, a valueOf that
+			// returns itself, and a toString on the prototype the box does not carry, so
+			// OrdinaryToPrimitive would fall through to "[object Object]" where JavaScript
+			// spells "TypeError: bad". Both hints take the same form, since Error.prototype
+			// has no valueOf of its own for the number hint to find. This is what makes
+			// String(err), `${err}` and "" + err read as the error in the dynamic world the
+			// way they do on a typed caught error, which coerces through ToBStr.
+			return StringValue(e.ToBStr())
+		}
+	}
 	exotic := v.getSymKey(symbolToPrimitive)
 	if !exotic.IsNullish() {
 		if exotic.kind != KindFunc {

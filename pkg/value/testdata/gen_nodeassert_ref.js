@@ -14,6 +14,13 @@
 // Colors are forced off. Node colors an assertion message when stderr is a color TTY,
 // and bento never does, so the reference is taken in the uncolored shape a redirected
 // run produces anyway.
+//
+// One case cannot be recorded: assert.throws(fn, Error) where fn threw a non-error. Node
+// tests the expectation with Error.isPrototypeOf(expected), which is false for Error
+// itself, so it calls Error as a validation function and reports the error that call
+// returned, stack and all. The message carries absolute paths from the machine that ran
+// the generator, so it is not ground truth anyone can compare against. It is a bento
+// divergence with a test of its own instead.
 
 'use strict';
 
@@ -74,6 +81,36 @@ const values = {
   'regexp': () => /a+/,
   'function': () => function foo() {},
   'other function': () => function bar() {},
+
+  // The throwers. throws and doesNotThrow take a function rather than a value, so their
+  // first argument is one of these: each raises one particular thing, or nothing.
+  'thrower nothing': () => () => {},
+  'thrower error a': () => () => { throw new Error('a'); },
+  'thrower error empty': () => () => { throw new Error(); },
+  'thrower type error bad': () => () => { throw new TypeError('bad'); },
+  'thrower error with code': () => () => { const e = new Error('a'); e.code = 'Y'; throw e; },
+  'thrower number': () => () => { throw 42; },
+  'thrower string': () => () => { throw 'boom'; },
+  'thrower object': () => () => { throw {}; },
+
+  // The expectations. An error class, a regexp over the string form of what was thrown,
+  // a validation object compared key by key, and a validation function returning true
+  // are the four kinds throws accepts.
+  'ctor Error': () => Error,
+  'ctor TypeError': () => TypeError,
+  'ctor RangeError': () => RangeError,
+  'regexp bad': () => /bad/,
+  'regexp error a': () => /^Error: a$/,
+  'validation true': () => () => true,
+  'validation false': () => () => false,
+  'validation one': () => () => 1,
+  'validation named nope': () => function named() { return 'nope'; },
+  'validation message a': () => (e) => e.message === 'a',
+  'expect name': () => ({ name: 'TypeError' }),
+  'expect name and message': () => ({ name: 'TypeError', message: 'other' }),
+  'expect message regexp': () => ({ message: /bad/ }),
+  'expect message regexp unmatched': () => ({ message: /nope/ }),
+  'expect code': () => ({ code: 'X' }),
 };
 
 // The methods under test, by the name the Go test uses for them.
@@ -95,6 +132,11 @@ const methods = {
   'fail nothing': () => assert.fail(),
   'match': (a, b) => assert.match(a, b),
   'doesNotMatch': (a, b) => assert.doesNotMatch(a, b),
+  'throws': (a, b) => assert.throws(a, b),
+  'throws message': (a, b) => assert.throws(a, b, 'custom'),
+  'throws error message': (a, b) => assert.throws(a, b, new RangeError('as message')),
+  'doesNotThrow': (a, b) => assert.doesNotThrow(a, b),
+  'doesNotThrow message': (a, b) => assert.doesNotThrow(a, b, 'custom'),
 };
 
 // Each case is [method, actual, expected]. A case naming a value the method ignores
@@ -193,6 +235,78 @@ const cases = [
   ['match', 'string a', 'regexp'],
   ['doesNotMatch', 'string a', 'regexp'],
   ['doesNotMatch', 'string b', 'regexp'],
+
+  // throws with no expectation: something has to be thrown and that is all.
+  ['throws', 'thrower error a', 'undefined'],
+  ['throws', 'thrower number', 'undefined'],
+  ['throws', 'thrower nothing', 'undefined'],
+  ['throws message', 'thrower nothing', 'undefined'],
+  ['throws', 'one', 'undefined'],
+  ['throws', 'null', 'undefined'],
+
+  // An error class, matched by prototype in Node and by name here.
+  ['throws', 'thrower type error bad', 'ctor TypeError'],
+  ['throws', 'thrower type error bad', 'ctor Error'],
+  ['throws', 'thrower error a', 'ctor TypeError'],
+  ['throws', 'thrower error empty', 'ctor TypeError'],
+  ['throws', 'thrower number', 'ctor TypeError'],
+  ['throws', 'thrower object', 'ctor TypeError'],
+  ['throws', 'thrower nothing', 'ctor RangeError'],
+  ['throws message', 'thrower nothing', 'ctor Error'],
+  ['throws message', 'thrower error a', 'ctor TypeError'],
+  ['throws error message', 'thrower error a', 'ctor TypeError'],
+
+  // A regexp, matched against the string form of what was thrown rather than its message.
+  ['throws', 'thrower type error bad', 'regexp bad'],
+  ['throws', 'thrower error a', 'regexp error a'],
+  ['throws', 'thrower error a', 'regexp bad'],
+  ['throws', 'thrower number', 'regexp bad'],
+
+  // A validation object, key by key, and the placeholder diff a mismatch prints.
+  ['throws', 'thrower type error bad', 'expect name'],
+  ['throws', 'thrower type error bad', 'expect name and message'],
+  ['throws', 'thrower error a', 'expect name'],
+  ['throws', 'thrower type error bad', 'expect message regexp'],
+  ['throws', 'thrower type error bad', 'expect message regexp unmatched'],
+  ['throws', 'thrower error with code', 'expect code'],
+  ['throws', 'thrower error a', 'expect code'],
+  ['throws', 'thrower object', 'expect code'],
+  ['throws', 'thrower number', 'expect code'],
+  ['throws', 'thrower error a', 'empty object'],
+  ['throws', 'thrower error a', 'error b'],
+  ['throws message', 'thrower error a', 'expect code'],
+
+  // A validation function, which has to return true rather than something truthy.
+  ['throws', 'thrower error a', 'validation true'],
+  ['throws', 'thrower error a', 'validation false'],
+  ['throws', 'thrower error a', 'validation one'],
+  ['throws', 'thrower error a', 'validation named nope'],
+  ['throws', 'thrower error a', 'validation message a'],
+  ['throws', 'thrower number', 'validation false'],
+
+  // A string second argument is the message, and a message beside it is refused.
+  ['throws', 'thrower error a', 'string a'],
+  ['throws', 'thrower error a', 'string b'],
+  ['throws', 'thrower string', 'string a'],
+  ['throws message', 'thrower error a', 'string a'],
+
+  // doesNotThrow, whose expectation names the error that would be a bug. Anything else
+  // is rethrown as itself, which is the recorded Error rather than an assertion.
+  ['doesNotThrow', 'thrower nothing', 'undefined'],
+  ['doesNotThrow', 'thrower error a', 'undefined'],
+  ['doesNotThrow', 'thrower number', 'undefined'],
+  ['doesNotThrow message', 'thrower error a', 'undefined'],
+  ['doesNotThrow', 'thrower type error bad', 'ctor TypeError'],
+  ['doesNotThrow', 'thrower error a', 'ctor TypeError'],
+  ['doesNotThrow message', 'thrower type error bad', 'ctor TypeError'],
+  ['doesNotThrow', 'thrower error a', 'regexp error a'],
+  ['doesNotThrow', 'thrower error a', 'regexp bad'],
+  ['doesNotThrow', 'thrower error a', 'validation true'],
+  ['doesNotThrow', 'thrower error a', 'validation false'],
+  ['doesNotThrow', 'thrower error a', 'string a'],
+  ['doesNotThrow', 'thrower error a', 'one'],
+  ['doesNotThrow', 'thrower error a', 'expect code'],
+  ['doesNotThrow', 'one', 'undefined'],
 ];
 
 function record(method, actualName, expectedName) {

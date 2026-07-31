@@ -97,3 +97,19 @@ console.log(foo);
 		t.Errorf("a boxed function did not carry its name:\n%s", source)
 	}
 }
+
+// TestConsoleNamedFunctionExpressionKeepsItsName is the name a function expression
+// carries when it is written where it is boxed. A reference to a binding takes the
+// binding's name, which the test above covers, but a function expression written
+// inline has a name only if one is spelled on it, and that one is the name JavaScript
+// gives it whether or not it is ever bound. An anonymous literal in the same position
+// stays anonymous, which is the other half of the rule.
+func TestConsoleNamedFunctionExpressionKeepsItsName(t *testing.T) {
+	skipIfShort(t)
+	const src = `console.log(function keep(a: number): number { return a; });
+console.log(function (a: number): number { return a; });
+`
+	if got, want := runProgramGo(t, src), "[Function: keep]\n[Function (anonymous)]\n"; got != want {
+		t.Errorf("logging function expressions printed %q, want %q", got, want)
+	}
+}

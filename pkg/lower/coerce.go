@@ -1392,9 +1392,10 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 	// .name off it answers and console.log of it prints "[Function: foo]" rather than
 	// "[Function (anonymous)]". The name is the binding the reference resolves to,
 	// which is the name the language gives a function declaration and the one named
-	// evaluation gives `const f = () => {}`. An inline function expression written at
-	// the boxing site resolves to no binding and stays anonymous, which is also what
-	// the language says: passed straight as an argument, it never gets named.
+	// evaluation gives `const f = () => {}`, or the function expression's own name
+	// when it is written named at the boxing site. An anonymous inline literal stays
+	// anonymous, which is also what the language says: passed straight as an
+	// argument with no name of its own, it never gets one.
 	if name := r.boxedFuncName(src); name != "" {
 		return &ast.CallExpr{
 			Fun:  sel("value", "WithName"),
@@ -1408,8 +1409,10 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 // Function.prototype.name a read off the box or an inspection of it reports. A
 // reference to a binding answers that binding's name: `function foo() {}` referenced
 // as foo is "foo", and `const f = () => {}` is "f", the name named evaluation gives
-// the arrow when it is assigned. Anything else, an inline literal or a call result,
-// is anonymous.
+// the arrow when it is assigned. A named function expression written where it is
+// boxed, `assert.throws(fn, function check(e) { ... })`, answers its own name, which
+// is the name it carries in the language whether or not it is ever bound. Anything
+// else, an anonymous literal or a call result, is anonymous.
 //
 // A binding that aliases another, `const g = f`, reports "g" where the language
 // reports "f": the name travelled with the function object at the original
@@ -1417,6 +1420,12 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 // resolving through every declaration form that can hold a function, which is a
 // later slice; the label is the only thing that differs.
 func (r *Renderer) boxedFuncName(src frontend.Node) string {
+	if src.Kind() == frontend.NodeFunctionExpression {
+		if nameNode, ok := r.funcExprNameNode(src); ok {
+			return r.prog.Text(nameNode)
+		}
+		return ""
+	}
 	if src.Kind() != frontend.NodeIdentifier {
 		return ""
 	}
