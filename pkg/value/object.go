@@ -40,6 +40,12 @@ type Object struct {
 	jsDate        *Date         // non-nil marks this Object the dynamic box of a Date; its members, its class tag, its coercions and its rendering route to the live date
 	jsBuffer      bufferBacking // non-nil marks this Object the dynamic box of an ArrayBuffer or a SharedArrayBuffer; its members and its rendering route to the live bytes
 	jsView        *DataView     // non-nil marks this Object the dynamic box of a DataView; the window half of jsBuffer
+	// non-nil marks this Object the dynamic box of a typed array, one of the eight numeric
+	// kinds, a Uint8Array or one of the two bigint kinds. Unlike every other box on this
+	// wall its own property table is not empty: a typed array's indices are real own
+	// properties, so the key walk, the JSON walk and an indexed read and write all route
+	// through the live elements rather than through the storage above.
+	jsTyped typedArrayBacking
 }
 
 // isExtensible reports whether new properties may still be added, the state
@@ -184,6 +190,13 @@ func (v Value) Set(key BStr, val Value) Value {
 		return v
 	}
 	o := v.object()
+	// A boxed typed array claims an index into its live elements, so a dynamic a[1] = 9
+	// lands in the bytes every other view of the buffer reads rather than in a property
+	// bag the typed path never looks at. A name that is not an index falls through and
+	// becomes an ordinary property, which is what such a write does on a typed array.
+	if o.jsTyped != nil && typedArraySet(o.jsTyped, key.ToGoString(), val) {
+		return v
+	}
 	// An array's length is not a stored named property but a view over the backing
 	// store, so a named write of it resizes the array rather than adding a key that a
 	// later read would ignore. This is the path a dynamic a.length = n assignment takes.
@@ -234,6 +247,12 @@ func (v Value) SetStrict(key BStr, val Value) Value {
 		return v
 	}
 	o := v.object()
+	// A typed array's index claims the write here too: an integer-indexed slot is
+	// writable, and one past the end is dropped rather than thrown even under strict
+	// mode, since the spec's integer-indexed store reports success for it.
+	if o.jsTyped != nil && typedArraySet(o.jsTyped, key.ToGoString(), val) {
+		return v
+	}
 	if v.kind == KindArray && key.ToGoString() == "length" {
 		setArrayLength(o, val)
 		return v
@@ -726,6 +745,15 @@ func (o *Object) orderedStringKeysFiltered(enumerableOnly bool) []BStr {
 	}
 	sort.Ints(idxKeys)
 	out := make([]BStr, 0, len(idxKeys)+len(strKeys))
+	// A boxed typed array is the one box on this wall whose keys are not empty: its
+	// integer-indexed slots are own enumerable properties, so Object.keys of one lists
+	// them and the JSON walk writes an index object rather than {}. They come off the
+	// live elements rather than out of the element storage above, which a typed array
+	// never uses, and they lead any ordinary name a program hung on the array, the same
+	// order an index-keyed object walks in.
+	if o.jsTyped != nil {
+		out = append(out, typedArrayKeys(o.jsTyped)...)
+	}
 	for _, n := range idxKeys {
 		out = append(out, NumberToString(float64(n)))
 	}
@@ -929,6 +957,14 @@ func (v Value) HasOwnElem(key Value) bool {
 		}
 		if idx, ok := arrayIndex(s); ok {
 			return idx < len(o.elems) && !isHole(o.elems[idx])
+		}
+	}
+	// A typed array's in-range indices are own properties, so Object.hasOwn answers for
+	// them. Its length and its methods are not: those live on the prototype, which is
+	// what makes hasOwn narrower here than the in operator.
+	if o.jsTyped != nil {
+		if idx, ok := arrayIndex(name.ToGoString()); ok {
+			return idx < o.jsTyped.jsTypedLen()
 		}
 	}
 	return o.hasOwn(name)

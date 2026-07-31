@@ -94,6 +94,13 @@ type inspectCtx struct {
 	seen           []unsafe.Pointer
 	currentDepth   int
 	circular       map[unsafe.Pointer]int
+	// bufferAsSlot is set while the [buffer] slot of a typed array is being formatted,
+	// node's typedArray argument to formatValue. A buffer reached that way prints only
+	// its length, "ArrayBuffer { [byteLength]: 8 }", rather than its bytes: the typed
+	// array has already shown what those bytes hold, so repeating them in hex would be
+	// the same data twice. A DataView's [buffer] slot does not set it, and does print
+	// the hex, since a view shows none of its bytes itself.
+	bufferAsSlot bool
 }
 
 // inspectOptions is the option half of Node's ctx, split out because util.format
@@ -495,6 +502,11 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		prefix := inspectPrefix(constructor, ctorNull, o.jsBuffer.jsBufferName(), "")
 		keys = inspectObjectKeys(o, c.showHidden)
 		braces = [2]string{prefix + "{", "}"}
+		if c.bufferAsSlot && len(keys) == 0 {
+			// The short form node takes for a typed array's own [buffer] slot, which returns
+			// before the layout rather than going through it.
+			return prefix + "{ [byteLength]: " + inspectNumber(float64(len(o.jsBuffer.jsBufferBytes()))) + " }"
+		}
 		formatter = func() []string { return c.formatBufferSlots(o.jsBuffer) }
 
 	case o.jsView != nil:
@@ -504,6 +516,21 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		keys = inspectObjectKeys(o, c.showHidden)
 		braces = [2]string{prefix + "{", "}"}
 		formatter = func() []string { return c.formatViewSlots(o.jsView, recurseTimes) }
+
+	case o.jsTyped != nil:
+		// A typed array renders like an array, in brackets with its elements, and unlike an
+		// array it always names its kind and its length: "Int32Array(3) [ 5, 0, 7 ]". The
+		// keys are the named extras only, since the indices are the elements the formatter
+		// already produces, and an empty one with no extras is the whole output.
+		size := "(" + strconv.Itoa(o.jsTyped.jsTypedLen()) + ")"
+		prefix := inspectPrefix(constructor, ctorNull, o.jsTyped.jsTypedName(), size)
+		keys = inspectTypedExtraKeys(o, c.showHidden)
+		braces = [2]string{prefix + "[", "]"}
+		if o.jsTyped.jsTypedLen() == 0 && len(keys) == 0 && !c.showHidden {
+			return braces[0] + "]"
+		}
+		extrasType = kArrayExtrasType
+		formatter = func() []string { return c.formatTypedArray(o.jsTyped, recurseTimes) }
 
 	case o.err != nil:
 		keys = inspectErrorKeys(o, c.showHidden)
@@ -626,6 +653,9 @@ func inspectConstructorName(v Value) (string, bool) {
 	}
 	if o.jsView != nil {
 		return "DataView", false
+	}
+	if o.jsTyped != nil {
+		return o.jsTyped.jsTypedName(), false
 	}
 	for cur := o; ; {
 		if cur.protoNull {
@@ -1038,6 +1068,66 @@ func (c *inspectCtx) formatViewSlots(d *DataView, recurseTimes int) []string {
 		"[byteOffset]: " + offset,
 		"[buffer]: " + buffer,
 	}
+}
+
+// formatTypedArray is Node's formatTypedArray: the elements, cut at the inspector's
+// array limit the way an array's are, and under showHidden the five geometry slots that
+// live on the prototype rather than on the array. The elements are rendered through the
+// ordinary value path, so a Number element prints as a number and a bigint element keeps
+// its n suffix, which is the one place the two halves of the family read differently.
+func (c *inspectCtx) formatTypedArray(a typedArrayBacking, recurseTimes int) []string {
+	valLen := a.jsTypedLen()
+	length := valLen
+	if c.maxArrayLength < length {
+		length = c.maxArrayLength
+	}
+	if length < 0 {
+		length = 0
+	}
+	output := make([]string, 0, length+1)
+	for i := 0; i < length; i++ {
+		output = append(output, c.formatElement(a.jsTypedAt(i), recurseTimes))
+	}
+	if remaining := valLen - length; remaining > 0 {
+		output = append(output, remainingText(remaining))
+	}
+	if !c.showHidden {
+		return output
+	}
+	// The buffer goes last because it is the one slot that is not a number, so a wrapped
+	// line breaks after the cheap ones rather than in the middle of them.
+	c.indentationLvl += 2
+	for _, name := range []string{"BYTES_PER_ELEMENT", "length", "byteLength", "byteOffset", "buffer"} {
+		slot, _ := typedArrayGet(a, name)
+		c.bufferAsSlot = name == "buffer"
+		output = append(output, "["+name+"]: "+c.formatValue(slot, recurseTimes))
+		c.bufferAsSlot = false
+	}
+	c.indentationLvl -= 2
+	return output
+}
+
+// inspectTypedExtraKeys is a typed array's own properties minus its indices, which the
+// element formatter has already rendered. It differs from the array form beside it in
+// that it never names a length: a typed array's length lives on the prototype, so
+// showHidden reports it among the geometry slots rather than as an own property.
+func inspectTypedExtraKeys(o *Object, showHidden bool) []inspectKey {
+	keys := make([]inspectKey, 0, len(o.keys)+len(o.symKeys))
+	for i, k := range o.keys {
+		if !showHidden && !o.descs[i].enumerable {
+			continue
+		}
+		if _, isIndex := arrayIndex(k.ToGoString()); isIndex {
+			continue
+		}
+		keys = append(keys, inspectKey{str: k})
+	}
+	for i, s := range o.symKeys {
+		if showHidden || o.symDescs[i].enumerable {
+			keys = append(keys, inspectKey{sym: s})
+		}
+	}
+	return keys
 }
 
 // formatElement renders one array element, which is formatProperty's array mode:
@@ -1457,7 +1547,8 @@ func (c *inspectCtx) groupArrayElements(output []string, v Value) []string {
 	// Numbers line up on their right edge so their digits align; anything else lines
 	// up on the left, since a right-aligned word reads as ragged.
 	padStart := true
-	if v.kind == KindArray {
+	switch {
+	case v.kind == KindArray:
 		o := v.object()
 		for i := 0; i < len(output) && i < len(o.elems); i++ {
 			if k := o.elems[i].kind; k != KindNumber && k != KindBigInt {
@@ -1465,7 +1556,10 @@ func (c *inspectCtx) groupArrayElements(output []string, v Value) []string {
 				break
 			}
 		}
-	} else {
+	case v.kind == KindObject && v.object().jsTyped != nil:
+		// Every element of a typed array is a number or a bigint by construction, so the
+		// columns always line up on their right edge.
+	default:
 		padStart = false
 	}
 

@@ -129,6 +129,12 @@ func encodeJSON(b *strings.Builder, v any) {
 		b.WriteByte(']')
 	case Value:
 		encodeBoxedJSON(b, jsonHookValue(x, BStr{}), nil)
+	case typedArrayBacking:
+		// A typed array arrives here as the runtime struct rather than as a box, since a
+		// statically typed one is passed straight through. Reflecting it would write an
+		// empty object, so it goes through its own box, whose own properties are its
+		// indices: JSON.stringify of one is {"0":5,"1":0,"2":7}, not [5,0,7].
+		encodeBoxedJSON(b, x.jsTypedBox(), nil)
 	case jsonArmer:
 		// A tagged-sum union carries its value in whichever arm its tag selects, and
 		// the arm fields are unexported machinery, so reflecting the struct would write
@@ -279,10 +285,35 @@ func encodeBoxedJSON(b *strings.Builder, v Value, stack []unsafe.Pointer) {
 			encodeBoxedJSON(b, e, stack)
 		}
 		b.WriteByte(']')
+	case KindBigInt:
+		// A bigint has no JSON form: it is not a Number and JSON has no other numeric
+		// spelling, so the specification throws rather than picking one. A BigInt64Array is
+		// what makes this reachable from a boxed walk, since every element of one is a
+		// bigint and the object arm below writes them out as values.
+		Throw(NewTypeError(FromGoString("Do not know how to serialize a BigInt")))
 	case KindObject:
 		o := v.object()
 		b.WriteByte('{')
 		first := true
+		// A typed array serializes as an index object, {"0":5,"1":0,"2":7}, because its
+		// indices are its own enumerable properties and nothing else about it is. It leads
+		// the named properties for the same reason an index-keyed object's numeric keys do.
+		if t := o.jsTyped; t != nil {
+			for i := 0; i < t.jsTypedLen(); i++ {
+				key := NumberToString(float64(i))
+				val := jsonHookValue(t.jsTypedAt(i), key)
+				if jsonUndefinedValue(val) {
+					continue
+				}
+				if !first {
+					b.WriteByte(',')
+				}
+				first = false
+				encodeJSONString(b, key)
+				b.WriteByte(':')
+				encodeBoxedJSON(b, val, stack)
+			}
+		}
 		for i := range o.keys {
 			if !o.descs[i].enumerable {
 				continue

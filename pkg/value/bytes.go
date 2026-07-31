@@ -29,6 +29,7 @@ type Uint8Array struct {
 	byteOffset     int
 	length         int
 	lengthTracking bool
+	boxed          *Object // this view's dynamic box, built on the first crossing and kept so two dynamic bindings of one view are the same object
 }
 
 // liveLen is the view's byte length as of this access, clamped against the buffer's

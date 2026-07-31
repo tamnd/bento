@@ -1140,6 +1140,13 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if r.isArrayBuffer(src) || r.isSharedArrayBuffer(src) || r.isDataView(src) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
 	}
+	// A typed array boxes through its own ToValue as well, and here the view matters most
+	// of all: its elements are its own properties, so a write through the box has to land
+	// in the same bytes the typed side indexes. It routes before the typed-array element
+	// read further down, which boxes a[i] rather than a itself.
+	if r.isTypedArray(src) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
+	}
 	// A Map or a Set flowing into a dynamic slot boxes through the collection's own
 	// ToValue, which hands back a live view of it rather than a copy, so console.log
 	// prints the entries it holds now and a write through the box is visible to the
@@ -1329,6 +1336,12 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "SharedArrayBuffer"))}, Sel: ident("ToValue")}
 	case r.dataViewType(elem):
 		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "DataView"))}, Sel: ident("ToValue")}
+	case r.typedArrayElemBox(elem) != nil:
+		// A typed array's box is a method expression too, but which concrete type it names
+		// depends on the kind: (*value.TypedArray[int32]).ToValue for an Int32Array,
+		// (*value.Uint8Array).ToValue for a Uint8Array. The helper renders the Go type the
+		// name maps to and hangs ToValue off it.
+		box = r.typedArrayElemBox(elem)
 	default:
 		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
 	}
@@ -1385,11 +1398,13 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 // own property table is empty, so Object.keys of one is the empty array in Node and the
 // box is what answers that rather than the Date interface's member list. A buffer and a
 // DataView are ones on the same ground: their bytes are not properties, so their own
-// tables are empty too. Anything else reports false and leaves the caller's static path
-// alone.
+// tables are empty too. A typed array is one for the opposite reason: its indices are
+// its own properties, so Object.keys of one answers them and only the box knows that,
+// where the static path would read the family's member list off the interface.
+// Anything else reports false and leaves the caller's static path alone.
 func (r *Renderer) lowerAsDynamicReceiver(n frontend.Node) (ast.Expr, bool, error) {
 	dynamic := r.isDynamic(n)
-	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) && !r.isBufferBacked(n) {
+	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) && !r.isBufferBacked(n) && !r.isTypedArray(n) {
 		return nil, false, nil
 	}
 	expr, err := r.lowerExpr(n)
@@ -1426,7 +1441,25 @@ func (r *Renderer) dynBoxableElem(t frontend.Type) bool {
 	if t.Flags&frontend.TypeObject == 0 {
 		return false
 	}
-	return r.isDateType(t) || r.arrayBufferType(t) || r.sharedArrayBufferType(t) || r.dataViewType(t)
+	return r.isDateType(t) || r.arrayBufferType(t) || r.sharedArrayBufferType(t) || r.dataViewType(t) ||
+		r.typedArrayElemBox(t) != nil
+}
+
+// typedArrayElemBox is the element box for a typed-array type, the method expression
+// (*value.TypedArray[int32]).ToValue and its ten siblings, or nil when the type is not
+// one of the family or is a kind whose Go representation does not lower yet. It is a
+// question rather than a switch because the element gate asks it and the array boxer
+// uses the answer, and both would otherwise repeat the name-to-Go-type mapping.
+func (r *Renderer) typedArrayElemBox(t frontend.Type) ast.Expr {
+	name, ok := r.typedArrayName(t)
+	if !ok {
+		return nil
+	}
+	goType, err := r.renderTypedArray(name)
+	if err != nil {
+		return nil
+	}
+	return &ast.SelectorExpr{X: &ast.ParenExpr{X: goType}, Sel: ident("ToValue")}
 }
 
 // isBufferBacked reports whether a node's type is one of the three byte-buffer kinds

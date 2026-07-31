@@ -81,6 +81,8 @@ func (e jsonIndenter) encode(b *strings.Builder, v any, indent string) {
 		e.encodeArray(b, x.jsonElements(), indent)
 	case Value:
 		e.encodeBoxed(b, jsonHookValue(x, BStr{}), indent)
+	case typedArrayBacking:
+		e.encodeBoxed(b, x.jsTypedBox(), indent)
 	case jsonArmer:
 		e.encode(b, x.JSONArm(), indent)
 	default:
@@ -232,11 +234,33 @@ func (e jsonIndenter) encodeBoxed(b *strings.Builder, v Value, indent string) {
 		b.WriteByte('\n')
 		b.WriteString(indent)
 		b.WriteByte(']')
+	case KindBigInt:
+		Throw(NewTypeError(FromGoString("Do not know how to serialize a BigInt")))
 	case KindObject:
 		o := v.object()
 		inner := indent + e.gap
 		b.WriteByte('{')
 		first := true
+		// A typed array's indices are its own enumerable properties, so it writes out as an
+		// index object here the way it does in the unindented walk.
+		if t := o.jsTyped; t != nil {
+			for i := 0; i < t.jsTypedLen(); i++ {
+				key := NumberToString(float64(i))
+				val := jsonHookValue(t.jsTypedAt(i), key)
+				if jsonUndefinedValue(val) {
+					continue
+				}
+				if !first {
+					b.WriteByte(',')
+				}
+				first = false
+				b.WriteByte('\n')
+				b.WriteString(inner)
+				encodeJSONString(b, key)
+				b.WriteString(": ")
+				e.encodeBoxed(b, val, inner)
+			}
+		}
 		for i := range o.keys {
 			if !o.descs[i].enumerable {
 				continue

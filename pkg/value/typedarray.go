@@ -50,6 +50,7 @@ type TypedArray[T typedElem] struct {
 	length         int
 	lengthTracking bool
 	coerce         func(float64) T
+	boxed          *Object // this view's dynamic box, built on the first crossing and kept so two dynamic bindings of one view are the same object
 }
 
 // typedElem is the set of Go element types a numeric typed array stores. Every

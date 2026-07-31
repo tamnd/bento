@@ -32,6 +32,7 @@ type BigIntArray[T bigArrayElem] struct {
 	lengthTracking bool
 	store          func(*big.Int) T
 	load           func(T) *big.Int
+	boxed          *Object // this view's dynamic box, built on the first crossing and kept so two dynamic bindings of one view are the same object
 }
 
 // bigArrayElem is the set of Go element types a bigint typed array stores: the two

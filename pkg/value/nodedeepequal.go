@@ -237,6 +237,28 @@ func deepObjectComparisonStart(a, b Value, mode deepMode, memos *deepMemos) bool
 	case b.asDataView() != nil:
 		return false
 
+	case a.asTypedArray() != nil:
+		// A typed array is compared by its bytes rather than element by element, which is
+		// what node does and what makes the two zeros and two NaNs behave the way they do: a
+		// -0 and a +0 differ in a bit so they are not equal, and two NaNs with the same bit
+		// pattern are. The tag test above has already kept the kinds apart, so this only
+		// ever compares two of a kind, and comparing bytes across kinds would be wrong since
+		// an Int32Array and a Float32Array of the same run hold different numbers.
+		if b.asTypedArray() == nil || !bytes.Equal(typedArrayBytes(a.asTypedArray()), typedArrayBytes(b.asTypedArray())) {
+			return false
+		}
+		// The elements are the array's own properties, so the key walk would compare them a
+		// second time and read them as a mismatch where the bytes agreed but the numbers do
+		// not, which is exactly the NaN case. Only the named extras are walked.
+		keys2 := deepNonIndexKeys(b, mode)
+		if len(keys2) != len(deepNonIndexKeys(a, mode)) {
+			return false
+		}
+		return deepKeyCheck(a, b, mode, memos, deepIterNone, keys2, true)
+
+	case b.asTypedArray() != nil:
+		return false
+
 	case a.asSet() != nil:
 		// Two sets of different sizes cannot match however their members compare, which
 		// is the one cheap test before the pairwise hunt setEquiv does. The tag test
