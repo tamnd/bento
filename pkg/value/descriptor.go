@@ -19,12 +19,31 @@ package value
 // which matches the spec's all-false defaults for a freshly defined property.
 type descriptor struct {
 	value        Value
+	live         *liveSlot
 	get          Value
 	set          Value
 	writable     bool
 	enumerable   bool
 	configurable bool
 	accessor     bool
+}
+
+// liveSlot is the storage of a data property whose value is not in the object's bag
+// at all but in a Go field the box is a view of. A class instance's box needs this:
+// the instance keeps living on the typed side after it is boxed, so a read through
+// the box has to answer what the field holds now and a write through the box has to
+// land in the field rather than in a copy nobody reads.
+//
+// This is deliberately not an accessor descriptor even though it reads like one. An
+// accessor is observable: util.inspect prints [Getter/Setter] instead of the value,
+// Object.getOwnPropertyDescriptor answers get and set rather than value and
+// writable, and a strict deep comparison takes a different path for it. A field of a
+// class instance is an ordinary data property in JavaScript and has to look like one
+// everywhere, so the indirection lives beside value rather than in place of it and
+// isData stays true.
+type liveSlot struct {
+	get func() Value
+	set func(Value)
 }
 
 // dataProperty returns a data descriptor with the given value and flags, the
@@ -44,6 +63,19 @@ func dataProperty(value Value, writable, enumerable, configurable bool) descript
 // the language gives a property assigned with o.k = v or an object literal.
 func defaultDataProperty(value Value) descriptor {
 	return dataProperty(value, true, true, true)
+}
+
+// liveProperty returns a data descriptor backed by a Go field rather than by a
+// stored value, with the attributes a plain field of an object carries: writable,
+// enumerable and configurable. The get closure is called on every read and the set
+// closure on every write, so the box and the instance under it never disagree.
+func liveProperty(get func() Value, set func(Value)) descriptor {
+	return descriptor{
+		live:         &liveSlot{get: get, set: set},
+		writable:     true,
+		enumerable:   true,
+		configurable: true,
+	}
 }
 
 // accessorProperty returns an accessor descriptor with the given getter and
@@ -79,6 +111,9 @@ func (d descriptor) isData() bool { return !d.accessor }
 // reaches here; the receiver is kept in the signature for a future this-aware ABI.
 func (d descriptor) read(receiver Value) Value {
 	if !d.accessor {
+		if d.live != nil {
+			return d.live.get()
+		}
 		return d.value
 	}
 	if d.get.kind == KindFunc {
@@ -99,7 +134,7 @@ func (d descriptor) toObject() Value {
 		o.Set(FromGoString("get"), d.get)
 		o.Set(FromGoString("set"), d.set)
 	} else {
-		o.Set(FromGoString("value"), d.value)
+		o.Set(FromGoString("value"), d.read(Undefined))
 		o.Set(FromGoString("writable"), Bool(d.writable))
 	}
 	o.Set(FromGoString("enumerable"), Bool(d.enumerable))
@@ -121,6 +156,10 @@ func (d descriptor) toObject() Value {
 // enforces are layered on at the define path, so this is the ordinary o.k = v store.
 func (d descriptor) write(receiver, val Value) descriptor {
 	if !d.accessor {
+		if d.live != nil {
+			d.live.set(val)
+			return d
+		}
 		d.value = val
 		return d
 	}

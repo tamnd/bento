@@ -13,6 +13,8 @@
 
 package value
 
+import "reflect"
+
 // dynBox boxes a single typed element into a Value. It covers the element types the
 // lowerer proves boxable before it emits a collection box: a number, a string, a
 // boolean, a date, and the already-boxed Value a collection written with no element
@@ -49,8 +51,27 @@ func dynBox[T any](x T) Value {
 		// lands in the bytes the typed side reads.
 		return e.jsTypedBox()
 	}
+	// A class instance is matched by its registration rather than by a case, since its Go
+	// type is generated and cannot be named here. Its box is a view too: the fields are
+	// read and written through the instance, and the view carries a pointer back to it so
+	// the value can be unboxed into the element the collection holds.
+	if v, ok := classDynBox(x); ok {
+		return v
+	}
 	Throw(NewTypeError(FromGoString("bento: this collection's element type has no dynamic form")))
 	return Undefined
+}
+
+// classDynBox boxes a class instance element, reporting false when the element is not
+// one. It is reflection rather than a type switch because the struct a class lowers to
+// is generated: this package cannot name it, so the registry is the only thing that
+// recognizes it.
+func classDynBox(x any) (Value, bool) {
+	t := reflect.TypeOf(x)
+	if t == nil || t.Kind() != reflect.Pointer || classPrototypeFor(t.Elem()) == nil {
+		return Undefined, false
+	}
+	return jsonStructToValue(reflect.ValueOf(x)), true
 }
 
 // dynUnbox converts a boxed value back into the collection's typed element,
@@ -106,6 +127,16 @@ func dynUnbox[T any](v Value) (T, bool) {
 		// since the concrete backing the box carries is not the element type.
 		if t := v.asTypedArray(); t != nil {
 			if e, ok := any(t).(T); ok {
+				return e, true
+			}
+		}
+	default:
+		// A class instance comes back through the pointer its view carries, so a value read
+		// out of a boxed collection is the instance the typed side holds rather than an
+		// object that merely looks like one. A plain object with the same fields carries no
+		// such pointer and is correctly not a member: it could never have been stored here.
+		if p, ok := v.classInstance(); ok {
+			if e, ok := p.(T); ok {
 				return e, true
 			}
 		}

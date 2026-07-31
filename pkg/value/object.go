@@ -46,6 +46,13 @@ type Object struct {
 	// properties, so the key walk, the JSON walk and an indexed read and write all route
 	// through the live elements rather than through the storage above.
 	jsTyped typedArrayBacking
+	// non-nil marks this Object a view of a class instance, holding the pointer to the Go
+	// struct the view reads and writes through. Unlike the boxes above it changes nothing
+	// about how the object behaves: an instance's fields are ordinary data properties and
+	// the view presents them as such. It is here so a value coming back out of a boxed
+	// collection can be turned into the instance the typed side holds, which a bag of
+	// copied fields could not be.
+	jsClass any
 }
 
 // isExtensible reports whether new properties may still be added, the state
