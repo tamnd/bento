@@ -232,6 +232,19 @@ func (r *Renderer) isWeakRef(n frontend.Node) bool {
 // the object member of that union is the target type, which strips to its pointee the
 // same way a weak key does. A WeakRef whose target render is not a pointer hands back.
 func (r *Renderer) weakRefTarget(t frontend.Type) (ast.Expr, error) {
+	target, ok := r.weakRefTargetType(t)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "WeakRef over a target that is not an object is a later slice"}
+	}
+	return r.weakKeyPointee(target)
+}
+
+// weakRefTargetType is weakRefTarget stopping one step earlier, at the target's own
+// type rather than at the pointee its render strips to. The boxing gate asks for the
+// type, since what it needs to know is whether the target has a dynamic form at all,
+// which is a question about the type and not about how it renders.
+func (r *Renderer) weakRefTargetType(t frontend.Type) (frontend.Type, bool) {
+	var none frontend.Type
 	var derefType frontend.Type
 	found := false
 	for _, p := range r.prog.Properties(t) {
@@ -241,11 +254,11 @@ func (r *Renderer) weakRefTarget(t frontend.Type) (ast.Expr, error) {
 		}
 	}
 	if !found {
-		return nil, &NotYetLowerable{Reason: "WeakRef type did not expose its target through a deref signature"}
+		return none, false
 	}
 	call, _ := r.prog.Signatures(derefType)
 	if len(call) == 0 {
-		return nil, &NotYetLowerable{Reason: "WeakRef deref did not expose a signature"}
+		return none, false
 	}
 	members := r.prog.UnionMembers(call[0].Return)
 	if len(members) == 0 {
@@ -253,10 +266,10 @@ func (r *Renderer) weakRefTarget(t frontend.Type) (ast.Expr, error) {
 	}
 	for _, m := range members {
 		if m.Flags&frontend.TypeObject != 0 {
-			return r.weakKeyPointee(m)
+			return m, true
 		}
 	}
-	return nil, &NotYetLowerable{Reason: "WeakRef over a target that is not an object is a later slice"}
+	return none, false
 }
 
 // renderWeakRef lowers a WeakRef<T> type to a pointer to the generic value.WeakRef

@@ -19,6 +19,9 @@ import "weak"
 // single weak.Pointer[T] to the target, which does not extend the target's lifetime.
 type WeakRef[T any] struct {
 	p weak.Pointer[T]
+	// boxed is the dynamic view of this reference, built once and kept so two crossings
+	// of one WeakRef are one value under ===. See weakvalue.go.
+	boxed *Object
 }
 
 // NewWeakRef builds a WeakRef to target, the lowering of new WeakRef(target). The

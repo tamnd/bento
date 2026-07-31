@@ -1181,6 +1181,17 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	} else if ok {
 		return boxed, nil
 	}
+	// A WeakMap, a WeakSet, a WeakRef or a FinalizationRegistry boxes through its own
+	// ToValue for the same reason, and what its box shows is what node shows: a name and,
+	// for the two that hold entries, the placeholder standing in for items no program may
+	// read. A weak collection exposes no size and no iteration on purpose, since a program
+	// that could count what one holds could watch the collector run, so there is nothing
+	// here to walk and the box is only a view its members read through.
+	if boxed, ok, err := r.boxWeakToDynamic(expr, src); err != nil {
+		return nil, err
+	} else if ok {
+		return boxed, nil
+	}
 	// A value whose Go shape is a fixed-object struct, a { x: string } binding flowing
 	// into a dynamic slot (an any, an index-signature dictionary), boxes into a live
 	// value.Object copying its fields, so the box carries the same properties the struct
@@ -1460,8 +1471,7 @@ func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 	// Array siblings. The gate is asked first so a Map of something with no box hands
 	// back at the boxing site rather than emitting a call whose element boxing would
 	// raise at run time.
-	_, isArray := r.prog.ElementType(elem)
-	if r.dynBoxableElem(elem) && (r.isMapType(elem) || r.isSetType(elem) || isArray) {
+	if r.dynBoxableElem(elem) && r.dynSelfBoxingType(elem) {
 		goType, err := r.typeExpr(elem)
 		if err != nil {
 			return nil
@@ -1511,6 +1521,73 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, true, nil
 }
 
+// boxWeakToDynamic boxes one of the four weakly-holding types into a dynamic value
+// through its own ToValue, reporting ok=false for anything else so the caller's other
+// arms still run. The box is a view kept on the collection, so two crossings of one
+// WeakMap are one object under === and a member call through the box reaches the same
+// entries the typed side holds.
+//
+// It hands back on the same ground boxCollectionToDynamic does: the box presents a key,
+// a member and a value as boxed values, so a weak collection over something with no
+// dynamic form would emit a view whose reads raise. A FinalizationRegistry has no such
+// gate, since nothing it holds crosses the box.
+func (r *Renderer) boxWeakToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, bool, error) {
+	if !r.isWeakBacked(src) {
+		return nil, false, nil
+	}
+	if !r.dynWeakBoxable(r.prog.TypeAt(src)) {
+		return nil, false, &NotYetLowerable{Reason: "boxing a weak collection whose keys, members or values are not a class instance, a primitive, a collection, or a dynamic value into a dynamic value is a later slice"}
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, true, nil
+}
+
+// isWeakBacked reports whether a node's type is one of the four weakly-holding kinds
+// that box through their own ToValue. The four are asked together wherever the boxing
+// path cares, since what they share is a box over a store no program may walk.
+func (r *Renderer) isWeakBacked(n frontend.Node) bool {
+	return r.isWeakMap(n) || r.isWeakSet(n) || r.isWeakRef(n) || r.isFinalizationRegistry(n)
+}
+
+// dynWeakBoxable reports whether a weakly-holding type's box can present what crosses
+// it, and false for a type that is not one of the four. A WeakMap's key and a WeakSet's
+// member are identity positions, found again by a value handed back in, so they ask
+// dynIdentityElem; a WeakMap's value and a WeakRef's target only need the box. A
+// FinalizationRegistry is always boxable: its held value never crosses, and its
+// unregister matches a token by the reference identity a boxed instance carries.
+func (r *Renderer) dynWeakBoxable(t frontend.Type) bool {
+	switch {
+	case r.isWeakMapType(t):
+		k, v, ok := r.mapKeyVal(t)
+		return ok && r.dynIdentityElem(k) && r.dynBoxableElem(v)
+	case r.isWeakSetType(t):
+		elem, ok := r.setElem(t)
+		return ok && r.dynIdentityElem(elem)
+	case r.isWeakRefType(t):
+		target, ok := r.weakRefTargetType(t)
+		return ok && r.dynBoxableElem(target)
+	case r.isFinalizationRegistryType(t):
+		return true
+	}
+	return false
+}
+
+// dynSelfBoxingType reports whether a type's dynamic box is its own no-argument
+// ToValue, which is what lets it be an element of a collection: the outer box reaches
+// an element with only its Go type in hand, so a box needing a boxer as an argument
+// would have nowhere to get one. An array, a Map, a Set and the four weakly-holding
+// kinds all have that method. It says nothing about whether the box can be emitted,
+// which is dynBoxableElem's question and is asked alongside it.
+func (r *Renderer) dynSelfBoxingType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, ok := r.prog.ElementType(t); ok {
+		return true
+	}
+	return r.isMapType(t) || r.isSetType(t) || r.isWeakMapType(t) || r.isWeakSetType(t) ||
+		r.isWeakRefType(t) || r.isFinalizationRegistryType(t)
+}
+
 // lowerAsDynamicReceiver lowers a node into the value.Value a built-in that walks its
 // argument as a live object needs, and reports whether the node has such a form. A
 // node the checker already types dynamic is one; a Map or a Set is one through its
@@ -1528,7 +1605,8 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 // Anything else reports false and leaves the caller's static path alone.
 func (r *Renderer) lowerAsDynamicReceiver(n frontend.Node) (ast.Expr, bool, error) {
 	dynamic := r.isDynamic(n)
-	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) && !r.isBufferBacked(n) && !r.isTypedArray(n) {
+	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) && !r.isBufferBacked(n) && !r.isTypedArray(n) &&
+		!r.isWeakBacked(n) {
 		return nil, false, nil
 	}
 	expr, err := r.lowerExpr(n)
@@ -1584,6 +1662,12 @@ func (r *Renderer) dynBoxableElem(t frontend.Type) bool {
 	}
 	if elem, ok := r.setElem(t); ok && r.isSetType(t) {
 		return r.dynIdentityElem(elem)
+	}
+	// A weakly-holding kind is boxable on the same terms, so a Map<string, WeakMap<P, n>>
+	// reads its values through the very WeakMaps the typed side holds. A weak collection
+	// whose own key or value has no box hands back at that depth rather than at the top.
+	if r.dynWeakBoxable(t) {
+		return true
 	}
 	if elem, ok := r.prog.ElementType(t); ok {
 		return r.dynBoxableElem(elem)

@@ -497,6 +497,24 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		}
 		formatter = func() []string { return c.formatSetMembers(o.jsSet, recurseTimes) }
 
+	case o.jsWeak != nil:
+		// A weak collection renders as its name and, when it holds items nobody may read,
+		// the placeholder node prints in their place: "WeakMap { <items unknown> }". There
+		// is no entry walk and no size, because a weak collection exposes neither, and that
+		// is the point rather than a gap: a program that could count what a WeakMap holds
+		// could watch the garbage collector run. A WeakRef and a FinalizationRegistry claim
+		// no items at all, so with no properties of their own they are the empty pair.
+		prefix := inspectPrefix(constructor, ctorNull, o.jsWeak.jsWeakName(), "")
+		keys = inspectObjectKeys(o, c.showHidden)
+		braces = [2]string{prefix + "{", "}"}
+		if !o.jsWeak.jsWeakOpaque() {
+			if len(keys) == 0 {
+				return prefix + "{}"
+			}
+			break
+		}
+		formatter = func() []string { return []string{"<items unknown>"} }
+
 	case o.jsDate != nil:
 		// A date renders as its instant rather than as its properties, since it has none:
 		// the ISO form, or "Invalid Date" for a date that names no instant. A date given
@@ -655,6 +673,9 @@ func inspectConstructorName(v Value) (string, bool) {
 	o := v.object()
 	if o.err != nil {
 		return o.err.ErrorName(), false
+	}
+	if o.jsWeak != nil {
+		return o.jsWeak.jsWeakName(), false
 	}
 	if o.jsMap != nil {
 		return "Map", false

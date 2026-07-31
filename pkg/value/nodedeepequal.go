@@ -193,6 +193,13 @@ func deepObjectComparisonStart(a, b Value, mode deepMode, memos *deepMemos) bool
 	}
 
 	switch {
+	case a.asWeak() != nil || b.asWeak() != nil:
+		// A weak collection is compared by reference and by nothing else, which is what
+		// node does and the only thing it could do: its contents are unreadable, so two
+		// distinct empty WeakMaps are not deeply equal however alike they look. The
+		// identity case never arrives here, since deepInnerEqual settled it with === above.
+		return false
+
 	case a.asRegExp() != nil:
 		if b.asRegExp() == nil || !deepSimilarRegExps(a.asRegExp(), b.asRegExp()) || deepHasUnequalTag(a, b) {
 			return false

@@ -37,6 +37,7 @@ type Object struct {
 	err           *Error        // non-nil marks this Object the dynamic box of an Error; the inspector renders it as an error rather than as its properties
 	jsMap         mapBacking    // non-nil marks this Object the dynamic box of a Map; its members and its rendering route to the live map
 	jsSet         setBacking    // non-nil marks this Object the dynamic box of a Set; the Set half of jsMap
+	jsWeak        weakBacking   // non-nil marks this Object the dynamic box of a WeakMap, WeakSet, WeakRef or FinalizationRegistry; it has no entries to show, only a name and a member surface
 	jsDate        *Date         // non-nil marks this Object the dynamic box of a Date; its members, its class tag, its coercions and its rendering route to the live date
 	jsBuffer      bufferBacking // non-nil marks this Object the dynamic box of an ArrayBuffer or a SharedArrayBuffer; its members and its rendering route to the live bytes
 	jsView        *DataView     // non-nil marks this Object the dynamic box of a DataView; the window half of jsBuffer

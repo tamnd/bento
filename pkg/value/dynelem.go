@@ -161,6 +161,13 @@ func dynUnbox[T any](v Value) (T, bool) {
 				return e, true
 			}
 		}
+		// A weak collection comes back the same way, through the view kept on it, so a
+		// Map keyed by WeakMaps finds the entry a boxed WeakMap was stored under.
+		if w := v.asWeak(); w != nil {
+			if e, ok := any(w).(T); ok {
+				return e, true
+			}
+		}
 		// A class instance comes back through the pointer its view carries, so a value read
 		// out of a boxed collection is the instance the typed side holds rather than an
 		// object that merely looks like one. A plain object with the same fields carries no

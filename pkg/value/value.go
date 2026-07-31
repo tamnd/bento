@@ -537,6 +537,15 @@ func (v Value) Get(key BStr) Value {
 				return val
 			}
 		}
+		if w := v.object().jsWeak; w != nil {
+			// A boxed weak collection answers its own methods off the live one, so a dynamic
+			// wm.get(o) reads the entry the typed wm.get(o) reads. There is no .size here,
+			// unlike the two above: a weak collection has none, so the read climbs the chain
+			// and ends at undefined the way it does in JavaScript.
+			if val, ok := w.jsWeakMember(name); ok {
+				return val
+			}
+		}
 		if d := v.object().jsDate; d != nil {
 			// A boxed date answers its own methods, the getters and the setters and the
 			// formats, off the live date rather than an empty property bag, so a dynamic
@@ -630,6 +639,11 @@ func (v Value) HasProperty(key BStr) bool {
 		}
 		if s := v.object().jsSet; s != nil {
 			if _, ok := setGet(s, name); ok {
+				return true
+			}
+		}
+		if w := v.object().jsWeak; w != nil {
+			if _, ok := w.jsWeakMember(name); ok {
 				return true
 			}
 		}
@@ -989,6 +1003,11 @@ func brandedClassTag(v Value) (BStr, bool) {
 		return FromGoString("[object Error]"), true
 	case o.regexp != nil:
 		return FromGoString("[object RegExp]"), true
+	case o.jsWeak != nil:
+		// Each of the four weakly-holding kinds brands itself, so String(wm) reads
+		// "[object WeakMap]" rather than the plain-object tag, and the deep comparison
+		// reaches the reference-only branch instead of walking two empty property tables.
+		return FromGoString("[object " + o.jsWeak.jsWeakName() + "]"), true
 	}
 	return BStr{}, false
 }

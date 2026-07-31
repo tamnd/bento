@@ -23,6 +23,9 @@ import "weak"
 // store the linear scan searches, the same first-cut shape Set takes.
 type WeakSet[T any] struct {
 	members []weak.Pointer[T]
+	// boxed is the dynamic view of this set, built once and kept for the same reason a
+	// WeakMap's is. See weakvalue.go.
+	boxed *Object
 }
 
 // NewWeakSet builds an empty WeakSet over *T, the lowering of new WeakSet<E>() for an
