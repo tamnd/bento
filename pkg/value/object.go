@@ -37,6 +37,7 @@ type Object struct {
 	err           *Error       // non-nil marks this Object the dynamic box of an Error; the inspector renders it as an error rather than as its properties
 	jsMap         mapBacking   // non-nil marks this Object the dynamic box of a Map; its members and its rendering route to the live map
 	jsSet         setBacking   // non-nil marks this Object the dynamic box of a Set; the Set half of jsMap
+	jsDate        *Date        // non-nil marks this Object the dynamic box of a Date; its members, its class tag, its coercions and its rendering route to the live date
 }
 
 // isExtensible reports whether new properties may still be added, the state

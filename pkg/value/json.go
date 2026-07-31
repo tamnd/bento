@@ -128,7 +128,7 @@ func encodeJSON(b *strings.Builder, v any) {
 		}
 		b.WriteByte(']')
 	case Value:
-		encodeBoxedJSON(b, x, nil)
+		encodeBoxedJSON(b, jsonHookValue(x, BStr{}), nil)
 	case jsonArmer:
 		// A tagged-sum union carries its value in whichever arm its tag selects, and
 		// the arm fields are unexported machinery, so reflecting the struct would write
@@ -271,6 +271,7 @@ func encodeBoxedJSON(b *strings.Builder, v Value, stack []unsafe.Pointer) {
 			if i > 0 {
 				b.WriteByte(',')
 			}
+			e = jsonHookValue(e, NumberToString(float64(i)))
 			if jsonUndefinedValue(e) {
 				b.WriteString("null")
 				continue
@@ -286,7 +287,7 @@ func encodeBoxedJSON(b *strings.Builder, v Value, stack []unsafe.Pointer) {
 			if !o.descs[i].enumerable {
 				continue
 			}
-			val := o.descs[i].read(v)
+			val := jsonHookValue(o.descs[i].read(v), o.keys[i])
 			if jsonUndefinedValue(val) {
 				continue
 			}
@@ -305,6 +306,33 @@ func encodeBoxedJSON(b *strings.Builder, v Value, stack []unsafe.Pointer) {
 		// being absent, so nothing is written here.
 	}
 }
+
+// jsonHookValue applies the toJSON hook to a boxed value, the first step of the
+// specification's SerializeJSONProperty: a value that carries a callable toJSON
+// serializes what that method returns rather than itself. It is the boxed counterpart
+// of jsonToJSONGo, which reads the same hook off a statically typed Go value by
+// reflection, and it is what makes JSON.stringify of a boxed date write the ISO string,
+// and null for an invalid one, rather than the empty object a date's own property table
+// would give.
+//
+// The key rides along because the specification hands it to the hook, so a program's
+// own toJSON can serialize a value differently depending on where it sits. The result
+// is not re-hooked: the specification applies the step once per value, and a toJSON
+// that returned another value with a toJSON would otherwise loop.
+func jsonHookValue(v Value, key BStr) Value {
+	if !isObjectLike(v) {
+		return v
+	}
+	hook := v.Get(jsonToJSONKey)
+	if hook.kind != KindFunc {
+		return v
+	}
+	return hook.Call(StringValue(key))
+}
+
+// jsonToJSONKey is the "toJSON" property name, hoisted so the walk does not rebuild it
+// for every value it serializes.
+var jsonToJSONKey = FromGoString("toJSON")
 
 // jsonUndefinedValue reports whether a boxed value serializes as JSON-undefined,
 // the values SerializeJSONProperty drops: undefined itself, a function, and a

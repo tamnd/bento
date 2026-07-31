@@ -250,6 +250,13 @@ func (v Value) getSymKey(key *Symbol) Value {
 				return val
 			}
 		}
+		// A boxed date answers Symbol.toPrimitive, the hook that makes it the one built-in
+		// whose default coercion is its string form rather than its number.
+		if d := v.object().jsDate; d != nil {
+			if val, ok := dateSymGet(d, key); ok {
+				return val
+			}
+		}
 		return v.object().getSymChained(v, key)
 	default:
 		return Undefined
@@ -510,6 +517,16 @@ func (v Value) Get(key BStr) Value {
 				return val
 			}
 		}
+		if d := v.object().jsDate; d != nil {
+			// A boxed date answers its own methods, the getters and the setters and the
+			// formats, off the live date rather than an empty property bag, so a dynamic
+			// d.getTime() reads the same instant the typed path holds and a dynamic setter
+			// moves it. A name that is not a Date member climbs the ordinary chain and ends
+			// at undefined, which is what such a read does in JavaScript.
+			if val, ok := dateGet(d, name); ok {
+				return val
+			}
+		}
 		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
@@ -563,7 +580,8 @@ func (v Value) HasProperty(key BStr) bool {
 	case KindObject, KindFunc:
 		// A boxed collection carries its members the way a real Map and Set carry theirs
 		// on their prototype, so `'size' in map` and `'add' in set` answer true, which
-		// the property read above already agrees with.
+		// the property read above already agrees with. A boxed date carries its own the
+		// same way, so `'getTime' in d` is true and `'size' in d` is false.
 		if m := v.object().jsMap; m != nil {
 			if _, ok := mapGet(m, name); ok {
 				return true
@@ -571,6 +589,11 @@ func (v Value) HasProperty(key BStr) bool {
 		}
 		if s := v.object().jsSet; s != nil {
 			if _, ok := setGet(s, name); ok {
+				return true
+			}
+		}
+		if d := v.object().jsDate; d != nil {
+			if _, ok := dateGet(d, name); ok {
 				return true
 			}
 		}
@@ -847,12 +870,13 @@ func (v Value) ValueOfMethod() Value {
 // the tag for its type. It is called only where the AOT path proved the borrow is
 // Object.prototype.toString.call, so the receiver kind alone decides the tag.
 //
-// One spec case bento does not model yet: an Error, Date, or RegExp built with the
-// corresponding internal slot reports "[object Error]" and the like, which waits on
-// the runtime carrying the slots. The other, an object whose Symbol.toStringTag
-// property is a string, is honored here: such an object reports "[object <tag>]"
-// with that string, the hook a library uses to name its own instances. A plain
-// object with no such property reaches the object case and reports "[object Object]".
+// An object whose Symbol.toStringTag property is a string reports "[object <tag>]"
+// with that string, the hook a library uses to name its own instances, and it is read
+// first because the specification has it override the internal class. A boxed Date,
+// Error or RegExp reports its own name next: bento brands those on the object's
+// storage rather than in the spec's internal slot, so the brand is what the tag is
+// read from. A plain object with neither reaches the object case and reports
+// "[object Object]".
 func ClassTag(v Value) BStr {
 	switch v.kind {
 	case KindUndefined:
@@ -877,6 +901,9 @@ func ClassTag(v Value) BStr {
 		if tag, ok := toStringTagOf(v); ok {
 			return FromGoString("[object ").ConcatN(tag, FromGoString("]"))
 		}
+		if tag, ok := brandedClassTag(v); ok {
+			return tag
+		}
 		// A Proxy over an array carries kind KindObject, not KindArray, so the array
 		// case above does not catch it, yet the spec's Object.prototype.toString brands
 		// it "[object Array]" because step 4 runs IsArray, which reads through the proxy
@@ -887,6 +914,27 @@ func ClassTag(v Value) BStr {
 		}
 		return FromGoString("[object Object]")
 	}
+}
+
+// brandedClassTag reports the tag a value carries because of what it is rather than
+// because of a property it holds: a Date, an Error and a RegExp each have their own
+// "[object Type]" in the specification, read from an internal slot. bento keeps that
+// slot as a brand on the object's storage, so the brand is what answers here. A proxy
+// is not branded itself, so it falls through and is named by what it wraps.
+func brandedClassTag(v Value) (BStr, bool) {
+	if v.kind != KindObject {
+		return BStr{}, false
+	}
+	o := v.object()
+	switch {
+	case o.jsDate != nil:
+		return FromGoString("[object Date]"), true
+	case o.err != nil:
+		return FromGoString("[object Error]"), true
+	case o.regexp != nil:
+		return FromGoString("[object RegExp]"), true
+	}
+	return BStr{}, false
 }
 
 // toStringTagOf reads an object's Symbol.toStringTag property, the hook

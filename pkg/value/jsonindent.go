@@ -80,7 +80,7 @@ func (e jsonIndenter) encode(b *strings.Builder, v any, indent string) {
 	case jsonArray:
 		e.encodeArray(b, x.jsonElements(), indent)
 	case Value:
-		e.encodeBoxed(b, x, indent)
+		e.encodeBoxed(b, jsonHookValue(x, BStr{}), indent)
 	case jsonArmer:
 		e.encode(b, x.JSONArm(), indent)
 	default:
@@ -222,6 +222,7 @@ func (e jsonIndenter) encodeBoxed(b *strings.Builder, v Value, indent string) {
 			}
 			b.WriteByte('\n')
 			b.WriteString(inner)
+			el = jsonHookValue(el, NumberToString(float64(i)))
 			if jsonUndefinedValue(el) {
 				b.WriteString("null")
 				continue
@@ -240,7 +241,7 @@ func (e jsonIndenter) encodeBoxed(b *strings.Builder, v Value, indent string) {
 			if !o.descs[i].enumerable {
 				continue
 			}
-			val := o.descs[i].read(v)
+			val := jsonHookValue(o.descs[i].read(v), o.keys[i])
 			if jsonUndefinedValue(val) {
 				continue
 			}

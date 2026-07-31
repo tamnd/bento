@@ -474,6 +474,19 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		}
 		formatter = func() []string { return c.formatSetMembers(o.jsSet, recurseTimes) }
 
+	case o.jsDate != nil:
+		// A date renders as its instant rather than as its properties, since it has none:
+		// the ISO form, or "Invalid Date" for a date that names no instant. A date given
+		// properties of its own prints them after it, "1970-01-01T00:00:00.000Z { x: 5 }",
+		// which is why the base-and-braces shape is set up here rather than returned. There
+		// is no depth escape in this arm, unlike the regexp one above: node prints the date
+		// itself however deep it sits, and only its extra properties are cut off.
+		keys = inspectObjectKeys(o, c.showHidden)
+		base = dateInspectText(o.jsDate)
+		if len(keys) == 0 {
+			return base
+		}
+
 	case o.err != nil:
 		keys = inspectErrorKeys(o, c.showHidden)
 		base = inspectErrorBase(o.err)
@@ -586,6 +599,9 @@ func inspectConstructorName(v Value) (string, bool) {
 	}
 	if o.jsSet != nil {
 		return "Set", false
+	}
+	if o.jsDate != nil {
+		return "Date", false
 	}
 	for cur := o; ; {
 		if cur.protoNull {
