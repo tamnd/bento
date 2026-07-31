@@ -1,6 +1,8 @@
 package build
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -279,6 +281,107 @@ rethrown Error a
 TypeError ERR_AMBIGUOUS_ARGUMENT
 ERR_INVALID_ARG_TYPE
 `
+
+// assertImportProgram is the module reached the ESM way, in every form a program
+// binds it: the default import, named imports with one aliased, a namespace import,
+// the strict specifier, and the scheme-less specifier. The function is there because
+// half of Node's test files call assert from inside one, which a compiled binary can
+// only do if the binding is package-level rather than a local of main.
+const assertImportProgram = `import assert, { strictEqual, ok as assertOk, throws } from 'node:assert';
+import * as ns from 'node:assert';
+import strict from 'node:assert/strict';
+import bare from 'assert';
+
+function check(x: boolean): void {
+  assert.ok(x);
+  strictEqual(x, true);
+}
+
+check(true);
+assertOk(1, 'not used');
+ns.deepStrictEqual({ a: 1 }, { a: 1 });
+throws(() => { throw new TypeError('bad'); }, TypeError);
+console.log('passing calls returned');
+console.log(typeof assert, typeof strictEqual, bare === assert, assert.strict === strict);
+try {
+  strict.equal(1, '1');
+} catch (e) {
+  console.log(e.operator, e.code);
+  console.log(e.message);
+}
+try {
+  assert.strictEqual(1, 2);
+} catch (e) {
+  console.log(e.message);
+}
+try {
+  throws(() => {});
+} catch (e) {
+  console.log(e.message);
+}
+`
+
+// assertImportWant is what node v24.18.0 prints for that program, run as an .mjs with
+// the type annotation removed. The identity line is the one worth reading twice: all
+// four specifiers name one module value, and the strict module the strict specifier
+// loads is the same object assert.strict answers.
+const assertImportWant = `passing calls returned
+function function true true
+strictEqual ERR_ASSERTION
+Expected values to be strictly equal:
+
+1 !== '1'
+
+Expected values to be strictly equal:
+
+1 !== 2
+
+Missing expected exception.
+`
+
+// TestImportNodeAssert is the import path to the same module the require tests above
+// reach. The two must not be able to answer differently, so the assertions here are
+// the ones those make, asked through every binding form instead.
+func TestImportNodeAssert(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts", assertImportProgram)
+	if got != assertImportWant {
+		t.Errorf("assert import program output\ngot:\n%s\nwant:\n%s", got, assertImportWant)
+	}
+}
+
+// TestImportNodeAssertBareSpecifier pins the side-effect import. Loading a built-in
+// has no effect a program can observe, so the import binds nothing and emits nothing,
+// and the program that follows it runs.
+func TestImportNodeAssertBareSpecifier(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"import 'node:assert';\n"+
+			"console.log('loaded');\n")
+	if want := "loaded\n"; got != want {
+		t.Errorf("bare import output %q, want %q", got, want)
+	}
+}
+
+// TestImportNodeAssertUnimplementedMemberFails is the honest-stub rule as the import
+// path spells it. A named import binds at load time, so a member bento does not carry
+// cannot fail later at its call: it fails the build, naming the member. That is
+// stricter than the require path, where the same member throws when it is read, and it
+// is the right way round: an import says what it needs before the program runs.
+func TestImportNodeAssertUnimplementedMemberFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.ts")
+	src := "import { rejects } from 'node:assert';\n" +
+		"rejects(function () {}, Error);\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatalf("write main.ts: %v", err)
+	}
+	_, err := Build(Options{Entry: path, Output: filepath.Join(dir, "prog")})
+	if err == nil {
+		t.Fatal("import of assert.rejects built, want a build error")
+	}
+	if !strings.Contains(err.Error(), "rejects") {
+		t.Errorf("build error did not name the member: %v", err)
+	}
+}
 
 // TestRequireAssertThrows is assert.throws and assert.doesNotThrow in a compiled binary.
 // The last two lines are the argument checking rather than an assertion: a string

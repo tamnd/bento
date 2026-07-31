@@ -7,6 +7,7 @@ import (
 
 	"github.com/tamnd/bento/pkg/frontend"
 	"github.com/tamnd/bento/pkg/goimport"
+	"github.com/tamnd/bento/pkg/value"
 )
 
 // This file lowers the small node:fs, node:os, node:path and node:util surface a
@@ -249,6 +250,13 @@ func (r *Renderer) recordNodeImport(decl frontend.Node, internal map[string]bool
 	}
 	exports, ok := nodeModuleExports[module]
 	if !ok {
+		// A built-in the runtime registry answers binds to its module value, the same
+		// value require of that specifier hands back, and every member reads off it
+		// through the value model (nodebuiltinimport.go). The static set above is asked
+		// first, so node:path and its three siblings keep their direct helper calls.
+		if value.IsBuiltinModule(module) {
+			return r.recordBuiltinModuleImport(module, clause, haveClause)
+		}
 		return &NotYetLowerable{Reason: "import of module " + module + " is a later slice"}
 	}
 	if !haveClause {

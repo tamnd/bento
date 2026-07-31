@@ -38,7 +38,7 @@ func (r *Renderer) primitiveFlags(n frontend.Node) frontend.TypeFlags {
 	// the box GetIndex answered. Without this, console.log(k) would pass a value.Value
 	// where the string path expects a value.BStr, which does not compile.
 	if n.Kind() == frontend.NodeIdentifier {
-		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
+		if name, ok := localName(r.prog.Text(n)); ok && r.isDynBoundName(name) {
 			return frontend.TypeAny
 		}
 	}
@@ -513,7 +513,7 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	// dispatch through the dynamic Get, so the read routes here off the binding's
 	// storage rather than its non-any type, which would fold to a fixed-shape miss.
 	if n.Kind() == frontend.NodeIdentifier {
-		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
+		if name, ok := localName(r.prog.Text(n)); ok && r.isDynBoundName(name) {
 			return true
 		}
 	}
@@ -864,7 +864,7 @@ func (r *Renderer) dynamicArrayElemCallee(calleeNode frontend.Node) bool {
 // slot's real storage to decide whether the static result must be boxed back.
 func (r *Renderer) localStorageDynamic(target frontend.Node) bool {
 	if target.Kind() == frontend.NodeIdentifier {
-		if name, ok := localName(r.prog.Text(target)); ok && r.dynBoundLocals[name] {
+		if name, ok := localName(r.prog.Text(target)); ok && r.isDynBoundName(name) {
 			return true
 		}
 	}

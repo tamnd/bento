@@ -95,7 +95,7 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// capitalized export names. So the boxed local shadows the function routing below
 		// and reads as its source name, the slot every other read and the dynamic call
 		// site use.
-		if name, ok := localName(r.prog.Text(n)); ok && r.dynBoundLocals[name] {
+		if name, ok := localName(r.prog.Text(n)); ok && r.isDynBoundName(name) {
 			return ident(name), nil
 		}
 		// A named function declaration that is also a callable object (it carries own

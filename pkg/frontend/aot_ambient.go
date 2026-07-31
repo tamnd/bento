@@ -88,7 +88,14 @@ func isAmbientPath(p string) bool { return devolume(p) == ambientPath }
 // benchmark passes). node:util declares the three members bento's util module
 // carries, format, formatWithOptions and inspect, each typed with any for the
 // values it renders, since rendering a value is the one thing util does that does
-// not care what type it is. The surface is deliberately small: it grows one entry
+// not care what type it is. node:assert is declared differently from those four: its
+// members are not lowered to named helpers but read off the module value the runtime
+// registry builds, so every one of them is typed any and the module's default export
+// is the callable module itself, which is what assert(true) calls. The four
+// specifiers Node gives that module, with and without the node: scheme and in the
+// strict form, are declared as one surface so a program written in any of them
+// checks; which one a binding loads is decided by the specifier at the import, not
+// here. The surface is deliberately small: it grows one entry
 // at a time as the lowerer learns to emit each one, so a declared name is always a
 // lowerable one.
 const ambientSource = `declare var process: any;
@@ -133,6 +140,38 @@ declare module "node:util" {
 	export function formatWithOptions(inspectOptions: any, format?: any, ...args: any[]): string;
 	export function inspect(value: any, options?: any): string;
 	export function isDeepStrictEqual(a: any, b: any): boolean;
+}
+declare module "node:assert" {
+	const assert: any;
+	export default assert;
+	export const ok: any;
+	export const fail: any;
+	export const equal: any;
+	export const notEqual: any;
+	export const deepEqual: any;
+	export const notDeepEqual: any;
+	export const deepStrictEqual: any;
+	export const notDeepStrictEqual: any;
+	export const strictEqual: any;
+	export const notStrictEqual: any;
+	export const match: any;
+	export const doesNotMatch: any;
+	export const throws: any;
+	export const doesNotThrow: any;
+	export const ifError: any;
+	export const strict: any;
+}
+declare module "assert" {
+	export * from "node:assert";
+	export { default } from "node:assert";
+}
+declare module "node:assert/strict" {
+	export * from "node:assert";
+	export { default } from "node:assert";
+}
+declare module "assert/strict" {
+	export * from "node:assert";
+	export { default } from "node:assert";
 }
 declare module "node:path" {
 	export function join(...parts: string[]): string;

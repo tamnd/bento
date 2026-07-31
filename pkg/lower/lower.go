@@ -79,6 +79,14 @@ type Renderer struct {
 	// forms meet at one dispatch. It is the namespace twin of nodeImports and is
 	// populated in the same pass.
 	nodeNamespaces map[string]string
+	// builtinModuleImports maps a local binding an ESM import of a registry built-in
+	// introduced (import assert from "node:assert") to the module and member it names.
+	// Each binding emits as a package-level value.Value filled at the top of main, and
+	// every read off it routes through the value model, the same slot the require form
+	// of the same module lands in. It is populated in the same import pass as the two
+	// maps above and is the registry twin of nodeNamespaces, which holds the bindings
+	// of the four modules whose members lower to named value helpers instead.
+	builtinModuleImports map[string]builtinModuleBinding
 	// goImports maps a local binding name introduced by a go: import to the Go
 	// symbol it names, so a call to that binding lowers to a direct call into the
 	// real Go package rather than a user function. Like nodeImports it is populated
