@@ -86,6 +86,27 @@ func JSONStringifyUndefined(v any) Value {
 	return Undefined
 }
 
+// JSONStringifyOpt is JSON.stringify of a top-level optional, the T | undefined shape a
+// keyed read of a collection answers. Its result is a Value rather than a BStr for the
+// same reason JSONStringifyUndefined's is: an absent optional is undefined, and
+// JSON.stringify of undefined is the value undefined, not a string.
+//
+// A present one serializes the arm it holds. Without this the walk would reach the
+// value.Opt struct itself, whose two fields are unexported, and write it as an empty
+// object; the field walk already unwraps an optional this way, and this is the same
+// unwrapping at the top of the walk, where there is no field to hang it off.
+func JSONStringifyOpt(v any) Value {
+	opt, ok := v.(jsonOptional)
+	if !ok {
+		return StringValue(JSONStringify(v))
+	}
+	inner, present := opt.jsonOptField()
+	if !present {
+		return Undefined
+	}
+	return StringValue(JSONStringify(inner))
+}
+
 // encodeJSON writes one value's JSON text to b. It dispatches on the concrete Go
 // type the lowering produces for each JavaScript type: a BStr is a quoted string,
 // a float64 is a JavaScript number, a bool is true or false, a *Array is a

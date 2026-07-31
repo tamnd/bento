@@ -2480,6 +2480,20 @@ func (r *Renderer) jsonStringifyIsUndefinedResult(t frontend.Type) bool {
 	return false
 }
 
+// jsonStringifyOptionalArg reports whether a value of type t, passed as the sole
+// argument to JSON.stringify, is an optional this slice serializes through
+// value.JSONStringifyOpt. An optional whose present arm would itself serialize to
+// undefined (an optional function or symbol) is left out: the result is then undefined
+// either way, but the unwrapping below would hand the arm to the reflection walk, which
+// has no arm for it, so it hands back rather than serializing it wrong.
+func (r *Renderer) jsonStringifyOptionalArg(t frontend.Type) bool {
+	if !r.isOptionalType(t) {
+		return false
+	}
+	inner, ok := r.optionalInner(r.prog.UnionMembers(t))
+	return ok && !r.jsonStringifyIsUndefinedResult(inner)
+}
+
 func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "stringify":
@@ -2513,6 +2527,23 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 			}
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "JSONStringifyUndefined"), Args: []ast.Expr{arg}}, nil
+		}
+		// An optional argument, the T | undefined a keyed read of a collection answers,
+		// lowers to a value.Opt whose two fields are unexported, so the reflection walk
+		// would write it as an empty object. It routes to value.JSONStringifyOpt, which
+		// unwraps it: the present arm serializes, and the absent one is the value
+		// undefined, the same not-a-string result the case above has and the reason this
+		// one answers a Value too.
+		if r.jsonStringifyOptionalArg(r.prog.TypeAt(argNodes[0])) {
+			if len(argNodes) != 1 {
+				return nil, &NotYetLowerable{Reason: "JSON.stringify of an optional, with a replacer or space argument, is a later slice"}
+			}
+			arg, err := r.lowerExpr(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "JSONStringifyOpt"), Args: []ast.Expr{arg}}, nil
 		}
 		arg, err := r.lowerExpr(argNodes[0])
 		if err != nil {
@@ -4486,19 +4517,27 @@ func (r *Renderer) consoleStringify(arg frontend.Node) (ast.Expr, error) {
 // string form: an object, an array, a function and a symbol.
 //
 // A regexp is left out because the two agree on it, "/a/g" either way, and its
-// direct lowering needs no box. So are an optional and a tagged union, which
-// stringify renders arm by arm today; inspecting those means boxing an arm whose
-// kind is only known at run time, which is the union boxing slice rather than this
-// one, and their arms are primitives in the programs that have one.
+// direct lowering needs no box. So is a tagged union, which stringify renders arm by
+// arm today; inspecting that means boxing an arm whose kind is only known at run
+// time, which is the union boxing slice rather than this one, and its arms are
+// primitives in the programs that have one.
+//
+// An optional reads through its arm. The absent case prints "undefined" whichever
+// path it takes, so an optional inspects exactly when the type it wraps does, and
+// that is what makes console.log(m.get('k')) on a map of instances print
+// P { x: 1, y: 's' } rather than the [object Object] a string coercion gives.
 func (r *Renderer) consoleInspectsStatically(arg frontend.Node) bool {
-	if r.isRegExp(arg) || r.isOptional(arg) {
-		return false
-	}
 	if _, ok := r.unionStringValued(arg); ok {
 		return false
 	}
-	flags := r.prog.TypeAt(arg).Flags
-	return flags&(frontend.TypeObject|frontend.TypeSymbol) != 0
+	t := r.prog.TypeAt(arg)
+	if inner, ok := r.optionalInner(r.prog.UnionMembers(t)); ok && r.isOptionalType(t) {
+		t = inner
+	}
+	if r.regExpType(t) {
+		return false
+	}
+	return t.Flags&(frontend.TypeObject|frontend.TypeSymbol) != 0
 }
 
 // consoleInspect lowers a boxed or dynamic console argument through value.ConsoleValue,
