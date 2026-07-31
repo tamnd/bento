@@ -1940,6 +1940,7 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		return nil, err
 	}
 	out = append(out, structDecl)
+	out = append(out, r.classRegisterDecl(info))
 	for _, f := range info.statics {
 		vd, err := r.staticVarDecl(f)
 		if err != nil {
@@ -2347,6 +2348,38 @@ func (r *Renderer) staticInitRHS(rhs ast.Expr, f classField, boxed bool) (ast.Ex
 		return r.boxStaticToDynamic(rhs, f.init)
 	}
 	return r.coerceToTarget(rhs, f.init, f.ident)
+}
+
+// classRegisterDecl emits the class's registration with the runtime: a package-level
+// var whose initializer records the instance struct's Go type against the source class
+// name, so a boxed instance can be named without the boxing site having to say which
+// class it is. That matters because most positions have no boxing site at all: an
+// instance held in a field of another instance or in an array is reached by the
+// reflection walk, which sees only a Go type.
+//
+// It rides a var rather than an init function because Go runs package var initializers
+// before main either way, and the registration returns a bool for exactly that reason.
+// Every class registers, whether or not the program ever boxes one: the cost is one
+// small object per class and the alternative is deciding at render time whether some
+// later-lowered expression will box it.
+func (r *Renderer) classRegisterDecl(info *classInfo) ast.Decl {
+	r.requireImport(valuePkg)
+	return &ast.GenDecl{
+		Tok: token.VAR,
+		Specs: []ast.Spec{&ast.ValueSpec{
+			Names: []*ast.Ident{ident("_")},
+			Values: []ast.Expr{&ast.CallExpr{
+				Fun: sel("value", "RegisterClass"),
+				Args: []ast.Expr{
+					&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(info.name)},
+					&ast.CallExpr{
+						Fun:  &ast.ParenExpr{X: star(ident(info.goName))},
+						Args: []ast.Expr{ident("nil")},
+					},
+				},
+			}},
+		}},
+	}
 }
 
 // classStruct emits the struct: one field per instance field, in declaration
