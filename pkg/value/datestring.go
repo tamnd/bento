@@ -20,6 +20,7 @@ package value
 
 import (
 	"math"
+	"strings"
 	"time"
 )
 
@@ -86,13 +87,20 @@ func timeZoneStringOf(t time.Time) string {
 // instant rather than by comparing offsets, so a southern-hemisphere zone in January
 // reads as daylight the way Node reads it.
 //
-// A zone the table does not carry at all is answered as unnamed. That happens when Go
-// cannot name the host's local zone, which it reports as "Local"; the offset form the
-// caller falls back to is still the right offset, so the reading is correct and only the
-// parenthesized name differs from what Node prints.
+// A zone the table does not carry at all falls through to the abbreviation Go has for
+// the instant, and takes it only when it reads as a phrase rather than a tzdata
+// abbreviation. That is the Windows case: Go names the host's local zone "Local" there
+// and takes its abbreviations from the registry, which spells them out in full
+// ("Eastern Standard Time", "Coordinated Universal Time"), the same names CLDR carries.
+// A tzdata abbreviation is a single word ("EST", "CEST", "+07"), so the space is what
+// separates the two, and a zone with neither a table entry nor a spelled-out
+// abbreviation is answered as unnamed, which prints the offset again.
 func zoneLongName(t time.Time) string {
 	pair, ok := zoneLongNames[t.Location().String()]
 	if !ok {
+		if abbrev, _ := t.Zone(); strings.Contains(abbrev, " ") {
+			return abbrev
+		}
 		return ""
 	}
 	if t.IsDST() {

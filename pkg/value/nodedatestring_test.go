@@ -162,6 +162,23 @@ func TestAnUnnamedZoneFallsBackToTheOffset(t *testing.T) {
 	}
 }
 
+// TestASpelledOutAbbreviationIsTakenAsTheName pins the Windows path. Go names the local
+// zone "Local" there whatever the machine is set to, so no table lookup can succeed, but
+// it takes the zone's abbreviations from the registry, which spells them out the way CLDR
+// does. An abbreviation with a space in it is therefore the name, while a tzdata
+// abbreviation, one word, is not and leaves the offset form in place.
+func TestASpelledOutAbbreviationIsTakenAsTheName(t *testing.T) {
+	saved := time.Local
+	t.Cleanup(func() { time.Local = saved })
+	time.Local = time.FixedZone("Eastern Standard Time", -5*3600)
+
+	got := (&Date{ms: 0}).ToString().ToGoString()
+	want := "Wed Dec 31 1969 19:00:00 GMT-0500 (Eastern Standard Time)"
+	if got != want {
+		t.Fatalf("toString in a zone named by its abbreviation = %q, want %q", got, want)
+	}
+}
+
 // TestEveryZoneTheTableNamesIsReadable pins that the generated table is self-consistent:
 // every index it holds points at a name that exists, and no zone maps to a pair that
 // would read out of range. A generator that renumbered its interning would otherwise

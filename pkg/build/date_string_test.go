@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -18,6 +19,14 @@ import (
 // suite happens to be in. The binary is otherwise run exactly as buildAndRunFile runs it.
 func buildAndRunFileInZone(t *testing.T, zone, name, src string) string {
 	t.Helper()
+	// Go reads TZ on Unix and ignores it on Windows, where the local zone comes from
+	// the registry and nothing a parent process sets can move it. A test that named a
+	// zone would therefore read the runner's own zone there and compare it against
+	// another zone's expected text, so it does not run rather than fail for a reason
+	// that is not about dates.
+	if runtime.GOOS == "windows" {
+		t.Skip("Go does not read TZ on Windows, so a program cannot be run in a named zone")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
