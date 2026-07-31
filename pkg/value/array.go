@@ -77,6 +77,16 @@ func ArrayValueOf[T any](a *Array[T], box func(T) Value) Value {
 	return NewArrayValue(boxed)
 }
 
+// ToValue is ArrayValueOf with the element box left to the runtime's own dispatch, the
+// no-argument form a container holding an array needs: a boxed Map<string, number[]>
+// reaches each value with nothing but its Go type in hand, so it cannot be handed a
+// boxer the way an emitted call site can. It copies the way ArrayValueOf does, so an
+// array nested in a boxed collection reads through and a write made through the box
+// does not reach the typed array.
+func (a *Array[T]) ToValue() Value {
+	return ArrayValueOf(a, dynBox[T])
+}
+
 // Len is the array's length. JavaScript's .length is a Number, so it is a
 // float64 here to match the type the checker gives the property and to compose
 // with the rest of the numeric path with no conversion at the use site. It is

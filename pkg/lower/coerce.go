@@ -1455,6 +1455,19 @@ func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 		// which is why this needs no closure where an arbitrary element type would.
 		return sel("value", "ClassToValue")
 	}
+	// A container holding a container boxes through the element's own no-argument box,
+	// the method expression (*value.Map[value.BStr, float64]).ToValue and its Set and
+	// Array siblings. The gate is asked first so a Map of something with no box hands
+	// back at the boxing site rather than emitting a call whose element boxing would
+	// raise at run time.
+	_, isArray := r.prog.ElementType(elem)
+	if r.dynBoxableElem(elem) && (r.isMapType(elem) || r.isSetType(elem) || isArray) {
+		goType, err := r.typeExpr(elem)
+		if err != nil {
+			return nil
+		}
+		return &ast.SelectorExpr{X: &ast.ParenExpr{X: goType}, Sel: ident("ToValue")}
+	}
 	return nil
 }
 
@@ -1481,16 +1494,16 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 		if !ok {
 			return nil, false, &NotYetLowerable{Reason: "boxing a Map that did not expose its key and value types is a later slice"}
 		}
-		if !r.dynBoxableElem(k) || !r.dynBoxableElem(v) {
-			return nil, false, &NotYetLowerable{Reason: "boxing a Map whose keys or values are not a number, string, boolean, date, class instance, or dynamic value into a dynamic value is a later slice"}
+		if !r.dynIdentityElem(k) || !r.dynBoxableElem(v) {
+			return nil, false, &NotYetLowerable{Reason: "boxing a Map whose keys or values are not a number, string, boolean, date, class instance, collection, or dynamic value into a dynamic value is a later slice"}
 		}
 	case r.isSet(src):
 		elem, ok := r.setElem(r.prog.TypeAt(src))
 		if !ok {
 			return nil, false, &NotYetLowerable{Reason: "boxing a Set that did not expose its member type is a later slice"}
 		}
-		if !r.dynBoxableElem(elem) {
-			return nil, false, &NotYetLowerable{Reason: "boxing a Set whose members are not a number, string, boolean, date, class instance, or dynamic value into a dynamic value is a later slice"}
+		if !r.dynIdentityElem(elem) {
+			return nil, false, &NotYetLowerable{Reason: "boxing a Set whose members are not a number, string, boolean, date, class instance, collection, or dynamic value into a dynamic value is a later slice"}
 		}
 	default:
 		return nil, false, nil
@@ -1561,8 +1574,36 @@ func (r *Renderer) dynBoxableElem(t frontend.Type) bool {
 		r.markClassBoxed(t)
 		return true
 	}
+	// A container holding a container reaches the runtime through the element's own
+	// no-argument box, which a Map, a Set and an Array each have. The element types under
+	// it are asked the same question, so a Map<string, Map<string, Date>> is boxable all
+	// the way down and a Map of something with no box still hands back at the depth the
+	// gap is at.
+	if k, v, ok := r.mapKeyVal(t); ok && r.isMapType(t) {
+		return r.dynIdentityElem(k) && r.dynBoxableElem(v)
+	}
+	if elem, ok := r.setElem(t); ok && r.isSetType(t) {
+		return r.dynIdentityElem(elem)
+	}
+	if elem, ok := r.prog.ElementType(t); ok {
+		return r.dynBoxableElem(elem)
+	}
 	return r.isDateType(t) || r.arrayBufferType(t) || r.sharedArrayBufferType(t) || r.dataViewType(t) ||
 		r.typedArrayElemBox(t) != nil
+}
+
+// dynIdentityElem is dynBoxableElem for the two positions that need the round trip
+// rather than the box alone: a Map's key and a Set's member. Both are found again by
+// the value handed back in, so an element whose box is a copy would be handed to has or
+// delete and not recognized, and answering false there is a wrong answer rather than a
+// raise. An array is the one boxable element with that shape, since its box holds its
+// own elements and carries no pointer back to the typed array, so it is a value a
+// collection can hold but not a key a collection can be found by.
+func (r *Renderer) dynIdentityElem(t frontend.Type) bool {
+	if _, ok := r.prog.ElementType(t); ok {
+		return false
+	}
+	return r.dynBoxableElem(t)
 }
 
 // typedArrayElemBox is the element box for a typed-array type, the method expression
