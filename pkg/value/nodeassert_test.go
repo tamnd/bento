@@ -63,6 +63,12 @@ func assertValue(t *testing.T, shared *assertSharedValues, name string) Value {
 	}
 	n := func(f float64) Value { return Number(f) }
 	s := func(v string) Value { return StringValue(FromGoString(v)) }
+	thrower := func(raise func()) Value {
+		return NewFunc(func([]Value) Value {
+			raise()
+			return Undefined
+		})
+	}
 	numbered := func(changed bool) Value {
 		o := NewObject()
 		for i := 0; i < 20; i++ {
@@ -158,6 +164,64 @@ func assertValue(t *testing.T, shared *assertSharedValues, name string) Value {
 		return WithName(NewFunc(func([]Value) Value { return Undefined }), "foo")
 	case "other function":
 		return WithName(NewFunc(func([]Value) Value { return Undefined }), "bar")
+
+	// The throwers throws and doesNotThrow are called with. A thrown non-error goes
+	// through the same carriers a program's throw of one does, so what the module catches
+	// is what it would catch from lowered code.
+	case "thrower nothing":
+		return NewFunc(func([]Value) Value { return Undefined })
+	case "thrower error a":
+		return thrower(func() { Throw(NewError(FromGoString("a"))) })
+	case "thrower error empty":
+		return thrower(func() { Throw(NewError(FromGoString(""))) })
+	case "thrower type error bad":
+		return thrower(func() { Throw(NewTypeError(FromGoString("bad"))) })
+	case "thrower error with code":
+		return thrower(func() {
+			e := NewError(FromGoString("a"))
+			e.SetProperty("code", s("Y"))
+			Throw(e)
+		})
+	case "thrower number":
+		return thrower(func() { Throw(NewThrownValue(n(42))) })
+	case "thrower string":
+		return thrower(func() { Throw(ThrownString(FromGoString("boom"))) })
+	case "thrower object":
+		return thrower(func() { Throw(NewThrownValue(NewObject())) })
+
+	// The expectations.
+	case "ctor Error":
+		return ErrorConstructor("Error")
+	case "ctor TypeError":
+		return ErrorConstructor("TypeError")
+	case "ctor RangeError":
+		return ErrorConstructor("RangeError")
+	case "regexp bad":
+		return RegExpValue(NewRegExpLiteral("bad", ""))
+	case "regexp error a":
+		return RegExpValue(NewRegExpLiteral("^Error: a$", ""))
+	case "validation true":
+		return NewFunc(func([]Value) Value { return Bool(true) })
+	case "validation false":
+		return NewFunc(func([]Value) Value { return Bool(false) })
+	case "validation one":
+		return NewFunc(func([]Value) Value { return n(1) })
+	case "validation named nope":
+		return WithName(NewFunc(func([]Value) Value { return s("nope") }), "named")
+	case "validation message a":
+		return NewFunc(func(args []Value) Value {
+			return Bool(StrictEquals(Arg(args, 0).Get(FromGoString("message")), s("a")))
+		})
+	case "expect name":
+		return obj("name", s("TypeError"))
+	case "expect name and message":
+		return obj("name", s("TypeError"), "message", s("other"))
+	case "expect message regexp":
+		return obj("message", RegExpValue(NewRegExpLiteral("bad", "")))
+	case "expect message regexp unmatched":
+		return obj("message", RegExpValue(NewRegExpLiteral("nope", "")))
+	case "expect code":
+		return obj("code", s("X"))
 	}
 	t.Fatalf("no value named %q: the generator has one and this file does not", name)
 	return Undefined
@@ -223,6 +287,16 @@ func assertCall(t *testing.T, method string, a, b Value) (e *Error, threw bool) 
 		call("match", a, b)
 	case "doesNotMatch":
 		call("doesNotMatch", a, b)
+	case "throws":
+		call("throws", a, b)
+	case "throws message":
+		call("throws", a, b, custom)
+	case "throws error message":
+		call("throws", a, b, NewRangeError(FromGoString("as message")).ToValue())
+	case "doesNotThrow":
+		call("doesNotThrow", a, b)
+	case "doesNotThrow message":
+		call("doesNotThrow", a, b, custom)
 	default:
 		t.Fatalf("no method named %q: the generator has one and this file does not", method)
 	}
@@ -395,7 +469,7 @@ func TestAssertStrictModuleUsesStrictComparisons(t *testing.T) {
 // mostly implemented: a member this port does not carry says so rather than answering
 // undefined, which a program would only find out about a few lines later.
 func TestAssertUnimplementedMembersThrow(t *testing.T) {
-	for _, member := range []string{"throws", "doesNotThrow", "rejects", "doesNotReject", "partialDeepStrictEqual", "AssertionError", "Assert", "CallTracker"} {
+	for _, member := range []string{"rejects", "doesNotReject", "partialDeepStrictEqual", "AssertionError", "Assert", "CallTracker"} {
 		func() {
 			defer func() {
 				r := recover()
@@ -411,5 +485,49 @@ func TestAssertUnimplementedMembersThrow(t *testing.T) {
 			}()
 			RequireBuiltin("assert").Get(FromGoString(member))
 		}()
+	}
+}
+
+// TestAssertThrowsErrorClassAgainstNonError pins the one throws case that is not in the
+// reference, because Node's answer to it is a stack from the machine that ran it.
+//
+// assert.throws(fn, Error) where fn threw something that is not an error: Node decides
+// an expectation is an error class with Error.isPrototypeOf(expected), which is false for
+// Error itself, so it falls through to the validation-function branch, calls Error as a
+// predicate, and reports the error that call returned, stack included. Every other class
+// (TypeError, RangeError) takes the class branch and says what it expected. bento models
+// a class as a name rather than a prototype and has no such gap, so Error reads as the
+// class the caller wrote, which is the message Node gives for every other class.
+func TestAssertThrowsErrorClassAgainstNonError(t *testing.T) {
+	e, threw := assertCall(t, "throws",
+		NewFunc(func([]Value) Value {
+			Throw(NewThrownValue(NewObject()))
+			return Undefined
+		}), ErrorConstructor("Error"))
+	if !threw {
+		t.Fatal("assert.throws(thrower, Error) passed for a thrown object")
+	}
+	want := `The error is expected to be an instance of "Error". Received "{}"`
+	if got := e.ErrorMessage(); got != want {
+		t.Errorf("message:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestAssertThrowsRethrowsIdentity pins that doesNotThrow rethrows the error it caught
+// rather than a copy of it. A test that lets an unexpected error through and catches it
+// higher up compares it by identity, and an assertion library that rebuilt it would
+// break that.
+func TestAssertThrowsRethrowsIdentity(t *testing.T) {
+	raised := NewError(FromGoString("a"))
+	e, threw := assertCall(t, "doesNotThrow",
+		NewFunc(func([]Value) Value {
+			Throw(raised)
+			return Undefined
+		}), ErrorConstructor("TypeError"))
+	if !threw {
+		t.Fatal("assert.doesNotThrow rethrew nothing")
+	}
+	if e != raised {
+		t.Errorf("rethrew %v, want the error the function raised", e)
 	}
 }

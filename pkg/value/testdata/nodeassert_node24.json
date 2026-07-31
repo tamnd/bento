@@ -629,5 +629,382 @@
  },
  "doesNotMatch(string b, regexp)": {
   "threw": false
+ },
+ "throws(thrower error a, undefined)": {
+  "threw": false
+ },
+ "throws(thrower number, undefined)": {
+  "threw": false
+ },
+ "throws(thrower nothing, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Missing expected exception.",
+  "generatedMessage": false,
+  "operator": "throws"
+ },
+ "throws message(thrower nothing, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Missing expected exception: custom",
+  "generatedMessage": false,
+  "operator": "throws"
+ },
+ "throws(one, undefined)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_INVALID_ARG_TYPE",
+  "message": "The \"fn\" argument must be of type function. Received type number (1)",
+  "operator": "undefined"
+ },
+ "throws(null, undefined)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_INVALID_ARG_TYPE",
+  "message": "The \"fn\" argument must be of type function. Received null",
+  "operator": "undefined"
+ },
+ "throws(thrower type error bad, ctor TypeError)": {
+  "threw": false
+ },
+ "throws(thrower type error bad, ctor Error)": {
+  "threw": false
+ },
+ "throws(thrower error a, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The error is expected to be an instance of \"TypeError\". Received \"Error\"\n\nError message:\n\na",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error empty, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The error is expected to be an instance of \"TypeError\". Received \"Error\"",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower number, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The error is expected to be an instance of \"TypeError\". Received \"42\"",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower object, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The error is expected to be an instance of \"TypeError\". Received \"{}\"",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower nothing, ctor RangeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Missing expected exception (RangeError).",
+  "generatedMessage": false,
+  "operator": "throws"
+ },
+ "throws message(thrower nothing, ctor Error)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Missing expected exception (Error): custom",
+  "generatedMessage": false,
+  "operator": "throws"
+ },
+ "throws message(thrower error a, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "custom",
+  "generatedMessage": false,
+  "operator": "throws"
+ },
+ "throws error message(thrower error a, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "RangeError: as message",
+  "generatedMessage": false,
+  "operator": "throws"
+ },
+ "throws(thrower type error bad, regexp bad)": {
+  "threw": false
+ },
+ "throws(thrower error a, regexp error a)": {
+  "threw": false
+ },
+ "throws(thrower error a, regexp bad)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The input did not match the regular expression /bad/. Input:\n\n'Error: a'\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower number, regexp bad)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The input did not match the regular expression /bad/. Input:\n\n'42'\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower type error bad, expect name)": {
+  "threw": false
+ },
+ "throws(thrower type error bad, expect name and message)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  Comparison {\n+   message: 'bad',\n-   message: 'other',\n    name: 'TypeError'\n  }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error a, expect name)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  Comparison {\n+   name: 'Error'\n-   name: 'TypeError'\n  }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower type error bad, expect message regexp)": {
+  "threw": false
+ },
+ "throws(thrower type error bad, expect message regexp unmatched)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  Comparison {\n+   message: 'bad'\n-   message: /nope/\n  }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error with code, expect code)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  Comparison {\n+   code: 'Y'\n-   code: 'X'\n  }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error a, expect code)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ Comparison {}\n- Comparison {\n-   code: 'X'\n- }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower object, expect code)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ Comparison {}\n- Comparison {\n-   code: 'X'\n- }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower number, expect code)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n+ 42\n- {\n-   code: 'X'\n- }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error a, empty object)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_INVALID_ARG_VALUE",
+  "message": "The argument 'error' may not be an empty object. Received {}",
+  "operator": "undefined"
+ },
+ "throws(thrower error a, error b)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Expected values to be strictly deep-equal:\n+ actual - expected\n\n  Comparison {\n+   message: 'a',\n-   message: 'b',\n    name: 'Error'\n  }\n",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws message(thrower error a, expect code)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "custom",
+  "generatedMessage": false,
+  "operator": "throws"
+ },
+ "throws(thrower error a, validation true)": {
+  "threw": false
+ },
+ "throws(thrower error a, validation false)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The validation function is expected to return \"true\". Received false\n\nCaught error:\n\nError: a",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error a, validation one)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The validation function is expected to return \"true\". Received 1\n\nCaught error:\n\nError: a",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error a, validation named nope)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The \"named\" validation function is expected to return \"true\". Received 'nope'\n\nCaught error:\n\nError: a",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error a, validation message a)": {
+  "threw": false
+ },
+ "throws(thrower number, validation false)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "The validation function is expected to return \"true\". Received false",
+  "generatedMessage": true,
+  "operator": "throws"
+ },
+ "throws(thrower error a, string a)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_AMBIGUOUS_ARGUMENT",
+  "message": "The \"error/message\" argument is ambiguous. The error message \"a\" is identical to the message.",
+  "operator": "undefined"
+ },
+ "throws(thrower error a, string b)": {
+  "threw": false
+ },
+ "throws(thrower string, string a)": {
+  "threw": false
+ },
+ "throws message(thrower error a, string a)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_INVALID_ARG_TYPE",
+  "message": "The \"error\" argument must be of type function or an instance of Error, RegExp, or Object. Received type string ('a')",
+  "operator": "undefined"
+ },
+ "doesNotThrow(thrower nothing, undefined)": {
+  "threw": false
+ },
+ "doesNotThrow(thrower error a, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception.\nActual message: \"a\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow(thrower number, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception.\nActual message: \"undefined\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow message(thrower error a, undefined)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception: custom\nActual message: \"a\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow(thrower type error bad, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception.\nActual message: \"bad\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow(thrower error a, ctor TypeError)": {
+  "threw": true,
+  "name": "Error",
+  "message": "a",
+  "operator": "undefined"
+ },
+ "doesNotThrow message(thrower type error bad, ctor TypeError)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception: custom\nActual message: \"bad\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow(thrower error a, regexp error a)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception.\nActual message: \"a\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow(thrower error a, regexp bad)": {
+  "threw": true,
+  "name": "Error",
+  "message": "a",
+  "operator": "undefined"
+ },
+ "doesNotThrow(thrower error a, validation true)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception.\nActual message: \"a\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow(thrower error a, validation false)": {
+  "threw": true,
+  "name": "Error",
+  "message": "a",
+  "operator": "undefined"
+ },
+ "doesNotThrow(thrower error a, string a)": {
+  "threw": true,
+  "name": "AssertionError",
+  "code": "ERR_ASSERTION",
+  "message": "Got unwanted exception: a\nActual message: \"a\"",
+  "generatedMessage": false,
+  "operator": "doesNotThrow"
+ },
+ "doesNotThrow(thrower error a, one)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_INVALID_ARG_TYPE",
+  "message": "The \"expected\" argument must be of type function or an instance of RegExp. Received type number (1)",
+  "operator": "undefined"
+ },
+ "doesNotThrow(thrower error a, expect code)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_INVALID_ARG_TYPE",
+  "message": "The \"expected\" argument must be of type function or an instance of RegExp. Received an instance of Object",
+  "operator": "undefined"
+ },
+ "doesNotThrow(one, undefined)": {
+  "threw": true,
+  "name": "TypeError",
+  "code": "ERR_INVALID_ARG_TYPE",
+  "message": "The \"fn\" argument must be of type function. Received type number (1)",
+  "operator": "undefined"
  }
 }

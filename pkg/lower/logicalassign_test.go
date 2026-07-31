@@ -51,12 +51,18 @@ func TestNamedEvalLogicalAssignEmits(t *testing.T) {
 }
 
 // TestNamedEvalSkipsNamedFunction pins that a function expression with its own name
-// is not rewrapped: it already carries a name, so named evaluation leaves it alone.
+// keeps that name through named evaluation rather than taking the target's. Node
+// prints "keep" for this program, not "value": named evaluation only names a function
+// that has no name of its own, and the box the function takes on its way into a
+// dynamic target carries the name written on it.
 func TestNamedEvalSkipsNamedFunction(t *testing.T) {
 	const src = "var value: any = undefined;\nvalue ??= function keep() {};\nconsole.log(value.name);\n"
 	out := renderProgram(t, src)
-	if strings.Contains(out, "value.WithName(") {
-		t.Fatalf("a named function should not be wrapped in WithName:\n%s", out)
+	if !strings.Contains(out, `value.WithName(value.NewFunc(`) || !strings.Contains(out, `, "keep")`) {
+		t.Fatalf("a named function should keep its own name:\n%s", out)
+	}
+	if strings.Contains(out, `, "value")`) {
+		t.Fatalf("named evaluation renamed a named function to the target:\n%s", out)
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 
 // These build real binaries and run them, which is the only place require('assert') is
 // checked the way a program experiences it. The messages themselves are unit tested
-// against node v24.18.0 in pkg/value over eighty-seven cases; what that does not prove
+// against node v24.18.0 in pkg/value over a hundred and forty cases; what that does not prove
 // is that the module survives compilation, that the callable module and its strict
 // variant come through the lowerer intact, and that a caught AssertionError still
 // carries name, code, operator, actual and expected when the program reads them. Every
@@ -156,17 +156,137 @@ func TestRequireAssertOkMessageDiverges(t *testing.T) {
 }
 
 // TestRequireAssertUnimplementedMemberFails is the honest-stub rule at the build level.
-// throws is deferred to its own slice, and what a program must not get is undefined: a
+// rejects is deferred until promises box, and what a program must not get is undefined: a
 // read of a member bento does not carry throws, naming the module and the member, so a
 // test that uses it fails where it stands rather than several lines later.
 func TestRequireAssertUnimplementedMemberFails(t *testing.T) {
 	got, err := buildAndRunFileExpectingFailure(t, "main.js",
 		"const assert = require('assert');\n"+
-			"assert.throws(function () {}, Error);\n")
+			"assert.rejects(function () {}, Error);\n")
 	if err == nil {
-		t.Fatalf("assert.throws did not fail, output: %s", got)
+		t.Fatalf("assert.rejects did not fail, output: %s", got)
 	}
-	if !strings.Contains(got, "not implemented in bento yet (reading 'throws')") {
-		t.Errorf("assert.throws error did not name the member: %s", got)
+	if !strings.Contains(got, "not implemented in bento yet (reading 'rejects')") {
+		t.Errorf("assert.rejects error did not name the member: %s", got)
+	}
+}
+
+// assertThrowsProgram is throws and doesNotThrow as a test suite writes them: a function
+// that must raise, matched against each of the four expectations Node accepts, then the
+// failure of each shape caught and printed.
+//
+// The arrow functions are the point as much as the assertions are. An expectation reaches
+// the module as a boxed value, and so does the function under test, so this is the path a
+// closure, an error constructor named as a value, a regexp literal, an object literal and
+// a validation function all take through the lowerer at once.
+const assertThrowsProgram = `const assert = require('assert');
+assert.throws(() => { throw new TypeError('bad'); }, TypeError);
+assert.throws(() => { throw new Error('a'); }, Error);
+assert.throws(() => { throw new Error('a'); }, /^Error: a$/);
+assert.throws(() => { throw new Error('a'); }, { name: 'Error', message: 'a' });
+assert.throws(() => { throw new Error('a'); }, function check(e) { return e.message === 'a'; });
+assert.throws(() => { throw new Error('a'); });
+assert.doesNotThrow(() => {});
+console.log('passing calls returned');
+try {
+  assert.throws(() => {});
+} catch (e) {
+  console.log(e.name, e.code, e.operator, e.generatedMessage);
+  console.log(e.message);
+}
+try {
+  assert.throws(() => {}, TypeError, 'wanted a throw');
+} catch (e) {
+  console.log(e.message);
+}
+try {
+  assert.throws(() => { throw new Error('a'); }, TypeError);
+} catch (e) {
+  console.log(e.message);
+}
+try {
+  assert.throws(() => { throw new TypeError('bad'); }, { name: 'TypeError', message: 'other' });
+} catch (e) {
+  console.log(e.message);
+}
+try {
+  assert.throws(() => { throw new Error('a'); }, /nope/);
+} catch (e) {
+  console.log(e.message);
+}
+try {
+  assert.throws(() => { throw new Error('a'); }, function check(e) { return false; });
+} catch (e) {
+  console.log(e.message);
+}
+try {
+  assert.doesNotThrow(() => { throw new Error('a'); });
+} catch (e) {
+  console.log(e.name, e.operator);
+  console.log(e.message);
+}
+try {
+  assert.doesNotThrow(() => { throw new Error('a'); }, TypeError);
+} catch (e) {
+  console.log('rethrown', e.name, e.message);
+}
+try {
+  assert.throws(() => { throw new Error('a'); }, 'a');
+} catch (e) {
+  console.log(e.name, e.code);
+}
+try {
+  assert.throws(42);
+} catch (e) {
+  console.log(e.code);
+}
+`
+
+// assertThrowsWant is what node v24.18.0 prints for that program. "Comparison" in the
+// diff is node's own placeholder class name, which the message shows because the diff is
+// of the keys under comparison rather than of the error itself.
+const assertThrowsWant = `passing calls returned
+AssertionError ERR_ASSERTION throws false
+Missing expected exception.
+Missing expected exception (TypeError): wanted a throw
+The error is expected to be an instance of "TypeError". Received "Error"
+
+Error message:
+
+a
+Expected values to be strictly deep-equal:
++ actual - expected
+
+  Comparison {
++   message: 'bad',
+-   message: 'other',
+    name: 'TypeError'
+  }
+
+The input did not match the regular expression /nope/. Input:
+
+'Error: a'
+
+The "check" validation function is expected to return "true". Received false
+
+Caught error:
+
+Error: a
+AssertionError doesNotThrow
+Got unwanted exception.
+Actual message: "a"
+rethrown Error a
+TypeError ERR_AMBIGUOUS_ARGUMENT
+ERR_INVALID_ARG_TYPE
+`
+
+// TestRequireAssertThrows is assert.throws and assert.doesNotThrow in a compiled binary.
+// The last two lines are the argument checking rather than an assertion: a string
+// expectation identical to the thrown error's message is refused because such a call
+// would assert nothing, and a first argument that is not a function is refused outright.
+func TestRequireAssertThrows(t *testing.T) {
+	got := buildAndRunFile(t, "main.js", assertThrowsProgram)
+	if got != assertThrowsWant {
+		t.Errorf("assert.throws program output\ngot:\n%s\nwant:\n%s", got, assertThrowsWant)
 	}
 }
