@@ -1007,7 +1007,7 @@ func (r *Renderer) isDynBoundReceiver(n frontend.Node) bool {
 		return false
 	}
 	name, ok := localName(r.prog.Text(n))
-	return ok && r.dynBoundLocals[name]
+	return ok && r.isDynBoundName(name)
 }
 
 // isRootedInDynBound reports whether n is a chain of reads, index reads, and calls

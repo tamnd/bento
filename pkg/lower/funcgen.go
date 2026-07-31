@@ -1733,7 +1733,7 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	// Threading the box through call sites so consumers read it as dynamic is a dataflow
 	// slice of its own; until then this hands back. A handback is always safe.
 	if body.Kind() == frontend.NodeIdentifier {
-		if name, ok := localName(r.prog.Text(body)); ok && r.dynBoundLocals[name] {
+		if name, ok := localName(r.prog.Text(body)); ok && r.isDynBoundName(name) {
 			return nil, &NotYetLowerable{Reason: "a concise arrow returning a binding forced dynamic by a computed key is a later slice"}
 		}
 	}

@@ -402,6 +402,15 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 		return Program{}, err
 	}
 
+	// An ESM import of a registry built-in loads its module at the top of main, before
+	// the program's first statement, which is when a module's bindings are live in the
+	// language. The bindings themselves are package-level vars (nodebuiltinimport.go),
+	// so a top-level function that calls an imported assert names the same variable
+	// main does.
+	if init := r.builtinModuleImportInit(); len(init) > 0 {
+		stmts = append(init, stmts...)
+	}
+
 	// A program that can raise a thrown value defers the uncaught-error reporter as
 	// its first statement, so a throw that escapes every catch prints an
 	// uncaught-error line and exits non-zero rather than crashing with a Go stack.
@@ -498,6 +507,9 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// Module bindings a function reads emit as package-level vars beside the other
 	// state, so both main and the functions name the same variable.
 	file.Decls = append(file.Decls, moduleVars...)
+	// An ESM import of a registry built-in emits its bindings the same way and for the
+	// same reason: main fills them at its top and a top-level function reads them.
+	file.Decls = append(file.Decls, r.builtinModuleImportDecls()...)
 	file.Decls = append(file.Decls, classDecls...)
 	// A composed sibling's functions emit as package funcs before the entry's, the
 	// order a hand-written Go file keeps a dependency above its user.
