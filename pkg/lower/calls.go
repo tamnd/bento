@@ -3446,7 +3446,13 @@ func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ok {
+		// The walk hands back an array of boxed values, which fits where the checker typed
+		// the result any[], the way it does for every receiver whose own property table is
+		// empty. A typed array is the one dynamic receiver whose table is not: its indices
+		// are its properties, so the checker reads its index signature and types the call
+		// number[], which a boxed array does not fit. That case falls to the shape path
+		// rather than emit an array whose element type does not fit its slot.
+		if ok && !r.isTypedArray(argNodes[0]) {
 			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}}, nil
 		}
 	}
@@ -4653,6 +4659,17 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 		// `d - 0` gives the number. The lowered expr is the *value.Date itself, so the
 		// method reads the instant with no boxing, the way the regexp case above does.
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: lowered, Sel: ident("ToString")}}, nil
+	case r.isTypedArray(arg):
+		// A typed array joins its elements with commas, "5,0,7", the same reading an
+		// ordinary array gives. It carries that toString on its prototype rather than as a
+		// method on the runtime struct, so like the buffers below it boxes first and lets
+		// the value model's coercion find it.
+		boxed, err := r.boxStaticToDynamic(lowered, arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", coerceFn), Args: []ast.Expr{boxed}}, nil
 	case r.isBufferBacked(arg):
 		// A buffer and a view carry no toString of their own, so each falls back to
 		// Object.prototype.toString and reads "[object ArrayBuffer]" and its two neighbors.

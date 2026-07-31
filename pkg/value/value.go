@@ -270,6 +270,13 @@ func (v Value) getSymKey(key *Symbol) Value {
 				return val
 			}
 		}
+		// A typed array names itself the same way, and unlike a buffer it also answers the
+		// default iterator, so a spread or a for...of over a boxed one walks its elements.
+		if t := v.object().jsTyped; t != nil {
+			if val, ok := typedArraySymGet(t, key); ok {
+				return val
+			}
+		}
 		return v.object().getSymChained(v, key)
 	default:
 		return Undefined
@@ -553,6 +560,14 @@ func (v Value) Get(key BStr) Value {
 				return val
 			}
 		}
+		if t := v.object().jsTyped; t != nil {
+			// A boxed typed array answers an index off the live elements as well as its
+			// geometry and its methods, so a dynamic a[1] reads the same slot the typed path
+			// writes and a dynamic a.map walks the same run.
+			if val, ok := typedArrayGet(t, name); ok {
+				return val
+			}
+		}
 		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
@@ -630,6 +645,11 @@ func (v Value) HasProperty(key BStr) bool {
 		}
 		if d := v.object().jsView; d != nil {
 			if _, ok := dataViewGet(d, name); ok {
+				return true
+			}
+		}
+		if t := v.object().jsTyped; t != nil {
+			if typedArrayHas(t, name) {
 				return true
 			}
 		}

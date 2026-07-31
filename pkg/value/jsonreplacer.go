@@ -142,6 +142,12 @@ func (s *jsonValueSerializer) serialize(v Value, indent string) (string, bool) {
 		var b strings.Builder
 		encodeJSONString(&b, v.str())
 		return b.String(), true
+	case KindBigInt:
+		// A bigint has no JSON form and is not one of the values that quietly drop: the
+		// specification throws for it, so a BigInt64Array walked through a replacer raises
+		// rather than serializing as an object with every key missing.
+		Throw(NewTypeError(FromGoString("Do not know how to serialize a BigInt")))
+		return "", false
 	case KindArray:
 		return s.serializeArray(v, indent), true
 	case KindObject:
@@ -204,6 +210,12 @@ func (s *jsonValueSerializer) objectKeys(v Value) []BStr {
 	}
 	o := v.object()
 	var keys []BStr
+	// A typed array's indices lead, the same order the two replacer-free walks write them
+	// in, so a replacer sees the elements under their index keys rather than an empty
+	// object with no keys to visit at all.
+	if o.jsTyped != nil {
+		keys = append(keys, typedArrayKeys(o.jsTyped)...)
+	}
 	for i := range o.keys {
 		if o.descs[i].enumerable {
 			keys = append(keys, o.keys[i])
@@ -245,6 +257,8 @@ func jsonToValue(v any) Value {
 		return False
 	case Value:
 		return x
+	case typedArrayBacking:
+		return x.jsTypedBox()
 	case jsonArray:
 		elems := x.jsonElements()
 		out := make([]Value, len(elems))

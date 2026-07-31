@@ -42,6 +42,12 @@ func dynBox[T any](x T) Value {
 		return e.ToValue()
 	case *DataView:
 		return e.ToValue()
+	case typedArrayBacking:
+		// The typed-array family is matched by its interface rather than kind by kind,
+		// which is what keeps eleven concrete types from needing eleven cases here. Like the
+		// buffers they box to their own view, so a write through the collection's element
+		// lands in the bytes the typed side reads.
+		return e.jsTypedBox()
 	}
 	Throw(NewTypeError(FromGoString("bento: this collection's element type has no dynamic form")))
 	return Undefined
@@ -93,6 +99,15 @@ func dynUnbox[T any](v Value) (T, bool) {
 	case *DataView:
 		if d := v.asDataView(); d != nil {
 			return any(d).(T), true
+		}
+	case typedArrayBacking:
+		// The family is matched by its interface here too, and the kind is checked by the
+		// assertion back to T: an Int32Array box does not unbox into a Set<Float64Array>,
+		// since the concrete backing the box carries is not the element type.
+		if t := v.asTypedArray(); t != nil {
+			if e, ok := any(t).(T); ok {
+				return e, true
+			}
 		}
 	}
 	return zero, false
