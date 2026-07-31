@@ -76,6 +76,14 @@ type classInfo struct {
 	// the inherited fields and methods; registration rejects a derived member
 	// sharing a base member's name, so promotion never has to break a tie.
 	base *classInfo
+	// boxed marks a class some expression boxes into a dynamic value, which is what
+	// decides whether the class registers its Go type with the runtime. Only a
+	// registered class can be named when it is printed or held apart by a deep
+	// comparison, and only a boxed one is ever asked to be, so a program whose classes
+	// stay on the typed side emits no registration and pulls in no runtime for it. The
+	// flag is set while expressions lower and read after every class has rendered, since
+	// a boxing inside one class's method body can be the first use of another class.
+	boxed bool
 	// superArgs are the argument nodes of the constructor's super(...) call,
 	// validated to sit at the point past any this-free leading statements. They
 	// stay nil when the class has no constructor of its own; the synthesized
@@ -1923,6 +1931,14 @@ func (r *Renderer) renderClasses() ([]ast.Decl, error) {
 		}
 		out = append(out, decls...)
 	}
+	// The registrations go last, after every class body has lowered, because a boxing
+	// written inside one class's method is the first the renderer hears of another class
+	// being boxed and the classes render in source order.
+	for _, name := range r.classOrder {
+		if info := r.classes[name]; info.boxed {
+			out = append(out, r.classRegisterDecl(info))
+		}
+	}
 	return out, nil
 }
 
@@ -1940,7 +1956,6 @@ func (r *Renderer) renderClass(info *classInfo) ([]ast.Decl, error) {
 		return nil, err
 	}
 	out = append(out, structDecl)
-	out = append(out, r.classRegisterDecl(info))
 	for _, f := range info.statics {
 		vd, err := r.staticVarDecl(f)
 		if err != nil {
