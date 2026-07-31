@@ -496,7 +496,7 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	// isDynamic recognizes the call by shape to keep the box on the dynamic path: it
 	// flows undefined into a dynamic sink and hands back into a string slot rather than
 	// unboxing to a wrong string.
-	if r.jsonStringifyUndefinedCall(n) {
+	if r.jsonStringifyUndefinedCall(n) || r.jsonStringifyOptCall(n) {
 		return true
 	}
 	// date.toJSON() is the same shape of lie: the checker types it as returning a
@@ -660,33 +660,54 @@ func (r *Renderer) objectBoxedResultCall(n frontend.Node) bool {
 // must stay in lockstep with the emit guard in jsonCall: same one-argument test, same
 // jsonStringifyIsUndefinedResult predicate over the argument's type.
 func (r *Renderer) jsonStringifyUndefinedCall(n frontend.Node) bool {
+	t, ok := r.jsonStringifySoleArgType(n)
+	return ok && r.jsonStringifyIsUndefinedResult(t)
+}
+
+// jsonStringifyOptCall reports whether n is a single-argument JSON.stringify call over
+// an optional, the shape jsonCall lowers to value.JSONStringifyOpt. That answers a
+// Value, since an absent optional serializes to undefined rather than to a string, so
+// it takes the same dynamic path jsonStringifyUndefinedCall's does. It must stay in
+// lockstep with the emit guard in jsonCall: same one-argument test, same
+// jsonStringifyOptionalArg predicate over the argument's type.
+func (r *Renderer) jsonStringifyOptCall(n frontend.Node) bool {
+	t, ok := r.jsonStringifySoleArgType(n)
+	return ok && r.jsonStringifyOptionalArg(t)
+}
+
+// jsonStringifySoleArgType reports the type of n's argument when n is a JSON.stringify
+// call with exactly one, the shape both recognizers above are a question about. A
+// replacer or a space argument makes it a different call, so the arity is part of the
+// match rather than something the callers check afterwards.
+func (r *Renderer) jsonStringifySoleArgType(n frontend.Node) (frontend.Type, bool) {
+	var none frontend.Type
 	if n.Kind() != frontend.NodeCallExpression {
-		return false
+		return none, false
 	}
 	kids := r.prog.Children(n)
-	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
-		return false
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return none, false
 	}
 	parts := r.prog.Children(kids[0])
 	if len(parts) != 2 {
-		return false
+		return none, false
 	}
 	if !r.isGlobalRef(parts[0], "JSON") || r.prog.Text(parts[1]) != "stringify" {
-		return false
+		return none, false
 	}
-	args := kids[1:]
-	return len(args) == 1 && r.jsonStringifyIsUndefinedResult(r.prog.TypeAt(args[0]))
+	return r.prog.TypeAt(kids[1]), true
 }
 
 // guardNonStringBoxIntoString hands back when a call the checker types as returning a
 // string, but that actually answers a value no string can hold, flows into a clean
-// string slot. Two calls have that shape, and both are the standard library's type
+// string slot. Three calls have that shape, and all are the standard library's type
 // lying rather than bento's: JSON.stringify of a value whose JSON form is undefined
-// answers undefined, and date.toJSON of a date with no representable instant answers
-// null. Coercing either would run value.ToString and produce "undefined" or "null", a
-// value whose typeof is "string" where Node keeps one whose typeof is not, so the only
-// sound result is a handback. A slot that is any, unknown, or a union keeps the box and
-// is not guarded here.
+// answers undefined, JSON.stringify of an absent optional answers undefined too, and
+// date.toJSON of a date with no representable instant answers null. Coercing any of them
+// would run value.ToString and produce "undefined" or "null", a value whose typeof is
+// "string" where Node keeps one whose typeof is not, so the only sound result is a
+// handback. A slot that is any, unknown, or a union keeps the box and is not guarded
+// here.
 func (r *Renderer) guardNonStringBoxIntoString(src frontend.Node, targetFlags frontend.TypeFlags) error {
 	if targetFlags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
 		return nil
@@ -696,6 +717,9 @@ func (r *Renderer) guardNonStringBoxIntoString(src frontend.Node, targetFlags fr
 	}
 	if r.jsonStringifyUndefinedCall(src) {
 		return &NotYetLowerable{Reason: "JSON.stringify of a top-level value whose JSON form is undefined bound into a string slot cannot be represented as a string, a later slice"}
+	}
+	if r.jsonStringifyOptCall(src) {
+		return &NotYetLowerable{Reason: "JSON.stringify of an optional bound into a string slot cannot be represented as a string, since an absent optional serializes as undefined"}
 	}
 	if r.dateToJSONCall(src) {
 		return &NotYetLowerable{Reason: "date.toJSON bound into a string slot cannot be represented as a string, since an invalid date serializes as null"}
@@ -1381,45 +1405,57 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 	if !ok {
 		return nil, false, nil
 	}
-	var box ast.Expr
+	box := r.dynValueBox(elem)
+	if box == nil {
+		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "ArrayValueOf"), Args: []ast.Expr{expr, box}}, true, nil
+}
+
+// dynValueBox returns the func(T) value.Value that boxes one value of a static type
+// into a dynamic one, or nil when the type has no such box yet. The two callers both
+// want a boxer they can pass rather than a boxing they can write: an array hands it to
+// value.ArrayValueOf to apply down the slice, and an optional hands it to
+// value.OptToValue to apply to the present case. That is why every arm here is a
+// function reference with no closure around it, and it is why the two share a list
+// rather than each carrying their own copy of it, which is what they did before.
+func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 	switch flags := r.primitiveFlagsOfType(elem); {
 	case flags&frontend.TypeNumber != 0:
-		box = sel("value", "Number")
+		return sel("value", "Number")
 	case flags&frontend.TypeString != 0:
-		box = sel("value", "StringValue")
+		return sel("value", "StringValue")
 	case flags&frontend.TypeBoolean != 0:
-		box = sel("value", "Bool")
+		return sel("value", "Bool")
 	case r.isDateType(elem):
 		// A date's box is a method on the date rather than a constructor taking one, so
-		// the element wrapper is the method expression (*value.Date).ToValue, which has the
-		// same func(T) value.Value shape ArrayValueOf wants. The elements are views: the
-		// array copies, but each date in it is the one the typed slice holds.
-		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "Date"))}, Sel: ident("ToValue")}
+		// the wrapper is the method expression (*value.Date).ToValue, which has the same
+		// func(T) value.Value shape. The result is a view: the container copies, but each
+		// date in it is the one the typed side holds.
+		return &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "Date"))}, Sel: ident("ToValue")}
 	case r.arrayBufferType(elem):
-		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "ArrayBuffer"))}, Sel: ident("ToValue")}
+		return &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "ArrayBuffer"))}, Sel: ident("ToValue")}
 	case r.sharedArrayBufferType(elem):
-		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "SharedArrayBuffer"))}, Sel: ident("ToValue")}
+		return &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "SharedArrayBuffer"))}, Sel: ident("ToValue")}
 	case r.dataViewType(elem):
-		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "DataView"))}, Sel: ident("ToValue")}
+		return &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "DataView"))}, Sel: ident("ToValue")}
 	case r.typedArrayElemBox(elem) != nil:
 		// A typed array's box is a method expression too, but which concrete type it names
 		// depends on the kind: (*value.TypedArray[int32]).ToValue for an Int32Array,
 		// (*value.Uint8Array).ToValue for a Uint8Array. The helper renders the Go type the
 		// name maps to and hangs ToValue off it.
-		box = r.typedArrayElemBox(elem)
+		return r.typedArrayElemBox(elem)
 	case r.classElemBoxable(elem):
 		r.markClassBoxed(elem)
-		// An array of class instances boxes each element the way a lone instance boxes,
-		// through the reflection walk that reads its fields and the registry that names its
-		// class, so console.log(people) prints "[ P { x: 1 }, P { x: 2 } ]". The boxer is the
-		// generic value.ClassToValue with its type argument left to inference from the
-		// slice, which is why this needs no closure where an arbitrary element type would.
-		box = sel("value", "ClassToValue")
-	default:
-		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
+		// A class instance boxes the way a lone instance does, through the reflection walk
+		// that reads its fields and the registry that names its class, so console.log of an
+		// array of them prints "[ P { x: 1 }, P { x: 2 } ]". The boxer is the generic
+		// value.ClassToValue with its type argument left to inference from the container,
+		// which is why this needs no closure where an arbitrary element type would.
+		return sel("value", "ClassToValue")
 	}
-	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "ArrayValueOf"), Args: []ast.Expr{expr, box}}, true, nil
+	return nil
 }
 
 // boxCollectionToDynamic boxes a Map or a Set into a dynamic value.Value through the
@@ -1557,13 +1593,16 @@ func (r *Renderer) isBufferBacked(n frontend.Node) bool {
 
 // boxOptionalToDynamic boxes a T | undefined result into a dynamic value.Value. The
 // optional lowers to a value.Opt[T], so the box threads it through value.OptToValue
-// with the element's own box constructor as the present-case wrapper: value.Number
-// for a numeric optional, value.StringValue for a string one, value.Bool for a
-// boolean. Each constructor already has the func(T) value.Value shape OptToValue
-// wants, so it passes as the wrapper directly with no closure. It reports ok=false
-// when the source is not an optional, so a non-union type falls through to the
-// primitive path, and hands back for an optional of a shape with no dynamic box yet
-// rather than emit a call that would not compile.
+// with the element's own boxer as the present-case wrapper, the same boxer an array of
+// that element type is built with. An absent optional boxes to undefined, which is what
+// the language says a read that found nothing is.
+//
+// This is the shape a keyed read of a collection has, since map.get(k) is typed
+// V | undefined, so it is what stands between a program and reading a Map or a Set back
+// by key rather than by walking it. It reports ok=false when the source is not an
+// optional, so a non-union type falls through to the primitive path, and hands back for
+// an optional of a shape with no dynamic box yet rather than emit a call that would not
+// compile.
 func (r *Renderer) boxOptionalToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, bool, error) {
 	t := r.prog.TypeAt(src)
 	if !r.isOptionalType(t) {
@@ -1573,15 +1612,8 @@ func (r *Renderer) boxOptionalToDynamic(expr ast.Expr, src frontend.Node) (ast.E
 	if !ok {
 		return nil, false, nil
 	}
-	var box ast.Expr
-	switch {
-	case inner.Flags&frontend.TypeNumber != 0:
-		box = sel("value", "Number")
-	case inner.Flags&frontend.TypeString != 0:
-		box = sel("value", "StringValue")
-	case inner.Flags&frontend.TypeBoolean != 0:
-		box = sel("value", "Bool")
-	default:
+	box := r.dynValueBox(inner)
+	if box == nil {
 		return nil, false, &NotYetLowerable{Reason: "boxing an optional of this type into a dynamic value is a later slice"}
 	}
 	r.requireImport(valuePkg)
@@ -1779,7 +1811,7 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// this the number type would drive value.NumberToString over a value.Value, which
 	// does not compile; with it the read flows through the value model, which prints
 	// the property that has not been assigned yet as undefined.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.dateToJSONCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
+	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.jsonStringifyOptCall(src) || r.dateToJSONCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
 }
 
 // isBoxedArrayElemRead reports whether src is an element read a[i] off an evolving
