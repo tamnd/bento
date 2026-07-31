@@ -629,7 +629,7 @@ func deepOwnEnumValue(v Value, k inspectKey) (Value, bool) {
 	if desc.accessor {
 		return deepGet(v, k), true
 	}
-	return desc.value, true
+	return desc.read(v), true
 }
 
 // deepOwnEnumKeys is node's ObjectKeys: the own enumerable string keys in the order

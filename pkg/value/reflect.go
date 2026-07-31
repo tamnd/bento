@@ -121,7 +121,7 @@ func ordinarySet(target Value, o *Object, name BStr, val Value) bool {
 				if !d.writable {
 					return false
 				}
-				o.descs[i].value = val
+				o.descs[i] = d.write(target, val)
 				return true
 			}
 			if d.set.kind != KindFunc {
@@ -343,7 +343,7 @@ func ordinarySetSym(target Value, o *Object, key *Symbol, val Value) bool {
 				if !d.writable {
 					return false
 				}
-				o.symDescs[i].value = val
+				o.symDescs[i] = d.write(target, val)
 				return true
 			}
 			if d.set.kind != KindFunc {

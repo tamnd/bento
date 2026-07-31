@@ -315,16 +315,31 @@ func jsonToValue(v any) Value {
 // it is reached: at the top, as a field of another instance, as an array element, or
 // as a member of a boxed collection.
 func jsonStructToValue(rv reflect.Value) Value {
+	inst := rv
 	if rv.Kind() == reflect.Pointer {
 		rv = rv.Elem()
 	}
 	obj := NewObject()
-	if rv.IsValid() {
-		if proto := classPrototypeFor(rv.Type()); proto != nil {
-			obj.object().proto = proto
-		}
+	if !rv.IsValid() {
+		jsonStructFields(obj, rv)
+		return obj
 	}
-	jsonStructFields(obj, rv)
+	proto := classPrototypeFor(rv.Type())
+	if proto == nil {
+		jsonStructFields(obj, rv)
+		return obj
+	}
+	obj.object().proto = proto
+	if inst.Kind() != reflect.Pointer || inst.IsNil() {
+		// A class instance reached by value rather than through its pointer has no
+		// addressable storage to view, so it copies. The lowerer holds an instance as a
+		// pointer everywhere it can be boxed, so this is the reflection walk meeting an
+		// embedded instance rather than a position a program can put one in.
+		jsonStructFields(obj, rv)
+		return obj
+	}
+	obj.object().jsClass = inst.Interface()
+	classLiveFields(obj, rv)
 	return obj
 }
 

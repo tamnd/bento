@@ -1433,9 +1433,11 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 // The element types decide whether the box can be emitted at all. The view presents
 // each key, value and member as a boxed value, which the runtime can do for a number,
 // a string, a boolean, and the dynamic value a collection written with no element type
-// already stores. A collection of anything else, an object-keyed map or a set of
-// arrays, hands back rather than emit a view whose reads would raise; boxing those
-// needs the element box the array path also lacks, which is one slice for both.
+// already stores, along with the built-in kinds and the class instances that box to a
+// view of their own. A collection of anything else, a map keyed by a plain object
+// shape or a set of arrays, hands back rather than emit a view whose reads would
+// raise; boxing those needs the element box the array path also lacks, which is one
+// slice for both.
 func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, bool, error) {
 	switch {
 	case r.isMap(src):
@@ -1444,7 +1446,7 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 			return nil, false, &NotYetLowerable{Reason: "boxing a Map that did not expose its key and value types is a later slice"}
 		}
 		if !r.dynBoxableElem(k) || !r.dynBoxableElem(v) {
-			return nil, false, &NotYetLowerable{Reason: "boxing a Map whose keys or values are not a number, string, boolean, date, or dynamic value into a dynamic value is a later slice"}
+			return nil, false, &NotYetLowerable{Reason: "boxing a Map whose keys or values are not a number, string, boolean, date, class instance, or dynamic value into a dynamic value is a later slice"}
 		}
 	case r.isSet(src):
 		elem, ok := r.setElem(r.prog.TypeAt(src))
@@ -1452,7 +1454,7 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 			return nil, false, &NotYetLowerable{Reason: "boxing a Set that did not expose its member type is a later slice"}
 		}
 		if !r.dynBoxableElem(elem) {
-			return nil, false, &NotYetLowerable{Reason: "boxing a Set whose members are not a number, string, boolean, date, or dynamic value into a dynamic value is a later slice"}
+			return nil, false, &NotYetLowerable{Reason: "boxing a Set whose members are not a number, string, boolean, date, class instance, or dynamic value into a dynamic value is a later slice"}
 		}
 	default:
 		return nil, false, nil
@@ -1513,6 +1515,15 @@ func (r *Renderer) dynBoxableElem(t frontend.Type) bool {
 	// still hands back for want of an element box.
 	if t.Flags&frontend.TypeObject == 0 {
 		return false
+	}
+	if r.classElemBoxable(t) {
+		// A class instance is the one element type whose box the runtime has to recognize by
+		// registration rather than by its Go type, so marking the class boxed here is what
+		// makes its registration reach the emitted program. The view a boxed instance takes
+		// carries a pointer back to the instance, which is what lets a value read out of the
+		// collection be the instance the typed side holds rather than a copy of its fields.
+		r.markClassBoxed(t)
+		return true
 	}
 	return r.isDateType(t) || r.arrayBufferType(t) || r.sharedArrayBufferType(t) || r.dataViewType(t) ||
 		r.typedArrayElemBox(t) != nil

@@ -23,6 +23,7 @@ package value
 
 import (
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -352,20 +353,35 @@ func (c *inspectCtx) formatValue(v Value, recurseTimes int) string {
 		}
 	}
 
+	ref := inspectRef(v)
 	for _, seen := range c.seen {
-		if seen == v.ref {
+		if seen == ref {
 			if c.circular == nil {
 				c.circular = map[unsafe.Pointer]int{}
 			}
-			index, ok := c.circular[v.ref]
+			index, ok := c.circular[ref]
 			if !ok {
 				index = len(c.circular) + 1
-				c.circular[v.ref] = index
+				c.circular[ref] = index
 			}
 			return "[Circular *" + strconv.Itoa(index) + "]"
 		}
 	}
 	return c.formatRaw(v, recurseTimes)
+}
+
+// inspectRef is the identity a cycle is recognized by. For nearly every value that is
+// the object itself, but a boxed class instance is a view rather than the instance, and
+// a view is made fresh at each read, so a cycle through an instance field would be two
+// different objects and would not be caught. The instance behind the view is the thing
+// that repeats, so it is what the walk remembers.
+func inspectRef(v Value) unsafe.Pointer {
+	if v.kind == KindObject {
+		if p, ok := v.classInstance(); ok {
+			return reflect.ValueOf(p).UnsafePointer()
+		}
+	}
+	return v.ref
 }
 
 // sortOutput orders already-rendered entries in place, the sorted option. With no
@@ -559,7 +575,8 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 	}
 	recurseTimes++
 
-	c.seen = append(c.seen, v.ref)
+	ref := inspectRef(v)
+	c.seen = append(c.seen, ref)
 	c.currentDepth = recurseTimes
 
 	var output []string
@@ -573,7 +590,7 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 	// The reference marker can only be known now: it is set by a nested
 	// [Circular *N] that pointed back at this value while the entries above were
 	// being formatted.
-	if index, ok := c.circular[v.ref]; ok {
+	if index, ok := c.circular[ref]; ok {
 		reference := "<ref *" + strconv.Itoa(index) + ">"
 		if base == "" {
 			base = reference
@@ -810,7 +827,7 @@ func (c *inspectCtx) formatProperty(v Value, recurseTimes int, k inspectKey, typ
 			diff = 3
 		}
 		c.indentationLvl += diff
-		str = c.formatValue(desc.value, recurseTimes)
+		str = c.formatValue(desc.read(Undefined), recurseTimes)
 		if diff == 3 && c.breakLength < stringWidth(str) {
 			extra = "\n" + strings.Repeat(" ", c.indentationLvl)
 		}

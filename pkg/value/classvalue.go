@@ -81,6 +81,191 @@ func ClassToValue[T any](x T) Value {
 	return ObjectFromStruct(x)
 }
 
+// classInstance returns the Go instance a class view reads through, and whether this
+// value is one. A boxed collection reaches for this to turn a value handed to
+// map.set or map.get back into the typed element it holds, which is the whole reason
+// the view carries a back-pointer: a bag of copied fields could be recognized as an
+// instance of the class but never as the instance.
+func (v Value) classInstance() (any, bool) {
+	if v.kind != KindObject {
+		return nil, false
+	}
+	o := v.object()
+	if o.jsClass == nil {
+		return nil, false
+	}
+	return o.jsClass, true
+}
+
+// classLiveFields defines one live data property per exported field of the instance,
+// visiting the struct the way jsonStructFields does so the two agree on which fields
+// an instance has and in what order: an unexported field is machinery and skipped, an
+// anonymous field flattens its own fields into the same object so a derived class's
+// inherited fields sit first, and an absent optional property contributes no key.
+//
+// The struct value here is reached through the instance pointer, so its fields are
+// addressable and a closure over one can write to it. That is what separates this from
+// the fixed-shape box next door, which copies: an instance keeps living on the typed
+// side after it is boxed, so a read through the view has to answer what the field
+// holds now rather than what it held when the view was made.
+func classLiveFields(obj Value, rv reflect.Value) {
+	t := rv.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.PkgPath != "" {
+			continue
+		}
+		if f.Anonymous {
+			classLiveFields(obj, rv.Field(i))
+			continue
+		}
+		fv := rv.Field(i)
+		if opt, ok := fv.Interface().(jsonOptional); ok {
+			// An optional property absent when the view is made contributes no key, the same
+			// choice the copying walk makes. The value of a present one stays live; only its
+			// presence is read once, so a field that becomes present later is not shown until
+			// the instance is boxed again.
+			if _, present := opt.jsonOptField(); !present {
+				continue
+			}
+		}
+		key := f.Tag.Get("json")
+		if key == "" {
+			key = f.Name
+		}
+		name := key
+		obj.object().defineOwn(FromGoString(key), liveProperty(
+			func() Value { return classFieldRead(fv) },
+			func(val Value) { classFieldWrite(fv, name, val) },
+		))
+	}
+}
+
+// classFieldRead boxes what a field holds now, through the same lift every other
+// boxing of a Go value goes through, so a field holding a date, a map or another
+// instance reads as that rather than as a bag of its storage.
+func classFieldRead(fv reflect.Value) Value {
+	v := fv.Interface()
+	if opt, ok := v.(jsonOptional); ok {
+		inner, present := opt.jsonOptField()
+		if !present {
+			return Undefined
+		}
+		v = inner
+	}
+	return jsonToValue(v)
+}
+
+// classFieldWrite lands a write made through the view in the field it views. It
+// raises on the two ways that can fail rather than storing the value in the view,
+// where it would read back correctly once and be gone from the instance: a field
+// whose Go type has no inbound conversion, and a value of a type the field cannot
+// hold. Both are what dynUnboxOrThrow refuses for a collection element and for the
+// same reason, that a dropped write cannot be told from a write that happened.
+func classFieldWrite(fv reflect.Value, name string, val Value) {
+	if !classFieldSettable(fv.Type()) {
+		Throw(NewTypeError(FromGoString("bento: writing to ." + name + " through a boxed instance is a later slice, its type has no dynamic form")))
+		return
+	}
+	if !classFieldStore(fv, val) {
+		Throw(NewTypeError(FromGoString("bento: ." + name + " of this instance cannot hold a value of this type")))
+	}
+}
+
+// classFieldSettable reports whether a field's Go type has an inbound conversion at
+// all, which is what tells a write that could never work from a write of the wrong
+// value. The list is the one dynUnbox converts a collection element back through,
+// plus another class instance, which comes back through its view's back-pointer.
+func classFieldSettable(t reflect.Type) bool {
+	switch reflect.Zero(t).Interface().(type) {
+	case Value, float64, BStr, bool, *Date, *RegExp, *ArrayBuffer, *SharedArrayBuffer, *DataView:
+		return true
+	}
+	if t.Kind() != reflect.Pointer && t.Kind() != reflect.Interface {
+		return false
+	}
+	for _, iface := range []reflect.Type{typedArrayBackingType, mapBackingType, setBackingType} {
+		if t.Implements(iface) {
+			return true
+		}
+	}
+	return t.Kind() == reflect.Pointer && classPrototypeFor(t.Elem()) != nil
+}
+
+// classFieldStore performs the write, reporting false when the value is not of the
+// field's kind. A reference field takes the very object the value boxes rather than a
+// copy of it, so a date or a map written through a view is the one the writer holds
+// and the two sides do not drift apart.
+func classFieldStore(fv reflect.Value, val Value) bool {
+	switch fv.Interface().(type) {
+	case Value:
+		fv.Set(reflect.ValueOf(val))
+		return true
+	case float64:
+		if val.kind == KindNumber {
+			fv.SetFloat(val.AsNumber())
+			return true
+		}
+		return false
+	case BStr:
+		if val.kind == KindString {
+			fv.Set(reflect.ValueOf(val.AsString()))
+			return true
+		}
+		return false
+	case bool:
+		if val.kind == KindBool {
+			fv.SetBool(val.AsBool())
+			return true
+		}
+		return false
+	}
+	if d := val.asDate(); d != nil && classFieldStoreRef(fv, d) {
+		return true
+	}
+	if r := val.asRegExp(); r != nil && classFieldStoreRef(fv, r) {
+		return true
+	}
+	if b := val.asBuffer(); b != nil && classFieldStoreRef(fv, b) {
+		return true
+	}
+	if w := val.asDataView(); w != nil && classFieldStoreRef(fv, w) {
+		return true
+	}
+	if a := val.asTypedArray(); a != nil && classFieldStoreRef(fv, a) {
+		return true
+	}
+	if m := val.asMap(); m != nil && classFieldStoreRef(fv, m) {
+		return true
+	}
+	if s := val.asSet(); s != nil && classFieldStoreRef(fv, s) {
+		return true
+	}
+	if p, ok := val.classInstance(); ok && classFieldStoreRef(fv, p) {
+		return true
+	}
+	return false
+}
+
+// classFieldStoreRef assigns a reference the value boxes when the field can hold it.
+// The assignability check is what keeps an Int32Array out of a Float64Array field and
+// an instance of one class out of a field declared for another, since both arrive
+// here as the interface the family shares.
+func classFieldStoreRef(fv reflect.Value, x any) bool {
+	rx := reflect.ValueOf(x)
+	if !rx.IsValid() || !rx.Type().AssignableTo(fv.Type()) {
+		return false
+	}
+	fv.Set(rx)
+	return true
+}
+
+var (
+	typedArrayBackingType = reflect.TypeOf((*typedArrayBacking)(nil)).Elem()
+	mapBackingType        = reflect.TypeOf((*mapBacking)(nil)).Elem()
+	setBackingType        = reflect.TypeOf((*setBacking)(nil)).Elem()
+)
+
 // classPrototypeFor returns the interned prototype for a boxed struct's type, or nil
 // when the type is not a registered class. A plain fixed-shape object struct is not
 // registered, so it boxes with no prototype and reads as a plain object, which is what
