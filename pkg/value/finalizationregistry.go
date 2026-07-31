@@ -26,6 +26,9 @@ import "runtime"
 type FinalizationRegistry[T any] struct {
 	cleanup       func(T)
 	registrations []frRegistration
+	// boxed is the dynamic view of this registry, built once and kept the way the three
+	// weakly-holding types beside it keep theirs. See weakvalue.go.
+	boxed *Object
 }
 
 // frRegistration records one live registration: the unregister token it was given

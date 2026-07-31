@@ -28,6 +28,9 @@ import "weak"
 type WeakMap[T any, V any] struct {
 	keys []weak.Pointer[T]
 	vals []V
+	// boxed is the dynamic view of this map, built on the first crossing and kept so
+	// every later one hands back the same object. See weakvalue.go.
+	boxed *Object
 }
 
 // NewWeakMap builds an empty WeakMap keyed by *T, the lowering of new WeakMap<K, V>()
