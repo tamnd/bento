@@ -2766,6 +2766,19 @@ func (r *Renderer) elemToBStr(elem frontend.Type, arg ast.Expr) (ast.Expr, error
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "JoinString"), Args: []ast.Expr{arg}}, nil
 	default:
+		// An object element reads through its box, the same route String() over the whole
+		// array takes: the box goes through JoinString rather than ToString because join
+		// renders a missing element as the empty string rather than as "undefined", which
+		// is the one place the two coercions part. An element whose box would not read as
+		// the engine's string, an instance that writes its own toString, stays handed back
+		// rather than join a row of class tags.
+		if box := r.dynValueBox(elem); box != nil && r.stringBoxFaithful(elem) {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{
+				Fun:  sel("value", "JoinString"),
+				Args: []ast.Expr{&ast.CallExpr{Fun: box, Args: []ast.Expr{arg}}},
+			}, nil
+		}
 		return nil, &NotYetLowerable{Reason: "coercing this array element type to a string is a later slice"}
 	}
 }

@@ -4739,6 +4739,33 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", coerceFn), Args: []ast.Expr{boxed}}, nil
+	case r.classDeclaresToString(arg):
+		// A class that writes its own toString has that method run, which is the whole
+		// of ToPrimitive over such an instance: the string hint calls toString first and
+		// takes its answer because it is a primitive. The call is the ordinary typed one,
+		// so an override in a subclass dispatches through the same vtable a written-out
+		// q.toString() would, and no boxing happens at all.
+		return r.classToStringCall(lowered, arg)
+	case r.objectStringCoercible(arg):
+		// Any other object stringifies through its box. ToString over an object is
+		// ToPrimitive with the string hint, which calls the object's own toString and
+		// valueOf and falls back to the class tag when neither answers a primitive, and
+		// all of that lives in the value model rather than in any one Go runtime type.
+		// So a Map, a Set, a weak collection, an array, a class instance and a plain
+		// shape all box first and let the value model read them: "[object Map]", the
+		// comma-joined elements of an array, "[object Object]" for a shape with no
+		// toString of its own. It routes last, after every case whose reading is a
+		// method on the concrete Go value (a regexp, a date) and after the optional,
+		// whose undefined arm is not an object at all.
+		if !r.stringBoxFaithful(r.prog.TypeAt(arg)) {
+			return nil, &NotYetLowerable{Reason: "coercing a value that holds an instance writing its own toString is a later slice"}
+		}
+		boxed, err := r.boxStaticToDynamic(lowered, arg)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", coerceFn), Args: []ast.Expr{boxed}}, nil
 	default:
 		// A tagged-sum union reads its string through the ToString method the renderer
 		// emits for it: the method switches the tag to the active arm's string form, so
@@ -4749,6 +4776,148 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 		}
 		return nil, &NotYetLowerable{Reason: "coercing this type to a string is a later slice"}
 	}
+}
+
+// classDeclaresToString reports whether n is an instance of a class that writes a
+// toString of its own, anywhere up its hierarchy. Such an instance takes its string
+// from that method rather than from its box, which carries the fields and the class
+// name but not the methods, so a boxed reading would print the tag where the engine
+// prints what the program wrote.
+func (r *Renderer) classDeclaresToString(n frontend.Node) bool {
+	info, ok := r.classOfType(r.prog.TypeAt(n))
+	if !ok {
+		return false
+	}
+	_, ok = info.lookupMethod("toString")
+	return ok
+}
+
+// classToStringCall lowers the string coercion of such an instance to the typed call
+// on its own method, the same call q.toString() lowers to, so an override dispatches
+// through the vtable and a generic method monomorphizes exactly as it does anywhere
+// else. A toString that answers something other than a string hands back: the engine
+// would take the answer as the primitive it is only if it is one, and otherwise fall
+// on to valueOf and then throw, and that ladder is a later slice rather than a wrong
+// string quietly emitted here.
+func (r *Renderer) classToStringCall(lowered ast.Expr, arg frontend.Node) (ast.Expr, error) {
+	info, _ := r.classOfType(r.prog.TypeAt(arg))
+	m, _ := info.lookupMethod("toString")
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok || r.primitiveFlagsOfType(sig.Return)&frontend.TypeString == 0 {
+		return nil, &NotYetLowerable{Reason: "coercing an instance of class " + info.name + " whose toString does not return a string is a later slice"}
+	}
+	return r.classMethodCall(info, lowered, "toString", nil, false)
+}
+
+// classPrimitiveConcat lowers the string form a class instance takes on the left or
+// right of a +, which is not the one String() gives it. The operator runs ToPrimitive
+// with the default hint, and that hint asks valueOf before toString, so a class whose
+// valueOf answers 7 concatenates as "7" while String() of the same instance reads the
+// class tag, because the string hint asks toString first and Object.prototype's answers
+// it. Reporting false leaves an instance with neither method to the box, which reads as
+// the tag, the same thing the engine's fallback produces.
+func (r *Renderer) classPrimitiveConcat(lowered ast.Expr, n frontend.Node) (ast.Expr, bool, error) {
+	info, ok := r.classOfType(r.prog.TypeAt(n))
+	if !ok {
+		return nil, false, nil
+	}
+	if m, ok := info.lookupMethod("valueOf"); ok {
+		expr, err := r.classValueOfConcat(lowered, info, m)
+		if err != nil {
+			return nil, false, err
+		}
+		return expr, true, nil
+	}
+	if _, ok := info.lookupMethod("toString"); !ok {
+		return nil, false, nil
+	}
+	expr, err := r.classToStringCall(lowered, n)
+	if err != nil {
+		return nil, false, err
+	}
+	return expr, true, nil
+}
+
+// classValueOfConcat lowers the call to a class's own valueOf and the coercion of what
+// it answers into the string the concatenation joins. Only a primitive answer takes
+// this path: valueOf returning an object is not a primitive, so the engine falls on to
+// toString and then throws if that is no better, and that ladder runs at a boxed
+// instance this slice does not have.
+func (r *Renderer) classValueOfConcat(lowered ast.Expr, info *classInfo, m classMethod) (ast.Expr, error) {
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "valueOf on class " + info.name + " has no call signature"}
+	}
+	call, err := r.classMethodCall(info, lowered, "valueOf", nil, false)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	switch flags := r.primitiveFlagsOfType(sig.Return); {
+	case flags&frontend.TypeString != 0:
+		return call, nil
+	case flags&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{call}}, nil
+	case flags&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{call}}, nil
+	case flags&frontend.TypeBigInt != 0:
+		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{call}}, nil
+	}
+	return nil, &NotYetLowerable{Reason: "concatenating an instance of class " + info.name + " whose valueOf does not answer a primitive is a later slice"}
+}
+
+// stringBoxFaithful reports whether the dynamic box of t reads back as the string the
+// engine would produce. One thing says no: an instance of a class that writes its own
+// toString. A boxed instance carries its fields and its class name but not its methods,
+// so the box would read as the class tag where the program's own toString has an answer,
+// and that is a wrong string rather than a missing feature.
+//
+// It says so through an array as well, since an array's string form is its elements
+// joined, which means the box has to stringify each element. A Map, a Set and a weak
+// collection stop the walk instead: each reads as its own tag whatever it holds, so
+// nothing inside one is ever asked for a string.
+//
+// An instance in the top position does not reach here, because the caller runs the
+// class's toString directly rather than boxing at all. What reaches here is the
+// instance one container down, where there is no such call site.
+func (r *Renderer) stringBoxFaithful(t frontend.Type) bool {
+	if info, ok := r.classOfType(t); ok {
+		_, declares := info.lookupMethod("toString")
+		return !declares
+	}
+	if r.isMapType(t) || r.isSetType(t) || r.isWeakMapType(t) || r.isWeakSetType(t) ||
+		r.isWeakRefType(t) || r.isFinalizationRegistryType(t) {
+		return true
+	}
+	if r.isOptionalType(t) {
+		if inner, ok := r.optionalInner(r.prog.UnionMembers(t)); ok {
+			return r.stringBoxFaithful(inner)
+		}
+	}
+	if elem, ok := r.prog.ElementType(t); ok {
+		return r.stringBoxFaithful(elem)
+	}
+	return true
+}
+
+// objectStringCoercible reports whether a static type takes its string form from
+// its dynamic box. That is every object type except a callable one: a function
+// stringifies to its own source text, which the box does not carry (it would read
+// "[object Function]" instead), so a function keeps handing back rather than print
+// a tag where the engine prints the code. A union is excluded too, since the object
+// flag is not set on one and the tagged-sum ToString below is its reading.
+//
+// Nothing here decides what the string is. Whether the box can be built at all is
+// boxStaticToDynamic's call, and it hands back with its own reason for a shape it
+// has no box for, which keeps one answer to "can this cross into a dynamic value"
+// rather than two that could drift apart.
+func (r *Renderer) objectStringCoercible(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	calls, _ := r.prog.Signatures(t)
+	return len(calls) == 0
 }
 
 // numberCoercion lowers Number(x) called as a function over a primitive argument.
