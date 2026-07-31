@@ -15,8 +15,8 @@ package value
 
 // dynBox boxes a single typed element into a Value. It covers the element types the
 // lowerer proves boxable before it emits a collection box: a number, a string, a
-// boolean, and the already-boxed Value a collection written with no element type
-// (`new Map()`, whose keys and values are dynamic) stores. Any other type is a
+// boolean, a date, and the already-boxed Value a collection written with no element
+// type (`new Map()`, whose keys and values are dynamic) stores. Any other type is a
 // lowering that should not have been emitted, so it raises rather than answering a
 // stand-in value that would read as a real element.
 func dynBox[T any](x T) Value {
@@ -29,6 +29,10 @@ func dynBox[T any](x T) Value {
 		return StringValue(e)
 	case bool:
 		return Bool(e)
+	case *Date:
+		// A date boxes to its own view rather than to a fresh object, so a date read out
+		// of a boxed collection is the same date the typed side holds and === says so.
+		return e.ToValue()
 	}
 	Throw(NewTypeError(FromGoString("bento: this collection's element type has no dynamic form")))
 	return Undefined
@@ -58,6 +62,12 @@ func dynUnbox[T any](v Value) (T, bool) {
 	case bool:
 		if v.kind == KindBool {
 			return any(v.AsBool()).(T), true
+		}
+	case *Date:
+		// Only a date box unboxes to a date. Any other object, including one carrying the
+		// same properties, is not a date and could never be a member of this collection.
+		if d := v.asDate(); d != nil {
+			return any(d).(T), true
 		}
 	}
 	return zero, false

@@ -1125,6 +1125,14 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "RegExpValue"), Args: []ast.Expr{expr}}, nil
 	}
+	// A date flowing into a dynamic slot boxes through the date's own ToValue, a live
+	// view of it rather than a copy, so a write through the box moves the same instant
+	// the typed side reads and two boxes of one date are one value under ===. It routes
+	// before the primitive switch, whose kind tests a Date type would otherwise fall past
+	// to the handback.
+	if r.isDate(src) {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
+	}
 	// A Map or a Set flowing into a dynamic slot boxes through the collection's own
 	// ToValue, which hands back a live view of it rather than a copy, so console.log
 	// prints the entries it holds now and a write through the box is visible to the
@@ -1302,6 +1310,12 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 		box = sel("value", "StringValue")
 	case flags&frontend.TypeBoolean != 0:
 		box = sel("value", "Bool")
+	case r.isDateType(elem):
+		// A date's box is a method on the date rather than a constructor taking one, so
+		// the element wrapper is the method expression (*value.Date).ToValue, which has the
+		// same func(T) value.Value shape ArrayValueOf wants. The elements are views: the
+		// array copies, but each date in it is the one the typed slice holds.
+		box = &ast.SelectorExpr{X: &ast.ParenExpr{X: star(sel("value", "Date"))}, Sel: ident("ToValue")}
 	default:
 		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
 	}
@@ -1331,7 +1345,7 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 			return nil, false, &NotYetLowerable{Reason: "boxing a Map that did not expose its key and value types is a later slice"}
 		}
 		if !r.dynBoxableElem(k) || !r.dynBoxableElem(v) {
-			return nil, false, &NotYetLowerable{Reason: "boxing a Map whose keys or values are not a number, string, boolean, or dynamic value into a dynamic value is a later slice"}
+			return nil, false, &NotYetLowerable{Reason: "boxing a Map whose keys or values are not a number, string, boolean, date, or dynamic value into a dynamic value is a later slice"}
 		}
 	case r.isSet(src):
 		elem, ok := r.setElem(r.prog.TypeAt(src))
@@ -1339,7 +1353,7 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 			return nil, false, &NotYetLowerable{Reason: "boxing a Set that did not expose its member type is a later slice"}
 		}
 		if !r.dynBoxableElem(elem) {
-			return nil, false, &NotYetLowerable{Reason: "boxing a Set whose members are not a number, string, boolean, or dynamic value into a dynamic value is a later slice"}
+			return nil, false, &NotYetLowerable{Reason: "boxing a Set whose members are not a number, string, boolean, date, or dynamic value into a dynamic value is a later slice"}
 		}
 	default:
 		return nil, false, nil
@@ -1354,10 +1368,13 @@ func (r *Renderer) boxCollectionToDynamic(expr ast.Expr, src frontend.Node) (ast
 // array in JavaScript because a Map keeps its entries off its property table, and the
 // box models exactly that, so routing the collection through it answers what Node
 // answers where the static path would try to read fields off a Map type that has
-// none. Anything else reports false and leaves the caller's static path alone.
+// none. A date is one for the same reason: its methods live on its prototype and its
+// own property table is empty, so Object.keys of one is the empty array in Node and the
+// box is what answers that rather than the Date interface's member list. Anything else
+// reports false and leaves the caller's static path alone.
 func (r *Renderer) lowerAsDynamicReceiver(n frontend.Node) (ast.Expr, bool, error) {
 	dynamic := r.isDynamic(n)
-	if !dynamic && !r.isMap(n) && !r.isSet(n) {
+	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) {
 		return nil, false, nil
 	}
 	expr, err := r.lowerExpr(n)
@@ -1384,7 +1401,13 @@ func (r *Renderer) dynBoxableElem(t frontend.Type) bool {
 	if t.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
 		return true
 	}
-	return r.primitiveFlagsOfType(t)&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0
+	if r.primitiveFlagsOfType(t)&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
+		return true
+	}
+	// A date is the one object type with a box of its own the view can present, so a
+	// Map<string, Date> reads its values through the same live boxes the typed side
+	// holds. Every other object type still hands back for want of an element box.
+	return t.Flags&frontend.TypeObject != 0 && r.isDateType(t)
 }
 
 // boxOptionalToDynamic boxes a T | undefined result into a dynamic value.Value. The

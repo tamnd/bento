@@ -200,6 +200,19 @@ func deepObjectComparisonStart(a, b Value, mode deepMode, memos *deepMemos) bool
 	case deepSlowHasUnequalTag(tag1, a, b) || IsArray(b):
 		return false
 
+	case a.asDate() != nil:
+		// A date is its instant: two dates are equal when they name the same moment,
+		// whatever properties either of them was given afterwards, which the key walk
+		// below still compares. The tag test above has already rejected a date against
+		// anything that names itself differently, but a plain object can carry the Date
+		// toStringTag, so the second value is still asked whether it is really a date.
+		if b.asDate() == nil || !dateSameInstant(a.asDate(), b.asDate()) {
+			return false
+		}
+
+	case b.asDate() != nil:
+		return false
+
 	case a.asSet() != nil:
 		// Two sets of different sizes cannot match however their members compare, which
 		// is the one cheap test before the pairwise hunt setEquiv does. The tag test

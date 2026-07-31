@@ -31,6 +31,10 @@ const maxTimeValue = 8.64e15
 // construction from an out-of-range or unparsable input lands in.
 type Date struct {
 	ms float64
+	// boxed is this date's dynamic view, built on the first crossing into a value.Value
+	// and kept so every later crossing hands back the same object. A JavaScript Date is a
+	// reference, so two boxes of one date would compare unequal under === (datevalue.go).
+	boxed *Object
 }
 
 // NewDate builds a Date for the current moment, the lowering of new Date(). It reads the

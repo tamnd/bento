@@ -106,10 +106,14 @@ func (s *jsonValueSerializer) stringify(root Value) BStr {
 	return FromGoString(str)
 }
 
-// apply runs the replacer for one key and value, returning the value unchanged
-// when there is no replacer. The holder is not threaded through because only an
-// inline arrow can be a replacer here and an arrow does not bind this.
+// apply runs the two steps SerializeJSONProperty takes before a value is written, in
+// the order the specification takes them: the value's own toJSON hook first, so a date
+// hands over its ISO string, and then the replacer, which therefore sees what the hook
+// returned rather than the value it was called on. It returns the value unchanged when
+// there is neither. The holder is not threaded through because only an inline arrow can
+// be a replacer here and an arrow does not bind this.
 func (s *jsonValueSerializer) apply(key BStr, val Value) Value {
+	val = jsonHookValue(val, key)
 	if s.replacer == nil {
 		return val
 	}
