@@ -1094,8 +1094,17 @@ func (r *Renderer) isRootedInDynBound(n frontend.Node) bool {
 // and calls yields a box at every step once its root is one, and the two roots that are
 // boxes are a dynBound binding and an assertion erased over a box. Anything else stops
 // the walk and keeps its own handling.
+//
+// A link the checker types number, string, or boolean is where the chain stops being
+// boxed, because unboxDynamicRead coerces such a read down to its Go primitive at the
+// read itself. r.tag off a boxed row really is a value.BStr, so r.tag.toUpperCase() is
+// the static string method and not a runtime dispatch.
 func (r *Renderer) isBoxedChain(n frontend.Node) bool {
+	const unboxes = frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
 	for {
+		if n.Kind() != frontend.NodeIdentifier && r.prog.TypeAt(n).Flags&unboxes != 0 {
+			return false
+		}
 		switch n.Kind() {
 		case frontend.NodeIdentifier:
 			return r.isDynBoundReceiver(n)

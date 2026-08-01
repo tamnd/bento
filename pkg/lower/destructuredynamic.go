@@ -129,6 +129,15 @@ func (r *Renderer) pushDynBound(paramNodes []frontend.Node, sig frontend.Signatu
 // binding pays nothing.
 func (r *Renderer) dynBoundLocalsOf(paramNodes []frontend.Node, sig frontend.Signature) map[string]bool {
 	out := map[string]bool{}
+	// The enclosing body's boxed locals come along. A closure captures the names around
+	// it and capture does not change what a name holds, so a local the outer body reads
+	// through the value model is read the same way one level in. Starting empty here
+	// dropped that: inside rows.map(r => rows.filter(...)) the inner read of rows found
+	// no mark and lowered as the static Filter on what is a value.Value, which is Go
+	// that does not compile rather than a hand-back.
+	for name := range r.dynBoundLocals {
+		out[name] = true
+	}
 	for i, pn := range paramNodes {
 		if i >= len(sig.Params) {
 			break
@@ -143,10 +152,17 @@ func (r *Renderer) dynBoundLocalsOf(paramNodes []frontend.Node, sig frontend.Sig
 		// blockBodyArrow rebuilds the set for the closure body, which would otherwise
 		// replace the outer merge forceCallbackDynParams made and lose the parameter.
 		if pkids[0].Kind() == frontend.NodeIdentifier {
+			name, ok := localName(r.prog.Text(pkids[0]))
+			if !ok {
+				continue
+			}
+			// A parameter of this function shadows whatever the enclosing body called the
+			// same name, so the inherited mark is dropped and the parameter's own answer
+			// stands: boxed when it was forced dynamic, static otherwise.
 			if r.forceDynParams[pkids[0]] {
-				if name, ok := localName(r.prog.Text(pkids[0])); ok {
-					out[name] = true
-				}
+				out[name] = true
+			} else {
+				delete(out, name)
 			}
 			continue
 		}
