@@ -70,9 +70,56 @@ func (d *declSet) internTuple(r *Renderer, t frontend.Type, elems []frontend.Tup
 		rollback()
 		return "", err
 	}
-	d.source[name] = body
+	hook := renderTupleJSONHook(name, elems)
+	hookBody, err := printDecl(hook)
+	if err != nil {
+		rollback()
+		return "", err
+	}
+	d.source[name] = body + "\n\n" + hookBody
 	d.node[name] = decl
+	d.aux[name] = []ast.Decl{hook}
 	return name, nil
+}
+
+// renderTupleJSONHook builds the JSONTuple method that rides along with every tuple
+// struct. A tuple is an array in JavaScript but a positional struct in Go, and the
+// runtime's walks over a Go value have no way to tell that struct from an object shape
+// that happens to carry E0 and E1 fields. So the generated type says so itself: it hands
+// back its positions in order, and the walk writes them the way it writes an array's
+// elements.
+//
+// Saying it here rather than at each boxing site is what makes it hold at every depth. A
+// tuple reached as an Object.entries pair, as a field of an object, or as a member of a
+// collection is reached by the same walk, and before this each of those came out as
+// {"E0":"a","E1":1} where the engine writes ["a",1].
+//
+//	func (t Tuple_str_num) JSONTuple() []any { return []any{t.E0, t.E1} }
+//
+// An optional position hands back its value.Opt, which the walks already unwrap through
+// the same jsonOptional hook an optional object field uses, so the absent case reads as
+// undefined rather than as an empty object.
+func renderTupleJSONHook(name string, elems []frontend.TupleElem) *ast.FuncDecl {
+	const recv = "t"
+	positions := make([]ast.Expr, len(elems))
+	for i := range elems {
+		positions[i] = &ast.SelectorExpr{X: ident(recv), Sel: ident("E" + itoa(i))}
+	}
+	anySlice := &ast.ArrayType{Elt: ident("any")}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{
+			Names: []*ast.Ident{ident(recv)},
+			Type:  ident(name),
+		}}},
+		Name: ident("JSONTuple"),
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: anySlice}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.CompositeLit{Type: anySlice, Elts: positions},
+		}}}},
+	}
 }
 
 // tupleKey builds a structural signature for a tuple from its positional elements,
@@ -808,8 +855,25 @@ func elidedTupleLengthReceiver(r *Renderer, n frontend.Node) (frontend.Node, boo
 	if obj.Kind() != frontend.NodeIdentifier {
 		return nil, false
 	}
-	if _, ok := r.prog.TupleElements(r.prog.TypeAt(obj)); !ok {
+	elems, ok := r.prog.TupleElements(r.prog.TypeAt(obj))
+	if !ok {
 		return nil, false
 	}
+	// The fold only happens when the type fixes the arity, so the elision only happens
+	// then either. An optional or rest position hands the read back instead, and nothing
+	// is dropped from an emit that never gets made.
+	for _, e := range elems {
+		if e.Optional || e.Rest {
+			return nil, false
+		}
+	}
 	return obj, true
+}
+
+// isTupleType reports whether a checker type is a tuple, the one-line test the boxing
+// arms ask by name so their intent reads on the line rather than in a discarded second
+// return value.
+func (r *Renderer) isTupleType(t frontend.Type) bool {
+	_, ok := r.prog.TupleElements(t)
+	return ok
 }

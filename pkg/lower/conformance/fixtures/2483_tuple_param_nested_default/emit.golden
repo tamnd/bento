@@ -10,18 +10,38 @@ type Tuple_tup_bool struct {
 	E0 Tuple_num_str
 	E1 bool
 }
+
+func (t Tuple_tup_bool) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type Tuple_num_str struct {
 	E0 float64
 	E1 value.BStr
 }
+
+func (t Tuple_num_str) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type Tuple_num_num struct {
 	E0 float64
 	E1 float64
 }
+
+func (t Tuple_num_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type Tuple_obj_num struct {
 	E0 *ObjName
 	E1 float64
 }
+
+func (t Tuple_obj_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type ObjName struct {
 	Name value.BStr `json:"name"`
 }

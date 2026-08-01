@@ -21,6 +21,9 @@ type Tuple_num_null struct {
 	E1 value.Value
 }
 
+func (t Tuple_num_null) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
 func main() {
 	undefs := value.NewArray[value.Value](value.Undefined, value.Undefined, value.Undefined)
 	value.ConsoleLog(value.NumberToConsole(undefs.Len()))

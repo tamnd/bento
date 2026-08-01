@@ -11,6 +11,9 @@ type Tuple_num_str struct {
 	E1 value.BStr
 }
 
+func (t Tuple_num_str) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
 func Run() *value.Promise[value.Unit] {
 	return value.RunAsyncVoid(func(_bt0 *value.AsyncCo) {
 		pairs := value.NewArray[*value.Promise[Tuple_num_str]](value.Resolved[Tuple_num_str](Tuple_num_str{E0: 1, E1: value.FromGoString("a")}), value.Resolved[Tuple_num_str](Tuple_num_str{E0: 2, E1: value.FromGoString("b")}))

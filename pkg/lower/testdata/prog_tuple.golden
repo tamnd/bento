@@ -8,11 +8,19 @@ type Tuple_num_num struct {
 	E0 float64
 	E1 float64
 }
+
+func (t Tuple_num_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type Tuple_str_num struct {
 	E0 value.BStr
 	E1 float64
 }
 
+func (t Tuple_str_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
 func Minmax(xs *value.Array[float64]) Tuple_num_num {
 	lo := xs.At(0)
 	hi := xs.At(0)

@@ -349,6 +349,16 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 		if prop != "length" {
 			return nil, &NotYetLowerable{Reason: "the property " + prop + " read off a tuple receiver is a later slice"}
 		}
+		// Only a tuple whose positions are all required has an arity the type fixes. A
+		// [number, string?] is the array [2] or the array [2, "x"], length 1 or 2, and
+		// the type cannot say which, so folding it to the position count would answer 2
+		// for [2] where the engine answers 1. Reading the option at runtime is a later
+		// slice; answering wrong is not an option at all.
+		for _, e := range elems {
+			if e.Optional || e.Rest {
+				return nil, &NotYetLowerable{Reason: "the length of a tuple with an optional or rest position is a later slice"}
+			}
+		}
 		return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(len(elems))}, nil
 	}
 	if r.isString(obj) && prop == "length" {

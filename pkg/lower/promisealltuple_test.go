@@ -75,20 +75,37 @@ main();`
 // wrong answer rather than a hand-back, and the tuple box is what closes it.
 func TestTupleBoxesAsAnArray(t *testing.T) {
 	for name, src := range map[string]string{
-		"console.log":    "const t: [number, string] = [1, \"a\"];\nconsole.log(t);",
-		"JSON.stringify": "const t: [number, string] = [1, \"a\"];\nconsole.log(JSON.stringify(t));",
-		"String":         "const t: [number, string] = [1, \"a\"];\nconsole.log(String(t));",
-		"uniform":        "const t: [number, number] = [1, 2];\nconsole.log(JSON.stringify(t));",
+		"console.log": "const t: [number, string] = [1, \"a\"];\nconsole.log(t);",
+		"String":      "const t: [number, string] = [1, \"a\"];\nconsole.log(String(t));",
+		"uniform":     "const t: [number, number] = [1, 2];\nconsole.log(String(t));",
+		"in an array": "const t: [number, string] = [1, \"a\"];\nconsole.log([t, t]);",
 	} {
 		t.Run(name, func(t *testing.T) {
 			out := renderProgram(t, src)
-			if !strings.Contains(out, "value.NewArrayValue(") {
-				t.Fatalf("a tuple did not box into an array value:\n%s", out)
+			if !strings.Contains(out, "value.TupleToValue") {
+				t.Fatalf("a tuple did not box through the tuple box:\n%s", out)
 			}
 			if strings.Contains(out, "value.ObjectFromStruct(") {
 				t.Fatalf("a tuple boxed into an object:\n%s", out)
 			}
 		})
+	}
+}
+
+// TestTupleCarriesItsJSONHook pins the method every tuple struct rides with. The runtime
+// walks over a Go value cannot tell a tuple's positional struct from an object shape that
+// happens to carry E0 and E1 fields, so the generated type says so itself and the walk
+// writes its positions the way it writes an array's elements. Without it a tuple reached
+// inside something else, an Object.entries pair or an object field, came out as an object
+// no matter what the boxing site did.
+func TestTupleCarriesItsJSONHook(t *testing.T) {
+	const src = "const t: [number, string] = [1, \"a\"];\nconsole.log(t[0]);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "JSONTuple() []any") {
+		t.Fatalf("the tuple struct carried no JSON hook:\n%s", out)
+	}
+	if !strings.Contains(out, "return []any{t.E0, t.E1}") {
+		t.Fatalf("the JSON hook did not hand back the positions:\n%s", out)
 	}
 }
 
@@ -130,6 +147,18 @@ func TestTupleLengthFolds(t *testing.T) {
 				t.Fatalf("a tuple length did not fold to its arity:\n%s", out)
 			}
 		})
+	}
+}
+
+// TestOptionalTupleLengthHandsBack pins the one tuple the length fold has no answer for.
+// A [number, string?] is the array [2] or the array [2, "x"], length 1 or 2, and the type
+// says only that it is one of them, so folding to the position count answers 2 for [2]
+// where the engine answers 1. That is a wrong answer, which is worse than a hand-back.
+func TestOptionalTupleLengthHandsBack(t *testing.T) {
+	const src = "const t: [number, string?] = [1];\nconsole.log(t.length);"
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "length of a tuple with an optional") {
+		t.Fatalf("an optional tuple's length did not hand back for that reason: %q", reason)
 	}
 }
 

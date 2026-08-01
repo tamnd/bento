@@ -10,15 +10,28 @@ type Tuple_num_num struct {
 	E0 float64
 	E1 float64
 }
+
+func (t Tuple_num_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type Tuple_str_num struct {
 	E0 value.BStr
 	E1 float64
 }
+
+func (t Tuple_str_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type Tuple_str_bool struct {
 	E0 value.BStr
 	E1 bool
 }
 
+func (t Tuple_str_bool) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
 func Pt(__0 Tuple_num_num) float64 {
 	x := __0.E0
 	y := __0.E1

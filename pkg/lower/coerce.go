@@ -1439,54 +1439,23 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 // boxTupleToDynamic boxes a tuple into a dynamic array value, reporting ok=false for a
 // non-tuple so the caller's other arms still run. A tuple is an array in JavaScript, and
 // its Go shape is the one thing standing in the way: a positional struct whose fields are
-// E0, E1 and so on, which the fixed-object path would box under those names.
+// E0, E1 and so on, which the fixed-object arm below would box under those names.
 //
-// So the box is built position by position rather than through one container boxer. Each
-// field crosses at its own static type, which is what lets a heterogeneous tuple box at
-// all: value.ArrayValueOf takes a single func(T) value.Value and a [number, string] has no
-// such T, but the emit here writes value.Number over E0 and value.StringValue over E1 and
-// collects both into a []value.Value the runtime reads as one array.
-//
-// The box copies, the way the array and struct boxes do, so it is a snapshot rather than a
-// view. The receiver is read once per position, so a side-effecting source hands back
-// rather than run its effect once per element, and a position whose type has no box of its
-// own hands back rather than emit a call that would not build.
+// The whole box is value.TupleToValue over the lowered receiver. It reads the positions
+// back through the JSONTuple method every tuple struct carries and boxes each one through
+// the same walk an object field takes, so a position holding a date, a class instance, or
+// another tuple crosses the way it would anywhere else. The box copies, the way the array
+// and struct boxes do, so it is a snapshot rather than a view.
 func (r *Renderer) boxTupleToDynamic(src frontend.Node) (ast.Expr, bool, error) {
-	elems, ok := r.prog.TupleElements(r.prog.TypeAt(src))
-	if !ok {
+	if _, ok := r.prog.TupleElements(r.prog.TypeAt(src)); !ok {
 		return nil, false, nil
-	}
-	if !r.repeatableOperand(src) {
-		return nil, false, &NotYetLowerable{Reason: "boxing a side-effecting tuple source into a dynamic value is a later slice"}
 	}
 	recv, err := r.lowerExpr(src)
 	if err != nil {
 		return nil, false, err
 	}
-	boxed := make([]ast.Expr, 0, len(elems))
-	for i, e := range elems {
-		// An optional or rest position is stored as a value.Opt or a slice rather than a
-		// plain field, so it does not read back with the position's own boxer.
-		if e.Optional || e.Rest {
-			return nil, false, &NotYetLowerable{Reason: "boxing a tuple with an optional or rest position into a dynamic value is a later slice"}
-		}
-		box := r.dynValueBox(e.Type)
-		if box == nil {
-			return nil, false, &NotYetLowerable{Reason: "boxing a tuple position whose type has no dynamic box is a later slice"}
-		}
-		boxed = append(boxed, &ast.CallExpr{
-			Fun:  box,
-			Args: []ast.Expr{&ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))}},
-		})
-	}
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{
-		Fun: sel("value", "NewArrayValue"),
-		Args: []ast.Expr{&ast.CompositeLit{
-			Type: &ast.ArrayType{Elt: sel("value", "Value")},
-			Elts: boxed,
-		}},
-	}, true, nil
+	return &ast.CallExpr{Fun: sel("value", "TupleToValue"), Args: []ast.Expr{recv}}, true, nil
 }
 
 // dynValueBox returns the func(T) value.Value that boxes one value of a static type
@@ -1522,6 +1491,14 @@ func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 		// (*value.Uint8Array).ToValue for a Uint8Array. The helper renders the Go type the
 		// name maps to and hangs ToValue off it.
 		return r.typedArrayElemBox(elem)
+	case r.isTupleType(elem):
+		// A container of tuples: Object.entries answers a [string, T][], and it is the
+		// everyday way one is reached. The boxer is value.TupleToValue, which reads the
+		// positions back through the JSONTuple method the generated struct carries, so a
+		// heterogeneous tuple needs no single element type here the way ArrayValueOf's
+		// own T does. Its type argument is left to inference from the container, the same
+		// way ClassToValue's is.
+		return sel("value", "TupleToValue")
 	case r.classElemBoxable(elem):
 		r.markClassBoxed(elem)
 		// A class instance boxes the way a lone instance does, through the reflection walk

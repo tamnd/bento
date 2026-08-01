@@ -55,6 +55,11 @@ type declSet struct {
 	// prints rather than reparse their text. It carries the same declarations
 	// source does, in the same order the order slice records.
 	node map[string]ast.Decl
+	// aux holds declarations that belong to a generated type but are not the type
+	// itself, keyed by the same name and emitted right after it. Today that is the
+	// JSONTuple method a tuple struct carries so every dynamic read of it sees the
+	// array a tuple is in JavaScript rather than the positional struct it is in Go.
+	aux map[string][]ast.Decl
 	// order is the names in first-seen order, so emission is stable.
 	order []string
 	// used records every assigned name so a second shape that derives the same
@@ -68,6 +73,7 @@ func newDeclSet() *declSet {
 		nameBySig:      map[string]string{},
 		source:         map[string]string{},
 		node:           map[string]ast.Decl{},
+		aux:            map[string][]ast.Decl{},
 		used:           map[string]bool{},
 	}
 }
@@ -375,6 +381,7 @@ func (d *declSet) emitNodes() []ast.Decl {
 	out := make([]ast.Decl, 0, len(d.order))
 	for _, name := range d.order {
 		out = append(out, d.node[name])
+		out = append(out, d.aux[name]...)
 	}
 	return out
 }
