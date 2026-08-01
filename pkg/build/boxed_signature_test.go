@@ -206,3 +206,96 @@ func TestReturnsThatDisagreeAnswerABox(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestAMethodTakesAndAnswersABox covers the class half of the same two rules. A method is
+// the everyday place this code puts a helper, and until now every box crossing one of its
+// signatures handed back.
+//
+// A method's Go signature is written in more than one place as soon as there is a
+// hierarchy, so the rewrite is only offered to a method of a class with no base and no
+// subclass and no virtual dispatch, which is where the signature is written once and the
+// same rewrite the top-level function takes applies unchanged: the parameter a call site
+// boxes takes the value slot, the literal argument boxes on its way in, one returned box
+// settles the result, and the read off the call dispatches.
+//
+// this.head() inside a sibling method is the shape that has to know it is holding a box,
+// so the receiver of a call resolves through the class being lowered too.
+//
+// Held against what Node v24.18.0 prints.
+func TestAMethodTakesAndAnswersABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"class Store {\n"+
+			"  take(r: Row): number { return r.id; }\n"+
+			"  head(): Row { return Object.values(m)[0]; }\n"+
+			"  byKey(k: string): Row { return m[k]; }\n"+
+			"  label(r: Row): string { return r.tag; }\n"+
+			"  join(a: Row, b: Row): string { return a.tag + b.tag; }\n"+
+			"  spell({ id, tag }: Row): string { return tag + id; }\n"+
+			"  copy(r: Row): string { return JSON.stringify({ ...r, k: 1 }); }\n"+
+			"  pick(k: string, b: boolean): Row { if (b) return m[k]; return { id: 0, tag: 'd' }; }\n"+
+			"  orLit(k: string, b: boolean): Row { return b ? m[k] : { id: 9, tag: 'z' }; }\n"+
+			"  headTag(): string { return this.head().tag; }\n"+
+			"  plus(n: number): number { return this.take(this.head()) + n; }\n"+
+			"}\n"+
+			"const s = new Store();\n"+
+			"const first = Object.values(m)[0];\n"+
+			"const v = Object.values(m);\n"+
+			"console.log(s.take(first), s.take(m['b']), s.take({ id: 7, tag: 'q' }));\n"+
+			"console.log(s.head().tag, s.head().id, s.byKey('b').tag);\n"+
+			"console.log(s.label(s.head()), s.join(v[0], v[1]), s.spell(first));\n"+
+			"console.log(s.copy(first));\n"+
+			"console.log(s.pick('a', true).tag, s.pick('a', false).tag, s.orLit('b', true).tag, s.orLit('b', false).tag);\n"+
+			"console.log(s.headTag(), s.plus(4));\n"+
+			"console.log(`${s.head().tag}!`, s.head().id + 1);\n"+
+			"console.log(JSON.stringify(s.head()), s.head() === s.head());\n"+
+			"for (const k of Object.keys(m)) { console.log(k, s.byKey(k).tag); }\n"+
+			"console.log(s.head());\n")
+	want := "1 2 7\n" +
+		"x 1 y\n" +
+		"x xy x1\n" +
+		"{\"id\":1,\"tag\":\"x\",\"k\":1}\n" +
+		"x d y z\n" +
+		"x 5\n" +
+		"x! 2\n" +
+		"{\"id\":1,\"tag\":\"x\"} true\n" +
+		"a x\n" +
+		"b y\n" +
+		"{ id: 1, tag: 'x' }\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+// TestAStaticMethodTakesAndAnswersABox covers the static half. A static method is a
+// package function the class name routes to, so its Go signature is written in one place
+// no matter what the class hierarchy looks like, and it takes the rewrite on the plainest
+// terms of any of the three shapes this rule now covers.
+//
+// Held against what Node v24.18.0 prints.
+func TestAStaticMethodTakesAndAnswersABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"class Reg {\n"+
+			"  static take(r: Row): number { return r.id; }\n"+
+			"  static head(): Row { return Object.values(m)[0]; }\n"+
+			"  static byKey(k: string): Row { return m[k]; }\n"+
+			"  static pick(b: boolean): Row { if (b) return m['a']; return { id: 0, tag: 'd' }; }\n"+
+			"  static both(a: Row, b: Row): string { return a.tag + b.tag; }\n"+
+			"}\n"+
+			"console.log(Reg.take(Object.values(m)[0]), Reg.take({ id: 3, tag: 'q' }));\n"+
+			"console.log(Reg.head().tag, Reg.byKey('b').id);\n"+
+			"console.log(Reg.take(Reg.head()), Reg.pick(true).tag, Reg.pick(false).tag);\n"+
+			"console.log(Reg.both(Reg.head(), Reg.byKey('b')));\n"+
+			"console.log(JSON.stringify(Reg.head()), Reg.head() === Reg.head());\n")
+	want := "1 3\n" +
+		"x 2\n" +
+		"1 x d\n" +
+		"xy\n" +
+		"{\"id\":1,\"tag\":\"x\"} true\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}

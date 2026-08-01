@@ -130,7 +130,95 @@ func (r *Renderer) boxableFuncs(files []frontend.Node) map[frontend.Node]boxable
 	for _, f := range files {
 		walk(f)
 	}
+	r.addBoxableMethods(out)
 	return out
+}
+
+// addBoxableMethods adds the methods this pass may rewrite. Classes register before it
+// runs, so the receiver of a call resolves to the class that declares the method the
+// same way the call lowering resolves it.
+//
+// A method is a candidate only when its Go signature is written in exactly one place.
+// That rules out an instance method in a hierarchy: an override, an abstract
+// declaration, or any class with a base or a subclass, since those spell the signature
+// again at the vtable and at the interface every derived receiver is called through. A
+// static method carries none of that, being a package function the class name routes to
+// and not inherited in this slice, so every class offers its statics.
+//
+// Both kinds still have to clear boxableMethodSig: an async or generator method hands
+// back a promise or a coroutine rather than what a return carries, a generic method
+// lowers once per specialization from its own substituted signature, and a name some
+// expression reads as a value rather than calls takes the method's Go type the rewrite
+// would be changing.
+func (r *Renderer) addBoxableMethods(out map[frontend.Node]boxableFunc) {
+	if len(r.classes) == 0 {
+		return
+	}
+	derived := map[*classInfo]bool{}
+	for _, info := range r.classes {
+		if info.base != nil {
+			derived[info.base] = true
+		}
+	}
+	for _, info := range r.classes {
+		for _, m := range info.staticMethods {
+			r.addBoxableMethod(out, m)
+		}
+		if info.base != nil || derived[info] {
+			continue
+		}
+		for _, m := range info.methods {
+			if info.isVirtual(m.prop) || m.abstract {
+				continue
+			}
+			r.addBoxableMethod(out, m)
+		}
+	}
+}
+
+// addBoxableMethod records one method as a candidate when its Go signature is one this
+// pass can rewrite in place. The property-name check is across the whole program, so an
+// unrelated object's property of the same name is enough to leave a method alone, which
+// costs a rewrite this pass could have made but never makes a wrong one.
+func (r *Renderer) addBoxableMethod(out map[frontend.Node]boxableFunc, m classMethod) {
+	if r.isAsyncFunc(m.node) || r.isGeneratorFunc(m.node) {
+		return
+	}
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok || len(sig.TypeParams) != 0 || sig.RestParam != nil {
+		return
+	}
+	if r.propReadAsValue(m.prop) {
+		return
+	}
+	out[m.node] = boxableFunc{sig: sig, params: r.funcParamNodes(m.node)}
+}
+
+// propReadAsValue reports whether any member access to a property name in the program is
+// something other than the callee of a call, `rows.map(s.take)` being the shape that
+// matters here. Such a read takes the method's Go type, which this pass would be
+// rewriting, so one is enough to leave the method alone.
+func (r *Renderer) propReadAsValue(prop string) bool {
+	found := false
+	var walk func(n frontend.Node, isCallee bool)
+	walk = func(n frontend.Node, isCallee bool) {
+		if found {
+			return
+		}
+		kids := r.prog.Children(n)
+		if n.Kind() == frontend.NodePropertyAccessExpression && len(kids) == 2 &&
+			kids[1].Kind() == frontend.NodeIdentifier && r.prog.Text(kids[1]) == prop && !isCallee {
+			found = true
+			return
+		}
+		for i, c := range kids {
+			walk(c, n.Kind() == frontend.NodeCallExpression && i == 0)
+		}
+	}
+	for _, f := range r.prog.SourceFiles() {
+		walk(f, false)
+	}
+	return found
 }
 
 func (r *Renderer) addBoxableFunc(out map[frontend.Node]boxableFunc, fn frontend.Node, sym frontend.Symbol) {
@@ -411,6 +499,9 @@ func (r *Renderer) calleeFuncNode(n frontend.Node) (frontend.Node, bool) {
 		return nil, false
 	}
 	kids := r.prog.Children(n)
+	if len(kids) != 0 && kids[0].Kind() == frontend.NodePropertyAccessExpression {
+		return r.calleeMethodNode(kids[0])
+	}
 	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
 		return nil, false
 	}
@@ -427,6 +518,42 @@ func (r *Renderer) calleeFuncNode(n frontend.Node) (frontend.Node, bool) {
 		}
 	}
 	return nil, false
+}
+
+// calleeMethodNode resolves a call's member callee, `s.take(...)`, to the method
+// declaration it names, through the receiver's own class the way classMethodCall
+// resolves it. A receiver whose checker type is not a registered class, or a name the
+// class does not declare as an instance method, is not a call into a method this pass
+// rewrites.
+//
+// The receiver resolves through classReceiver so that `this.head()` inside a sibling
+// method finds the class it is written in. That answers nothing while the pass is
+// deciding, since no body is lowering then and curClass is nil, and the pass does not
+// need it: a method's own returns are what mark it. It answers once a body is lowering,
+// which is when the read off the call has to know it is holding a box.
+func (r *Renderer) calleeMethodNode(callee frontend.Node) (frontend.Node, bool) {
+	kids := r.prog.Children(callee)
+	if len(kids) != 2 || kids[1].Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	name := r.prog.Text(kids[1])
+	// A receiver naming the class itself, `S.head()`, is the static half: it routes to
+	// the package function the static method became, so it is looked up in that list
+	// rather than among the instance methods.
+	if info, ok := r.classNameRef(kids[0]); ok {
+		if m, ok := info.staticMethodByName(name); ok {
+			return m.node, true
+		}
+	}
+	info, ok := r.classReceiver(kids[0])
+	if !ok {
+		return nil, false
+	}
+	m, ok := info.lookupMethod(name)
+	if !ok {
+		return nil, false
+	}
+	return m.node, true
 }
 
 // boxedSig applies this pass's decision to a function's signature: a parameter a call
