@@ -3085,8 +3085,22 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 		colon := false
 		switch len(kids) {
 		case 1:
+			// A spread member copies the source's own enumerable properties onto what the
+			// literal has built so far, which is what Assign does and what the spec says a
+			// spread evaluates to. Order carries the override rule for free: a key written
+			// before a spread is overwritten by it and one written after wins, because each
+			// member lands on the object in source order.
+			//
+			// The target is the fresh object this literal is building, so the one way
+			// Object.assign differs from a spread, running the target's setters rather than
+			// defining outright, has nothing to act on here.
 			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
-				return nil, &NotYetLowerable{Reason: "boxing an object literal with a spread member is a later slice"}
+				boxedSrc, err := r.boxOperand(kids[0])
+				if err != nil {
+					return nil, err
+				}
+				obj = &ast.CallExpr{Fun: &ast.SelectorExpr{X: obj, Sel: ident("Assign")}, Args: []ast.Expr{boxedSrc}}
+				continue
 			}
 			keyNode, valNode = kids[0], kids[0]
 		case 2:
@@ -3427,7 +3441,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	if err := r.guardNonStringBoxIntoString(srcNode, r.retType.Flags); err != nil {
 		return nil, err
 	}
-	srcDyn := r.isDynamic(srcNode)
+	// A source the lowerer holds as a box while the checker holds a concrete shape is
+	// dynamic here too, the same pairing the argument bridge takes. Returning
+	// Object.values(m)[0] from a function declared to answer a Row used to hand the box
+	// over as if it were the struct.
+	srcDyn := r.isDynamic(srcNode) || r.isBoxedChain(srcNode)
 	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(r.retType)
 	switch {
 	case srcDyn && !tgtDyn:

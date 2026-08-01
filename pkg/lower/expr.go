@@ -397,12 +397,27 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		return r.conditionalExpr(n)
 
 	case frontend.NodeArrayLiteralExpression:
+		if r.literalHoldsBox(n) {
+			return r.boxArrayLiteral(n)
+		}
 		return r.arrayLiteral(n)
 
 	case frontend.NodeElementAccessExpression:
 		return r.elementAccess(n)
 
 	case frontend.NodeObjectLiteralExpression:
+		// A literal with a box in it has no Go struct to build. The checker interns one
+		// from the shape it gives the literal, and the box carries no fields to fill it,
+		// so the literal is built over the value model instead and what it holds is stored
+		// as itself. That keeps the object it names the one object every other reference
+		// to it sees, which a struct copy would have lost.
+		//
+		// This is here rather than at the binding because a literal is an expression
+		// wherever it appears: JSON.stringify({ ...first }) is the same question asked
+		// from an argument.
+		if r.literalHoldsBox(n) {
+			return r.boxObjectLiteral(n)
+		}
 		return r.objectLiteral(n)
 
 	case frontend.NodeArrowFunction:

@@ -1113,6 +1113,8 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 		switch n.Kind() {
 		case frontend.NodeIdentifier:
 			return r.isDynBoundReceiver(n)
+		case frontend.NodeObjectLiteralExpression, frontend.NodeArrayLiteralExpression:
+			return r.literalHoldsBox(n)
 		case frontend.NodeParenthesizedExpression, frontend.NodeAsExpression, frontend.NodeTypeAssertion, frontend.NodeNonNull:
 			if r.prog.TypeAt(n).Flags&unboxes != 0 {
 				return false
@@ -1128,6 +1130,15 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 		case frontend.NodePropertyAccessExpression, frontend.NodeElementAccessExpression, frontend.NodeCallExpression:
 			if r.isBoxedObjectWalk(n) {
 				return true
+			}
+			// An optional link answers value.OptionalMember, which is a box whatever the
+			// checker calls the result: the read is not coerced down the way a plain read off
+			// a box is, since the undefined a short circuit produces has to stay tellable
+			// from the property's own value. So first?.tag is a box while the checker types
+			// it string | undefined, and the ?.length after it dispatches rather than
+			// mapping an Opt that is not there.
+			if recv, ok := r.optionalLinkReceiver(n); ok {
+				return r.isBoxedChain(recv)
 			}
 			if n.Kind() != frontend.NodeCallExpression && r.prog.TypeAt(n).Flags&unboxes != 0 {
 				return false
@@ -1148,6 +1159,87 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			return false
 		}
 	}
+}
+
+// optionalLinkReceiver reports whether n is one link of an optional property chain,
+// a?.b, and answers the receiver it reads off. The link is a property access carrying
+// the ?. token between its receiver and its name, which is the same shape lowerMember
+// dispatches optionalChainAccess on.
+func (r *Renderer) optionalLinkReceiver(n frontend.Node) (frontend.Node, bool) {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 3 || !r.isQuestionDotToken(kids[1]) {
+		return nil, false
+	}
+	return kids[0], true
+}
+
+// boxedChainBinding reports whether a declaration binds a box to a name that the
+// checker gave a shape the box cannot fill, which is the case for taking a value.Value
+// slot rather than the Go type the name's type interns to.
+//
+// Two kinds of binding are left where they were. One the checker types any or unknown
+// already has a boxed slot and the initializer already lands in it, so nothing is
+// gained by marking it. One it types number, string, or boolean has a Go value to come
+// down to, and the ordinary coercion runs ToNumber or ToString on the way in, which is
+// the same answer a read off a box gives; the name then holds a float64 or a value.BStr
+// and every consumer of it is right about that.
+//
+// What is left is the shapes: an object, an array, a tuple, a class instance. None of
+// them can be built from a box without copying, so all of them hold the box.
+func (r *Renderer) boxedChainBinding(nameNode, initNode frontend.Node) bool {
+	flags := r.prog.TypeAt(nameNode).Flags
+	if flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return false
+	}
+	if flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
+		return false
+	}
+	return r.isBoxedChain(initNode)
+}
+
+// literalHoldsBox reports whether n is an object or array literal with a box somewhere
+// in it. `const o = { first: Object.values(m)[0] }` is the shape: the checker types the
+// literal { first: Row } and interns a Go struct for it, and the box has no fields to
+// fill that struct's with.
+//
+// The literal boxes whole instead, so the box is stored as itself and the object it
+// names stays the one object every other reference to it sees. That is the property a
+// struct copy would lose, and it is why this is the answer rather than a conversion.
+//
+// Only a literal built here is walked. A name holding a struct that happens to have come
+// from a literal is a static value and stays one.
+func (r *Renderer) literalHoldsBox(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeArrayLiteralExpression:
+		for _, k := range r.prog.Children(n) {
+			if r.isBoxedChain(k) || r.literalHoldsBox(k) {
+				return true
+			}
+		}
+	case frontend.NodeObjectLiteralExpression:
+		for _, k := range r.prog.Children(n) {
+			kids := r.prog.Children(k)
+			// A member is [key, value], or the one node a shorthand or a spread carries.
+			// A spread of a box is a box in the literal the same way a named member is:
+			// { ...first } read first's properties off a Go struct it does not have.
+			if len(kids) == 1 && strings.HasPrefix(strings.TrimSpace(r.prog.Text(k)), "...") {
+				if r.isBoxedChain(kids[0]) || r.literalHoldsBox(kids[0]) {
+					return true
+				}
+				continue
+			}
+			if len(kids) != 2 {
+				continue
+			}
+			if r.isBoxedChain(kids[1]) || r.literalHoldsBox(kids[1]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isBoxedObjectWalk reports whether n is an Object.values or Object.entries call whose

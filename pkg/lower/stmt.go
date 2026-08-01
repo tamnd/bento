@@ -1937,6 +1937,30 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding whose initializer lowers to a box holds the box, whatever shape the
+		// checker projects onto it. `const first = Object.values(m)[0]` is the everyday
+		// one: the walk hands back boxes and the checker calls the element a Row, and a
+		// box carries no Go fields for that shape. The only way to fill the typed slot
+		// would be to copy the object's properties into a struct, which aliases nothing
+		// where JavaScript aliases everything, so the binding takes the value.Value slot
+		// instead and every later read off the name dispatches at run time.
+		//
+		// This is the same slot an assertion bound to a name takes, reached from the
+		// other root a box has.
+		if r.boxedChainBinding(kids[0], kids[initIdx]) {
+			boxInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{boxInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err
@@ -5377,6 +5401,13 @@ func (r *Renderer) foldShortDecl(decls []frontend.Node) (ast.Stmt, bool) {
 	// routing every later member read through its union-typed shape rather than the value
 	// model. So decline the fold and let buildVarDecl take it.
 	if r.isDynGlobalCtorNew(kids[len(kids)-1]) {
+		return nil, false
+	}
+	// A binding that holds a box needs the same value.Value slot and the same dynamic
+	// mark, and only buildVarDecl's loop writes those. The fold would take a literal
+	// holding a box at face value and build the Go struct the checker's shape interns
+	// to, which the box cannot fill.
+	if r.boxedChainBinding(kids[0], kids[len(kids)-1]) {
 		return nil, false
 	}
 	// A binding with a type annotation but no initializer, var x: typeof undefined,

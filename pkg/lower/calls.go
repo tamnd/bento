@@ -1392,7 +1392,13 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	// static value into a dynamic parameter boxes, and a dynamic value into a
 	// static parameter coerces, so a string passed for a message?: any lands as
 	// the boxed string the body reads.
-	srcDyn := r.isDynamic(node)
+	//
+	// A source the lowerer holds as a box while the checker holds a concrete shape is
+	// dynamic here too. f(Object.values(m)[0]) against an f(r: Row) used to hand the box
+	// straight over as if it were a *ObjIdTag, which is Go that does not compile; it now
+	// reaches the coercion and hands back, since filling a Go struct from a box could
+	// only copy where JavaScript aliases.
+	srcDyn := r.isDynamic(node) || r.isBoxedChain(node)
 	tgtDyn := pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(pt)
 	switch {
 	case srcDyn && !tgtDyn:
