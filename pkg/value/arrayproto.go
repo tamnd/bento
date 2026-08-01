@@ -31,6 +31,14 @@ func arrayProtoBuiltin(recv Value, key BStr) (Value, bool) {
 	return NewFunc(func(args []Value) Value { return fn(recv, args) }), true
 }
 
+// arrayProtoHas reports whether Array.prototype carries key, the existence half of
+// arrayProtoBuiltin that the in operator asks. It reads the same table the property
+// read does, so 'map' in arr is true exactly when arr.map reads a method.
+func arrayProtoHas(key BStr) bool {
+	_, ok := arrayProtoMethods[key.ToGoString()]
+	return ok
+}
+
 // tail returns the arguments after the first n, the optional trailing arguments a
 // method takes past the one it always reads: the thisArg of a callback method, the
 // fromIndex of a search. A call that passed fewer arguments yields an empty slice, so

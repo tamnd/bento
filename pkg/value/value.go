@@ -579,13 +579,15 @@ func (v Value) Get(key BStr) Value {
 		}
 		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
 			// A boxed instance answers toString and valueOf, the two the language calls on
-			// its own: the class's own code when it writes one, and what Object.prototype
-			// gives when it does not. Without this a box carries an instance's fields and its
-			// class name and none of its methods, so String([q]) would print a class tag
-			// where the program has an answer. The check for an own property comes first
+			// its own, by running the class's own code when it writes one. Without this a
+			// box carries an instance's fields and its class name and none of its methods,
+			// so String([q]) would print a class tag where the program has an answer. A
+			// class that writes neither reports nothing here and falls through to the chain
+			// walk, which ends at Object.prototype and answers both. The own-property check
+			// comes first
 			// because a field named toString is a real own property and shadows the method,
 			// the way it does on a live instance.
-			if val, ok := classCoercionGet(v, inst, name); ok {
+			if val, ok := classCoercionGet(inst, name); ok {
 				return val
 			}
 		}
@@ -638,7 +640,7 @@ func (v Value) HasProperty(key BStr) bool {
 		if idx, ok := arrayIndex(name); ok {
 			return idx < len(o.elems) && !isHole(o.elems[idx])
 		}
-		return o.hasChained(key)
+		return o.hasChained(v, key)
 	case KindObject, KindFunc:
 		// A boxed collection carries its members the way a real Map and Set carry theirs
 		// on their prototype, so `'size' in map` and `'add' in set` answer true, which
@@ -680,11 +682,11 @@ func (v Value) HasProperty(key BStr) bool {
 			}
 		}
 		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
-			if _, ok := classCoercionGet(v, inst, name); ok {
+			if _, ok := classCoercionGet(inst, name); ok {
 				return true
 			}
 		}
-		return v.object().hasChained(key)
+		return v.object().hasChained(v, key)
 	default:
 		Throw(NewTypeError(FromGoString("Cannot use 'in' operator to search for '" + name + "' in a non-object")))
 		return false
@@ -935,7 +937,7 @@ func (v Value) ToStringMethod() Value {
 		// the method the way it does on a live instance.
 		key := FromGoString("toString")
 		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
-			if m, ok := classCoercionGet(v, inst, "toString"); ok {
+			if m, ok := classCoercionGet(inst, "toString"); ok {
 				return m.Call(v)
 			}
 		}
@@ -965,7 +967,7 @@ func (v Value) ValueOfMethod() Value {
 	case KindObject:
 		key := FromGoString("valueOf")
 		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
-			if m, ok := classCoercionGet(v, inst, "valueOf"); ok {
+			if m, ok := classCoercionGet(inst, "valueOf"); ok {
 				return m.Call(v)
 			}
 		}
@@ -1268,7 +1270,11 @@ func toPrimitive(v Value, hint primHint) Value {
 	// TypeError (7.1.1.1 step 5) rather than inventing "[object Object]". This is the
 	// throw String.prototype.slice.call({toString: undefined, valueOf: undefined})
 	// raises in its ToString step.
-	if v.kind == KindObject && v.object().hasOwn(FromGoString("toString")) {
+	//
+	// An object whose chain ends at an explicit null throws for the other half of the
+	// same reason: it never inherited the built-in at all, so String(Object.create(null))
+	// raises rather than reading "[object Object]", which is what the engine does.
+	if v.kind == KindObject && (v.object().hasOwn(FromGoString("toString")) || !v.object().inheritsObjectProto()) {
 		Throw(NewTypeError(FromGoString("Cannot convert object to primitive value")))
 		return Undefined
 	}
