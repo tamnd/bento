@@ -1152,10 +1152,26 @@ func (r *Renderer) forceCallbackDynParams(n frontend.Node) (func(), bool) {
 		return nil, false
 	}
 	var forced []frontend.Node
+	var patterns []frontend.Node
 	var names []string
 	for _, pn := range r.funcParamNodes(n) {
 		pkids := r.prog.Children(pn)
-		if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
+		if len(pkids) == 0 {
+			continue
+		}
+		// A destructuring pattern parameter is forced whatever the checker typed its
+		// leaves. The wrapper hands this parameter one boxed argument, and a pattern is
+		// never a slot a box lands in: the typed binder would read a Go struct field or a
+		// tuple position off a value.Value. So the whole pattern takes one value.Value
+		// slot and its leaves read out of it through the dynamic protocol, which is the
+		// same answer an untyped pattern already gets, reached through the checker's
+		// types rather than in spite of them.
+		if pkids[0].Kind() != frontend.NodeIdentifier {
+			if !r.patternNode(pkids[0]) {
+				continue
+			}
+			forced = append(forced, pkids[0])
+			patterns = append(patterns, pkids[0])
 			continue
 		}
 		name, ok := localName(r.prog.Text(pkids[0]))
@@ -1197,6 +1213,12 @@ func (r *Renderer) forceCallbackDynParams(n frontend.Node) (func(), bool) {
 	}
 	for _, name := range names {
 		merged[name] = true
+	}
+	// Every name a forced pattern binds holds a box too, and the set has to be in place
+	// before the body lowers, since the body reads those names above where
+	// paramDestructureBindings appends the binds themselves.
+	for _, pat := range patterns {
+		r.collectDynPatternNames(pat, merged)
 	}
 	r.dynBoundLocals = merged
 	return func() {

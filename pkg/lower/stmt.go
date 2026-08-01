@@ -2400,8 +2400,11 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 	// return reports ok=true with an error, not a fall-through.
 	// A dynamic source has no static array shape, so the pattern reads each position
 	// through the boxed value's index protocol rather than a typed AtI, the declaration
-	// sibling of the untyped parameter's dynamic slot.
-	if r.isDynamic(initNode) {
+	// sibling of the untyped parameter's dynamic slot. A source the lowerer holds as a
+	// box while the checker holds a concrete shape takes the same route, since what
+	// decides the reads is the Go type the source lowers to and not the name the checker
+	// has for it.
+	if r.isDynamic(initNode) || r.isBoxedChain(initNode) {
 		return r.dynamicSourceDestructure(patNode, initNode)
 	}
 	initType := r.prog.TypeAt(initNode)
@@ -2825,8 +2828,11 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 	// return reports ok=true with an error, not a fall-through.
 	// A dynamic source has no static shape, so the pattern reads each property through the
 	// boxed value's member protocol rather than a struct-field selector, the declaration
-	// sibling of the untyped parameter's dynamic slot.
-	if r.isDynamic(initNode) {
+	// sibling of the untyped parameter's dynamic slot. A source the lowerer holds as a box
+	// while the checker holds a concrete shape takes the same route: const { id } =
+	// Object.values(m)[0] over a boxed m selected the Go field Id off a value.Value,
+	// which is Go that does not compile rather than a hand-back.
+	if r.isDynamic(initNode) || r.isBoxedChain(initNode) {
 		return r.dynamicSourceDestructure(patNode, initNode)
 	}
 	objType := r.prog.TypeAt(initNode)

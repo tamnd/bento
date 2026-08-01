@@ -514,6 +514,19 @@ func (r *Renderer) paramFieldType(p frontend.Param) (ast.Expr, error) {
 	return r.typeExpr(p.Type)
 }
 
+// patternFieldType is paramFieldType for a caller that holds the pattern node as well as
+// the parameter, which a closure's parameter list does. A pattern the boxed-callback
+// forcing marked dynamic takes the boxed slot even where its leaves carry concrete
+// checker types, since what decides the field is the Go type the argument arrives as and
+// not the name the checker has for it. Everything else asks paramFieldType unchanged.
+func (r *Renderer) patternFieldType(pat frontend.Node, p frontend.Param) (ast.Expr, error) {
+	if r.forceDynParams[pat] {
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+	}
+	return r.paramFieldType(p)
+}
+
 // variadicPlan describes a top-level function whose trailing optional parameters
 // are filled in the callee scope through one Go variadic tail. It is the shape a
 // default that reads an earlier parameter needs: the call site cannot see that
@@ -1018,7 +1031,10 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 			if !ok {
 				return nil, &NotYetLowerable{Reason: noun + " destructured parameter has no Go name to read from, a later slice"}
 			}
-			ptype, err := r.paramFieldType(sig.Params[pi])
+			// A pattern forceCallbackDynParams marked dynamic takes the value.Value slot
+			// whatever the checker typed its leaves, since the boxed call hands it a box and
+			// there is no Go struct or slice for a box to land in.
+			ptype, err := r.patternFieldType(pkids[0], sig.Params[pi])
 			if err != nil {
 				return nil, err
 			}
@@ -1122,7 +1138,10 @@ func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig fron
 		// An untyped destructured parameter arrives as one boxed value.Value slot, so its
 		// names read out of it through the dynamic protocol rather than through the struct
 		// selectors and slice indices the typed binder emits, which no boxed value carries.
-		if r.dynamicParamSlot(sig.Params[i]) {
+		// A pattern the boxed-callback forcing marked dynamic reads the same way, its slot
+		// holding the box the wrapper handed through rather than the shape the checker
+		// named. The two gates emit the one binder so the field type and the binds agree.
+		if r.forceDynParams[pat] || r.dynamicParamSlot(sig.Params[i]) {
 			stmts, err := r.bindDynamicPattern(pat, ident(goName), token.DEFINE)
 			if err != nil {
 				return nil, err

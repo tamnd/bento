@@ -166,6 +166,13 @@ func (r *Renderer) dynBoundLocalsOf(paramNodes []frontend.Node, sig frontend.Sig
 			}
 			continue
 		}
+		// A pattern forceCallbackDynParams marked dynamic binds every one of its leaves to
+		// a box, since the whole pattern reads out of one value.Value slot, so all its
+		// names join the set rather than only the rests an untyped pattern contributes.
+		if r.forceDynParams[pkids[0]] {
+			r.collectDynPatternNames(pkids[0], out)
+			continue
+		}
 		if !r.dynamicParamSlot(sig.Params[i]) {
 			continue
 		}
@@ -196,10 +203,105 @@ func (r *Renderer) collectAssignedNames(stmts []ast.Stmt, out map[string]bool) {
 		if !ok {
 			continue
 		}
+		// A bind that coerced its element down to a Go primitive holds no box, so its name
+		// is not a boxed name. This reads the emitted bind rather than the leaf's type,
+		// which is the same reading the rest of this walk takes and keeps the two from
+		// drifting: whatever unboxDynLeaf emitted is what the slot holds.
+		if len(a.Rhs) == 1 && isUnboxCoercion(a.Rhs[0]) {
+			continue
+		}
 		for _, lhs := range a.Lhs {
 			if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
 				out[id.Name] = true
 			}
+		}
+	}
+}
+
+// isUnboxCoercion reports whether an expression is one of the three coercions that bring
+// a box down to a Go primitive, value.ToNumber, value.ToString, or value.ToBoolean. It is
+// how a caller reading emitted binds tells a slot that holds a box from one that does not.
+func isUnboxCoercion(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	fn, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := fn.X.(*ast.Ident)
+	if !ok || pkg.Name != "value" {
+		return false
+	}
+	switch fn.Sel.Name {
+	case "ToNumber", "ToString", "ToBoolean":
+		return true
+	}
+	return false
+}
+
+// collectDynPatternNames records every name a pattern binds, not just its rests. It is
+// what a forced pattern needs where collectDynRestNames is what an untyped one needs: an
+// untyped pattern's leaves are typed any, so isDynamic routes their reads off the checker
+// alone, while a forced pattern's leaves carry the concrete types the checker gave them
+// and their Go slots are boxes all the same. Reading the names off the pattern rather than
+// off the emitted binds is what lets the set be built before the body lowers, which is
+// where the body's reads of those names ask.
+func (r *Renderer) collectDynPatternNames(pat frontend.Node, out map[string]bool) {
+	txt := strings.TrimSpace(r.prog.Text(pat))
+	if strings.HasPrefix(txt, "{") {
+		for _, el := range r.prog.Children(pat) {
+			if node, ok := r.objectRestElem(el); ok {
+				if name, ok := localName(r.prog.Text(node)); ok {
+					out[name] = true
+				}
+				continue
+			}
+			if _, sub, ok := r.objectNestedElem(el); ok {
+				r.collectDynPatternNames(sub, out)
+				continue
+			}
+			if _, target, ok := r.objectComputedElem(el); ok {
+				if name, ok := localName(r.prog.Text(target)); ok && !r.dynLeafUnboxes(target) {
+					out[name] = true
+				}
+				continue
+			}
+			info, err := r.classifyObjectElem(el)
+			if err != nil {
+				continue
+			}
+			if name, ok := localName(r.prog.Text(info.bindNode)); ok && !r.dynLeafUnboxes(info.bindNode) {
+				out[name] = true
+			}
+		}
+		return
+	}
+	if !strings.HasPrefix(txt, "[") {
+		return
+	}
+	elems := r.prog.Children(pat)
+	fixed, restNode, hasRest, err := r.splitArrayRest(elems)
+	if err != nil {
+		return
+	}
+	if hasRest {
+		if name, ok := localName(r.prog.Text(restNode)); ok {
+			out[name] = true
+		}
+	}
+	for _, el := range fixed {
+		info, err := r.classifyArrayElem(el)
+		if err != nil {
+			continue
+		}
+		if info.nested != nil {
+			r.collectDynPatternNames(info.nested, out)
+			continue
+		}
+		if name, ok := localName(r.prog.Text(info.nameNode)); ok && !r.dynLeafUnboxes(info.nameNode) {
+			out[name] = true
 		}
 	}
 }
@@ -258,6 +360,36 @@ func (r *Renderer) bindDynamicPattern(pat frontend.Node, recv ast.Expr, tok toke
 		return r.bindDynamicArray(pat, recv, tok)
 	}
 	return nil, &NotYetLowerable{Reason: "an untyped destructuring pattern that is neither an object nor an array is a later slice"}
+}
+
+// dynLeafUnboxes reports whether a leaf a dynamic pattern binds comes down to a Go
+// primitive rather than staying a box. It is the rule unboxDynamicRead applies to a read
+// off a boxed receiver, asked at the bind, which is the same kind of site: the element
+// read answers a box, and a leaf the checker types number, string, or boolean with no any
+// facet has exactly one Go value to coerce it to. A leaf typed any, unknown, or a shape
+// has none and keeps the box.
+//
+// Keeping the box for a primitive leaf is what made a bound name refuse its own methods.
+// The name reports no primitive facet so every read of it takes the runtime route, and a
+// boxed string's Get answers undefined for toUpperCase, so `({ tag }) => tag.toUpperCase()`
+// built and then threw at run time. Coercing at the bind puts the name back in the Go slot
+// its checker type names, and every consumer reads it the ordinary way.
+func (r *Renderer) dynLeafUnboxes(n frontend.Node) bool {
+	flags := r.prog.TypeAt(n).Flags
+	if flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return false
+	}
+	return flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0
+}
+
+// unboxDynLeaf coerces an element read down to the Go primitive its leaf's checker type
+// names, or leaves the box alone when there is none. It is the emit side of
+// dynLeafUnboxes, so the two always answer together.
+func (r *Renderer) unboxDynLeaf(read ast.Expr, n frontend.Node) (ast.Expr, error) {
+	if !r.dynLeafUnboxes(n) {
+		return read, nil
+	}
+	return r.coerceDynamicToStaticFlags(read, r.prog.TypeAt(n).Flags)
 }
 
 // throwIfNullish emits `if recv.IsNullish() { value.Throw(value.NewTypeError(...)) }`,
@@ -342,7 +474,7 @@ func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.
 			return nil, &NotYetLowerable{Reason: "an untyped destructuring target is not a Go identifier"}
 		}
 		if info.hasDefault {
-			fill, err := r.dynDefaultFill(name, read, info.defNode, tok)
+			fill, err := r.dynDefaultFill(name, read, info.defNode, info.nameNode, tok)
 			if err != nil {
 				return nil, err
 			}
@@ -350,7 +482,11 @@ func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.
 			out = r.blankDynBinding(out, info.nameNode, name, tok)
 			continue
 		}
-		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
+		bound, err := r.unboxDynLeaf(read, info.nameNode)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{bound}})
 		out = r.blankDynBinding(out, info.nameNode, name, tok)
 	}
 	// A trailing rest gathers the source's tail past the fixed slots into a boxed
@@ -428,7 +564,11 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 				return nil, &NotYetLowerable{Reason: "an untyped destructuring target is not a Go identifier"}
 			}
 			computed = true
-			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{dynGetElem(recv, key)}})
+			bound, err := r.unboxDynLeaf(dynGetElem(recv, key), valNode)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{bound}})
 			out = r.blankDynBinding(out, valNode, name, tok)
 			continue
 		}
@@ -444,7 +584,7 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 		omit = append(omit, dynKey(prop))
 		read := dynGet(recv, prop)
 		if info.hasDefault {
-			fill, err := r.dynDefaultFill(name, read, info.defNode, tok)
+			fill, err := r.dynDefaultFill(name, read, info.defNode, info.bindNode, tok)
 			if err != nil {
 				return nil, err
 			}
@@ -452,7 +592,11 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 			out = r.blankDynBinding(out, info.bindNode, name, tok)
 			continue
 		}
-		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}})
+		bound, err := r.unboxDynLeaf(read, info.bindNode)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{bound}})
 		out = r.blankDynBinding(out, info.bindNode, name, tok)
 	}
 	return out, nil
@@ -463,10 +607,30 @@ func (r *Renderer) bindDynamicObject(pat frontend.Node, recv ast.Expr, tok token
 // `if name.IsUndefined() { name = <boxed default> }`. The default boxes through the same
 // operand path a dynamic value takes, so it evaluates only on the undefined branch the
 // way JavaScript evaluates a default lazily and at most once.
-func (r *Renderer) dynDefaultFill(name string, read ast.Expr, defNode frontend.Node, tok token.Token) ([]ast.Stmt, error) {
+func (r *Renderer) dynDefaultFill(name string, read ast.Expr, defNode, leafNode frontend.Node, tok token.Token) ([]ast.Stmt, error) {
 	boxed, err := r.boxOperand(defNode)
 	if err != nil {
 		return nil, err
+	}
+	// A leaf that comes down to a Go primitive fills on the box and coerces after, since
+	// being undefined is a fact about the box: a coercion run first would have flattened
+	// the missing property to NaN or "undefined" and the fill would never fire.
+	if r.dynLeafUnboxes(leafNode) {
+		tmp := r.freshTemp()
+		coerced, err := r.coerceDynamicToStaticFlags(ident(tmp), r.prog.TypeAt(leafNode).Flags)
+		if err != nil {
+			return nil, err
+		}
+		return []ast.Stmt{
+			define(tmp, read),
+			&ast.IfStmt{
+				Cond: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(tmp), Sel: ident("IsUndefined")}},
+				Body: &ast.BlockStmt{List: []ast.Stmt{
+					&ast.AssignStmt{Lhs: []ast.Expr{ident(tmp)}, Tok: token.ASSIGN, Rhs: []ast.Expr{boxed}},
+				}},
+			},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{coerced}},
+		}, nil
 	}
 	return []ast.Stmt{
 		&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: tok, Rhs: []ast.Expr{read}},
