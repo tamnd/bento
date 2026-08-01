@@ -367,9 +367,13 @@ func jsonStructFields(obj Value, rv reflect.Value) {
 			}
 			val = inner
 		}
-		key := f.Tag.Get("json")
-		if key == "" {
-			key = f.Name
+		key, omitUndef := jsonFieldKey(f)
+		// An optional any or unknown member holds a bare Value, so an omitted one and a
+		// written undefined are the same storage. The tag says which fields are optional
+		// and those contribute no key when they hold undefined, the way an absent member
+		// contributes none.
+		if omitUndef && jsonUndefinedGo(val) {
+			continue
 		}
 		obj.Set(FromGoString(key), jsonToValue(val))
 	}

@@ -1204,6 +1204,29 @@ func (r *Renderer) isThrowable(n frontend.Node) bool {
 	return false
 }
 
+// builtinErrorType reports whether an object type is one of the standard error types,
+// Error and its siblings. To the structural walk one reads like any other plain shape,
+// a name and a message and a stack and an optional cause, so it would intern to a Go
+// struct of those fields. Its run-time representation is not that: it is the
+// *value.Error the throw path raises, a catch binds, and the boxing path hands to a
+// dynamic sink through ToValue. Interning it as a struct would put a nameless bag of
+// fields where the error belongs, which is what String() and console.log would then
+// read, so the type stays out of the struct path and the sites that know how to carry
+// an error keep it.
+//
+// A user class that shadows one of the names keeps its own lowering, the same guard
+// errorConstructorRef takes for the constructor spelling.
+func (r *Renderer) builtinErrorType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, ok := r.classOfType(t); ok {
+		return false
+	}
+	sym, ok := r.prog.TypeSymbol(t)
+	return ok && errorCtorValueNames[sym.Name]
+}
+
 // thrownClassOf reports the registered class a throw's new expression
 // constructs, when its instances can ride the runtime's throw path: the class
 // declares its own string message field, so the Thrown surface the panic

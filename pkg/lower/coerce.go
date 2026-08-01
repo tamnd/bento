@@ -380,6 +380,15 @@ func (r *Renderer) isBigInt(n frontend.Node) bool {
 	return r.primitiveFlags(n)&frontend.TypeBigInt != 0
 }
 
+// isDynamicType reports whether a checker type is any or unknown, the two that lower to
+// a boxed value.Value. It is the type-level half of isDynamic, for the places that hold a
+// type rather than the node it came from: a property's declared type, a signature's
+// parameter. It asks nothing about a node, so none of isDynamic's node-shaped overrides
+// apply here.
+func (r *Renderer) isDynamicType(t frontend.Type) bool {
+	return t.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
 // isDynamic reports whether the checker types n as any or unknown, the types that
 // have no static Go shape and so live as a boxed value.Value. It is the guard the
 // dynamic paths use to route a property read, a +, or an assignment through the
@@ -456,6 +465,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	// and a member or element read off it must dispatch through the dynamic Get, so
 	// the call reads as dynamic off its callee rather than its non-any result type.
 	if r.objectBoxedResultCall(n) {
+		return true
+	}
+	// A type assertion over a boxed operand, the (e as Error) a catch block reads
+	// .message off, is erased at run time: the value that crosses it is the same box.
+	// The checker gives the assertion its asserted type, which is not any, so the shape
+	// is recognized here to keep the read on the dynamic path.
+	if r.castOfDynamicOperand(n) {
 		return true
 	}
 	// A borrowed Array.prototype.<m>.call/apply on a generic receiver runs the
@@ -613,6 +629,83 @@ func (r *Renderer) divergentAccessorRead(n frontend.Node) bool {
 	}
 	sp, ok := r.shapeProp(objType, strings.TrimSpace(r.prog.Text(kids[1])))
 	return ok && sp.DivergentAccessor
+}
+
+// castOfDynamicOperand reports whether n is a type assertion over an operand that is
+// already a boxed value.Value and whose asserted type has no static Go representation to
+// coerce into. `e as Error` in a catch block is the everyday one: the checker types a
+// caught binding unknown, so TypeScript will not let a program read .message off it
+// without the assertion, and (e as Error).message is how essentially every catch block
+// in TypeScript is written.
+//
+// An assertion is erased at run time. It changes what the checker believes and nothing
+// about the value, so the box crosses it unchanged and the read off it dispatches the way
+// a read off any other box does. Recognizing that here is what keeps the enclosing member
+// read, call, or coercion on the dynamic path rather than driving a static field read
+// against the struct the asserted type interns to.
+//
+// A primitive target is excluded, since `x as number` does have a static landing and
+// coerceDynamicToStatic gives it one. So is a cast that widens an option, which castExpr
+// handles before this by unwrapping the Opt.
+func (r *Renderer) castOfDynamicOperand(n frontend.Node) bool {
+	// A cast is almost always written inside parentheses, since (e as Error).message is
+	// the only way to read a member off one, so the node a member read holds as its
+	// receiver is the parenthesized expression rather than the assertion. Seeing through
+	// it here is what lets the read find the assertion at all.
+	for n.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(n)
+		if len(kids) != 1 {
+			return false
+		}
+		n = kids[0]
+	}
+	var innerIdx int
+	switch n.Kind() {
+	case frontend.NodeAsExpression, frontend.NodeNonNull:
+		innerIdx = 0
+	case frontend.NodeTypeAssertion:
+		innerIdx = 1
+	default:
+		return false
+	}
+	kids := r.prog.Children(n)
+	if innerIdx >= len(kids) {
+		return false
+	}
+	target := r.prog.TypeAt(n)
+	// A target that is itself dynamic is not an override at all: isDynamic already
+	// answers true off the type, and saying so here would only recurse.
+	if r.isDynamicType(target) {
+		return false
+	}
+	// A primitive target keeps the coercion it has today. Erasing it would be the more
+	// faithful answer, since an assertion changes nothing at run time and Node reads
+	// ('7' as number) + 1 as the string concat "71" where the coercion reads 8. But the
+	// box then has to land in every static sink a number can flow into, and the sinks do
+	// not all know how to take one yet, so the emitted Go stops compiling. Landing the
+	// box in a static slot is its own slice; this one does not make that worse.
+	if r.primitiveFlagsOfType(target)&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean|frontend.TypeBigInt) != 0 {
+		return false
+	}
+	inner := kids[innerIdx]
+	// An object literal asserted to a fixed shape, `({}) as { id: number }`, builds at
+	// the asserted shape rather than crossing as a box (castExpr's first case). The bare
+	// `{}` is the empty object top type, which isDynamic answers true for, so without
+	// this the two would disagree about the same node: castExpr would build the struct
+	// while every consumer read the assertion as dynamic and asked to coerce the struct
+	// back down. The precedence has to be the same in both places.
+	lit := inner
+	for lit.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(lit)
+		if len(kids) != 1 {
+			break
+		}
+		lit = kids[0]
+	}
+	if lit.Kind() == frontend.NodeObjectLiteralExpression && r.isPlainShape(target) {
+		return false
+	}
+	return r.isDynamic(inner)
 }
 
 // objectBoxedResultCall reports whether n is a call to Object.fromEntries or

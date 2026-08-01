@@ -531,6 +531,14 @@ func (r *Renderer) castExpr(n frontend.Node, innerIdx int) (ast.Expr, error) {
 	if r.isOptionalType(r.prog.TypeAt(inner)) && !r.isOptionalType(r.prog.TypeAt(n)) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("Get")}}, nil
 	}
+	// An assertion over a value that is already a box, `e as Error` in a catch block,
+	// is the erasure it looks like: the box crosses unchanged and the reads off it
+	// dispatch at run time. Coercing here would ask for the Go struct the asserted type
+	// interns to, which no dynamic value can be turned into. isDynamic recognizes the
+	// same shape, so every consumer downstream sees the box for what it is.
+	if r.castOfDynamicOperand(n) {
+		return expr, nil
+	}
 	return r.coerceToTarget(expr, inner, n)
 }
 
