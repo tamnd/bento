@@ -1124,8 +1124,9 @@ func (r *Renderer) inUnionCompare(left, right frontend.Node) (ast.Expr, bool, er
 // runtime existence check can read, reporting whether it produced one. A dynamic value
 // is already a box and lowers as itself. An object or array literal boxes member by
 // member into a live value.Object, so `"a" in {a: 1}` lowers even though the literal's
-// own type is a fixed shape. A static fixed-shape object binding has no box yet, so it
-// returns false and the caller hands the whole `in` back.
+// own type is a fixed shape. An array binding boxes too, for a reason of its own below.
+// Every other static receiver returns false and folds at compile time instead, in
+// inStaticShape, since its membership is a fixed set of names the checker already knows.
 func (r *Renderer) inReceiver(right frontend.Node) (ast.Expr, bool, error) {
 	if r.isDynamic(right) {
 		e, err := r.lowerExpr(right)
@@ -1139,7 +1140,35 @@ func (r *Renderer) inReceiver(right frontend.Node) (ast.Expr, bool, error) {
 	} else if ok {
 		return boxed, true, nil
 	}
+	// An array is the one static receiver whose membership is not a fixed set of names:
+	// its own keys are its live indices, so `2 in a` and `9 in a` differ by the length at
+	// that moment and no compile-time fold can say which. The box carries the same
+	// elements and the same length, and the value model answers an index, a length, and
+	// the Array.prototype and Object.prototype names off it, so every key reads right.
+	// A tuple has index keys too, but boxOperand cannot box one yet, so it stays on the
+	// handback rather than take a fold its fixed length only looks like it earns: an
+	// optional or rest element makes the last indices as undecided as an array's.
+	if _, ok := r.prog.ElementType(r.prog.TypeAt(right)); ok {
+		e, err := r.boxOperand(right)
+		if err != nil {
+			return nil, false, err
+		}
+		return e, true, nil
+	}
 	return nil, false, nil
+}
+
+// indexKeyedShape reports whether t is an array or a tuple, the two shapes whose own keys
+// are positions rather than names, so neither can fold. A tuple asks separately from an
+// array because the checker gives it its own representation, and its length being fixed
+// does not make its keys foldable: an optional or rest element leaves the last of them as
+// undecided as an array's.
+func (r *Renderer) indexKeyedShape(t frontend.Type) bool {
+	if _, ok := r.prog.ElementType(t); ok {
+		return true
+	}
+	_, ok := r.prog.TupleElements(t)
+	return ok
 }
 
 // objectPrototypeMembers is the set of string keys Object.prototype carries, the
@@ -1165,26 +1194,41 @@ var objectPrototypeMembers = map[string]bool{
 	"__lookupSetter__":     true,
 }
 
-// inStaticShapeRequired folds "key" in obj to the constant true when the membership is
-// provably present on a static object shape, the value the boxing InOperator would
-// answer at run time without a box to build. Two cases fold. A required own property
-// named key is always present. A key that names an Object.prototype member is present on
-// every ordinary object's prototype chain, so it holds even when the shape declares no
-// such field, or declares one only optionally: the prototype member stands in when the
-// own field is absent. Every other case returns not-handled so the caller keeps its
-// honest handback, since none of them is a provable present. An optional member the
-// shape declares under a non-prototype name may be absent; a member the shape does not
-// declare may still live on Object.prototype under a name not in the set, so a false
-// fold would be unsound; a non-literal key is not known here; and a receiver that is not
-// side-effect-free would lose its effect once the receiver is dropped. The receiver is
-// never dynamic at this point, since inReceiver has already taken the boxed path for a
-// dynamic value, so reading its declared properties is safe.
-func (r *Renderer) inStaticShapeRequired(left, right frontend.Node) (ast.Expr, bool) {
+// inStaticShape folds "key" in obj to a constant when the membership is decided by the
+// receiver's static shape, the answer the boxing InOperator would give at run time
+// without a box to build. Three cases fold. A key that names an Object.prototype member
+// is present on every ordinary object's chain, so it holds even where the shape declares
+// no such field or declares one only optionally. A required own property named key is
+// always present. And a key the shape does not declare at all is absent, since a sealed
+// shape carries exactly its declared names plus the prototype's, both of which have
+// already been asked. The false half is what makes the fold usable: a program writing
+// `"a" in o` almost always writes the miss beside it, and until this the miss handed the
+// whole unit back and took the hit with it.
+//
+// The remaining cases return not-handled so the caller keeps its honest handback. An
+// optional member is genuinely absent or present at run time and the shape cannot say
+// which. A non-literal key is not known here. A receiver that is not side-effect-free
+// would lose its effect once the receiver is dropped. And a shape that is not sealed
+// carries names the checker did not list, so neither half of the fold would hold. The
+// receiver is never dynamic at this point, since inReceiver has already taken the boxed
+// path for a dynamic value and for an array, so reading its declared properties is safe.
+func (r *Renderer) inStaticShape(left, right frontend.Node) (ast.Expr, bool) {
 	prop, ok := r.stringLiteralValue(left)
 	if !ok {
 		return nil, false
 	}
 	if !r.repeatableOperand(right) {
+		return nil, false
+	}
+	t := r.prog.TypeAt(right)
+	// An array or tuple receiver is the boxed path in inReceiver, not this one. Saying so
+	// here rather than leaning on sealedShape's index-signature test keeps the two callers
+	// agreeing: elidedInReceiver asks this to decide a receiver was dropped from the emit,
+	// and dropping one the box still reads would blank a binding the Go references.
+	if r.indexKeyedShape(t) {
+		return nil, false
+	}
+	if !r.sealedShape(t) {
 		return nil, false
 	}
 	// An Object.prototype member is present on the chain of any ordinary object shape,
@@ -1193,7 +1237,7 @@ func (r *Renderer) inStaticShapeRequired(left, right frontend.Node) (ast.Expr, b
 	if objectPrototypeMembers[prop] {
 		return ident("true"), true
 	}
-	for _, p := range r.prog.Properties(r.prog.TypeAt(right)) {
+	for _, p := range r.prog.Properties(t) {
 		if p.Name != prop {
 			continue
 		}
@@ -1202,15 +1246,46 @@ func (r *Renderer) inStaticShapeRequired(left, right frontend.Node) (ast.Expr, b
 		}
 		return ident("true"), true
 	}
-	return nil, false
+	return ident("false"), true
 }
 
-// elidedInReceiver reports the identifier receiver a required-member in fold drops from
-// the emit. "key" in obj folds to the constant true when obj carries a required own
-// property named key and never lowers obj, so a binding whose only read was that
-// receiver would be declared and not used in Go. Recording the read lets bindingUnused
-// blank it. The match is the one inStaticShapeRequired makes, restricted to a bare
-// identifier receiver since only a binding can be orphaned: a literal or property-access
+// sealedShape reports whether the checker's property list for t names every key an
+// object of that type carries at run time, so a name missing from the list is provably
+// absent rather than merely undeclared. Only then can an `in` test fold to false.
+//
+// Five shapes are not sealed. A union lists only the properties every arm shares, so a
+// name one arm declares would read as absent; an intersection and a type parameter are
+// out for the mirror reason, that the list is not the whole story. An index signature
+// admits any name at all, which is the point of writing one. And a callable type carries
+// the Function.prototype members through its apparent type rather than in its own
+// property list, so call and bind would fold false. Anything the checker gave no object
+// flag to is not a receiver this fold understands either.
+//
+// An array is sealed by this test only because its numeric index signature is caught
+// above; it never reaches here anyway, since inReceiver boxes an array and lets the
+// runtime answer from the box's live length.
+func (r *Renderer) sealedShape(t frontend.Type) bool {
+	const unsealed = frontend.TypeAny | frontend.TypeUnknown | frontend.TypeUnion |
+		frontend.TypeIntersection | frontend.TypeTypeParameter
+	if t.Flags&unsealed != 0 || t.Flags&frontend.TypeObject == 0 {
+		return false
+	}
+	if _, ok := r.prog.StringIndexType(t); ok {
+		return false
+	}
+	if _, ok := r.prog.NumberIndexType(t); ok {
+		return false
+	}
+	call, construct := r.prog.Signatures(t)
+	return len(call) == 0 && len(construct) == 0
+}
+
+// elidedInReceiver reports the identifier receiver a static in fold drops from the
+// emit. "key" in obj folds to a constant when obj's shape decides the membership and
+// never lowers obj, so a binding whose only read was that receiver would be declared and
+// not used in Go. Recording the read lets bindingUnused blank it. The match is the one
+// inStaticShape makes, restricted to a bare identifier receiver since only a binding can
+// be orphaned: a literal or property-access
 // receiver names no local to blank. An over-count is harmless, since a receiver that
 // does not fold hands the whole unit back and emits no Go.
 func elidedInReceiver(r *Renderer, n frontend.Node) (frontend.Node, bool) {
@@ -1225,7 +1300,7 @@ func elidedInReceiver(r *Renderer, n frontend.Node) (frontend.Node, bool) {
 	if right.Kind() != frontend.NodeIdentifier {
 		return nil, false
 	}
-	if _, ok := r.inStaticShapeRequired(left, right); !ok {
+	if _, ok := r.inStaticShape(left, right); !ok {
 		return nil, false
 	}
 	return right, true

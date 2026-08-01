@@ -1351,8 +1351,9 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 		// A general `key in obj` asks the runtime object whether the property exists,
 		// own or inherited (value.InOperator, which climbs the prototype chain and sees
 		// a non-enumerable property). The receiver must be an object value: a dynamic
-		// value, or an object or array literal boxed into one. A static fixed-shape
-		// object has no box yet and hands back. The key is boxed and coerced through
+		// value, or an object or array literal boxed into one, or an array binding whose
+		// keys are its live indices. A static fixed-shape object has no box and folds at
+		// compile time instead, below. The key is boxed and coerced through
 		// ToPropertyKey inside InOperator, so a string, number, boolean, symbol, or
 		// dynamic key all reach the same existence check.
 		obj, ok, err := r.inReceiver(right)
@@ -1376,11 +1377,12 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "InOperator"), Args: []ast.Expr{key, obj}}, nil
 		}
-		// A static fixed-shape receiver has no box, but a required own property is
-		// provably present, so "key" in obj folds to true where key names one. The
-		// absent and optional cases stay on the handback below rather than fold to a
-		// false the prototype chain could contradict.
-		if expr, ok := r.inStaticShapeRequired(left, right); ok {
+		// A static fixed-shape receiver has no box to ask, but a sealed shape names every
+		// key an object of that type carries, so the checker decides the membership on its
+		// own: a required own property or an Object.prototype member folds true, and a name
+		// the shape never declares folds false. Only an optional member is genuinely
+		// undecided at compile time, and that one keeps the handback.
+		if expr, ok := r.inStaticShape(left, right); ok {
 			return expr, nil
 		}
 		return nil, &NotYetLowerable{Reason: "the in operator outside a discriminated-union narrowing is a later slice"}
