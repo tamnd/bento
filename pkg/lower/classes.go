@@ -2525,6 +2525,11 @@ func (r *Renderer) classStruct(info *classInfo) (ast.Decl, error) {
 			// type is fixed value.BStr, the runtime string the message and name carry.
 			r.requireImport(valuePkg)
 			goType = sel("value", "BStr")
+		} else if r.boxedFields[f.ident] {
+			// A field some store hands a box takes the value slot, decided from outside
+			// this struct before anything lowered (boxedsignature.go).
+			r.requireImport(valuePkg)
+			goType = sel("value", "Value")
 		} else {
 			var err error
 			goType, err = r.typeExpr(r.prog.TypeAt(f.ident))
@@ -2728,7 +2733,7 @@ func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 	haveSig := false
 	if info.ctor != nil {
 		if s, ok := r.prog.SignatureAt(info.ctor); ok {
-			sig, haveSig = s, true
+			sig, haveSig = r.boxedSig(info.ctor, s), true
 		}
 	}
 	params := &ast.FieldList{}
@@ -2744,6 +2749,12 @@ func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 			}
 		}
 		pt := r.prog.TypeAt(nameNode)
+		// A parameter the boxed-signature pass moved into the value slot takes its type
+		// from the overlay instead, since the checker still types the node by the shape
+		// the declaration spells (boxedsignature.go).
+		if marks := r.boxedParams[info.ctor]; i < len(marks) && marks[i] {
+			pt = sig.Params[i].Type
+		}
 		if haveSig && i >= sig.MinArgs && pt.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 && !r.optParams[pname] {
 			return nil, &NotYetLowerable{Flags: pt.Flags, Reason: "optional parameter needs call-site defaulting, a later slice"}
 		}
@@ -2761,6 +2772,9 @@ func (r *Renderer) ctorParamFields(info *classInfo) (*ast.FieldList, error) {
 // its own lowering (a bare return must still yield the receiver), so it hands
 // back for now.
 func (r *Renderer) ctorBody(info *classInfo) (*ast.BlockStmt, error) {
+	if restore, ok := r.pushCtorDynLocals(info); ok {
+		defer restore()
+	}
 	if lit, ok, err := r.ctorCompositeFold(info); err != nil {
 		return nil, err
 	} else if ok {
@@ -2890,6 +2904,28 @@ func (r *Renderer) ctorBodyStmts(info *classInfo) ([]ast.Stmt, error) {
 }
 
 // ctorBlock returns the declared constructor's body block.
+// pushCtorDynLocals puts the constructor's boxed parameters into the dynamic-locals set
+// for the length of the body, so a read of one goes through the value model the way a
+// boxed parameter does in a method (boxedsignature.go). It hands back the restore to
+// defer, and false when this constructor has no boxed parameter to add.
+func (r *Renderer) pushCtorDynLocals(info *classInfo) (func(), bool) {
+	if info.ctor == nil || len(r.boxedParams[info.ctor]) == 0 {
+		return nil, false
+	}
+	sig, ok := r.prog.SignatureAt(info.ctor)
+	if !ok {
+		return nil, false
+	}
+	sig = r.boxedSig(info.ctor, sig)
+	var stmts []frontend.Node
+	if block := r.ctorBlock(info); block != nil {
+		stmts = r.prog.Children(block)
+	}
+	prev := r.dynLocals
+	r.dynLocals = mergeNameSets(prev, r.dynLocalsOf(sig.Params, stmts), r.scopeDeclaredNames(sig.Params, stmts))
+	return func() { r.dynLocals = prev }, true
+}
+
 func (r *Renderer) ctorBlock(info *classInfo) frontend.Node {
 	var block frontend.Node
 	for _, k := range r.prog.Children(info.ctor) {

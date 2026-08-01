@@ -1149,6 +1149,11 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			if r.readOfBoxedGetter(n) {
 				return true
 			}
+			// A field the pass gave the value slot hands back a box on every read,
+			// whatever shape its declaration spells.
+			if r.readOfBoxedField(n) {
+				return true
+			}
 			// An optional link answers value.OptionalMember, which is a box whatever the
 			// checker calls the result: the read is not coerced down the way a plain read off
 			// a box is, since the undefined a short circuit produces has to stay tellable

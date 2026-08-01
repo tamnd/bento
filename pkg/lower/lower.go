@@ -317,6 +317,11 @@ type Renderer struct {
 	// left alone, so a concise arrow among them can hand back rather than spell its
 	// declared shape as the result of a body that answers a box.
 	unclaimedFuncs map[frontend.Node]bool
+	// boxedFields is the set of class field declaration name nodes whose Go field holds
+	// a value.Value because some store hands it a box. It is decided in the same
+	// pre-pass fixpoint the signatures are, since a boxed field feeds the calls that
+	// read it and a boxed call feeds the stores that fill it.
+	boxedFields map[frontend.Node]bool
 	// boxBindVisiting is the set of binding symbols identifierBindsABox is currently
 	// asking about, so a self-referential declaration does not spin. A nil map (the
 	// default) holds nothing.

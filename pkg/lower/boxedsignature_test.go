@@ -270,3 +270,82 @@ func TestANameBoundToABoxIsSeenAtACallSite(t *testing.T) {
 		t.Fatalf("a name bound to a box was not seen at the call site:\n%s", out)
 	}
 }
+
+// TestAFieldAStoreBoxesTakesTheValueSlot pins the field half. The struct field is the one
+// place the Go type is written, so a store that hands it a box settles it for every other
+// store, and the reads that follow go through the value model rather than a Go field the
+// struct no longer has.
+func TestAFieldAStoreBoxesTakesTheValueSlot(t *testing.T) {
+	const src = boxedSigPrelude +
+		"class S { first: Row = Object.values(m)[0]; tag(): string { return this.first.tag; } }\n" +
+		"console.log(new S().tag());"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "First value.Value `json:\"first\"`") {
+		t.Fatalf("a field a store boxes did not take the value slot:\n%s", out)
+	}
+	if !strings.Contains(out, `s.First.Get(value.FromGoString("tag"))`) {
+		t.Fatalf("a read of the boxed field did not dispatch at run time:\n%s", out)
+	}
+}
+
+// TestAStoreFromASiblingMethodBoxesTheField pins the receiver the pass has to supply
+// itself. `this` has no class in hand while the pass is deciding, so without walking the
+// program with the declaring class set, neither the receiver of the store nor the sibling
+// call it stores was recognizable, and the field kept a Go type the store could not fill.
+func TestAStoreFromASiblingMethodBoxesTheField(t *testing.T) {
+	const src = boxedSigPrelude +
+		"class S { last: Row = { id: 0, tag: 'z' }; head(): Row { return m['a']; } keep(): void { this.last = this.head(); } }\n" +
+		"const s = new S();\ns.keep();\nconsole.log(s.last.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "Last value.Value `json:\"last\"`") {
+		t.Fatalf("a store from a sibling method did not box the field:\n%s", out)
+	}
+}
+
+// TestAMethodHandingBackABoxedFieldAnswersABox is the same receiver read at the result.
+// The return half decides from the body, so `return this.first` is only a box once the
+// field it names is known to hold one.
+func TestAMethodHandingBackABoxedFieldAnswersABox(t *testing.T) {
+	const src = boxedSigPrelude +
+		"class S { first: Row = m['a']; get(): Row { return this.first; } }\n" +
+		"console.log(new S().get().tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "func (s *S) Get() value.Value") {
+		t.Fatalf("a method handing back a boxed field did not answer a box:\n%s", out)
+	}
+}
+
+// TestAConstructorParameterACallSiteBoxesTakesABoxedSlot pins the half that faces the
+// call site. A constructor's whole job is moving its arguments into fields, so the field
+// rewrite is worth nothing until new S(box) has somewhere to put what it is handed, and
+// the literal call site agrees with it by boxing on the way in.
+func TestAConstructorParameterACallSiteBoxesTakesABoxedSlot(t *testing.T) {
+	const src = boxedSigPrelude +
+		"class S { r: Row; constructor(r: Row) { this.r = r; } }\n" +
+		"console.log(new S(Object.values(m)[0]).r.tag, new S({ id: 7, tag: 'q' }).r.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "func NewS(r value.Value) *S") {
+		t.Fatalf("a constructor parameter a call site boxes did not take a boxed slot:\n%s", out)
+	}
+	if !strings.Contains(out, "value.NewObject()") {
+		t.Fatalf("a static literal argument did not box on its way into the constructor:\n%s", out)
+	}
+}
+
+// TestAFieldInAHierarchyIsLeftAlone pins the boundary. A base or a subclass spells the
+// field's Go type in more than one struct, and the embedded base means a read can arrive
+// through either, so the rewrite stops where note 387 stopped and the program hands back
+// rather than compiling half a decision.
+func TestAFieldInAHierarchyIsLeftAlone(t *testing.T) {
+	const src = boxedSigPrelude +
+		"class B { first: Row = m['a']; }\n" +
+		"class C extends B { extra = 2; }\n" +
+		"console.log(new C().first.tag, new C().extra);"
+	prog := compile(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+}

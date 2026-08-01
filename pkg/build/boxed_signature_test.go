@@ -354,3 +354,72 @@ func TestAGetterAnswersABox(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestAFieldHoldsABox covers the slot. A field is where a box comes to rest, and it takes
+// the same rewrite the parameter and the result take, for the same reason: a Go struct
+// field has one type, and of the two candidates the box is the only one the other stores
+// can be brought to, since a static value boxes on its way in where a box has no way to
+// become the struct.
+//
+// A store is a store wherever it is written, so the initializer, a this.f = v inside the
+// class, and a recv.f = v from outside all decide it together. The reads that follow are
+// the ones a box already answers: a member, a call argument, a template, a spread, JSON,
+// console, and identity, which is the property that made this a rewrite rather than a
+// conversion in the first place.
+//
+// The constructor is the half that faces the call site. Its parameter takes the value slot
+// on the same terms, so new S(box) has somewhere to put what it is handed, and new S({...})
+// boxes on its way in to agree with it.
+//
+// A field declared Row | undefined is boxed like any other and stops being a value.Opt
+// slot, so the coercion asks for the type the field now has rather than the one it was
+// written with.
+//
+// Held against what Node prints.
+func TestAFieldHoldsABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"function label(r: Row): string { return r.tag + r.id; }\n"+
+			"class Store {\n"+
+			"  first: Row = Object.values(m)[0];\n"+
+			"  last: Row = { id: 0, tag: 'z' };\n"+
+			"  spare: Row | undefined = m['b'];\n"+
+			"  n = 3;\n"+
+			"  head(): Row { return m['a']; }\n"+
+			"  keep(): void { this.last = this.head(); }\n"+
+			"  pick(k: string): void { this.first = m[k]; }\n"+
+			"  get(): Row { return this.first; }\n"+
+			"  tag(): string { return this.first.tag; }\n"+
+			"}\n"+
+			"class Holder {\n"+
+			"  r: Row;\n"+
+			"  n: number;\n"+
+			"  constructor(r: Row) { const t = r.tag; this.r = r; this.n = t.length; }\n"+
+			"}\n"+
+			"const s = new Store();\n"+
+			"console.log(s.first.tag, s.first.id, s.n, s.spare?.tag);\n"+
+			"console.log(s.last.tag);\n"+
+			"s.keep();\n"+
+			"console.log(s.last.tag, s.get().tag, s.tag());\n"+
+			"s.pick('b');\n"+
+			"console.log(s.first.tag, label(s.first), `${s.first.tag}!`);\n"+
+			"console.log(JSON.stringify(s.first), s.first === s.first);\n"+
+			"console.log(JSON.stringify({ ...s.first, k: 1 }));\n"+
+			"s.last = m['a'];\n"+
+			"console.log(s.last.id, s.last);\n"+
+			"console.log(new Holder(Object.values(m)[0]).r.tag, new Holder(m['b']).n);\n"+
+			"console.log(new Holder({ id: 7, tag: 'q' }).r.tag);\n")
+	want := "x 1 3 y\n" +
+		"z\n" +
+		"x x x\n" +
+		"y y2 y!\n" +
+		"{\"id\":2,\"tag\":\"y\"} true\n" +
+		"{\"id\":2,\"tag\":\"y\",\"k\":1}\n" +
+		"1 { id: 1, tag: 'x' }\n" +
+		"x 1\n" +
+		"q\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
