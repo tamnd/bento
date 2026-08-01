@@ -1084,6 +1084,12 @@ func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
 	if restore, ok := r.forceCallbackDynParams(n); ok {
 		defer restore()
 	}
+	// With those parameters holding boxes, a body that hands one of them back is handing
+	// back a box, so the callback's own result has to be the box too. This runs after the
+	// parameters are forced because that is what makes the body read as boxed.
+	if restore, ok := r.forceCallbackDynResult(n); ok {
+		defer restore()
+	}
 	e, err := r.lowerExpr(n)
 	if err != nil {
 		return nil, err
@@ -1227,6 +1233,54 @@ func (r *Renderer) forceCallbackDynParams(n frontend.Node) (func(), bool) {
 		}
 		r.dynBoundLocals = prevDyn
 	}, true
+}
+
+// forceCallbackDynResult marks an inline callback whose body hands back a box, so its Go
+// result is a value.Value rather than the shape the checker read off the body.
+//
+// This is the result half of forceCallbackDynParams and it follows from it. Once a
+// parameter holds a box, every expression the body builds out of that parameter is a box
+// too, and a callback that hands one back has nothing to put in the static slot its
+// declared type names. `(r: Row) => [r].map(...).join(”)` is the case that names itself:
+// the checker calls the body a string, the join runs on a boxed array so it produces a
+// value.Value, and returning that into a value.BStr result is Go that does not build.
+//
+// The mark is the boxed-return set the whole-program pass already fills, so the closure
+// renders its result from it the way a named function does, through boxedSig for a block
+// body and through arrowFunc's concise path. It is set here and not in that pass because
+// an inline callback's parameters are forced at lowering time, so whether its body is a
+// box is not known until the slot it flows into is being lowered. The restore clears it,
+// since the mark is about this callback in this position.
+//
+// A void body is left alone: arrowFunc drops the result for one before it consults the
+// set, and boxFuncToDynamic already yields undefined for it, so the two ends agree only
+// while the mark stays off.
+func (r *Renderer) forceCallbackDynResult(n frontend.Node) (func(), bool) {
+	if n.Kind() != frontend.NodeArrowFunction && n.Kind() != frontend.NodeFunctionExpression {
+		return nil, false
+	}
+	if r.boxedReturnFns[n] {
+		return nil, false
+	}
+	sig, ok := r.prog.SignatureAt(n)
+	if ok && isVoidReturn(sig.Return) {
+		return nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) < 2 {
+		return nil, false
+	}
+	if body := kids[len(kids)-1]; body.Kind() != frontend.NodeBlock && isVoidReturn(r.prog.TypeAt(body)) {
+		return nil, false
+	}
+	if !r.funcReturnsBoxedChain(n) {
+		return nil, false
+	}
+	if r.boxedReturnFns == nil {
+		r.boxedReturnFns = map[frontend.Node]bool{}
+	}
+	r.boxedReturnFns[n] = true
+	return func() { delete(r.boxedReturnFns, n) }, true
 }
 
 // boxStaticToDynamic wraps a statically typed primitive expression in the value
@@ -1985,6 +2039,12 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 			&ast.ExprStmt{X: inner},
 			&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
 		}
+	} else if r.boxedReturnFns[src] {
+		// A callback whose result the box rewrite moved into the value model already
+		// returns a value.Value, so the wrapper hands it straight on. Boxing it again
+		// would build a second object off the shape the declaration names and lose the
+		// identity the one the body produced still has.
+		body = []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{inner}}}
 	} else {
 		boxed, err := r.boxStaticResultToDynamic(inner, sig.Return)
 		if err != nil {

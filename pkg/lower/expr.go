@@ -587,6 +587,18 @@ func (r *Renderer) conditionalExpr(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A branch that is a box settles the whole ternary. The IIFE has one Go result type,
+	// and of the two candidates only the box is one the other branch can be brought to: a
+	// static value boxes on its way in through the coercion that already runs, and a box
+	// has no way to become the struct the checker names. It is the rule a parameter, a
+	// result and a field already take, read at the one expression that spells two values
+	// into one slot. Without it the IIFE spells the checker's shape and the boxed branch
+	// returns a value.Value into it, which is Go that does not build. This is the shape
+	// `map((r: Row) => r.id > 1 ? r : { id: 0, tag: 'z' })` has, where r holds a box
+	// because the callback was handed one.
+	if r.isBoxedChain(kids[2]) || r.isBoxedChain(kids[4]) {
+		return r.conditionalBoxed(cond, kids[2], kids[4])
+	}
 	whenTrue, err := r.lowerExpr(kids[2])
 	if err != nil {
 		return nil, err
@@ -614,6 +626,37 @@ func (r *Renderer) conditionalExpr(n frontend.Node) (ast.Expr, error) {
 		Type: &ast.FuncType{
 			Params:  &ast.FieldList{},
 			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: cond,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{whenTrue}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{whenFalse}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, nil
+}
+
+// conditionalBoxed lowers a ternary one of whose branches is a box into an IIFE
+// returning a value.Value, with both branches boxed. The branch that already is a box
+// passes through boxOperand untouched, keeping the identity it has, and the other takes
+// the same boxing an argument crossing into a dynamic slot takes, so an object literal
+// builds a live object rather than the Go struct the checker named.
+func (r *Renderer) conditionalBoxed(cond ast.Expr, trueNode, falseNode frontend.Node) (ast.Expr, error) {
+	whenTrue, err := r.boxOperand(trueNode)
+	if err != nil {
+		return nil, err
+	}
+	whenFalse, err := r.boxOperand(falseNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
 		},
 		Body: &ast.BlockStmt{List: []ast.Stmt{
 			&ast.IfStmt{

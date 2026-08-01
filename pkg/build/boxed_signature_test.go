@@ -489,3 +489,65 @@ func TestAFieldHoldsABoxInAHierarchy(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestAnInlineCallbacksParameterTakesABox holds the whole slice against Node. A callback
+// written inline into a call on a box is handed its arguments boxed, so its parameter
+// holds a box and everything the body does with that parameter is a read through the
+// value model: passing it on to a declared function, to a method, to a constructor, into
+// a nested callback, spreading it, comparing it by identity, storing it into a field.
+func TestAnInlineCallbacksParameterTakesABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"\n"+
+			"function label(r: Row): string { return r.tag + r.id; }\n"+
+			"function pick(r: Row): Row { return r; }\n"+
+			"\n"+
+			"class Holder {\n"+
+			"  first: Row = { id: 0, tag: 'z' };\n"+
+			"  seen: Row;\n"+
+			"  constructor(r: Row) { this.seen = r; }\n"+
+			"  name(r: Row): string { return 'h' + r.tag; }\n"+
+			"  all(): string { return Object.values(m).map((r: Row) => this.name(r)).join(','); }\n"+
+			"}\n"+
+			"\n"+
+			"console.log(Object.values(m).map((r: Row) => r.tag).join(','));\n"+
+			"console.log(Object.values(m).map((r: Row) => label(r)).join(','));\n"+
+			"console.log(Object.values(m).map((r: Row) => pick(r).tag).join(','));\n"+
+			"console.log(Object.values(m).map(function (r: Row) { return label(r); }).join(','));\n"+
+			"console.log(Object.values(m).map((r: Row) => { return r; }).map((r: Row) => r.id).join(','));\n"+
+			"console.log(Object.values(m).map(({ tag, id }: Row) => tag + id).join(','));\n"+
+			"console.log(Object.values(m).map((r: Row, i: number) => `${i}${r.tag}`).join(','));\n"+
+			"console.log(Object.values(m).map((r: Row) => JSON.stringify({ ...r, k: 1 })).join('|'));\n"+
+			"console.log(Object.values(m).map((r: Row) => r.id > 1 ? r : { id: 0, tag: 'z' }).map((r: Row) => r.tag).join(','));\n"+
+			"console.log(Object.values(m).map((r: Row) => [r].map((q: Row) => label(q)).join('')).join(','));\n"+
+			"\n"+
+			"const first = Object.values(m)[0];\n"+
+			"const same = Object.values(m).filter((r: Row) => r === first);\n"+
+			"console.log(same.length, same[0] === first);\n"+
+			"\n"+
+			"const h = new Holder(Object.values(m)[1]);\n"+
+			"Object.values(m).forEach((r: Row) => { h.first = r; });\n"+
+			"console.log(h.first.tag, h.seen.tag, h.all());\n"+
+			"console.log(Object.values(m).map((r: Row) => new Holder(r).seen.tag).join(','));\n"+
+			"console.log(Object.values(m).reduce((acc: number, r: Row) => acc + r.id, 0));\n"+
+			"console.log(Object.values(m).sort((a: Row, b: Row) => b.id - a.id).map((r: Row) => r.tag).join(','));\n")
+	want := "x,y\n" +
+		"x1,y2\n" +
+		"x,y\n" +
+		"x1,y2\n" +
+		"1,2\n" +
+		"x1,y2\n" +
+		"0x,1y\n" +
+		"{\"id\":1,\"tag\":\"x\",\"k\":1}|{\"id\":2,\"tag\":\"y\",\"k\":1}\n" +
+		"z,y\n" +
+		"x1,y2\n" +
+		"1 true\n" +
+		"y y hx,hy\n" +
+		"x,y\n" +
+		"3\n" +
+		"y,x\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
