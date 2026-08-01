@@ -333,6 +333,14 @@ type Renderer struct {
 	// goes, but that happens long after the pre-pass has decided, so the pass keeps its
 	// own reading of the loops for the stores those bindings feed.
 	boxedLoopVars map[frontend.Symbol]bool
+	// boxedSetElems, boxedMapKeys, and boxedMapVals are the collection slots the pre-pass
+	// found a box crossing into, keyed by the collection type's identity. A Go collection
+	// has one element type and every spelling of it reads that type, so the mark sits on
+	// the type rather than on any one expression, and setElem and mapKeyVal answer any for
+	// a marked slot so the whole lowering carries the box end to end.
+	boxedSetElems map[int]bool
+	boxedMapKeys  map[int]bool
+	boxedMapVals  map[int]bool
 	// boxBindVisiting is the set of binding symbols identifierBindsABox is currently
 	// asking about, so a self-referential declaration does not spin. A nil map (the
 	// default) holds nothing.
@@ -1980,6 +1988,35 @@ func (r *Renderer) isMap(n frontend.Node) bool {
 // direct than reconstructing them from get's V | undefined result. It reports false
 // for a type with no such set signature, which a non-map object is.
 func (r *Renderer) mapKeyVal(t frontend.Type) (key, val frontend.Type, ok bool) {
+	key, val, ok = r.mapKeyValRaw(t)
+	if !ok {
+		return key, val, ok
+	}
+	// The two slots are decided apart, so a Map<Row, number> whose keys take a box keeps
+	// its values float64 and only the key reads as any.
+	if r.boxedMapKeys[t.Identity()] {
+		key = frontend.Type{Flags: frontend.TypeAny}
+	}
+	if r.boxedMapVals[t.Identity()] {
+		val = frontend.Type{Flags: frontend.TypeAny}
+	}
+	return key, val, true
+}
+
+// mapKeyRaw and mapValRaw answer one slot of a Map type as the checker wrote it, the
+// reading the pass takes while it is deciding, for the reason setElemRaw exists.
+func (r *Renderer) mapKeyRaw(t frontend.Type) (frontend.Type, bool) {
+	key, _, ok := r.mapKeyValRaw(t)
+	return key, ok
+}
+
+func (r *Renderer) mapValRaw(t frontend.Type) (frontend.Type, bool) {
+	_, val, ok := r.mapKeyValRaw(t)
+	return val, ok
+}
+
+// mapKeyValRaw is mapKeyVal without the boxed-collection rewrite.
+func (r *Renderer) mapKeyValRaw(t frontend.Type) (key, val frontend.Type, ok bool) {
 	var setType frontend.Type
 	found := false
 	for _, p := range r.prog.Properties(t) {
@@ -2060,6 +2097,23 @@ func (r *Renderer) isSet(n frontend.Node) bool {
 // it from the values iterator. It reports false for a type with no such add
 // signature, which a non-set object is.
 func (r *Renderer) setElem(t frontend.Type) (elem frontend.Type, ok bool) {
+	elem, ok = r.setElemRaw(t)
+	if ok && r.boxedSetElems[t.Identity()] {
+		// A set the boxed pass found a box crossing into holds its members boxed, which is
+		// spelled by reading its member type as any. That is the one seam both spellings of
+		// the set go through, the constructor that mints it and the Go type of every
+		// variable that holds it, so rewriting it here settles them together and the
+		// argument coercion that already runs boxes a static member on its way in.
+		return frontend.Type{Flags: frontend.TypeAny}, true
+	}
+	return elem, ok
+}
+
+// setElemRaw is setElem without the boxed-collection rewrite, the member type exactly as
+// the checker wrote it. The pass itself reads this one, since deciding whether a slot may
+// take a box has to look at what was written rather than at what an earlier round already
+// answered.
+func (r *Renderer) setElemRaw(t frontend.Type) (elem frontend.Type, ok bool) {
 	var addType frontend.Type
 	found := false
 	for _, p := range r.prog.Properties(t) {

@@ -199,6 +199,11 @@ func (r *Renderer) rangeCollSingle(recvNode, bindNode frontend.Node, name string
 	if err != nil {
 		return nil, true, err
 	}
+	// A snapshot the pass boxed yields boxes, so the binding holds one and every read of
+	// it in the body dispatches.
+	if r.boxedCollSnapshot(recvNode, method) {
+		defer r.dynBoundScope(name)()
+	}
 	body, err := r.loopBody(bodyNode)
 	if err != nil {
 		return nil, true, err
@@ -243,6 +248,9 @@ func (r *Renderer) rangeCollPairSingle(recvNode, bindNode frontend.Node, name st
 			drive = "Keys"
 		}
 		return &ast.RangeStmt{X: collCall(recv, drive), Body: body}, true, nil
+	}
+	if r.boxedCollPair(recvNode) {
+		return nil, true, &NotYetLowerable{Reason: "a for...of over the pair of a " + kind + " whose slot holds a box is a later slice"}
 	}
 	elems, ok := r.prog.TupleElements(r.prog.TypeAt(bindNode))
 	if !ok || len(elems) != 2 {
@@ -499,6 +507,18 @@ func (r *Renderer) forOfMapEntriesDestructure(recvNode frontend.Node, names [2]s
 	if err != nil {
 		return nil, err
 	}
+	// Each half of the pair is boxed or not on its own, so the two names are marked
+	// separately off the slot each one binds.
+	var boxed []string
+	if used[0] && r.boxedMapKey(recvNode) {
+		boxed = append(boxed, names[0])
+	}
+	if used[1] && r.boxedMapVal(recvNode) {
+		boxed = append(boxed, names[1])
+	}
+	if len(boxed) > 0 {
+		defer r.dynBoundScope(boxed...)()
+	}
 	body, err := r.loopBody(bodyNode)
 	if err != nil {
 		return nil, err
@@ -541,6 +561,19 @@ func (r *Renderer) forOfSetEntriesDestructure(recvNode frontend.Node, names [2]s
 	if err != nil {
 		return nil, err
 	}
+	// Both names bind the same member, so a boxed member slot marks whichever of them
+	// the body reads.
+	if r.boxedSetElem(recvNode) {
+		var boxed []string
+		for i, name := range names {
+			if used[i] {
+				boxed = append(boxed, name)
+			}
+		}
+		if len(boxed) > 0 {
+			defer r.dynBoundScope(boxed...)()
+		}
+	}
 	body, err := r.loopBody(bodyNode)
 	if err != nil {
 		return nil, err
@@ -558,4 +591,54 @@ func (r *Renderer) forOfSetEntriesDestructure(recvNode frontend.Node, names [2]s
 	default:
 		return &ast.RangeStmt{X: call, Body: body}, nil
 	}
+}
+
+// dynBoundScope marks each named binding as holding a box and returns the restore the
+// caller defers, which a loop lowering calls before it lowers a body over a snapshot the
+// pass boxed. The marks are dropped again after the body, the way forOfDynamic drops its
+// own: the binding's scope is that loop, and an outer name of the same spelling is not it.
+func (r *Renderer) dynBoundScope(names ...string) func() {
+	type saved struct {
+		val bool
+		had bool
+	}
+	prev := make([]saved, len(names))
+	for i, name := range names {
+		val, had := r.dynBoundLocals[name]
+		prev[i] = saved{val, had}
+		r.markDynBound(name)
+	}
+	return func() {
+		for i, name := range names {
+			if prev[i].had {
+				r.dynBoundLocals[name] = prev[i].val
+			} else {
+				delete(r.dynBoundLocals, name)
+			}
+		}
+	}
+}
+
+// boxedCollPair reports whether either half of the [key, value] pair a collection yields
+// is a box. A pair materializes into an interned tuple whose two fields carry the
+// checker's own element types, and that tuple type is read by every other spelling of the
+// same pair, so a box crossing into one of its fields is the tuple's slot to give way
+// rather than any one loop's. Until it does, the pair spellings hand back.
+func (r *Renderer) boxedCollPair(recvNode frontend.Node) bool {
+	return r.boxedSetElem(recvNode) || r.boxedMapKey(recvNode) || r.boxedMapVal(recvNode)
+}
+
+// boxedCollSnapshot reports whether the snapshot a collection loop ranges yields boxes.
+// The method names which slot is being walked: Members is a Set's own, Keys and Values a
+// Map's two, and each is boxed or not on its own.
+func (r *Renderer) boxedCollSnapshot(recvNode frontend.Node, method string) bool {
+	switch method {
+	case "Members":
+		return r.boxedSetElem(recvNode)
+	case "Keys":
+		return r.boxedMapKey(recvNode)
+	case "Values":
+		return r.boxedMapVal(recvNode)
+	}
+	return false
 }

@@ -700,11 +700,15 @@ func (r *Renderer) mapFromPairs(n frontend.Node, ctor ast.Expr, arg frontend.Nod
 		if len(kv) != 2 {
 			return nil, &NotYetLowerable{Reason: "new Map from an entry that is not a two-element pair is a later slice"}
 		}
-		kExpr, err := r.lowerExpr(kv[0])
+		// Each half crosses into the slot it fills, the way a written set()'s arguments do,
+		// so a static half boxes where the pass gave that slot the value model and a half
+		// that is already a box crosses as itself.
+		key, val, hasKV := r.mapKeyVal(r.prog.TypeAt(n))
+		kExpr, err := r.collSlotArg(kv[0], key, hasKV)
 		if err != nil {
 			return nil, err
 		}
-		vExpr, err := r.lowerExpr(kv[1])
+		vExpr, err := r.collSlotArg(kv[1], val, hasKV)
 		if err != nil {
 			return nil, err
 		}
@@ -987,6 +991,18 @@ func (r *Renderer) setFromIterable(n frontend.Node, ctor ast.Expr, arg frontend.
 // that is neither hands back, since a built-in Set, Map, or string iterable needs
 // its own walk a later slice brings.
 func (r *Renderer) iterableElems(arg frontend.Node) (ast.Expr, error) {
+	// A source that is a box carries no Go slice to range, whatever shape the checker
+	// projects onto it: `new Set<Row>(Object.values(m))` is typed Row[] and lowers to a
+	// value.Value, so reading .Elems off it is Go that does not build. It drains through
+	// the runtime instead, which answers a []value.Value, the element the collection this
+	// fills holds once the boxed pass gave it the value slot.
+	if r.isBoxedChain(arg) {
+		src, err := r.lowerExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		return r.iterateToSliceCall(src, arg), nil
+	}
 	if isArrayElem(r, arg) {
 		src, err := r.lowerExpr(arg)
 		if err != nil {

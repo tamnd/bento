@@ -1154,13 +1154,25 @@ func (r *Renderer) takesADynamicArg(t frontend.Type) bool {
 }
 
 func (r *Renderer) forceCallbackDynParams(n frontend.Node) (func(), bool) {
+	return r.forceCallbackDynParamsAt(n, func(int) bool { return true })
+}
+
+// forceCallbackDynParamsAt is forceCallbackDynParams over a chosen set of parameter
+// positions. A callback going into a dynamic call is handed every argument boxed, so the
+// whole parameter list is forced there; a callback a collection drives is handed one
+// boxed slot and not the others, so map.forEach((v, k) => ...) over a Map<string, Row>
+// whose values hold boxes forces v and leaves k the value.BStr it really is.
+func (r *Renderer) forceCallbackDynParamsAt(n frontend.Node, want func(int) bool) (func(), bool) {
 	if n.Kind() != frontend.NodeArrowFunction && n.Kind() != frontend.NodeFunctionExpression {
 		return nil, false
 	}
 	var forced []frontend.Node
 	var patterns []frontend.Node
 	var names []string
-	for _, pn := range r.funcParamNodes(n) {
+	for i, pn := range r.funcParamNodes(n) {
+		if !want(i) {
+			continue
+		}
 		pkids := r.prog.Children(pn)
 		if len(pkids) == 0 {
 			continue
@@ -2478,23 +2490,54 @@ func (r *Renderer) boxLiteralToDynamic(src frontend.Node) (ast.Expr, bool, error
 // boxArrayLiteral lowers [e0, e1, ...] into value.NewArrayValue over a []value.Value
 // of the boxed elements, the dense array a boxed value carries. Each element boxes
 // through boxOperand, so a primitive rides its box constructor and a nested literal
-// recurses here. A spread element hands back, keeping this to the plain element run.
+// recurses here. A spread of a Set whose members the pass boxed splices its Members
+// snapshot, which is already the []value.Value this literal is built of; every other
+// spread hands back.
 func (r *Renderer) boxArrayLiteral(n frontend.Node) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	seed := &ast.ArrayType{Elt: sel("value", "Value")}
 	kids := r.prog.Children(n)
-	elems := make([]ast.Expr, 0, len(kids))
+	var acc ast.Expr
+	pending := make([]ast.Expr, 0, len(kids))
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if acc == nil {
+			acc = &ast.CompositeLit{Type: seed, Elts: pending}
+		} else {
+			acc = &ast.CallExpr{Fun: ident("append"), Args: append([]ast.Expr{acc}, pending...)}
+		}
+		pending = nil
+	}
 	for _, k := range kids {
 		if k.Kind() == frontend.NodeSpreadElement {
-			return nil, &NotYetLowerable{Reason: "boxing an array literal with a spread element is a later slice"}
+			if !r.spreadOfBoxedColl(k) {
+				return nil, &NotYetLowerable{Reason: "boxing an array literal with a spread element is a later slice"}
+			}
+			src, err := r.lowerExpr(r.prog.Children(k)[0])
+			if err != nil {
+				return nil, err
+			}
+			flush()
+			if acc == nil {
+				acc = &ast.CompositeLit{Type: seed}
+			}
+			members := &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Members")}}
+			acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
+			continue
 		}
 		boxed, err := r.boxOperand(k)
 		if err != nil {
 			return nil, err
 		}
-		elems = append(elems, boxed)
+		pending = append(pending, boxed)
 	}
-	r.requireImport(valuePkg)
-	lit := &ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "Value")}, Elts: elems}
-	return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{lit}}, nil
+	flush()
+	if acc == nil {
+		acc = &ast.CompositeLit{Type: seed}
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{acc}}, nil
 }
 
 // emptyArrayContextual re-emits a bare [] flowing into an array-typed slot at the

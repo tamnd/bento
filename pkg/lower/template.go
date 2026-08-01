@@ -227,6 +227,12 @@ func (r *Renderer) templateExpression(n frontend.Node) (ast.Expr, error) {
 	allPrimitive := true
 	for i := range spans {
 		switch {
+		// A substitution the runtime hands back as a box carries no Go primitive for the
+		// builder to append, whatever primitive the checker names it: `${[...s].length}`
+		// off a boxed collection is typed number and is a value.Value. The join takes it
+		// instead, since its stringify is what brings a box down to its text.
+		case r.producesBoxedValue(spans[i].sub):
+			allPrimitive = false
 		case r.isString(spans[i].sub):
 		case r.isNumber(spans[i].sub), r.isBool(spans[i].sub):
 			needsCoercion = true

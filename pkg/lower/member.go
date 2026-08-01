@@ -1154,6 +1154,16 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 				return true
 			}
 			kids := r.prog.Children(n)
+			// A non-null assertion erases entirely at run time, so a box under one is still
+			// the same box. It reads through the operand for the same reason a parenthesis
+			// does, which is what lets `mp.get(k)!.tag` off a map the pass boxed dispatch
+			// rather than read a Go struct field off a value.Value. The two written
+			// assertions keep castOfDynamicOperand's own precedence, which decides more than
+			// whether the operand is a box.
+			if n.Kind() == frontend.NodeNonNull && len(kids) == 1 {
+				n = kids[0]
+				continue
+			}
 			if n.Kind() != frontend.NodeParenthesizedExpression || len(kids) != 1 {
 				return false
 			}
@@ -1175,6 +1185,18 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			// A field the pass gave the value slot hands back a box on every read,
 			// whatever shape its declaration spells.
 			if r.readOfBoxedField(n) {
+				return true
+			}
+			// A collection the pass gave a boxed slot hands back a box on every read, the
+			// same way, whatever type argument the declaration spells.
+			if r.readOfBoxedCollection(n) {
+				return true
+			}
+			// An iterator result stores its value boxed, so a read of that value with no one
+			// Go type to come down to is a box. The member lowering already decides this for
+			// itself; reading the same answer here is what lets a `!` on it erase rather than
+			// unwrap an Opt the expression is not.
+			if r.iterResultBoxedValueRead(n) {
 				return true
 			}
 			// An optional link answers value.OptionalMember, which is a box whatever the
@@ -1308,6 +1330,17 @@ func (r *Renderer) literalHoldsBox(n frontend.Node) bool {
 	switch n.Kind() {
 	case frontend.NodeArrayLiteralExpression:
 		for _, k := range r.prog.Children(n) {
+			// A spread of a collection the pass boxed splices boxes, so the literal holds
+			// them the same way a named element would. Only that spread counts here: a
+			// spread of a box the checker already types any[] lowers through the ordinary
+			// array path at value.Value elements, and reading it as a boxed literal would
+			// change what that spelling has always built.
+			if k.Kind() == frontend.NodeSpreadElement {
+				if r.spreadOfBoxedColl(k) {
+					return true
+				}
+				continue
+			}
 			if r.isBoxedChain(k) || r.literalHoldsBox(k) {
 				return true
 			}

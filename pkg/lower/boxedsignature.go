@@ -87,11 +87,204 @@ func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 		if r.markBoxedCallbackParams(files) {
 			changed = true
 		}
+		if r.markBoxedCollections(files) {
+			changed = true
+		}
 		if !changed {
 			break
 		}
 	}
 	r.forceBoxedParams(cands)
+}
+
+// boxedSetElem reports whether a Set receiver holds its members boxed, and boxedMapKey
+// and boxedMapVal the same for a Map's two slots. They are the read side of the marks
+// markBoxedCollections lays down: what goes into a boxed collection boxes on its way in
+// through the argument coercion that already runs, and what comes out of one is a box,
+// which the callback a forEach drives, the binding a for...of makes, and the result of a
+// get each have to be told.
+func (r *Renderer) boxedSetElem(recvNode frontend.Node) bool {
+	return len(r.boxedSetElems) > 0 && (r.isSet(recvNode) || r.isWeakSet(recvNode)) &&
+		r.boxedSetElems[r.prog.TypeAt(recvNode).Identity()]
+}
+
+func (r *Renderer) boxedMapKey(recvNode frontend.Node) bool {
+	return len(r.boxedMapKeys) > 0 && (r.isMap(recvNode) || r.isWeakMap(recvNode)) &&
+		r.boxedMapKeys[r.prog.TypeAt(recvNode).Identity()]
+}
+
+func (r *Renderer) boxedMapVal(recvNode frontend.Node) bool {
+	return len(r.boxedMapVals) > 0 && (r.isMap(recvNode) || r.isWeakMap(recvNode)) &&
+		r.boxedMapVals[r.prog.TypeAt(recvNode).Identity()]
+}
+
+// readOfBoxedCollection reports whether a call reads a box out of a collection whose slot
+// this pass boxed. Only get answers a member directly; the iterating reads bind their box
+// through the loop and the callback rather than through an expression, so each of those is
+// told at its own lowering.
+func (r *Renderer) readOfBoxedCollection(n frontend.Node) bool {
+	recvNode, method, _, ok := r.methodCallParts(n)
+	if !ok || method != "get" {
+		return false
+	}
+	return r.boxedMapVal(recvNode)
+}
+
+// spreadOfBoxedColl reports whether a spread element splices a collection whose member
+// slot this pass boxed. A Set is the one whose spread splices its members straight; a
+// Map's spreads its entries as pairs, which is the tuple's question rather than this one.
+func (r *Renderer) spreadOfBoxedColl(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeSpreadElement {
+		return false
+	}
+	kids := r.prog.Children(n)
+	return len(kids) == 1 && r.boxedSetElem(kids[0])
+}
+
+// markBoxedCollections marks the slots of a Set or a Map that some call hands a box, so
+// the collection holds its members boxed rather than in the Go element type the checker's
+// type argument interns.
+//
+//	const s = new Set<Row>()
+//	s.add(Object.values(m)[0])
+//
+// value.NewRefSet[*ObjIdTag] keys its members on a Go struct pointer and a box is not one,
+// so this was Go that did not build. The rule is the one every other slot takes: the
+// collection gives way, since a box cannot be brought to the struct without a copy that
+// aliases nothing, while a static member boxes on its way in.
+//
+// The mark is on the collection type rather than on any one expression because a Go
+// collection has one element type, and the type is what both spellings of it read: the
+// constructor that mints it and the Go type of every variable that holds it. A program
+// with two unrelated Set<Row> gets one answer for both, which is coarser than it needs to
+// be and is still right, since a static member has somewhere to go in the boxed set and a
+// box has nowhere to go in the static one.
+//
+// Only a shape is marked. A member the checker already calls any or unknown holds a box
+// already, and one it calls a number, a string, or a boolean has a Go value the box comes
+// down to through the coercion that already runs.
+func (r *Renderer) markBoxedCollections(files []frontend.Node) bool {
+	changed := false
+	r.walkInClasses(files, func(n frontend.Node) bool {
+		// A collection built from a boxed iterable holds boxes from the start, since the
+		// runtime drains such a source into value.Value elements and there is no shape to
+		// bring them to. `new Set<Row>(Object.values(m))` is the everyday spelling.
+		if coll, iter, ok := r.collFromIterable(n); ok {
+			if r.isBoxedChain(iter) && r.isSetType(coll) &&
+				r.markCollSlot(&r.boxedSetElems, coll, r.setElemRaw) {
+				changed = true
+			}
+			// A Map built from a literal of pairs fills itself with one Set per pair, so each
+			// pair's two halves land in the same two slots a written set() fills.
+			if r.isMapType(coll) && iter.Kind() == frontend.NodeArrayLiteralExpression {
+				for _, pair := range r.prog.Children(iter) {
+					kv := r.prog.Children(pair)
+					if pair.Kind() != frontend.NodeArrayLiteralExpression || len(kv) != 2 {
+						continue
+					}
+					if r.isBoxedChain(kv[0]) && r.markCollSlot(&r.boxedMapKeys, coll, r.mapKeyRaw) {
+						changed = true
+					}
+					if r.isBoxedChain(kv[1]) && r.markCollSlot(&r.boxedMapVals, coll, r.mapValRaw) {
+						changed = true
+					}
+				}
+			}
+		}
+		recvNode, method, argNodes, ok := r.methodCallParts(n)
+		if !ok {
+			return true
+		}
+		switch {
+		// A WeakSet and a WeakMap take the same three and four method names against the
+		// same two slot readers, so each is marked beside the strong collection it mirrors.
+		// Whether the runtime can hold a boxed member weakly is renderWeakSet's own
+		// question, and it answers with a hand-back.
+		case r.isSet(recvNode) || r.isWeakSet(recvNode):
+			// add, has, and delete each take one member, so a boxed argument to any of them
+			// is a box the set has to hold: has and delete compare against what is stored,
+			// which only answers right if the stored form is the boxed one.
+			switch method {
+			case "add", "has", "delete":
+			default:
+				return true
+			}
+			if len(argNodes) != 1 || !r.isBoxedChain(argNodes[0]) {
+				return true
+			}
+			if r.markCollSlot(&r.boxedSetElems, r.prog.TypeAt(recvNode), r.setElemRaw) {
+				changed = true
+			}
+		case r.isMap(recvNode) || r.isWeakMap(recvNode):
+			// set takes a key then a value; get, has, and delete take a key alone. A boxed
+			// argument marks the slot it fills, and the two slots are decided apart because
+			// a Map<Row, number> boxes its keys and keeps its values float64.
+			var keyed, valued bool
+			switch method {
+			case "set":
+				keyed, valued = len(argNodes) > 0, len(argNodes) > 1
+			case "get", "has", "delete":
+				keyed = len(argNodes) > 0
+			default:
+				return true
+			}
+			if keyed && r.isBoxedChain(argNodes[0]) {
+				if r.markCollSlot(&r.boxedMapKeys, r.prog.TypeAt(recvNode), r.mapKeyRaw) {
+					changed = true
+				}
+			}
+			if valued && r.isBoxedChain(argNodes[1]) {
+				if r.markCollSlot(&r.boxedMapVals, r.prog.TypeAt(recvNode), r.mapValRaw) {
+					changed = true
+				}
+			}
+		}
+		return true
+	})
+	return changed
+}
+
+// markCollSlot records that one slot of a collection type holds a box, and reports whether
+// that was news. The slot's own type comes from the raw reader, the one that does not
+// consult these marks, so the shape test reads what the checker wrote rather than what an
+// earlier round already rewrote.
+func (r *Renderer) markCollSlot(marks *map[int]bool, coll frontend.Type, raw func(frontend.Type) (frontend.Type, bool)) bool {
+	slot, ok := raw(coll)
+	if !ok {
+		return false
+	}
+	const settled = frontend.TypeAny | frontend.TypeUnknown |
+		frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
+	if slot.Flags&settled != 0 {
+		return false
+	}
+	id := coll.Identity()
+	if (*marks)[id] {
+		return false
+	}
+	if *marks == nil {
+		*marks = map[int]bool{}
+	}
+	(*marks)[id] = true
+	return true
+}
+
+// methodCallParts splits a plain method call, recv.name(args), into its three parts. It is
+// the shape the collection walk above looks for and nothing else: a call whose callee is a
+// property access with a receiver and a name.
+func (r *Renderer) methodCallParts(n frontend.Node) (frontend.Node, string, []frontend.Node, bool) {
+	if n.Kind() != frontend.NodeCallExpression {
+		return nil, "", nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return nil, "", nil, false
+	}
+	callee := r.prog.Children(kids[0])
+	if len(callee) != 2 || callee[1].Kind() != frontend.NodeIdentifier {
+		return nil, "", nil, false
+	}
+	return callee[0], r.prog.Text(callee[1]), kids[1:], true
 }
 
 // markBoxedCallbackParams marks the parameters of an inline callback that a dynamic call
@@ -297,11 +490,19 @@ func (r *Renderer) markBoxedLoopVars(files []frontend.Node) bool {
 	changed := false
 	r.walkInClasses(files, func(n frontend.Node) bool {
 		bind, iterable, ok := r.forOfSingleBinding(n)
-		if !ok || !r.isBoxedChain(iterable) {
+		if !ok {
 			return true
 		}
-		if !r.isDynamic(iterable) && !r.producesBoxedValue(iterable) {
-			return true
+		// A Set whose members the pass boxed yields a box each turn the same way a boxed
+		// iterable does, which rangeCollSingle is what tells the body. The Set itself is not
+		// a boxed chain, so it is read on its own here.
+		if !r.boxedSetElem(iterable) {
+			if !r.isBoxedChain(iterable) {
+				return true
+			}
+			if !r.isDynamic(iterable) && !r.producesBoxedValue(iterable) {
+				return true
+			}
 		}
 		sym, ok := r.prog.SymbolAt(bind)
 		if !ok || r.boxedLoopVars[sym] {
@@ -1218,4 +1419,24 @@ func (r *Renderer) isBoxedParamRead(n frontend.Node) bool {
 	}
 	sym, ok := r.prog.SymbolAt(n)
 	return ok && r.boxedParamSyms[sym]
+}
+
+// collFromIterable answers the collection type a `new Set(src)` or `new Map(src)` mints
+// and the source it is filled from. A construction with no argument fills nothing, so it
+// reports false and the slot is left to the calls that reach it later.
+func (r *Renderer) collFromIterable(n frontend.Node) (frontend.Type, frontend.Node, bool) {
+	if n.Kind() != frontend.NodeNewExpression {
+		return frontend.Type{}, nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) < 2 {
+		return frontend.Type{}, nil, false
+	}
+	// The children after the callee carry the written type arguments beside the value
+	// arguments, and namedArgs is what tells the two apart.
+	args := r.namedArgs(kids[1:])
+	if len(args) != 1 {
+		return frontend.Type{}, nil, false
+	}
+	return r.prog.TypeAt(n), args[0], true
 }
