@@ -282,6 +282,8 @@ func jsonToValue(v any) Value {
 		return x.jsBox()
 	case setBacking:
 		return x.jsBox()
+	case jsonTupler:
+		return jsonToValue(jsonPositions(x))
 	case jsonArray:
 		elems := x.jsonElements()
 		out := make([]Value, len(elems))

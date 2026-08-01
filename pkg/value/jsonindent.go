@@ -77,6 +77,8 @@ func (e jsonIndenter) encode(b *strings.Builder, v any, indent string) {
 		} else {
 			b.WriteString("false")
 		}
+	case jsonTupler:
+		e.encodeArray(b, x.JSONTuple(), indent)
 	case jsonArray:
 		e.encodeArray(b, x.jsonElements(), indent)
 	case Value:

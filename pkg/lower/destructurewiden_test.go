@@ -35,9 +35,27 @@ func TestTupleDestructureUndefinedDefaultFolds(t *testing.T) {
 	if !strings.Contains(out, `z := value.FromGoString("d")`) {
 		t.Fatalf("undefined-element default did not fold to the default binding:\n%s", out)
 	}
-	if strings.Contains(out, ".E0") {
+	if strings.Contains(funcBody(t, out, "G"), ".E0") {
 		t.Fatalf("a dead read over an always-undefined element must not draw the field:\n%s", out)
 	}
+}
+
+// funcBody cuts one top-level function out of a rendered program so an assertion about
+// what that function does is not answered by something else in the file. The tuple struct
+// this program mints carries a generated JSONTuple method that reads every position, which
+// is what the type is for and says nothing about whether the destructuring read is dead.
+func funcBody(t *testing.T, out, name string) string {
+	t.Helper()
+	start := strings.Index(out, "func "+name+"(")
+	if start < 0 {
+		t.Fatalf("the rendered program declares no %s:\n%s", name, out)
+	}
+	rest := out[start:]
+	end := strings.Index(rest, "\n}")
+	if end < 0 {
+		t.Fatalf("the declaration of %s does not close:\n%s", name, out)
+	}
+	return rest[:end]
 }
 
 // TestArrayDestructureWidensBindingToUnion pins the array-source sibling of the tuple

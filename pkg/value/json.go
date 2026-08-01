@@ -52,6 +52,60 @@ type jsonArmer interface {
 	JSONArm() any
 }
 
+// jsonTupler is the hook a generated tuple struct exposes so every walk over a Go
+// value reads it as the array a tuple is in JavaScript rather than as the positional
+// struct it is in Go. Without it a [string, number] reached the struct walk and came
+// out as {"E0":"a","E1":1} where the engine writes ["a",1], which is a wrong answer
+// rather than a refusal, and it came out that way at every depth: an Object.entries
+// result, a tuple field of an object, a tuple in a collection.
+//
+// The method is exported for the reason jsonArmer's is: the generated tuple type
+// lives in the compiled program's own package, so an unexported method declared
+// there could not satisfy an interface declared here. JSONTuple returns the
+// positions in order, boxed as any, which is the same shape jsonElements gives the
+// walk for an array, so every consumer treats the two alike.
+type jsonTupler interface {
+	JSONTuple() []any
+}
+
+// TupleToValue boxes a tuple into the array value a tuple is in JavaScript, the box
+// the lowering emits wherever a tuple crosses into a dynamic slot: console.log of
+// one, String of one, an element of an array being boxed. It is generic so it can be
+// passed as the func(T) Value that ArrayValueOf applies down a slice, and it defers
+// to the same walk every other boxing goes through, so a position holding a date, a
+// class instance, or another tuple boxes the way it would anywhere else.
+func TupleToValue[T any](t T) Value { return jsonToValue(t) }
+
+// jsonPositionList adapts a tuple's positions to the jsonElements hook every walk
+// already has for an array, so a tuple takes exactly the array path rather than a
+// parallel copy of it. It carries no JSONTuple of its own, which is what keeps the
+// tuple arm of each switch from claiming it a second time.
+type jsonPositionList []any
+
+func (p jsonPositionList) jsonElements() []any { return p }
+
+// jsonPositions reads a tuple's positions and presents them as an array to the walk. An
+// optional position is stored as a value.Opt, the same way an optional object field is,
+// so it is unwrapped here: a present one contributes the value it holds and an absent one
+// contributes undefined. An object field would be dropped instead, but dropping a
+// position would shift every position after it, and an absent element of an array is
+// undefined rather than gone.
+func jsonPositions(t jsonTupler) jsonArray {
+	pos := t.JSONTuple()
+	for i, p := range pos {
+		opt, ok := p.(jsonOptional)
+		if !ok {
+			continue
+		}
+		if inner, present := opt.jsonOptField(); present {
+			pos[i] = inner
+		} else {
+			pos[i] = Undefined
+		}
+	}
+	return jsonPositionList(pos)
+}
+
 // jsonElements returns the array's elements boxed as a slice of any, in order, so
 // the JSON walk can recurse into each without knowing the element type. The box
 // is the same value the element already is (a BStr, a float64, a struct), so no
@@ -133,6 +187,12 @@ func encodeJSON(b *strings.Builder, v any) {
 		} else {
 			b.WriteString("false")
 		}
+	case jsonTupler:
+		// A tuple is an array in JavaScript, so it serializes as one. Its Go shape is a
+		// positional struct, which the reflection default below would write under its
+		// E0/E1 field names, so the generated type hands back its positions here and the
+		// walk writes them the way it writes an array's elements.
+		encodeJSON(b, jsonPositions(x))
 	case jsonArray:
 		b.WriteByte('[')
 		for i, e := range x.jsonElements() {

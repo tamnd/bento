@@ -32,6 +32,11 @@ func TestOptionalBoxEmits(t *testing.T) {
 			"class P { x = 1; }\nconst m = new Map<string, P>();\nconsole.log(JSON.stringify(m.get('k')));\n",
 			[]string{"value.JSONStringifyOpt("},
 		},
+		{
+			"tupleValue",
+			"const outer = new Map<string, [number, string]>();\nconsole.log(outer.get('a'));\n",
+			[]string{"value.OptToValue(", "value.TupleToValue)"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,8 +62,8 @@ func TestOptionalBoxHandsBack(t *testing.T) {
 		want string
 	}{
 		{
-			"tupleElement",
-			"const outer = new Map<string, [number, string]>();\nconsole.log(outer.get('a'));\n",
+			"functionValue",
+			"const outer = new Map<string, () => number>();\nconsole.log(outer.get('a'));\n",
 			"boxing an optional of this type into a dynamic value is a later slice",
 		},
 		{
