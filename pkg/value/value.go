@@ -460,6 +460,19 @@ func (v Value) deleteSymKey(key *Symbol) bool {
 	}
 }
 
+// OptionalMember is a?.b on a boxed receiver: undefined when the receiver is null or
+// undefined, and the ordinary property read otherwise. The short circuit is the whole
+// point of the optional chain, and a box is the one receiver that can carry either
+// answer without the lowerer having to prove which, so the question is asked here at
+// run time. A longer chain composes by feeding this call's result back in as the next
+// receiver, which is what makes a?.b?.c stop at the first nullish link.
+func OptionalMember(v Value, key BStr) Value {
+	if v.IsNullish() {
+		return Undefined
+	}
+	return v.Get(key)
+}
+
 // MissingProperty is the value of a property read whose receiver's fixed shape
 // does not declare the property. A shape interns to a Go struct that carries
 // exactly its declared fields, so such a read is a provable miss and the language

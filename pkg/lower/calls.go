@@ -1803,6 +1803,23 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 		}
 		return r.classMethodCall(info, recv, method, argNodes, recvNode.Kind() == frontend.NodeSuperKeyword)
 	}
+	// A receiver the lowerer holds as a box while the checker holds a concrete shape,
+	// `const arr = u as number[]` being the everyday one, dispatches through the runtime
+	// rather than through the shape's own methods. It has to route before the value-shape
+	// paths below: the checker still says number[], so the array path would emit arr.Map
+	// on a value.Value, which is not a hand-back but Go that does not compile. A receiver
+	// the checker itself types any or unknown is not this case and keeps the ordering it
+	// has, reaching the boxed dispatch further down after the paths that answer a box
+	// with a dedicated helper.
+	//
+	// isBoxedChain rather than isDynamic, because the question here is what Go type the
+	// receiver lowers to and isDynamic answers a broader one: a borrowed
+	// Array.prototype.map result is dynamic in its elements while the call itself yields
+	// a *value.Array, whose Join this would have replaced with a Get it does not have.
+	if r.isBoxedChain(recvNode) && !r.isDynamicType(r.prog.TypeAt(recvNode)) &&
+		method != "toString" && method != "valueOf" {
+		return r.dynamicCall(callee, argNodes)
+	}
 	// A method on a tuple receiver: a tuple is an array subtype, so an array method
 	// like map borrowed on it materializes the tuple as a value.Array over its element
 	// union and dispatches the array method on that. It routes before the array path,
