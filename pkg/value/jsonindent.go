@@ -172,10 +172,7 @@ func (e jsonIndenter) encodeFields(b *strings.Builder, rv reflect.Value, inner s
 		if jsonUndefinedGo(val) {
 			continue
 		}
-		key := f.Tag.Get("json")
-		if key == "" {
-			key = f.Name
-		}
+		key, _ := jsonFieldKey(f)
 		if !*first {
 			b.WriteByte(',')
 		}

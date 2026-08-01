@@ -1203,6 +1203,15 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 				seen[field] = true
 				continue
 			}
+			// An optional any or unknown field is a bare value.Value, which carries
+			// undefined itself, so the explicit undefined is that singleton rather
+			// than an empty option.
+			if r.isDynamicType(sp.Type) {
+				r.requireImport(valuePkg)
+				elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: sel("value", "Undefined")})
+				seen[field] = true
+				continue
+			}
 			inner, ok := r.optionalInner(r.prog.UnionMembers(sp.Type))
 			if !ok {
 				return nil, &NotYetLowerable{Reason: "optional property outside the T | undefined shape is a later slice"}
@@ -1240,7 +1249,10 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 		// A member filling an optional field is wrapped in value.Some so it lands in
 		// the value.Opt slot the field became, unless the member is already an optional
 		// of that type, which passes through as the Opt it is.
-		if hasProp && sp.Optional && !r.isOptional(valNode) {
+		// An optional any or unknown field is a bare value.Value, so a present member is
+		// already the box it needs to be by the time it gets here and there is no option
+		// to wrap it in: undefined is a kind the box carries itself.
+		if hasProp && sp.Optional && !r.isOptional(valNode) && !r.isDynamicType(sp.Type) {
 			// A present value filling an optional tagged-sum union field wraps into its
 			// number or string arm constructor, the same coercion a required union field
 			// applies; a value.Opt field wraps in value.Some.
@@ -1288,6 +1300,15 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 		// value.Opt field takes the empty value.None.
 		if info, ok := r.optionalUnionInfo(tp); ok {
 			elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: r.unionUndefValue(info)})
+			continue
+		}
+		// An omitted optional any or unknown field takes the undefined singleton, which
+		// is what a bare value.Value holds when nothing is written to it anyway. Naming
+		// it keeps the emit saying what the source meant rather than relying on the Go
+		// zero to spell it.
+		if r.isDynamicType(tp.Type) {
+			r.requireImport(valuePkg)
+			elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: sel("value", "Undefined")})
 			continue
 		}
 		inner, ok := r.optionalInner(r.prog.UnionMembers(tp.Type))

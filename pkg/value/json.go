@@ -76,6 +76,32 @@ type jsonTupler interface {
 // class instance, or another tuple boxes the way it would anywhere else.
 func TupleToValue[T any](t T) Value { return jsonToValue(t) }
 
+// jsonFieldKey reads a generated struct field's json tag, answering the JavaScript
+// property name it carries and whether the field is one that disappears when it holds
+// undefined.
+//
+// The name alone is the tag for almost every field: it is the one place the source key
+// survives onto the Go type, since the exported Go name capitalizes the first letter and
+// so cannot tell "name" from "Name". An optional property typed any or unknown adds the
+// word omitundefined, because its Go type is a bare Value that spells an absent member
+// and a present undefined one the same way, and the two are not the same to a reader.
+// { a: 1 } prints { a: 1 } while { a: 1, b: undefined } prints both keys, so the tag
+// picks the first, which is what an omitted optional means far more often than a written
+// undefined does.
+//
+// A field with no tag at all falls back to the Go field name, which is what a struct the
+// lowering did not generate gets.
+func jsonFieldKey(f reflect.StructField) (key string, omitUndefined bool) {
+	tag := f.Tag.Get("json")
+	if tag == "" {
+		return f.Name, false
+	}
+	if i := strings.IndexByte(tag, ','); i >= 0 {
+		return tag[:i], tag[i+1:] == "omitundefined"
+	}
+	return tag, false
+}
+
 // jsonPositionList adapts a tuple's positions to the jsonElements hook every walk
 // already has for an array, so a tuple takes exactly the array path rather than a
 // parallel copy of it. It carries no JSONTuple of its own, which is what keeps the
@@ -522,10 +548,7 @@ func encodeJSONFields(b *strings.Builder, rv reflect.Value, first *bool) {
 			// key rather than reflecting the func and faulting on NumField.
 			continue
 		}
-		key := f.Tag.Get("json")
-		if key == "" {
-			key = f.Name
-		}
+		key, _ := jsonFieldKey(f)
 		if !*first {
 			b.WriteByte(',')
 		}

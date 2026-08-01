@@ -129,9 +129,11 @@ func classLiveFields(obj Value, rv reflect.Value) {
 				continue
 			}
 		}
-		key := f.Tag.Get("json")
-		if key == "" {
-			key = f.Name
+		key, omitUndef := jsonFieldKey(f)
+		// An optional any or unknown member holds a bare Value, so an omitted one reads
+		// as undefined and contributes no key, the same choice the copying walk makes.
+		if omitUndef && jsonUndefinedGo(fv.Interface()) {
+			continue
 		}
 		name := key
 		obj.object().defineOwn(FromGoString(key), liveProperty(

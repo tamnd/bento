@@ -84,6 +84,15 @@ func newDeclSet() *declSet {
 // refers back to this same object (a recursive shape) resolves to the reserved
 // name instead of recursing forever.
 func (d *declSet) internStruct(r *Renderer, t frontend.Type) (string, error) {
+	// A built-in error is a value.Error at run time, not a struct of the fields the
+	// checker lists on it, so it never interns. Before the optional-unknown property
+	// landed the whole Error type stopped here anyway, on cause?: unknown; now that
+	// the shape is renderable the type has to be held out on its own terms, or a
+	// thrown error boxed into a dynamic slot would take ObjectFromStruct and read as
+	// an empty object rather than as the error it is.
+	if r.builtinErrorType(t) {
+		return "", &NotYetLowerable{Flags: t.Flags, Reason: "the built-in Error type is a value rather than a struct shape"}
+	}
 	id := t.Identity()
 	if name, ok := d.nameByIdentity[id]; ok {
 		return name, nil
@@ -411,7 +420,7 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 		})
 	}
 	for _, p := range props {
-		if p.Optional && !r.isOptionalType(p.Type) {
+		if p.Optional && !r.isOptionalType(p.Type) && !r.isDynamicType(p.Type) {
 			// An optional property x?: T types as T | undefined, which lowers to a
 			// value.Opt[T'] field below through the ordinary typeExpr, with the Opt's
 			// zero value standing for the absent member (05_type_lowering section 17).
@@ -422,6 +431,12 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 			// an omitted or explicit-undefined field with the undefined-arm
 			// constructor (composite.go). A union that does not intern (an object-mixed
 			// one) still hands back.
+			//
+			// An optional whose type is any or unknown is excluded above, since it
+			// needs no wrapper at all: both lower to a value.Value, which already
+			// carries undefined as one of the kinds it can hold, and the zero Value is
+			// exactly that undefined, so an omitted member reads as undefined with
+			// nothing written for it.
 			if _, ok := r.optionalUnionInfo(p); !ok {
 				return nil, &NotYetLowerable{Flags: p.Type.Flags, Reason: "optional property outside the T | undefined shape needs the tagged sum, a later slice"}
 			}
@@ -473,12 +488,23 @@ func renderStructBody(r *Renderer, name string, props []frontend.Property, callS
 		// than guessing it back from the exported Go name, which capitalizes the
 		// first letter and so cannot tell "name" from "Name". The tag is the one
 		// place the source key survives onto the Go type.
+		//
+		// An optional any or unknown field takes a second tag word. Its Go type is a
+		// bare value.Value, which spells an absent member and a present undefined one
+		// the same way, and the two are not the same to a reader: { a: 1 } prints
+		// { a: 1 } while { a: 1, b: undefined } prints both keys. The tag says the
+		// field is optional so a walk can drop it when it holds undefined, which is
+		// what an omitted optional does far more often than a written undefined.
+		tag := "`json:\"" + p.Name + "\"`"
+		if p.Optional && r.isDynamicType(p.Type) {
+			tag = "`json:\"" + p.Name + ",omitundefined\"`"
+		}
 		fields.List = append(fields.List, &ast.Field{
 			Names: []*ast.Ident{ident(field)},
 			Type:  goType,
 			Tag: &ast.BasicLit{
 				Kind:  token.STRING,
-				Value: "`json:\"" + p.Name + "\"`",
+				Value: tag,
 			},
 		})
 	}
