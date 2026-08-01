@@ -123,11 +123,47 @@ func TestOneReturnedBoxSettlesTheWholeFunction(t *testing.T) {
 	}
 }
 
+// TestAMethodTakesAndAnswersABox pins the class half at both ends: the parameter a call
+// site boxes takes the value slot with the literal argument boxing into it, and the body
+// that hands back a box gives the method a value.Value result. A static method takes the
+// same rewrite through the package function it becomes.
+func TestAMethodTakesAndAnswersABox(t *testing.T) {
+	for name, tc := range map[string]struct{ src, want string }{
+		"parameter": {boxedSigPrelude +
+			"class C { take(r: Row): number { return r.id; } }\n" +
+			"const c = new C();\nconsole.log(c.take(Object.values(m)[0]), c.take({ id: 7, tag: 'q' }));",
+			"Take(r value.Value)"},
+		"result": {boxedSigPrelude +
+			"class C { head(): Row { return Object.values(m)[0]; } }\n" +
+			"console.log(new C().head().tag);",
+			"Head() value.Value"},
+		"this receiver": {boxedSigPrelude +
+			"class C { head(): Row { return Object.values(m)[0]; } tag(): string { return this.head().tag; } }\n" +
+			"console.log(new C().tag());",
+			`.Get(value.FromGoString("tag"))`},
+		"static parameter": {boxedSigPrelude +
+			"class C { static take(r: Row): number { return r.id; } }\n" +
+			"console.log(C.take(Object.values(m)[0]), C.take({ id: 7, tag: 'q' }));",
+			"(r value.Value)"},
+		"static result": {boxedSigPrelude +
+			"class C { static head(): Row { return Object.values(m)[0]; } }\n" +
+			"console.log(C.head().tag);",
+			"() value.Value"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := renderProgram(t, tc.src)
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("a method did not take the boxed signature, want %q in:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
 // TestABoxCrossingIntoASignatureThisPassLeavesAloneHandsBack pins what the pass does not
-// rewrite. A function referenced as a value has its Go type read by that reference, and
-// a method's signature is read again at the vtable and at every call through an
-// interface; neither is one place a rewrite can land, so a box reaching one is an honest
-// hand-back rather than the Go that does not compile.
+// rewrite. A function referenced as a value has its Go type read by that reference, and a
+// method in a hierarchy has its signature read again at the vtable and at every call
+// through an interface; neither is one place a rewrite can land, so a box reaching one is
+// an honest hand-back rather than the Go that does not compile.
 //
 // An async body is the third: what its Go func hands back is the promise rather than the
 // value a return carries, so the result type is not this pass's to rewrite.
@@ -137,9 +173,14 @@ func TestABoxCrossingIntoASignatureThisPassLeavesAloneHandsBack(t *testing.T) {
 			"const pick = (r: Row): number => r.id;\n" +
 			"console.log(Object.values(m).map(pick));",
 			"coercing a dynamic value into this static type"},
-		"method": {boxedSigPrelude +
-			"class C { take(r: Row): number { return r.id; } }\n" +
-			"console.log(new C().take(Object.values(m)[0]));",
+		"override": {boxedSigPrelude +
+			"class A { head(): Row { return m['a']; } }\n" +
+			"class B extends A { head(): Row { return m['b']; } }\n" +
+			"console.log(new B().head().tag);",
+			"coercing a dynamic value into this static type"},
+		"async method": {boxedSigPrelude +
+			"class C { async head(): Promise<Row> { return m['a']; } }\n" +
+			"new C().head().then((r) => console.log(r.tag));",
 			"coercing a dynamic value into this static type"},
 		"async": {boxedSigPrelude +
 			"async function g(): Promise<Row> { return Object.values(m)[0]; }\n" +

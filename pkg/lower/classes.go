@@ -3151,6 +3151,10 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "method has no call signature"}
 	}
+	// A parameter a call site hands a box to reads as any here, so its Go field is the
+	// value slot, and a method whose body hands back a box answers value.Value. Both were
+	// decided from outside this body before anything lowered (boxedsignature.go).
+	sig = r.boxedSig(m.node, sig)
 	if len(sig.TypeParams) != 0 && r.typeSubst == nil {
 		// A generic method with no active substitution is one no specialization pass
 		// entered: it has no single Go form and hands back. When a specialization is
@@ -3198,6 +3202,20 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	r.retType = sig.Return
 	defer func() { r.retType = prevRet }()
 
+	// A parameter this pass moved into the value slot binds a box, so its reads in the
+	// body dispatch at run time the way a top-level function's do off the set
+	// funcDeclNamed builds. Only a method with such a parameter pushes one, so every
+	// other method body reads the enclosing set untouched.
+	var bodyStmts []frontend.Node
+	if block, ok := r.funcBodyBlock(m.node); ok {
+		bodyStmts = r.prog.Children(block)
+	}
+	if len(r.boxedParams[m.node]) != 0 {
+		prevDyn := r.dynLocals
+		r.dynLocals = mergeNameSets(prevDyn, r.dynLocalsOf(sig.Params, bodyStmts), r.scopeDeclaredNames(sig.Params, bodyStmts))
+		defer func() { r.dynLocals = prevDyn }()
+	}
+
 	// An object-rest binding an untyped pattern parameter gathers is a boxed value the
 	// checker did not type any, so its reads route the dynamic way off this set, built
 	// before the method body lowers ahead of the entry bindings.
@@ -3229,10 +3247,6 @@ func (r *Renderer) classMethodDecl(info *classInfo, m classMethod, name string) 
 	// slot emitted no trailing return and did not compile. The append reuses the
 	// shared helper, which fires only for an any or unknown return and a body that
 	// does not already terminate, so a static or already-returning method is untouched.
-	var bodyStmts []frontend.Node
-	if block, ok := r.funcBodyBlock(m.node); ok {
-		bodyStmts = r.prog.Children(block)
-	}
 	r.endWithImplicitUndefinedReturn(body, bodyStmts, sig.Return)
 	r.endThrowTerminatedBody(body, bodyStmts, results)
 	return &ast.FuncDecl{
@@ -3403,6 +3417,10 @@ func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, er
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "static method has no call signature"}
 	}
+	// A parameter a call site hands a box to reads as any here, so its Go field is the
+	// value slot, and a static method whose body hands back a box answers value.Value
+	// (boxedsignature.go).
+	sig = r.boxedSig(m.node, sig)
 	if len(sig.TypeParams) != 0 {
 		return nil, &NotYetLowerable{Reason: "generic method needs monomorphization, a later slice"}
 	}
@@ -3433,6 +3451,18 @@ func (r *Renderer) staticFuncDecl(owner *classInfo, m classMethod) (ast.Decl, er
 	prevClass, prevThis, prevStatic := r.curClass, r.thisName, r.staticClass
 	r.curClass, r.thisName, r.staticClass = nil, "", owner
 	defer func() { r.curClass, r.thisName, r.staticClass = prevClass, prevThis, prevStatic }()
+
+	// A parameter this pass moved into the value slot binds a box, so its reads in the
+	// body dispatch at run time the way a top-level function's do.
+	if len(r.boxedParams[m.node]) != 0 {
+		var bodyStmts []frontend.Node
+		if block, ok := r.funcBodyBlock(m.node); ok {
+			bodyStmts = r.prog.Children(block)
+		}
+		prevDyn := r.dynLocals
+		r.dynLocals = mergeNameSets(prevDyn, r.dynLocalsOf(sig.Params, bodyStmts), r.scopeDeclaredNames(sig.Params, bodyStmts))
+		defer func() { r.dynLocals = prevDyn }()
+	}
 
 	// An object-rest binding an untyped pattern parameter gathers is a boxed value the
 	// checker did not type any, so its reads route the dynamic way off this set, built
@@ -3750,6 +3780,10 @@ func (r *Renderer) classMethodCall(info *classInfo, recv ast.Expr, method string
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "method has no call signature"}
 	}
+	// A method a call site hands a box to takes a boxed slot, so the argument bridges
+	// against that slot below and a static argument boxes on its way in, the same overlay
+	// a top-level function's call site reads.
+	sig = r.boxedSig(m.node, sig)
 	if len(argNodes) > len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
@@ -3854,6 +3888,7 @@ func (r *Renderer) staticMethodCall(info *classInfo, method string, argNodes []f
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "static method has no call signature"}
 	}
+	sig = r.boxedSig(m.node, sig)
 	if len(argNodes) > len(sig.Params) {
 		return nil, &NotYetLowerable{Reason: "method call with an argument count that differs from the declaration is a later slice"}
 	}
