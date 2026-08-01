@@ -1112,7 +1112,15 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 	for {
 		switch n.Kind() {
 		case frontend.NodeIdentifier:
-			return r.isDynBoundReceiver(n)
+			// A parameter the boxed-signature pass gave a value.Value slot is a box the
+			// same way a dynBound local is, and so is a name whose own declaration binds
+			// one. The three answers agree once the body is lowering, since a boxed
+			// parameter joins dynBoundLocals there and buildVarDecl marks a boxed binding
+			// on exactly the boxedChainBinding rule read below. Reading the declaration as
+			// well is what lets a name be seen as a box from outside the body that holds
+			// it, which is what the boxed-signature pass needs while it is still deciding
+			// and no dynamic-locals set exists yet.
+			return r.isDynBoundReceiver(n) || r.isBoxedParamRead(n) || r.identifierBindsABox(n)
 		case frontend.NodeObjectLiteralExpression, frontend.NodeArrayLiteralExpression:
 			return r.literalHoldsBox(n)
 		case frontend.NodeParenthesizedExpression, frontend.NodeAsExpression, frontend.NodeTypeAssertion, frontend.NodeNonNull:
@@ -1129,6 +1137,12 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			n = kids[0]
 		case frontend.NodePropertyAccessExpression, frontend.NodeElementAccessExpression, frontend.NodeCallExpression:
 			if r.isBoxedObjectWalk(n) {
+				return true
+			}
+			// A call of a function the boxed-signature pass gave a value.Value result is a
+			// box whatever shape the function declares, the same way a call of a factory
+			// that returns a growing object is.
+			if r.callOfBoxedReturnFunc(n) {
 				return true
 			}
 			// An optional link answers value.OptionalMember, which is a box whatever the
@@ -1198,6 +1212,46 @@ func (r *Renderer) boxedChainBinding(nameNode, initNode frontend.Node) bool {
 		return false
 	}
 	return r.isBoxedChain(initNode)
+}
+
+// identifierBindsABox reports whether an identifier names a binding whose own
+// declaration holds a box, the `const first = Object.values(m)[0]` note 384 gave a
+// value.Value slot to.
+//
+// It answers from the declaration rather than from the body-scoped dynamic-locals set,
+// which is the same reading identifierBindsAGrowingObject takes and for the same reason:
+// the question is asked at every read of the name, and from places that have no such set
+// in scope at all.
+//
+// The visiting set breaks the cycle a self-referential binding would spin: asking
+// whether `var a = a.b` holds a box asks the same question of a again. A symbol already
+// being asked about answers false, which leaves such a program where it was.
+func (r *Renderer) identifierBindsABox(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(n)
+	if !ok || r.boxBindVisiting[sym] {
+		return false
+	}
+	if r.boxBindVisiting == nil {
+		r.boxBindVisiting = map[frontend.Symbol]bool{}
+	}
+	r.boxBindVisiting[sym] = true
+	defer delete(r.boxBindVisiting, sym)
+	for _, d := range r.prog.Declarations(sym) {
+		if d.Kind() != frontend.NodeVariableDeclaration {
+			continue
+		}
+		kids := r.prog.Children(d)
+		if len(kids) < 2 || kids[0].Kind() != frontend.NodeIdentifier {
+			continue
+		}
+		if r.boxedChainBinding(kids[0], kids[len(kids)-1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // literalHoldsBox reports whether n is an object or array literal with a box somewhere

@@ -129,6 +129,12 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// same pre-pass records which arrows are escape-safe so the arrow's declaration
 	// lowers the default away and its call sites fill it, both reading one map.
 	r.collectArrowDefaults(entry)
+	// A declared signature a call site hands a box to takes a boxed slot, and a declared
+	// function whose every return is a box answers one. Both are decisions about a
+	// function made from outside its own body, so they settle here, before any signature
+	// is read for emission, and the fixpoint inside the pass is what lets one function's
+	// answer feed the next one's.
+	r.collectBoxedSignatures(append([]frontend.Node{entry}, deps...))
 	// A module reached by require registers its class and enum declarations in the
 	// same shared pre-pass, so each emits a package-level Go type the loader body
 	// constructs and reads. It runs after the entry's collectors so an entry name

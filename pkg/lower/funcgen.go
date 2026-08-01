@@ -144,7 +144,10 @@ func (r *Renderer) funcDeclHead(fn frontend.Node) (frontend.Symbol, string, fron
 	if !ok {
 		return frontend.Symbol{}, "", frontend.Signature{}, &NotYetLowerable{Reason: "function has no call signature"}
 	}
-	return sym, name, sig, nil
+	// A parameter the boxed-signature pass decided holds a box reads as any from here
+	// on, so its Go field is a value.Value, its body reads it through the value model,
+	// and every call site boxes what it passes (see collectBoxedSignatures).
+	return sym, name, r.boxedSig(fn, sig), nil
 }
 
 // funcDeclNamed builds one Go function declaration for a body under a given Go
@@ -200,8 +203,12 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	// untouched. The checker types the return by the shape the object finishes with,
 	// which as a Go struct would answer the zero value for a property assigned after
 	// the call, so the declared shape is deliberately not the result type here.
+	//
+	// A function whose every return is a box answers the box for the same reason,
+	// reached from the other root: the shape it declares has no way to be built from
+	// what the returns actually hold.
 	ret := sig.Return
-	if r.funcReturnsGrowingObject(fn) {
+	if r.funcReturnsGrowingObject(fn) || r.boxedReturnFns[fn] {
 		r.requireImport(valuePkg)
 		ret = frontend.Type{Flags: frontend.TypeAny}
 	}
@@ -1547,6 +1554,9 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
 	}
 	sig, _ := r.prog.SignatureAt(n)
+	// A parameter the boxed-signature pass decided holds a box reads as any from here
+	// on, the same overlay a top-level function's signature takes.
+	sig = r.boxedSig(n, sig)
 	fields, err := r.closureParamFields(n, sig, "function")
 	if err != nil {
 		return nil, err
@@ -1743,6 +1753,10 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	}
 	body := kids[len(kids)-1]
 	sig, _ := r.prog.SignatureAt(n)
+	// A const-bound arrow every reference calls directly takes the same boxed-parameter
+	// overlay a top-level function does, so `const f = (r: Row) => r.tag` called with a
+	// box holds the box in its one Go field.
+	sig = r.boxedSig(n, sig)
 	// A concise body that is a bare local forced dynamic by a computed key returns the
 	// boxed value.Value the local was stored as, while the checker still types the body
 	// the object shape. Spelling that struct as the result type does not build, and
@@ -1988,6 +2002,7 @@ func (r *Renderer) blockBodyArrow(n frontend.Node, fields []*ast.Field) (ast.Exp
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "arrow function with a block body has no call signature"}
 	}
+	sig = r.boxedSig(n, sig)
 	results, err := r.resultFields(sig.Return)
 	if err != nil {
 		return nil, err

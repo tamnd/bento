@@ -304,6 +304,19 @@ type Renderer struct {
 	// return an object that grows" reaches f's own body, and a function already on the
 	// stack answers false rather than ask again. A nil map (the default) holds nothing.
 	growthVisiting map[frontend.Node]bool
+	// boxedParams, boxedReturnFns and boxedParamSyms hold what collectBoxedSignatures
+	// decided about the declared functions: which parameter positions of a function take
+	// a value.Value slot because a call site hands them a box, which functions answer a
+	// value.Value because every return in them is one, and the symbols of the boxed
+	// parameters so a read of the name is recognised as a box wherever it sits. All
+	// three are filled by the pre-pass before any body lowers and never change after.
+	boxedParams    map[frontend.Node][]bool
+	boxedReturnFns map[frontend.Node]bool
+	boxedParamSyms map[frontend.Symbol]bool
+	// boxBindVisiting is the set of binding symbols identifierBindsABox is currently
+	// asking about, so a self-referential declaration does not spin. A nil map (the
+	// default) holds nothing.
+	boxBindVisiting map[frontend.Symbol]bool
 	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
 	// the block currently lowering. A proxy holds its target by identity and dispatches
 	// its traps off the live object, so a write through the proxy and a mutation of the
