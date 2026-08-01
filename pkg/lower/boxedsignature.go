@@ -76,11 +76,67 @@ func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 		if r.markBoxedFields(files) {
 			changed = true
 		}
+		if r.markBoxedCallbackParams(files) {
+			changed = true
+		}
 		if !changed {
 			break
 		}
 	}
 	r.forceBoxedParams(cands)
+}
+
+// markBoxedCallbackParams marks the parameters of an inline callback that a dynamic call
+// hands a box, so the pass sees what the lowering already does.
+//
+// A callback going into a call on a box is handed its arguments boxed, and note 383's
+// forceCallbackDynParams gives every parameter that cannot hold one a value.Value slot
+// instead. That happens as the callback lowers, which is long after this pass has decided,
+// so `Object.values(m).map((r: Row) => label(r))` had a box in `r` that nothing on this
+// side knew about and label kept a parameter the box could not fill.
+//
+// The condition is forceCallbackDynParams' own, read here rather than there: the receiver
+// is a box, so the call dispatches through the value model, and a parameter takes the value
+// slot unless it is one of the primitives a box coerces into. Only the symbol is recorded.
+// The callback's own Go signature is not this pass's to write, since the closure renders
+// from the forced set; what the pass needs is only that a read of the name answers as a box.
+func (r *Renderer) markBoxedCallbackParams(files []frontend.Node) bool {
+	changed := false
+	r.walkInClasses(files, func(n frontend.Node) bool {
+		if n.Kind() != frontend.NodeCallExpression {
+			return true
+		}
+		kids := r.prog.Children(n)
+		if len(kids) < 2 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+			return true
+		}
+		recv := r.prog.Children(kids[0])
+		if len(recv) != 2 || !r.isBoxedChain(recv[0]) {
+			return true
+		}
+		for _, a := range kids[1:] {
+			if a.Kind() != frontend.NodeArrowFunction && a.Kind() != frontend.NodeFunctionExpression {
+				continue
+			}
+			for _, pn := range r.funcParamNodes(a) {
+				pkids := r.prog.Children(pn)
+				if len(pkids) == 0 || pkids[0].Kind() != frontend.NodeIdentifier {
+					continue
+				}
+				if r.takesADynamicArg(r.prog.TypeAt(pkids[0])) {
+					continue
+				}
+				sym, ok := r.prog.SymbolAt(pkids[0])
+				if !ok || r.boxedParamSyms[sym] {
+					continue
+				}
+				r.boxedParamSyms[sym] = true
+				changed = true
+			}
+		}
+		return true
+	})
+	return changed
 }
 
 // markBoxedFields decides which class fields hold a box, and joins the fixpoint because
@@ -299,7 +355,7 @@ func (r *Renderer) boxableFuncs(files []frontend.Node) map[frontend.Node]boxable
 			if !ok {
 				break
 			}
-			if fn, ok := r.declValueFunc(n); ok && fn.Kind() != frontend.NodeFunctionDeclaration {
+			if fn, ok := r.declBoundFunc(n); ok && fn.Kind() != frontend.NodeFunctionDeclaration {
 				r.addBoxableFunc(out, fn, sym)
 			}
 		}
@@ -449,6 +505,39 @@ func (r *Renderer) propReadAsValue(prop string) bool {
 		walk(f, false)
 	}
 	return found
+}
+
+// declBoundFunc returns the function a declaration binds its name to, the arrow or
+// function expression the initializer itself is. Only parentheses and a type assertion
+// sit between a name and the function it names, so those are the only wrappers it looks
+// through. declValueFunc, which this used to call, finds the first function-like node
+// anywhere under the declaration; for `const out = xs.map((r) => r.tag)` that is the
+// inline callback, and treating it as the function `out` names decides the callback by
+// how the binding is used, which is a fact about a string.
+func (r *Renderer) declBoundFunc(d frontend.Node) (frontend.Node, bool) {
+	var none frontend.Node
+	kids := r.prog.Children(d)
+	// A binding is [name], [name, type], [name, initializer], or [name, type,
+	// initializer], so an initializer is a last child past the name carrying a real
+	// expression kind rather than an unclassified type annotation.
+	if len(kids) < 2 {
+		return none, false
+	}
+	init := kids[len(kids)-1]
+	if init.Kind() == frontend.NodeUnknown {
+		return none, false
+	}
+	for {
+		peeled := r.unwrapParens(r.assertionOperand(init))
+		if peeled == init {
+			break
+		}
+		init = peeled
+	}
+	if !isFunctionLike(init.Kind()) {
+		return none, false
+	}
+	return init, true
 }
 
 func (r *Renderer) addBoxableFunc(out map[frontend.Node]boxableFunc, fn frontend.Node, sym frontend.Symbol) {

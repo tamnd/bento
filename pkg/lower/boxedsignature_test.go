@@ -383,3 +383,63 @@ func TestASuperCallCarriesABoxToTheBaseConstructor(t *testing.T) {
 		t.Fatalf("the derived constructor did not take the boxed slot:\n%s", out)
 	}
 }
+
+// TestACallbackParameterPassedOnBoxesTheCallee is the pre-pass half of the callback
+// slice. Note 383 already gave an inline callback's non-primitive parameter a value.Value
+// slot, but only at lowering time, so the whole-program pass never saw the box and a
+// function the callback passed that parameter to still asked for the struct. Marking the
+// parameter's symbol in the pre-pass is what carries the box across the call.
+func TestACallbackParameterPassedOnBoxesTheCallee(t *testing.T) {
+	const src = boxedSigPrelude +
+		"function label(r: Row): string { return r.tag; }\n" +
+		"console.log(Object.values(m).map((r: Row) => label(r)).join(','));"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "func Label(r value.Value)") {
+		t.Fatalf("a function a callback parameter is passed to did not take a boxed slot:\n%s", out)
+	}
+}
+
+// TestACallbackAnsweringABoxTakesAValueResult is the result half. Once the parameter
+// holds a box every expression the body builds from it is a box too, so the callback's
+// own Go result has to be the box rather than the shape the checker read off the body.
+func TestACallbackAnsweringABoxTakesAValueResult(t *testing.T) {
+	const src = boxedSigPrelude +
+		"function label(r: Row): string { return r.tag; }\n" +
+		"console.log(Object.values(m).map((r: Row) => [r].map((q: Row) => label(q)).join('')).join(','));"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "func(r value.Value) value.Value {") {
+		t.Fatalf("a callback answering a box kept the checker's string result:\n%s", out)
+	}
+}
+
+// TestAnInlineCallbackIsNotClaimedAsTheBindingsFunction pins a mis-claim the pass used to
+// make. It looked for the function a declaration binds by finding the first function-like
+// node anywhere under it, so `const out = xs.map((r) => ...)` handed it the inline
+// callback and decided that callback by how the binding `out` is used, which here is a
+// string. The function a name binds is the initializer itself and nothing nested in it.
+func TestAnInlineCallbackIsNotClaimedAsTheBindingsFunction(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const out = Object.values(m).map((r: Row) => r.tag);\n" +
+		"console.log(out.join(','));"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.NewFunc") {
+		t.Fatalf("the inline callback did not lower as a boxed callback:\n%s", out)
+	}
+}
+
+// TestATernaryArmThatIsABoxSettlesTheWholeTernary reads the rule the parameter, the
+// result and the field already take at the one expression that spells two values into a
+// single slot. The IIFE a ternary lowers to has one Go result type, and only the box is
+// one the other arm can be brought to.
+func TestATernaryArmThatIsABoxSettlesTheWholeTernary(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const out = Object.values(m).map((r: Row) => r.id > 1 ? r : { id: 0, tag: 'z' });\n" +
+		"console.log(out.map((r: Row) => r.tag).join(','));"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "func() value.Value {") {
+		t.Fatalf("a ternary with a boxed arm did not answer a box:\n%s", out)
+	}
+	if !strings.Contains(out, "value.NewObject()") {
+		t.Fatalf("the static arm did not box on its way into the shared slot:\n%s", out)
+	}
+}
