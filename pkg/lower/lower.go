@@ -313,6 +313,10 @@ type Renderer struct {
 	boxedParams    map[frontend.Node][]bool
 	boxedReturnFns map[frontend.Node]bool
 	boxedParamSyms map[frontend.Symbol]bool
+	// unclaimedFuncs is the set of named functions collectBoxedSignatures looked at and
+	// left alone, so a concise arrow among them can hand back rather than spell its
+	// declared shape as the result of a body that answers a box.
+	unclaimedFuncs map[frontend.Node]bool
 	// boxBindVisiting is the set of binding symbols identifierBindsABox is currently
 	// asking about, so a self-referential declaration does not spin. A nil map (the
 	// default) holds nothing.

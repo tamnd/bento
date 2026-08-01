@@ -70,36 +70,96 @@ func TestAFunctionWhoseReturnsAreAllBoxesAnswersOne(t *testing.T) {
 	}
 }
 
+// TestAnArrowWhoseBodyIsABoxAnswersOne pins the return half at the const-bound form, both
+// ways it renders a result: a block body from the signature, a concise body from the body
+// expression. The concise form used to spell the declared struct and return a value.Value
+// into it, which is Go that does not build rather than a hand-back.
+func TestAnArrowWhoseBodyIsABoxAnswersOne(t *testing.T) {
+	for name, src := range map[string]string{
+		"concise": boxedSigPrelude +
+			"const g = (): Row => Object.values(m)[0];\n" +
+			"console.log(g().tag);",
+		"block": boxedSigPrelude +
+			"const g = (): Row => { return Object.values(m)[0]; };\n" +
+			"console.log(g().tag);",
+		"function expression": boxedSigPrelude +
+			"const g = function (): Row { return Object.values(m)[0]; };\n" +
+			"console.log(g().tag);",
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := renderProgram(t, src)
+			if !strings.Contains(out, "func() value.Value") {
+				t.Fatalf("an arrow whose body is a box did not answer a box:\n%s", out)
+			}
+			if !strings.Contains(out, `.Get(value.FromGoString("tag"))`) {
+				t.Fatalf("a read off the call did not dispatch at run time:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestOneReturnedBoxSettlesTheWholeFunction pins the body whose returns disagree. A Go
+// function has one result type and the box is the only one of the two the other returns
+// can be brought to, so the literal boxes on its way out. The ternary form is the same
+// disagreement written in one expression.
+func TestOneReturnedBoxSettlesTheWholeFunction(t *testing.T) {
+	for name, src := range map[string]string{
+		"two returns": boxedSigPrelude +
+			"function g(b: boolean): Row { if (b) return Object.values(m)[0]; return { id: 0, tag: 'd' }; }\n" +
+			"console.log(g(true).tag);",
+		"ternary": boxedSigPrelude +
+			"function g(b: boolean): Row { return b ? Object.values(m)[0] : { id: 0, tag: 'd' }; }\n" +
+			"console.log(g(true).tag);",
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := renderProgram(t, src)
+			if !strings.Contains(out, "func G(b bool) value.Value") {
+				t.Fatalf("a function that returns a box on one path did not answer a box:\n%s", out)
+			}
+			if !strings.Contains(out, "value.NewObject()") {
+				t.Fatalf("the static return did not box on its way out:\n%s", out)
+			}
+		})
+	}
+}
+
 // TestABoxCrossingIntoASignatureThisPassLeavesAloneHandsBack pins what the pass does not
 // rewrite. A function referenced as a value has its Go type read by that reference, and
 // a method's signature is read again at the vtable and at every call through an
 // interface; neither is one place a rewrite can land, so a box reaching one is an honest
 // hand-back rather than the Go that does not compile.
 //
-// A body that returns a box on one path and a struct on another is the third: a Go
-// function has one result type and the two returns do not agree on it.
+// An async body is the third: what its Go func hands back is the promise rather than the
+// value a return carries, so the result type is not this pass's to rewrite.
 func TestABoxCrossingIntoASignatureThisPassLeavesAloneHandsBack(t *testing.T) {
-	for name, src := range map[string]string{
-		"value use": boxedSigPrelude +
+	for name, tc := range map[string]struct{ src, reason string }{
+		"value use": {boxedSigPrelude +
 			"const pick = (r: Row): number => r.id;\n" +
 			"console.log(Object.values(m).map(pick));",
-		"method": boxedSigPrelude +
+			"coercing a dynamic value into this static type"},
+		"method": {boxedSigPrelude +
 			"class C { take(r: Row): number { return r.id; } }\n" +
 			"console.log(new C().take(Object.values(m)[0]));",
-		"returns disagree": boxedSigPrelude +
-			"function g(b: boolean): Row { if (b) return Object.values(m)[0]; return { id: 0, tag: 'd' }; }\n" +
-			"console.log(g(true).tag);",
+			"coercing a dynamic value into this static type"},
+		"async": {boxedSigPrelude +
+			"async function g(): Promise<Row> { return Object.values(m)[0]; }\n" +
+			"g().then((r) => console.log(r.tag));",
+			"coercing a dynamic value into this static type"},
+		"answers a box as a value": {boxedSigPrelude +
+			"const g = (): Row => Object.values(m)[0];\n" +
+			"const fns = [g];\nconsole.log(fns[0]().tag);",
+			"passes as a value"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			prog := compile(t, src)
+			prog := compile(t, tc.src)
 			r := NewRenderer(prog)
 			_, err := r.RenderProgram(entryFile(t, prog))
 			var nyl *NotYetLowerable
 			if !errors.As(err, &nyl) {
 				t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
 			}
-			if !strings.Contains(nyl.Reason, "coercing a dynamic value into this static type") {
-				t.Errorf("hand-back reason = %q, want it to name the dynamic coercion", nyl.Reason)
+			if !strings.Contains(nyl.Reason, tc.reason) {
+				t.Errorf("hand-back reason = %q, want it to name %q", nyl.Reason, tc.reason)
 			}
 		})
 	}

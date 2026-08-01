@@ -136,15 +136,30 @@ func (r *Renderer) boxableFuncs(files []frontend.Node) map[frontend.Node]boxable
 func (r *Renderer) addBoxableFunc(out map[frontend.Node]boxableFunc, fn frontend.Node, sym frontend.Symbol) {
 	sig, ok := r.prog.SignatureAt(fn)
 	if !ok || len(sig.TypeParams) != 0 || sig.RestParam != nil {
+		r.markUnclaimedFunc(fn)
 		return
 	}
 	if len(r.prog.Declarations(sym)) != 1 {
+		r.markUnclaimedFunc(fn)
 		return
 	}
 	if r.funcSymValueUsed(sym) {
+		r.markUnclaimedFunc(fn)
 		return
 	}
 	out[fn] = boxableFunc{sym: sym, sig: sig, params: r.funcParamNodes(fn)}
+}
+
+// markUnclaimedFunc records a named function this pass looked at and did not take.
+// Whatever the reason, its signature stays as the checker wrote it, so a body that
+// hands back a box has nowhere to put it. arrowFunc reads this set to tell such an arrow
+// apart from an inline callback, whose result comes from the slot it is passed to rather
+// than from its own signature and which this pass never considers.
+func (r *Renderer) markUnclaimedFunc(fn frontend.Node) {
+	if r.unclaimedFuncs == nil {
+		r.unclaimedFuncs = map[frontend.Node]bool{}
+	}
+	r.unclaimedFuncs[fn] = true
 }
 
 // funcSymValueUsed reports whether any reference to a function symbol is something
@@ -270,19 +285,19 @@ func (r *Renderer) markBoxedParam(fn frontend.Node, c boxableFunc, i int) bool {
 	return true
 }
 
-// markBoxedReturns marks a function whose every return hands back a box, so its Go
+// markBoxedReturns marks a function that hands back a box on any path, so its Go
 // result is a value.Value and a call to it is itself a box.
+//
+// An async or generator body is left alone: what its Go func hands back is the promise
+// or the coroutine rather than the value a return carries, so the result type is not
+// this pass's to rewrite.
 func (r *Renderer) markBoxedReturns(cands map[frontend.Node]boxableFunc) bool {
 	changed := false
 	for fn, c := range cands {
-		// Only a `function` declaration is at issue. funcDeclNamed is where a Go result
-		// type is decided apart from the checker's return type, and an arrow does not go
-		// through it: it renders its result from the signature at the literal, so an arrow
-		// answering a box keeps the handback it has.
-		if fn.Kind() != frontend.NodeFunctionDeclaration {
+		if r.boxedReturnFns[fn] || !r.boxableReturnSlot(c.sig.Return) {
 			continue
 		}
-		if r.boxedReturnFns[fn] || !r.boxableReturnSlot(c.sig.Return) {
+		if r.isAsyncFunc(fn) || r.isGeneratorFunc(fn) {
 			continue
 		}
 		if !r.funcReturnsBoxedChain(fn) {
@@ -302,27 +317,57 @@ func (r *Renderer) boxableReturnSlot(t frontend.Type) bool {
 	return r.boxableParamSlot(frontend.Param{Type: t})
 }
 
-// funcReturnsBoxedChain reports whether every return in a function's body hands back a
-// box. Every return has to agree, since the Go function has one result type: a body
-// that returns a box on one path and a struct on another has no single lowering here
-// and keeps the handback it had. A body with no return at all returns undefined and is
-// not this shape either.
+// funcReturnsBoxedChain reports whether a function hands back a box on any path.
+//
+// One such path settles it for the whole function, because a Go function has one result
+// type and a box is the only one of the two the other returns can be brought to: a
+// struct boxes on its way out through the ordinary return coercion, where a box has no
+// way to become the struct. That is the parameter half's rule read at the result, where
+// the static literal argument boxes into the slot the boxed call site decided.
+//
+// A body with no return at all hands back undefined and is not this shape. A concise
+// arrow has no return statement to read, so its single body expression is the path.
 func (r *Renderer) funcReturnsBoxedChain(fn frontend.Node) bool {
-	block, ok := r.funcBodyBlock(fn)
-	if !ok {
+	if block, ok := r.funcBodyBlock(fn); ok {
+		for _, ret := range r.returnsOfBody(block) {
+			kids := r.prog.Children(ret)
+			if len(kids) == 1 && r.returnHandsBackABox(kids[0]) {
+				return true
+			}
+		}
 		return false
 	}
-	returns := r.returnsOfBody(block)
-	if len(returns) == 0 {
+	kids := r.prog.Children(fn)
+	if len(kids) < 2 {
 		return false
 	}
-	for _, ret := range returns {
-		kids := r.prog.Children(ret)
-		if len(kids) != 1 || !r.isBoxedChain(kids[0]) {
-			return false
+	body := kids[len(kids)-1]
+	return body.Kind() != frontend.NodeBlock && r.returnHandsBackABox(body)
+}
+
+// returnHandsBackABox reports whether a returned expression hands back a box.
+//
+// It is isBoxedChain plus the shape that writes the disagreement into one expression
+// rather than across two returns, `return b ? m[k] : { id: 9, tag: 'z' }`. A returned
+// ternary does not lower as one value: flattenConditionalReturn turns it into an if with
+// a return in each arm, and each of those coerces to the function's result on its own.
+// So the arms are what to ask, and the recursion here is the one conditionalReturnStmts
+// takes so a chained ternary answers on any of its arms.
+func (r *Renderer) returnHandsBackABox(x frontend.Node) bool {
+	x = r.unwrapParens(x)
+	if x.Kind() != frontend.NodeConditionalExpression {
+		return r.isBoxedChain(x)
+	}
+	arms := r.prog.Children(x)
+	if len(arms) < 3 {
+		return false
+	}
+	for _, arm := range arms[1:] {
+		if r.returnHandsBackABox(arm) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // forceBoxedParams records each boxed parameter's own name or pattern node in the set a
@@ -390,21 +435,29 @@ func (r *Renderer) calleeFuncNode(n frontend.Node) (frontend.Node, bool) {
 // dynamic-locals set the body reads through, the argument coercion) picks its answer
 // from the type, so rewriting the type here is the whole of the change.
 //
-// The result is untouched: funcDeclNamed decides the Go result type for itself, beside
-// the growing-object override it already carries.
+// The result reads as any on the same terms once the function is known to hand back a
+// box, which is what gives an arrow and a function expression the value.Value result
+// their block body renders straight from the signature. A `function` declaration reaches
+// the same answer through funcDeclNamed, beside the growing-object override it already
+// carries.
 func (r *Renderer) boxedSig(fn frontend.Node, sig frontend.Signature) frontend.Signature {
 	marks := r.boxedParams[fn]
-	if len(marks) == 0 {
+	if len(marks) == 0 && !r.boxedReturnFns[fn] {
 		return sig
 	}
-	params := make([]frontend.Param, len(sig.Params))
-	copy(params, sig.Params)
-	for i := range params {
-		if i < len(marks) && marks[i] {
-			params[i].Type = frontend.Type{Flags: frontend.TypeAny}
+	if len(marks) != 0 {
+		params := make([]frontend.Param, len(sig.Params))
+		copy(params, sig.Params)
+		for i := range params {
+			if i < len(marks) && marks[i] {
+				params[i].Type = frontend.Type{Flags: frontend.TypeAny}
+			}
 		}
+		sig.Params = params
 	}
-	sig.Params = params
+	if r.boxedReturnFns[fn] {
+		sig.Return = frontend.Type{Flags: frontend.TypeAny}
+	}
 	return sig
 }
 

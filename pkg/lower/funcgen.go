@@ -1770,6 +1770,14 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 			return nil, &NotYetLowerable{Reason: "a concise arrow returning a binding forced dynamic by a computed key is a later slice"}
 		}
 	}
+	// A named arrow collectBoxedSignatures could not claim, one some reference passes as a
+	// value being the everyday reason, keeps the checker's return type. A concise body that
+	// answers a box would then be a value.Value returned into that shape, which is Go that
+	// does not build, so it hands back here. An inline callback is not in that set: its
+	// result comes from the slot it is passed to, not from a signature of its own.
+	if r.unclaimedFuncs[n] && body.Kind() != frontend.NodeBlock && r.isBoxedChain(body) {
+		return nil, &NotYetLowerable{Reason: "a concise arrow answering a box that some reference passes as a value is a later slice"}
+	}
 	fields, err := r.closureParamFields(n, sig, "arrow")
 	if err != nil {
 		return nil, err
@@ -1826,6 +1834,21 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 		return &ast.FuncLit{
 			Type: &ast.FuncType{Params: &ast.FieldList{List: fields}},
 			Body: &ast.BlockStmt{List: append(binds, &ast.ExprStmt{X: call})},
+		}, nil
+	}
+	// An arrow whose body is a box answers the box, the rule a `function` declaration
+	// takes in funcDeclNamed reached at the concise form. The body expression has already
+	// lowered to a value.Value, so the result is spelled value.Value and nothing coerces:
+	// boxing it again would build a second object off the checker's shape and lose the
+	// identity the one the walk found still has.
+	if r.boxedReturnFns[n] {
+		r.requireImport(valuePkg)
+		return &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{List: fields},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+			},
+			Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{loweredBody}})},
 		}, nil
 	}
 	// A contextual return type wider than the body's own coerces the body into it and
