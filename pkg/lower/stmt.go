@@ -301,6 +301,18 @@ func (r *Renderer) lowerForOf(n frontend.Node) (ast.Stmt, error) {
 	// types it. The arguments object ranges over the same Elems, off the store the
 	// body materialized, yielding each boxed argument. Any other iterable (a Set, a
 	// Map, a user iterator) is a later slice and hands back.
+	//
+	// An iterable the lowerer holds as a box while the checker holds a concrete shape,
+	// `for (const x of cfg.list)` where cfg was bound to a box, is asked at run time
+	// like any other boxed iterable. It routes before the shape switch below for the
+	// same reason the boxed method receiver does: the checker still says number[], so
+	// the array case would range .Elems on a value.Value, which is not a hand-back but
+	// Go that does not compile.
+	if r.isBoxedChain(kids[1]) {
+		if stmt, handled, err := r.forOfDynamic(kids[1], dkids[0], name, kids[2]); handled {
+			return stmt, err
+		}
+	}
 	var elemsMethod string
 	var iter ast.Expr
 	liveLen := false
@@ -1902,6 +1914,29 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding initialized by an assertion over a boxed value, the
+		// `const parsed = JSON.parse(s) as Config` every program that reads JSON is
+		// written with, holds the box the assertion is erased over. The checker types
+		// the binding by the asserted type, whose Go shape the box carries no fields
+		// for, so the binding lands in a value.Value slot and is marked dynamic and
+		// every later read off the name dispatches the way a read straight off the
+		// assertion does. An assertion to a primitive never reaches here:
+		// castOfDynamicOperand leaves those on the coercion that unboxes them into a
+		// float64, a value.BStr, or a bool.
+		if r.castOfDynamicOperand(kids[initIdx]) {
+			castInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{castInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 		if err != nil {
 			return nil, err
@@ -2705,13 +2740,18 @@ func (r *Renderer) dynamicSourceDestructure(patNode, initNode frontend.Node) ([]
 	if err != nil {
 		return nil, true, err
 	}
-	// An object rest this declaration binds is a boxed value the checker did not type any,
-	// so a read of it later in the scope must dispatch dynamically. Statements lower in
-	// order, so marking it here reaches every read below. The map is lazily created since
-	// a body with no destructured parameter never built one.
+	// Every name the pattern binds holds a box: the source is a boxed value, so the
+	// member and index reads that bind the names yield boxes too. When the source is an
+	// any the checker types those names any as well and the mark changes nothing, but
+	// when the box came from somewhere the checker gave a concrete shape,
+	// `const { a, b } = JSON.parse(s) as P`, the checker calls them number and string and
+	// a later read would take them for Go values they are not. Statements lower in order,
+	// so marking here reaches every read below. The map is lazily created since a body
+	// with no destructured parameter never built one.
 	if r.dynBoundLocals == nil {
 		r.dynBoundLocals = map[string]bool{}
 	}
+	r.collectAssignedNames(stmts, r.dynBoundLocals)
 	r.collectDynRestNames(patNode, r.dynBoundLocals)
 	return append(prefix, stmts...), true, nil
 }

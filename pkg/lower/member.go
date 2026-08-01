@@ -892,6 +892,26 @@ func (r *Renderer) isQuestionDotToken(n frontend.Node) bool {
 // class or object shapes all hand back to their own later slices.
 func (r *Renderer) optionalChainAccess(recvNode, nameNode frontend.Node) (ast.Expr, error) {
 	prop := r.prog.Text(nameNode)
+	// A boxed receiver answers the link at run time. The box already carries null and
+	// undefined among its kinds, so the short circuit is a nullish test on it and the
+	// read is the same dynamic Get every other member read off a box takes. This routes
+	// first because the checker still types the receiver by its shape, `{ b: number } |
+	// undefined`, and the Opt path below would map over a value.Value that is not an
+	// Opt, which is Go that does not compile rather than a hand-back.
+	if r.isBoxedChain(recvNode) || r.isDynamicType(r.prog.TypeAt(recvNode)) {
+		recvExpr, err := r.lowerExpr(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{
+			Fun: sel("value", "OptionalMember"),
+			Args: []ast.Expr{recvExpr, &ast.CallExpr{
+				Fun:  sel("value", "FromGoString"),
+				Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)}},
+			}},
+		}, nil
+	}
 	inner, ok := r.optionalInner(r.prog.UnionMembers(r.prog.TypeAt(recvNode)))
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "optional chain ?." + prop + " on a receiver that is not a T | undefined optional is a later slice"}
@@ -1048,6 +1068,46 @@ func (r *Renderer) isRootedInDynBound(n frontend.Node) bool {
 		switch n.Kind() {
 		case frontend.NodeIdentifier:
 			return r.isDynBoundReceiver(n)
+		case frontend.NodePropertyAccessExpression, frontend.NodeElementAccessExpression, frontend.NodeCallExpression:
+			kids := r.prog.Children(n)
+			if len(kids) == 0 {
+				return false
+			}
+			n = kids[0]
+		default:
+			return false
+		}
+	}
+}
+
+// isBoxedChain reports whether n lowers to a boxed value.Value because every step of
+// the chain that produced it did, as opposed to merely holding boxes inside something
+// else.
+//
+// isDynamic answers a broader question than that, and the difference matters wherever
+// the answer decides what method to emit. Array.prototype.map.call(xs, String) is
+// dynamic in isDynamic's sense, because its elements are boxes, but the call lowers to
+// a *value.Array[value.Value], which has Join and has no Get. Asking that receiver a
+// question through the runtime emits Go that does not compile.
+//
+// So this walks the chain instead of reading the type. A chain of reads, index reads,
+// and calls yields a box at every step once its root is one, and the two roots that are
+// boxes are a dynBound binding and an assertion erased over a box. Anything else stops
+// the walk and keeps its own handling.
+func (r *Renderer) isBoxedChain(n frontend.Node) bool {
+	for {
+		switch n.Kind() {
+		case frontend.NodeIdentifier:
+			return r.isDynBoundReceiver(n)
+		case frontend.NodeParenthesizedExpression, frontend.NodeAsExpression, frontend.NodeTypeAssertion, frontend.NodeNonNull:
+			if r.castOfDynamicOperand(n) {
+				return true
+			}
+			kids := r.prog.Children(n)
+			if n.Kind() != frontend.NodeParenthesizedExpression || len(kids) != 1 {
+				return false
+			}
+			n = kids[0]
 		case frontend.NodePropertyAccessExpression, frontend.NodeElementAccessExpression, frontend.NodeCallExpression:
 			kids := r.prog.Children(n)
 			if len(kids) == 0 {
