@@ -113,3 +113,96 @@ func TestAFunctionThatAnswersABox(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestAnArrowThatAnswersABox is the same rule at the other two ways to write a named
+// function. A helper bound to a const:
+//
+//	const head = (): Row => Object.values(m)[0];
+//
+// answers a box exactly as the `function` form does, and it is the form the everyday
+// helper takes. It reaches the answer from its own signature rather than through
+// funcDeclNamed, so both the block body, which renders its result from the signature, and
+// the concise body, which renders it from the body expression, have to arrive there.
+//
+// A concise arrow used to spell the declared struct as its result and return a
+// value.Value into it, which is Go that does not build.
+//
+// Held against what Node v24.18.0 prints.
+func TestAnArrowThatAnswersABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"const head = (): Row => Object.values(m)[0];\n"+
+			"const tail = (): Row => { return Object.values(m)[1]; };\n"+
+			"const byKey = function (k: string): Row { return m[k]; };\n"+
+			"const relay = (): Row => head();\n"+
+			"const label = (r: Row): string => r.tag;\n"+
+			"const h = head();\n"+
+			"console.log(h.id, h.tag);\n"+
+			"console.log(head().tag, head().id + 1);\n"+
+			"console.log(tail().tag, byKey('a').id);\n"+
+			"console.log(relay().tag, label(head()));\n"+
+			"console.log(`t=${head().tag}`);\n"+
+			"console.log(JSON.stringify({ ...head(), k: 1 }), head() === head());\n"+
+			"const rows = [head(), byKey('b')];\n"+
+			"console.log(rows.length, rows[1].tag);\n"+
+			"for (const r of [head()]) { console.log(r.id, typeof r); }\n"+
+			"console.log(head());\n")
+	want := "1 x\n" +
+		"x 2\n" +
+		"y 1\n" +
+		"x x\n" +
+		"t=x\n" +
+		"{\"id\":1,\"tag\":\"x\",\"k\":1} true\n" +
+		"2 y\n" +
+		"1 object\n" +
+		"{ id: 1, tag: 'x' }\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+// TestReturnsThatDisagreeAnswerABox covers the body that hands back a box on one path and
+// something it built itself on another, which is what a lookup with a fallback looks like:
+//
+//	function orLit(k: string, b: boolean): Row { if (b) return m[k]; return { id: 0, tag: 'd' } }
+//
+// One box settles it for the whole function, because a Go function has one result type and
+// the box is the only one of the two the other returns can be brought to: the literal boxes
+// on its way out through the ordinary return coercion, where a box has no way to become the
+// struct. That is the parameter half's rule read at the result, where the static literal
+// argument boxes into the slot the boxed call site decided.
+//
+// A returned ternary is the same disagreement written in one expression, and it lowers to a
+// return in each arm, so the arms are what decide it.
+//
+// Held against what Node v24.18.0 prints.
+func TestReturnsThatDisagreeAnswerABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"function orLit(k: string, b: boolean): Row { if (b) return m[k]; return { id: 0, tag: 'd' }; }\n"+
+			"function orTern(k: string, b: boolean): Row { return b ? m[k] : { id: 9, tag: 'z' }; }\n"+
+			"function orLocal(b: boolean): Row { const s: Row = { id: 5, tag: 'v' }; if (b) return m['a']; return s; }\n"+
+			"function orNested(b: boolean): Row { if (b) { if (b) return m['a']; } return { id: 0, tag: 'n' }; }\n"+
+			"function orTry(k: string): Row { try { return m[k]; } catch { return { id: 0, tag: 'e' }; } }\n"+
+			"function orSwitch(k: string, n: number): Row { switch (n) { case 1: return m[k]; default: return { id: 0, tag: 's' }; } }\n"+
+			"function deep(k: string, n: number): Row { if (n <= 0) return m[k]; return deep(k, n - 1); }\n"+
+			"console.log(orLit('a', true).tag, orLit('a', false).tag);\n"+
+			"console.log(orTern('b', true).id, orTern('b', false).id);\n"+
+			"console.log(orLocal(true).tag, orLocal(false).tag);\n"+
+			"console.log(orNested(true).id, orNested(false).tag);\n"+
+			"console.log(orTry('b').tag, orSwitch('a', 1).tag, orSwitch('a', 2).tag);\n"+
+			"console.log(deep('b', 3).tag);\n"+
+			"console.log(JSON.stringify(orLit('a', true)), JSON.stringify({ ...orLit('a', false) }));\n")
+	want := "x d\n" +
+		"2 9\n" +
+		"x v\n" +
+		"1 n\n" +
+		"y x s\n" +
+		"y\n" +
+		"{\"id\":1,\"tag\":\"x\"} {\"id\":0,\"tag\":\"d\"}\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
