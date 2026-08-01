@@ -299,3 +299,58 @@ func TestAStaticMethodTakesAndAnswersABox(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestAGetterAnswersABox covers the accessor. A getter emits through the method path and
+// takes no parameters, so only note 386's return half can apply, and it applies on the
+// same terms: a body that hands back a box gives the getter a value.Value result.
+//
+// What is different is where the box arrives. A getter is called by being read, so the
+// property read is the site that has to know it is holding one, and it is also why the
+// read-as-a-value check that protects a method from rows.map(s.take) is not asked here:
+// it would match every getter's own use. An unrelated object's property of the same name
+// is a separate read that resolves to itself, so it neither takes the rewrite nor blocks
+// it.
+//
+// A static getter is the package function half, read off the class name.
+//
+// Held against what Node v24.18.0 prints.
+func TestAGetterAnswersABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"class Store {\n"+
+			"  on = true;\n"+
+			"  get head(): Row { return Object.values(m)[0]; }\n"+
+			"  get second(): Row { return m['b']; }\n"+
+			"  get either(): Row { if (this.on) return m['a']; return { id: 0, tag: 'd' }; }\n"+
+			"  get count(): number { return 5; }\n"+
+			"  label(r: Row): string { return r.tag; }\n"+
+			"  headTag(): string { return this.head.tag; }\n"+
+			"}\n"+
+			"class Reg { static get head(): Row { return m['a']; } }\n"+
+			"const s = new Store();\n"+
+			"const o = { head: 5 };\n"+
+			"console.log(s.head.tag, s.head.id, s.second.tag);\n"+
+			"console.log(s.label(s.head), s.headTag(), s.count + 1, o.head);\n"+
+			"console.log(s.either.tag);\n"+
+			"s.on = false;\n"+
+			"console.log(s.either.tag);\n"+
+			"console.log(`${s.head.tag}!`, s.head.id + 1);\n"+
+			"console.log(JSON.stringify({ ...s.head, k: 2 }), s.head === s.head);\n"+
+			"console.log(Reg.head.tag, JSON.stringify(Reg.head));\n"+
+			"for (const k of Object.keys(m)) { console.log(k, s.second.tag); }\n"+
+			"console.log(s.head);\n")
+	want := "x 1 y\n" +
+		"x x 6 5\n" +
+		"x\n" +
+		"d\n" +
+		"x! 2\n" +
+		"{\"id\":1,\"tag\":\"x\",\"k\":2} true\n" +
+		"x {\"id\":1,\"tag\":\"x\"}\n" +
+		"a y\n" +
+		"b y\n" +
+		"{ id: 1, tag: 'x' }\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}

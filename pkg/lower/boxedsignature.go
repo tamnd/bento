@@ -83,9 +83,8 @@ type boxableFunc struct {
 //
 // A named function is a candidate whether it was written as a `function` declaration or
 // bound to a name as an arrow or a function expression, since both lower from one
-// signature read at one place. A method is not: its signature is read again at the
-// vtable and at every call through an interface, and there is no single place a rewrite
-// would land, so a method keeps the handback it has.
+// signature read at one place. addBoxableMethods adds the class members that meet the
+// same condition.
 //
 // A symbol referenced anywhere but as the callee of a direct call is left alone as
 // well. Rewriting the parameter changes the function's Go type, so a reference that
@@ -164,6 +163,9 @@ func (r *Renderer) addBoxableMethods(out map[frontend.Node]boxableFunc) {
 		for _, m := range info.staticMethods {
 			r.addBoxableMethod(out, m)
 		}
+		for _, g := range info.staticGetters {
+			r.addBoxableGetter(out, g)
+		}
 		if info.base != nil || derived[info] {
 			continue
 		}
@@ -173,7 +175,29 @@ func (r *Renderer) addBoxableMethods(out map[frontend.Node]boxableFunc) {
 			}
 			r.addBoxableMethod(out, m)
 		}
+		for _, g := range info.getters {
+			if info.isVirtual(g.prop) {
+				continue
+			}
+			r.addBoxableGetter(out, g)
+		}
 	}
+}
+
+// addBoxableGetter records a getter as a candidate. A getter emits through the method
+// path and takes no parameters, so only the return half of the rewrite can apply, and it
+// applies on the same terms: a body that hands back a box gives the getter a value.Value
+// result and the read off it dispatches.
+//
+// It skips the read-as-a-value check the other two take, because a getter has no shape a
+// program can read without calling it. Reading `s.head` is how a getter is invoked, so
+// that check would match the getter's own use and leave every getter alone.
+func (r *Renderer) addBoxableGetter(out map[frontend.Node]boxableFunc, g classMethod) {
+	sig, ok := r.prog.SignatureAt(g.node)
+	if !ok || len(sig.TypeParams) != 0 {
+		return
+	}
+	out[g.node] = boxableFunc{sig: sig}
 }
 
 // addBoxableMethod records one method as a candidate when its Go signature is one this
@@ -597,6 +621,34 @@ func (r *Renderer) callOfBoxedReturnFunc(n frontend.Node) bool {
 	}
 	fn, ok := r.calleeFuncNode(n)
 	return ok && r.boxedReturnFns[fn]
+}
+
+// readOfBoxedGetter reports whether a property read runs a getter this pass gave a
+// value.Value result. A getter is called by being read, so the read is where its box
+// arrives, and this is the getter's answer to the question callOfBoxedReturnFunc answers
+// for everything that is called with parentheses.
+func (r *Renderer) readOfBoxedGetter(n frontend.Node) bool {
+	if len(r.boxedReturnFns) == 0 || n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || kids[1].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	name := r.prog.Text(kids[1])
+	// A receiver naming the class itself reads the package function a static getter
+	// became, the same split calleeMethodNode makes for a call.
+	if info, ok := r.classNameRef(kids[0]); ok {
+		if g, ok := info.staticGetterByName(name); ok {
+			return r.boxedReturnFns[g.node]
+		}
+	}
+	info, ok := r.classReceiver(kids[0])
+	if !ok {
+		return false
+	}
+	g, ok := info.getterByName(name)
+	return ok && r.boxedReturnFns[g.node]
 }
 
 // isBoxedParamRead reports whether an identifier names a parameter this pass gave a
