@@ -423,3 +423,69 @@ func TestAFieldHoldsABox(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestAFieldHoldsABoxInAHierarchy lifts note 389's boundary for the field. A method had to
+// stop at a hierarchy because its Go signature is written again at the vtable and at the
+// interface every derived receiver is called through. A field is not: it lives in the
+// struct of the class that declares it and nowhere else, a derived struct embeds its base
+// and reaches it through Go's own promotion, and registration rejects a derived member
+// sharing a base member's name, so at most one class on a chain owns any property. The
+// one-place condition the whole pass rests on holds however deep the chain is.
+//
+// So a base's field, a derived class's own field, a store written in a derived class, a
+// read from a base method every subclass inherits, and a read through a base-typed
+// binding all reach the same value slot. A virtual method still dispatches; what changed
+// is only what the field it reads holds.
+//
+// The constructor comes along for the same reason, being a package function written once
+// per class. super(r) is where the box reaches the base's parameter, since a derived class
+// hands its own parameter straight on and only the base's declaration says what the field
+// it fills holds.
+//
+// Held against what Node prints.
+func TestAFieldHoldsABoxInAHierarchy(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"abstract class Base {\n"+
+			"  first: Row = Object.values(m)[0];\n"+
+			"  cur: Row = { id: 0, tag: 'z' };\n"+
+			"  abstract kind(): string;\n"+
+			"  show(): string { return this.kind() + this.first.tag; }\n"+
+			"  label(): string { return 'B' + this.first.id; }\n"+
+			"}\n"+
+			"class Mid extends Base {\n"+
+			"  own: Row = m['b'];\n"+
+			"  kind(): string { return 'm'; }\n"+
+			"  load(k: string): void { this.cur = m[k]; }\n"+
+			"}\n"+
+			"class Leaf extends Mid {\n"+
+			"  n = 7;\n"+
+			"  label(): string { return 'L' + this.first.tag + this.own.id; }\n"+
+			"}\n"+
+			"class Held { r: Row; constructor(r: Row) { this.r = r; } }\n"+
+			"class HeldMore extends Held {\n"+
+			"  n: number;\n"+
+			"  constructor(r: Row, n: number) { super(r); this.n = n; }\n"+
+			"}\n"+
+			"const leaf = new Leaf();\n"+
+			"console.log(leaf.first.tag, leaf.own.tag, leaf.cur.tag, leaf.n);\n"+
+			"leaf.load('a');\n"+
+			"console.log(leaf.cur.tag, leaf.show(), JSON.stringify(leaf.first));\n"+
+			"const xs: Base[] = [new Mid(), leaf];\n"+
+			"for (const x of xs) { console.log(x.label(), x.show()); }\n"+
+			"const b: Mid = leaf;\n"+
+			"console.log(b.first.id, b.own.tag, b.first === leaf.first);\n"+
+			"console.log(new HeldMore(m['b'], 4).r.tag, new HeldMore({ id: 5, tag: 'p' }, 1).r.id);\n"+
+			"console.log(new Held(Object.values(m)[0]).r.tag);\n")
+	want := "x y z 7\n" +
+		"x mx {\"id\":1,\"tag\":\"x\"}\n" +
+		"B1 mx\n" +
+		"Lx2 mx\n" +
+		"1 y true\n" +
+		"y 5\n" +
+		"x\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}

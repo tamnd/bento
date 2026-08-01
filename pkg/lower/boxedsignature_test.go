@@ -332,20 +332,54 @@ func TestAConstructorParameterACallSiteBoxesTakesABoxedSlot(t *testing.T) {
 	}
 }
 
-// TestAFieldInAHierarchyIsLeftAlone pins the boundary. A base or a subclass spells the
-// field's Go type in more than one struct, and the embedded base means a read can arrive
-// through either, so the rewrite stops where note 387 stopped and the program hands back
-// rather than compiling half a decision.
-func TestAFieldInAHierarchyIsLeftAlone(t *testing.T) {
+// TestAFieldInABaseTakesTheValueSlot lifts note 389's boundary. A method stops at a
+// hierarchy because its Go signature is written again at the vtable and at the interface;
+// a field is written into the struct of the class that declares it and nowhere else, so
+// the one-place condition still holds and the derived struct reaches it through Go's own
+// promotion.
+func TestAFieldInABaseTakesTheValueSlot(t *testing.T) {
 	const src = boxedSigPrelude +
-		"class B { first: Row = m['a']; }\n" +
+		"class B { first: Row = Object.values(m)[0]; }\n" +
 		"class C extends B { extra = 2; }\n" +
 		"console.log(new C().first.tag, new C().extra);"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "First value.Value `json:\"first\"`") {
+		t.Fatalf("a field in a base did not take the value slot:\n%s", out)
+	}
+	if strings.Count(out, "First value.Value") != 1 {
+		t.Fatalf("the boxed field was written into more than the declaring struct:\n%s", out)
+	}
+}
+
+// TestAStoreInADerivedClassBoxesTheBaseField pins the receiver walking the chain. The
+// store names the derived class, the field belongs to the base, and Go promotion is what
+// joins them, so the pass has to match a receiver by what its property resolves to rather
+// than by the class itself.
+func TestAStoreInADerivedClassBoxesTheBaseField(t *testing.T) {
+	const src = boxedSigPrelude +
+		"class B { cur: Row = { id: 0, tag: 'z' }; }\n" +
+		"class C extends B { load(k: string): void { this.cur = m[k]; } }\n" +
+		"const c = new C();\nc.load('b');\nconsole.log(c.cur.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "Cur value.Value `json:\"cur\"`") {
+		t.Fatalf("a store in a derived class did not box the base field:\n%s", out)
+	}
+}
+
+// TestASuperCallCarriesABoxToTheBaseConstructor pins the one call site a derived class
+// makes that no other shape covers. The derived constructor hands its own parameter
+// straight on, and only the base's declaration says what the field it fills holds, so
+// without reading super(...) as a call into the base the chain stopped one class short.
+func TestASuperCallCarriesABoxToTheBaseConstructor(t *testing.T) {
+	const src = boxedSigPrelude +
+		"class A { r: Row; constructor(r: Row) { this.r = r; } }\n" +
+		"class B extends A { n: number; constructor(r: Row, n: number) { super(r); this.n = n; } }\n" +
+		"console.log(new B(Object.values(m)[0], 4).r.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "func NewA(r value.Value) *A") {
+		t.Fatalf("a super call did not carry the box to the base constructor:\n%s", out)
+	}
+	if !strings.Contains(out, "func NewB(r value.Value, n float64) *B") {
+		t.Fatalf("the derived constructor did not take the boxed slot:\n%s", out)
 	}
 }
