@@ -1135,6 +1135,18 @@ func (r *Renderer) boxStringIndexRead(n frontend.Node) (ast.Expr, bool, error) {
 // the dynamic-name marks, and reports whether it changed anything so the caller only
 // defers a restore when it did. A callback whose parameters all lower cleanly is left
 // untouched, so an existing typed callback keeps its exact static lowering.
+// takesADynamicArg reports whether a boxed value can land in a slot of this type, which
+// is the question boxFuncToDynamic's wrapper asks of every parameter it passes through.
+// A type the checker already calls any or unknown holds the box as it is. The three
+// primitives take it through their coercion. Nothing else has one, so this is the same
+// set coerceDynamicToStaticFlags answers for, read ahead of the attempt rather than
+// after the hand-back.
+func (r *Renderer) takesADynamicArg(t frontend.Type) bool {
+	const takes = frontend.TypeAny | frontend.TypeUnknown |
+		frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
+	return t.Flags&takes != 0
+}
+
 func (r *Renderer) forceCallbackDynParams(n frontend.Node) (func(), bool) {
 	if n.Kind() != frontend.NodeArrowFunction && n.Kind() != frontend.NodeFunctionExpression {
 		return nil, false
@@ -1150,10 +1162,20 @@ func (r *Renderer) forceCallbackDynParams(n frontend.Node) (func(), bool) {
 		if !ok {
 			continue
 		}
-		// A parameter whose static type lowers cleanly keeps it; only one bento cannot
-		// spell yet is forced dynamic, so a number or string callback parameter is
-		// untouched and its golden does not move.
-		if _, err := r.typeExpr(r.prog.TypeAt(pkids[0])); err == nil {
+		// A parameter whose static type lowers cleanly and can take a box keeps it, so a
+		// number or string callback parameter is untouched and its golden does not move.
+		//
+		// Lowering cleanly is not enough on its own. The wrapper this callback goes into
+		// is handed its arguments already boxed, so the parameter also has to be a slot a
+		// box can land in, and only the primitives are: ToNumber, ToString and ToBoolean
+		// are the whole of the coercion. A shape lowers perfectly well to a Go struct and
+		// there is still no way to put a box in it, which is what made
+		// rows.map((r: Row) => r.id) hand back while rows.map((x: number) => x * 2)
+		// worked. Forcing it dynamic is the honest answer rather than the missing one:
+		// the argument is a box, so the parameter holds a box and the body reads it the
+		// way it reads any other.
+		pt := r.prog.TypeAt(pkids[0])
+		if _, err := r.typeExpr(pt); err == nil && r.takesADynamicArg(pt) {
 			continue
 		}
 		forced = append(forced, pkids[0])
@@ -1934,7 +1956,7 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 			&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
 		}
 	} else {
-		boxed, err := r.boxStaticToDynamicFlags(inner, sig.Return.Flags)
+		boxed, err := r.boxStaticResultToDynamic(inner, sig.Return)
 		if err != nil {
 			return nil, err
 		}
@@ -2020,6 +2042,37 @@ func (r *Renderer) boxStaticToDynamicFlags(expr ast.Expr, flags frontend.TypeFla
 	default:
 		return nil, &NotYetLowerable{Reason: "boxing this static result type into a dynamic value is a later slice"}
 	}
+}
+
+// boxStaticResultToDynamic boxes a call's static result into a value.Value, which is
+// what the wrapper around a boxed function has to do with whatever the inner call
+// returns.
+//
+// The flag-keyed path answers the primitives. Beyond them a result still has a box, it
+// just needs the type rather than the flags to name it: a fixed shape rides the same
+// reflection ObjectFromStruct does everywhere else, and an array of a boxable element
+// walks through ArrayValueOf. Those two are what a callback into a dynamic call returns
+// in practice, rows.map(r => ({ v: r.id })) and rows.flatMap(r => [r.id, r.id]), and
+// without them a callback that returns anything but a primitive handed the build back.
+func (r *Renderer) boxStaticResultToDynamic(expr ast.Expr, t frontend.Type) (ast.Expr, error) {
+	boxed, err := r.boxStaticToDynamicFlags(expr, t.Flags)
+	if err == nil {
+		return boxed, nil
+	}
+	if r.isFixedObjectShape(t) {
+		if _, ierr := r.decls.internStruct(r, t); ierr != nil {
+			return nil, ierr
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "ObjectFromStruct"), Args: []ast.Expr{expr}}, nil
+	}
+	if elem, ok := r.prog.ElementType(t); ok {
+		if box := r.dynValueBox(elem); box != nil {
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "ArrayValueOf"), Args: []ast.Expr{expr, box}}, nil
+		}
+	}
+	return nil, err
 }
 
 // producesBoxedValue reports whether a source expression already lowers to a
