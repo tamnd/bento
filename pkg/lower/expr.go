@@ -543,7 +543,14 @@ func (r *Renderer) castExpr(n frontend.Node, innerIdx int) (ast.Expr, error) {
 	// gives a value the type says is impossible. An operand whose read already
 	// unwrapped (a narrowed optional local, whose type at the node no longer carries
 	// undefined) does not reach here, since the test is the operand's own type.
-	if r.isOptionalType(r.prog.TypeAt(inner)) && !r.isOptionalType(r.prog.TypeAt(n)) {
+	// An operand that lowered to a box is not a value.Opt at all, whatever the checker
+	// calls its type. `mp.get(k)!` off a map the boxed pass gave a value slot is the
+	// shape: the checker still types the get Row | undefined, and the lowering already
+	// answered a value.Value carrying the entry or undefined. Unwrapping it would call
+	// Get on a value.Value, which is the map read rather than the optional's, so the box
+	// crosses as itself and the reads off it dispatch.
+	if r.isOptionalType(r.prog.TypeAt(inner)) && !r.isOptionalType(r.prog.TypeAt(n)) &&
+		!r.isBoxedChain(inner) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("Get")}}, nil
 	}
 	// An assertion over a value that is already a box, `e as Error` in a catch block,

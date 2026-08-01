@@ -84,6 +84,13 @@ func (r *Renderer) renderWeakMap(t frontend.Type) (ast.Expr, error) {
 // a func) is not a weak key and hands back, upholding the zero-fail rule rather than
 // emit a weak collection over a type the runtime cannot hold.
 func (r *Renderer) weakKeyPointee(k frontend.Type) (ast.Expr, error) {
+	// A slot the boxed-signature pass rewrote reads as any here, which is the shape of a
+	// weak collection holding boxed members. value.WeakSet and value.WeakMap are generic
+	// over the pointee they hold weakly, and a value.Value is not a pointer, so this is a
+	// runtime shape that does not exist yet rather than a key that could never be one.
+	if k.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return nil, &NotYetLowerable{Reason: "a weak collection whose member slot holds a box is a later slice"}
+	}
 	if k.Flags&frontend.TypeObject == 0 {
 		return nil, &NotYetLowerable{Reason: "a weak collection keyed by a non-object type is not lowerable"}
 	}

@@ -534,3 +534,170 @@ func TestAStoreFromAnotherBoxedLocalMarksBoth(t *testing.T) {
 		t.Fatalf("the store between two boxed locals did not hand the box straight on:\n%s", out)
 	}
 }
+
+// TestASetAnAddBoxesTakesTheValueSlot pins the collection half at the plainest fill. A
+// Go set has one element type, read by the constructor and by every variable that holds
+// it, so an add of a box settles the slot for the whole collection: the set is built
+// over value.Value and the static add boxes on its way in.
+func TestASetAnAddBoxesTakesTheValueSlot(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const s = new Set<Row>();\n" +
+		"s.add(m['a']);\n" +
+		"s.add({ id: 7, tag: 'q' });\n" +
+		"console.log(s.size, s.has(m['a']));"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "s := value.NewDynSet()") {
+		t.Fatalf("the set did not take the value model for its members:\n%s", out)
+	}
+	if !strings.Contains(out, `s.Add(m.Get(value.FromGoString("a")))`) {
+		t.Fatalf("the boxed member did not cross into the slot as itself:\n%s", out)
+	}
+	if !strings.Contains(out, "s.Add(value.NewObject()") {
+		t.Fatalf("the static member did not box on its way into the slot:\n%s", out)
+	}
+}
+
+// TestABoxedSetMemberCrossesWithoutRewrapping is the identity half. A member matches by
+// object identity, so boxing a box again would build a second object and the has() would
+// miss what the add() just stored. The two calls have to spell the same expression.
+func TestABoxedSetMemberCrossesWithoutRewrapping(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const s = new Set<Row>();\n" +
+		"s.add(m['a']);\n" +
+		"console.log(s.has(m['a']));"
+	out := renderProgram(t, src)
+	if strings.Contains(out, "s.Has(value.NewObject()") {
+		t.Fatalf("a member that was already a box was boxed again:\n%s", out)
+	}
+	if !strings.Contains(out, `s.Has(m.Get(value.FromGoString("a")))`) {
+		t.Fatalf("the has did not read the same box the add stored:\n%s", out)
+	}
+}
+
+// TestAMapValueSlotTakesABoxAndHandsOneBack reads the same rule on the two-slot
+// collection, where the key and the value are marked apart: a box crossing into the
+// value leaves the key its declared string.
+func TestAMapValueSlotTakesABoxAndHandsOneBack(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const mm = new Map<string, Row>();\n" +
+		"mm.set('a', m['a']);\n" +
+		"mm.set('b', { id: 7, tag: 'q' });\n" +
+		"const got = mm.get('a');\n" +
+		"console.log(got!.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "mm := value.NewStringMap[value.Value]()") {
+		t.Fatalf("only the map's value slot should have taken the box:\n%s", out)
+	}
+	if !strings.Contains(out, "var got value.Value = value.OptValue(mm.Get(") {
+		t.Fatalf("the get did not hand a box back:\n%s", out)
+	}
+	if !strings.Contains(out, `got.Get(value.FromGoString("tag"))`) {
+		t.Fatalf("the read off the got value did not dispatch at run time:\n%s", out)
+	}
+}
+
+// TestASetBuiltFromABoxedIterableTakesTheValueSlot pins the fill the constructor makes
+// rather than a written add. The members arrive through the iteration protocol already
+// boxed, so the slot they land in is the same one an add would have settled.
+func TestASetBuiltFromABoxedIterableTakesTheValueSlot(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const s = new Set<Row>(Object.values(m));\n" +
+		"console.log(s.size);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "_bt0 := value.NewDynSet()") {
+		t.Fatalf("the set built from a boxed iterable did not take the value slot:\n%s", out)
+	}
+}
+
+// TestAMapBuiltFromPairsMarksTheHalfTheBoxCrosses is the constructor's own fill on the
+// two-slot collection. A literal of pairs fills the map one pair at a time, the same two
+// slots a written set() fills, so a box in a pair's second half marks the value slot and
+// leaves the key alone.
+func TestAMapBuiltFromPairsMarksTheHalfTheBoxCrosses(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const mm = new Map<string, Row>([['a', m['a']], ['b', { id: 7, tag: 'q' }]]);\n" +
+		"console.log(mm.size);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.NewStringMap[value.Value]()") {
+		t.Fatalf("the map built from pairs did not take the box in its value slot:\n%s", out)
+	}
+	if !strings.Contains(out, `_bt0.Set(value.FromGoString("a"), m.Get(value.FromGoString("a")))`) {
+		t.Fatalf("the boxed half did not cross as itself:\n%s", out)
+	}
+	if !strings.Contains(out, "value.NewObject().Set(value.FromGoString(\"id\")") {
+		t.Fatalf("the static half did not box on its way into the shared slot:\n%s", out)
+	}
+}
+
+// TestAReadOffABoxedCollectionBindsABox covers the read side at the three spellings that
+// bind a member: the forEach callback's parameter, a for...of head, and the array a
+// spread splices. Each hands back the box the slot holds rather than the shape the
+// declaration names, so every read in the body dispatches.
+func TestAReadOffABoxedCollectionBindsABox(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const s = new Set<Row>();\n" +
+		"s.add(m['a']);\n" +
+		"s.forEach((r) => { console.log(r.tag); });\n" +
+		"for (const r of s) { console.log(r.tag); }\n" +
+		"console.log([...s].length);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "s.ForEach(func(r value.Value)") {
+		t.Fatalf("the forEach callback did not take the box the slot holds:\n%s", out)
+	}
+	if !strings.Contains(out, "for _, r := range s.Members()") {
+		t.Fatalf("the for...of head did not range the boxed members:\n%s", out)
+	}
+	if strings.Count(out, `r.Get(value.FromGoString("tag"))`) != 2 {
+		t.Fatalf("a read off a bound member did not dispatch at run time:\n%s", out)
+	}
+	if !strings.Contains(out, "value.NewArrayValue(append([]value.Value{}, s.Members()...))") {
+		t.Fatalf("the spread did not splice the boxed members:\n%s", out)
+	}
+}
+
+// TestABoxedCollectionSpellingWithNoSlotYetHandsBack keeps the boundary honest at the two
+// spellings this slice does not reach. A weak collection is generic over the pointee it
+// holds weakly and a value.Value is not a pointer, and the [key, value] pair materializes
+// into an interned tuple whose field types are the tuple's own slot to give way. Neither
+// is Go that could be emitted from what exists, so both hand back rather than miscompile.
+func TestABoxedCollectionSpellingWithNoSlotYetHandsBack(t *testing.T) {
+	for name, tc := range map[string]struct{ src, reason string }{
+		"weak set": {
+			"const w = new WeakSet<Row>();\n" +
+				"w.add(m['a']);\nconsole.log(w.has(m['a']));",
+			"weak collection whose member slot holds a box"},
+		"weak map": {
+			"const w = new WeakMap<Row, number>();\n" +
+				"w.set(m['a'], 1);\nconsole.log(w.has(m['a']));",
+			"weak collection whose member slot holds a box"},
+		"map entry pair": {
+			"const mm = new Map<string, Row>();\nmm.set('a', m['a']);\n" +
+				"for (const e of mm.entries()) { console.log(e); }",
+			"whose slot holds a box is a later slice"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reason := renderProgramHandBack(t, boxedSigPrelude+tc.src)
+			if !strings.Contains(reason, tc.reason) {
+				t.Errorf("hand-back reason = %q, want it to name %q", reason, tc.reason)
+			}
+		})
+	}
+}
+
+// TestABoxedTemplateSubstitutionTakesTheJoin pins the template decision the boxed slot
+// reaches. `${[...s].length}` is typed number by the checker and is a value.Value at run
+// time, and the string builder appends a Go primitive, so a box has to take the join
+// path, whose stringify is what brings it down to its text.
+func TestABoxedTemplateSubstitutionTakesTheJoin(t *testing.T) {
+	const src = boxedSigPrelude +
+		"const s = new Set<Row>();\n" +
+		"s.add(m['a']);\n" +
+		"console.log(`${[...s].map((r) => r.tag).join(',')} ${[...s].length}`);"
+	out := renderProgram(t, src)
+	if strings.Contains(out, ".Num(") || strings.Contains(out, ".Str(") {
+		t.Fatalf("a boxed substitution reached the string builder:\n%s", out)
+	}
+	if !strings.Contains(out, ".ConcatN(") {
+		t.Fatalf("the template did not take the join a boxed substitution needs:\n%s", out)
+	}
+}

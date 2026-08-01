@@ -1718,14 +1718,12 @@ func (r *Renderer) mapMethodCall(recvNode frontend.Node, method string, argNodes
 	slots := []frontend.Type{k, v}
 	args := make([]ast.Expr, 0, want)
 	for i, a := range argNodes {
-		lowered, err := r.lowerExpr(a)
+		if i >= len(slots) {
+			return nil, &NotYetLowerable{Reason: "map method ." + method + " with this argument count is a later slice"}
+		}
+		lowered, err := r.collSlotArg(a, slots[i], hasKV)
 		if err != nil {
 			return nil, err
-		}
-		if hasKV && i < len(slots) && slots[i].Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 && !r.isDynamic(a) {
-			if lowered, err = r.boxStaticToDynamic(lowered, a); err != nil {
-				return nil, err
-			}
 		}
 		args = append(args, lowered)
 	}
@@ -1793,21 +1791,33 @@ func (r *Renderer) setMethodCall(recvNode frontend.Node, method string, argNodes
 	// A set whose member type nothing narrowed holds boxed values, so each argument
 	// crosses into that slot the same way a dynamic map's key does.
 	elem, hasElem := r.setElem(r.prog.TypeAt(recvNode))
-	dynElem := hasElem && elem.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
 	args := make([]ast.Expr, 0, want)
 	for _, a := range argNodes {
-		lowered, err := r.lowerExpr(a)
+		lowered, err := r.collSlotArg(a, elem, hasElem)
 		if err != nil {
 			return nil, err
-		}
-		if dynElem && !r.isDynamic(a) {
-			if lowered, err = r.boxStaticToDynamic(lowered, a); err != nil {
-				return nil, err
-			}
 		}
 		args = append(args, lowered)
 	}
 	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(goName)}, Args: args}, nil
+}
+
+// collSlotArg lowers one argument crossing into a collection slot, boxing it when the
+// slot holds the value model and the argument is not already a box. It is the one
+// coercion every fill of a Set member or a Map key or value runs, whether the fill is
+// written as a method call or is the constructor's own from a literal of pairs. An
+// argument that is already a box crosses as itself: boxing it again would build a second
+// object, and an object member matches by identity, so a has() would then miss what an
+// add() just stored.
+func (r *Renderer) collSlotArg(a frontend.Node, slot frontend.Type, hasSlot bool) (ast.Expr, error) {
+	lowered, err := r.lowerExpr(a)
+	if err != nil {
+		return nil, err
+	}
+	if !hasSlot || slot.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 || r.isDynamic(a) {
+		return lowered, nil
+	}
+	return r.boxStaticToDynamic(lowered, a)
 }
 
 // mapForEach lowers map.forEach(cb), the insertion-order traversal (section 6.5).
@@ -1834,6 +1844,17 @@ func (r *Renderer) mapForEach(recvNode frontend.Node, argNodes []frontend.Node) 
 	if err != nil {
 		return nil, err
 	}
+	// forEach passes the value then the key, so parameter 0 is the value slot and
+	// parameter 1 the key, and each is forced only if the pass boxed that slot. A
+	// Map<string, Row> whose values hold boxes forces the value and leaves the key the
+	// value.BStr the Go ForEach really hands it.
+	valBoxed, keyBoxed := r.boxedMapVal(recvNode), r.boxedMapKey(recvNode)
+	if valBoxed || keyBoxed {
+		want := func(i int) bool { return (i == 0 && valBoxed) || (i == 1 && keyBoxed) }
+		if restore, ok := r.forceCallbackDynParamsAt(argNodes[0], want); ok {
+			defer restore()
+		}
+	}
 	fn, err := r.lowerExpr(argNodes[0])
 	if err != nil {
 		return nil, err
@@ -1857,6 +1878,15 @@ func (r *Renderer) setForEach(recvNode frontend.Node, argNodes []frontend.Node) 
 	recv, err := r.lowerExpr(recvNode)
 	if err != nil {
 		return nil, err
+	}
+	// A set the boxed pass gave a value slot hands its callback a box, so the member
+	// parameter takes a value.Value slot and the body reads it through the value model.
+	// The Go ForEach on such a set takes func(value.Value), so this is what makes the two
+	// ends agree rather than a preference.
+	if r.boxedSetElem(recvNode) {
+		if restore, ok := r.forceCallbackDynParamsAt(argNodes[0], func(i int) bool { return i == 0 }); ok {
+			defer restore()
+		}
 	}
 	fn, err := r.lowerExpr(argNodes[0])
 	if err != nil {

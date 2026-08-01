@@ -652,3 +652,164 @@ func TestALocalWhoseStoreHandsItABox(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestACollectionWhoseElementSlotTakesABox holds the boxed collection slot against
+// Node: a Set or a Map some call hands a box holds its members boxed, and every read
+// of one hands a box back. The program covers the writes (add, set, the constructor
+// from a boxed iterable and from a literal of pairs), the reads (get, forEach,
+// for...of over the collection and over its values and keys, the destructured pair
+// head, a spread, a stored iterator), and the places a collection lives (a local, a
+// field, a declared parameter, another collection). Identity is checked because a
+// copy into a Go struct would have lost it.
+func TestACollectionWhoseElementSlotTakesABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"\n"+
+			"const out: string[] = [];\n"+
+			"\n"+
+			"// A set the box crosses into on add, and the reads that follow it.\n"+
+			"const s = new Set<Row>();\n"+
+			"s.add(m['a']);\n"+
+			"s.add({ id: 3, tag: 'c' });\n"+
+			"out.push(`${s.size} ${s.has(m['a'])} ${s.has(m['b'])}`);\n"+
+			"out.push(`${s.delete(m['a'])} ${s.size}`);\n"+
+			"\n"+
+			"// A set built from a boxed iterable holds boxes from the start.\n"+
+			"const all = new Set<Row>(Object.values(m));\n"+
+			"let acc = '';\n"+
+			"for (const r of all) {\n"+
+			"  acc += r.tag;\n"+
+			"}\n"+
+			"const tags: string[] = [];\n"+
+			"all.forEach((r) => {\n"+
+			"  tags.push(r.tag);\n"+
+			"});\n"+
+			"out.push(`${all.size} ${acc} ${tags.join('|')}`);\n"+
+			"\n"+
+			"// Spread of a boxed set, and the array reads that follow it.\n"+
+			"out.push(`${[...all].map((r) => r.tag).join(',')} ${[...all].length}`);\n"+
+			"out.push(JSON.stringify([...all]));\n"+
+			"\n"+
+			"// The identity a copy would have lost.\n"+
+			"const first = m['a'];\n"+
+			"all.add(first);\n"+
+			"out.push(`${all.size} ${first === m['a']} ${all.has(first)}`);\n"+
+			"\n"+
+			"// A map whose value slot takes the box, read every way a value is read.\n"+
+			"const byKey = new Map<string, Row>();\n"+
+			"for (const k of Object.keys(m)) {\n"+
+			"  byKey.set(k, m[k]);\n"+
+			"}\n"+
+			"byKey.set('s', { id: 4, tag: 'd' });\n"+
+			"const pairs: string[] = [];\n"+
+			"byKey.forEach((v, k) => {\n"+
+			"  pairs.push(k + v.tag);\n"+
+			"});\n"+
+			"out.push(`${byKey.size} ${byKey.get('a')!.id} ${byKey.get('zz')?.tag} ${pairs.join(',')}`);\n"+
+			"\n"+
+			"const seen: string[] = [];\n"+
+			"for (const [k, v] of byKey) {\n"+
+			"  seen.push(`${k}${v.id}`);\n"+
+			"}\n"+
+			"let vacc = '';\n"+
+			"for (const v of byKey.values()) {\n"+
+			"  vacc += v.tag;\n"+
+			"}\n"+
+			"out.push(`${seen.join(',')} ${vacc}`);\n"+
+			"\n"+
+			"// A map whose key slot takes the box instead.\n"+
+			"const rank = new Map<Row, number>();\n"+
+			"rank.set(m['a'], 10);\n"+
+			"rank.set(m['b'], 20);\n"+
+			"let ids = 0;\n"+
+			"for (const k of rank.keys()) {\n"+
+			"  ids += k.id;\n"+
+			"}\n"+
+			"out.push(`${rank.size} ${rank.get(m['b'])} ${rank.has({ id: 1, tag: 'x' })} ${ids}`);\n"+
+			"\n"+
+			"// A map filled by its constructor from a literal of pairs.\n"+
+			"const ctor = new Map<string, Row>([\n"+
+			"  ['k', m['a']],\n"+
+			"  ['j', { id: 5, tag: 'e' }],\n"+
+			"]);\n"+
+			"out.push(`${ctor.size} ${ctor.get('k')!.tag} ${ctor.get('j')!.id}`);\n"+
+			"\n"+
+			"// A collection on a field, filled by a method, read from outside.\n"+
+			"class Bag {\n"+
+			"  s = new Set<Row>();\n"+
+			"  fill(): void {\n"+
+			"    for (const k of Object.keys(m)) {\n"+
+			"      this.s.add(m[k]);\n"+
+			"    }\n"+
+			"  }\n"+
+			"  tags(): string {\n"+
+			"    const got: string[] = [];\n"+
+			"    this.s.forEach((r) => {\n"+
+			"      got.push(r.tag);\n"+
+			"    });\n"+
+			"    return got.join('');\n"+
+			"  }\n"+
+			"}\n"+
+			"const bag = new Bag();\n"+
+			"bag.fill();\n"+
+			"out.push(`${bag.s.size} ${bag.s.has(m['b'])} ${bag.tags()}`);\n"+
+			"\n"+
+			"// A boxed collection through a declared parameter, and a nested one.\n"+
+			"function count(t: Set<Row>): string {\n"+
+			"  const got: string[] = [];\n"+
+			"  t.forEach((r) => {\n"+
+			"    got.push(String(r.id));\n"+
+			"  });\n"+
+			"  return got.join('+');\n"+
+			"}\n"+
+			"const nested = new Map<string, Set<Row>>();\n"+
+			"const inner = new Set<Row>();\n"+
+			"inner.add(m['a']);\n"+
+			"nested.set('k', inner);\n"+
+			"out.push(`${count(inner)} ${nested.get('k')!.size} ${nested.get('k')!.has(m['a'])}`);\n"+
+			"\n"+
+			"// A store whose box arrives through a ternary, a local, and a closure.\n"+
+			"const flag = process.argv.length > 0;\n"+
+			"const via = new Set<Row>();\n"+
+			"let cur: Row = { id: 0, tag: 'z' };\n"+
+			"cur = m['b'];\n"+
+			"via.add(flag ? m['a'] : { id: 9, tag: 'q' });\n"+
+			"via.add(cur);\n"+
+			"const put = (r: Row) => {\n"+
+			"  via.add(r);\n"+
+			"};\n"+
+			"put(m['a']);\n"+
+			"out.push(`${via.size} ${via.has(m['a'])} ${via.has(cur)}`);\n"+
+			"\n"+
+			"// A set algebra call and a stored iterator over a boxed set.\n"+
+			"const other = new Set<Row>();\n"+
+			"other.add(m['b']);\n"+
+			"const both = via.union(other);\n"+
+			"const it = via.values();\n"+
+			"const step = it.next();\n"+
+			"out.push(`${both.size} ${step.done} ${step.value!.tag}`);\n"+
+			"\n"+
+			"// A generator and an async body reading the same boxed set.\n"+
+			"function* everyTag(): Generator<string> {\n"+
+			"  for (const r of all) {\n"+
+			"    yield r.tag;\n"+
+			"  }\n"+
+			"}\n"+
+			"const gen: string[] = [];\n"+
+			"for (const t of everyTag()) {\n"+
+			"  gen.push(t);\n"+
+			"}\n"+
+			"async function total(): Promise<number> {\n"+
+			"  return all.size;\n"+
+			"}\n"+
+			"total().then((n) => {\n"+
+			"  out.push(`${gen.join('')} ${n}`);\n"+
+			"  console.log(out.join(' / '));\n"+
+			"});\n"+
+			"\n")
+	want := "2 true false / true 1 / 2 xy x|y / x,y 2 / [{\"id\":1,\"tag\":\"x\"},{\"id\":2,\"tag\":\"y\"}] / 2 true true / 3 1 undefined ax,by,sd / a1,b2,s4 xyd / 2 20 false 3 / 2 x 5 / 2 true xy / 1 1 true / 2 true true / 2 false x / xy 2\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}

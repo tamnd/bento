@@ -123,8 +123,10 @@ func (v Value) OwnSymbols() *Array[Value] {
 // runtime behind Object.fromEntries(iterable). Each entry is read for its first two
 // elements, the key and the value, and the key is set on the new object through the
 // ordinary property-key coercion, so a later entry with the same key overwrites an
-// earlier one. The entries are taken from the iterable's dense elements, the array
-// form the static covers, so a non-array iterable yields an empty object.
+// earlier one. An array is read straight off its dense elements, since that is the
+// common source and a hole there contributes no entry; every other iterable, a Map
+// above all, is drained through the iteration protocol the same way a for...of would
+// drain it.
 func FromEntries(iterable Value) Value {
 	out := NewObject()
 	if iterable.kind == KindArray {
@@ -134,6 +136,10 @@ func FromEntries(iterable Value) Value {
 			}
 			out.SetElem(entry.GetIndex(0), entry.GetIndex(1))
 		}
+		return out
+	}
+	for _, entry := range IterateToSlice(iterable, "Object.fromEntries") {
+		out.SetElem(entry.GetIndex(0), entry.GetIndex(1))
 	}
 	return out
 }
