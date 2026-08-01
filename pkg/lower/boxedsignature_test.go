@@ -443,3 +443,94 @@ func TestATernaryArmThatIsABoxSettlesTheWholeTernary(t *testing.T) {
 		t.Fatalf("the static arm did not box on its way into the shared slot:\n%s", out)
 	}
 }
+
+// TestALocalStoredABoxTakesTheValueSlot reads the binding rule at a store rather than at
+// an initializer. The declaration names Row and the store hands back a value.Value, and
+// there is one Go variable to hold both, so the box settles it: the literal boxes on its
+// way in and the name holds the box every read of it dispatches on.
+func TestALocalStoredABoxTakesTheValueSlot(t *testing.T) {
+	const src = boxedSigPrelude +
+		"let cur: Row = { id: 0, tag: 'z' };\n" +
+		"cur = m['a'];\n" +
+		"console.log(cur.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var cur value.Value = value.NewObject()") {
+		t.Fatalf("the local did not take the value slot:\n%s", out)
+	}
+}
+
+// TestALocalWithNoInitializerReachesTheValueSlotFromTheOtherSide checks the declaration
+// that has nothing to box on its way in. The Go zero of value.Value is the undefined the
+// name reads until the store lands, so the same slot answers both halves.
+func TestALocalWithNoInitializerReachesTheValueSlotFromTheOtherSide(t *testing.T) {
+	const src = boxedSigPrelude +
+		"let cur: Row;\n" +
+		"cur = m['a'];\n" +
+		"console.log(cur.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var cur value.Value\n") {
+		t.Fatalf("the uninitialized local did not take the value slot:\n%s", out)
+	}
+	if !strings.Contains(out, "cur.Get(") {
+		t.Fatalf("the read of the local did not dispatch through the value model:\n%s", out)
+	}
+}
+
+// TestAForOfBindingOverABoxFeedsAStore checks the loop binding the pass now reads. The
+// loop lowering marks it dynBound as it goes, but that happens long after the pass has
+// decided, so without its own reading of the loop the store read as a store of the
+// checker's shape and handed back.
+func TestAForOfBindingOverABoxFeedsAStore(t *testing.T) {
+	const src = boxedSigPrelude +
+		"let cur: Row = { id: 0, tag: 'z' };\n" +
+		"for (const r of Object.values(m)) { cur = r; }\n" +
+		"console.log(cur.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var cur value.Value = value.NewObject()") {
+		t.Fatalf("the loop binding did not carry its box to the store:\n%s", out)
+	}
+	if !strings.Contains(out, "cur = r\n") {
+		t.Fatalf("the store did not hand the loop binding straight on:\n%s", out)
+	}
+}
+
+// TestATernaryStoredIntoALocalCarriesItsBox checks the store whose value is a ternary
+// with one boxed arm. A branch that is a box settles the whole ternary, so the local it
+// is stored into holds a box the same as any other store does, and the static arm boxes
+// on its way into the shared slot. A store of a ternary lowers to a branch per arm rather
+// than to the IIFE the expression position takes, so both arms are assignments here.
+func TestATernaryStoredIntoALocalCarriesItsBox(t *testing.T) {
+	const src = boxedSigPrelude +
+		"let cur: Row = { id: 0, tag: 'z' };\n" +
+		"cur = m['a'].id === 1 ? m['a'] : { id: 9, tag: 'q' };\n" +
+		"console.log(cur.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var cur value.Value = value.NewObject()") {
+		t.Fatalf("the ternary did not carry its box to the local:\n%s", out)
+	}
+	if !strings.Contains(out, "cur = m.Get(value.FromGoString(\"a\"))") {
+		t.Fatalf("the boxed arm did not store the box straight on:\n%s", out)
+	}
+	if !strings.Contains(out, "cur = value.NewObject().Set(value.FromGoString(\"id\"), value.Number(9))") {
+		t.Fatalf("the static arm did not box on its way into the shared slot:\n%s", out)
+	}
+}
+
+// TestAStoreFromAnotherBoxedLocalMarksBoth is the transitive step the fixpoint is for.
+// The second store's value is a read of the first local, which is only known to be a box
+// because an earlier round of the same loop said so.
+func TestAStoreFromAnotherBoxedLocalMarksBoth(t *testing.T) {
+	const src = boxedSigPrelude +
+		"let src2: Row = { id: 0, tag: 'z' };\n" +
+		"let dst: Row = { id: 0, tag: 'z' };\n" +
+		"src2 = m['a'];\n" +
+		"dst = src2;\n" +
+		"console.log(dst.tag);"
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "var dst value.Value = value.NewObject()") {
+		t.Fatalf("the second local did not take the box the first one holds:\n%s", out)
+	}
+	if !strings.Contains(out, "dst = src2\n") {
+		t.Fatalf("the store between two boxed locals did not hand the box straight on:\n%s", out)
+	}
+}

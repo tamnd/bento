@@ -551,3 +551,104 @@ func TestAnInlineCallbacksParameterTakesABox(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+// TestALocalWhoseStoreHandsItABox holds the whole slice against Node. A local whose
+// declaration names a shape and whose later store hands it a box takes the value slot,
+// whatever the checker made of the declaration, and every read of the name after that
+// goes through the value model. The stores come from everywhere a store can: a plain
+// assignment, one inside a callback, one fed by a for...of binding over a boxed iterable,
+// a ternary with one boxed arm, another boxed local, a branch of an if, a switch case, a
+// try. The reads are the ones a box already answers.
+func TestALocalWhoseStoreHandsItABox(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"type Row = { id: number; tag: string };\n"+
+			"const m = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"},\"b\":{\"id\":2,\"tag\":\"y\"}}') as Record<string, Row>;\n"+
+			"let cur: Row = { id: 0, tag: 'z' };\n"+
+			"cur = m['a'];\n"+
+			"console.log(cur.tag, cur.id, cur === m['a']);\n"+
+			"\n"+
+			"let bare: Row;\n"+
+			"bare = m['b'];\n"+
+			"console.log(bare.tag, JSON.stringify(bare), Object.keys(bare).join('|'));\n"+
+			"\n"+
+			"let seen: Row = { id: 0, tag: 'z' };\n"+
+			"Object.values(m).forEach((r: Row) => { seen = r; });\n"+
+			"console.log(seen.tag, seen.id);\n"+
+			"\n"+
+			"let best: Row = { id: 0, tag: 'z' };\n"+
+			"for (const r of Object.values(m)) { if (r.id > best.id) { best = r; } }\n"+
+			"console.log(best.tag, best.id);\n"+
+			"\n"+
+			"let pick: Row = { id: 0, tag: 'z' };\n"+
+			"pick = m['a'].id === 1 ? m['a'] : { id: 9, tag: 'q' };\n"+
+			"console.log(pick.tag, pick.id);\n"+
+			"\n"+
+			"let src: Row = { id: 0, tag: 'z' };\n"+
+			"let dst: Row = { id: 0, tag: 'z' };\n"+
+			"src = m['b'];\n"+
+			"dst = src;\n"+
+			"console.log(dst.tag, dst === src);\n"+
+			"\n"+
+			"function label(r: Row): string { return r.tag + r.id; }\n"+
+			"let sent: Row = { id: 0, tag: 'z' };\n"+
+			"sent = m['b'];\n"+
+			"console.log(label(sent), `${sent.tag}-${sent.id}`, JSON.stringify({ ...sent, k: 3 }));\n"+
+			"\n"+
+			"let xs: Row[] = [];\n"+
+			"xs = Object.values(m);\n"+
+			"xs.push({ id: 3, tag: 'c' });\n"+
+			"console.log(xs.length, xs.map((r) => r.tag).join(','), xs.filter((r) => r.id > 1).length);\n"+
+			"\n"+
+			"class S { r: Row = { id: 0, tag: 'z' }; get tag(): string { return this.r.tag; } }\n"+
+			"const s = new S();\n"+
+			"let held: Row = { id: 0, tag: 'z' };\n"+
+			"held = m['a'];\n"+
+			"s.r = held;\n"+
+			"console.log(s.tag, s.r.id);\n"+
+			"\n"+
+			"function run(): string {\n"+
+			"  let inner: Row = { id: 0, tag: 'z' };\n"+
+			"  const set = () => { inner = m['b']; };\n"+
+			"  set();\n"+
+			"  return inner.tag;\n"+
+			"}\n"+
+			"console.log(run());\n"+
+			"\n"+
+			"let branchy: Row = { id: 0, tag: 'z' };\n"+
+			"if (m['a'].id === 1) { branchy = m['a']; } else { branchy = m['b']; }\n"+
+			"switch (branchy.tag) { case 'x': branchy = m['b']; break; default: branchy = m['a']; }\n"+
+			"try { branchy = m[branchy.tag === 'y' ? 'a' : 'b']; } catch { branchy = { id: 9, tag: 'q' }; }\n"+
+			"console.log(branchy.tag, branchy.id + 1, branchy.id > 0, branchy.tag.toUpperCase());\n"+
+			"\n"+
+			"var loose: Row = { id: 0, tag: 'z' };\n"+
+			"loose = m['b'];\n"+
+			"console.log('id' in loose, typeof loose, Array.isArray(loose));\n"+
+			"\n"+
+			"const grab = (k: string): Row => { let g: Row = { id: 0, tag: 'z' }; g = m[k]; return g; };\n"+
+			"console.log(grab('a').tag, grab('b').id);\n"+
+			"\n"+
+			"async function later(): Promise<string> {\n"+
+			"  let a: Row = { id: 0, tag: 'z' };\n"+
+			"  a = m['b'];\n"+
+			"  return a.tag;\n"+
+			"}\n"+
+			"later().then((v) => console.log(v));\n"+
+			"\n")
+	want := "x 1 true\n" +
+		"y {\"id\":2,\"tag\":\"y\"} id|tag\n" +
+		"y 2\n" +
+		"y 2\n" +
+		"x 1\n" +
+		"y true\n" +
+		"y2 y-2 {\"id\":2,\"tag\":\"y\",\"k\":3}\n" +
+		"3 x,y,c 2\n" +
+		"x 1\n" +
+		"y\n" +
+		"x 2 true X\n" +
+		"true object false\n" +
+		"x 2\n" +
+		"y\n"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}

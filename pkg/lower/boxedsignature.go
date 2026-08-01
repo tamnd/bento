@@ -49,13 +49,12 @@ const maxBoxedSigRounds = 8
 // added, so reading the half-built maps mid-round is safe: a later round can confirm a
 // mark but never take one back.
 func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
+	// There is no cheap guard left that would skip the pass. A signature is not the only
+	// Go type it rewrites any more: a field's is not a signature, and neither is a local's,
+	// so a program with no function and no class at all can still have a store that hands a
+	// box to a binding. Each round is an AST walk, and a program with nothing to mark
+	// changes nothing in the first one and leaves the loop there.
 	cands := r.boxableFuncs(files)
-	// A program with no rewritable signature can still have a field a store hands a box
-	// to, since a field's Go type is not a signature, so the classes keep the pass alive
-	// on their own.
-	if len(cands) == 0 && len(r.classes) == 0 {
-		return
-	}
 	if r.boxedParams == nil {
 		r.boxedParams = map[frontend.Node][]bool{}
 	}
@@ -68,12 +67,21 @@ func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 	if r.boxedFields == nil {
 		r.boxedFields = map[frontend.Node]bool{}
 	}
+	if r.boxedLocals == nil {
+		r.boxedLocals = map[frontend.Symbol]bool{}
+	}
 	for round := 0; round < maxBoxedSigRounds; round++ {
 		changed := r.markBoxedParams(files, cands)
 		if r.markBoxedReturns(cands) {
 			changed = true
 		}
 		if r.markBoxedFields(files) {
+			changed = true
+		}
+		if r.markBoxedLoopVars(files) {
+			changed = true
+		}
+		if r.markBoxedLocals(files) {
 			changed = true
 		}
 		if r.markBoxedCallbackParams(files) {
@@ -178,6 +186,178 @@ func (r *Renderer) markBoxedFields(files []frontend.Node) bool {
 		}
 	}
 	return changed
+}
+
+// markBoxedLocals marks a local binding some assignment hands a box, so its Go slot is a
+// value.Value however the checker types the declaration.
+//
+// This is the field's rule read at a binding. Note 384 already gave a binding the value
+// slot when its own initializer was a box; what was left is the box that arrives later.
+//
+//	let cur: Row = { id: 0, tag: 'z' }
+//	cur = m['b']
+//
+// The declaration says Row and the store hands back a value.Value, and there is one Go
+// variable to hold both. Only the box is a candidate the other side can be brought to: the
+// literal boxes on its way in through the coercion that already runs, and the box has no
+// way to become the struct without a copy that aliases nothing.
+//
+// A local passes the one-place condition the way a field does. Its Go type is written into
+// exactly one declaration, and every read of the name resolves to that one binding, so
+// there is no second spelling to keep in step. The store itself can sit anywhere, which is
+// why this is decided here rather than by looking at the declaration alone: the store that
+// boxes `seen` is inside a callback in
+//
+//	Object.values(m).forEach((r: Row) => { seen = r })
+//
+// and the callback's parameter is only known to hold a box because a round of this same
+// fixpoint said so.
+func (r *Renderer) markBoxedLocals(files []frontend.Node) bool {
+	changed := false
+	r.walkInClasses(files, func(n frontend.Node) bool {
+		target, value, ok := r.localStoreParts(n)
+		if !ok {
+			return true
+		}
+		sym, ok := r.prog.SymbolAt(target)
+		if !ok || r.boxedLocals[sym] || !r.boxableLocal(sym) {
+			return true
+		}
+		if r.isBoxedChain(value) {
+			r.boxedLocals[sym] = true
+			changed = true
+		}
+		return true
+	})
+	return changed
+}
+
+// localStoreParts splits a plain assignment to a bare name into its target and its value.
+// A compound assignment is left out the way it is for a field: `cur += x` reads the slot
+// before it writes it, so it is an operator's question rather than a store's.
+func (r *Renderer) localStoreParts(n frontend.Node) (frontend.Node, frontend.Node, bool) {
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return nil, nil, false
+	}
+	parts := r.prog.Children(n)
+	if len(parts) != 3 || strings.TrimSpace(r.prog.Text(parts[1])) != "=" {
+		return nil, nil, false
+	}
+	if parts[0].Kind() != frontend.NodeIdentifier {
+		return nil, nil, false
+	}
+	return parts[0], parts[2], true
+}
+
+// boxableLocal reports whether a symbol names a binding this pass may move into the value
+// slot: one variable declaration and nothing else.
+//
+// A second declaration would mean two Go slots for one name and the one-place condition
+// would not hold. A parameter is left out because its own half of the pass decides it from
+// the call sites, which is a stronger reading than a store inside the body.
+//
+// The type test is boxedChainBinding's, read here so the walk does not mark a binding that
+// path would then decline. One the checker already calls any or unknown holds a box
+// already, and one it calls a number, a string, or a boolean has a Go value the store can
+// be brought down to through the coercion that already runs.
+func (r *Renderer) boxableLocal(sym frontend.Symbol) bool {
+	decls := r.prog.Declarations(sym)
+	if len(decls) != 1 || decls[0].Kind() != frontend.NodeVariableDeclaration {
+		return false
+	}
+	kids := r.prog.Children(decls[0])
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	const settled = frontend.TypeAny | frontend.TypeUnknown |
+		frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
+	return r.prog.TypeAt(kids[0]).Flags&settled == 0
+}
+
+// markBoxedLoopVars marks the binding of a for...of whose iterable is a box, so the pass
+// sees the box the loop lowering already binds.
+//
+//	for (const r of Object.values(m)) { cur = r }
+//
+// The iterable is a box, so what comes out of it is a box, and forOfDynamic marks the
+// binding dynBound before it lowers the body for exactly that reason. That mark is made
+// while the loop lowers, which is after this pass has run, so nothing here saw it and a
+// store fed by the loop variable read as a store of the checker's shape.
+//
+// The two tests are the two the lowering applies in sequence, isBoxedChain in lowerForOf
+// and then forOfDynamic's own, so a loop marked here is a loop that really does take the
+// dynamic path. A loop that takes one of the static paths binds a Go value and nothing
+// about it is boxed.
+//
+// This joins the fixpoint rather than running once because the iterable can be a box for a
+// reason an earlier round established, a call of a function the pass gave a boxed result
+// among them. A destructuring head is left out; its names bind through a different path
+// and are their own slice.
+func (r *Renderer) markBoxedLoopVars(files []frontend.Node) bool {
+	changed := false
+	r.walkInClasses(files, func(n frontend.Node) bool {
+		bind, iterable, ok := r.forOfSingleBinding(n)
+		if !ok || !r.isBoxedChain(iterable) {
+			return true
+		}
+		if !r.isDynamic(iterable) && !r.producesBoxedValue(iterable) {
+			return true
+		}
+		sym, ok := r.prog.SymbolAt(bind)
+		if !ok || r.boxedLoopVars[sym] {
+			return true
+		}
+		if r.boxedLoopVars == nil {
+			r.boxedLoopVars = map[frontend.Symbol]bool{}
+		}
+		r.boxedLoopVars[sym] = true
+		changed = true
+		return true
+	})
+	return changed
+}
+
+// forOfSingleBinding answers the name a for...of binds and the expression it iterates,
+// for the plain head that declares one identifier. It is lowerForOf's own reading of the
+// statement's children, kept to the single-binding shape forOfDynamic handles.
+func (r *Renderer) forOfSingleBinding(n frontend.Node) (frontend.Node, frontend.Node, bool) {
+	if n.Kind() != frontend.NodeForOfStatement || r.isForAwait(n) {
+		return nil, nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 3 {
+		return nil, nil, false
+	}
+	var decls []frontend.Node
+	collectVarDecls(r.prog, kids[0], &decls)
+	if len(decls) != 1 {
+		return nil, nil, false
+	}
+	dkids := r.prog.Children(decls[0])
+	if len(dkids) != 1 || dkids[0].Kind() != frontend.NodeIdentifier {
+		return nil, nil, false
+	}
+	return dkids[0], kids[1], true
+}
+
+// isBoxedLoopVar reports whether an identifier names a for...of binding the pass found
+// iterating a box.
+func (r *Renderer) isBoxedLoopVar(n frontend.Node) bool {
+	if len(r.boxedLoopVars) == 0 || n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(n)
+	return ok && r.boxedLoopVars[sym]
+}
+
+// isBoxedLocalRead reports whether an identifier names a local this pass gave a value.Value
+// slot, so a read of it is a box however the checker types the declaration.
+func (r *Renderer) isBoxedLocalRead(n frontend.Node) bool {
+	if len(r.boxedLocals) == 0 || n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	sym, ok := r.prog.SymbolAt(n)
+	return ok && r.boxedLocals[sym]
 }
 
 // fieldTakesABox reports whether any store to a field hands it a box: its own declared
