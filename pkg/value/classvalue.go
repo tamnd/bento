@@ -266,6 +266,86 @@ var (
 	setBackingType        = reflect.TypeOf((*setBacking)(nil)).Elem()
 )
 
+// classCoercions holds the two members a boxed instance answers by running the class's
+// own code rather than by reading a copied field: toString and valueOf. A box carries
+// the fields and the class name, so without these an instance that writes its own
+// toString would read as "[object Object]" the moment it crossed into a dynamic value,
+// which is a wrong string rather than a missing one.
+//
+// Only these two are here because they are the two the language calls on its own. Every
+// other method is reached by a call the program writes, which has a typed call site to
+// run it at; ToPrimitive has no such site, so it has to find the method through the box.
+type classCoercions struct {
+	toString func(any) Value
+	valueOf  func(any) Value
+}
+
+// classCoercionRegistry maps a generated class struct's Go type to the coercions its
+// instances answer. It is separate from classRegistry rather than a field on the
+// prototype so the two registrations are independent: each rides its own package-level
+// var and neither has to be initialized before the other.
+var classCoercionRegistry sync.Map // reflect.Type -> *classCoercions
+
+// RegisterClassCoercion records that instances of the struct sample points at answer
+// the named coercion by calling fn, and returns true so the registration can ride a
+// package-level var the way RegisterClass does. The lowerer emits one of these per
+// class that writes a toString or a valueOf, with fn closing over the typed call and
+// the boxing of what it returns, so nothing here has to know the class's Go signature.
+//
+// A name that is neither is ignored rather than stored, which keeps the read path a
+// two-way switch instead of a map lookup on every property miss.
+func RegisterClassCoercion(sample any, name string, fn func(any) Value) bool {
+	t := reflect.TypeOf(sample)
+	if t == nil || t.Kind() != reflect.Pointer {
+		return true
+	}
+	entry, _ := classCoercionRegistry.LoadOrStore(t.Elem(), &classCoercions{})
+	c := entry.(*classCoercions)
+	switch name {
+	case "toString":
+		c.toString = fn
+	case "valueOf":
+		c.valueOf = fn
+	}
+	return true
+}
+
+// classCoercionGet answers a coercion read off a boxed instance, bound to the instance
+// the view reads through, or reports false when the class registered none by that name.
+// The method is bound here rather than installed on the interned prototype because a
+// Call carries no receiver in this value model: every other box binds its members at the
+// read for the same reason, which is why a boxed Map's get knows which map it came from.
+//
+// A class that writes neither still answers both, with what Object.prototype gives: the
+// class tag for toString and the object itself for valueOf. That is not a courtesy, it
+// is what keeps the two hints apart. The string hint asks for toString first and takes
+// its answer, so a class writing only a valueOf whose box answered only valueOf would
+// read String(v) as "7" where the engine reads "[object Object]"; and an identity valueOf
+// is object-like, so the default hint falls through it to toString the way the spec's
+// OrdinaryToPrimitive does. The tag is computed off the receiver rather than fixed here
+// so a class naming itself through Symbol.toStringTag reads by that name.
+func classCoercionGet(recv Value, inst any, name string) (Value, bool) {
+	var c *classCoercions
+	if t := reflect.TypeOf(inst); t != nil && t.Kind() == reflect.Pointer {
+		if entry, ok := classCoercionRegistry.Load(t.Elem()); ok {
+			c = entry.(*classCoercions)
+		}
+	}
+	switch name {
+	case "toString":
+		if c != nil && c.toString != nil {
+			return boundMethod(name, func([]Value) Value { return c.toString(inst) }), true
+		}
+		return boundMethod(name, func([]Value) Value { return StringValue(ClassTag(recv)) }), true
+	case "valueOf":
+		if c != nil && c.valueOf != nil {
+			return boundMethod(name, func([]Value) Value { return c.valueOf(inst) }), true
+		}
+		return boundMethod(name, func([]Value) Value { return recv }), true
+	}
+	return Undefined, false
+}
+
 // classPrototypeFor returns the interned prototype for a boxed struct's type, or nil
 // when the type is not a registered class. A plain fixed-shape object struct is not
 // registered, so it boxes with no prototype and reads as a plain object, which is what

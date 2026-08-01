@@ -1937,6 +1937,7 @@ func (r *Renderer) renderClasses() ([]ast.Decl, error) {
 	for _, name := range r.classOrder {
 		if info := r.classes[name]; info.boxed {
 			out = append(out, r.classRegisterDecl(info))
+			out = append(out, r.classCoercionDecls(info)...)
 		}
 	}
 	return out, nil
@@ -2395,6 +2396,103 @@ func (r *Renderer) classRegisterDecl(info *classInfo) ast.Decl {
 			}},
 		}},
 	}
+}
+
+// classCoercionDecls emits the registrations that let a boxed instance answer the two
+// members the language calls on its own, toString and valueOf. A box carries an
+// instance's fields and its class name and none of its methods, so without these
+// String([q]) prints a row of class tags where the program has an answer.
+//
+// Each registration hands the runtime a thunk closing over the ordinary typed call, so
+// nothing in the value package has to know the class's Go signature or how its result
+// boxes. The thunk asserts the instance back to the struct it was boxed from, which is
+// sound because the runtime looks the thunk up by that exact Go type.
+func (r *Renderer) classCoercionDecls(info *classInfo) []ast.Decl {
+	var out []ast.Decl
+	for _, prop := range [...]string{"toString", "valueOf"} {
+		if decl, ok := r.classCoercionDecl(info, prop); ok {
+			out = append(out, decl)
+		}
+	}
+	return out
+}
+
+// classCoercionCallable reports whether the class's method by that name can be called
+// from a thunk that takes no arguments and hands back a boxed result. That is the whole
+// of what a coercion registration can do, so a method wanting arguments, one answering
+// through a channel (a generator or an async), one with type parameters still to fix,
+// and one answering something other than a primitive all say no here. The string
+// coercion asks the same question before it boxes, so a class that cannot register is
+// the class whose coercion hands back rather than reading as a tag the program
+// disagrees with.
+func (r *Renderer) classCoercionCallable(info *classInfo, prop string) bool {
+	m, ok := info.lookupMethod(prop)
+	if !ok || m.abstract || m.generator || m.async {
+		return false
+	}
+	sig, ok := r.prog.SignatureAt(m.node)
+	if !ok || len(sig.Params) != 0 || len(sig.TypeParams) != 0 {
+		return false
+	}
+	prim := frontend.TypeString | frontend.TypeNumber | frontend.TypeBoolean | frontend.TypeBigInt
+	return r.primitiveFlagsOfType(sig.Return)&prim != 0
+}
+
+// classCoercionDecl emits one registration, or reports false when the class has no
+// method by that name or has one this cannot call blind. The thunk takes no arguments
+// and hands back a boxed result, so a method that wants arguments, that answers
+// through a channel (a generator or an async), that has type parameters left to fix,
+// or that answers something other than a primitive has no shape to be called in. Those
+// classes stay unregistered, which leaves the box reading as its class tag and leaves
+// the string coercion handing back rather than printing a tag the program disagrees
+// with.
+func (r *Renderer) classCoercionDecl(info *classInfo, prop string) (ast.Decl, bool) {
+	if !r.classCoercionCallable(info, prop) {
+		return nil, false
+	}
+	m, _ := info.lookupMethod(prop)
+	sig, _ := r.prog.SignatureAt(m.node)
+	// The call is written against the class the box holds, not the one that declared
+	// the method, so an inherited toString is reached by Go promotion and an override
+	// by the same shadowing a written-out call resolves to. A virtual method still
+	// routes through the vtable, so a base-typed box of a subclass instance runs the
+	// subclass's body.
+	call := &ast.CallExpr{Fun: &ast.SelectorExpr{
+		X:   &ast.TypeAssertExpr{X: ident("x"), Type: star(ident(info.goName))},
+		Sel: ident(m.goName),
+	}}
+	boxed, err := r.boxStaticToDynamicFlags(call, r.primitiveFlagsOfType(sig.Return))
+	if err != nil {
+		return nil, false
+	}
+	r.requireImport(valuePkg)
+	thunk := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params: &ast.FieldList{List: []*ast.Field{{
+				Names: []*ast.Ident{ident("x")},
+				Type:  ident("any"),
+			}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{boxed}}}},
+	}
+	return &ast.GenDecl{
+		Tok: token.VAR,
+		Specs: []ast.Spec{&ast.ValueSpec{
+			Names: []*ast.Ident{ident("_")},
+			Values: []ast.Expr{&ast.CallExpr{
+				Fun: sel("value", "RegisterClassCoercion"),
+				Args: []ast.Expr{
+					&ast.CallExpr{
+						Fun:  &ast.ParenExpr{X: star(ident(info.goName))},
+						Args: []ast.Expr{ident("nil")},
+					},
+					&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(prop)},
+					thunk,
+				},
+			}},
+		}},
+	}, true
 }
 
 // classStruct emits the struct: one field per instance field, in declaration

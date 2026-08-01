@@ -72,6 +72,32 @@ func TestObjectStringEmits(t *testing.T) {
 			"class P { x = 1; }\nconst ps: P[] = [new P()];\nconsole.log(ps.join(','));\n",
 			"value.JoinString(value.ClassToValue(x))",
 		},
+		{
+			// An instance one container down has no call site of its own, so it reads
+			// through its box, which answers the class's own toString now.
+			"arrayOfInstancesWithToString",
+			"class Q { y = 2; toString() { return 'Q!'; } }\nconst qs: Q[] = [new Q()];\nconsole.log(String(qs));\n",
+			"value.StringCoerce(value.ArrayValueOf(qs, value.ClassToValue))",
+		},
+		{
+			"concatOfAnArrayOfInstancesWithToString",
+			"class Q { y = 2; toString() { return 'Q!'; } }\nconst qs: Q[] = [new Q()];\nconsole.log('x' + qs);\n",
+			"value.PlusToString(value.ArrayValueOf(qs, value.ClassToValue))",
+		},
+		{
+			// A toString answering a number is a rung short of a string, so the direct
+			// call cannot spell it and the box walks the ladder instead.
+			"toStringAnsweringANumber",
+			"class N { n = 1; toString() { return 1; } }\nconsole.log(String(new N()));\n",
+			"value.StringCoerce(value.ObjectFromStruct(",
+		},
+		{
+			// A valueOf answering an object is not a primitive, so + falls on to toString
+			// from there, which is exactly what the box does.
+			"concatOfAValueOfAnsweringAnObject",
+			"class O { o = 1; valueOf() { return { a: 1 }; } }\nconst o = new O();\nconsole.log('x' + o);\n",
+			"value.PlusToString(value.ObjectFromStruct(o))",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,12 +110,12 @@ func TestObjectStringEmits(t *testing.T) {
 }
 
 // TestObjectStringHandsBack pins the boundary. A box that would read back as a
-// different string than the engine produces is worse than no lowering at all, so the
-// two shapes where that would happen still hand back: an instance writing its own
-// toString reached through a container, where there is no call site to run the method,
-// and a valueOf answering something that is not a primitive, which sends the engine on
-// down a ladder this slice does not walk. A function is left out for its own reason: it
-// stringifies to its source text, which no box carries.
+// different string than the engine produces is worse than no lowering at all, so an
+// instance whose own toString the box cannot run still hands back: the thunk a class
+// registers takes no arguments and answers a primitive, so a toString wanting an
+// argument or answering through a channel has no shape to be called in, and the box
+// would read as the class tag where the program has an answer. A function is left out
+// for its own reason: it stringifies to its source text, which no box carries.
 func TestObjectStringHandsBack(t *testing.T) {
 	cases := []struct {
 		name string
@@ -97,24 +123,14 @@ func TestObjectStringHandsBack(t *testing.T) {
 		want string
 	}{
 		{
-			"arrayOfInstancesWithToString",
-			"class Q { y = 2; toString() { return 'Q!'; } }\nconst qs: Q[] = [new Q()];\nconsole.log(String(qs));\n",
+			"aToStringWantingAnArgument",
+			"class T { x = 1; toString(pad: string) { return pad; } }\nconst ts: T[] = [new T()];\nconsole.log(String(ts));\n",
 			"coercing a value that holds an instance writing its own toString",
 		},
 		{
-			"concatOfAnArrayOfInstancesWithToString",
-			"class Q { y = 2; toString() { return 'Q!'; } }\nconst qs: Q[] = [new Q()];\nconsole.log('x' + qs);\n",
+			"anAsyncToString",
+			"class A { x = 1; async toString() { return 'a'; } }\nconst as: A[] = [new A()];\nconsole.log(String(as));\n",
 			"coercing a value that holds an instance writing its own toString",
-		},
-		{
-			"valueOfAnsweringAnObject",
-			"class V { v = 1; valueOf() { return { a: 1 }; } }\nconst v = new V();\nconsole.log('x' + v);\n",
-			"whose valueOf does not answer a primitive",
-		},
-		{
-			"toStringAnsweringANumber",
-			"class N { n = 1; toString() { return 1; } }\nconsole.log(String(new N()));\n",
-			"whose toString does not return a string",
 		},
 		{
 			"aFunction",
