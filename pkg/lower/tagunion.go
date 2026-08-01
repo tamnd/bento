@@ -1145,10 +1145,10 @@ func (r *Renderer) inReceiver(right frontend.Node) (ast.Expr, bool, error) {
 	// that moment and no compile-time fold can say which. The box carries the same
 	// elements and the same length, and the value model answers an index, a length, and
 	// the Array.prototype and Object.prototype names off it, so every key reads right.
-	// A tuple has index keys too, but boxOperand cannot box one yet, so it stays on the
-	// handback rather than take a fold its fixed length only looks like it earns: an
-	// optional or rest element makes the last indices as undecided as an array's.
-	if _, ok := r.prog.ElementType(r.prog.TypeAt(right)); ok {
+	// A tuple takes the same route now that boxOperand can box one: its fixed length only
+	// looks like it earns a fold, since an optional or rest element leaves the last
+	// indices as undecided as an array's, and the box answers every one of them.
+	if r.indexKeyedShape(r.prog.TypeAt(right)) {
 		e, err := r.boxOperand(right)
 		if err != nil {
 			return nil, false, err

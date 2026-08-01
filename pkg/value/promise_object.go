@@ -73,6 +73,70 @@ func All[T any](ps *Array[*Promise[T]]) *Promise[*Array[T]] {
 	return result
 }
 
+// Combinable is the face a promise shows a combinator that watches promises of more
+// than one element type at once. All takes an array, so every input shares one T; a
+// Promise.all over a tuple does not, and `Promise.all([fetchUser(), fetchPosts()])`
+// combines a Promise<User> with a Promise<Post[]> in one call. A Go slice cannot hold
+// both, and a type parameter list cannot vary in length, so the inputs cross as this
+// element-type-erased interface instead and the fulfilled values are read back through
+// the caller's own closure, which is the one place that still knows each T.
+//
+// The methods are unexported, so only a value.Promise can be one and no foreign type
+// can claim to be a promise by shape.
+type Combinable interface {
+	subscribe(reaction func())
+	rejection() (Thrown, bool)
+}
+
+// rejection satisfies Combinable, reporting the reason when the promise settled
+// rejected. AllTuple needs no more of a promise than this and the subscribe above,
+// since it never reads a fulfilled value: its caller does that.
+func (p *Promise[T]) rejection() (Thrown, bool) {
+	return p.reason, p.state == promiseRejected
+}
+
+// Fulfilled reads the value a settled promise fulfilled with. It is the accessor the
+// build closure AllTuple calls uses to assemble its tuple, and it is only meaningful
+// once the promise has fulfilled, which is the only moment AllTuple calls that closure.
+func (p *Promise[T]) Fulfilled() T { return p.value }
+
+// AllTuple combines promises of differing element types into one promise of the tuple
+// of their fulfilled values, the value.Promise side of a Promise.all whose argument the
+// checker typed as a tuple rather than an array. It settles by the same rule All does:
+// it fulfills once every input has fulfilled, and rejects with the reason of the first
+// input to reject, ignoring later settlements.
+//
+// The difference is where the values come from. All can gather them itself because they
+// share one type; here they do not, so build is the caller's closure over the very
+// promises passed in, reading each one's Fulfilled at its own static type and packing
+// them into the tuple struct. AllTuple calls it exactly once, at the moment the last
+// input fulfills, so every read it makes is of a settled promise. An empty input
+// fulfills immediately, the way Promise.all([]) does.
+func AllTuple[T any](build func() T, ps ...Combinable) *Promise[T] {
+	result := &Promise[T]{}
+	if len(ps) == 0 {
+		result.fulfill(build())
+		return result
+	}
+	remaining := len(ps)
+	for _, p := range ps {
+		p.subscribe(func() {
+			if result.state != promisePending {
+				return
+			}
+			if reason, rejected := p.rejection(); rejected {
+				result.reject(reason)
+				return
+			}
+			remaining--
+			if remaining == 0 {
+				result.fulfill(build())
+			}
+		})
+	}
+	return result
+}
+
 // Race combines an array of promises into one promise that settles the way the first
 // input to settle does, the value.Promise side of Promise.race: it fulfills with that
 // input's value if it fulfilled, or rejects with its reason if it rejected, and later

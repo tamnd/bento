@@ -1035,6 +1035,11 @@ func countElidedReads(r *Renderer, entry frontend.Node) map[frontend.Symbol]int 
 				uses[sym]++
 			}
 		}
+		if arg, ok := elidedTupleLengthReceiver(r, n); ok {
+			if sym, ok := prog.SymbolAt(arg); ok {
+				uses[sym]++
+			}
+		}
 		for _, arg := range elidedOverriddenSpreadSources(r, n) {
 			if sym, ok := prog.SymbolAt(arg); ok {
 				uses[sym]++

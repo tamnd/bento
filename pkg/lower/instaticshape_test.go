@@ -119,6 +119,7 @@ func TestInArrayBoxesRatherThanFolds(t *testing.T) {
 		"const a = [1, 2];\nconsole.log(String(5 in a));",
 		"const a = [1, 2];\nconsole.log(String(\"length\" in a));",
 		"const a = [1, 2];\nconsole.log(String(\"toString\" in a));",
+		"const t: [number, string] = [1, \"a\"];\nconsole.log(String(1 in t));",
 	} {
 		t.Run(src, func(t *testing.T) {
 			out := renderProgram(t, src)
@@ -142,16 +143,16 @@ console.log(String("a" in o));`
 	}
 }
 
-// TestInTupleHandsBack pins the index-keyed shape this slice leaves alone. A tuple's keys
-// are positions, so no fold holds for them, and boxOperand cannot box a tuple into a
-// dynamic value yet, so there is nothing for the runtime check to read either. Closing it
-// is the tuple-boxing slice, not this one.
-func TestInTupleHandsBack(t *testing.T) {
+// TestInTupleFoldsNothing pins that a tuple stays off the fold. Its keys are positions,
+// so `2 in t` is decided by what the box holds rather than by the type's name list, the
+// same reason an array boxes. It handed back until the tuple box landed; now it reaches
+// the same runtime check an array does.
+func TestInTupleFoldsNothing(t *testing.T) {
 	const src = `const t: [number, string] = [1, "a"];
-console.log(String(1 in t));`
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "in operator") && !strings.Contains(reason, "boxing this static type") {
-		t.Fatalf("in on a tuple did not hand back for a reason this slice names: %q", reason)
+console.log(String(1 in t), String(5 in t));`
+	out := renderProgram(t, src)
+	if !strings.Contains(out, "value.InOperator(") {
+		t.Fatalf("in on a tuple did not reach the runtime check:\n%s", out)
 	}
 }
 
