@@ -3535,7 +3535,7 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 // undefined` and boxed is the case that names itself: value.Opt[*ObjIdTag] is not what
 // the struct holds any more, so wrapping in Some would spell an optional that is gone.
 func (r *Renderer) targetType(target frontend.Node) frontend.Type {
-	if r.boxedFieldIdent(target) || r.isBoxedParamRead(target) {
+	if r.boxedFieldIdent(target) || r.isBoxedParamRead(target) || r.isBoxedLocalRead(target) {
 		return frontend.Type{Flags: frontend.TypeAny}
 	}
 	return r.prog.TypeAt(target)
@@ -3607,7 +3607,7 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	// way into `new S({ id: 7 })` once some other call site passes that slot a box.
 	srcDyn := r.isDynamic(src) || r.producesBoxedValue(src)
 	tgtDyn := r.isDynamic(target) || r.producesBoxedValue(target) ||
-		r.boxedFieldIdent(target) || r.isBoxedParamRead(target)
+		r.boxedFieldIdent(target) || r.isBoxedParamRead(target) || r.isBoxedLocalRead(target)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStatic(expr, target)

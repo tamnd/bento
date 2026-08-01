@@ -1693,12 +1693,19 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 		// bare var declaration with no value is correct on its own.
 		if initIdx < 0 {
 			nameType := r.prog.TypeAt(kids[0])
-			if nameType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+			// A binding the boxed pass marked reaches the same slot from the other side:
+			// its Go type is value.Value because a later store hands it a box, and the same
+			// Go zero is the undefined it reads until then. `let cur: Row; cur = m['a']` is
+			// the shape, and the name is marked dynBound so every read of it dispatches.
+			if boxed := r.isBoxedLocalRead(kids[0]); boxed || nameType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
 				r.requireImport(valuePkg)
 				specs = append(specs, &ast.ValueSpec{
 					Names: []*ast.Ident{ident(name)},
 					Type:  sel("value", "Value"),
 				})
+				if boxed {
+					r.markDynBound(name)
+				}
 				continue
 			}
 			// An optional binding (T | undefined) lowers to value.Opt[T], whose Go zero
@@ -1948,9 +1955,20 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 		// This is the same slot an assertion bound to a name takes, reached from the
 		// other root a box has.
 		if r.boxedChainBinding(kids[0], kids[initIdx]) {
+			// The initializer is a box when the binding took the slot because of it, and a
+			// static value when the binding took it because of a later store, which is the
+			// `let cur: Row = { id: 0, tag: 'z' }; cur = m['b']` shape. The static one boxes
+			// on its way in, the same coercion an argument crossing into a boxed parameter
+			// takes; the box itself lowers as it is, since boxing it again would build a
+			// second object off the checker's shape and lose the identity it has.
 			boxInit, err := r.lowerExpr(kids[initIdx])
 			if err != nil {
 				return nil, err
+			}
+			if !r.isBoxedChain(kids[initIdx]) && !r.isDynamic(kids[initIdx]) {
+				if boxInit, err = r.boxStaticToDynamic(boxInit, kids[initIdx]); err != nil {
+					return nil, err
+				}
 			}
 			r.requireImport(valuePkg)
 			specs = append(specs, &ast.ValueSpec{

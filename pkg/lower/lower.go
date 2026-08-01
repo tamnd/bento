@@ -322,6 +322,17 @@ type Renderer struct {
 	// pre-pass fixpoint the signatures are, since a boxed field feeds the calls that
 	// read it and a boxed call feeds the stores that fill it.
 	boxedFields map[frontend.Node]bool
+	// boxedLocals is the set of local binding symbols whose Go slot holds a value.Value
+	// because some assignment to the name hands it a box. It is decided in the same
+	// pre-pass fixpoint the fields are, and for the same reason: a local is written into
+	// one Go declaration, so the one-place condition the whole pass rests on holds, and
+	// the store that boxes it can sit anywhere, including inside a callback.
+	boxedLocals map[frontend.Symbol]bool
+	// boxedLoopVars is the set of for...of binding symbols that iterate a box, so each
+	// element they take is one. The loop lowering marks the same binding dynBound as it
+	// goes, but that happens long after the pre-pass has decided, so the pass keeps its
+	// own reading of the loops for the stores those bindings feed.
+	boxedLoopVars map[frontend.Symbol]bool
 	// boxBindVisiting is the set of binding symbols identifierBindsABox is currently
 	// asking about, so a self-referential declaration does not spin. A nil map (the
 	// default) holds nothing.

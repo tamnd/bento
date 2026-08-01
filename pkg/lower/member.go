@@ -1113,16 +1113,39 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 		switch n.Kind() {
 		case frontend.NodeIdentifier:
 			// A parameter the boxed-signature pass gave a value.Value slot is a box the
-			// same way a dynBound local is, and so is a name whose own declaration binds
-			// one. The three answers agree once the body is lowering, since a boxed
-			// parameter joins dynBoundLocals there and buildVarDecl marks a boxed binding
-			// on exactly the boxedChainBinding rule read below. Reading the declaration as
-			// well is what lets a name be seen as a box from outside the body that holds
-			// it, which is what the boxed-signature pass needs while it is still deciding
-			// and no dynamic-locals set exists yet.
-			return r.isDynBoundReceiver(n) || r.isBoxedParamRead(n) || r.identifierBindsABox(n)
+			// same way a dynBound local is, and so is a for...of binding over a boxed
+			// iterable, and so is a name whose own declaration binds one. The answers
+			// agree once the body is lowering, since a boxed parameter joins
+			// dynBoundLocals there, forOfDynamic marks its loop variable, and buildVarDecl
+			// marks a boxed binding on exactly the boxedChainBinding rule read below.
+			// Reading the declaration and the loop as well is what lets a name be seen as
+			// a box from outside the body that holds it, which is what the boxed-signature
+			// pass needs while it is still deciding and no dynamic-locals set exists yet.
+			return r.isDynBoundReceiver(n) || r.isBoxedParamRead(n) ||
+				r.isBoxedLoopVar(n) || r.identifierBindsABox(n)
 		case frontend.NodeObjectLiteralExpression, frontend.NodeArrayLiteralExpression:
 			return r.literalHoldsBox(n)
+		case frontend.NodeConditionalExpression:
+			// A ternary with a boxed branch is a box whichever way it goes, since
+			// conditionalBoxed gives the whole expression a value.Value result and boxes the
+			// static branch on its way in. The checker's type for the ternary says nothing
+			// about that, so the branches are what this reads.
+			kids := r.prog.Children(n)
+			if len(kids) != 5 {
+				return false
+			}
+			// A condition the lowering settles collapses the ternary to the one branch that
+			// runs, and nothing of the other branch is emitted, so the box is that branch's
+			// question alone. The test is conditionalExpr's own, read here so the two agree.
+			if val, known := r.staticTruthy(kids[0]); known && r.repeatableOperand(kids[0]) {
+				if val {
+					n = kids[2]
+				} else {
+					n = kids[4]
+				}
+				continue
+			}
+			return r.isBoxedChain(kids[2]) || r.isBoxedChain(kids[4])
 		case frontend.NodeParenthesizedExpression, frontend.NodeAsExpression, frontend.NodeTypeAssertion, frontend.NodeNonNull:
 			if r.prog.TypeAt(n).Flags&unboxes != 0 {
 				return false
@@ -1219,6 +1242,13 @@ func (r *Renderer) boxedChainBinding(nameNode, initNode frontend.Node) bool {
 	}
 	if flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) != 0 {
 		return false
+	}
+	// A binding the pre-pass marked takes the value slot whatever its own initializer is,
+	// since the box arrives at a later store. The mark is read here rather than beside the
+	// initializer test so every caller gets it at once: the declaration lowering, the read
+	// of the name from anywhere in the program, and the pass itself while it is deciding.
+	if r.isBoxedLocalRead(nameNode) {
+		return true
 	}
 	return r.isBoxedChain(initNode)
 }
