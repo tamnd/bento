@@ -1145,6 +1145,10 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			if r.callOfBoxedReturnFunc(n) {
 				return true
 			}
+			// A getter is called by being read, so the read is where its box arrives.
+			if r.readOfBoxedGetter(n) {
+				return true
+			}
 			// An optional link answers value.OptionalMember, which is a box whatever the
 			// checker calls the result: the read is not coerced down the way a plain read off
 			// a box is, since the undefined a short circuit produces has to stay tellable

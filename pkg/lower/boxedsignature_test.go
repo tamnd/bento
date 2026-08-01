@@ -159,6 +159,41 @@ func TestAMethodTakesAndAnswersABox(t *testing.T) {
 	}
 }
 
+// TestAGetterAnswersABox pins the accessor. A getter has no parameters, so only the
+// return half applies, and the site that has to know it is holding a box is the property
+// read rather than a call. A getter of a plain type keeps its Go result, which is what
+// says the rewrite is driven by the body and not by the accessor being an accessor.
+func TestAGetterAnswersABox(t *testing.T) {
+	for name, tc := range map[string]struct{ src, want, notWant string }{
+		"instance": {boxedSigPrelude +
+			"class C { get head(): Row { return Object.values(m)[0]; } }\n" +
+			"console.log(new C().head.tag);",
+			"Head() value.Value", ""},
+		"read dispatches": {boxedSigPrelude +
+			"class C { get head(): Row { return Object.values(m)[0]; } }\n" +
+			"console.log(new C().head.tag);",
+			`.Get(value.FromGoString("tag"))`, ""},
+		"static": {boxedSigPrelude +
+			"class C { static get head(): Row { return Object.values(m)[0]; } }\n" +
+			"console.log(C.head.tag);",
+			"() value.Value", ""},
+		"plain body keeps its shape": {boxedSigPrelude +
+			"class C { get count(): number { return 5; } }\n" +
+			"console.log(new C().count + 1);",
+			"", "Count() value.Value"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := renderProgram(t, tc.src)
+			if tc.want != "" && !strings.Contains(out, tc.want) {
+				t.Fatalf("a getter did not answer a box, want %q in:\n%s", tc.want, out)
+			}
+			if tc.notWant != "" && strings.Contains(out, tc.notWant) {
+				t.Fatalf("a getter whose body is no box answered one anyway:\n%s", out)
+			}
+		})
+	}
+}
+
 // TestABoxCrossingIntoASignatureThisPassLeavesAloneHandsBack pins what the pass does not
 // rewrite. A function referenced as a value has its Go type read by that reference, and a
 // method in a hierarchy has its signature read again at the vtable and at every call
