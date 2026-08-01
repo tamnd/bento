@@ -151,16 +151,22 @@ func TestInStaticShapeOptionalHandsBack(t *testing.T) {
 	}
 }
 
-// TestInStaticShapeAbsentHandsBack pins that a member the shape declares under neither an
-// own field nor an Object.prototype name does not fold to false, since an index signature
-// the interned struct dropped could still carry it, so a name like z keeps the honest
-// handback rather than fold to an unsound false.
-func TestInStaticShapeAbsentHandsBack(t *testing.T) {
+// TestInStaticShapeAbsentFoldsFalse pins the half this used to decline. A name the shape
+// declares under neither an own field nor an Object.prototype name used to keep an honest
+// handback, because an index signature the interned struct dropped could still have
+// carried it. sealedShape now asks the checker for that index signature directly and only
+// folds where there is none, so the absence is provable and the false is sound.
+func TestInStaticShapeAbsentFoldsFalse(t *testing.T) {
+	skipIfShort(t)
 	for _, key := range []string{"z", "missing", "nope"} {
 		src := "const o = { a: 1 };\nconsole.log(\"" + key + "\" in o);\n"
-		reason := renderProgramHandBack(t, src)
-		if !strings.Contains(reason, "in operator outside a discriminated-union narrowing") {
-			t.Fatalf("absent-member %q in handed back with %q, want the in-operator reason", key, reason)
+		want := "false\n"
+		if got := runProgramGo(t, src); got != want {
+			t.Fatalf("absent-member %q in printed %q, want %q", key, got, want)
+		}
+		source := renderProgram(t, src)
+		if strings.Contains(source, "value.InOperator") {
+			t.Fatalf("absent-member %q in should fold to a constant, not route through InOperator:\n%s", key, source)
 		}
 	}
 }
