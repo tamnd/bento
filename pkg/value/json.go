@@ -84,14 +84,30 @@ type jsonPositionList []any
 
 func (p jsonPositionList) jsonElements() []any { return p }
 
-// jsonPositions reads a tuple's positions and presents them as an array to the walk. An
-// optional position is stored as a value.Opt, the same way an optional object field is,
-// so it is unwrapped here: a present one contributes the value it holds and an absent one
-// contributes undefined. An object field would be dropped instead, but dropping a
-// position would shift every position after it, and an absent element of an array is
-// undefined rather than gone.
+// jsonPositions reads a tuple's positions and presents them as an array to the walk.
+//
+// An optional position is stored as a value.Opt, the same way an optional object field
+// is, and the two want different answers. A [number, string?] holding only a number is
+// the array [2] in the engine, length 1, so a trailing absent position is dropped and
+// takes the length with it: JSON.stringify reads [2] and console.log reads [ 2 ].
+//
+// Only a trailing run can be dropped. Dropping one with a position after it would shift
+// everything past it down, and an absent element in the middle of a JavaScript array
+// reads as undefined, so that is what it contributes. A middle position can only be
+// absent when the source wrote undefined there explicitly, which the Go shape cannot
+// tell from an omission, and undefined is the closer of the two.
 func jsonPositions(t jsonTupler) jsonArray {
 	pos := t.JSONTuple()
+	for len(pos) > 0 {
+		opt, ok := pos[len(pos)-1].(jsonOptional)
+		if !ok {
+			break
+		}
+		if _, present := opt.jsonOptField(); present {
+			break
+		}
+		pos = pos[:len(pos)-1]
+	}
 	for i, p := range pos {
 		opt, ok := p.(jsonOptional)
 		if !ok {

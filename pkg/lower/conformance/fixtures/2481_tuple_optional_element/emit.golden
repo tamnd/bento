@@ -11,6 +11,9 @@ type Tuple_num_union struct {
 	E1 value.Opt[value.BStr]
 }
 
+func (t Tuple_num_union) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
 func Label(pair Tuple_num_union) value.BStr {
 	if !pair.E1.IsUndefined() {
 		return value.NumberToString(pair.E0).ConcatN(value.FromGoString(":"), pair.E1.Get())

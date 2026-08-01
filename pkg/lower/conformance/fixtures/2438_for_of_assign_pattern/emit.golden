@@ -11,6 +11,9 @@ type Tuple_num_str struct {
 	E1 value.BStr
 }
 
+func (t Tuple_num_str) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
 func main() {
 	pairs := value.NewArray[Tuple_num_str](Tuple_num_str{E0: 1, E1: value.FromGoString("a")}, Tuple_num_str{E0: 2, E1: value.FromGoString("b")}, Tuple_num_str{E0: 3, E1: value.FromGoString("c")})
 	a := 0.0

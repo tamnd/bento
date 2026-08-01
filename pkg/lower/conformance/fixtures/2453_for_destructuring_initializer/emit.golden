@@ -10,6 +10,11 @@ type Tuple_num_num struct {
 	E0 float64
 	E1 float64
 }
+
+func (t Tuple_num_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
+
 type ObjHiLo struct {
 	Lo float64 `json:"lo"`
 	Hi float64 `json:"hi"`

@@ -40,6 +40,29 @@ func TestATupleReadsAsAnArrayEverywhere(t *testing.T) {
 	}
 }
 
+// TestATupleWithAnOptionalPositionReadsAsAnArray covers the shape where the Go struct and
+// the JavaScript array disagree about how many elements there are. A [number, string?] is
+// one struct with two fields either way, the second an option, but the engine sees the
+// array [2] with length 1 when the literal wrote one element. So an absent trailing
+// position is dropped rather than written as undefined, which JSON.stringify would have
+// spelled null and console.log would have spelled undefined, both a length too long.
+//
+// Held against what Node v24.18.0 prints.
+func TestATupleWithAnOptionalPositionReadsAsAnArray(t *testing.T) {
+	got := buildAndRunFile(t, "main.ts",
+		"const a: [number, string?] = [1, 'x'];\n"+
+			"const b: [number, string?] = [2];\n"+
+			"console.log(JSON.stringify(a));\n"+
+			"console.log(JSON.stringify(b));\n"+
+			"console.log(a);\n"+
+			"console.log(b);\n"+
+			"console.log(JSON.stringify({ p: b }));\n")
+	want := "[1,\"x\"]\n[2]\n[ 1, 'x' ]\n[ 2 ]\n{\"p\":[2]}\n"
+	if got != want {
+		t.Errorf("a tuple with an optional position read differently than Node:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 // TestAnOptionalTupleReadsAsAnArray covers the tuple reached through a Map lookup, which
 // hands back a T | undefined rather than a T. That shape had no box before this: the
 // optional boxer needs a boxer for the element it wraps, and a tuple had none, so a

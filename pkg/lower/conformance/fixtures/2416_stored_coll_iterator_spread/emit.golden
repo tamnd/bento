@@ -11,6 +11,9 @@ type Tuple_str_num struct {
 	E1 float64
 }
 
+func (t Tuple_str_num) JSONTuple() []any {
+	return []any{t.E0, t.E1}
+}
 func Count(xs *value.Array[float64]) float64 {
 	return xs.Len()
 }

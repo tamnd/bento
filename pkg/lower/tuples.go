@@ -855,8 +855,17 @@ func elidedTupleLengthReceiver(r *Renderer, n frontend.Node) (frontend.Node, boo
 	if obj.Kind() != frontend.NodeIdentifier {
 		return nil, false
 	}
-	if _, ok := r.prog.TupleElements(r.prog.TypeAt(obj)); !ok {
+	elems, ok := r.prog.TupleElements(r.prog.TypeAt(obj))
+	if !ok {
 		return nil, false
+	}
+	// The fold only happens when the type fixes the arity, so the elision only happens
+	// then either. An optional or rest position hands the read back instead, and nothing
+	// is dropped from an emit that never gets made.
+	for _, e := range elems {
+		if e.Optional || e.Rest {
+			return nil, false
+		}
 	}
 	return obj, true
 }

@@ -150,6 +150,18 @@ func TestTupleLengthFolds(t *testing.T) {
 	}
 }
 
+// TestOptionalTupleLengthHandsBack pins the one tuple the length fold has no answer for.
+// A [number, string?] is the array [2] or the array [2, "x"], length 1 or 2, and the type
+// says only that it is one of them, so folding to the position count answers 2 for [2]
+// where the engine answers 1. That is a wrong answer, which is worse than a hand-back.
+func TestOptionalTupleLengthHandsBack(t *testing.T) {
+	const src = "const t: [number, string?] = [1];\nconsole.log(t.length);"
+	reason := renderProgramHandBack(t, src)
+	if !strings.Contains(reason, "length of a tuple with an optional") {
+		t.Fatalf("an optional tuple's length did not hand back for that reason: %q", reason)
+	}
+}
+
 // TestUnhostedTuplePropertyHandsBack pins the boundary beside the length fold. Every name
 // on a tuple other than length belongs to Array.prototype or Object.prototype, and the
 // positional struct carries neither, so the read reports the absence at the boundary
