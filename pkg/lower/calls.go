@@ -4779,33 +4779,31 @@ func (r *Renderer) stringifyMode(arg frontend.Node, symbolDescriptive bool) (ast
 }
 
 // classDeclaresToString reports whether n is an instance of a class that writes a
-// toString of its own, anywhere up its hierarchy. Such an instance takes its string
-// from that method rather than from its box, which carries the fields and the class
-// name but not the methods, so a boxed reading would print the tag where the engine
-// prints what the program wrote.
+// toString of its own answering a string, anywhere up its hierarchy. Such an instance
+// takes its string from that method directly, which saves boxing an instance the
+// program has a typed call site for. A toString answering some other primitive is left
+// out on purpose: the engine takes it as the primitive it is and coerces from there,
+// which is one more rung than a direct call spells, so that instance goes through its
+// box and lets the value model walk the ladder.
 func (r *Renderer) classDeclaresToString(n frontend.Node) bool {
 	info, ok := r.classOfType(r.prog.TypeAt(n))
 	if !ok {
 		return false
 	}
-	_, ok = info.lookupMethod("toString")
-	return ok
+	m, ok := info.lookupMethod("toString")
+	if !ok {
+		return false
+	}
+	sig, ok := r.prog.SignatureAt(m.node)
+	return ok && r.primitiveFlagsOfType(sig.Return)&frontend.TypeString != 0
 }
 
 // classToStringCall lowers the string coercion of such an instance to the typed call
 // on its own method, the same call q.toString() lowers to, so an override dispatches
 // through the vtable and a generic method monomorphizes exactly as it does anywhere
-// else. A toString that answers something other than a string hands back: the engine
-// would take the answer as the primitive it is only if it is one, and otherwise fall
-// on to valueOf and then throw, and that ladder is a later slice rather than a wrong
-// string quietly emitted here.
+// else. Its caller has already checked the method answers a string.
 func (r *Renderer) classToStringCall(lowered ast.Expr, arg frontend.Node) (ast.Expr, error) {
 	info, _ := r.classOfType(r.prog.TypeAt(arg))
-	m, _ := info.lookupMethod("toString")
-	sig, ok := r.prog.SignatureAt(m.node)
-	if !ok || r.primitiveFlagsOfType(sig.Return)&frontend.TypeString == 0 {
-		return nil, &NotYetLowerable{Reason: "coercing an instance of class " + info.name + " whose toString does not return a string is a later slice"}
-	}
 	return r.classMethodCall(info, lowered, "toString", nil, false)
 }
 
@@ -4815,20 +4813,21 @@ func (r *Renderer) classToStringCall(lowered ast.Expr, arg frontend.Node) (ast.E
 // valueOf answers 7 concatenates as "7" while String() of the same instance reads the
 // class tag, because the string hint asks toString first and Object.prototype's answers
 // it. Reporting false leaves an instance with neither method to the box, which reads as
-// the tag, the same thing the engine's fallback produces.
+// the tag, the same thing the engine's fallback produces, and so does an instance whose
+// method answers something the direct call cannot spell: the box runs the same ladder
+// one level down, so falling through to it is a lowering rather than a hand-back.
 func (r *Renderer) classPrimitiveConcat(lowered ast.Expr, n frontend.Node) (ast.Expr, bool, error) {
 	info, ok := r.classOfType(r.prog.TypeAt(n))
 	if !ok {
 		return nil, false, nil
 	}
 	if m, ok := info.lookupMethod("valueOf"); ok {
-		expr, err := r.classValueOfConcat(lowered, info, m)
-		if err != nil {
-			return nil, false, err
+		if expr, ok := r.classValueOfConcat(lowered, info, m); ok {
+			return expr, true, nil
 		}
-		return expr, true, nil
+		return nil, false, nil
 	}
-	if _, ok := info.lookupMethod("toString"); !ok {
+	if !r.classDeclaresToString(n) {
 		return nil, false, nil
 	}
 	expr, err := r.classToStringCall(lowered, n)
@@ -4839,51 +4838,57 @@ func (r *Renderer) classPrimitiveConcat(lowered ast.Expr, n frontend.Node) (ast.
 }
 
 // classValueOfConcat lowers the call to a class's own valueOf and the coercion of what
-// it answers into the string the concatenation joins. Only a primitive answer takes
-// this path: valueOf returning an object is not a primitive, so the engine falls on to
-// toString and then throws if that is no better, and that ladder runs at a boxed
-// instance this slice does not have.
-func (r *Renderer) classValueOfConcat(lowered ast.Expr, info *classInfo, m classMethod) (ast.Expr, error) {
+// it answers into the string the concatenation joins, and reports false when the direct
+// call cannot spell it. Only a primitive answer takes this path: a valueOf answering an
+// object is not a primitive, so the engine falls on to toString from there, which is
+// what the box does one level down, so the caller lets it rather than emitting a call
+// whose answer would be wrong.
+func (r *Renderer) classValueOfConcat(lowered ast.Expr, info *classInfo, m classMethod) (ast.Expr, bool) {
 	sig, ok := r.prog.SignatureAt(m.node)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "valueOf on class " + info.name + " has no call signature"}
+		return nil, false
 	}
 	call, err := r.classMethodCall(info, lowered, "valueOf", nil, false)
 	if err != nil {
-		return nil, err
+		return nil, false
 	}
 	r.requireImport(valuePkg)
 	switch flags := r.primitiveFlagsOfType(sig.Return); {
 	case flags&frontend.TypeString != 0:
-		return call, nil
+		return call, true
 	case flags&frontend.TypeNumber != 0:
-		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{call}}, nil
+		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{call}}, true
 	case flags&frontend.TypeBoolean != 0:
-		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{call}}, nil
+		return &ast.CallExpr{Fun: sel("value", "BoolToString"), Args: []ast.Expr{call}}, true
 	case flags&frontend.TypeBigInt != 0:
-		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{call}}, nil
+		return &ast.CallExpr{Fun: sel("value", "BigIntToString"), Args: []ast.Expr{call}}, true
 	}
-	return nil, &NotYetLowerable{Reason: "concatenating an instance of class " + info.name + " whose valueOf does not answer a primitive is a later slice"}
+	return nil, false
 }
 
 // stringBoxFaithful reports whether the dynamic box of t reads back as the string the
-// engine would produce. One thing says no: an instance of a class that writes its own
-// toString. A boxed instance carries its fields and its class name but not its methods,
-// so the box would read as the class tag where the program's own toString has an answer,
-// and that is a wrong string rather than a missing feature.
+// engine would produce. One thing says no: an instance of a class whose own toString the
+// box cannot run, which is one taking arguments or answering something other than a
+// primitive. A box answers the toString its class registered, so the ordinary case reads
+// through the class's own code; a class that could not register would read as its class
+// tag where the program's own toString has an answer, and that is a wrong string rather
+// than a missing feature.
 //
 // It says so through an array as well, since an array's string form is its elements
 // joined, which means the box has to stringify each element. A Map, a Set and a weak
 // collection stop the walk instead: each reads as its own tag whatever it holds, so
 // nothing inside one is ever asked for a string.
 //
-// An instance in the top position does not reach here, because the caller runs the
-// class's toString directly rather than boxing at all. What reaches here is the
-// instance one container down, where there is no such call site.
+// A class that writes only a valueOf is faithful whatever that valueOf answers, because
+// the string hint asks for toString first and the box answers that with the class tag
+// the way Object.prototype does. It is the concat path, asking with the default hint,
+// that cares whether the valueOf is callable, and that path has a call site of its own.
 func (r *Renderer) stringBoxFaithful(t frontend.Type) bool {
 	if info, ok := r.classOfType(t); ok {
-		_, declares := info.lookupMethod("toString")
-		return !declares
+		if _, declares := info.lookupMethod("toString"); !declares {
+			return true
+		}
+		return r.classCoercionCallable(info, "toString")
 	}
 	if r.isMapType(t) || r.isSetType(t) || r.isWeakMapType(t) || r.isWeakSetType(t) ||
 		r.isWeakRefType(t) || r.isFinalizationRegistryType(t) {

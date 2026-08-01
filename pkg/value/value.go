@@ -577,6 +577,18 @@ func (v Value) Get(key BStr) Value {
 				return val
 			}
 		}
+		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
+			// A boxed instance answers toString and valueOf, the two the language calls on
+			// its own: the class's own code when it writes one, and what Object.prototype
+			// gives when it does not. Without this a box carries an instance's fields and its
+			// class name and none of its methods, so String([q]) would print a class tag
+			// where the program has an answer. The check for an own property comes first
+			// because a field named toString is a real own property and shadows the method,
+			// the way it does on a live instance.
+			if val, ok := classCoercionGet(v, inst, name); ok {
+				return val
+			}
+		}
 		return v.object().getChained(v, key)
 	case KindFunc:
 		// A function is an object too, so a named read finds its own properties: the
@@ -664,6 +676,11 @@ func (v Value) HasProperty(key BStr) bool {
 		}
 		if t := v.object().jsTyped; t != nil {
 			if typedArrayHas(t, name) {
+				return true
+			}
+		}
+		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
+			if _, ok := classCoercionGet(v, inst, name); ok {
 				return true
 			}
 		}
@@ -910,6 +927,18 @@ func (v Value) ToStringMethod() Value {
 		// renders "Symbol(desc)", so the method form answers that descriptive string
 		// rather than routing through ToString the way the other kinds do.
 		return StringValue(v.SymbolDescriptiveString())
+	case KindObject:
+		// A boxed class instance runs the toString its class writes, and answers exactly
+		// what that method returns rather than a string: a class whose toString answers a
+		// number answers a number here, since this is the method call and not the abstract
+		// coercion, which is the one place the two part. An own field of that name shadows
+		// the method the way it does on a live instance.
+		key := FromGoString("toString")
+		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
+			if m, ok := classCoercionGet(v, inst, "toString"); ok {
+				return m.Call(v)
+			}
+		}
 	}
 	return StringValue(ToString(v))
 }
@@ -922,12 +951,24 @@ func (v Value) ToStringMethod() Value {
 // identity. undefined and null carry no prototype, so reading valueOf off them throws a
 // TypeError the way JavaScript does. The result is boxed because the receiver is dynamic
 // and the call site is typed any.
+//
+// A boxed class instance is the one object that does not answer by identity: a class
+// writing its own valueOf shadows Object.prototype's, so the call runs the class's code
+// and answers the primitive it returns. An own field of that name shadows the method
+// again, the way it does on a live instance, so the read is checked first.
 func (v Value) ValueOfMethod() Value {
 	switch v.kind {
 	case KindUndefined:
 		Throw(NewTypeError(FromGoString("Cannot read properties of undefined (reading 'valueOf')")))
 	case KindNull:
 		Throw(NewTypeError(FromGoString("Cannot read properties of null (reading 'valueOf')")))
+	case KindObject:
+		key := FromGoString("valueOf")
+		if inst := v.object().jsClass; inst != nil && !v.object().hasOwn(key) {
+			if m, ok := classCoercionGet(v, inst, "valueOf"); ok {
+				return m.Call(v)
+			}
+		}
 	}
 	return v
 }
