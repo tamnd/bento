@@ -401,6 +401,13 @@ func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []front
 	var params []frontend.Param
 	var rest *frontend.Param
 	if sig, ok := r.prog.SignatureAt(n); ok {
+		// A call into a signature the boxed-signature pass rewrote bridges against the
+		// boxed parameter, so a static argument boxes on the way in and a box passes
+		// through untouched. Both ends read the same overlay, which is what keeps the Go
+		// call and the Go declaration in step.
+		if fn, ok := r.calleeFuncNode(n); ok {
+			sig = r.boxedSig(fn, sig)
+		}
 		params = sig.Params
 		rest = sig.RestParam
 	}

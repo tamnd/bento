@@ -1,7 +1,6 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -81,31 +80,5 @@ func TestAnOptionalLinkOffABoxStaysBoxed(t *testing.T) {
 	out := renderProgram(t, src)
 	if strings.Count(out, "value.OptionalMember(") != 2 {
 		t.Fatalf("an optional link off a box did not stay boxed down the chain:\n%s", out)
-	}
-}
-
-// TestABoxPassedToADeclaredSignatureHandsBack pins the boundary this stops at. Filling a
-// declared parameter or return from a box could only copy, so the honest answer until
-// such a signature can take a boxed slot is a hand-back rather than the Go that does not
-// compile it used to emit.
-func TestABoxPassedToADeclaredSignatureHandsBack(t *testing.T) {
-	const prelude = "type Row = { id: number; tag: string };\n" +
-		"const m = JSON.parse('{}') as Record<string, Row>;\n"
-	for name, src := range map[string]string{
-		"argument": prelude + "function f(r: Row): number { return r.id; }\nconsole.log(f(Object.values(m)[0]));",
-		"return":   prelude + "function g(): Row { return Object.values(m)[0]; }\nconsole.log(g().tag);",
-	} {
-		t.Run(name, func(t *testing.T) {
-			prog := compile(t, src)
-			r := NewRenderer(prog)
-			_, err := r.RenderProgram(entryFile(t, prog))
-			var nyl *NotYetLowerable
-			if !errors.As(err, &nyl) {
-				t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
-			}
-			if !strings.Contains(nyl.Reason, "coercing a dynamic value into this static type") {
-				t.Errorf("hand-back reason = %q, want it to name the dynamic coercion", nyl.Reason)
-			}
-		})
 	}
 }
