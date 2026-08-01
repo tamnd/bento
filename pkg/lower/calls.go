@@ -2494,6 +2494,19 @@ func (r *Renderer) jsonStringifyOptionalArg(t frontend.Type) bool {
 	return ok && !r.jsonStringifyIsUndefinedResult(inner)
 }
 
+// jsonStringifyArg lowers the value JSON.stringify serializes, boxing it first when it
+// is a tuple. The serializer is a reflection walk over the Go value, and a tuple's Go
+// shape is a positional struct, so it would write [1, "a"] as {"E0":1,"E1":"a"}: a wrong
+// answer rather than a handback. Boxing gives the walk the array value the engine
+// serializes, the same box console.log and String already take a tuple through. Every
+// other argument lowers as itself.
+func (r *Renderer) jsonStringifyArg(n frontend.Node) (ast.Expr, error) {
+	if _, ok := r.prog.TupleElements(r.prog.TypeAt(n)); ok {
+		return r.boxOperand(n)
+	}
+	return r.lowerExpr(n)
+}
+
 func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "stringify":
@@ -2545,7 +2558,7 @@ func (r *Renderer) jsonCall(method string, argNodes []frontend.Node) (ast.Expr, 
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "JSONStringifyOpt"), Args: []ast.Expr{arg}}, nil
 		}
-		arg, err := r.lowerExpr(argNodes[0])
+		arg, err := r.jsonStringifyArg(argNodes[0])
 		if err != nil {
 			return nil, err
 		}

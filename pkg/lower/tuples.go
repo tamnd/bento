@@ -343,17 +343,62 @@ func (r *Renderer) tupleLiteralAt(n frontend.Node, t frontend.Type, elems []fron
 // tuple's Go representation is a positional struct that carries no such method. The
 // tuple is materialized as a value.Array over its element union (the checker's
 // numeric index type) and the array method dispatches on that materialized array.
-// handled is false for a method this slice does not cover, so the caller falls
-// through to its existing dispatch rather than mislower a method the tuple path does
-// not host.
+// A tuple's whole method surface is Array.prototype and Object.prototype, and its Go
+// representation is a struct that carries neither, so a method this path does not host
+// hands back here rather than fall through. The dispatch below it has nothing to offer a
+// struct receiver and used to emit a call to a Go method the struct does not have, which
+// the assembled program then failed to compile: `[1, 2, 3].join(",")` on a tuple binding
+// reached the Go compiler as t.Join and died there rather than at the boundary. A
+// hand-back is the same absence reported at the place that knows about it.
 func (r *Renderer) tupleArrayMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node, elems []frontend.TupleElem) (ast.Expr, bool, error) {
 	switch method {
 	case "map":
 		e, err := r.tupleMapCall(recvNode, argNodes, elems)
 		return e, true, err
+	case "join":
+		e, err := r.tupleJoinCall(recvNode, argNodes, elems)
+		return e, true, err
 	default:
-		return nil, false, nil
+		return nil, true, &NotYetLowerable{Reason: "the array method " + method + " borrowed on a tuple receiver is a later slice"}
 	}
+}
+
+// tupleJoinCall lowers tuple.join(sep) to the join of the array the tuple materializes
+// to. join is the method a tuple most often reaches for, since `await Promise.all([...])`
+// hands back a tuple and printing it is usually the next thing a program does, and it is
+// the cheapest to host: unlike map it takes no callback, so the materialized array's own
+// join answers it directly. The separator is optional and defaults to a comma, which is
+// the array method's own default rather than anything tuple-specific.
+func (r *Renderer) tupleJoinCall(recvNode frontend.Node, argNodes []frontend.Node, elems []frontend.TupleElem) (ast.Expr, error) {
+	if len(argNodes) > 1 {
+		return nil, &NotYetLowerable{Reason: "a tuple join takes at most a separator argument"}
+	}
+	arr, elemGo, err := r.materializeTupleArray(recvNode, elems)
+	if err != nil {
+		return nil, err
+	}
+	elemT, ok := r.prog.NumberIndexType(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a tuple whose array element type the checker does not expose is a later slice"}
+	}
+	str, err := r.stringifyClosure(elemT, elemGo)
+	if err != nil {
+		return nil, err
+	}
+	sep := ast.Expr(&ast.CallExpr{
+		Fun:  sel("value", "FromGoString"),
+		Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: `","`}},
+	})
+	if len(argNodes) == 1 {
+		if !r.isString(argNodes[0]) {
+			return nil, &NotYetLowerable{Reason: "a tuple join with a non-string separator is a later slice"}
+		}
+		if sep, err = r.lowerExpr(argNodes[0]); err != nil {
+			return nil, err
+		}
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: arr, Sel: ident("Join")}, Args: []ast.Expr{sep, str}}, nil
 }
 
 // tupleMapCall lowers tuple.map(cb) to value.MapArray over the array the tuple
@@ -742,4 +787,29 @@ func (r *Renderer) tupleDestructureValues(targets []frontend.Node, rhs frontend.
 		values = append(values, &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))})
 	}
 	return values, nil
+}
+
+// elidedTupleLengthReceiver reports the identifier receiver a folded tuple length drops
+// from the emit. t.length answers the arity the type fixes, a Go constant with no read of
+// t at all, so a binding whose only read was that receiver would be declared and not used
+// in Go. Recording the read lets bindingUnused blank it, the same bookkeeping the folded
+// in test does for its receiver. The match is restricted to a bare identifier receiver
+// since only a binding can be orphaned; a literal or property-access receiver names no
+// local to blank.
+func elidedTupleLengthReceiver(r *Renderer, n frontend.Node) (frontend.Node, bool) {
+	if n.Kind() != frontend.NodePropertyAccessExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || strings.TrimSpace(r.prog.Text(kids[1])) != "length" {
+		return nil, false
+	}
+	obj := kids[0]
+	if obj.Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	if _, ok := r.prog.TupleElements(r.prog.TypeAt(obj)); !ok {
+		return nil, false
+	}
+	return obj, true
 }

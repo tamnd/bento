@@ -2,6 +2,7 @@ package lower
 
 import (
 	"go/ast"
+	"go/token"
 	"maps"
 
 	"github.com/tamnd/bento/pkg/frontend"
@@ -276,9 +277,18 @@ func (r *Renderer) promiseAll(call frontend.Node, argNodes []frontend.Node) (ast
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "Promise.all whose type is not a Promise is a later slice"}
 	}
+	// The everyday spelling, `await Promise.all([a(), b()])`, does not produce an array
+	// at all: with no contextual type to widen it, the checker types the literal as a
+	// tuple and the call as a Promise of a tuple, one element type per position. That
+	// takes the tuple path below, which is the only one that can carry per-position
+	// types. An array reaches here when the source widened it, by annotating the
+	// argument or the result.
+	if elems, ok := r.prog.TupleElements(resultElem); ok {
+		return r.promiseAllTuple(argNodes[0], resultElem, elems)
+	}
 	elem, ok := r.prog.ElementType(resultElem)
 	if !ok {
-		return nil, &NotYetLowerable{Reason: "Promise.all whose fulfilled value is not an array is a later slice"}
+		return nil, &NotYetLowerable{Reason: "Promise.all whose fulfilled value is neither an array nor a tuple is a later slice"}
 	}
 	elemType, err := r.typeExpr(elem)
 	if err != nil {
@@ -296,6 +306,138 @@ func (r *Renderer) promiseAll(call frontend.Node, argNodes []frontend.Node) (ast
 	r.usesPromise = true
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: index(sel("value", "All"), elemType), Args: []ast.Expr{lowered}}, nil
+}
+
+// promiseAllTuple lowers a Promise.all whose fulfilled value is a tuple, which is what
+// the everyday `await Promise.all([a(), b()])` produces: with nothing to widen the
+// literal, the checker keeps one element type per position, and value.All cannot carry
+// those because a Go slice holds one type and a type parameter list cannot vary in
+// length.
+//
+// The emit binds each position of the argument literal to its own local inside an
+// immediately-called function and hands value.AllTuple two views of them: the promises
+// themselves, erased to Combinable so they fit in one variadic, and a closure that reads
+// each one's Fulfilled back at its own static type and packs the result tuple. The closure
+// is where the per-position types survive, and binding first is what lets the same promise
+// appear in both views while the source expression runs once.
+//
+//	func() *value.Promise[Res] {
+//		p0, p1 := <elem0>, <elem1>
+//		return value.AllTuple(func() Res { return Res{E0: p0.Fulfilled(), E1: p1.Fulfilled()} }, p0, p1)
+//	}()
+//
+// The positions are lowered one at a time rather than by lowering the argument as a whole
+// and reading its fields, which would need a Go struct interned for the tuple of promises.
+// Those structs are interned on a structural key per position that does not separate a
+// Promise<number> from a Promise<string>, so a mixed call would share a struct with a
+// uniform one and emit Go that does not compile. There is no reason to build a struct only
+// to take it apart, so the argument has to be an array literal here; a tuple-typed binding
+// passed to Promise.all hands back.
+//
+// resultElems must be all-required, since an optional or rest position has no promise to
+// wait on, and every position of the literal must be a runtime promise of the matching
+// result position, since the closure reads its Fulfilled at that type.
+func (r *Renderer) promiseAllTuple(arg frontend.Node, resultT frontend.Type, resultElems []frontend.TupleElem) (ast.Expr, error) {
+	if arg.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, &NotYetLowerable{Reason: "Promise.all over a tuple that is not written as an array literal at the call is a later slice"}
+	}
+	kids := r.prog.Children(arg)
+	if len(kids) != len(resultElems) {
+		return nil, &NotYetLowerable{Reason: "Promise.all over an array literal whose positions do not match its fulfilled tuple is a later slice"}
+	}
+	resultName, err := r.decls.internTuple(r, resultT, resultElems)
+	if err != nil {
+		return nil, err
+	}
+	// Promise.all([]) is a tuple of no positions: there is nothing to wait on, so
+	// AllTuple over no inputs fulfills at once with the empty tuple, the way the engine
+	// does. It is spelled separately because the emit below would declare locals it never
+	// reads, which Go rejects.
+	if len(resultElems) == 0 {
+		return r.promiseAllEmptyTuple(resultName), nil
+	}
+	names := make([]string, len(resultElems))
+	lowered := make([]ast.Expr, len(resultElems))
+	fields := make([]ast.Expr, 0, len(resultElems))
+	inputs := make([]ast.Expr, 0, len(resultElems)+1)
+	inputs = append(inputs, nil) // the build closure, filled in below
+	for i, e := range resultElems {
+		if e.Optional || e.Rest {
+			return nil, &NotYetLowerable{Reason: "Promise.all over a tuple with an optional or rest position is a later slice"}
+		}
+		argT := r.prog.TypeAt(kids[i])
+		inner, ok := r.promiseElem(argT)
+		if !ok || inner.Identity() != e.Type.Identity() {
+			return nil, &NotYetLowerable{Reason: "Promise.all over a tuple position that is not a promise of the matching fulfilled type is a later slice"}
+		}
+		argGo, err := r.typeExpr(argT)
+		if err != nil {
+			return nil, err
+		}
+		if !isPromiseGoType(argGo) {
+			return nil, &NotYetLowerable{Reason: "Promise.all over a tuple of foreign thenables is a later slice"}
+		}
+		if lowered[i], err = r.lowerExpr(kids[i]); err != nil {
+			return nil, err
+		}
+		names[i] = r.freshTemp()
+		fields = append(fields, &ast.KeyValueExpr{
+			Key:   ident("E" + itoa(i)),
+			Value: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(names[i]), Sel: ident("Fulfilled")}},
+		})
+		inputs = append(inputs, ident(names[i]))
+	}
+	inputs[0] = &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(resultName)}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.CompositeLit{Type: ident(resultName), Elts: fields},
+		}}}},
+	}
+	// One multi-assign rather than one statement per position: the source evaluates the
+	// literal's elements left to right and a Go tuple assignment does the same, so the
+	// order a program can observe through the calls' own effects is the order it wrote.
+	binds := make([]ast.Expr, len(names))
+	for i, n := range names {
+		binds[i] = ident(n)
+	}
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	promiseOfResult := &ast.StarExpr{X: index(sel("value", "Promise"), ident(resultName))}
+	return &ast.CallExpr{Fun: &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: promiseOfResult}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.AssignStmt{Lhs: binds, Tok: token.DEFINE, Rhs: lowered},
+			&ast.ReturnStmt{Results: []ast.Expr{
+				&ast.CallExpr{Fun: sel("value", "AllTuple"), Args: inputs},
+			}},
+		}},
+	}}, nil
+}
+
+// promiseAllEmptyTuple emits the Promise.all([]) case, whose fulfilled tuple has no
+// positions: AllTuple over no inputs fulfills immediately with the empty tuple. The
+// literal has no elements, so there is no effect to preserve and nothing to bind.
+//
+//	value.AllTuple(func() Res { return Res{} })
+func (r *Renderer) promiseAllEmptyTuple(resultName string) ast.Expr {
+	r.usesPromise = true
+	r.requireImport(valuePkg)
+	build := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: ident(resultName)}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.CompositeLit{Type: ident(resultName)},
+		}}}},
+	}
+	return &ast.CallExpr{Fun: sel("value", "AllTuple"), Args: []ast.Expr{build}}
 }
 
 // promiseCombinator lowers Promise.race and Promise.any, which share a shape: each

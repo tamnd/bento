@@ -337,6 +337,20 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	if expr, ok, err := r.classKeyRead(obj, prop); err != nil || ok {
 		return expr, err
 	}
+	// A property read off a tuple receiver. A tuple's Go shape is a positional struct
+	// whose fields are E0, E1 and so on, so the interned-shape path below would read
+	// t.length as a struct field named Length that the struct does not carry and emit Go
+	// that does not compile. length is the property a tuple is actually asked for, and the
+	// type fixes the arity, so it folds to that constant with no receiver read at all.
+	// Every other name on a tuple belongs to Array.prototype or Object.prototype, neither
+	// of which the positional struct has, and reporting the absence here is what keeps the
+	// Go compiler from reporting it instead.
+	if elems, ok := r.prog.TupleElements(r.prog.TypeAt(obj)); ok {
+		if prop != "length" {
+			return nil, &NotYetLowerable{Reason: "the property " + prop + " read off a tuple receiver is a later slice"}
+		}
+		return &ast.BasicLit{Kind: token.FLOAT, Value: strconv.Itoa(len(elems))}, nil
+	}
 	if r.isString(obj) && prop == "length" {
 		recv, err := r.lowerExpr(obj)
 		if err != nil {
