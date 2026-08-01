@@ -2295,6 +2295,11 @@ func (r *Renderer) isBoxedStaticFieldRead(src frontend.Node) bool {
 // down through ToNumber into a slot that holds a box. That does not compile, which
 // is the same failure this bridge was widened to fix, with its two sides swapped.
 func (r *Renderer) boxedFieldIdent(n frontend.Node) bool {
+	// An instance field the boxed-signature pass gave a value.Value is a boxed slot on
+	// the same terms, so a static store into it boxes on its way in.
+	if r.boxedFields[n] {
+		return true
+	}
 	for _, info := range r.classes {
 		for _, f := range info.statics {
 			if f.ident == n {
@@ -3462,38 +3467,52 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 // one side is dynamic and the other static. A dynamic source into a static target
 // coerces through ToNumber and its siblings; a static source into a dynamic target
 // boxes through the value constructors; matching sides pass through unchanged.
+// targetType is the checker's type for an assignment target with the boxed-signature
+// pass's rewrite applied: a slot that pass moved into the value model reads as any,
+// because its Go type is a value.Value however the declaration spells it. Every
+// shape-specific bridge in coerceToTarget asks through this, so none of them tries to
+// build a slot the struct or the signature no longer has. A field declared `Row |
+// undefined` and boxed is the case that names itself: value.Opt[*ObjIdTag] is not what
+// the struct holds any more, so wrapping in Some would spell an optional that is gone.
+func (r *Renderer) targetType(target frontend.Node) frontend.Type {
+	if r.boxedFieldIdent(target) || r.isBoxedParamRead(target) {
+		return frontend.Type{Flags: frontend.TypeAny}
+	}
+	return r.prog.TypeAt(target)
+}
+
 func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast.Expr, error) {
-	if tup, ok, err := r.arrayAssertedToTuple(expr, src, r.prog.TypeAt(target)); err != nil {
+	if tup, ok, err := r.arrayAssertedToTuple(expr, src, r.targetType(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return tup, nil
 	}
-	if empty, ok, err := r.emptyArrayContextual(src, r.prog.TypeAt(target)); err != nil {
+	if empty, ok, err := r.emptyArrayContextual(src, r.targetType(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return empty, nil
 	}
-	if dyn, ok, err := r.dynArrayLiteralContextual(src, r.prog.TypeAt(target)); err != nil {
+	if dyn, ok, err := r.dynArrayLiteralContextual(src, r.targetType(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return dyn, nil
 	}
-	if opt, ok, err := r.optArrayLiteralContextual(src, r.prog.TypeAt(target)); err != nil {
+	if opt, ok, err := r.optArrayLiteralContextual(src, r.targetType(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return opt, nil
 	}
-	if fn, ok, err := r.coerceFuncValue(expr, src, r.prog.TypeAt(target)); err != nil {
+	if fn, ok, err := r.coerceFuncValue(expr, src, r.targetType(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return fn, nil
 	}
-	if boxed, ok, err := r.boxToOptional(expr, src, r.prog.TypeAt(target)); err != nil {
+	if boxed, ok, err := r.boxToOptional(expr, src, r.targetType(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return boxed, nil
 	}
-	if wrapped, ok, err := r.wrapToUnion(expr, src, r.prog.TypeAt(target)); err != nil {
+	if wrapped, ok, err := r.wrapToUnion(expr, src, r.targetType(target)); err != nil {
 		return nil, err
 	} else if ok {
 		return wrapped, nil
@@ -3501,10 +3520,10 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	// A value bound into a slot of a different fixed shape where either shape
 	// carries an optional property cannot compile as one Go struct assigned to
 	// another, so it hands back the way it did before optional shapes interned.
-	if err := r.guardOptionalShapeCross(src, r.prog.TypeAt(target)); err != nil {
+	if err := r.guardOptionalShapeCross(src, r.targetType(target)); err != nil {
 		return nil, err
 	}
-	if err := r.guardNonStringBoxIntoString(src, r.prog.TypeAt(target).Flags); err != nil {
+	if err := r.guardNonStringBoxIntoString(src, r.targetType(target).Flags); err != nil {
 		return nil, err
 	}
 	// A source whose lowering is a box but whose checker type is a concrete primitive
@@ -3523,9 +3542,12 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 	// would make the bridge see dynamic-to-static there and coerce the box down through
 	// ToNumber into a slot that holds a box, which is the original bug with its two
 	// sides swapped. Both sides read the same predicate, so neither can be wrong about
-	// the other.
+	// the other. A parameter the boxed-signature pass moved into the value slot is the
+	// same case reached from the other end, which is how a static argument boxes on its
+	// way into `new S({ id: 7 })` once some other call site passes that slot a box.
 	srcDyn := r.isDynamic(src) || r.producesBoxedValue(src)
-	tgtDyn := r.isDynamic(target) || r.producesBoxedValue(target) || r.boxedFieldIdent(target)
+	tgtDyn := r.isDynamic(target) || r.producesBoxedValue(target) ||
+		r.boxedFieldIdent(target) || r.isBoxedParamRead(target)
 	switch {
 	case srcDyn && !tgtDyn:
 		return r.coerceDynamicToStatic(expr, target)

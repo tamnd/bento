@@ -1,6 +1,10 @@
 package lower
 
-import "github.com/tamnd/bento/pkg/frontend"
+import (
+	"strings"
+
+	"github.com/tamnd/bento/pkg/frontend"
+)
 
 // maxBoxedSigRounds bounds the fixpoint below. Each round can only add marks, and a
 // program has finitely many parameters and functions, so the loop terminates on its
@@ -46,7 +50,10 @@ const maxBoxedSigRounds = 8
 // mark but never take one back.
 func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 	cands := r.boxableFuncs(files)
-	if len(cands) == 0 {
+	// A program with no rewritable signature can still have a field a store hands a box
+	// to, since a field's Go type is not a signature, so the classes keep the pass alive
+	// on their own.
+	if len(cands) == 0 && len(r.classes) == 0 {
 		return
 	}
 	if r.boxedParams == nil {
@@ -58,9 +65,15 @@ func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 	if r.boxedParamSyms == nil {
 		r.boxedParamSyms = map[frontend.Symbol]bool{}
 	}
+	if r.boxedFields == nil {
+		r.boxedFields = map[frontend.Node]bool{}
+	}
 	for round := 0; round < maxBoxedSigRounds; round++ {
 		changed := r.markBoxedParams(files, cands)
 		if r.markBoxedReturns(cands) {
+			changed = true
+		}
+		if r.markBoxedFields(files) {
 			changed = true
 		}
 		if !changed {
@@ -70,12 +83,168 @@ func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 	r.forceBoxedParams(cands)
 }
 
+// markBoxedFields decides which class fields hold a box, and joins the fixpoint because
+// the three answers feed each other: a method that hands back a box fills a field, a
+// field that holds one is read into a call, and that call's parameter takes the value
+// slot in turn.
+//
+// A field is boxed when some store hands it a box. That is the field's reading of the
+// rule the parameter and the result take: a Go struct field has one type, and of the two
+// candidates the box is the only one the other stores can be brought to, since a static
+// value boxes on its way in through the coercion that already runs where a box has no way
+// to become the struct.
+//
+// The eligible classes are the ones note 387 settled on, with no base and no subclass, so
+// the field's Go type is written in exactly one struct. A private field is left out
+// because its own boxing rule already exists for the static case, and a synthesized Error
+// field has no declared type to rewrite.
+func (r *Renderer) markBoxedFields(files []frontend.Node) bool {
+	if len(r.classes) == 0 {
+		return false
+	}
+	derived := map[*classInfo]bool{}
+	for _, info := range r.classes {
+		if info.base != nil {
+			derived[info.base] = true
+		}
+	}
+	changed := false
+	for _, info := range r.classes {
+		if info.base != nil || derived[info] {
+			continue
+		}
+		for _, f := range info.fields {
+			if f.ident == nil || f.synthBStr || strings.HasPrefix(f.prop, "#") {
+				continue
+			}
+			if r.boxedFields[f.ident] || !r.fieldTakesABox(files, info, f) {
+				continue
+			}
+			r.boxedFields[f.ident] = true
+			changed = true
+		}
+	}
+	return changed
+}
+
+// fieldTakesABox reports whether any store to a field hands it a box: its own declared
+// initializer, a this.f = v inside the class it belongs to, or a recv.f = v anywhere the
+// receiver's checker type is that class.
+//
+// Both sides of a store need the class `this` names: the receiver of `this.f = ...` to
+// know the store is this field's, and the value of `... = this.head()` to know a sibling
+// method handed it a box. The walk carries it through curClass, which is what classReceiver
+// reads, so the declaration supplies what the receiver does not.
+func (r *Renderer) fieldTakesABox(files []frontend.Node, info *classInfo, f classField) bool {
+	if f.init != nil {
+		prev := r.curClass
+		r.curClass = info
+		boxed := r.isBoxedChain(f.init)
+		r.curClass = prev
+		if boxed {
+			return true
+		}
+	}
+	found := false
+	r.walkInClasses(files, func(n frontend.Node) bool {
+		if found {
+			return false
+		}
+		lhs, rhs, ok := r.propStoreParts(n)
+		if !ok || r.prog.Text(r.prog.Children(lhs)[1]) != f.prop {
+			return true
+		}
+		if got, ok := r.classReceiver(r.prog.Children(lhs)[0]); ok && got == info && r.isBoxedChain(rhs) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// walkInClasses visits every node of the program with curClass set to whatever class the
+// node sits inside, so `this` resolves during the pass the way it will once the body
+// lowers. The visit returns false to stop descending.
+//
+// The pass needs this wherever a shape it decides can be written with `this`: a field read
+// or a sibling call is only recognizable as a box once the receiver has a class, and those
+// appear in returns and in arguments as readily as in stores.
+func (r *Renderer) walkInClasses(files []frontend.Node, visit func(frontend.Node) bool) {
+	byDecl := make(map[frontend.Node]*classInfo, len(r.classes))
+	for _, info := range r.classes {
+		if info.decl != nil {
+			byDecl[info.decl] = info
+		}
+	}
+	var walk func(frontend.Node)
+	walk = func(n frontend.Node) {
+		if !visit(n) {
+			return
+		}
+		if info, ok := byDecl[n]; ok {
+			prev := r.curClass
+			r.curClass = info
+			for _, c := range r.prog.Children(n) {
+				walk(c)
+			}
+			r.curClass = prev
+			return
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c)
+		}
+	}
+	for _, file := range files {
+		walk(file)
+	}
+}
+
+// propStoreParts recognizes a plain `recv.prop = value` assignment expression and hands
+// back its target member access and its value. A compound store is not one: it reads the
+// field first, so what it writes is whatever the operator produced rather than the value
+// as written.
+func (r *Renderer) propStoreParts(n frontend.Node) (frontend.Node, frontend.Node, bool) {
+	if n.Kind() != frontend.NodeBinaryExpression {
+		return nil, nil, false
+	}
+	parts := r.prog.Children(n)
+	if len(parts) != 3 || strings.TrimSpace(r.prog.Text(parts[1])) != "=" {
+		return nil, nil, false
+	}
+	if parts[0].Kind() != frontend.NodePropertyAccessExpression || len(r.prog.Children(parts[0])) != 2 {
+		return nil, nil, false
+	}
+	return parts[0], parts[2], true
+}
+
+// readOfBoxedField reports whether a property read reaches a field this pass boxed, so
+// the read is a value.Value however the checker types the declaration.
+func (r *Renderer) readOfBoxedField(n frontend.Node) bool {
+	if len(r.boxedFields) == 0 || n.Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || kids[1].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	info, ok := r.classReceiver(kids[0])
+	if !ok {
+		return false
+	}
+	f, ok := info.fieldByName(r.prog.Text(kids[1]))
+	return ok && f.ident != nil && r.boxedFields[f.ident]
+}
+
 // boxableFunc is one function declaration this pass may rewrite, held with the pieces
 // every round needs so they are looked up once rather than per round.
 type boxableFunc struct {
 	sym    frontend.Symbol
 	sig    frontend.Signature
 	params []frontend.Node
+	// owner is the class a member candidate is declared in, so the return scan can set
+	// curClass and a `return this.first` resolves the field it reads.
+	owner *classInfo
 }
 
 // boxableFuncs collects the function declarations whose signature this pass is allowed
@@ -161,27 +330,50 @@ func (r *Renderer) addBoxableMethods(out map[frontend.Node]boxableFunc) {
 	}
 	for _, info := range r.classes {
 		for _, m := range info.staticMethods {
-			r.addBoxableMethod(out, m)
+			r.addBoxableMethod(out, info, m)
 		}
 		for _, g := range info.staticGetters {
-			r.addBoxableGetter(out, g)
+			r.addBoxableGetter(out, info, g)
 		}
 		if info.base != nil || derived[info] {
 			continue
 		}
+		r.addBoxableCtor(out, info)
 		for _, m := range info.methods {
 			if info.isVirtual(m.prop) || m.abstract {
 				continue
 			}
-			r.addBoxableMethod(out, m)
+			r.addBoxableMethod(out, info, m)
 		}
 		for _, g := range info.getters {
 			if info.isVirtual(g.prop) {
 				continue
 			}
-			r.addBoxableGetter(out, g)
+			r.addBoxableGetter(out, info, g)
 		}
 	}
+}
+
+// addBoxableCtor records a constructor's parameters as candidates. A constructor's whole
+// job is moving its arguments into fields, so it is the half of the field slice that faces
+// the call site: `new S(box)` has nowhere to put the box until the parameter holds one.
+//
+// Only the parameter half can apply. A constructor hands back the receiver rather than
+// what a return carries, and ctorBody hands back on any return statement at all, so no
+// result mark can arise to be read.
+//
+// The eligibility is the field's, a class with no base and no subclass, which the caller
+// has already checked: the parameter's Go type is written into one function, and the field
+// it is stored into is written into one struct.
+func (r *Renderer) addBoxableCtor(out map[frontend.Node]boxableFunc, info *classInfo) {
+	if info.ctor == nil {
+		return
+	}
+	sig, ok := r.prog.SignatureAt(info.ctor)
+	if !ok || len(sig.TypeParams) != 0 || sig.RestParam != nil {
+		return
+	}
+	out[info.ctor] = boxableFunc{sig: sig, params: info.ctorParams, owner: info}
 }
 
 // addBoxableGetter records a getter as a candidate. A getter emits through the method
@@ -192,19 +384,19 @@ func (r *Renderer) addBoxableMethods(out map[frontend.Node]boxableFunc) {
 // It skips the read-as-a-value check the other two take, because a getter has no shape a
 // program can read without calling it. Reading `s.head` is how a getter is invoked, so
 // that check would match the getter's own use and leave every getter alone.
-func (r *Renderer) addBoxableGetter(out map[frontend.Node]boxableFunc, g classMethod) {
+func (r *Renderer) addBoxableGetter(out map[frontend.Node]boxableFunc, owner *classInfo, g classMethod) {
 	sig, ok := r.prog.SignatureAt(g.node)
 	if !ok || len(sig.TypeParams) != 0 {
 		return
 	}
-	out[g.node] = boxableFunc{sig: sig}
+	out[g.node] = boxableFunc{sig: sig, owner: owner}
 }
 
 // addBoxableMethod records one method as a candidate when its Go signature is one this
 // pass can rewrite in place. The property-name check is across the whole program, so an
 // unrelated object's property of the same name is enough to leave a method alone, which
 // costs a rewrite this pass could have made but never makes a wrong one.
-func (r *Renderer) addBoxableMethod(out map[frontend.Node]boxableFunc, m classMethod) {
+func (r *Renderer) addBoxableMethod(out map[frontend.Node]boxableFunc, owner *classInfo, m classMethod) {
 	if r.isAsyncFunc(m.node) || r.isGeneratorFunc(m.node) {
 		return
 	}
@@ -215,7 +407,7 @@ func (r *Renderer) addBoxableMethod(out map[frontend.Node]boxableFunc, m classMe
 	if r.propReadAsValue(m.prop) {
 		return
 	}
-	out[m.node] = boxableFunc{sig: sig, params: r.funcParamNodes(m.node)}
+	out[m.node] = boxableFunc{sig: sig, params: r.funcParamNodes(m.node), owner: owner}
 }
 
 // propReadAsValue reports whether any member access to a property name in the program is
@@ -329,8 +521,22 @@ func (r *Renderer) funcSymValueUsed(sym frontend.Symbol) bool {
 // fixpoint.
 func (r *Renderer) markBoxedParams(files []frontend.Node, cands map[frontend.Node]boxableFunc) bool {
 	changed := false
-	var walk func(frontend.Node)
-	walk = func(n frontend.Node) {
+	r.walkInClasses(files, func(n frontend.Node) bool {
+		if fn, ok := r.newCtorNode(n); ok {
+			if c, isCand := cands[fn]; isCand {
+				for i, a := range r.prog.Children(n)[1:] {
+					if i >= len(c.sig.Params) {
+						break
+					}
+					if !r.boxableParamSlot(c.sig.Params[i]) || !r.isBoxedChain(a) {
+						continue
+					}
+					if r.markBoxedParam(fn, c, i) {
+						changed = true
+					}
+				}
+			}
+		}
 		if n.Kind() == frontend.NodeCallExpression {
 			if fn, ok := r.calleeFuncNode(n); ok {
 				if c, isCand := cands[fn]; isCand {
@@ -349,13 +555,8 @@ func (r *Renderer) markBoxedParams(files []frontend.Node, cands map[frontend.Nod
 				}
 			}
 		}
-		for _, c := range r.prog.Children(n) {
-			walk(c)
-		}
-	}
-	for _, f := range files {
-		walk(f)
-	}
+		return true
+	})
 	return changed
 }
 
@@ -387,11 +588,16 @@ func (r *Renderer) markBoxedParam(fn frontend.Node, c boxableFunc, i int) bool {
 	// body answers isBoxedChain in the next round, which is what lets `inner(r)` be seen
 	// as passing a box once outer's r is one.
 	if i < len(c.params) {
-		pkids := r.prog.Children(c.params[i])
-		if len(pkids) != 0 && pkids[0].Kind() == frontend.NodeIdentifier {
-			if sym, ok := r.prog.SymbolAt(pkids[0]); ok {
+		// The name is looked up past any leading modifier so a constructor's parameter
+		// property, where the name node is also the field's, joins the set too.
+		for _, k := range r.prog.Children(c.params[i]) {
+			if k.Kind() != frontend.NodeIdentifier {
+				continue
+			}
+			if sym, ok := r.prog.SymbolAt(k); ok {
 				r.boxedParamSyms[sym] = true
 			}
+			break
 		}
 	}
 	return true
@@ -412,13 +618,27 @@ func (r *Renderer) markBoxedReturns(cands map[frontend.Node]boxableFunc) bool {
 		if r.isAsyncFunc(fn) || r.isGeneratorFunc(fn) {
 			continue
 		}
-		if !r.funcReturnsBoxedChain(fn) {
+		if !r.returnsBoxedIn(c.owner, fn) {
 			continue
 		}
 		r.boxedReturnFns[fn] = true
 		changed = true
 	}
 	return changed
+}
+
+// returnsBoxedIn asks funcReturnsBoxedChain with the declaring class in hand, so a member
+// whose body says `return this.first` resolves the receiver the same way the body will
+// once it lowers. A plain function has no owner and asks the question as it stands.
+func (r *Renderer) returnsBoxedIn(owner *classInfo, fn frontend.Node) bool {
+	if owner == nil {
+		return r.funcReturnsBoxedChain(fn)
+	}
+	prev := r.curClass
+	r.curClass = owner
+	boxed := r.funcReturnsBoxedChain(fn)
+	r.curClass = prev
+	return boxed
 }
 
 // boxableReturnSlot is boxableParamSlot for the result position. A declared return the
@@ -551,10 +771,11 @@ func (r *Renderer) calleeFuncNode(n frontend.Node) (frontend.Node, bool) {
 // rewrites.
 //
 // The receiver resolves through classReceiver so that `this.head()` inside a sibling
-// method finds the class it is written in. That answers nothing while the pass is
-// deciding, since no body is lowering then and curClass is nil, and the pass does not
-// need it: a method's own returns are what mark it. It answers once a body is lowering,
-// which is when the read off the call has to know it is holding a box.
+// method finds the class it is written in. While the pass is deciding, that answers only
+// where a caller has set curClass, which fieldTakesABox does over the class it is asking
+// about; a method's own returns are what mark it, so nothing else needs it there. It
+// answers everywhere once a body is lowering, which is when the read off the call has to
+// know it is holding a box.
 func (r *Renderer) calleeMethodNode(callee frontend.Node) (frontend.Node, bool) {
 	kids := r.prog.Children(callee)
 	if len(kids) != 2 || kids[1].Kind() != frontend.NodeIdentifier {
@@ -610,6 +831,25 @@ func (r *Renderer) boxedSig(fn frontend.Node, sig frontend.Signature) frontend.S
 		sig.Return = frontend.Type{Flags: frontend.TypeAny}
 	}
 	return sig
+}
+
+// newCtorNode resolves `new S(...)` to the constructor declaration it runs, the way
+// newExpr resolves it: through the class the identifier names, so a local class shadowing
+// a built-in still answers as itself. A class with no written constructor has no node to
+// mark, and nothing to mark on it either, since its arguments go nowhere.
+func (r *Renderer) newCtorNode(n frontend.Node) (frontend.Node, bool) {
+	if n.Kind() != frontend.NodeNewExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeIdentifier {
+		return nil, false
+	}
+	info, ok := r.classNameRef(kids[0])
+	if !ok || info.ctor == nil {
+		return nil, false
+	}
+	return info.ctor, true
 }
 
 // callOfBoxedReturnFunc reports whether a call goes to a function this pass gave a
