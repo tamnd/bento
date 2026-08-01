@@ -316,32 +316,32 @@ func RegisterClassCoercion(sample any, name string, fn func(any) Value) bool {
 // Call carries no receiver in this value model: every other box binds its members at the
 // read for the same reason, which is why a boxed Map's get knows which map it came from.
 //
-// A class that writes neither still answers both, with what Object.prototype gives: the
-// class tag for toString and the object itself for valueOf. That is not a courtesy, it
-// is what keeps the two hints apart. The string hint asks for toString first and takes
-// its answer, so a class writing only a valueOf whose box answered only valueOf would
-// read String(v) as "7" where the engine reads "[object Object]"; and an identity valueOf
-// is object-like, so the default hint falls through it to toString the way the spec's
-// OrdinaryToPrimitive does. The tag is computed off the receiver rather than fixed here
-// so a class naming itself through Symbol.toStringTag reads by that name.
-func classCoercionGet(recv Value, inst any, name string) (Value, bool) {
+// A class that writes neither reports false here and falls through to the chain walk,
+// which ends at Object.prototype and answers both: the class tag for toString and the
+// object itself for valueOf. That fallback is not a courtesy, it is what keeps the two
+// hints apart. The string hint asks for toString first and takes its answer, so a class
+// writing only a valueOf whose box answered only valueOf would read String(v) as "7"
+// where the engine reads "[object Object]"; and an identity valueOf is object-like, so
+// the default hint falls through it to toString the way OrdinaryToPrimitive does.
+func classCoercionGet(inst any, name string) (Value, bool) {
 	var c *classCoercions
 	if t := reflect.TypeOf(inst); t != nil && t.Kind() == reflect.Pointer {
 		if entry, ok := classCoercionRegistry.Load(t.Elem()); ok {
 			c = entry.(*classCoercions)
 		}
 	}
+	if c == nil {
+		return Undefined, false
+	}
 	switch name {
 	case "toString":
-		if c != nil && c.toString != nil {
+		if c.toString != nil {
 			return boundMethod(name, func([]Value) Value { return c.toString(inst) }), true
 		}
-		return boundMethod(name, func([]Value) Value { return StringValue(ClassTag(recv)) }), true
 	case "valueOf":
-		if c != nil && c.valueOf != nil {
+		if c.valueOf != nil {
 			return boundMethod(name, func([]Value) Value { return c.valueOf(inst) }), true
 		}
-		return boundMethod(name, func([]Value) Value { return recv }), true
 	}
 	return Undefined, false
 }

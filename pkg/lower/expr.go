@@ -1360,18 +1360,14 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 			return nil, err
 		}
 		if ok {
-			// `"valueOf" in obj` and its siblings ask whether an Object.prototype method
-			// is present. Every ordinary object inherits Object.prototype, so the answer is
-			// true, but a prototype-less object (Object.create(null)) has no such property
-			// and answers false. bento stores both a default plain object and a null-proto
-			// object with a nil [[Prototype]] slot, so it cannot tell them apart and does
-			// not install Object.prototype's own methods, which would make InOperator answer
-			// false for the inherited name on an ordinary object, a wrong result. Until a
-			// real Object.prototype sentinel distinguishes the two, a `key in obj` whose key
-			// literally names an Object.prototype property hands back rather than emit that
-			// wrong answer, a safe decline.
-			if name, ok := r.staticStringKey(left); ok && isObjectProtoPropName(name) {
-				return nil, &NotYetLowerable{Reason: "an `in` test for an Object.prototype property needs a modeled default prototype, a later slice"}
+			// `"valueOf" in obj` and its siblings ask whether an Object.prototype member is
+			// present. The value model answers the methods now, under a gate that reads the
+			// end of the receiver's prototype chain, so an ordinary object reports true and
+			// an Object.create(null) reports false without the lowerer having to guess which
+			// it holds. The two members it still cannot answer are data slots rather than
+			// methods, constructor and __proto__, and those hand back.
+			if name, ok := r.staticStringKey(left); ok && isUnmodeledObjectProtoSlot(name) {
+				return nil, &NotYetLowerable{Reason: "an `in` test for constructor or __proto__ needs those slots modeled on the default prototype, a later slice"}
 			}
 			key, err := r.boxOperand(left)
 			if err != nil {
@@ -1904,17 +1900,15 @@ func (r *Renderer) staticStringKey(n frontend.Node) (string, bool) {
 	return string(utf16.Decode(units)), true
 }
 
-// isObjectProtoPropName reports whether name is one of Object.prototype's own property
-// names, the fixed set every ordinary object inherits: the standard methods plus the
-// legacy accessor helpers and the constructor and __proto__ slots. An `in` test for one
-// of these depends on whether the receiver's prototype is the default Object.prototype
-// or an explicit null, a distinction bento's nil-slot model cannot yet make, so the
-// lowering hands back on a match rather than answer from an unmodeled prototype.
-func isObjectProtoPropName(name string) bool {
+// isUnmodeledObjectProtoSlot reports whether name is one of the two Object.prototype
+// members the value model does not answer. Every method on the prototype is answered
+// there, so an `in` test for one of those lowers, but constructor and __proto__ are data
+// slots whose values are objects the value model does not build: an Object constructor
+// function and the Object.prototype object itself. An `in` test naming one of them hands
+// back rather than report an absence the engine would contradict.
+func isUnmodeledObjectProtoSlot(name string) bool {
 	switch name {
-	case "constructor", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
-		"toLocaleString", "toString", "valueOf", "__proto__",
-		"__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__":
+	case "constructor", "__proto__":
 		return true
 	}
 	return false

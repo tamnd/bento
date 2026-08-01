@@ -527,6 +527,12 @@ func (o *Object) getChained(recv Value, key BStr) Value {
 	// Nothing on the receiver's own chain overrode the name, so fall back to the
 	// prototype method the receiver inherits. This runs only on a genuine miss, after
 	// the override check above, so a user-declared property of the same name still wins.
+	// An object whose chain ends at an explicit null inherits nothing at all, so it gets
+	// no fallback: Object.create(null).hasOwnProperty is undefined, which is the whole
+	// reason to make such an object, and answering a method here would defeat it.
+	if !o.inheritsObjectProto() {
+		return Undefined
+	}
 	// An array is asked Array.prototype first, since its methods sit nearer on the chain
 	// than Object.prototype's and a name the two share (toString, toLocaleString) must
 	// resolve to the array's.
@@ -558,7 +564,13 @@ func (o *Object) getSymChained(recv Value, key *Symbol) Value {
 // hasChained reports whether the object carries key as a named property anywhere on
 // its prototype chain, the existence probe the in operator makes: unlike hasOwn it
 // climbs, so key in child is true when a prototype supplies the key.
-func (o *Object) hasChained(key BStr) bool {
+//
+// The inherited prototype methods count as present, since getChained answers them, so
+// this asks the same two tables under the same null-prototype gate. Without that the
+// probe and the read would disagree: 'toString' in o would be false for an object whose
+// o.toString reads a method, which is the wrong half of a pair the language keeps
+// together.
+func (o *Object) hasChained(recv Value, key BStr) bool {
 	for cur := o; cur != nil; cur = cur.proto {
 		for i := range cur.keys {
 			if cur.keys[i].Equal(key) {
@@ -566,7 +578,28 @@ func (o *Object) hasChained(key BStr) bool {
 			}
 		}
 	}
-	return false
+	if !o.inheritsObjectProto() {
+		return false
+	}
+	if recv.kind == KindArray && arrayProtoHas(key) {
+		return true
+	}
+	return objectProtoHas(recv, key)
+}
+
+// inheritsObjectProto reports whether the chain starting at this object ends at the
+// default Object.prototype rather than at an explicit null. bento carries no synthetic
+// Object.prototype object, so both endings leave a nil [[Prototype]] slot and only the
+// protoNull flag on the last object apart tells them apart. The walk runs to the end of
+// the chain rather than reading the receiver's own flag because a prototype-less object
+// can sit anywhere along it: an object made over Object.create(null) inherits nothing
+// either, however many links stand between the two.
+func (o *Object) inheritsObjectProto() bool {
+	cur := o
+	for cur.proto != nil {
+		cur = cur.proto
+	}
+	return !cur.protoNull
 }
 
 // getOwnDesc returns the descriptor of a named own property and whether the object
