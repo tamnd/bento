@@ -94,25 +94,22 @@ func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 // value boxes on its way in through the coercion that already runs where a box has no way
 // to become the struct.
 //
-// The eligible classes are the ones note 387 settled on, with no base and no subclass, so
-// the field's Go type is written in exactly one struct. A private field is left out
-// because its own boxing rule already exists for the static case, and a synthesized Error
-// field has no declared type to rewrite.
+// A hierarchy is allowed here, where note 387 had to stop for a method. A field's Go type
+// is written into the struct of the class that declares it and nowhere else, since a
+// derived struct embeds its base and reaches the field through Go's own promotion, and
+// registration rejects a derived member sharing a base member's name, so at most one class
+// on a chain owns any property. The one-place condition the whole pass rests on therefore
+// holds for a field however deep the chain is; it is the vtable and the interface a method
+// is written into again that this pass still cannot rewrite.
+//
+// A private field is left out because its own boxing rule already exists for the static
+// case, and a synthesized Error field has no declared type to rewrite.
 func (r *Renderer) markBoxedFields(files []frontend.Node) bool {
 	if len(r.classes) == 0 {
 		return false
 	}
-	derived := map[*classInfo]bool{}
-	for _, info := range r.classes {
-		if info.base != nil {
-			derived[info.base] = true
-		}
-	}
 	changed := false
 	for _, info := range r.classes {
-		if info.base != nil || derived[info] {
-			continue
-		}
 		for _, f := range info.fields {
 			if f.ident == nil || f.synthBStr || strings.HasPrefix(f.prop, "#") {
 				continue
@@ -128,13 +125,17 @@ func (r *Renderer) markBoxedFields(files []frontend.Node) bool {
 }
 
 // fieldTakesABox reports whether any store to a field hands it a box: its own declared
-// initializer, a this.f = v inside the class it belongs to, or a recv.f = v anywhere the
-// receiver's checker type is that class.
+// initializer, a this.f = v inside the class it belongs to or any class below it, or a
+// recv.f = v anywhere the receiver reaches that field.
 //
 // Both sides of a store need the class `this` names: the receiver of `this.f = ...` to
 // know the store is this field's, and the value of `... = this.head()` to know a sibling
 // method handed it a box. The walk carries it through curClass, which is what classReceiver
 // reads, so the declaration supplies what the receiver does not.
+//
+// The receiver is matched by what its property resolves to rather than by the class
+// itself, so a store written in a derived class, or through a derived receiver, lands on
+// the base's field the way Go's promotion lands it.
 func (r *Renderer) fieldTakesABox(files []frontend.Node, info *classInfo, f classField) bool {
 	if f.init != nil {
 		prev := r.curClass
@@ -154,13 +155,24 @@ func (r *Renderer) fieldTakesABox(files []frontend.Node, info *classInfo, f clas
 		if !ok || r.prog.Text(r.prog.Children(lhs)[1]) != f.prop {
 			return true
 		}
-		if got, ok := r.classReceiver(r.prog.Children(lhs)[0]); ok && got == info && r.isBoxedChain(rhs) {
+		if r.storeReaches(r.prog.Children(lhs)[0], f) && r.isBoxedChain(rhs) {
 			found = true
 			return false
 		}
 		return true
 	})
 	return found
+}
+
+// storeReaches reports whether a store's receiver names the field f, following the base
+// chain the way a read of the property does.
+func (r *Renderer) storeReaches(recv frontend.Node, f classField) bool {
+	info, ok := r.classReceiver(recv)
+	if !ok {
+		return false
+	}
+	got, ok := info.lookupField(f.prop)
+	return ok && got.ident == f.ident
 }
 
 // walkInClasses visits every node of the program with curClass set to whatever class the
@@ -232,7 +244,7 @@ func (r *Renderer) readOfBoxedField(n frontend.Node) bool {
 	if !ok {
 		return false
 	}
-	f, ok := info.fieldByName(r.prog.Text(kids[1]))
+	f, ok := info.lookupField(r.prog.Text(kids[1]))
 	return ok && f.ident != nil && r.boxedFields[f.ident]
 }
 
@@ -335,10 +347,12 @@ func (r *Renderer) addBoxableMethods(out map[frontend.Node]boxableFunc) {
 		for _, g := range info.staticGetters {
 			r.addBoxableGetter(out, info, g)
 		}
+		// A constructor is a package function written once per class, with no vtable entry
+		// and no interface, so it takes the rewrite in a hierarchy the way a field does.
+		r.addBoxableCtor(out, info)
 		if info.base != nil || derived[info] {
 			continue
 		}
-		r.addBoxableCtor(out, info)
 		for _, m := range info.methods {
 			if info.isVirtual(m.prop) || m.abstract {
 				continue
@@ -522,6 +536,21 @@ func (r *Renderer) funcSymValueUsed(sym frontend.Symbol) bool {
 func (r *Renderer) markBoxedParams(files []frontend.Node, cands map[frontend.Node]boxableFunc) bool {
 	changed := false
 	r.walkInClasses(files, func(n frontend.Node) bool {
+		if fn, ok := r.superCtorNode(n); ok {
+			if c, isCand := cands[fn]; isCand {
+				for i, a := range r.prog.Children(n)[1:] {
+					if i >= len(c.sig.Params) {
+						break
+					}
+					if !r.boxableParamSlot(c.sig.Params[i]) || !r.isBoxedChain(a) {
+						continue
+					}
+					if r.markBoxedParam(fn, c, i) {
+						changed = true
+					}
+				}
+			}
+		}
 		if fn, ok := r.newCtorNode(n); ok {
 			if c, isCand := cands[fn]; isCand {
 				for i, a := range r.prog.Children(n)[1:] {
@@ -850,6 +879,24 @@ func (r *Renderer) newCtorNode(n frontend.Node) (frontend.Node, bool) {
 		return nil, false
 	}
 	return info.ctor, true
+}
+
+// superCtorNode resolves a super(...) call to the base constructor it runs, which is how a
+// box reaches a base's parameter: a derived class hands its own parameter straight on, and
+// only the base's declaration says what the field it fills holds. The walk supplies
+// curClass, so the base is the one the enclosing class extends.
+func (r *Renderer) superCtorNode(n frontend.Node) (frontend.Node, bool) {
+	if n.Kind() != frontend.NodeCallExpression {
+		return nil, false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodeSuperKeyword {
+		return nil, false
+	}
+	if r.curClass == nil || r.curClass.base == nil || r.curClass.base.ctor == nil {
+		return nil, false
+	}
+	return r.curClass.base.ctor, true
 }
 
 // callOfBoxedReturnFunc reports whether a call goes to a function this pass gave a
