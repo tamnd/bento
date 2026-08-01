@@ -1760,10 +1760,18 @@ func (r *Renderer) dynSelfBoxingType(t frontend.Type) bool {
 // its own properties, so Object.keys of one answers them and only the box knows that,
 // where the static path would read the family's member list off the interface.
 // Anything else reports false and leaves the caller's static path alone.
+// hasDynamicReceiverForm is the question lowerAsDynamicReceiver gates on, asked
+// without lowering anything. A caller that has to decide the shape of what it emits
+// before it emits it needs the answer on its own, and asking it here keeps the two
+// readings of "this has a runtime form" from drifting apart.
+func (r *Renderer) hasDynamicReceiverForm(n frontend.Node) bool {
+	return r.isDynamic(n) || r.isMap(n) || r.isSet(n) || r.isDate(n) || r.isBufferBacked(n) ||
+		r.isTypedArray(n) || r.isWeakBacked(n)
+}
+
 func (r *Renderer) lowerAsDynamicReceiver(n frontend.Node) (ast.Expr, bool, error) {
 	dynamic := r.isDynamic(n)
-	if !dynamic && !r.isMap(n) && !r.isSet(n) && !r.isDate(n) && !r.isBufferBacked(n) && !r.isTypedArray(n) &&
-		!r.isWeakBacked(n) {
+	if !r.hasDynamicReceiverForm(n) {
 		return nil, false, nil
 	}
 	expr, err := r.lowerExpr(n)
@@ -2124,7 +2132,14 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// this the number type would drive value.NumberToString over a value.Value, which
 	// does not compile; with it the read flows through the value model, which prints
 	// the property that has not been assigned yet as undefined.
-	return r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.jsonStringifyOptCall(src) || r.dateToJSONCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
+	// A chain rooted in a box is one wherever it ends, since a read, an index, and a
+	// call off a box each answer a box in turn. isBoxedChain is the walk that says so,
+	// and it is the same answer the dispatch sites take, so a result the runtime handed
+	// back enters a dynamic slot as itself rather than being wrapped by the type the
+	// checker has for it. Object.values of a Record<string, Row> mapped over is the
+	// everyday one: the checker calls the result a number[] and would drive
+	// value.ArrayValueOf over what is already a box.
+	return r.isBoxedChain(src) || r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.jsonStringifyOptCall(src) || r.dateToJSONCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
 }
 
 // isBoxedArrayElemRead reports whether src is an element read a[i] off an evolving

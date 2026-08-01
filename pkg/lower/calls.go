@@ -3496,12 +3496,24 @@ func (r *Renderer) objectValues(argNodes []frontend.Node) (ast.Expr, error) {
 		}
 		// The walk hands back an array of boxed values, which fits where the checker typed
 		// the result any[], the way it does for every receiver whose own property table is
-		// empty. A typed array is the one dynamic receiver whose table is not: its indices
-		// are its properties, so the checker reads its index signature and types the call
-		// number[], which a boxed array does not fit. That case falls to the shape path
-		// rather than emit an array whose element type does not fit its slot.
-		if ok && !r.isTypedArray(argNodes[0]) {
-			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}}, nil
+		// empty. Where the receiver has a value type of its own the checker types the call
+		// after it, so Object.values of a Record<string, Row> is a Row[] and a boxed array
+		// is not one. Emitting it anyway put a *value.Array[value.Value] where the consumer
+		// asked for a *value.Array[*Row], which is Go that does not compile.
+		//
+		// So the answer there is the array boxed whole. A box is what the runtime dispatch
+		// takes, the reads off it route the way every other read off a box does, and the
+		// callback a map hands it holds a box the same way. A typed array is the case that
+		// used to fall through to the shape path and hand back for exactly this mismatch,
+		// its indices being its own properties, and it takes the box now too.
+		if ok {
+			if r.dynamicWalkFits(argNodes[0]) {
+				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}}, nil
+			}
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{
+				X:   &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("OwnValues")}},
+				Sel: ident("ToValue"),
+			}}, nil
 		}
 	}
 	props, err := r.objectShapeArg("values", argNodes)

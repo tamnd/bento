@@ -284,7 +284,13 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	// Get looks it up by the same name the value carries. This routes before the
 	// static-shape paths below, which expect a receiver whose type the checker
 	// pinned down.
-	if r.isDynamic(obj) {
+	//
+	// A receiver the checker types concretely while the lowerer holds a box takes the
+	// same route, since what decides the emit is the Go type the receiver lowers to and
+	// not the name the checker has for it. Object.values of a Record<string, Row> is the
+	// everyday one: the walk answers a box and the checker calls it a Row[], so the
+	// static paths below would emit a field read on a value.Value.
+	if r.isDynamic(obj) || r.isBoxedChain(obj) {
 		recv, err := r.lowerExpr(obj)
 		if err != nil {
 			return nil, err
@@ -1095,20 +1101,22 @@ func (r *Renderer) isRootedInDynBound(n frontend.Node) bool {
 // boxes are a dynBound binding and an assertion erased over a box. Anything else stops
 // the walk and keeps its own handling.
 //
-// A link the checker types number, string, or boolean is where the chain stops being
+// A read the checker types number, string, or boolean is where the chain stops being
 // boxed, because unboxDynamicRead coerces such a read down to its Go primitive at the
 // read itself. r.tag off a boxed row really is a value.BStr, so r.tag.toUpperCase() is
-// the static string method and not a runtime dispatch.
+// the static string method and not a runtime dispatch. Only a read does that. A call
+// dispatched through the runtime hands back the box whatever the checker calls its
+// result, so Object.values(nums).reduce(...) is a box while the checker says number.
 func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 	const unboxes = frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
 	for {
-		if n.Kind() != frontend.NodeIdentifier && r.prog.TypeAt(n).Flags&unboxes != 0 {
-			return false
-		}
 		switch n.Kind() {
 		case frontend.NodeIdentifier:
 			return r.isDynBoundReceiver(n)
 		case frontend.NodeParenthesizedExpression, frontend.NodeAsExpression, frontend.NodeTypeAssertion, frontend.NodeNonNull:
+			if r.prog.TypeAt(n).Flags&unboxes != 0 {
+				return false
+			}
 			if r.castOfDynamicOperand(n) {
 				return true
 			}
@@ -1118,6 +1126,19 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			}
 			n = kids[0]
 		case frontend.NodePropertyAccessExpression, frontend.NodeElementAccessExpression, frontend.NodeCallExpression:
+			if r.isBoxedObjectWalk(n) {
+				return true
+			}
+			if n.Kind() != frontend.NodeCallExpression && r.prog.TypeAt(n).Flags&unboxes != 0 {
+				return false
+			}
+			// toString and valueOf are the two the dynamic dispatch itself skips, each
+			// having a dedicated helper that answers the Go primitive rather than a box:
+			// a symbol's toString lowers to ToStringMethod().AsString(). Claiming those
+			// would send a value.BStr to a consumer expecting a box.
+			if n.Kind() == frontend.NodeCallExpression && r.callsUnboxingMethod(n) {
+				return false
+			}
 			kids := r.prog.Children(n)
 			if len(kids) == 0 {
 				return false
@@ -1127,6 +1148,120 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			return false
 		}
 	}
+}
+
+// isBoxedObjectWalk reports whether n is an Object.values or Object.entries call whose
+// answer is a box. The two are roots of a boxed chain that no walk up the callee finds,
+// because the callee names the global Object rather than the receiver being walked.
+//
+// What the runtime hands back for either is a bag of boxes, since the property values of
+// an object with no compile-time shape share no Go type. That fits where the checker
+// types the call any[], which is what it does for a receiver whose own value type it
+// does not know. Where it does know one, Object.values of a Record<string, Row> being a
+// Row[], the two disagree, and a consumer that believes the checker asks the bag a
+// question its Go type cannot answer. So the answer there is the array boxed whole and
+// this is what tells the consumers so.
+func (r *Renderer) isBoxedObjectWalk(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 2 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	ckids := r.prog.Children(kids[0])
+	if len(ckids) != 2 || !r.isGlobalRef(ckids[0], "Object") {
+		return false
+	}
+	switch r.prog.Text(ckids[1]) {
+	case "values", "entries":
+		return r.hasDynamicReceiverForm(kids[1]) && !r.dynamicWalkFits(kids[1])
+	}
+	return false
+}
+
+// callsUnboxingMethod reports whether n is a call of toString or valueOf, the two
+// methods the boxed-receiver dispatch in methodCall deliberately does not take. Each has
+// a lowering of its own that answers the Go primitive, so a chain does not stay boxed
+// through one. The two lists are the same list and have to stay that way.
+func (r *Renderer) callsUnboxingMethod(n frontend.Node) bool {
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	ckids := r.prog.Children(kids[0])
+	if len(ckids) != 2 {
+		return false
+	}
+	switch r.prog.Text(ckids[1]) {
+	case "toString", "valueOf":
+		return true
+	}
+	return false
+}
+
+// dynamicElementRead lowers a[i] where the receiver is a box, dispatching the index at
+// run time: GetIndex for a number, GetElem for another box or a symbol, Get for a
+// string. The receiver carries its own kind, so the read indexes an array, a string, or
+// an object property by the same rule a static read would. A string-literal key was
+// already folded to a property read before this, so what arrives here is a computed
+// index. Only a number, a string, a symbol, or another box is a key this slice forms; a
+// statically typed non-number index (a bigint, a boolean) is its own later slice.
+func (r *Renderer) dynamicElementRead(n, obj, idxNode frontend.Node) (ast.Expr, error) {
+	r.requireImport(valuePkg)
+	recv, err := r.lowerExpr(obj)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case r.isNumber(idxNode):
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{idx}}, n)
+	case r.isDynamic(idxNode):
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, n)
+	case r.isString(idxNode):
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{idx}}, n)
+	case r.isSymbol(idxNode):
+		// A symbol key reads through GetElem, which looks the boxed symbol up in the
+		// property bag by identity rather than coercing it to a string the way a
+		// number or string key resolves.
+		idx, err := r.lowerExpr(idxNode)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, nil
+	default:
+		return nil, &NotYetLowerable{Reason: "a dynamic element access with a non-number, non-string index is a later slice"}
+	}
+}
+
+// dynamicWalkFits reports whether a bag of boxes fits the slot the checker gives a walk
+// over n. It does when the checker has no value type for the receiver, a Map and a Set
+// and a bare any all being that, because then the call is typed any[] and a box is what
+// any holds. It does not when the receiver carries an element or an index type the
+// checker projects into the result, which is a Record's value type, an array's element
+// type, and a typed array's number.
+func (r *Renderer) dynamicWalkFits(n frontend.Node) bool {
+	t := r.prog.TypeAt(n)
+	for _, at := range []func(frontend.Type) (frontend.Type, bool){
+		r.prog.ElementType, r.prog.StringIndexType, r.prog.NumberIndexType,
+	} {
+		if vt, ok := at(t); ok {
+			return r.isDynamicType(vt)
+		}
+	}
+	return true
 }
 
 // elementAccess lowers an index expression a[i] to the receiver's index read: the
@@ -1238,6 +1373,16 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 			}
 		}
 	}
+	// A receiver the lowerer holds as a box while the checker holds a concrete shape
+	// indexes through the runtime, for the same reason the dotted read and the method
+	// call do: what decides the emit is the Go type the receiver lowers to. It routes
+	// before the tuple, array, and string paths below, each of which would select a
+	// field or call a method a value.Value does not carry. A pair out of Object.entries
+	// is the everyday one, e[0] on a parameter the runtime handed a box while the
+	// checker calls it a [string, Row].
+	if r.isBoxedChain(obj) {
+		return r.dynamicElementRead(n, obj, idxNode)
+	}
 	// A tuple read t[i] with a literal index is the field read t.E<i>: a tuple's
 	// positions are fixed and typed, so the read selects the interned struct's field
 	// directly rather than going through the array At the dynamic-length receivers
@@ -1284,42 +1429,7 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// slice forms; a statically typed non-number index (a bigint, a boolean) is its own
 	// later slice.
 	if r.isDynamic(obj) {
-		r.requireImport(valuePkg)
-		recv, err := r.lowerExpr(obj)
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case r.isNumber(idxNode):
-			idx, err := r.lowerExpr(idxNode)
-			if err != nil {
-				return nil, err
-			}
-			return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetIndex")}, Args: []ast.Expr{idx}}, n)
-		case r.isDynamic(idxNode):
-			idx, err := r.lowerExpr(idxNode)
-			if err != nil {
-				return nil, err
-			}
-			return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, n)
-		case r.isString(idxNode):
-			idx, err := r.lowerExpr(idxNode)
-			if err != nil {
-				return nil, err
-			}
-			return r.unboxDynamicRead(&ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("Get")}, Args: []ast.Expr{idx}}, n)
-		case r.isSymbol(idxNode):
-			// A symbol key reads through GetElem, which looks the boxed symbol up in the
-			// property bag by identity rather than coercing it to a string the way a
-			// number or string key resolves.
-			idx, err := r.lowerExpr(idxNode)
-			if err != nil {
-				return nil, err
-			}
-			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident("GetElem")}, Args: []ast.Expr{idx}}, nil
-		default:
-			return nil, &NotYetLowerable{Reason: "a dynamic element access with a non-number, non-string index is a later slice"}
-		}
+		return r.dynamicElementRead(n, obj, idxNode)
 	}
 	// A manual obj[Symbol.iterator] reads the iterator factory a user iterable
 	// defines, the Go SymbolIterator method, so a test can drive the protocol by hand:
