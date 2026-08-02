@@ -83,6 +83,17 @@ func (r *Renderer) bindSubObject(pat frontend.Node, recv ast.Expr, patType front
 	}
 	var out []ast.Stmt
 	for _, el := range elems {
+		// A rest gathers the own properties this level's pattern did not name. The
+		// receiver already holds the value the outer level selected, so the gather is the
+		// same one the top-level pattern builds off its own source.
+		if restIdent, ok := r.objectRestElem(el); ok {
+			bind, err := r.objectRestBinding(restIdent, recv, tok, "destructuring")
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, bind...)
+			continue
+		}
 		if source, sub, ok := r.objectNestedElem(el); ok {
 			prop := strings.TrimSpace(r.prog.Text(source))
 			// The source property names its Go field through exportedField, the mapping
@@ -288,6 +299,16 @@ func (r *Renderer) bindSubObjectAssign(pat frontend.Node, recv ast.Expr, patType
 	}
 	var out []ast.Stmt
 	for _, el := range elems {
+		// A rest gathers into a target that already exists, so it assigns rather than
+		// declares; the gather itself is the declaration form's.
+		if restIdent, ok := r.objectRestElem(el); ok {
+			bind, err := r.objectRestBinding(restIdent, recv, token.ASSIGN, "assignment")
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, bind...)
+			continue
+		}
 		if source, sub, ok := r.objectAssignNestedElem(el); ok {
 			prop := strings.TrimSpace(r.prog.Text(source))
 			pt, known := propType[prop]
