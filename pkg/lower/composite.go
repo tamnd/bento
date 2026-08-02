@@ -36,6 +36,18 @@ func (r *Renderer) arrayElem(n frontend.Node) (ast.Expr, bool) {
 	return e, true
 }
 
+// padArrayCallbackElemType is padArrayCallbackElem for a caller that has the element
+// type in hand rather than a receiver node to read it off, which is what the collection
+// source of an Array.from has: the callback runs over the members the collection yields,
+// not over anything the checker typed as an array.
+func (r *Renderer) padArrayCallbackElemType(arrow frontend.Node, elem frontend.Type) func() {
+	if len(r.funcParamNodes(arrow)) != 0 {
+		return nil
+	}
+	r.closurePadParams[arrow] = []frontend.Param{{Type: elem}}
+	return func() { delete(r.closurePadParams, arrow) }
+}
+
 // arrayLiteral lowers an array literal [e0, e1, ...] to a value.NewArray call
 // instantiated at the element type. The element type is taken from the checker's
 // type for the whole literal, not guessed from the elements, so a widened or
@@ -240,27 +252,15 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 					continue
 				}
 			}
-			// A spread of a Set splices its members in insertion order, the walk for...of
-			// over a Set takes. A Set lowers to a *value.Set[T] whose Members() returns the
-			// typed []T the append splices directly, so the target element type must lower
-			// to the same Go type; a different element type hands back rather than mix kinds.
-			if r.isSet(operand) {
-				setElemT, ok := r.setElem(r.prog.TypeAt(operand))
-				if !ok {
-					return nil, &NotYetLowerable{Reason: "spread of a set whose member type is unreadable is a later slice"}
-				}
-				memberGo, err := r.typeExpr(setElemT)
-				if err != nil {
-					return nil, err
-				}
-				same, err := sameGoType(elemType, memberGo)
-				if err != nil {
-					return nil, err
-				}
-				if !same {
-					return nil, &NotYetLowerable{Reason: "spread of a set with a different element type is a later slice"}
-				}
-				src, err := r.lowerExpr(operand)
+			// A spread of a Map or Set splices what that collection yields, in insertion
+			// order, the same walk a for...of over it takes: a Set and either kind's
+			// keys()/values() splice the runtime's typed snapshot slice directly, and a Map
+			// used directly or either kind's entries() splices its [key, value] pairs as the
+			// interned tuple the target array's element type names. collSnapshotSlice is the
+			// one reader of all of those, shared with the Array.from that collects the same
+			// slice, and it hands back when the target element type is not what the collection
+			// yields rather than splice a slice of the wrong kind.
+			if members, ok, err := r.collSnapshotSlice(operand, elemType, elemT, hasElemT); ok {
 				if err != nil {
 					return nil, err
 				}
@@ -268,54 +268,6 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 				if acc == nil {
 					acc = &ast.CompositeLit{Type: seedType}
 				}
-				members := &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Members")}}
-				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
-				continue
-			}
-			// A spread of a Map used directly or of any entries() call splices its
-			// [key, value] pairs, a Set's entries() the member twice, each pair the interned
-			// tuple the target array's element type names. The entries collect into a fresh
-			// []Tuple the append splices; a target that is not a two-element tuple array hands
-			// back. This is checked before the keys()/values() accessor path since an
-			// entries() call also matches mapSetIterForOfCall.
-			if members, ok, err := r.spreadCollEntries(operand, elemT, hasElemT); ok {
-				if err != nil {
-					return nil, err
-				}
-				flush()
-				if acc == nil {
-					acc = &ast.CompositeLit{Type: seedType}
-				}
-				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
-				continue
-			}
-			// A spread of a Map or Set keys()/values() call splices the same insertion-
-			// ordered snapshot slice a for...of over that iterator ranges: a Map's keys()
-			// and values() splice Keys() and Values(), a Set's keys() and values() both
-			// splice Members(). The accessor returns the typed slice the append splices
-			// directly, so the target element type must lower to the same Go type; entries(),
-			// which yields a [key, value] tuple, and an unreadable member type hand back.
-			if recv, accessor, memberT, ok := r.collIterAccessor(operand); ok {
-				memberGo, err := r.typeExpr(memberT)
-				if err != nil {
-					return nil, err
-				}
-				same, err := sameGoType(elemType, memberGo)
-				if err != nil {
-					return nil, err
-				}
-				if !same {
-					return nil, &NotYetLowerable{Reason: "spread of a map or set iterator with a different element type is a later slice"}
-				}
-				src, err := r.lowerExpr(recv)
-				if err != nil {
-					return nil, err
-				}
-				flush()
-				if acc == nil {
-					acc = &ast.CompositeLit{Type: seedType}
-				}
-				members := collCall(src, accessor)
 				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
 				continue
 			}
@@ -475,6 +427,17 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 	if len(argNodes) > 2 {
 		return nil, &NotYetLowerable{Reason: "Array.from with a thisArg is a later slice"}
 	}
+	// A Map or Set whose member slot the boxed-signature pass rewrote hands back a box
+	// per member, so collecting it builds a boxed array the same way a spread of it
+	// splices into one, whatever array type the checker gave the call.
+	// arrayFromBoxedResultCall answers for this shape too, so a read off the result
+	// stays on the dynamic path.
+	if r.boxedCollSource(argNodes[0]) {
+		if len(argNodes) > 1 {
+			return nil, &NotYetLowerable{Reason: "Array.from with a map callback over a collection whose members are boxed is a later slice"}
+		}
+		return r.boxedCollArray(argNodes[0])
+	}
 	// A dynamic source, or a map callback, walks the source as an array-like value
 	// at runtime, reading length and integer keys, and applies the optional map
 	// callback there. This is the general form, producing a boxed array;
@@ -493,6 +456,24 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 		if _, ok := r.arrayElem(argNodes[0]); ok {
 			return r.arrayMapFilter(argNodes[0], "Map", argNodes[1:], true)
 		}
+		// A Map or Set source collects into the array its members already make, and the
+		// callback then maps that array the way it maps a written one. The collected
+		// array is the callback's receiver rather than the source, so the member type
+		// the map runs over is the collection's own and not the result's, which the
+		// callback is free to change.
+		if collected, member, ok, err := r.arrayFromColl(argNodes[0]); ok {
+			if err != nil {
+				return nil, err
+			}
+			if defer_ := r.padArrayCallbackElemType(argNodes[1], member); defer_ != nil {
+				defer defer_()
+			}
+			elemType, err := r.typeExpr(member)
+			if err != nil {
+				return nil, err
+			}
+			return r.callbackOverLoweredArray(collected, elemType, "Map", argNodes[1])
+		}
 		return nil, &NotYetLowerable{Reason: "Array.from with a map callback over a non-array source is a later slice"}
 	}
 	elemType, ok := r.arrayElem(call)
@@ -501,6 +482,17 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 	}
 	src := argNodes[0]
 	r.requireImport(valuePkg)
+	// A Map or Set collects the same insertion-ordered snapshot slice a spread of it
+	// splices, handed to ArrayFrom as a fresh array of its own. The slice the runtime
+	// returns is already a copy, so the result aliases the collection's backing no more
+	// than the array case aliases its source's.
+	elemT, hasElemT := r.prog.ElementType(r.prog.TypeAt(call))
+	if members, ok, err := r.collSnapshotSlice(src, elemType, elemT, hasElemT); ok {
+		if err != nil {
+			return nil, err
+		}
+		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{members}}, nil
+	}
 	// A real array copies its backing slice into a fresh []T, the same splice a
 	// person writes with append, so the result shares storage with nothing.
 	if opElemType, ok := r.arrayElem(src); ok {
@@ -544,6 +536,30 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 		drained := r.iterableToSliceExpr(srcExpr, elemType, shape)
 		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{drained}}, nil
 	}
+	// A generator drains its coroutine into a slice of its yielded type, the same pull
+	// a spread of it makes. An iterator-helper shape has a different Next and stays on
+	// the general iterable path above, matching how the spread routes the two apart.
+	if r.isGeneratorIterable(src) && !r.isIterHelperType(r.prog.TypeAt(src)) {
+		if yieldT, ok := r.generatorElemType(r.prog.TypeAt(src)); ok {
+			yieldGo, err := r.typeExpr(yieldT)
+			if err != nil {
+				return nil, err
+			}
+			same, err := sameGoType(elemType, yieldGo)
+			if err != nil {
+				return nil, err
+			}
+			if !same {
+				return nil, &NotYetLowerable{Reason: "Array.from over a generator with a different element type is a later slice"}
+			}
+			srcExpr, err := r.lowerExpr(src)
+			if err != nil {
+				return nil, err
+			}
+			drained := r.generatorToSliceExpr(srcExpr, elemType)
+			return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{drained}}, nil
+		}
+	}
 	// A string's elements are its code points, one substring per code point, the
 	// same walk a for...of over a string takes.
 	if r.isString(src) {
@@ -555,6 +571,64 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 		return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{points}}, nil
 	}
 	return nil, &NotYetLowerable{Reason: "Array.from over an array-like object is a later slice"}
+}
+
+// boxedCollArray collects a Map or Set whose member slot the boxed-signature pass
+// rewrote into a boxed array of those members. The runtime's snapshot is already a
+// []value.Value, so the collection is the same append into a fresh slice a spread of the
+// collection into an array literal makes, wrapped as the one array value every read off
+// the result then dispatches through.
+func (r *Renderer) boxedCollArray(src frontend.Node) (ast.Expr, error) {
+	recv, accessor := src, "Members"
+	if rn, acc, _, ok := r.collIterAccessor(src); ok {
+		recv, accessor = rn, acc
+	}
+	lowered, err := r.lowerExpr(recv)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	copied := &ast.CallExpr{
+		Fun:      ident("append"),
+		Args:     []ast.Expr{&ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "Value")}}, collCall(lowered, accessor)},
+		Ellipsis: token.Pos(1),
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{copied}}, nil
+}
+
+// arrayFromColl collects the members a Map or Set yields into a fresh array and reports
+// the member type the collected array holds, which is what an Array.from with a map
+// callback needs: the callback runs over the members, and its result is free to be
+// another type entirely, so the element type to compare against is the collection's own
+// rather than the one the checker gave the whole call.
+//
+// Only the member-yielding spellings are here. A Map used directly and either kind's
+// entries() yield a [key, value] pair, whose interned tuple the target array's element
+// type is what names, and with a callback in between there is no such target to read, so
+// those report ok=false and the caller hands back.
+func (r *Renderer) arrayFromColl(src frontend.Node) (ast.Expr, frontend.Type, bool, error) {
+	recv, accessor := src, "Members"
+	var member frontend.Type
+	if r.isSet(src) {
+		m, ok := r.setElem(r.prog.TypeAt(src))
+		if !ok {
+			return nil, frontend.Type{}, true, &NotYetLowerable{Reason: "collecting a set whose member type is unreadable is a later slice"}
+		}
+		member = m
+	} else {
+		rn, acc, m, ok := r.collIterAccessor(src)
+		if !ok {
+			return nil, frontend.Type{}, false, nil
+		}
+		recv, accessor, member = rn, acc, m
+	}
+	lowered, err := r.lowerExpr(recv)
+	if err != nil {
+		return nil, frontend.Type{}, true, err
+	}
+	r.requireImport(valuePkg)
+	collected := &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{collCall(lowered, accessor)}}
+	return collected, member, true, nil
 }
 
 // arrayFromDynamic lowers Array.from into a boxed array by walking the source as
@@ -2070,8 +2144,7 @@ func (r *Renderer) padArrayCallbackElem(arrow, recvNode frontend.Node) func() {
 	if !ok {
 		return nil
 	}
-	r.closurePadParams[arrow] = []frontend.Param{{Type: elem}}
-	return func() { delete(r.closurePadParams, arrow) }
+	return r.padArrayCallbackElemType(arrow, elem)
 }
 
 // string[]) it lowers to the free function value.MapArray[T, U] with both type
@@ -2091,22 +2164,45 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 	if r.arrowParamCount(argNodes[0]) >= 3 {
 		return nil, &NotYetLowerable{Reason: "array ." + goMethod + " with a callback that reads the array parameter is a later slice"}
 	}
-	index := r.arrowParamCount(argNodes[0]) == 2
 	// A callback that ignores its element, () => expr, lowers to a zero-parameter func
 	// literal, but the array method and the value.MapArray free function both take a
 	// func(T) U over the element type. Pad the missing element parameter off the
 	// receiver's element type so the emitted func value carries the arity the method's
 	// callback field declares, the same growth a lower-arity callback takes at a call
-	// site. The clear is deferred so a nested callback lowers against its own slot.
+	// site. The clear is deferred so a nested callback lowers against its own slot, and
+	// it outlives the call below, so the padding is still in place while the arrow lowers.
 	if defer_ := r.padArrayCallbackElem(argNodes[0], recvNode); defer_ != nil {
 		defer defer_()
 	}
+	var elemType ast.Expr
 	if restrictToElem {
-		elemType, ok := r.arrayElem(recvNode)
+		e, ok := r.arrayElem(recvNode)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "array map on a receiver whose element type did not lower"}
 		}
-		arrow := argNodes[0]
+		elemType = e
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	return r.callbackOverLoweredArray(recv, elemType, goMethod, argNodes[0])
+}
+
+// callbackOverLoweredArray applies an inline callback to an array expression that is
+// already lowered, which is what a receiver written in the source and a snapshot
+// collected off a Map or Set both come down to. elemType is the receiver's Go element
+// type when the method's result has to stay that type, a map, and nil when it does not,
+// a filter, whose callback is always to bool.
+//
+// A callback taking (element, index) reads the position, so it lowers to the index-aware
+// runtime variant, whose callback is func(T, float64) U. A type-changing map cannot use
+// the method at all, since the method's result is the receiver's own element type, so it
+// lowers to the free function value.MapArray[T, U](recv, fn), the one place both Go
+// types are named in the emitted call.
+func (r *Renderer) callbackOverLoweredArray(recv, elemType ast.Expr, goMethod string, arrow frontend.Node) (ast.Expr, error) {
+	index := r.arrowParamCount(arrow) == 2
+	if elemType != nil {
 		bodyType, err := r.arrowResultType(arrow)
 		if err != nil {
 			return nil, err
@@ -2116,13 +2212,6 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 			return nil, err
 		}
 		if !same {
-			// A type-changing map cannot use the method, so it lowers to the free
-			// function value.MapArray[T, U](recv, fn), the one place the element and
-			// result Go types are both named in the emitted call.
-			recv, err := r.lowerExpr(recvNode)
-			if err != nil {
-				return nil, err
-			}
 			fn, err := r.lowerExpr(arrow)
 			if err != nil {
 				return nil, err
@@ -2141,11 +2230,7 @@ func (r *Renderer) arrayMapFilter(recvNode frontend.Node, goMethod string, argNo
 	if index {
 		goMethod += "Index"
 	}
-	recv, err := r.lowerExpr(recvNode)
-	if err != nil {
-		return nil, err
-	}
-	fn, err := r.lowerExpr(argNodes[0])
+	fn, err := r.lowerExpr(arrow)
 	if err != nil {
 		return nil, err
 	}

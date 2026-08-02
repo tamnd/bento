@@ -295,15 +295,15 @@ func (r *Renderer) rangeCollPairSingle(recvNode, bindNode frontend.Node, name st
 	return &ast.BlockStmt{List: append(decls, rng)}, true, nil
 }
 
-// spreadCollEntries lowers a spread of a Map used directly, or of any Map or Set
-// entries() call, in an array literal to a slice of the interned [key, value] tuple
-// the append then splices. A Map's default iterator and its entries() both yield the
-// [key, value] pairs, a Set's entries() yields the member twice, so each spliced
-// element is the materialized tuple the target array's element type names. It reports
-// ok=false when the operand is neither shape, so the caller keeps looking; ok=true with
-// a hand-back when the target element type is not a two-element tuple or its fields do
-// not lower to the same Go types as the pair, so no wrong slice is spliced.
-func (r *Renderer) spreadCollEntries(operand frontend.Node, tupleT frontend.Type, hasTupleT bool) (ast.Expr, bool, error) {
+// collEntriesTuples lowers a Map used directly, or any Map or Set entries() call, to a
+// slice of the interned [key, value] tuple its consumer then takes. A Map's default
+// iterator and its entries() both yield the [key, value] pairs, a Set's entries() yields
+// the member twice, so each element is the materialized tuple the target's element type
+// names. It reports ok=false when the operand is neither shape, so the caller keeps
+// looking; ok=true with a hand-back when the target element type is not a two-element
+// tuple or its fields do not lower to the same Go types as the pair, so no wrong slice
+// is built.
+func (r *Renderer) collEntriesTuples(operand frontend.Node, tupleT frontend.Type, hasTupleT bool) (ast.Expr, bool, error) {
 	var recvNode frontend.Node
 	kind := ""
 	if recv, method, k, ok := r.mapSetIterForOfCall(operand); ok && method == "entries" {
@@ -314,11 +314,11 @@ func (r *Renderer) spreadCollEntries(operand frontend.Node, tupleT frontend.Type
 		return nil, false, nil
 	}
 	if !hasTupleT {
-		return nil, true, &NotYetLowerable{Reason: "spread of a " + kind + "'s entries needs the target's tuple element type, a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "collecting a " + kind + "'s entries needs the target's tuple element type, a later slice"}
 	}
 	elems, ok := r.prog.TupleElements(tupleT)
 	if !ok || len(elems) != 2 {
-		return nil, true, &NotYetLowerable{Reason: "spread of a " + kind + "'s entries into other than a two-element tuple array is a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "collecting a " + kind + "'s entries into other than a two-element tuple array is a later slice"}
 	}
 	// The tuple's two field types must lower to the same Go types as the pair the
 	// runtime yields, a Map's key and value or a Set's member twice, or the composite
@@ -335,13 +335,13 @@ func (r *Renderer) spreadCollEntries(operand frontend.Node, tupleT frontend.Type
 	if kind == "set" {
 		m, ok := r.setElem(r.prog.TypeAt(recvNode))
 		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "spread of a set's entries whose member type is unreadable is a later slice"}
+			return nil, true, &NotYetLowerable{Reason: "collecting a set's entries whose member type is unreadable is a later slice"}
 		}
 		fst, snd = m, m
 	} else {
 		k, v, ok := r.mapKeyVal(r.prog.TypeAt(recvNode))
 		if !ok {
-			return nil, true, &NotYetLowerable{Reason: "spread of a map's entries whose key or value type is unreadable is a later slice"}
+			return nil, true, &NotYetLowerable{Reason: "collecting a map's entries whose key or value type is unreadable is a later slice"}
 		}
 		fst, snd = k, v
 	}
@@ -358,7 +358,7 @@ func (r *Renderer) spreadCollEntries(operand frontend.Node, tupleT frontend.Type
 	} else if sameSnd, err := sameGoType(e1Go, sndGo); err != nil {
 		return nil, true, err
 	} else if !sameFst || !sameSnd {
-		return nil, true, &NotYetLowerable{Reason: "spread of a " + kind + "'s entries into a tuple with a different field type is a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "collecting a " + kind + "'s entries into a tuple with a different field type is a later slice"}
 	}
 	tname, err := r.decls.internTuple(r, tupleT, elems)
 	if err != nil {
@@ -372,7 +372,7 @@ func (r *Renderer) spreadCollEntries(operand frontend.Node, tupleT frontend.Type
 }
 
 // collEntriesTupleSlice builds the immediately-called function literal that collects a
-// Map or Set's entries into a fresh []Tname the spread's append splices. A Map ranges
+// Map or Set's entries into a fresh []Tname its consumer takes. A Map ranges
 // its Keys and Values snapshots in parallel by index so each entry pairs a key with its
 // own value; a Set ranges its Members and pairs each with itself. The slice is
 // preallocated to the snapshot length, the same walk a for...of over the entries takes.
@@ -426,6 +426,68 @@ func (r *Renderer) collEntriesTupleSlice(recv ast.Expr, tname, kind string) ast.
 		Body: &ast.BlockStmt{List: body},
 	}
 	return &ast.CallExpr{Fun: fn}
+}
+
+// collSnapshotSlice lowers a Map or Set used as an iterable in a value position to the
+// Go slice of elemType that holds what it yields, in insertion order. It is the one
+// reader every consumer of a collection's members goes through, whether that consumer is
+// a spread splicing them into an array literal or an Array.from collecting them into a
+// fresh array, since both need exactly the same slice and both have a target element
+// type the slice has to match. The three spellings are the whole of what a collection
+// yields: a Set or its keys()/values() yields its members, a Map's keys() and values()
+// yield those snapshots, and a Map used directly or either kind's entries() yields the
+// [key, value] pairs, which materialize into the interned tuple the target names.
+//
+// It reports ok=false when the operand is not a collection at all, so the caller keeps
+// looking down its own list of iterable shapes, and ok=true with a hand-back when it is
+// one but the target element type does not match what the collection yields, so no
+// wrong slice is built.
+func (r *Renderer) collSnapshotSlice(operand frontend.Node, elemType ast.Expr, elemT frontend.Type, hasElemT bool) (ast.Expr, bool, error) {
+	// A plain Set is read first because it is not a call, so it cannot be one of the
+	// accessor spellings below and the order between them never matters.
+	if r.isSet(operand) {
+		member, ok := r.setElem(r.prog.TypeAt(operand))
+		if !ok {
+			return nil, true, &NotYetLowerable{Reason: "collecting a set whose member type is unreadable is a later slice"}
+		}
+		src, err := r.collSnapshotSrc(operand, elemType, member, "a set")
+		if err != nil {
+			return nil, true, err
+		}
+		return collCall(src, "Members"), true, nil
+	}
+	// The pair-yielding spellings are read before the keys()/values() accessor, since an
+	// entries() call matches mapSetIterForOfCall the same way those two do.
+	if pairs, ok, err := r.collEntriesTuples(operand, elemT, hasElemT); ok {
+		return pairs, true, err
+	}
+	if recv, accessor, member, ok := r.collIterAccessor(operand); ok {
+		src, err := r.collSnapshotSrc(recv, elemType, member, "a map or set iterator")
+		if err != nil {
+			return nil, true, err
+		}
+		return collCall(src, accessor), true, nil
+	}
+	return nil, false, nil
+}
+
+// collSnapshotSrc lowers the receiver a snapshot is read off, once its member type has
+// been checked against the target's element type. The two must lower to the same Go
+// type, since the snapshot slice is spliced or handed on with no conversion, so a
+// mismatch hands back rather than mixing kinds.
+func (r *Renderer) collSnapshotSrc(recv frontend.Node, elemType ast.Expr, member frontend.Type, what string) (ast.Expr, error) {
+	memberGo, err := r.typeExpr(member)
+	if err != nil {
+		return nil, err
+	}
+	same, err := sameGoType(elemType, memberGo)
+	if err != nil {
+		return nil, err
+	}
+	if !same {
+		return nil, &NotYetLowerable{Reason: "collecting " + what + " with a different element type is a later slice"}
+	}
+	return r.lowerExpr(recv)
 }
 
 // makeSlice builds make([]T, len(src)), preallocating a slice to a snapshot's length.

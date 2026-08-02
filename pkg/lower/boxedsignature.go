@@ -130,6 +130,51 @@ func (r *Renderer) readOfBoxedCollection(n frontend.Node) bool {
 	return r.boxedMapVal(recvNode)
 }
 
+// boxedCollSource reports whether an iterable is a Map or Set spelling whose members
+// this pass gave the value model, so what it yields is a box per member and a collection
+// of it is a boxed array however the checker types the result. A plain Set yields its
+// members; a keys() or values() call yields whichever of the two slots it reads, which
+// are marked apart. The pair spellings are not here: what they yield is the interned
+// tuple, whose fields are their own slot.
+func (r *Renderer) boxedCollSource(n frontend.Node) bool {
+	if r.isSet(n) {
+		return r.boxedSetElem(n)
+	}
+	recv, accessor, _, ok := r.collIterAccessor(n)
+	if !ok {
+		return false
+	}
+	switch accessor {
+	case "Keys":
+		return r.boxedMapKey(recv)
+	case "Values":
+		return r.boxedMapVal(recv)
+	}
+	return r.boxedSetElem(recv)
+}
+
+// arrayFromBoxedColl reports whether n is the Array.from that collects a Map or Set
+// whose member slot this pass boxed. Its result is one boxed array, so the sites that
+// ask what an expression lowers to have to see through the checker's concrete array type
+// the same way they see through a boxed collection's declared type argument.
+func (r *Renderer) arrayFromBoxedColl(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) < 2 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	parts := r.prog.Children(kids[0])
+	if len(parts) != 2 || !r.isGlobalRef(parts[0], "Array") || r.prog.Text(parts[1]) != "from" {
+		return false
+	}
+	// The children after the callee carry any written type arguments beside the value
+	// arguments, so the source is read off the named ones rather than off kids[1].
+	args := r.namedArgs(kids[1:])
+	return len(args) == 1 && r.boxedCollSource(args[0])
+}
+
 // spreadOfBoxedColl reports whether a spread element splices a collection whose member
 // slot this pass boxed. A Set is the one whose spread splices its members straight; a
 // Map's spreads its entries as pairs, which is the tuple's question rather than this one.
