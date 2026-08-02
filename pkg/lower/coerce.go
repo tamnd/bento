@@ -2518,7 +2518,10 @@ func (r *Renderer) boxArrayLiteral(n frontend.Node) (ast.Expr, error) {
 			if !r.spreadOfBoxedColl(k) {
 				return nil, &NotYetLowerable{Reason: "boxing an array literal with a spread element is a later slice"}
 			}
-			src, err := r.lowerExpr(r.prog.Children(k)[0])
+			// boxedCollValues is the one reader of what such a spelling yields, shared with
+			// the Array.from that collects the same boxes: a member-yielding spelling
+			// splices the runtime's snapshot, a pair one splices the entries it builds.
+			members, err := r.boxedCollValues(r.prog.Children(k)[0])
 			if err != nil {
 				return nil, err
 			}
@@ -2526,7 +2529,6 @@ func (r *Renderer) boxArrayLiteral(n frontend.Node) (ast.Expr, error) {
 			if acc == nil {
 				acc = &ast.CompositeLit{Type: seed}
 			}
-			members := &ast.CallExpr{Fun: &ast.SelectorExpr{X: src, Sel: ident("Members")}}
 			acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, members}, Ellipsis: token.Pos(1)}
 			continue
 		}

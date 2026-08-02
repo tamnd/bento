@@ -235,6 +235,13 @@ func (r *Renderer) rangeCollPairSingle(recvNode, bindNode frontend.Node, name st
 	if err != nil {
 		return nil, true, err
 	}
+	// A pair off a collection the pass boxed is itself a box, so the binding holds one
+	// and every read of it in the body dispatches. The scope has to be in place before
+	// the body lowers, since that is where those reads are.
+	boxedPair := used && r.boxedCollPair(recvNode)
+	if boxedPair {
+		defer r.dynBoundScope(name)()
+	}
 	body, err := r.loopBody(bodyNode)
 	if err != nil {
 		return nil, true, err
@@ -249,8 +256,9 @@ func (r *Renderer) rangeCollPairSingle(recvNode, bindNode frontend.Node, name st
 		}
 		return &ast.RangeStmt{X: collCall(recv, drive), Body: body}, true, nil
 	}
-	if r.boxedCollPair(recvNode) {
-		return nil, true, &NotYetLowerable{Reason: "a for...of over the pair of a " + kind + " whose slot holds a box is a later slice"}
+	if boxedPair {
+		stmt, err := r.rangeBoxedCollPair(recvNode, recv, name, body, kind)
+		return stmt, true, err
 	}
 	elems, ok := r.prog.TupleElements(r.prog.TypeAt(bindNode))
 	if !ok || len(elems) != 2 {
@@ -293,6 +301,167 @@ func (r *Renderer) rangeCollPairSingle(recvNode, bindNode frontend.Node, name st
 	body.List = append([]ast.Stmt{bind}, body.List...)
 	rng := &ast.RangeStmt{Key: ident(idx), Value: ident(key), Tok: token.DEFINE, X: ident(ks), Body: body}
 	return &ast.BlockStmt{List: append(decls, rng)}, true, nil
+}
+
+// rangeBoxedCollPair is rangeCollPairSingle for a collection whose key, value or member
+// slot the boxed-signature pass rewrote. An interned tuple is a Go struct and a struct
+// field has no room for a box, so the pair gives way rather than the value: it
+// materializes as the boxed two-element array JavaScript says an entry is, and the body
+// reads e[0] and e[1] through the value model the way it reads any other box.
+//
+// That is the closer reading of the source as well as the only one that lowers. An entry
+// pair really is an array in JavaScript, so the box answers its length, its index reads,
+// its spread and its JSON form with no tuple struct in the picture at all.
+//
+// Only the slot the pass boxed hands back a box. The other half is still whatever Go
+// value the checker named, so it boxes on its way into the pair through the same coercion
+// a static argument to a boxed slot takes, and a half whose shape has no box hands back
+// there rather than here.
+func (r *Renderer) rangeBoxedCollPair(recvNode frontend.Node, recv ast.Expr, name string, body *ast.BlockStmt, kind string) (ast.Stmt, error) {
+	r.requireImport(valuePkg)
+	pair := func(e0, e1 ast.Expr) ast.Expr {
+		return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{
+			&ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "Value")}, Elts: []ast.Expr{e0, e1}},
+		}}
+	}
+	if kind == "set" {
+		member, ok := r.setElem(r.prog.TypeAt(recvNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "a for...of over the pair of a set whose member type is unreadable is a later slice"}
+		}
+		// A Set's entry is the member twice, so both halves box the one ranged member.
+		mem := r.freshTemp()
+		fst, err := r.boxStaticResultToDynamic(ident(mem), member)
+		if err != nil {
+			return nil, err
+		}
+		snd, err := r.boxStaticResultToDynamic(ident(mem), member)
+		if err != nil {
+			return nil, err
+		}
+		bind := &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{pair(fst, snd)}}
+		body.List = append([]ast.Stmt{bind}, body.List...)
+		return &ast.RangeStmt{Key: ident("_"), Value: ident(mem), Tok: token.DEFINE, X: collCall(recv, "Members"), Body: body}, nil
+	}
+	keyT, valT, ok := r.mapKeyVal(r.prog.TypeAt(recvNode))
+	if !ok {
+		return nil, &NotYetLowerable{Reason: "a for...of over the pair of a map whose key or value type is unreadable is a later slice"}
+	}
+	// A Map ranges its Keys and Values snapshots in parallel, indexing Values by the
+	// range index so each turn's pair holds a key with its own value.
+	m := r.freshTemp()
+	ks := r.freshTemp()
+	vs := r.freshTemp()
+	idx := r.freshTemp()
+	key := r.freshTemp()
+	boxedKey, err := r.boxStaticResultToDynamic(ident(key), keyT)
+	if err != nil {
+		return nil, err
+	}
+	boxedVal, err := r.boxStaticResultToDynamic(&ast.IndexExpr{X: ident(vs), Index: ident(idx)}, valT)
+	if err != nil {
+		return nil, err
+	}
+	decls := []ast.Stmt{
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(m)}, Tok: token.DEFINE, Rhs: []ast.Expr{recv}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(ks)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Keys")}},
+		&ast.AssignStmt{Lhs: []ast.Expr{ident(vs)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Values")}},
+	}
+	bind := &ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.DEFINE, Rhs: []ast.Expr{pair(boxedKey, boxedVal)}}
+	body.List = append([]ast.Stmt{bind}, body.List...)
+	rng := &ast.RangeStmt{Key: ident(idx), Value: ident(key), Tok: token.DEFINE, X: ident(ks), Body: body}
+	return &ast.BlockStmt{List: append(decls, rng)}, nil
+}
+
+// boxedCollPairSlice is collEntriesTupleSlice for a collection whose key, value or member
+// slot the boxed-signature pass rewrote: it collects the entries into a []value.Value of
+// two-element boxed arrays rather than into a slice of the interned tuple, since a Go
+// struct field has no room for a box. It is the one builder every consumer of those
+// entries goes through, the spread that splices them into a boxed array literal and the
+// Array.from that collects them, the same way collSnapshotSlice is for the unboxed case.
+//
+// The half the pass did not box is still whatever Go value the checker named, so it boxes
+// on its way into the entry through boxStaticResultToDynamic, which is where a half whose
+// shape has no box hands back.
+func (r *Renderer) boxedCollPairSlice(operand frontend.Node) (ast.Expr, error) {
+	recvNode, kind := operand, "map"
+	if rn, method, k, ok := r.mapSetIterForOfCall(operand); ok && method == "entries" {
+		recvNode, kind = rn, k
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	sliceT := &ast.ArrayType{Elt: sel("value", "Value")}
+	pair := func(e0, e1 ast.Expr) ast.Expr {
+		return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{
+			&ast.CompositeLit{Type: sliceT, Elts: []ast.Expr{e0, e1}},
+		}}
+	}
+	out := r.freshTemp()
+	var body []ast.Stmt
+	if kind == "set" {
+		member, ok := r.setElem(r.prog.TypeAt(recvNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "collecting the entries of a set whose member type is unreadable is a later slice"}
+		}
+		// A Set's entry is the member twice, so both halves box the one ranged member.
+		ms, idx, mem := r.freshTemp(), r.freshTemp(), r.freshTemp()
+		fst, err := r.boxStaticResultToDynamic(ident(mem), member)
+		if err != nil {
+			return nil, err
+		}
+		snd, err := r.boxStaticResultToDynamic(ident(mem), member)
+		if err != nil {
+			return nil, err
+		}
+		assign := &ast.AssignStmt{
+			Lhs: []ast.Expr{&ast.IndexExpr{X: ident(out), Index: ident(idx)}},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{pair(fst, snd)},
+		}
+		body = []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(ms)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(recv, "Members")}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(out)}, Tok: token.DEFINE, Rhs: []ast.Expr{makeSlice(sliceT, ident(ms))}},
+			&ast.RangeStmt{Key: ident(idx), Value: ident(mem), Tok: token.DEFINE, X: ident(ms), Body: &ast.BlockStmt{List: []ast.Stmt{assign}}},
+			&ast.ReturnStmt{Results: []ast.Expr{ident(out)}},
+		}
+	} else {
+		keyT, valT, ok := r.mapKeyVal(r.prog.TypeAt(recvNode))
+		if !ok {
+			return nil, &NotYetLowerable{Reason: "collecting the entries of a map whose key or value type is unreadable is a later slice"}
+		}
+		// A Map ranges its Keys and Values snapshots in parallel, indexing Values by the
+		// range index so each entry holds a key with its own value.
+		m, ks, vs, idx, key := r.freshTemp(), r.freshTemp(), r.freshTemp(), r.freshTemp(), r.freshTemp()
+		boxedKey, err := r.boxStaticResultToDynamic(ident(key), keyT)
+		if err != nil {
+			return nil, err
+		}
+		boxedVal, err := r.boxStaticResultToDynamic(&ast.IndexExpr{X: ident(vs), Index: ident(idx)}, valT)
+		if err != nil {
+			return nil, err
+		}
+		assign := &ast.AssignStmt{
+			Lhs: []ast.Expr{&ast.IndexExpr{X: ident(out), Index: ident(idx)}},
+			Tok: token.ASSIGN,
+			Rhs: []ast.Expr{pair(boxedKey, boxedVal)},
+		}
+		body = []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(m)}, Tok: token.DEFINE, Rhs: []ast.Expr{recv}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(ks)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Keys")}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(vs)}, Tok: token.DEFINE, Rhs: []ast.Expr{collCall(ident(m), "Values")}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(out)}, Tok: token.DEFINE, Rhs: []ast.Expr{makeSlice(sliceT, ident(ks))}},
+			&ast.RangeStmt{Key: ident(idx), Value: ident(key), Tok: token.DEFINE, X: ident(ks), Body: &ast.BlockStmt{List: []ast.Stmt{assign}}},
+			&ast.ReturnStmt{Results: []ast.Expr{ident(out)}},
+		}
+	}
+	fn := &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: sliceT}}}},
+		Body: &ast.BlockStmt{List: body},
+	}
+	return &ast.CallExpr{Fun: fn}, nil
 }
 
 // collEntriesTuples lowers a Map used directly, or any Map or Set entries() call, to a

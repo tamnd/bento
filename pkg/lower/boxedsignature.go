@@ -134,9 +134,12 @@ func (r *Renderer) readOfBoxedCollection(n frontend.Node) bool {
 // this pass gave the value model, so what it yields is a box per member and a collection
 // of it is a boxed array however the checker types the result. A plain Set yields its
 // members; a keys() or values() call yields whichever of the two slots it reads, which
-// are marked apart. The pair spellings are not here: what they yield is the interned
-// tuple, whose fields are their own slot.
+// are marked apart; a pair spelling yields an entry with a box in one half, which is a
+// box itself.
 func (r *Renderer) boxedCollSource(n frontend.Node) bool {
+	if r.boxedCollPairSource(n) {
+		return true
+	}
 	if r.isSet(n) {
 		return r.boxedSetElem(n)
 	}
@@ -151,6 +154,21 @@ func (r *Renderer) boxedCollSource(n frontend.Node) bool {
 		return r.boxedMapVal(recv)
 	}
 	return r.boxedSetElem(recv)
+}
+
+// boxedCollPairSource reports whether an iterable is a pair-yielding spelling, a Map used
+// directly or either kind's entries(), of a collection this pass boxed on either side.
+//
+// An entry holding a box is a box itself. The interned tuple such an entry otherwise
+// materializes into is a Go struct, and a struct field has no room for a box, so the
+// entry gives way and becomes the two-element array JavaScript says it is. That is the
+// same answer the for...of over one pair takes, and it is why the pair spellings answer
+// here rather than being a slot of their own: there is no tuple left to give a slot to.
+func (r *Renderer) boxedCollPairSource(n frontend.Node) bool {
+	if recv, method, _, ok := r.mapSetIterForOfCall(n); ok && method == "entries" {
+		return r.boxedCollPair(recv)
+	}
+	return r.isMap(n) && r.boxedCollPair(n)
 }
 
 // arrayFromBoxedColl reports whether n is the Array.from that collects a Map or Set
@@ -176,14 +194,15 @@ func (r *Renderer) arrayFromBoxedColl(n frontend.Node) bool {
 }
 
 // spreadOfBoxedColl reports whether a spread element splices a collection whose member
-// slot this pass boxed. A Set is the one whose spread splices its members straight; a
-// Map's spreads its entries as pairs, which is the tuple's question rather than this one.
+// slot this pass boxed. Every spelling that yields boxes counts, which is what
+// boxedCollSource already answers: a Set spliced straight, a keys() or values() call, and
+// a Map or an entries() call, whose entries are boxes once one of their halves is.
 func (r *Renderer) spreadOfBoxedColl(n frontend.Node) bool {
 	if n.Kind() != frontend.NodeSpreadElement {
 		return false
 	}
 	kids := r.prog.Children(n)
-	return len(kids) == 1 && r.boxedSetElem(kids[0])
+	return len(kids) == 1 && r.boxedCollSource(kids[0])
 }
 
 // markBoxedCollections marks the slots of a Set or a Map that some call hands a box, so
