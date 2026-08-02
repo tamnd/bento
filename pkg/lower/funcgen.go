@@ -1878,6 +1878,20 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A body that lowered to a box while the checker types it a clean primitive comes
+	// down to that primitive here, the same ToNumber, ToString or ToBoolean a read off
+	// a box takes anywhere else. `const f = (): string => ns.join(',')` over a boxed ns
+	// is the shape: the join dispatches through the runtime and answers a value.Value,
+	// and the func literal's result is spelled by the checker's string, so without the
+	// coercion the return does not build. boxedReturnFns above already claimed every
+	// arrow whose result stays a box, so what reaches here has a Go value to land in.
+	const unboxes = frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
+	if bodyType.Flags&unboxes != 0 && bodyType.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 && r.isBoxedChain(body) {
+		loweredBody, err = r.coerceDynamicToStaticFlags(loweredBody, bodyType.Flags)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &ast.FuncLit{
 		Type: &ast.FuncType{
 			Params:  &ast.FieldList{List: fields},
