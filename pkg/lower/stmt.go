@@ -2962,7 +2962,7 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			if _, isArray := r.prog.ElementType(restType); isArray {
 				return nil, true, &NotYetLowerable{Reason: "an object destructuring rest typed as an array is a later slice"}
 			}
-			structName, err := r.decls.internStruct(r, restType)
+			structName, err := r.restGatherStruct(restType)
 			if err != nil {
 				return nil, true, err
 			}
@@ -3014,18 +3014,14 @@ func (r *Renderer) objectDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, 
 			return nil, true, err
 		}
 		if b.rest {
-			elts := make([]ast.Expr, 0, len(r.prog.Properties(b.restType)))
-			for _, pr := range r.prog.Properties(b.restType) {
-				field, ok := exportedField(pr.Name)
-				if !ok {
-					return nil, true, &NotYetLowerable{Reason: "an object destructuring rest property is not a Go field name"}
-				}
-				elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: &ast.SelectorExpr{X: rc, Sel: ident(field)}})
+			gather, err := r.restGatherExpr(b.restType, b.restStruct, rc, "destructuring")
+			if err != nil {
+				return nil, true, err
 			}
 			stmts = append(stmts, &ast.AssignStmt{
 				Lhs: []ast.Expr{ident(b.name)},
 				Tok: token.DEFINE,
-				Rhs: []ast.Expr{&ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(b.restStruct), Elts: elts}}},
+				Rhs: []ast.Expr{gather},
 			})
 			// A rest gathered only to be discarded, `const { a, ...rest } = o` where rest is
 			// never read, takes the same blank an ordinary unused binding does so the Go
@@ -3681,7 +3677,7 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 			if _, isArray := r.prog.ElementType(restType); isArray {
 				return nil, true, &NotYetLowerable{Reason: "an object assignment rest typed as an array is a later slice"}
 			}
-			structName, err := r.decls.internStruct(r, restType)
+			structName, err := r.restGatherStruct(restType)
 			if err != nil {
 				return nil, true, err
 			}
@@ -3725,16 +3721,12 @@ func (r *Renderer) objectDestructureAssign(paren frontend.Node) (ast.Stmt, bool,
 			if !ok {
 				return nil, true, &NotYetLowerable{Reason: "object assignment rest target is not a Go identifier"}
 			}
-			elts := make([]ast.Expr, 0, len(r.prog.Properties(el.restType)))
-			for _, pr := range r.prog.Properties(el.restType) {
-				field, ok := exportedField(pr.Name)
-				if !ok {
-					return nil, true, &NotYetLowerable{Reason: "an object assignment rest property is not a Go field name"}
-				}
-				elts = append(elts, &ast.KeyValueExpr{Key: ident(field), Value: &ast.SelectorExpr{X: recv, Sel: ident(field)}})
+			gather, err := r.restGatherExpr(el.restType, el.restStruct, recv, "assignment")
+			if err != nil {
+				return nil, true, err
 			}
 			names = append(names, ident(name))
-			values = append(values, &ast.UnaryExpr{Op: token.AND, X: &ast.CompositeLit{Type: ident(el.restStruct), Elts: elts}})
+			values = append(values, gather)
 			continue
 		}
 		// The source property maps straight to its Go field through exportedField, the
