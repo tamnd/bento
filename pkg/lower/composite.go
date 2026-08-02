@@ -189,7 +189,14 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 			return nil, &NotYetLowerable{Reason: "spread element with an unexpected shape is a later slice"}
 		}
 		operand := operands[0]
+		// arrayElem answers off the checker's type, so it succeeds for a binding still
+		// declared number[] after the compiler put a box in its slot. The Elems splice it
+		// then picks reads a field a value.Value has not got, so a boxed operand is routed
+		// past it to the run-time drain below however the checker typed it.
 		opElemType, ok := r.arrayElem(operand)
+		if ok && r.spreadsABox(operand) {
+			ok = false
+		}
 		if !ok {
 			// A spread of a user iterable that is not an array walks the iterator
 			// protocol: it is drained into a slice of its element type, then that slice
@@ -297,19 +304,10 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 			}
 			// A spread of a boxed value is the for...of case in expression position: what
 			// it is cannot be settled here, so it is drained at run time by the same
-			// value.Iterate the loop drives, and the drained values splice like any other
-			// slice. They are value.Value, so this only stands where the literal's element
-			// type is value.Value too; a boxed spread into a typed array would need each
-			// element coerced, which is a different question and hands back.
-			if r.isDynamic(operand) || r.producesBoxedValue(operand) {
-				same, err := sameGoType(elemType, sel("value", "Value"))
-				if err != nil {
-					return nil, err
-				}
-				if !same {
-					return nil, &NotYetLowerable{Reason: "spread of a boxed value into a typed array is a later slice"}
-				}
-				src, err := r.lowerExpr(operand)
+			// value.Iterate the loop drives. The drained values are value.Value, so they
+			// splice straight into a boxed literal and coerce one by one into a typed one.
+			if r.spreadsABox(operand) {
+				drained, err := r.boxedSpreadSlice(operand, elemType, elemT, hasElemT)
 				if err != nil {
 					return nil, err
 				}
@@ -317,7 +315,7 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 				if acc == nil {
 					acc = &ast.CompositeLit{Type: seedType}
 				}
-				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, r.iterateToSliceCall(src, operand)}, Ellipsis: token.Pos(1)}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
 				continue
 			}
 			return nil, &NotYetLowerable{Reason: "spread of a non-array value in an array literal is a later slice"}
@@ -346,6 +344,72 @@ func (r *Renderer) arraySpread(n frontend.Node, elemType ast.Expr, kids []fronte
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ArrayFrom"), Args: []ast.Expr{acc}}, nil
+}
+
+// spreadsABox reports whether a spread operand's Go value is a box, whatever the checker
+// says its type is. It is the one question the spread paths have to ask before believing
+// arrayElem: a binding declared number[] whose slot the compiler boxed still answers that
+// query with number, and every splice built on that answer reads an Elems a value.Value
+// has not got.
+func (r *Renderer) spreadsABox(operand frontend.Node) bool {
+	return r.isDynamic(operand) || r.producesBoxedValue(operand)
+}
+
+// boxedSpreadSlice drains a boxed spread operand into the Go slice the splicing literal's
+// element type names. What the box holds cannot be settled here, so it is walked at run
+// time by the same value.Iterate a for...of over it drives, which yields a []value.Value.
+//
+// A literal that is itself boxed takes that slice as it stands, since its elements are
+// boxes too. A typed literal has to bring each drained element down to its own element
+// type, which is one pass over the slice: JavaScript would coerce at the read, and doing
+// it once at the splice puts every element in the Go slot the array's type names so no
+// later reader has to know the array came from a box.
+//
+// An element type with no coercion, an object shape or a class, hands back. There is no
+// single Go value to land a box in there, which is the same boundary unboxDynamicRead
+// draws for a read off a boxed receiver.
+func (r *Renderer) boxedSpreadSlice(operand frontend.Node, elemType ast.Expr, elemT frontend.Type, hasElemT bool) (ast.Expr, error) {
+	src, err := r.lowerExpr(operand)
+	if err != nil {
+		return nil, err
+	}
+	drained := r.iterateToSliceCall(src, operand)
+	same, err := sameGoType(elemType, sel("value", "Value"))
+	if err != nil {
+		return nil, err
+	}
+	if same {
+		return drained, nil
+	}
+	if !hasElemT {
+		return nil, &NotYetLowerable{Reason: "a spread of a boxed value whose target element type is unreadable is a later slice"}
+	}
+	if elemT.Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+		return nil, &NotYetLowerable{Reason: "a spread of a boxed value into this element type is a later slice"}
+	}
+	in, out, idx, el := r.freshTemp(), r.freshTemp(), r.freshTemp(), r.freshTemp()
+	coerced, err := r.coerceDynamicToStaticFlags(ident(el), elemT.Flags)
+	if err != nil {
+		return nil, err
+	}
+	sliceT := &ast.ArrayType{Elt: elemType}
+	fn := &ast.FuncLit{
+		Type: &ast.FuncType{Params: &ast.FieldList{}, Results: &ast.FieldList{List: []*ast.Field{{Type: sliceT}}}},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(in)}, Tok: token.DEFINE, Rhs: []ast.Expr{drained}},
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(out)}, Tok: token.DEFINE, Rhs: []ast.Expr{makeSlice(sliceT, ident(in))}},
+			&ast.RangeStmt{
+				Key: ident(idx), Value: ident(el), Tok: token.DEFINE, X: ident(in),
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.AssignStmt{
+					Lhs: []ast.Expr{&ast.IndexExpr{X: ident(out), Index: ident(idx)}},
+					Tok: token.ASSIGN,
+					Rhs: []ast.Expr{coerced},
+				}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{ident(out)}},
+		}},
+	}
+	return &ast.CallExpr{Fun: fn}, nil
 }
 
 // arrayStaticCall lowers a static call on the global Array constructor. It
@@ -430,7 +494,7 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 	// A Map or Set whose member slot the boxed-signature pass rewrote hands back a box
 	// per member, so collecting it builds a boxed array the same way a spread of it
 	// splices into one, whatever array type the checker gave the call.
-	// arrayFromBoxedResultCall answers for this shape too, so a read off the result
+	// arrayFromBoxedSource answers for this shape too, so a read off the result
 	// stays on the dynamic path.
 	if r.boxedCollSource(argNodes[0]) {
 		if len(argNodes) > 1 {
@@ -441,9 +505,9 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 	// A dynamic source, or a map callback, walks the source as an array-like value
 	// at runtime, reading length and integer keys, and applies the optional map
 	// callback there. This is the general form, producing a boxed array;
-	// arrayFromBoxedResultCall keeps isDynamic in step so a read off the result
+	// arrayFromBoxedSource keeps isDynamic in step so a read off the result
 	// stays on the dynamic path.
-	if r.arrayFromBoxedResultCall(call) {
+	if r.arrayFromBoxedSource(call) {
 		return r.arrayFromDynamic(argNodes)
 	}
 	if len(argNodes) > 1 {

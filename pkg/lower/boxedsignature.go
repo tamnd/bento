@@ -171,11 +171,16 @@ func (r *Renderer) boxedCollPairSource(n frontend.Node) bool {
 	return r.isMap(n) && r.boxedCollPair(n)
 }
 
-// arrayFromBoxedColl reports whether n is the Array.from that collects a Map or Set
-// whose member slot this pass boxed. Its result is one boxed array, so the sites that
-// ask what an expression lowers to have to see through the checker's concrete array type
-// the same way they see through a boxed collection's declared type argument.
-func (r *Renderer) arrayFromBoxedColl(n frontend.Node) bool {
+// arrayFromBoxedSource reports whether n is an Array.from whose one source is a box: a
+// Map or Set whose member slot this pass boxed, or any value whose Go slot already holds
+// a value.Value. Either way the result is one boxed array, so the sites that ask what an
+// expression lowers to have to see through the concrete array type the checker gave the
+// call the same way they see through a boxed collection's declared type argument.
+//
+// It is the one rule both the routing in arrayFrom and the readers of that result go
+// through, which is what keeps the emit and the reads from disagreeing about whether the
+// collected array is a box.
+func (r *Renderer) arrayFromBoxedSource(n frontend.Node) bool {
 	if n.Kind() != frontend.NodeCallExpression {
 		return false
 	}
@@ -189,8 +194,13 @@ func (r *Renderer) arrayFromBoxedColl(n frontend.Node) bool {
 	}
 	// The children after the callee carry any written type arguments beside the value
 	// arguments, so the source is read off the named ones rather than off kids[1].
+	// A map callback is allowed alongside the source, since the array-like walk that
+	// applies it produces a box just the same.
 	args := r.namedArgs(kids[1:])
-	return len(args) == 1 && r.boxedCollSource(args[0])
+	if len(args) < 1 || len(args) > 2 {
+		return false
+	}
+	return r.boxedCollSource(args[0]) || r.isDynamic(args[0])
 }
 
 // spreadOfBoxedColl reports whether a spread element splices a collection whose member
@@ -203,6 +213,37 @@ func (r *Renderer) spreadOfBoxedColl(n frontend.Node) bool {
 	}
 	kids := r.prog.Children(n)
 	return len(kids) == 1 && r.boxedCollSource(kids[0])
+}
+
+// spreadOfUnlandableBox reports whether a spread element splices a box whose elements
+// have no Go slot to come down to, which is what makes the literal around it a box too.
+//
+//	const rows = JSON.parse(s) as Row[]
+//	const copy = [...rows]
+//
+// rows is a value.Value, so the splice is a run-time drain that yields value.Value
+// elements. A number or string element type takes those elements down to a Go primitive
+// one by one, which is what the ordinary array path now does, and the copy stays the
+// typed array the checker named. A shape has no such conversion: there is no value to
+// put in a *ObjIdTag that is the same object the box already is. So the copy gives way
+// and becomes a boxed array, the same answer a spread of a boxed collection takes.
+//
+// An any[] or unknown[] source stays out of this. Its elements are already value.Value
+// on the ordinary path, so the literal it splices into is a typed array of boxes and
+// reading it as a boxed literal would change what that spelling has always built.
+func (r *Renderer) spreadOfUnlandableBox(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeSpreadElement {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) != 1 || !r.spreadsABox(kids[0]) {
+		return false
+	}
+	elemT, ok := r.prog.ElementType(r.prog.TypeAt(kids[0]))
+	if !ok || elemT.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return false
+	}
+	return elemT.Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0
 }
 
 // markBoxedCollections marks the slots of a Set or a Map that some call hands a box, so
