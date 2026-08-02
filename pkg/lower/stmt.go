@@ -148,15 +148,19 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	} else if ok {
 		return stmts, nil
 	}
+	// A module-level destructuring statement whose leaves hoisted to package vars keeps
+	// its binds here in main, at its source position, but they store into those vars
+	// rather than declare fresh main locals that would shadow them.
+	hoistedLeaves := r.hoistedPatternTargets(n)
 	if stmts, ok, err := r.flattenArrayDestructure(n); err != nil {
 		return nil, err
 	} else if ok {
-		return stmts, nil
+		return storeIntoHoistedPattern(stmts, hoistedLeaves)
 	}
 	if stmts, ok, err := r.flattenObjectDestructure(n); err != nil {
 		return nil, err
 	} else if ok {
-		return stmts, nil
+		return storeIntoHoistedPattern(stmts, hoistedLeaves)
 	}
 	// A variable statement whose bindings the module never reads expands to the
 	// declaration plus a blank assignment per unused binding, so the initializer

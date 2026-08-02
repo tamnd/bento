@@ -153,10 +153,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// assignment can be checked against a forward reference: an initializer that reads
 	// a module binding declared later would, in main's source order, read an unset
 	// value, so that statement hands back rather than emit a wrong answer.
-	moduleOrder := moduleBindingOrder(r.prog, entry)
+	moduleOrder := r.moduleBindingOrder(entry)
 	// Reset the in-place module-assignment set for this program: a binding hoisted to
 	// a zero-valued package var, whose statement stays in main to run as an assignment.
 	r.moduleAssignVars = map[string]bool{}
+	r.moduleAssignPatternNames = map[frontend.Symbol]bool{}
 
 	// Count how many identifiers resolve to each binding so a local declared and
 	// never read can be spotted when its statement lowers. A symbol is unique to
@@ -727,18 +728,24 @@ func (r *Renderer) crossBoundaryModuleNames(entry frontend.Node) map[string]bool
 		collectVarDecls(r.prog, stmt, &decls)
 		for _, d := range decls {
 			kids := r.prog.Children(d)
-			if len(kids) == 0 {
-				continue
-			}
-			name, ok := localName(r.prog.Text(kids[0]))
+			// A destructuring declaration introduces one module binding per leaf, and every
+			// one of them is a name a function body can read, so all of them are registered.
+			// They share the one initializer, which is what the closure growth below walks.
+			names, ok := r.declBindingNames(d)
 			if !ok {
 				continue
 			}
-			if sym, ok := r.prog.SymbolAt(kids[0]); ok {
-				module[sym] = name
-			}
-			if len(kids) == 2 || len(kids) == 3 {
-				initOf[name] = kids[len(kids)-1]
+			for _, nn := range names {
+				name, ok := localName(r.prog.Text(nn))
+				if !ok {
+					continue
+				}
+				if sym, ok := r.prog.SymbolAt(nn); ok {
+					module[sym] = name
+				}
+				if len(kids) == 2 || len(kids) == 3 {
+					initOf[name] = kids[len(kids)-1]
+				}
 			}
 		}
 	}
@@ -1547,12 +1554,20 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 	collectVarDecls(r.prog, stmt, &decls)
 	needsHoist := false
 	for _, d := range decls {
-		kids := r.prog.Children(d)
-		if len(kids) == 0 {
+		// A destructuring declaration introduces one name per leaf, so the test is over
+		// every name the binding target introduces rather than over the first child alone,
+		// which for a pattern is the pattern.
+		names, ok := r.declBindingNames(d)
+		if !ok {
 			continue
 		}
-		if name, ok := localName(r.prog.Text(kids[0])); ok && hoisted[name] {
-			needsHoist = true
+		for _, nn := range names {
+			if name, ok := localName(r.prog.Text(nn)); ok && hoisted[name] {
+				needsHoist = true
+				break
+			}
+		}
+		if needsHoist {
 			break
 		}
 	}
@@ -1567,9 +1582,16 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 		}
 	}
 	// If every initializer is package-init-safe the statement hoists whole, the
-	// cleaner form with no zero-value window and no in-main assignment.
+	// cleaner form with no zero-value window and no in-main assignment. A destructuring
+	// declaration is never that form: its leaves are read out of the source by a run of
+	// statements, and a package-level var spec holds one expression, so a pattern always
+	// takes the in-place assignment below whatever its source is.
 	allSafe := true
 	for _, d := range decls {
+		if r.declIsPattern(d) {
+			allSafe = false
+			break
+		}
 		kids := r.prog.Children(d)
 		if !packageSafeInit(r.prog, kids[len(kids)-1]) {
 			allSafe = false
@@ -1592,7 +1614,14 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 	// never reads an unset package var; a forward or cyclic reference hands back.
 	for _, d := range decls {
 		kids := r.prog.Children(d)
-		sym, ok := r.prog.SymbolAt(kids[0])
+		// A pattern's ordinal is its first leaf's: every leaf of one declaration is
+		// assigned by the same statement, so they share a position in main's source order
+		// and any of them answers for the whole binding.
+		names, ok := r.declBindingNames(d)
+		if !ok || len(names) == 0 {
+			return nil, hoistNone, &NotYetLowerable{Reason: "a module destructuring pattern a function reads has an element shape the hoist cannot name"}
+		}
+		sym, ok := r.prog.SymbolAt(names[0])
 		if !ok {
 			return nil, hoistNone, &NotYetLowerable{Reason: "a hoisted module binding has no resolved symbol"}
 		}
@@ -1602,6 +1631,18 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 	}
 	specs := make([]ast.Spec, 0, len(decls))
 	for _, d := range decls {
+		// A destructuring declaration contributes one package var per leaf and records
+		// them by symbol, so the binds its statement keeps in main store into those vars
+		// rather than declare fresh main locals that would shadow them.
+		if r.declIsPattern(d) {
+			patSpecs, err := r.modulePatternZeroSpecs(d)
+			if err != nil {
+				return nil, hoistNone, err
+			}
+			specs = append(specs, patSpecs...)
+			r.markModulePatternAssign(d)
+			continue
+		}
 		spec, err := r.moduleZeroVarSpec(d)
 		if err != nil {
 			return nil, hoistNone, err
@@ -1633,12 +1674,16 @@ func (r *Renderer) tdzHoistHandback(moduleStmts []frontend.Node, selfIdx int, st
 	collectVarDecls(r.prog, stmt, &decls)
 	bound := map[string]bool{}
 	for _, d := range decls {
-		kids := r.prog.Children(d)
-		if len(kids) == 0 {
+		// Every leaf of a destructuring declaration sits in the same dead zone the
+		// statement's own position opens and closes, so all of them are tested.
+		names, ok := r.declBindingNames(d)
+		if !ok {
 			continue
 		}
-		if name, ok := localName(r.prog.Text(kids[0])); ok && hoisted[name] {
-			bound[name] = true
+		for _, nn := range names {
+			if name, ok := localName(r.prog.Text(nn)); ok && hoisted[name] {
+				bound[name] = true
+			}
 		}
 	}
 	if len(bound) == 0 {
@@ -1871,22 +1916,28 @@ func isInvokedFunctionLiteral(n frontend.Node) bool {
 // an in-place hoist can tell a backward reference (safe, already assigned) from a
 // forward or self reference (unsafe, an unset package var). The ordinal increases in
 // declaration order across every top-level variable statement.
-func moduleBindingOrder(prog *frontend.Program, entry frontend.Node) map[frontend.Symbol]int {
+func (r *Renderer) moduleBindingOrder(entry frontend.Node) map[frontend.Symbol]int {
 	order := map[frontend.Symbol]int{}
 	next := 0
-	for _, stmt := range prog.Children(entry) {
+	for _, stmt := range r.prog.Children(entry) {
 		if stmt.Kind() != frontend.NodeVariableStatement {
 			continue
 		}
 		var decls []frontend.Node
-		collectVarDecls(prog, stmt, &decls)
+		collectVarDecls(r.prog, stmt, &decls)
 		for _, d := range decls {
-			kids := prog.Children(d)
-			if len(kids) == 0 {
+			// A destructuring declaration's leaves all sit at their statement's position, so
+			// they take one ordinal together: a later binding that reads any of them reads
+			// them all after the same assignment has run.
+			names, ok := r.declBindingNames(d)
+			if !ok {
+				next++
 				continue
 			}
-			if sym, ok := prog.SymbolAt(kids[0]); ok {
-				order[sym] = next
+			for _, nn := range names {
+				if sym, ok := r.prog.SymbolAt(nn); ok {
+					order[sym] = next
+				}
 			}
 			next++
 		}

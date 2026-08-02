@@ -706,6 +706,13 @@ type Renderer struct {
 	// set once for the whole program, so it is not scoped or restored the way the
 	// per-body hoist sets are.
 	moduleAssignVars map[string]bool
+	// moduleAssignPatternNames names the module-level destructuring leaves hoisted the
+	// same way, keyed by the symbol the leaf's identifier resolves to rather than by
+	// text. A pattern's statement stays in main and lowers to one bind per leaf, and
+	// those binds have to store into the package vars instead of declaring fresh Go
+	// locals that would shadow them. The symbol is what tells this p from a p a function
+	// body declares of its own, which a text key could not.
+	moduleAssignPatternNames map[frontend.Symbol]bool
 	// typeDepth counts the nesting typeExpr is currently rendering, so a
 	// self-referential type (a function whose return type reaches back to itself, an
 	// object with a property of its own shape) hands back at a bounded depth rather

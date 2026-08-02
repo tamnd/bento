@@ -144,7 +144,7 @@ func TestForwardModuleRefSkipsDeferredClosure(t *testing.T) {
 	prog := compile(t, src)
 	entry := entryFile(t, prog)
 	r := NewRenderer(prog)
-	order := moduleBindingOrder(prog, entry)
+	order := r.moduleBindingOrder(entry)
 
 	var decls []frontend.Node
 	collectKind(prog, []frontend.Node{entry}, frontend.NodeVariableDeclaration, &decls)
@@ -175,7 +175,7 @@ func TestForwardModuleRefDetection(t *testing.T) {
 	prog := compile(t, src)
 	entry := entryFile(t, prog)
 	r := NewRenderer(prog)
-	order := moduleBindingOrder(prog, entry)
+	order := r.moduleBindingOrder(entry)
 
 	var decls []frontend.Node
 	collectKind(prog, []frontend.Node{entry}, frontend.NodeVariableDeclaration, &decls)
