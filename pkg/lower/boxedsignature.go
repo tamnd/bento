@@ -84,6 +84,9 @@ func (r *Renderer) collectBoxedSignatures(files []frontend.Node) {
 		if r.markBoxedLocals(files) {
 			changed = true
 		}
+		if r.markPatternBoxLeaves(files) {
+			changed = true
+		}
 		if r.markBoxedCallbackParams(files) {
 			changed = true
 		}

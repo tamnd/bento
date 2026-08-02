@@ -117,11 +117,13 @@ func (r *Renderer) declIsPattern(d frontend.Node) bool {
 // declaration, one per name the pattern introduces. The statement stays in main and its
 // binds assign into these, so each spec carries the type the leaf's own bind produces.
 //
-// Two shapes hand back here rather than declare a var the bind cannot fill. A leaf whose
-// declared type and narrowed type render to different Go types is one: the bind picks
-// between them per element shape, and a package var can only spell one. A leaf whose slot
-// holds a box is the other, since a box off a destructured source is marked in the
-// per-body dynamic set, which a top-level function reading the name is not inside.
+// A leaf whose slot holds a box declares the package var as one, since the bind that
+// stays in main stores a value.Value into it and every read of the name dispatches
+// through the value model wherever it is.
+//
+// One shape hands back rather than declare a var the bind cannot fill: a leaf whose
+// declared type and narrowed type render to different Go types, since the bind picks
+// between them per element shape and a package var can only spell one.
 func (r *Renderer) modulePatternZeroSpecs(d frontend.Node) ([]ast.Spec, error) {
 	names, ok := r.declBindingNames(d)
 	if !ok {
@@ -129,21 +131,19 @@ func (r *Renderer) modulePatternZeroSpecs(d frontend.Node) ([]ast.Spec, error) {
 	}
 	kids := r.prog.Children(d)
 	initNode := kids[len(kids)-1]
-	if r.isDynamic(initNode) || r.isBoxedChain(initNode) {
-		for _, nn := range names {
-			if !r.dynLeafUnboxes(nn) {
-				return nil, &NotYetLowerable{Reason: "a module destructuring binding whose slot holds a box is a later slice"}
-			}
-		}
-	}
 	specs := make([]ast.Spec, 0, len(names))
 	for _, nn := range names {
 		name, ok := localName(r.prog.Text(nn))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "a hoisted module binding name is not a Go identifier"}
 		}
-		if r.isBoxedLocalRead(nn) {
-			return nil, &NotYetLowerable{Reason: "a module destructuring binding whose slot holds a box is a later slice"}
+		if r.patternLeafBindsABox(nn, initNode) {
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names: []*ast.Ident{ident(name)},
+				Type:  sel("value", "Value"),
+			})
+			continue
 		}
 		declGo, err := r.typeExpr(r.bindingDeclaredType(nn))
 		if err != nil {

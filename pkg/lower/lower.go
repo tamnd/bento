@@ -345,6 +345,13 @@ type Renderer struct {
 	// asking about, so a self-referential declaration does not spin. A nil map (the
 	// default) holds nothing.
 	boxBindVisiting map[frontend.Symbol]bool
+	// patternBoxLeaves is the set of module-level destructuring leaves whose Go slot
+	// holds a value.Value. The body that destructures a pattern records its boxed names
+	// in dynBoundLocals, but that set is keyed by name and lives only while that body
+	// lowers, so a top-level function reading a module leaf has no way to ask it. This
+	// is that answer keyed by symbol and settled before any body lowers, which is what
+	// identifierBindsABox needs to give every read of the name the same answer.
+	patternBoxLeaves map[frontend.Symbol]bool
 	// proxyTargetLocals is the set of local names used as the target of a new Proxy in
 	// the block currently lowering. A proxy holds its target by identity and dispatches
 	// its traps off the live object, so a write through the proxy and a mutation of the

@@ -1298,6 +1298,14 @@ func (r *Renderer) identifierBindsABox(n frontend.Node) bool {
 	if n.Kind() != frontend.NodeIdentifier {
 		return false
 	}
+	// A module-level destructuring leaf holds a box off a boxed source, and the pre-pass
+	// settled which leaves those are before any body lowered. Answering from that set is
+	// what lets a read of the name from a top-level function agree with the binder's own
+	// dynBoundLocals mark, which is keyed by name and lives only inside the body that
+	// destructured the pattern.
+	if r.isPatternBoxLeaf(n) {
+		return true
+	}
 	sym, ok := r.prog.SymbolAt(n)
 	if !ok || r.boxBindVisiting[sym] {
 		return false

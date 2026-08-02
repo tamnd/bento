@@ -1,7 +1,6 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -99,27 +98,5 @@ func TestFunctionLocalPatternIsUntouched(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("a function-local pattern lost its own declaration, want %q:\n%s", want, body)
 		}
-	}
-}
-
-// TestModulePatternBoxedLeafHandsBack pins the edge this slice does not take. A leaf whose
-// slot holds a box is marked in the per-body dynamic set of the body that destructured it,
-// and a top-level function reading the name is not inside that body, so the read would
-// lower against the wrong model. It hands back rather than miscompile.
-func TestModulePatternBoxedLeafHandsBack(t *testing.T) {
-	const src = "type Row = { id: number; tag: string };\n" +
-		"const raw = JSON.parse('{\"a\":{\"id\":1,\"tag\":\"x\"}}') as Record<string, Row>;\n" +
-		"const { a } = raw;\n" +
-		"function tagOf(): string { return a.tag; }\n" +
-		"console.log(tagOf());\n"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
-	}
-	if !strings.Contains(nyl.Reason, "whose slot holds a box") {
-		t.Errorf("hand-back reason %q does not name the box", nyl.Reason)
 	}
 }
