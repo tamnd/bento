@@ -152,6 +152,14 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	// its binds here in main, at its source position, but they store into those vars
 	// rather than declare fresh main locals that would shadow them.
 	hoistedLeaves := r.hoistedPatternTargets(n)
+	// A statement that declares a pattern beside another binding lowers declaration by
+	// declaration, since the two flatteners below take a statement holding one and
+	// nothing else.
+	if stmts, ok, err := r.flattenMixedDeclarators(n, hoistedLeaves); err != nil {
+		return nil, err
+	} else if ok {
+		return stmts, nil
+	}
 	if stmts, ok, err := r.flattenArrayDestructure(n); err != nil {
 		return nil, err
 	} else if ok {
@@ -1466,24 +1474,45 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	// shadow that keeps its own declaration. Gate the parameter test on the kind so a
 	// shadowing let/const stays fresh and still gets its blank when unread.
 	isVar := r.isVarStatement(n)
-	// Note which names are seeing their first Go declaration in this statement before
-	// it lowers, since lowering marks them declared and would otherwise make every
-	// later redeclaration look fresh too.
+	fresh := r.freshBindingMask(decls, isVar)
+	s, err := r.lowerVarStatement(n)
+	if err != nil {
+		return nil, err
+	}
+	return append([]ast.Stmt{s}, r.unusedBindingBlanks(decls, fresh)...), nil
+}
+
+// freshBindingMask reports, per declaration of a variable statement, whether that
+// declaration is the first Go declaration of its name. It is read before the statement
+// lowers, since lowering marks a name declared and would otherwise make every later
+// redeclaration of it look fresh too. Only a `var` shares the enclosing function's
+// scope, so only a `var` redeclares a parameter's binding; a `let` or `const` naming a
+// parameter is a fresh block-scoped shadow, which is why the parameter test is gated on
+// the kind. A destructuring declaration is never fresh here: its target is a pattern
+// rather than a name, it declares one binding per leaf, and its own lowering mints
+// whatever blanks those leaves need.
+func (r *Renderer) freshBindingMask(decls []frontend.Node, isVar bool) []bool {
 	fresh := make([]bool, len(decls))
 	for i, d := range decls {
 		kids := r.prog.Children(d)
-		if len(kids) == 0 {
+		if len(kids) == 0 || r.patternNode(kids[0]) {
 			continue
 		}
 		if name, ok := localName(r.prog.Text(kids[0])); ok {
 			fresh[i] = !r.blockDeclares(name) && !r.hoistedVars[name] && !r.moduleAssignVars[name] && !r.fwdHoistedFunc[name] && (!isVar || !r.scopeParams[name])
 		}
 	}
-	s, err := r.lowerVarStatement(n)
-	if err != nil {
-		return nil, err
-	}
-	out := []ast.Stmt{s}
+	return fresh
+}
+
+// unusedBindingBlanks returns a blank assignment for every freshly declared binding the
+// module never reads, so an unread `var x = e;` keeps running its initializer without
+// tripping Go's declared-and-not-used rule. A binding that is read anywhere gets no
+// blank, and a redeclaration, which lowers to an assignment rather than a second
+// declaration, is not fresh and so gets none either: the blank belongs with the first
+// declaration alone.
+func (r *Renderer) unusedBindingBlanks(decls []frontend.Node, fresh []bool) []ast.Stmt {
+	var out []ast.Stmt
 	for i, d := range decls {
 		if !fresh[i] {
 			continue
@@ -1510,7 +1539,7 @@ func (r *Renderer) lowerVarStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 			})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // varDeclStmt builds a Go statement for a set of variable declaration nodes. It is
