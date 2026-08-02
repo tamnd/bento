@@ -1192,10 +1192,11 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			if r.readOfBoxedCollection(n) {
 				return true
 			}
-			// Array.from over such a collection collects those boxes into one boxed array,
-			// so a method or an element read off the result dispatches rather than reaching
-			// for the Go array the checker's element type would name.
-			if r.arrayFromBoxedColl(n) {
+			// Array.from over such a collection, or over anything else whose slot already
+			// holds a box, collects those boxes into one boxed array, so a method or an
+			// element read off the result dispatches rather than reaching for the Go array
+			// the checker's element type would name.
+			if r.arrayFromBoxedSource(n) {
 				return true
 			}
 			// An iterator result stores its value boxed, so a read of that value with no one
@@ -1342,7 +1343,7 @@ func (r *Renderer) literalHoldsBox(n frontend.Node) bool {
 			// array path at value.Value elements, and reading it as a boxed literal would
 			// change what that spelling has always built.
 			if k.Kind() == frontend.NodeSpreadElement {
-				if r.spreadOfBoxedColl(k) {
+				if r.spreadOfBoxedColl(k) || r.spreadOfUnlandableBox(k) {
 					return true
 				}
 				continue

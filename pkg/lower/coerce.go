@@ -482,11 +482,12 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.arrayProtoBorrowedResultCall(n) {
 		return true
 	}
-	// Array.from over a dynamic source, or with a map callback, lowers to
-	// value.ArrayFromArrayLike, whose result is a boxed value.Value. The checker
-	// types Array.from as a concrete array, so isDynamic recognizes the boxed form
-	// by shape to keep a member or element read off the result on the dynamic path.
-	if r.arrayFromBoxedResultCall(n) {
+	// Array.from over a boxed source lowers to a boxed array, through
+	// value.ArrayFromArrayLike for a dynamic one and boxedCollArray for a collection
+	// the boxed-signature pass rewrote. The checker types Array.from as a concrete
+	// array, so isDynamic recognizes the boxed form by shape to keep a member or
+	// element read off the result on the dynamic path.
+	if r.arrayFromBoxedSource(n) {
 		return true
 	}
 	// A re.exec(s), str.match(re), or str.split(re) call returns the boxed value.Value
@@ -844,38 +845,6 @@ func (r *Renderer) arrayProtoBorrowedResultCall(n frontend.Node) bool {
 	}
 	_, ok := r.arrayProtoMethodName(parts[0])
 	return ok
-}
-
-// arrayFromBoxedResultCall reports whether n is an Array.from call the lowerer
-// routes to value.ArrayFromArrayLike, whose result is a boxed value.Value: the
-// form over a dynamic source, with or without a map callback, as opposed to the
-// copy of a typed array, string, or user iterable. A dynamic source means the
-// surrounding context is dynamic too, so the boxed array flows without a
-// representation mismatch; a map callback over a typed source, whose result the
-// checker types a concrete array, is a later slice and does not take this path.
-// isDynamic recognizes the boxed form by shape so a read off the result stays on
-// the dynamic path whatever array type the checker gave Array.from. The routing
-// in arrayFrom shares this same rule.
-func (r *Renderer) arrayFromBoxedResultCall(n frontend.Node) bool {
-	if n.Kind() != frontend.NodeCallExpression {
-		return false
-	}
-	kids := r.prog.Children(n)
-	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
-		return false
-	}
-	parts := r.prog.Children(kids[0])
-	if len(parts) != 2 || !r.isGlobalRef(parts[0], "Array") || r.prog.Text(parts[1]) != "from" {
-		return false
-	}
-	args := kids[1:]
-	if len(args) < 1 || len(args) > 2 {
-		return false
-	}
-	// A Map or Set whose member slot the boxed-signature pass rewrote collects into a
-	// boxed array too, through boxedCollArray rather than the array-like walk, so a read
-	// off that result has to stay on the dynamic path the same way.
-	return r.isDynamic(args[0]) || r.boxedCollSource(args[0])
 }
 
 // callOfDynamicStorage reports whether n is a call whose callee is a bare
@@ -2515,13 +2484,25 @@ func (r *Renderer) boxArrayLiteral(n frontend.Node) (ast.Expr, error) {
 	}
 	for _, k := range kids {
 		if k.Kind() == frontend.NodeSpreadElement {
-			if !r.spreadOfBoxedColl(k) {
+			var members ast.Expr
+			var err error
+			switch {
+			case r.spreadOfBoxedColl(k):
+				// boxedCollValues is the one reader of what such a spelling yields, shared
+				// with the Array.from that collects the same boxes: a member-yielding
+				// spelling splices the runtime's snapshot, a pair one splices the entries
+				// it builds.
+				members, err = r.boxedCollValues(r.prog.Children(k)[0])
+			case len(r.prog.Children(k)) == 1 && r.spreadsABox(r.prog.Children(k)[0]):
+				// A box drains at run time into the []value.Value this literal is already
+				// made of, so its elements splice as themselves with nothing to convert.
+				// Every box counts here, not just the ones spreadOfUnlandableBox says make
+				// a literal box: that predicate decides what the literal is, and once the
+				// literal is a box a spread of an array of numbers splices the same way.
+				members, err = r.boxedSpreadSlice(r.prog.Children(k)[0], sel("value", "Value"), frontend.Type{}, false)
+			default:
 				return nil, &NotYetLowerable{Reason: "boxing an array literal with a spread element is a later slice"}
 			}
-			// boxedCollValues is the one reader of what such a spelling yields, shared with
-			// the Array.from that collects the same boxes: a member-yielding spelling
-			// splices the runtime's snapshot, a pair one splices the entries it builds.
-			members, err := r.boxedCollValues(r.prog.Children(k)[0])
 			if err != nil {
 				return nil, err
 			}

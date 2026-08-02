@@ -1278,18 +1278,11 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 			// A spread of a boxed value is drained at run time by the same value.Iterate
 			// the for...of and the array-literal spread use, so `f(...os.cpus())` reaches a
 			// rest parameter the same way `[...os.cpus()]` reaches a literal. The drained
-			// values are value.Value, so this stands only where the rest element type is
-			// value.Value too; a boxed spread into a typed rest would need each element
-			// coerced, a different question, and hands back.
-			if r.isDynamic(operand) || r.producesBoxedValue(operand) {
-				same, err := sameGoType(elemGo, sel("value", "Value"))
-				if err != nil {
-					return nil, err
-				}
-				if !same {
-					return nil, &NotYetLowerable{Reason: "a spread of a boxed value into a typed rest parameter is a later slice"}
-				}
-				src, err := r.lowerExpr(operand)
+			// values are value.Value, so a rest of boxes takes them as they stand and a
+			// typed rest brings each one down to its element type, which is the one splice
+			// boxedSpreadSlice builds for both.
+			if r.spreadsABox(operand) {
+				drained, err := r.boxedSpreadSlice(operand, elemGo, elemT, true)
 				if err != nil {
 					return nil, err
 				}
@@ -1297,7 +1290,7 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 				if acc == nil {
 					acc = &ast.CompositeLit{Type: seedType}
 				}
-				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, r.iterateToSliceCall(src, operand)}, Ellipsis: token.Pos(1)}
+				acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
 				continue
 			}
 			return nil, &NotYetLowerable{Reason: "a spread of a non-iterable into a rest parameter is a later slice"}
