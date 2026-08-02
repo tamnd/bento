@@ -1717,6 +1717,27 @@ func (r *Renderer) moduleVarSpec(d frontend.Node) (ast.Spec, error) {
 	if !packageSafeInit(r.prog, initNode) {
 		return nil, &NotYetLowerable{Reason: "a module binding a function reads has an initializer that is not yet hoistable to a package var"}
 	}
+	// A binding whose slot holds a box declares the package var as one, and its
+	// initializer rides in as the box it is. This is buildVarDecl's branch moved up to
+	// package scope: the statement being read from a function changes where the
+	// variable lives and nothing about what is in it.
+	if r.moduleBoxedSlot(d) {
+		boxInit, err := r.lowerExpr(initNode)
+		if err != nil {
+			return nil, err
+		}
+		if !r.isBoxedChain(initNode) && !r.isDynamic(initNode) {
+			if boxInit, err = r.boxStaticToDynamic(boxInit, initNode); err != nil {
+				return nil, err
+			}
+		}
+		r.requireImport(valuePkg)
+		return &ast.ValueSpec{
+			Names:  []*ast.Ident{ident(name)},
+			Type:   sel("value", "Value"),
+			Values: []ast.Expr{boxInit},
+		}, nil
+	}
 	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 	if err != nil {
 		return nil, err
@@ -1744,6 +1765,17 @@ func (r *Renderer) moduleZeroVarSpec(d frontend.Node) (ast.Spec, error) {
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "a hoisted module binding name is not a Go identifier"}
 	}
+	// A binding whose slot holds a box declares the package var as one. The statement
+	// that stays in main assigns the box into it, and every read of the name, in main
+	// and in the functions that made it hoist, already dispatches through the value
+	// model, so this is what keeps the declaration agreeing with both of them.
+	if r.moduleBoxedSlot(d) {
+		r.requireImport(valuePkg)
+		return &ast.ValueSpec{
+			Names: []*ast.Ident{ident(name)},
+			Type:  sel("value", "Value"),
+		}, nil
+	}
 	typ, err := r.typeExpr(r.prog.TypeAt(kids[0]))
 	if err != nil {
 		return nil, err
@@ -1752,6 +1784,24 @@ func (r *Renderer) moduleZeroVarSpec(d frontend.Node) (ast.Spec, error) {
 		Names: []*ast.Ident{ident(name)},
 		Type:  typ,
 	}, nil
+}
+
+// moduleBoxedSlot reports whether a hoisted module binding's Go slot holds a box, so
+// its package var is declared value.Value rather than the type the checker gave the
+// name.
+//
+// It is boxedChainBinding's rule, the same one buildVarDecl reads when it declares the
+// binding inside main and identifierBindsABox reads at every use of the name from
+// anywhere in the program. Asking it here is what stopped the three from disagreeing:
+// the reads dispatched through the value model and the initializer lowered as a box
+// while the package var still spelled the checker's array type, and the emitted Go did
+// not compile.
+func (r *Renderer) moduleBoxedSlot(d frontend.Node) bool {
+	kids := r.prog.Children(d)
+	if len(kids) < 2 || kids[0].Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	return r.boxedChainBinding(kids[0], kids[len(kids)-1])
 }
 
 // forwardModuleRef reports whether an initializer subtree reads a module binding
