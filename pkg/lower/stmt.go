@@ -3462,6 +3462,13 @@ func (r *Renderer) arrayDestructureAssignFill(elems []arrayAssignElem, restNode 
 func (r *Renderer) arrayDestructureValues(targets []frontend.Node, rhs frontend.Node) ([]ast.Expr, error) {
 	switch rhs.Kind() {
 	case frontend.NodeIdentifier:
+		// A source whose slot holds a box reads through the value model, not through the
+		// interned struct the checker's tuple type still names. It routes ahead of the
+		// tuple branch, which would otherwise emit E0 and E1 field reads a value.Value
+		// has not got.
+		if r.isDynBoundReceiver(rhs) {
+			return r.dynDestructureValues(targets, rhs)
+		}
 		// A tuple source reads each target's element as the interned struct's field
 		// rather than through AtI: a tuple's positions are fixed and typed, so [a, b] =
 		// pair lowers to a, b = pair.E0, pair.E1, the assignment-form sibling of the
@@ -3523,6 +3530,37 @@ func (r *Renderer) arrayDestructureValues(targets []frontend.Node, rhs frontend.
 	default:
 		return nil, &NotYetLowerable{Reason: "array destructuring assignment from anything but a plain variable or an array literal needs a temporary, a later slice"}
 	}
+}
+
+// dynDestructureValues lowers the right side of an array destructuring assignment whose
+// source holds a box, `[k, v] = e` where e is the boxed pair a boxed collection yields,
+// into one indexed read per target. A box has no Go fields, so each position is read
+// through the runtime's index and then has to land in whatever slot its target already
+// declared: a target the checker typed a primitive coerces down to that primitive, and
+// a target whose own slot is boxed takes the read as it stands.
+//
+// A target whose slot is a Go struct or another concrete shape hands back rather than
+// assign a box into it. That is the same boundary every other consumer of a box draws,
+// and it is not reachable from the pair a boxed collection yields, whose halves are
+// either boxed themselves or a primitive the checker named.
+func (r *Renderer) dynDestructureValues(targets []frontend.Node, rhs frontend.Node) ([]ast.Expr, error) {
+	r.requireImport(valuePkg)
+	values := make([]ast.Expr, 0, len(targets))
+	for i, tgt := range targets {
+		if !r.dynLeafUnboxes(tgt) && !r.isDynBoundReceiver(tgt) {
+			return nil, &NotYetLowerable{Reason: "an array destructuring assignment from a box into a target whose own slot is not boxed is a later slice"}
+		}
+		recv, err := r.lowerExpr(rhs)
+		if err != nil {
+			return nil, err
+		}
+		read, err := r.unboxDynLeaf(dynIndex(recv, i), tgt)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, read)
+	}
+	return values, nil
 }
 
 // objectDestructureAssign lowers an object destructuring assignment `({ x, y } = o)`

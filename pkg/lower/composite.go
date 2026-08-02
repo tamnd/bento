@@ -574,11 +574,37 @@ func (r *Renderer) arrayFrom(call frontend.Node, argNodes []frontend.Node) (ast.
 }
 
 // boxedCollArray collects a Map or Set whose member slot the boxed-signature pass
-// rewrote into a boxed array of those members. The runtime's snapshot is already a
-// []value.Value, so the collection is the same append into a fresh slice a spread of the
-// collection into an array literal makes, wrapped as the one array value every read off
-// the result then dispatches through.
+// rewrote into a boxed array of what it yields. The slice is appended into a fresh one so
+// the array does not alias the runtime's own snapshot, the same copy a spread of the
+// collection into an array literal makes, and it is wrapped as the one array value every
+// read off the result then dispatches through.
 func (r *Renderer) boxedCollArray(src frontend.Node) (ast.Expr, error) {
+	members, err := r.boxedCollValues(src)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	copied := &ast.CallExpr{
+		Fun:      ident("append"),
+		Args:     []ast.Expr{&ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "Value")}}, members},
+		Ellipsis: token.Pos(1),
+	}
+	return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{copied}}, nil
+}
+
+// boxedCollValues lowers a Map or Set spelling whose slot the boxed-signature pass
+// rewrote to the []value.Value of what that spelling yields. It is the one reader both
+// consumers of those boxes go through, the spread that splices them into a boxed array
+// literal and the Array.from that collects them, the way collSnapshotSlice is the one
+// reader for the collections this pass left alone.
+//
+// A member-yielding spelling reads the runtime's own snapshot, which is already a
+// []value.Value once the slot is boxed. A pair spelling has no snapshot to read, since
+// an entry with a box in one half is the boxed two-element array the entry builder mints.
+func (r *Renderer) boxedCollValues(src frontend.Node) (ast.Expr, error) {
+	if r.boxedCollPairSource(src) {
+		return r.boxedCollPairSlice(src)
+	}
 	recv, accessor := src, "Members"
 	if rn, acc, _, ok := r.collIterAccessor(src); ok {
 		recv, accessor = rn, acc
@@ -587,13 +613,7 @@ func (r *Renderer) boxedCollArray(src frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.requireImport(valuePkg)
-	copied := &ast.CallExpr{
-		Fun:      ident("append"),
-		Args:     []ast.Expr{&ast.CompositeLit{Type: &ast.ArrayType{Elt: sel("value", "Value")}}, collCall(lowered, accessor)},
-		Ellipsis: token.Pos(1),
-	}
-	return &ast.CallExpr{Fun: sel("value", "NewArrayValue"), Args: []ast.Expr{copied}}, nil
+	return collCall(lowered, accessor), nil
 }
 
 // arrayFromColl collects the members a Map or Set yields into a fresh array and reports

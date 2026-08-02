@@ -655,11 +655,12 @@ func TestAReadOffABoxedCollectionBindsABox(t *testing.T) {
 	}
 }
 
-// TestABoxedCollectionSpellingWithNoSlotYetHandsBack keeps the boundary honest at the two
-// spellings this slice does not reach. A weak collection is generic over the pointee it
-// holds weakly and a value.Value is not a pointer, and the [key, value] pair materializes
-// into an interned tuple whose field types are the tuple's own slot to give way. Neither
-// is Go that could be emitted from what exists, so both hand back rather than miscompile.
+// TestABoxedCollectionSpellingWithNoSlotYetHandsBack keeps the boundary honest at the
+// spelling this pass still does not reach. A weak collection is generic over the pointee
+// it holds weakly and a value.Value is not a pointer, so there is no Go that could be
+// emitted from what exists and it hands back rather than miscompile. The [key, value]
+// pair used to sit here too and now lowers, by giving way and materializing as the boxed
+// two-element array an entry is, which boxed_collection_pair_test.go covers.
 func TestABoxedCollectionSpellingWithNoSlotYetHandsBack(t *testing.T) {
 	for name, tc := range map[string]struct{ src, reason string }{
 		"weak set": {
@@ -670,10 +671,6 @@ func TestABoxedCollectionSpellingWithNoSlotYetHandsBack(t *testing.T) {
 			"const w = new WeakMap<Row, number>();\n" +
 				"w.set(m['a'], 1);\nconsole.log(w.has(m['a']));",
 			"weak collection whose member slot holds a box"},
-		"map entry pair": {
-			"const mm = new Map<string, Row>();\nmm.set('a', m['a']);\n" +
-				"for (const e of mm.entries()) { console.log(e); }",
-			"whose slot holds a box is a later slice"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			reason := renderProgramHandBack(t, boxedSigPrelude+tc.src)
