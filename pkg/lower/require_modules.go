@@ -397,6 +397,7 @@ func (r *Renderer) lowerRequiredModuleBody(file frontend.Node) ([]ast.Stmt, bool
 	// module's bindings are all loader locals. The in-place module-assignment set is
 	// reset for the same reason the entry resets it.
 	r.moduleAssignVars = map[string]bool{}
+	r.moduleAssignPatternNames = map[frontend.Symbol]bool{}
 	r.programStrict = r.hasUseStrictPrologue(file)
 
 	// The use counts drive the blank-declaration decision the same way they do for the
