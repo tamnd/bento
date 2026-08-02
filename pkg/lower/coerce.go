@@ -872,7 +872,10 @@ func (r *Renderer) arrayFromBoxedResultCall(n frontend.Node) bool {
 	if len(args) < 1 || len(args) > 2 {
 		return false
 	}
-	return r.isDynamic(args[0])
+	// A Map or Set whose member slot the boxed-signature pass rewrote collects into a
+	// boxed array too, through boxedCollArray rather than the array-like walk, so a read
+	// off that result has to stay on the dynamic path the same way.
+	return r.isDynamic(args[0]) || r.boxedCollSource(args[0])
 }
 
 // callOfDynamicStorage reports whether n is a call whose callee is a bare

@@ -1192,6 +1192,12 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			if r.readOfBoxedCollection(n) {
 				return true
 			}
+			// Array.from over such a collection collects those boxes into one boxed array,
+			// so a method or an element read off the result dispatches rather than reaching
+			// for the Go array the checker's element type would name.
+			if r.arrayFromBoxedColl(n) {
+				return true
+			}
 			// An iterator result stores its value boxed, so a read of that value with no one
 			// Go type to come down to is a box. The member lowering already decides this for
 			// itself; reading the same answer here is what lets a `!` on it erase rather than

@@ -1233,7 +1233,7 @@ func (r *Renderer) gatherRest(rest frontend.Param, restNodes []frontend.Node) (a
 		// slice the array-literal spread builds. The rest element type must be the matching
 		// two-element tuple, so this is checked before the keys()/values() accessor path,
 		// which an entries() call also matches on receiver.
-		if members, ok, err := r.spreadCollEntries(operand, elemT, true); ok {
+		if members, ok, err := r.collEntriesTuples(operand, elemT, true); ok {
 			if err != nil {
 				return nil, err
 			}
