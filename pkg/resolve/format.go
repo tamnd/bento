@@ -6,6 +6,14 @@ import (
 	"github.com/tamnd/bento/pkg/cpath"
 )
 
+// FormatOf reports how a file on disk should be parsed, so a caller holding a
+// path rather than a Resolved can ask the same question the resolver answers
+// for itself. A loader needs this to describe the file an import is written in:
+// a require in a .js file and an import in a .mjs file are different questions
+// and get different answers, and a loader that guesses one for both asks the
+// wrong one half the time.
+func (r *Resolver) FormatOf(path string) Format { return r.detectFormat(path) }
+
 // detectFormat decides how a resolved file should be parsed. Extension wins for
 // the unambiguous cases; the ambiguous .ts/.js family defers to the nearest
 // package.json "type". Content is never sniffed.

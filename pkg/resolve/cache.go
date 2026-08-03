@@ -11,11 +11,14 @@ type cache struct {
 }
 
 // resolutionKey identifies a resolution question. The parent directory and the
-// active conditions both change the answer, so both are part of the key.
+// active conditions both change the answer, and so does whether the importer is
+// ESM or CommonJS, since a require and an import search different extensions.
+// All four are part of the key.
 type resolutionKey struct {
 	dir        string
 	specifier  string
 	conditions string
+	esm        bool
 }
 
 func newCache() *cache {

@@ -162,6 +162,33 @@ type Options struct {
 // code, and .node is last. This is a documented bento choice, not Node parity.
 var DefaultExtensions = []string{".ts", ".tsx", ".mjs", ".cjs", ".js", ".jsx", ".json", ".node"}
 
+// searchExtensions returns the extension order for one resolution context.
+//
+// A require never resolves to .mjs. Node's CommonJS resolver searches .js,
+// .json and .node and stops; .mjs means ESM by definition, and handing a
+// require an ESM file is not a near miss, it is the wrong module. A package
+// that ships both index.js and index.mjs is shipping a CommonJS entry and an
+// ESM entry side by side, and require means the first one. Node's own test
+// suite does exactly this in test/common, so getting the order wrong costs a
+// fifth of the suite.
+//
+// bento searches more extensions than Node does, TypeScript first, which is a
+// documented choice. Dropping .mjs from a require is not a departure from that
+// choice; it is the one rule the extra extensions must not break.
+func (r *Resolver) searchExtensions(esm bool) []string {
+	if esm {
+		return r.extensions
+	}
+	out := make([]string, 0, len(r.extensions))
+	for _, ext := range r.extensions {
+		if ext == ".mjs" {
+			continue
+		}
+		out = append(out, ext)
+	}
+	return out
+}
+
 // DefaultImportConditions is the condition set for an import context. "bento"
 // comes first so a package can ship a bento-specific build.
 var DefaultImportConditions = []string{"bento", "node", "import", "default"}

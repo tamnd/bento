@@ -14,7 +14,7 @@ import (
 // import the way the source spells it.
 func (r *Resolver) resolveFileSpecifier(path, specifier string, parent *Module) (Resolved, error) {
 	dir := parentDir(parent)
-	key := resolutionKey{dir: dir, specifier: specifier, conditions: r.conditionKey()}
+	key := resolutionKey{dir: dir, specifier: specifier, conditions: r.conditionKey(), esm: parent != nil && parent.Format == FormatESM}
 	if hit, ok := r.cache.get(key); ok {
 		return hit, nil
 	}
@@ -27,6 +27,7 @@ func (r *Resolver) resolveFileSpecifier(path, specifier string, parent *Module) 
 	}
 
 	esm := parent != nil && parent.Format == FormatESM
+	key.esm = esm
 	found, err := r.resolveFile(target, specifier, parent, esm)
 	if err != nil {
 		return Resolved{}, err
@@ -50,11 +51,11 @@ func (r *Resolver) resolveFile(target, specifier string, parent *Module, esm boo
 	allowSearch := !esm || r.dev
 	allowIndex := !esm || r.dev
 
-	if p, ok := r.resolveAsFile(target, allowSearch); ok {
+	if p, ok := r.resolveAsFile(target, allowSearch, esm); ok {
 		return p, nil
 	}
 	if allowIndex {
-		if p, ok := r.resolveAsDirectory(target); ok {
+		if p, ok := r.resolveAsDirectory(target, esm); ok {
 			return p, nil
 		}
 	}
@@ -62,8 +63,10 @@ func (r *Resolver) resolveFile(target, specifier string, parent *Module, esm boo
 }
 
 // resolveAsFile tries a path as a file: exactly as given, then via the TS
-// extension rewrite, then via extension search when allowed.
-func (r *Resolver) resolveAsFile(target string, allowSearch bool) (string, bool) {
+// extension rewrite, then via extension search when allowed. esm says which
+// context is asking, because a require and an import do not search the same
+// extensions.
+func (r *Resolver) resolveAsFile(target string, allowSearch, esm bool) (string, bool) {
 	if r.fileExists(target) {
 		return target, true
 	}
@@ -71,7 +74,7 @@ func (r *Resolver) resolveAsFile(target string, allowSearch bool) (string, bool)
 		return rewritten, true
 	}
 	if allowSearch {
-		for _, ext := range r.extensions {
+		for _, ext := range r.searchExtensions(esm) {
 			candidate := target + ext
 			if r.fileExists(candidate) {
 				return candidate, true
@@ -112,30 +115,30 @@ var tsSiblings = map[string][]string{
 
 // resolveAsDirectory resolves a directory to its entry: the package.json main
 // first, then an index file in extension order.
-func (r *Resolver) resolveAsDirectory(dir string) (string, bool) {
+func (r *Resolver) resolveAsDirectory(dir string, esm bool) (string, bool) {
 	if !r.dirExists(dir) {
 		return "", false
 	}
 	if pkg, err := r.readPackageJSON(cpath.Join(dir, "package.json")); err == nil && pkg != nil {
 		if main := pkg.mainEntry(r.conditions); main != "" {
 			target := cpath.Join(dir, main)
-			if p, ok := r.resolveAsFile(target, true); ok {
+			if p, ok := r.resolveAsFile(target, true, esm); ok {
 				return p, true
 			}
 			// A main pointing at a directory recurses to its index.
 			if r.dirExists(target) {
-				if p, ok := r.resolveIndex(target); ok {
+				if p, ok := r.resolveIndex(target, esm); ok {
 					return p, true
 				}
 			}
 		}
 	}
-	return r.resolveIndex(dir)
+	return r.resolveIndex(dir, esm)
 }
 
 // resolveIndex tries index.<ext> in a directory in extension order.
-func (r *Resolver) resolveIndex(dir string) (string, bool) {
-	for _, ext := range r.extensions {
+func (r *Resolver) resolveIndex(dir string, esm bool) (string, bool) {
+	for _, ext := range r.searchExtensions(esm) {
 		candidate := cpath.Join(dir, "index"+ext)
 		if r.fileExists(candidate) {
 			return candidate, true
