@@ -293,7 +293,7 @@ func (r *Renderer) collectDynPatternNames(pat frontend.Node, out map[string]bool
 	}
 	for _, el := range fixed {
 		info, err := r.classifyArrayElem(el)
-		if err != nil {
+		if err != nil || info.hole {
 			continue
 		}
 		if info.nested != nil {
@@ -335,7 +335,7 @@ func (r *Renderer) collectDynRestNames(pat frontend.Node, out map[string]bool) {
 		}
 		for _, el := range fixed {
 			info, err := r.classifyArrayElem(el)
-			if err != nil {
+			if err != nil || info.hole {
 				continue
 			}
 			if info.nested != nil {
@@ -456,6 +456,9 @@ func (r *Renderer) bindDynamicArray(pat frontend.Node, recv ast.Expr, tok token.
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, err
+		}
+		if info.hole {
+			continue
 		}
 		read := dynIndex(recv, i)
 		if info.nested != nil {

@@ -78,11 +78,12 @@ func TestDeclaratorsLowerInSourceOrder(t *testing.T) {
 // goes through the same destructure cores a statement holding one alone goes through, so
 // a shape they do not lower yet hands back with their own reason. It must not fall
 // through to the plain path, which would spell the pattern as a mangled name and emit a
-// program that does not build, which is what a hole did before this.
+// program that does not build. A string source is such a shape: the pattern type-checks,
+// since a string is iterable, but the positional read needs an array to index.
 func TestPatternBesideANameHandsBackOnAShapeItCannotLower(t *testing.T) {
-	const src = "const arr: number[] = [1, 2];\n" +
-		"const [, s] = arr, z = 1;\n" +
-		"console.log(s, z);\n"
+	const src = "const word = \"ab\";\n" +
+		"const [c0, c1] = word, z = 1;\n" +
+		"console.log(c0, c1, z);\n"
 	prog := compile(t, src)
 	r := NewRenderer(prog)
 	_, err := r.RenderProgram(entryFile(t, prog))
@@ -90,7 +91,7 @@ func TestPatternBesideANameHandsBackOnAShapeItCannotLower(t *testing.T) {
 	if !errors.As(err, &nyl) {
 		t.Fatalf("want a hand-back, got %v", err)
 	}
-	if !strings.Contains(nyl.Reason, "hole or rest") {
+	if !strings.Contains(nyl.Reason, "non-array or tuple source") {
 		t.Errorf("want the destructure path's own reason, got %q", nyl.Reason)
 	}
 }

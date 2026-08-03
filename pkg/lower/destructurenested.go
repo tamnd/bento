@@ -230,6 +230,9 @@ func (r *Renderer) bindSubArrayAssign(pat frontend.Node, recv ast.Expr, patType 
 		if err != nil {
 			return nil, err
 		}
+		if el.hole {
+			continue
+		}
 		name, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "array assignment target is not a Go identifier"}
@@ -398,6 +401,11 @@ func (r *Renderer) bindSubArray(pat frontend.Node, recv ast.Expr, patType fronte
 		if err != nil {
 			return nil, err
 		}
+		// A hole binds nothing, so its position is stepped over and no read is emitted
+		// for it; the elements after it keep the indices the hole held open.
+		if info.hole {
+			continue
+		}
 		if info.nested != nil {
 			tmp := r.freshTemp()
 			read := &ast.CallExpr{
@@ -500,6 +508,9 @@ func (r *Renderer) bindSubTuple(pat frontend.Node, recv ast.Expr, patType fronte
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, err
+		}
+		if info.hole {
+			continue
 		}
 		if info.nested != nil || info.hasDefault {
 			return nil, &NotYetLowerable{Reason: "a tuple destructuring nested pattern or defaulted element is a later slice"}

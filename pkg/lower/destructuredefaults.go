@@ -26,15 +26,20 @@ type arrayDefaultElem struct {
 	hasDefault bool
 	defNode    frontend.Node
 	nested     frontend.Node
+	hole       bool
 }
 
 // classifyArrayElem reads one array binding pattern element into an
 // arrayDefaultElem. A single identifier child is a plain name; a single array or
 // object pattern child is a nested pattern, `[[a, b]]` or `[{x}]`, whose inner
 // pattern binds against the slot the outer element selects; an identifier followed
-// by an expression is a defaulted name, `[a = d]`. A hole or a rest is a later
-// slice, so it hands back rather than mislowering.
+// by an expression is a defaulted name, `[a = d]`. An empty element is a hole, which
+// binds nothing and holds only its position. A rest is a later slice, so it hands back
+// rather than mislowering.
 func (r *Renderer) classifyArrayElem(el frontend.Node) (arrayDefaultElem, error) {
+	if r.arrayHoleElem(el) {
+		return arrayDefaultElem{hole: true}, nil
+	}
 	ec := r.prog.Children(el)
 	switch {
 	case len(ec) == 1 && ec[0].Kind() == frontend.NodeIdentifier:
@@ -47,7 +52,7 @@ func (r *Renderer) classifyArrayElem(el frontend.Node) (arrayDefaultElem, error)
 		}
 		return arrayDefaultElem{nameNode: ec[0], hasDefault: true, defNode: ec[1]}, nil
 	default:
-		return arrayDefaultElem{}, &NotYetLowerable{Reason: "an array destructuring hole or rest is a later slice"}
+		return arrayDefaultElem{}, &NotYetLowerable{Reason: "an array destructuring element that is neither a name, a nested pattern, a default, nor a hole is a later slice"}
 	}
 }
 
@@ -213,13 +218,18 @@ type arrayAssignElem struct {
 	hasDefault bool
 	defNode    frontend.Node
 	memberNode frontend.Node
+	hole       bool
 }
 
 // classifyArrayAssignElem reads one array assignment target into an arrayAssignElem.
 // A bare identifier is a plain target; an `a = d` binary expression is a defaulted
-// target; a property access `o.a` is a member target the element stores into. A hole,
-// a rest, a nested pattern, or an element-access target is a later slice.
+// target; a property access `o.a` is a member target the element stores into; an empty
+// element is a hole, which stores nowhere and holds only its position. A rest, a nested
+// pattern, or an element-access target is a later slice.
 func (r *Renderer) classifyArrayAssignElem(tgt frontend.Node) (arrayAssignElem, error) {
+	if r.arrayHoleElem(tgt) {
+		return arrayAssignElem{hole: true}, nil
+	}
 	if tgt.Kind() == frontend.NodeIdentifier {
 		return arrayAssignElem{nameNode: tgt}, nil
 	}
@@ -230,7 +240,7 @@ func (r *Renderer) classifyArrayAssignElem(tgt frontend.Node) (arrayAssignElem, 
 	if tgt.Kind() == frontend.NodeBinaryExpression && len(c) == 3 && r.prog.Text(c[1]) == "=" && c[0].Kind() == frontend.NodeIdentifier {
 		return arrayAssignElem{nameNode: c[0], hasDefault: true, defNode: c[2]}, nil
 	}
-	return arrayAssignElem{}, &NotYetLowerable{Reason: "an array assignment hole, rest, nested pattern, or element-access target is a later slice"}
+	return arrayAssignElem{}, &NotYetLowerable{Reason: "an array assignment rest, nested pattern, or element-access target is a later slice"}
 }
 
 // objectAssignElem describes one target of an object destructuring assignment,

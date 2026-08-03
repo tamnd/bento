@@ -1041,7 +1041,7 @@ func (r *Renderer) patternBoundNames(pat frontend.Node) []string {
 			continue
 		}
 		info, err := r.classifyArrayElem(el)
-		if err != nil {
+		if err != nil || info.hole {
 			continue
 		}
 		if info.nested != nil {
@@ -2552,6 +2552,12 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 		if err != nil {
 			return nil, true, err
 		}
+		// A hole names nothing, so there is nothing to validate and nothing to read; it
+		// is carried through so the emit loop steps over the position it holds.
+		if info.hole {
+			infos[i] = info
+			continue
+		}
 		// A nested pattern binds against the slot the outer element selects, so its
 		// inner names are validated when the sub-pattern is bound, not here.
 		if info.nested != nil {
@@ -2653,7 +2659,7 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 	} else {
 		anyRead := hasRest
 		for i := range infos {
-			if !defaultAlways[i] {
+			if !defaultAlways[i] && !infos[i].hole {
 				anyRead = true
 				break
 			}
@@ -2668,7 +2674,18 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 			// the source may hold side effects, let [z = ""] = [f()] still calling f. Evaluate
 			// it once to the blank so the effect survives without a temp Go would flag unused;
 			// a plain variable source has no effect to keep, so it needs no draw at all.
-			if initNode.Kind() != frontend.NodeIdentifier {
+			//
+			// A pattern of nothing but holes, const [, ,] = arr, is the one exception: it
+			// binds no name at all, so a plain variable source would go untouched and Go
+			// would call it declared and not used, where the destructure is the read.
+			allHoles := true
+			for i := range infos {
+				if !infos[i].hole {
+					allHoles = false
+					break
+				}
+			}
+			if initNode.Kind() != frontend.NodeIdentifier || allHoles {
 				lowered, lerr := r.lowerExpr(initNode)
 				if lerr != nil {
 					return nil, true, lerr
@@ -2682,6 +2699,11 @@ func (r *Renderer) arrayDestructureDecl(decl frontend.Node) ([]ast.Stmt, bool, e
 	}
 	stmts := prefix
 	for i, info := range infos {
+		// A hole binds nothing, so the position it holds open is stepped over and no read
+		// is emitted for it; the elements after it keep the indices they had.
+		if info.hole {
+			continue
+		}
 		if defaultAlways[i] {
 			// The always-undefined element makes the read dead, so the source is not drawn
 			// for this position and the binding takes the default directly.
@@ -3387,6 +3409,12 @@ func (r *Renderer) arrayDestructureAssign(bin frontend.Node) (ast.Stmt, bool, er
 	}
 	names := make([]ast.Expr, 0, len(fixedTargets))
 	for _, el := range elems {
+		// A hole stores nowhere, so its slot is still read to keep the parallel assignment
+		// aligned with the positions and the read goes to the blank.
+		if el.hole {
+			names = append(names, ident("_"))
+			continue
+		}
 		if el.memberNode != nil {
 			lhs, err := r.memberAssignTarget(el.memberNode)
 			if err != nil {
@@ -3430,6 +3458,11 @@ func (r *Renderer) arrayDestructureAssignFill(elems []arrayAssignElem, restNode 
 	}
 	out := make([]ast.Stmt, 0, len(elems))
 	for i, el := range elems {
+		// A hole stores nowhere, and this path reads element by element rather than in
+		// parallel, so its position needs no statement at all.
+		if el.hole {
+			continue
+		}
 		name, ok := localName(r.prog.Text(el.nameNode))
 		if !ok {
 			return nil, true, &NotYetLowerable{Reason: "array assignment target is not a Go identifier"}
@@ -3516,14 +3549,18 @@ func (r *Renderer) arrayDestructureValues(targets []frontend.Node, rhs frontend.
 		}
 		values := make([]ast.Expr, 0, len(targets))
 		for i, tgt := range targets {
-			tgtGo, err := r.typeExpr(r.prog.TypeAt(tgt))
-			if err != nil {
-				return nil, err
-			}
-			if same, err := sameGoType(tgtGo, elemGo); err != nil {
-				return nil, err
-			} else if !same {
-				return nil, &NotYetLowerable{Reason: "array destructuring assignment where a target's type differs from the array element type is a later slice"}
+			// A hole has no target to agree with, since the read goes to the blank, so the
+			// type match every other position must pass does not apply to it.
+			if !r.arrayHoleElem(tgt) {
+				tgtGo, err := r.typeExpr(r.prog.TypeAt(tgt))
+				if err != nil {
+					return nil, err
+				}
+				if same, err := sameGoType(tgtGo, elemGo); err != nil {
+					return nil, err
+				} else if !same {
+					return nil, &NotYetLowerable{Reason: "array destructuring assignment where a target's type differs from the array element type is a later slice"}
+				}
 			}
 			recv, err := r.lowerExpr(rhs)
 			if err != nil {
@@ -3549,9 +3586,13 @@ func (r *Renderer) arrayDestructureValues(targets []frontend.Node, rhs frontend.
 			if err != nil {
 				return nil, err
 			}
-			v, err = r.coerceToTarget(v, el, targets[i])
-			if err != nil {
-				return nil, err
+			// A hole's element is still evaluated, since a literal source evaluates every
+			// element it holds, but it lands in the blank and so has no target to coerce to.
+			if !r.arrayHoleElem(targets[i]) {
+				v, err = r.coerceToTarget(v, el, targets[i])
+				if err != nil {
+					return nil, err
+				}
 			}
 			values = append(values, v)
 		}
@@ -3576,16 +3617,22 @@ func (r *Renderer) dynDestructureValues(targets []frontend.Node, rhs frontend.No
 	r.requireImport(valuePkg)
 	values := make([]ast.Expr, 0, len(targets))
 	for i, tgt := range targets {
-		if !r.dynLeafUnboxes(tgt) && !r.isDynBoundReceiver(tgt) {
+		// A hole lands in the blank, so it takes the boxed read as it stands: there is no
+		// target slot for it to unbox into and so none to refuse either.
+		hole := r.arrayHoleElem(tgt)
+		if !hole && !r.dynLeafUnboxes(tgt) && !r.isDynBoundReceiver(tgt) {
 			return nil, &NotYetLowerable{Reason: "an array destructuring assignment from a box into a target whose own slot is not boxed is a later slice"}
 		}
 		recv, err := r.lowerExpr(rhs)
 		if err != nil {
 			return nil, err
 		}
-		read, err := r.unboxDynLeaf(dynIndex(recv, i), tgt)
-		if err != nil {
-			return nil, err
+		read := dynIndex(recv, i)
+		if !hole {
+			read, err = r.unboxDynLeaf(read, tgt)
+			if err != nil {
+				return nil, err
+			}
 		}
 		values = append(values, read)
 	}
