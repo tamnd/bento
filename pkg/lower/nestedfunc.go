@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 
@@ -29,8 +30,19 @@ import (
 // would still be nil there where JavaScript already has the function. So the
 // closure's binding moves up to just before the statement that reads it, which is
 // as early as it can go while still capturing only names Go has already declared.
-// If the body reads something declared at or after that point, the move would
-// capture a Go local that does not exist yet, and the unit hands back instead.
+//
+// A helper the moving body reads that is itself declared below that point comes
+// along to the same statement, since the same question has the same answer for it.
+// A local the body reads that is declared below that point does not, and there is
+// nowhere left to move to.
+//
+// If the early read only passes the function along as a value, the binding it needs
+// is a forwarder: `name` is assigned at the top of the block a closure that does
+// nothing but call `nameImpl`, and `nameImpl` takes the real body at the
+// declaration's own position, where every local it reads exists. The value handed
+// out early is the one that gets called later, which is what the source promised.
+// Only an early call is left over, since the forwarder would find no body yet, and
+// that hands back.
 //
 // The same holds for a name that collides with an enclosing parameter, a `this`
 // read whose binding a plain closure does not carry, and the async, generator,
@@ -44,14 +56,26 @@ import (
 // whether that move has already emitted it so its own position emits nothing, and
 // whether anything reads the local (so an unread helper gets a blank assignment
 // rather than trip Go's declared-and-not-used).
+//
+// thunk and implName carry the forwarder form, the answer for a body that reads a
+// local declared below the statement the binding would have to move to: the local
+// the source names holds a closure that calls implName, and implName takes the real
+// body at the declaration's own position. needMove lists the sibling function
+// declarations this one reads that sit below its destination and so come along to
+// it, and insertIdx is that destination's index among the siblings, which is how two
+// moves of the same declaration settle on the earlier one.
 type nestedFuncPlan struct {
 	goName       string
 	recursive    bool
 	hoisted      bool
 	insertBefore frontend.Node
+	insertIdx    int
 	moved        bool
 	emitted      bool
 	used         bool
+	thunk        bool
+	implName     string
+	needMove     []frontend.Node
 }
 
 // paramNameSet gives the set of Go parameter names a signature binds, the guard a
@@ -140,6 +164,27 @@ func (r *Renderer) enterNestedFuncScope(nodes []frontend.Node) (func(), error) {
 		r.nestedFuncOrder = prevOrder
 		return noop, nil
 	}
+	// A closure that moved up the block reads siblings declared below where it landed,
+	// and those come along to the same statement so they hold their bodies by the time
+	// it runs. Their plans only exist now, once every declaration has been walked, so
+	// this is the earliest the move can say so. A declaration two moves want settles on
+	// the earlier destination, which is the one both readers see.
+	for _, n := range r.nestedFuncOrder {
+		plan := r.nestedFuncPlans[n]
+		if !plan.moved {
+			continue
+		}
+		for _, dep := range plan.needMove {
+			dp, ok := r.nestedFuncPlans[dep]
+			if !ok {
+				continue
+			}
+			dp.hoisted = true
+			if !dp.moved || plan.insertIdx < dp.insertIdx {
+				dp.moved, dp.insertBefore, dp.insertIdx = true, plan.insertBefore, plan.insertIdx
+			}
+		}
+	}
 	return restore, nil
 }
 
@@ -226,22 +271,35 @@ func (r *Renderer) nestedFuncLowerable(fn frontend.Node, siblings []frontend.Nod
 	// that still sees everything the source declared above it.
 	hoisted := false
 	moved := false
+	thunk := false
+	insertIdx := 0
 	var insertBefore frontend.Node
+	var needMove []frontend.Node
 	for j := range idx {
 		if !r.subtreeReferencesSymbol(siblings[j], sym) {
 			continue
 		}
 		hoisted = true
-		if !moved && r.eagerlyReferencesSymbol(siblings[j], sym, false) {
-			moved, insertBefore = true, siblings[j]
-			// The closure binds where the block has only run the statements above this
-			// sibling, so a name declared at or below it is a Go local that does not exist
-			// yet. JavaScript's hoisting has no such limit, so this hands back rather than
-			// pick between a Go build failure and a binding that reads the wrong thing.
-			if r.capturesSiblingDeclaredFrom(body, siblings, j, fn, sym) {
-				return frontend.Symbol{}, nil, &NotYetLowerable{Reason: "a nested function called before its declaration needs hoisting, a later slice"}
-			}
+		if moved || thunk || !r.eagerlyReferencesSymbol(siblings[j], sym, false) {
+			continue
 		}
+		// The closure binds where the block has only run the statements above this
+		// sibling, so a name declared at or below it is a Go local that does not exist
+		// yet. A sibling function declaration is not one of those on its own account,
+		// because it can come along to the same place; the rest are, and they are what
+		// decides between moving the closure and forwarding to it.
+		ok, need := r.movableTo(fn, siblings, j, map[frontend.Node]bool{})
+		if ok {
+			moved, insertBefore, insertIdx, needMove = true, siblings[j], j, need
+			continue
+		}
+		// The forwarder needs a body by the time it is called, and it is assigned one at
+		// the declaration's own position, below here. So a sibling that hands the name
+		// along as a value is fine and one that calls it is not, and the call hands back.
+		if r.anySiblingEagerlyCalls(siblings, idx, sym) {
+			return frontend.Symbol{}, nil, &NotYetLowerable{Reason: "a nested function called before its declaration needs hoisting, a later slice"}
+		}
+		thunk = true
 	}
 	recursive := r.subtreeReferencesSymbol(body, sym)
 	used := recursive
@@ -261,35 +319,75 @@ func (r *Renderer) nestedFuncLowerable(fn frontend.Node, siblings []frontend.Nod
 		recursive:    recursive,
 		hoisted:      hoisted,
 		insertBefore: insertBefore,
+		insertIdx:    insertIdx,
 		moved:        moved,
 		used:         used,
+		thunk:        thunk,
+		implName:     goName + "Impl",
+		needMove:     needMove,
 	}, nil
 }
 
-// capturesSiblingDeclaredFrom reports whether a function body reads a name one of
-// the siblings from index from onward declares, skipping the function's own
-// declaration and its own name. It is the guard on moving a closure's binding up the
-// block: the closure captures Go locals lexically, so it can only go somewhere every
-// name it reads is already declared, and a name bound at or below the destination is
-// not.
+// movableTo reports whether a nested function declaration's binding can move to
+// sibling index from, and returns the sibling declarations that have to come along
+// with it. A closure captures Go locals lexically, so it can only go somewhere every
+// name it reads already exists, and the siblings from that index onward are the ones
+// that do not.
 //
-// The scan is over declared symbols rather than text, so an inner block's own local
-// spelling the same name does not count, and it covers a function declaration as well
-// as a variable one, since a helper bound below the destination is exactly as absent
-// there as a const is.
-func (r *Renderer) capturesSiblingDeclaredFrom(body frontend.Node, siblings []frontend.Node, from int, self frontend.Node, selfSym frontend.Symbol) bool {
+// A sibling function declaration is the case that does not settle it on its own,
+// because it can move to the same place. So it is asked the same question in turn,
+// and comes along when the answer is yes. Moving it rather than only declaring it at
+// the top of the block is what makes the order safe whatever the moved body does
+// with it: a helper handed to a call that runs it on the spot has its body by then,
+// where a bare declaration would have left nil.
+//
+// Anything else a sibling declares, a variable or a class, stops the move. The scan
+// is over declared symbols rather than text, so an inner block's own local spelling
+// the same name does not count, and seen breaks the cycle two mutually referring
+// helpers would otherwise make.
+func (r *Renderer) movableTo(fn frontend.Node, siblings []frontend.Node, from int, seen map[frontend.Node]bool) (bool, []frontend.Node) {
+	if seen[fn] {
+		return true, nil
+	}
+	seen[fn] = true
+	body, ok := r.funcBodyBlock(fn)
+	if !ok {
+		return false, nil
+	}
+	selfSym, _ := r.prog.SymbolAt(fn)
+	var need []frontend.Node
 	for j := from; j < len(siblings); j++ {
 		s := siblings[j]
-		if s == self {
+		if s == fn {
 			continue
 		}
 		for _, sym := range r.statementDeclaredSymbols(s) {
-			if sym == selfSym {
+			if sym == selfSym || !r.subtreeReferencesSymbol(body, sym) {
 				continue
 			}
-			if r.subtreeReferencesSymbol(body, sym) {
-				return true
+			if s.Kind() != frontend.NodeFunctionDeclaration {
+				return false, nil
 			}
+			ok, more := r.movableTo(s, siblings, from, seen)
+			if !ok {
+				return false, nil
+			}
+			need = append(need, s)
+			need = append(need, more...)
+		}
+	}
+	return true, need
+}
+
+// anySiblingEagerlyCalls reports whether any of the siblings before index before
+// calls sym while the block runs, as opposed to handing it along as a value. It is
+// what separates the two shapes that read a nested function before its declaration:
+// a value read is satisfied by a forwarder assigned at the top of the block, and a
+// call is not, because the forwarder has no body to call yet.
+func (r *Renderer) anySiblingEagerlyCalls(siblings []frontend.Node, before int, sym frontend.Symbol) bool {
+	for j := 0; j < before; j++ {
+		if r.eagerlyCallsSymbol(siblings[j], sym, false) {
+			return true
 		}
 	}
 	return false
@@ -367,6 +465,92 @@ func (r *Renderer) eagerlyReferencesSymbol(n frontend.Node, sym frontend.Symbol,
 	return false
 }
 
+// eagerlyCallsSymbol reports whether the subtree calls sym at a point that runs
+// while the enclosing block runs. It walks the same way eagerlyReferencesSymbol
+// does, and asks a narrower question: not whether the name is read there, but
+// whether what is read there is immediately invoked.
+func (r *Renderer) eagerlyCallsSymbol(n frontend.Node, sym frontend.Symbol, invoked bool) bool {
+	if isFunctionLike(n.Kind()) && !invoked {
+		return false
+	}
+	call := n.Kind() == frontend.NodeCallExpression || n.Kind() == frontend.NodeNewExpression
+	kids := r.prog.Children(n)
+	if call && len(kids) != 0 && r.namesSymbol(kids[0], sym) {
+		return true
+	}
+	for i, c := range kids {
+		invokedChild := call && i == 0
+		if n.Kind() == frontend.NodeParenthesizedExpression {
+			invokedChild = invoked
+		}
+		if r.eagerlyCallsSymbol(c, sym, invokedChild) {
+			return true
+		}
+	}
+	return false
+}
+
+// namesSymbol reports whether an expression is exactly the identifier bound to sym,
+// looking through the parentheses a callee is often written in.
+func (r *Renderer) namesSymbol(n frontend.Node, sym frontend.Symbol) bool {
+	for n.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(n)
+		if len(kids) == 0 {
+			return false
+		}
+		n = kids[0]
+	}
+	if n.Kind() != frontend.NodeIdentifier {
+		return false
+	}
+	s, ok := r.prog.SymbolAt(n)
+	return ok && s == sym
+}
+
+// forwardingFuncLit builds the closure a forwarded nested function binds at the top
+// of its block: it takes the same parameters as the real body and does nothing but
+// pass them to implName, so the value handed out before the declaration is the one
+// that runs the body once the declaration has assigned it. The parameters are named
+// afresh rather than reused, since the closure's own body never reads them by the
+// source's names and a blank or shadowing name would not forward.
+func forwardingFuncLit(implName string, ft *ast.FuncType) *ast.FuncLit {
+	params := &ast.FieldList{}
+	var args []ast.Expr
+	variadic := false
+	next := 0
+	if ft.Params != nil {
+		for _, f := range ft.Params.List {
+			count := len(f.Names)
+			if count == 0 {
+				count = 1
+			}
+			var names []*ast.Ident
+			for range count {
+				name := fmt.Sprintf("a%d", next)
+				next++
+				names = append(names, ident(name))
+				args = append(args, ident(name))
+			}
+			params.List = append(params.List, &ast.Field{Names: names, Type: f.Type})
+			if _, ok := f.Type.(*ast.Ellipsis); ok {
+				variadic = true
+			}
+		}
+	}
+	call := &ast.CallExpr{Fun: ident(implName), Args: args}
+	if variadic {
+		call.Ellipsis = token.Pos(1)
+	}
+	var body ast.Stmt = &ast.ExprStmt{X: call}
+	if ft.Results != nil && len(ft.Results.List) != 0 {
+		body = &ast.ReturnStmt{Results: []ast.Expr{call}}
+	}
+	return &ast.FuncLit{
+		Type: &ast.FuncType{Params: params, Results: ft.Results},
+		Body: &ast.BlockStmt{List: []ast.Stmt{body}},
+	}
+}
+
 // lowerNestedFuncDecl emits a nested function declaration enterNestedFuncScope
 // registered. It builds the closure the same way a block-bodied arrow does, then
 // binds it to the Go local: a plain `name := closure` when the body does not call
@@ -407,10 +591,21 @@ func (r *Renderer) lowerNestedFuncDecl(fn frontend.Node) ([]ast.Stmt, bool, erro
 		return nil, false, &NotYetLowerable{Reason: "a nested function body did not lower to a closure"}
 	}
 	var out []ast.Stmt
-	varDecl := func() ast.Stmt {
-		return &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{Names: []*ast.Ident{ident(plan.goName)}, Type: funcLit.Type}}}}
+	varDeclNamed := func(name string) ast.Stmt {
+		return &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{Names: []*ast.Ident{ident(name)}, Type: funcLit.Type}}}}
 	}
+	varDecl := func() ast.Stmt { return varDeclNamed(plan.goName) }
 	switch {
+	case plan.thunk:
+		// Both bindings and the forwarder go to the top of the block, since that is where
+		// the read that could not wait for this position happens. Only the real body
+		// stays here, which is the point: it is what reads the locals above it.
+		r.nestedFuncHoists = append(r.nestedFuncHoists,
+			varDeclNamed(plan.goName),
+			varDeclNamed(plan.implName),
+			&ast.AssignStmt{Lhs: []ast.Expr{ident(plan.goName)}, Tok: token.ASSIGN, Rhs: []ast.Expr{forwardingFuncLit(plan.implName, funcLit.Type)}},
+		)
+		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(plan.implName)}, Tok: token.ASSIGN, Rhs: []ast.Expr{funcLit}})
 	case plan.hoisted:
 		r.nestedFuncHoists = append(r.nestedFuncHoists, varDecl())
 		out = append(out, &ast.AssignStmt{Lhs: []ast.Expr{ident(plan.goName)}, Tok: token.ASSIGN, Rhs: []ast.Expr{funcLit}})
