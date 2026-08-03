@@ -99,10 +99,16 @@ func (h *loadHost) GetCurrentDirectory() string         { return h.cwd }
 // pull into the program; a builtin, a go: import, or a non-source asset resolves
 // but is not added as a typed input.
 func (h *loadHost) ResolveModule(specifier, containingFile string) (string, adapter.ImportKind, bool) {
+	// The containing file's own format is the question being asked, not a
+	// constant. A require in a .js file and an import in a .mjs file resolve the
+	// same specifier differently: an import of ./x may mean x.mjs, a require of
+	// ./x never does. Asserting ESM here made every require in a CommonJS file
+	// resolve as if it were an import, which in a tree that ships index.js next
+	// to index.mjs is the wrong module and not a near miss.
 	parent := &resolve.Module{
 		Path:   containingFile,
 		Dir:    cpath.Dir(containingFile),
-		Format: resolve.FormatESM,
+		Format: h.resolver.FormatOf(containingFile),
 	}
 	res, err := h.resolver.Resolve(specifier, parent)
 	if err != nil {
