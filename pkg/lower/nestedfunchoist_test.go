@@ -195,7 +195,7 @@ func TestAForwardCallBindsAheadOfEverythingItReads(t *testing.T) {
 	if factor < 0 || bind < 0 || call < 0 {
 		t.Fatalf("expected all three of the binding, the closure and the call:\n%s", out)
 	}
-	if !(factor < bind && bind < call) {
+	if factor >= bind || bind >= call {
 		t.Errorf("the closure did not land between what it reads and the call:\n%s", out)
 	}
 }
