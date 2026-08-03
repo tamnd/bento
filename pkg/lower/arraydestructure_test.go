@@ -69,11 +69,14 @@ console.log(only);
 	}
 }
 
-// TestArrayDestructureHoleHandsBack proves a pattern with a hole hands back, since a
-// skipped position is a later slice.
-func TestArrayDestructureHoleHandsBack(t *testing.T) {
+// TestArrayDestructureHoleRuns proves a pattern with a hole binds off the position the
+// hole holds open, so the name after it reads the second slot rather than the first.
+func TestArrayDestructureHoleRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = "const pair: number[] = [1, 2];\nconst [, b] = pair;\nconsole.log(b);\n"
-	renderProgramHandBack(t, src)
+	if got, want := runProgramGo(t, src), "2\n"; got != want {
+		t.Fatalf("array hole destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestArrayDestructureDefaultRuns proves an element default lowers: a present slot

@@ -103,10 +103,14 @@ console.log(String(iterCount));
 	}
 }
 
-// TestForOfDestructureHoleHandsBack proves a pattern with a hole hands back.
-func TestForOfDestructureHoleHandsBack(t *testing.T) {
+// TestForOfDestructureHoleRuns proves a hole in a loop head holds its position every
+// iteration, so the name after it reads the second element of each row.
+func TestForOfDestructureHoleRuns(t *testing.T) {
+	skipIfShort(t)
 	const src = "const pairs: number[][] = [[1, 2]];\nfor (const [, b] of pairs) {\n  console.log(b);\n}\n"
-	renderProgramHandBack(t, src)
+	if got, want := runProgramGo(t, src), "2\n"; got != want {
+		t.Fatalf("for-of hole destructure printed %q, want %q", got, want)
+	}
 }
 
 // TestForOfDestructureRestRuns proves a rest element gathers the tail each iteration,

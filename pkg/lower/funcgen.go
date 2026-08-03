@@ -1372,6 +1372,9 @@ func (r *Renderer) arrayPatternBindings(pat frontend.Node, goName string, arrTyp
 		if err != nil {
 			return nil, err
 		}
+		if info.hole {
+			continue
+		}
 		// A nested pattern in a parameter binds the whole tree at body entry: the slot is
 		// held in a temporary, then the inner pattern binds against it the same way a
 		// nested declaration element does.
@@ -1479,6 +1482,9 @@ func (r *Renderer) tupleParamBindings(pat frontend.Node, goName string, tupleTyp
 		info, err := r.classifyArrayElem(el)
 		if err != nil {
 			return nil, err
+		}
+		if info.hole {
+			continue
 		}
 		// An optional or rest position holds a value.Opt or slice field a plain read, a
 		// nested bind, or a default fill would each have to peel; that stays a later slice.

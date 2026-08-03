@@ -646,6 +646,12 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		if err != nil {
 			return nil, err
 		}
+		// A hole names nothing, so there is nothing to validate here; it is carried
+		// through so the emit loop steps over the field it holds open.
+		if info.hole {
+			infos[i] = info
+			continue
+		}
 		if info.nested != nil {
 			return nil, &NotYetLowerable{Reason: "a tuple destructuring nested pattern is a later slice"}
 		}
@@ -716,7 +722,7 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 	}
 	anyRead := false
 	for i := range infos {
-		if defaultVal[i] == nil {
+		if defaultVal[i] == nil && !infos[i].hole {
 			anyRead = true
 			break
 		}
@@ -752,6 +758,11 @@ func (r *Renderer) tupleDestructure(patNode, initNode frontend.Node, elems []fro
 		})
 	}
 	for i, info := range infos {
+		// A hole binds no name, so the position needs no read and no statement; its only
+		// job was to push the elements after it onto the fields they name.
+		if info.hole {
+			continue
+		}
 		if defaultVal[i] != nil {
 			// The always-undefined field makes the read dead, so the source struct is not
 			// drawn for this position and the binding takes the default directly.
@@ -811,6 +822,16 @@ func (r *Renderer) tupleDestructureValues(targets []frontend.Node, rhs frontend.
 	}
 	values := make([]ast.Expr, 0, len(targets))
 	for i, tgt := range targets {
+		// A hole reads its field into the blank, so neither the target's type nor the
+		// position's optional or rest shape has anything to agree with.
+		if r.arrayHoleElem(tgt) {
+			recv, err := r.lowerExpr(rhs)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, &ast.SelectorExpr{X: recv, Sel: ident("E" + itoa(i))})
+			continue
+		}
 		if elems[i].Optional || elems[i].Rest {
 			return nil, &NotYetLowerable{Reason: "an assignment-form tuple destructure of an optional or rest element is a later slice"}
 		}

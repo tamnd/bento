@@ -50,6 +50,9 @@ func (r *Renderer) patternLeafNodes(pat frontend.Node, out *[]frontend.Node) boo
 			if err != nil {
 				return false
 			}
+			if info.hole {
+				continue
+			}
 			if info.nested != nil {
 				if !r.patternLeafNodes(info.nested, out) {
 					return false
