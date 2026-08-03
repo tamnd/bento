@@ -46,6 +46,15 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 		return nil, err
 	}
 	defer restoreNested()
+	// A declaration a statement above it names is bound at the top of the Go block,
+	// which is where the source's hoisting puts it. lowerNestedFuncDecl collects those
+	// `var` declarations here as it builds each closure, so the type comes off the
+	// closure itself, and they go on the front of the block once the list is lowered.
+	// The field belongs to this block alone: a nested block lowers through its own call
+	// and its own frame, and this one restores when that call returns.
+	prevHoists := r.nestedFuncHoists
+	r.nestedFuncHoists = nil
+	defer func() { r.nestedFuncHoists = prevHoists }()
 	// A binding used as a new Proxy target must box to a shared value.Value before its
 	// own declaration lowers, so the proxy aliases it rather than a detached copy. The
 	// pre-scan marks those names ahead of the statement loop; it is additive, so a
@@ -54,6 +63,14 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 	r.markProxyTargetLocals(nodes)
 	out := make([]ast.Stmt, 0, len(nodes))
 	for i, n := range nodes {
+		// A helper this statement reads while the block runs binds here, ahead of it,
+		// rather than at its own declaration further down. Every other declaration binds
+		// where the source puts it and this adds nothing.
+		moved, err := r.emitMovedNestedFuncs(n)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, moved...)
 		if atTop {
 			if stmts, ok, err := r.lowerUsingDefer(n); err != nil {
 				return nil, err
@@ -70,7 +87,7 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 				return nil, err
 			} else if ok {
 				out = append(out, stmts...)
-				return out, nil
+				return append(r.nestedFuncHoists, out...), nil
 			}
 		}
 		stmts, err := r.lowerStatementMulti(n)
@@ -79,7 +96,7 @@ func (r *Renderer) lowerStatements(nodes []frontend.Node) ([]ast.Stmt, error) {
 		}
 		out = append(out, stmts...)
 	}
-	return out, nil
+	return append(r.nestedFuncHoists, out...), nil
 }
 
 // blockDeclares reports whether name is already declared in the current block and,
