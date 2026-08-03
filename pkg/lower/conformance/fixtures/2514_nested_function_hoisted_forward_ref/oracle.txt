@@ -1,0 +1,7 @@
+== stdout:
+nonnegative even
+negative odd
+50
+
+== exit:
+0

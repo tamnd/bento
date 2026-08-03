@@ -399,6 +399,17 @@ type Renderer struct {
 	// block enters and removed when it restores, so a declaration outside the current
 	// block is not in the map and falls to the older handback.
 	nestedFuncPlans map[frontend.Node]*nestedFuncPlan
+	// nestedFuncOrder lists the nested function declarations the current block
+	// registered, in source order, so the bindings that move up to a reader are emitted
+	// in the order the source declares them rather than in map order. It is saved and
+	// restored with the plans it indexes.
+	nestedFuncOrder []frontend.Node
+	// nestedFuncHoists holds the `var name funcType` declarations the block being
+	// lowered owes its hoisted nested functions, the ones a statement above them
+	// names. lowerNestedFuncDecl appends one as it builds each closure, so the type is
+	// the closure's own, and lowerStatements puts them on the front of the block and
+	// restores the enclosing block's set when it returns.
+	nestedFuncHoists []ast.Stmt
 	// arrowDropDefaults marks an arrow-function node whose defaulted parameters lower
 	// as plain Go fields with no default, because collectArrowDefaults proved the
 	// const binding the arrow initializes never escapes as a value: every call to it is

@@ -626,11 +626,27 @@ func (r *Renderer) lowerMainItems(items []mainItem) ([]ast.Stmt, error) {
 		}
 	}
 	r.markProxyTargetLocals(nodes)
+	// A required module's body is a block like any other, so the nested function
+	// declarations a statement above them names are declared at its top and assigned
+	// where the source declares them. lowerStatements keeps the same frame for a nested
+	// block; this is the module-body copy of it.
+	prevHoists := r.nestedFuncHoists
+	r.nestedFuncHoists = nil
+	defer func() { r.nestedFuncHoists = prevHoists }()
 	out := make([]ast.Stmt, 0, len(items))
 	for _, it := range items {
 		if it.initClass != nil {
 			out = append(out, &ast.ExprStmt{X: &ast.CallExpr{Fun: ident(staticInitName(it.initClass))}})
 			continue
+		}
+		// A helper this statement reads while the module body runs binds here, ahead of
+		// it, rather than at its own declaration further down. This is the same splice
+		// lowerStatements does for a block; the module body lowers through its own loop,
+		// so it has to ask too.
+		if moved, err := r.emitMovedNestedFuncs(it.node); err != nil {
+			return nil, err
+		} else if len(moved) != 0 {
+			out = append(out, moved...)
 		}
 		// The program body is a top-level scope like a function body, so a `using`
 		// among its statements defers its disposal to main's return, the scope that
@@ -648,7 +664,7 @@ func (r *Renderer) lowerMainItems(items []mainItem) ([]ast.Stmt, error) {
 		}
 		out = append(out, stmts...)
 	}
-	return out, nil
+	return append(r.nestedFuncHoists, out...), nil
 }
 
 // classInfoForDecl finds the registered class a class-declaration node belongs
@@ -1574,11 +1590,17 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 	if !needsHoist {
 		return nil, hoistNone, nil
 	}
-	// Every binding must carry an initializer to hoist; a bare `let x;` a function
-	// reads is a later slice, not this group.
+	// A binding with no initializer is what `let catchWarning;` is: the name exists
+	// from the top of the module and holds undefined until something assigns it. A
+	// package var declared at its zero value says exactly that, so the statement takes
+	// the in-place path below and contributes nothing to main, since there is no value
+	// to write at its source position. It cannot take the hoist-whole path, which needs
+	// an expression to put in the spec.
+	uninitialized := false
 	for _, d := range decls {
-		if kids := r.prog.Children(d); len(kids) != 2 && len(kids) != 3 {
-			return nil, hoistNone, &NotYetLowerable{Reason: "a module binding a function reads needs an initializer to hoist to a package var"}
+		if r.bindingInitIdx(d) < 0 {
+			uninitialized = true
+			break
 		}
 	}
 	// If every initializer is package-init-safe the statement hoists whole, the
@@ -1586,8 +1608,11 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 	// declaration is never that form: its leaves are read out of the source by a run of
 	// statements, and a package-level var spec holds one expression, so a pattern always
 	// takes the in-place assignment below whatever its source is.
-	allSafe := true
+	allSafe := !uninitialized
 	for _, d := range decls {
+		if !allSafe {
+			break
+		}
 		if r.declIsPattern(d) {
 			allSafe = false
 			break
@@ -1614,6 +1639,11 @@ func (r *Renderer) hoistModuleVar(stmt frontend.Node, hoisted map[string]bool, o
 	// never reads an unset package var; a forward or cyclic reference hands back.
 	for _, d := range decls {
 		kids := r.prog.Children(d)
+		// A binding with no initializer reads nothing, so there is no order to check and
+		// the trailing child is the name or its type annotation rather than an expression.
+		if r.bindingInitIdx(d) < 0 {
+			continue
+		}
 		// A pattern's ordinal is its first leaf's: every leaf of one declaration is
 		// assigned by the same statement, so they share a position in main's source order
 		// and any of them answers for the whole binding.
