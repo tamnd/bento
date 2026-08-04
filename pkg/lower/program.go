@@ -721,13 +721,15 @@ func (r *Renderer) checkMangleCollisions(entry frontend.Node) error {
 		if m, ok := mangleIdent(t); ok && m != t && texts[m] {
 			return &NotYetLowerable{Reason: "the module already speaks " + m + ", which " + t + " mangles to"}
 		}
-		// The CommonJS module object and exports alias emit under reserved Go names. A
-		// user binding whose Go spelling is one of them would share the identifier with
-		// the synthetic var, so the unit hands back rather than emit a redeclaration. A
-		// reference to the module or exports global itself never reaches here as its own
-		// text, since those spell module and exports, not the reserved Go names.
-		if m, ok := localName(t); ok && (m == bentoModuleName || m == bentoExportsName || m == bentoRequireName) {
-			return &NotYetLowerable{Reason: "the CommonJS module object reserves the Go name " + m + ", which " + t + " takes"}
+		// The synthetic globals emit under reserved Go names: the CommonJS module
+		// object and its exports alias and require, and the process, console, and
+		// globalThis objects. A user binding whose Go spelling is one of them would
+		// share the identifier with the synthetic var, so the unit hands back rather
+		// than emit a redeclaration. A reference to one of those globals never reaches
+		// here as its own text, since they spell module, process, console and the rest,
+		// not the reserved Go names.
+		if m, ok := localName(t); ok && reservedGlobalName(m) {
+			return &NotYetLowerable{Reason: "a bento global reserves the Go name " + m + ", which " + t + " takes"}
 		}
 	}
 	return nil

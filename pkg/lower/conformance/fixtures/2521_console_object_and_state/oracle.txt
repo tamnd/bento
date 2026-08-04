@@ -1,0 +1,12 @@
+== stdout:
+default: 1
+default: 2
+outer
+  inside
+{ a: 1, b: 'x' }
+through the alias
+default: 3
+object true
+
+== exit:
+0

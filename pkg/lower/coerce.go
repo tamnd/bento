@@ -411,6 +411,16 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.isGlobalThisRef(n) {
 		return true
 	}
+	// console is the same story again. The TypeScript standard library declares it as
+	// a Console, an interface with a method per member, which would drive a static
+	// method call on a Go shape the lowerer never interns. What backs the name is a
+	// value.Object (console.go), so a read of it, an alias bound to it, and a member
+	// read off it all dispatch through the dynamic paths. A call the static console
+	// path claims, console.log(x), never asks: that path recognizes the receiver by
+	// name and emits its own helper before a receiver would lower.
+	if r.isGlobalRef(n, "console") {
+		return true
+	}
 	// A read of a caught error's .message or .name lowers to a bento string
 	// (member.go), so it is not a boxed value even though the checker types the
 	// catch binding any or unknown; keeping it off the dynamic path routes a +

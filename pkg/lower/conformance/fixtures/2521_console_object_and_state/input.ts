@@ -1,0 +1,10 @@
+console.count();
+console.count();
+console.group("outer");
+console.log("inside");
+console.groupEnd();
+console.dir({ a: 1, b: "x" });
+const c = console;
+c.log("through the alias");
+c.count();
+console.log(typeof console, console === globalThis.console);

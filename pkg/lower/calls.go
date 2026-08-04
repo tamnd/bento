@@ -4455,8 +4455,9 @@ func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Exp
 }
 
 // consoleCall lowers a call on the global console. The methods that write to
-// standard output (log, info, debug) lower to value.ConsoleLog, and the ones that
-// write to standard error (error, warn) to value.ConsoleError. A call whose first
+// standard output (log, info, debug, and dirxml, which Node defines as log
+// itself) lower to value.ConsoleLog, and the ones that write to standard error
+// (error, warn) to value.ConsoleError. A call whose first
 // argument can carry format specifiers goes through value.ConsoleFormat as one
 // part; every other call stringifies its arguments one at a time, so a number,
 // boolean, or string prints exactly as Node's console does for that primitive and
@@ -4464,12 +4465,19 @@ func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Exp
 // this slice cannot stringify (an object, whose inspect runs richer formatting)
 // hands back rather than printing the wrong text.
 func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	if expr, handled, err := r.consoleStatefulCall(method, argNodes); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
 	var goName string
 	switch method {
-	case "log", "info", "debug":
+	case "log", "info", "debug", "dirxml":
 		goName = "ConsoleLog"
 	case "error", "warn":
 		goName = "ConsoleError"
+	case "group", "groupCollapsed":
+		goName = "ConsoleGroup"
 	default:
 		return nil, &NotYetLowerable{Reason: "console." + method + " is a later slice"}
 	}
@@ -4488,6 +4496,108 @@ func (r *Renderer) consoleCall(method string, argNodes []frontend.Node) (ast.Exp
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, nil
+}
+
+// consoleStatefulCall lowers the console members that are not a line of output:
+// the ones that carry state between calls (count, time, group), the one that
+// clears the screen, the one that inspects a value, and the one that reports a
+// failed condition. It reports handled=false for the writing members, which the
+// caller lowers through the stringify-and-join path.
+//
+// The label a stateful member files its entry under is a value rather than a
+// string: Node coerces it, so console.count(1) and console.count('1') are one
+// counter and an object counts under "[object Object]". Boxing it and letting the
+// runtime coerce keeps that without the lowerer having to prove the argument is a
+// string, and an omitted label passes undefined, which the runtime reads as the
+// "default" label the way Node does.
+func (r *Renderer) consoleStatefulCall(method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
+	call := func(goName string, args ...ast.Expr) (ast.Expr, bool, error) {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", goName), Args: args}, true, nil
+	}
+	switch method {
+	case "clear":
+		return call("ConsoleClear")
+	case "groupEnd":
+		return call("ConsoleGroupEnd")
+	case "timeStamp", "profile", "profileEnd":
+		// The three members that report to an attached inspector and write nothing
+		// otherwise. A compiled program has no inspector, so the call is a no-op, but
+		// its arguments still evaluate, which is what the helper taking them is for.
+		rest, err := r.consoleBoxedRest(argNodes, 0)
+		if err != nil {
+			return nil, false, err
+		}
+		return call("ConsoleNoop", rest...)
+	case "count", "countReset", "time", "timeEnd":
+		label, err := r.consoleLabelArg(argNodes)
+		if err != nil {
+			return nil, false, err
+		}
+		return call("Console"+strings.ToUpper(method[:1])+method[1:], label)
+	case "timeLog":
+		label, err := r.consoleLabelArg(argNodes)
+		if err != nil {
+			return nil, false, err
+		}
+		rest, err := r.consoleBoxedRest(argNodes, 1)
+		if err != nil {
+			return nil, false, err
+		}
+		return call("ConsoleTimeLog", append([]ast.Expr{label}, rest...)...)
+	case "assert":
+		cond, err := r.consoleLabelArg(argNodes)
+		if err != nil {
+			return nil, false, err
+		}
+		rest, err := r.consoleBoxedRest(argNodes, 1)
+		if err != nil {
+			return nil, false, err
+		}
+		return call("ConsoleAssert", append([]ast.Expr{cond}, rest...)...)
+	case "dir":
+		if len(argNodes) != 1 {
+			return nil, false, &NotYetLowerable{Reason: "console.dir with this argument count is a later slice"}
+		}
+		arg, err := r.boxOperand(argNodes[0])
+		if err != nil {
+			return nil, false, err
+		}
+		return call("ConsoleDir", arg)
+	}
+	return nil, false, nil
+}
+
+// consoleLabelArg lowers the first argument of a stateful console call to the
+// boxed value the runtime coerces, or to undefined when the call left it off.
+func (r *Renderer) consoleLabelArg(argNodes []frontend.Node) (ast.Expr, error) {
+	if len(argNodes) == 0 {
+		r.requireImport(valuePkg)
+		return sel("value", "Undefined"), nil
+	}
+	return r.boxOperand(argNodes[0])
+}
+
+// consoleBoxedRest lowers the arguments a console call made past position i to
+// the boxed values the runtime formats them from, and returns nothing when the
+// call made none. The members that take a message list, assert and timeLog,
+// hand the whole list to the same format pass a console line goes through, so
+// the arguments arrive as values rather than as already-stringified parts: a
+// specifier in the first of them fills from the ones after it, and the shape of
+// each is still readable where Node's own formatting depends on it.
+func (r *Renderer) consoleBoxedRest(argNodes []frontend.Node, i int) ([]ast.Expr, error) {
+	if i >= len(argNodes) {
+		return nil, nil
+	}
+	parts := make([]ast.Expr, 0, len(argNodes)-i)
+	for _, a := range argNodes[i:] {
+		part, err := r.boxOperand(a)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, part)
+	}
+	return parts, nil
 }
 
 // consoleFormatCall lowers a console call whose first argument can carry format
