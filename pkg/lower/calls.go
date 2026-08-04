@@ -3679,6 +3679,22 @@ func (r *Renderer) primitiveValueCall(recvNode frontend.Node, method string, arg
 	if len(argNodes) != 0 {
 		return nil, &NotYetLowerable{Reason: "primitive method ." + method + " with arguments is a later slice"}
 	}
+	// ref, unref, hasRef, and refresh on a number receiver are the timer handle's
+	// methods. Node's setTimeout returns a Timeout object carrying them; the standard
+	// library declaration bento checks against says number, so the handle here is the
+	// timer's id and these are operations on that id. Nothing else in the language puts
+	// one of these four names on a number, so a number receiver is enough to know what
+	// the program is holding, and setTimeout(fn, ms).unref() is the shape Node's suite
+	// writes. See pkg/value/timers.go for what each one does to the loop.
+	if goName, ok := timerHandleGoName(method); ok && r.isNumber(recvNode) {
+		recv, err := r.boxOperand(recvNode)
+		if err != nil {
+			return nil, err
+		}
+		r.usesTimers = true
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", goName), Args: []ast.Expr{recv}}, nil
+	}
 	switch method {
 	case "toString":
 		return r.stringify(recvNode)
@@ -4321,6 +4337,25 @@ func (r *Renderer) timerCall(calleeNode frontend.Node, argNodes []frontend.Node)
 	r.usesTimers = true
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", goName), Args: args}, true, nil
+}
+
+// timerHandleGoName maps a Timeout method to the runtime function that backs it,
+// reporting false for a name that is not one of the four. refresh is the odd one: it
+// re-arms the timeout for its original delay, which only a timeout has, so the runtime
+// ignores it for an immediate rather than the lowerer refusing a call it cannot tell
+// apart from a timeout's.
+func timerHandleGoName(method string) (string, bool) {
+	switch method {
+	case "ref":
+		return "TimerRef", true
+	case "unref":
+		return "TimerUnref", true
+	case "hasRef":
+		return "TimerHasRef", true
+	case "refresh":
+		return "TimerRefresh", true
+	}
+	return "", false
 }
 
 // timerGoName maps a scheduling global to the runtime function that backs it. The two

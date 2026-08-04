@@ -1,0 +1,7 @@
+== stdout:
+fresh true
+unrefed false
+soon
+
+== exit:
+0

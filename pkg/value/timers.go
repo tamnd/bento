@@ -27,10 +27,13 @@ import (
 //
 // A scheduling call returns a number, the timer's id, which is what the standard
 // library's setTimeout declaration says it returns and so what the checker types the
-// binding as. Node instead returns a Timeout object carrying unref and refresh; those
-// are not offered here rather than approximated, and a program that reaches for one is
-// rejected by the checker against the declared number rather than reading a member that
-// silently does nothing.
+// binding as. Node instead returns a Timeout object. The four methods that object
+// carries, ref, unref, hasRef, and refresh, are offered here as operations on the id:
+// the lowerer turns a call of one of them on a number receiver into the matching
+// TimerRef, TimerUnref, TimerHasRef, or TimerRefresh below. That is the whole of what
+// a program does with the object, and every one of them has a real effect here rather
+// than a stand-in. What is still divergent is the handle itself: typeof reports
+// "number" where Node reports "object", and there is no Timeout to compare or print.
 
 // timerHandle is one scheduled callback, the state behind the id a timer global
 // returns. The deadline is when a timeout fires; period is non-zero only for an
@@ -38,15 +41,22 @@ import (
 // deadline at all, since it runs in the next turn's check phase rather than at a time.
 // The sequence number breaks the tie between two timers that share a deadline, so they
 // fire in the order they were scheduled the way Node orders them.
+//
+// The delay is kept alongside the deadline because refresh re-arms a timeout for the
+// delay it was scheduled with, which a one-shot timeout does not otherwise record.
+// unrefed is Node's ref flag inverted: an unrefed timer still fires if the loop is
+// running for some other reason, but it no longer keeps the process alive on its own.
 type timerHandle struct {
 	id        float64
 	fn        Value
 	args      []Value
 	deadline  time.Time
+	delay     time.Duration
 	period    time.Duration
 	immediate bool
 	seq       uint64
 	cleared   bool
+	unrefed   bool
 }
 
 // The scheduler state. pendingTimers is kept sorted by deadline and then by sequence
@@ -93,6 +103,7 @@ func scheduleTimeout(fn Value, delay Value, repeat bool, args []Value) float64 {
 		fn:       fn,
 		args:     args,
 		deadline: time.Now().Add(ms),
+		delay:    ms,
 		seq:      newTimerSeq(),
 	}
 	if repeat {
@@ -133,12 +144,76 @@ func ClearTimer(handle Value) {
 		return
 	}
 	t.cleared = true
-	delete(timersByID, t.id)
+	forgetTimer(t)
 	if t.immediate {
 		pendingImmediates = removeTimer(pendingImmediates, t)
 		return
 	}
 	pendingTimers = removeTimer(pendingTimers, t)
+}
+
+// TimerUnref takes a timer out of the count that keeps the process alive, the runtime
+// behind timeout.unref(). The callback is not cancelled: an unrefed timer still fires
+// if the loop is turning for some other reason, which is the difference between unref
+// and clearTimeout and the whole reason a program reaches for it. A program whose only
+// remaining work is unrefed exits instead of waiting, which is what
+// setTimeout(mustNotCall(), 1000).unref() is asserting.
+//
+// It returns the handle so a call can be chained, the way Node's returns the Timeout.
+// An id naming no live timer is ignored, since unrefing a timer that already fired is
+// as normal as clearing one.
+func TimerUnref(handle Value) float64 {
+	return setTimerRef(handle, false)
+}
+
+// TimerRef puts a timer back into the count that keeps the process alive, the runtime
+// behind timeout.ref() and the undo of TimerUnref. A timer is refed when it is
+// scheduled, so this only matters after an unref.
+func TimerRef(handle Value) float64 {
+	return setTimerRef(handle, true)
+}
+
+// setTimerRef is the body both ref calls share, returning the id so the call can be
+// chained.
+func setTimerRef(handle Value, refed bool) float64 {
+	id := ToNumber(handle)
+	if t, ok := timersByID[id]; ok {
+		t.unrefed = !refed
+	}
+	return id
+}
+
+// TimerHasRef reports whether a timer is refed, the runtime behind timeout.hasRef().
+// It reads the ref flag and nothing else, which is what Node's Timeout does: a timeout
+// that has already fired or been cleared still answers true, because clearing a timer
+// does not unref it. A timer this runtime has forgotten therefore answers true as well,
+// and forgetting only ever happens to a refed one; see retireTimer.
+func TimerHasRef(handle Value) bool {
+	t, ok := timersByID[ToNumber(handle)]
+	return !ok || !t.unrefed
+}
+
+// TimerRefresh re-arms a timeout for its original delay counted from now, the runtime
+// behind timeout.refresh(). It is what a program with an idle timeout calls on every
+// bit of activity, so the timeout only fires after a real gap rather than a fixed time
+// after it was created.
+//
+// The call a program most often makes is from inside the timeout's own callback, which
+// is how an idle timeout keeps itself alive; a timer is retired only after its callback
+// returns, so the handle is still live when that call arrives and the refresh re-arms it
+// rather than dropping. An id naming a timer that has been cleared, or one this process
+// never handed out, is ignored. An immediate has no deadline to move, so it is ignored
+// too, which is what Node's Immediate does by not carrying the method at all.
+func TimerRefresh(handle Value) float64 {
+	id := ToNumber(handle)
+	t, ok := timersByID[id]
+	if !ok || t.cleared || t.immediate {
+		return id
+	}
+	pendingTimers = removeTimer(pendingTimers, t)
+	t.deadline = time.Now().Add(t.delay)
+	scheduleTimer(t)
+	return id
 }
 
 // RunEventLoop runs scheduled callbacks until nothing is left scheduled, the loop the
@@ -162,12 +237,25 @@ func RunEventLoop() {
 	}
 }
 
-// hasPendingWork reports whether anything is still scheduled, which is what keeps the
-// loop turning and, to a Node program, what keeps the process alive. The beforeExit
-// event asks the same question after its listeners run, since a listener that
-// scheduled something has put the process back to work.
+// hasPendingWork reports whether anything that keeps the process alive is still
+// scheduled, which is what keeps the loop turning. An unrefed timer does not count: it
+// still fires while the loop is turning for some other reason, but on its own it lets
+// the process leave, which is what unref means. The beforeExit event asks the same
+// question after its listeners run, since a listener that scheduled something has put
+// the process back to work.
 func hasPendingWork() bool {
-	return len(pendingTimers) > 0 || len(pendingImmediates) > 0
+	return countRefed(pendingTimers)+countRefed(pendingImmediates) > 0
+}
+
+// countRefed counts the timers in a queue that still hold the process open.
+func countRefed(queue []*timerHandle) int {
+	n := 0
+	for _, t := range queue {
+		if !t.unrefed && !t.cleared {
+			n++
+		}
+	}
+	return n
 }
 
 // runDueTimers runs every timer whose deadline has passed, in deadline order. The due
@@ -225,8 +313,8 @@ func runImmediates() {
 // callback resolves must run its reaction before the next timer fires, not after the
 // whole batch.
 func runTimerCallback(t *timerHandle) {
-	retireTimer(t)
 	t.fn.Call(t.args...)
+	retireTimer(t)
 	RunMicrotasks()
 }
 
@@ -309,10 +397,35 @@ func newTimerSeq() uint64 {
 
 // retireTimer drops a timer that has finished from the id registry, so a program that
 // schedules in a loop does not grow the map for the life of the process. An interval is
-// kept, since its id stays valid until the program clears it.
+// kept, since its id stays valid until the program clears it, and so is a timeout that
+// its own callback re-armed with refresh, which is back in the queue with a new
+// deadline and would otherwise be dropped from the registry it is still scheduled in.
 func retireTimer(t *timerHandle) {
-	if t.period > 0 {
+	if t.period > 0 || isPendingTimer(t) {
+		return
+	}
+	forgetTimer(t)
+}
+
+// forgetTimer drops a finished timer from the id registry, unless it was unrefed. The
+// exception is what keeps hasRef answering truthfully: a forgotten id reads as refed,
+// which is right for a timer nobody unrefed and wrong for one somebody did, so the
+// unrefed ones stay. Only a program that unrefs in a loop grows the map for it, and a
+// program that unrefs is by definition holding the handle it unrefed.
+func forgetTimer(t *timerHandle) {
+	if t.unrefed {
 		return
 	}
 	delete(timersByID, t.id)
+}
+
+// isPendingTimer reports whether a timer is in the queue, which after its callback has
+// run means the callback put it back there.
+func isPendingTimer(t *timerHandle) bool {
+	for _, o := range pendingTimers {
+		if o == t {
+			return true
+		}
+	}
+	return false
 }

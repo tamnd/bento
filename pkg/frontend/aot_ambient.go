@@ -65,7 +65,15 @@ func isAmbientPath(p string) bool { return devolume(p) == ambientPath }
 // value.QueueMicrotask, and the assembled main drains the queue at its end.
 // structuredClone is the WHATWG global that deep-copies a data graph; the lowerer
 // boxes the argument and emits value.StructuredClone, whose clone the caller reads
-// through the dynamic model. setImmediate and clearImmediate are Node's own
+// through the dynamic model. The four members added to the global Number interface,
+// ref, unref, hasRef and refresh, are the Timeout object's methods: a scheduling call
+// returns the timer's id here, which the standard library declares as a number, so the
+// handle a program holds is a number and its methods have to be reachable on one. The
+// declaration is wider than the truth, since it puts those names on every number, and
+// it is the same width the lowerer already has: it turns one of those four calls on a
+// number receiver into the matching timer operation whatever number it is. Typing them
+// is what makes the result usable, so console.log(t.hasRef()) renders a boolean instead
+// of refusing on a call the checker had no type for. setImmediate and clearImmediate are Node's own
 // scheduling pair, declared here because the TypeScript standard library has only
 // the WHATWG timers: the other four, setTimeout and setInterval with their clears,
 // come from that library already and need no declaration. Each returns a number,
@@ -108,6 +116,12 @@ declare function queueMicrotask(callback: () => void): void;
 declare function setImmediate(callback: (...args: any[]) => void, ...args: any[]): number;
 declare function clearImmediate(handle: number): void;
 declare function structuredClone(value: any): any;
+interface Number {
+	ref(): number;
+	unref(): number;
+	hasRef(): boolean;
+	refresh(): number;
+}
 declare function __bento_os_info(): string;
 declare function __bento_inspect(value: any): string;
 declare function __bento_url_parse(input: string, base: string): string;
