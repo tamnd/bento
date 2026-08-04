@@ -76,7 +76,7 @@ type Renderer struct {
 	thisPlain bool
 	recvPos   bool
 	decls     *declSet
-	imports       map[string]bool
+	imports   map[string]bool
 	// nodeImports maps a local binding name introduced by a node: import to the
 	// builtin it names, so a call to that binding lowers to the value helper the
 	// builtin maps to rather than a user function. It is populated once from the
