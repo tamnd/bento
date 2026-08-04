@@ -63,8 +63,20 @@ type Renderer struct {
 	// prologue, so a member store lowers to the throwing SetStrict rather than the
 	// silent-drop Set, the way a strict script observes a failed assignment.
 	programStrict bool
-	decls         *declSet
-	imports       map[string]bool
+	// fileStrict caches whether each source file in the program runs strict, the
+	// question a plain function's `this` turns on. It is per file rather than per
+	// program because a required CommonJS module carries its own directive prologue.
+	fileStrict map[string]bool
+	// thisPlain is set while a plain function's body lowers, a declaration or an
+	// expression but never an arrow and never a method, where `this` is whatever the
+	// call supplies and every call bento emits supplies nothing. recvPos is set while
+	// an expression lowers into a property slot, where a plain function value would be
+	// called with the owning object as its receiver, so a body that reads `this` hands
+	// back there. Both are saved and restored the way thisName is.
+	thisPlain bool
+	recvPos   bool
+	decls     *declSet
+	imports   map[string]bool
 	// nodeImports maps a local binding name introduced by a node: import to the
 	// builtin it names, so a call to that binding lowers to the value helper the
 	// builtin maps to rather than a user function. It is populated once from the

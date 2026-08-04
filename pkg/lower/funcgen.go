@@ -169,6 +169,15 @@ func (r *Renderer) funcDeclNamed(fn frontend.Node, sig frontend.Signature, name 
 	r.optParams = r.optParamsOf(fn, sig)
 	defer func() { r.optParams = prevOptP }()
 
+	// A top-level function declaration is a plain function like any other: its this is
+	// the call's to decide, and a Go func declaration has no receiver for a call to
+	// decide it through, so strict mode's undefined is what a body reading this gets.
+	restore, err := r.plainThisScope(fn, "function declaration")
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
+
 	// A default that reads an earlier parameter cannot be filled at the call site,
 	// which does not see the callee's scope, so such a function collapses its optional
 	// tail into one Go variadic and fills each optional in the body. Every other
@@ -1546,8 +1555,9 @@ func (r *Renderer) tupleParamBindings(pat frontend.Node, goName string, tupleTyp
 // function expression always has a block body, which is the same closure a
 // block-body arrow lowers to, so it routes through the same generator once the
 // forms an arrow does not share are ruled out. An async or generator function is
-// a coroutine and a body that reads this needs a receiver neither a Go closure
-// carries, so each hands back; a body that reads arguments materializes its own
+// a coroutine, so it hands back; a body that reads this reads the undefined a
+// receiver-free call leaves it, which is what plainThisScope settles; a body that
+// reads arguments materializes its own
 // arity object in the closure the same way a named function does, and a named
 // function expression takes the two-step a self-reference needs.
 func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
@@ -1556,9 +1566,16 @@ func (r *Renderer) functionExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	r.closureDepth++
 	defer func() { r.closureDepth-- }()
-	if subtreeHasKind(r.prog, n, frontend.NodeThisKeyword) {
-		return nil, &NotYetLowerable{Reason: "a function expression that reads this needs a receiver, a later slice"}
+	// A body that reads this reads whatever the call supplies, and a Go closure has no
+	// receiver slot for a call to supply anything through, so strict mode's undefined
+	// is what it gets. plainThisScope is where that is decided and where the shapes it
+	// does not cover, a sloppy-mode global object and a value going straight into a
+	// property, keep the hand-back.
+	restore, err := r.plainThisScope(n, "function expression")
+	if err != nil {
+		return nil, err
 	}
+	defer restore()
 	sig, _ := r.prog.SignatureAt(n)
 	// A parameter the boxed-signature pass decided holds a box reads as any from here
 	// on, the same overlay a top-level function's signature takes.

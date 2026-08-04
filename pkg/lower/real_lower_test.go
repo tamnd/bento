@@ -145,7 +145,8 @@ func compileTolerant(t *testing.T, src string) *frontend.Program {
 			continue
 		}
 		// 2683 (free `this` with no annotation) is admitted because a free `this`
-		// reaches the renderer's this path where thisName is empty and hands back, so
+		// reaches the renderer's this path, where a strict plain function reads the
+		// undefined a receiver-free call leaves and everything else hands back, so
 		// mirror the front door (build.go toleratedImplicitThis) here too.
 		if d.Code == 2683 {
 			continue

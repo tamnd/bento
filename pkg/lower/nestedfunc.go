@@ -260,8 +260,11 @@ func (r *Renderer) nestedFuncLowerable(fn frontend.Node, siblings []frontend.Nod
 	if !ok {
 		return frontend.Symbol{}, nil, &NotYetLowerable{Reason: "a nested function overload signature has no body to lower, a later slice"}
 	}
-	if subtreeHasKind(r.prog, fn, frontend.NodeThisKeyword) {
-		return frontend.Symbol{}, nil, &NotYetLowerable{Reason: "a nested function that reads this needs its own this binding, a later slice"}
+	// A body that reads this reads whatever the call supplies, and the Go local this
+	// declaration binds is a closure with no receiver slot, so strict mode's undefined
+	// is the answer; thisplain.go carries the reasoning and the shapes it refuses.
+	if err := r.plainThisRefusal(fn, "nested function"); err != nil {
+		return frontend.Symbol{}, nil, err
 	}
 	// A sibling above this declaration that names it decides where the binding goes.
 	// If it only names it from inside a function body, the read happens after the
@@ -578,6 +581,9 @@ func (r *Renderer) lowerNestedFuncDecl(fn frontend.Node) ([]ast.Stmt, bool, erro
 	if !ok {
 		return nil, false, &NotYetLowerable{Reason: "a nested function with no call signature is a later slice"}
 	}
+	// The declaration's own this scope, the one nestedFuncLowerable already cleared to
+	// lower: an enclosing method's receiver is not this function's.
+	defer r.pushPlainThis(fn)()
 	fields, err := r.closureParamFields(fn, sig, "function")
 	if err != nil {
 		return nil, false, err

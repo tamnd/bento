@@ -2233,7 +2233,9 @@ func (r *Renderer) staticInitFuncDecl(info *classInfo) (ast.Decl, error) {
 // where JavaScript evaluates it. An initializer that reaches a not-yet-lowerable
 // construct hands back through the ordinary expression path, no special casing.
 func (r *Renderer) staticInitAssign(f classField) (ast.Stmt, error) {
+	done := r.pushReceiverPosition()
 	rhs, err := r.lowerExpr(f.init)
+	done()
 	if err != nil {
 		return nil, err
 	}
@@ -2329,7 +2331,9 @@ func (r *Renderer) staticVarDecl(f classField) (ast.Decl, error) {
 		Type:  goType,
 	}
 	if !f.runtimeInit && f.init != nil {
+		done := r.pushReceiverPosition()
 		rhs, err := r.lowerExpr(f.init)
+		done()
 		if err != nil {
 			return nil, err
 		}
@@ -2865,7 +2869,11 @@ func (r *Renderer) fieldInitStmts(info *classInfo) ([]ast.Stmt, error) {
 		if f.init == nil {
 			continue
 		}
+		// A field initializer's value ends up in a property, so a plain function going in
+		// would be called with the instance as its this; thisplain.go refuses it here.
+		done := r.pushReceiverPosition()
 		rhs, err := r.lowerExpr(f.init)
+		done()
 		if err != nil {
 			return nil, err
 		}
@@ -4242,7 +4250,13 @@ func (r *Renderer) classFieldAssign(bin frontend.Node) (ast.Stmt, bool, error) {
 			}
 		}
 	} else {
+		// The stored value lands in a property, so a plain function value going in
+		// would be called as o.m() with o as its this, which a receiver-free Go closure
+		// has nowhere to put. thisplain.go refuses that body here rather than lower one
+		// whose this would answer undefined where the source named the object.
+		done := r.pushReceiverPosition()
 		rhs, err = r.lowerExpr(parts[2])
+		done()
 		if err != nil {
 			return nil, false, err
 		}
