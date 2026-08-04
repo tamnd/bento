@@ -184,23 +184,25 @@ func processExit(args []Value) {
 	if c := Arg(args, 0); c.Kind() != KindUndefined {
 		code = int(ToNumber(c))
 	}
-	RunExitCallbacks()
+	RunExitCallbacksWithCode(code)
 	os.Exit(code)
 }
 
 // processOn registers a process event listener, the runtime behind
-// process.on(event, fn). Only the exit event is carried, the one a compiled
-// program can honor, and it routes to the same registry the lowerer's static
-// process.on('exit') path uses so a listener registered either way runs in the one
-// registration order. Another event throws rather than registering a listener that
-// would never fire, which would silently drop the handler a program relies on.
+// process.on(event, fn). It routes to the same registry the lowerer's static
+// process.on path uses, so a listener registered either way runs in the one
+// registration order. A signal event throws rather than registering: the host really
+// can raise one, and a listener also suppresses the default disposition, so accepting
+// it and never delivering would change what the program does. Every other event
+// registers; the four a compiled program raises are described in processevents.go and
+// the rest never fire, which is what Node does when nothing raises them.
 func processOn(args []Value) {
 	event := ToString(Arg(args, 0)).ToGoString()
-	if event != "exit" {
-		Throw(NewError(FromGoString("process.on('" + event + "') is not implemented in bento yet; only the 'exit' event is supported")))
+	if IsSignalEvent(event) {
+		Throw(NewError(FromGoString("process.on('" + event + "') is not implemented in bento yet; a signal listener is a later slice")))
 		return
 	}
-	OnExit(Arg(args, 1))
+	OnProcessEvent(event, Arg(args, 1))
 }
 
 // nodePlatform maps the Go operating system name to the string Node reports

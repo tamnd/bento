@@ -66,6 +66,15 @@ func ReportUnhandledRejections() {
 			continue
 		}
 		v := thrownValue(reason)
+		// A program that registered an unhandledRejection listener handles the
+		// rejection itself, so the listeners run with the reason and nothing is printed
+		// or exited for it. That is the whole point of the event: a test asserts on the
+		// reason it was given. Node passes the promise as a second argument too, which
+		// this does not: a promise is a typed Go value here with no boxed form to hand
+		// a listener, so a listener that declares the parameter reads undefined.
+		if EmitProcessEvent("unhandledRejection", v) {
+			continue
+		}
 		line := "Uncaught (in promise) " + describeRejection(v)
 		_, _ = os.Stderr.WriteString(line + "\n")
 		reported = true

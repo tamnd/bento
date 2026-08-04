@@ -153,13 +153,21 @@ func ClearTimer(handle Value) {
 // callbacks it asked for.
 func RunEventLoop() {
 	RunMicrotasks()
-	for len(pendingTimers) > 0 || len(pendingImmediates) > 0 {
+	for hasPendingWork() {
 		if d := timeUntilNextDue(); d > 0 {
 			time.Sleep(d)
 		}
 		runDueTimers()
 		runImmediates()
 	}
+}
+
+// hasPendingWork reports whether anything is still scheduled, which is what keeps the
+// loop turning and, to a Node program, what keeps the process alive. The beforeExit
+// event asks the same question after its listeners run, since a listener that
+// scheduled something has put the process back to work.
+func hasPendingWork() bool {
+	return len(pendingTimers) > 0 || len(pendingImmediates) > 0
 }
 
 // runDueTimers runs every timer whose deadline has passed, in deadline order. The due

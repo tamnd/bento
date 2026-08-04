@@ -575,6 +575,11 @@ func disposeCatch(release func()) (thrown Thrown, threw bool) {
 // value is a Go runtime panic, a bug in the runtime rather than a program throw,
 // so it is re-panicked to keep its original stack. A run that did not panic
 // recovers nothing and returns, leaving a clean exit untouched.
+//
+// A program that registered an uncaughtException listener has said it wants to deal
+// with the escape itself, so the listeners run with the thrown value and the program
+// leaves cleanly instead of crashing, which is what Node does. The exit listeners run
+// after them, because the panic skipped the end of main where they would have run.
 func ReportUncaught() {
 	r := recover()
 	if r == nil {
@@ -583,6 +588,10 @@ func ReportUncaught() {
 	t, ok := r.(Thrown)
 	if !ok {
 		panic(r)
+	}
+	if EmitProcessEvent("uncaughtException", thrownValue(t)) {
+		RunExitCallbacks()
+		return
 	}
 	line := "Uncaught " + t.ErrorName()
 	if msg := t.ErrorMessage(); msg != "" {

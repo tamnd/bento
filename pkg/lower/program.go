@@ -478,6 +478,17 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 		mainDecl.Body.List = append(mainDecl.Body.List, report)
 	}
 
+	// A program that registered a process 'beforeExit' listener fires that event after
+	// the loop and before the exit drain, the point Node fires it: the loop has drained
+	// and the process is about to leave but has not left yet. The runtime turns the loop
+	// again if a listener scheduled work, so the statement is one call whatever the
+	// listeners do.
+	if r.usesBeforeExit {
+		r.requireImport(valuePkg)
+		before := &ast.ExprStmt{X: &ast.CallExpr{Fun: sel("value", "RunBeforeExit")}}
+		mainDecl.Body.List = append(mainDecl.Body.List, before)
+	}
+
 	// A program that registered a process 'exit' listener runs the registered
 	// callbacks once as the final statement of main, the point Node fires the exit
 	// event: the synchronous body and the microtask checkpoint above have both
