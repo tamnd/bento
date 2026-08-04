@@ -1,0 +1,9 @@
+== stdout:
+body
+beforeExit 1
+timer
+beforeExit 2
+exit 0
+
+== exit:
+0

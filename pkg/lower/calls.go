@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tamnd/bento/pkg/frontend"
+	"github.com/tamnd/bento/pkg/value"
 )
 
 // This file lowers calls: the callExpr dispatch, method calls on primitives and
@@ -4351,22 +4352,23 @@ func (r *Renderer) structuredCloneCall(argNodes []frontend.Node) (ast.Expr, erro
 }
 
 // processCall lowers the calls on the global process object that have a direct
-// runtime lowering, reporting whether it claimed the call. Only process.on('exit',
-// fn) is claimed: it registers fn as a run-at-exit callback, lowering to
-// value.OnExit with the callback boxed into a value.Value so the end-of-main drain
-// can invoke it without its static signature, and it sets the program's
-// exit-callback flag so the assembled main appends value.RunExitCallbacks as its
-// final statement. That shape is claimed here rather than left to the process
-// object because the drain has to be emitted into main, which a runtime call
-// through the object cannot arrange.
+// runtime lowering, reporting whether it claimed the call. process.on is the one
+// claimed method: it registers the listener against the named event, boxing the
+// callback into a value.Value so the runtime can invoke it without its static
+// signature. It is claimed here rather than left to the process object because two
+// of the events are raised by statements the assembled main has to carry, and a
+// registration made through a runtime object cannot arrange for those statements to
+// be emitted. Registering for exit sets the exit-callback flag so main ends with the
+// exit drain, and registering for beforeExit sets its own flag so main runs the
+// beforeExit loop ahead of that drain.
 //
 // Every other method is left unclaimed, so the caller falls through to the dynamic
 // path and dispatches it against the process object: process.cwd() and
 // process.exit(0) are members of that object, so they run rather than handing back
 // the way they did when process had no value form. A malformed process.on, one
-// with the wrong arity or a non-function listener, still hands back rather than
-// dropping the registration, since the object's own on would register a listener
-// the static drain does not know about.
+// with the wrong arity, an event named at run time, or a non-function listener,
+// still hands back rather than dropping the registration, since the object's own on
+// would register a listener the emitted statements do not know about.
 func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Expr, bool, error) {
 	if method != "on" {
 		return nil, false, nil
@@ -4374,19 +4376,47 @@ func (r *Renderer) processCall(method string, argNodes []frontend.Node) (ast.Exp
 	if len(argNodes) != 2 {
 		return nil, true, &NotYetLowerable{Reason: "process.on with this argument count is a later slice"}
 	}
-	if argNodes[0].Kind() != frontend.NodeStringLiteral || unquote(r.prog.Text(argNodes[0])) != "exit" {
-		return nil, true, &NotYetLowerable{Reason: "process.on for an event other than exit is a later slice"}
+	if argNodes[0].Kind() != frontend.NodeStringLiteral {
+		return nil, true, &NotYetLowerable{Reason: "process.on with an event named at run time is a later slice"}
+	}
+	event := unquote(r.prog.Text(argNodes[0]))
+	// A signal listener is refused rather than registered. Every other event is either
+	// one the compiled program raises or one nothing raises, and registering for the
+	// second kind is what Node does too; a signal is the case where the host really can
+	// deliver the event and where a listener also suppresses the default disposition,
+	// so accepting one and never delivering it would change what the program does.
+	if value.IsSignalEvent(event) {
+		return nil, true, &NotYetLowerable{Reason: "process.on for the signal " + event + " is a later slice"}
 	}
 	if calls, _ := r.prog.Signatures(r.prog.TypeAt(argNodes[1])); len(calls) != 1 {
-		return nil, true, &NotYetLowerable{Reason: "process.on('exit') with a non-function listener is a later slice"}
+		return nil, true, &NotYetLowerable{Reason: "process.on('" + event + "') with a non-function listener is a later slice"}
 	}
 	fn, err := r.boxOperand(argNodes[1])
 	if err != nil {
 		return nil, true, err
 	}
-	r.usesExitCallbacks = true
 	r.requireImport(valuePkg)
-	return &ast.CallExpr{Fun: sel("value", "OnExit"), Args: []ast.Expr{fn}}, true, nil
+	switch event {
+	case "exit":
+		// The exit drain has to be emitted into main, which a runtime registration
+		// cannot arrange, so the flag rides along with the registration.
+		r.usesExitCallbacks = true
+		return &ast.CallExpr{Fun: sel("value", "OnExit"), Args: []ast.Expr{fn}}, true, nil
+	case "beforeExit":
+		// beforeExit runs before the exit drain and can put the loop back to work, so
+		// main emits its own statement for it, ahead of the exit one.
+		r.usesBeforeExit = true
+	case "uncaughtException":
+		// The listener runs from the deferred reporter at the top of main, which only a
+		// program that can throw emits, and registering the listener is itself a reason
+		// to emit it: the throw that reaches the listener may come from a runtime helper
+		// rather than from a `throw` the lowerer saw.
+		r.usesThrow = true
+	}
+	return &ast.CallExpr{
+		Fun:  sel("value", "OnProcessEvent"),
+		Args: []ast.Expr{stringLit(event), fn},
+	}, true, nil
 }
 
 // consoleCall lowers a call on the global console. The methods that write to

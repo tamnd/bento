@@ -503,6 +503,13 @@ type Renderer struct {
 	// unchanged. This is what lets common.mustCall, which asserts on exit that a wrapped
 	// function ran the expected number of times, observe the run.
 	usesExitCallbacks bool
+	// usesBeforeExit records that the program registered a process 'beforeExit'
+	// listener, so the assembled main fires that event (value.RunBeforeExit) after the
+	// event loop and before the exit drain, the point Node fires it: the loop has
+	// drained and the process is about to leave but has not left. A listener may
+	// schedule more work, which is what the event is for, so the runtime turns the loop
+	// again and fires once more when that work is done.
+	usesBeforeExit bool
 	// usesMicrotask records that the program called queueMicrotask, so the assembled
 	// main drains the microtask queue at its end (value.RunMicrotasks) even when the
 	// program minted no promise. queueMicrotask and a promise share one queue, so a
