@@ -511,6 +511,9 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// top-level function that closes over module or exports name the same variable. A
 	// program that named neither emits nothing here.
 	file.Decls = append(file.Decls, r.commonjsModuleDecls()...)
+	// The global object, when the program named globalThis, emits the same way and
+	// for the same reason: one object every reference reads, wherever it sits.
+	file.Decls = append(file.Decls, r.globalThisDecls()...)
 	// Module bindings a function reads emit as package-level vars beside the other
 	// state, so both main and the functions name the same variable.
 	file.Decls = append(file.Decls, moduleVars...)

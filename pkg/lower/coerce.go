@@ -404,6 +404,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.isCommonJSModuleGlobal(n) {
 		return true
 	}
+	// globalThis is the same story with a different name. The checker types it as the
+	// whole global scope, a shape with no finite Go struct behind it, while the
+	// lowerer holds a value.Object for it, so every read and write off the name has
+	// to dispatch through the dynamic Get and Set rather than off a static shape.
+	if r.isGlobalThisRef(n) {
+		return true
+	}
 	// A read of a caught error's .message or .name lowers to a bento string
 	// (member.go), so it is not a boxed value even though the checker types the
 	// catch binding any or unknown; keeping it off the dynamic path routes a +

@@ -149,6 +149,16 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 			return nil, &NotYetLowerable{Reason: "reading " + prop + " off " + module + " as a value is a later slice"}
 		}
 	}
+	// A member off globalThis whose name is an ambient global reads as the bare name
+	// does, so globalThis.process is the process object and globalThis.crypto hands
+	// back naming crypto rather than answering the undefined the global object holds
+	// for a surface bento has not built. A member that names no global reads off the
+	// object through the dynamic path below, which is what it is. See globalthis.go.
+	if expr, handled, err := r.globalThisMember(obj, nameNode); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
 	if obj.Kind() == frontend.NodeIdentifier && r.internalNamespaces[r.prog.Text(obj)] {
 		name, err := r.namespaceMemberValue(nameNode)
 		if err != nil {
@@ -1577,7 +1587,15 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// signature's element type; only its own handback for a wider index type remains. A
 	// genuinely static literal, whose binding was never boxed, still takes the
 	// struct-field selector here.
-	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) && !r.isStringIndexDict(r.prog.TypeAt(obj)) {
+	// globalThis is excluded for the same reason: the lowerer holds a value.Object for
+	// it whatever shape the checker gives the global scope, so a keyed read off it is
+	// the runtime Get below. A key that is constant in the source is still a key the
+	// global object answers at run time, so globalThis["process"] reads the process
+	// object the same as globalThis.process does, and a key naming a global bento has
+	// not built reads undefined rather than handing back the way the dotted form can:
+	// the bracket form is the run-time-keyed shape, and nothing separates a constant
+	// key from a computed one once the read dispatches. See globalthis.go.
+	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isGlobalThisRef(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) && !r.isStringIndexDict(r.prog.TypeAt(obj)) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {
