@@ -40,14 +40,10 @@ func compileJS(t *testing.T, src string) *frontend.Program {
 	return prog
 }
 
-// renderUncheckedJS renders src the way the AOT front door builds a .js entry: allowJs
-// on so the checker types the file, checkJs off so its JavaScript-specific reports never
-// arise (build.go compileProgram). That is the mode a form TypeScript rejects but
-// JavaScript runs has to be read in, arithmetic on a date being one: with checkJs on the
-// checker reports 2362 and the renderer hands the whole unit back for it, which is the
-// deliberate rule for a program TypeScript does not accept, while a plain .js program
-// carries no such report and lowers.
-func renderUncheckedJS(t *testing.T, src string) string {
+// compileUncheckedJS loads src the way the AOT front door loads a .js entry, the mode
+// renderUncheckedJS renders in. It is split out so a test that expects a hand-back can
+// load the same way without rendering.
+func compileUncheckedJS(t *testing.T, src string) *frontend.Program {
 	t.Helper()
 	yes, no := true, false
 	prog, err := frontend.Load(frontend.LoadOptions{
@@ -59,6 +55,19 @@ func renderUncheckedJS(t *testing.T, src string) string {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	return prog
+}
+
+// renderUncheckedJS renders src the way the AOT front door builds a .js entry: allowJs
+// on so the checker types the file, checkJs off so its JavaScript-specific reports never
+// arise (build.go compileProgram). That is the mode a form TypeScript rejects but
+// JavaScript runs has to be read in, arithmetic on a date being one: with checkJs on the
+// checker reports 2362 and the renderer hands the whole unit back for it, which is the
+// deliberate rule for a program TypeScript does not accept, while a plain .js program
+// carries no such report and lowers.
+func renderUncheckedJS(t *testing.T, src string) string {
+	t.Helper()
+	prog := compileUncheckedJS(t, src)
 	r := NewRenderer(prog)
 	r.SetGoSignatures(testGoSignatures())
 	r.SetGoConstants(testGoConstants())

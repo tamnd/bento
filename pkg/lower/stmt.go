@@ -2142,6 +2142,19 @@ func (r *Renderer) bindingInit(nameNode, initNode frontend.Node) (ast.Expr, erro
 		}
 		return boxed, nil
 	}
+	// A `const g = globalThis` binding holds the one global object the program emits,
+	// a value.Value, while the checker types it typeof globalThis, the whole global
+	// scope. That type has no Go shape to coerce into and is far past the budget
+	// internStruct keys a shape by, so the ordinary coercion below would hand the
+	// binding back rather than bind it. Returning the reference straight lets := infer
+	// the value.Value slot, and the mark routes every later read, write, and
+	// enumeration off the alias through the same dynamic paths the name itself takes.
+	if r.isGlobalThisRef(initNode) {
+		if name, ok := localName(r.prog.Text(nameNode)); ok {
+			r.markDynBound(name)
+		}
+		return r.globalThisRef(), nil
+	}
 	// A `var p = new Proxy(target, handler)` binding holds the boxed value.Value
 	// value.NewProxy builds, the exotic object whose trap dispatch lives on the value
 	// model. The checker types the binding typeof target, a fixed shape, so a named

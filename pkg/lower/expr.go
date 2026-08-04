@@ -220,6 +220,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isGlobalRef(n, "process") {
 			return r.processRef(), nil
 		}
+		// globalThis is the global scope as an object. It reads as the package-level
+		// value.Object the program emits once, so a member read, an element read keyed at
+		// run time, a write, and a for...in over it all lower through the dynamic paths
+		// from that object; see globalthis.go. Left to fall through, the name would reach
+		// the local-name fallback below and emit an undefined Go identifier, since the
+		// checker's globalThis symbol has no declarations for the ambient-global handback
+		// to recognize.
+		if r.isGlobalThisRef(n) {
+			return r.globalThisRef(), nil
+		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
 		// has no generated Go behind its name, so capitalizing the source name would
