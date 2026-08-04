@@ -230,6 +230,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isGlobalThisRef(n) {
 			return r.globalThisRef(), nil
 		}
+		// console is the Node console global. A call through it, console.log(x), is
+		// claimed by the static path in calls.go before a receiver would lower, so what
+		// reaches here is the name read as a value: an alias, a write of it back onto
+		// globalThis, or a member read the static path does not model. It lowers to the
+		// package-level console object, whose members are the same helpers the static
+		// path emits, so the two ways of reaching console.log reach one function.
+		if r.isGlobalRef(n, "console") {
+			return r.consoleRef(), nil
+		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
 		// has no generated Go behind its name, so capitalizing the source name would

@@ -54,7 +54,21 @@ const (
 	bentoExportsName = "bentoExports"
 	bentoRequireName = "bentoRequire"
 	bentoProcessName = "bentoProcess"
+	bentoConsoleName = "bentoConsole"
 )
+
+// reservedGlobalName reports whether a Go identifier is one the synthetic globals
+// emit under, which is what a user binding cannot take. It is the one list, so a
+// global added above is checked without the collision test in program.go having to
+// be edited alongside it.
+func reservedGlobalName(name string) bool {
+	switch name {
+	case bentoModuleName, bentoExportsName, bentoRequireName,
+		bentoProcessName, bentoConsoleName, bentoGlobalThisName:
+		return true
+	}
+	return false
+}
 
 // isCommonJSModuleGlobal reports whether n is a reference to the CommonJS module
 // or exports wrapper global rather than a user binding that shares the name. The
@@ -150,6 +164,18 @@ func (r *Renderer) processRef() ast.Expr {
 	return ident(bentoProcessName)
 }
 
+// consoleRef lowers a bare console reference to the package-level console object,
+// flagging that it must be emitted. A console call the static path claims never
+// reaches this, so what emits the object is a program that reads the name as a
+// value: an alias, a write of it back, or a member read the static path does not
+// model. The object's members call the same helpers the static path emits, so
+// console.log through the object and console.log through the name are one
+// function.
+func (r *Renderer) consoleRef() ast.Expr {
+	r.usesConsole = true
+	return ident(bentoConsoleName)
+}
+
 // commonjsModuleDecls returns the package-level declarations that back the module,
 // exports, and require globals, or nil when the program named none of them. The
 // exports object is declared first and the module object holds it under the
@@ -210,6 +236,20 @@ func (r *Renderer) commonjsModuleDecls() []ast.Decl {
 			}},
 		}
 		decls = append(decls, processVar)
+	}
+	// The console object is emitted on the same terms: only a program that read the
+	// name as a value pays for it, and one that only calls console.log emits the
+	// direct helper call and no object at all.
+	if r.usesConsole {
+		r.requireImport(valuePkg)
+		consoleVar := &ast.GenDecl{
+			Tok: token.VAR,
+			Specs: []ast.Spec{&ast.ValueSpec{
+				Names:  []*ast.Ident{ident(bentoConsoleName)},
+				Values: []ast.Expr{&ast.CallExpr{Fun: sel("value", "ConsoleObject")}},
+			}},
+		}
+		decls = append(decls, consoleVar)
 	}
 	return decls
 }

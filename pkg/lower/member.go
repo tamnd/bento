@@ -1131,6 +1131,14 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			// Reading the declaration and the loop as well is what lets a name be seen as
 			// a box from outside the body that holds it, which is what the boxed-signature
 			// pass needs while it is still deciding and no dynamic-locals set exists yet.
+			// The console global is a value.Object the runtime builds (console.go), so
+			// the bare name is a box even though the standard library types it as a
+			// Console interface. Reading it here is what gives `const c = console` a
+			// value.Value slot rather than a Go shape the lowerer never interns, and
+			// what keeps `console.log` read as a value on the boxed path.
+			if r.isGlobalRef(n, "console") {
+				return true
+			}
 			return r.isDynBoundReceiver(n) || r.isBoxedParamRead(n) ||
 				r.isBoxedLoopVar(n) || r.identifierBindsABox(n)
 		case frontend.NodeObjectLiteralExpression, frontend.NodeArrayLiteralExpression:
@@ -1235,6 +1243,14 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			if n.Kind() == frontend.NodeCallExpression && r.callsUnboxingMethod(n) {
 				return false
 			}
+			// A call on the console global is claimed by the static console path, which
+			// emits its own helper and answers whatever that helper returns rather than a
+			// box. Walking through to the receiver would call the whole call a box on the
+			// strength of console being one, which would put a void helper's result into a
+			// value.Value slot.
+			if n.Kind() == frontend.NodeCallExpression && r.isConsoleMethodCall(n) {
+				return false
+			}
 			kids := r.prog.Children(n)
 			if len(kids) == 0 {
 				return false
@@ -1244,6 +1260,22 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			return false
 		}
 	}
+}
+
+// isConsoleMethodCall reports whether n is a call of a method on the console global,
+// the console.log(x) form calls.go recognizes by receiver name and lowers to a value
+// console helper. The receiver is read the way the call lowering reads it, so the two
+// agree on which calls the static path claims.
+func (r *Renderer) isConsoleMethodCall(n frontend.Node) bool {
+	if n.Kind() != frontend.NodeCallExpression {
+		return false
+	}
+	kids := r.prog.Children(n)
+	if len(kids) == 0 || kids[0].Kind() != frontend.NodePropertyAccessExpression {
+		return false
+	}
+	recv := r.prog.Children(kids[0])
+	return len(recv) > 0 && r.isGlobalRef(recv[0], "console")
 }
 
 // optionalLinkReceiver reports whether n is one link of an optional property chain,

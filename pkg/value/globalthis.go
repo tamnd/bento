@@ -36,10 +36,11 @@ func GlobalThisValue() Value {
 	}
 	g := NewObject()
 	// globalThis names itself, so the property is installed on the object it points
-	// at, after the object exists. process is the one Node global bento hosts as a
-	// value today; the list grows as the lowerer learns to host another.
+	// at, after the object exists. process and console are the Node globals bento
+	// hosts as values today; the list grows as the lowerer learns to host another.
 	defineGlobal(g, "globalThis", g)
 	defineGlobal(g, "process", ProcessValue())
+	defineGlobal(g, "console", ConsoleObject())
 	globalObject = g
 	return globalObject
 }

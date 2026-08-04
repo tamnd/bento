@@ -543,6 +543,11 @@ type Renderer struct {
 	// process.stdout.write) emit their own helper calls and do not set it, so a program
 	// that only uses those still emits no process object.
 	usesProcess bool
+	// usesConsole records that the program read the console global as a value, so the
+	// assembled program emits the package-level console object (see commonjs.go). A
+	// console.log call lowers to a direct helper call and does not set it, so only a
+	// program that names console outside a call it models pays for the object.
+	usesConsole bool
 	// usesGlobalThis records that the program named globalThis, so the assembled
 	// program emits the package-level global object (see globalthis.go). Every read,
 	// write, and enumeration over the name goes through that one object, so the flag

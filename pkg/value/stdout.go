@@ -48,7 +48,9 @@ func ConsoleError(parts ...BStr) {
 
 // writeConsoleLine joins the parts with a single space, appends a newline, and
 // writes the line in one call so a console line is not interleaved with another
-// writer between the arguments.
+// writer between the arguments. An open console.group indents the line, and a
+// line with an embedded newline is indented at every one of them, because the
+// indent belongs to the output rather than to the call.
 func writeConsoleLine(w io.Writer, parts []BStr) {
 	var b strings.Builder
 	for i, p := range parts {
@@ -57,6 +59,9 @@ func writeConsoleLine(w io.Writer, parts []BStr) {
 		}
 		b.WriteString(p.ToGoString())
 	}
-	b.WriteByte('\n')
-	_, _ = io.WriteString(w, b.String())
+	line := b.String()
+	if consoleIndent != "" {
+		line = consoleIndent + strings.ReplaceAll(line, "\n", "\n"+consoleIndent)
+	}
+	_, _ = io.WriteString(w, line+"\n")
 }
