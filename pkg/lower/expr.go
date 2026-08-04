@@ -350,9 +350,11 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		return r.propertyAccess(n)
 
 	case frontend.NodeThisKeyword:
-		// Inside a lowered constructor or method, this is the receiver.
+		// Inside a lowered constructor or method, this is the receiver. Outside one it
+		// is the call's to decide, and inside a plain function every call bento emits
+		// decides undefined; see thisplain.go.
 		if r.thisName == "" {
-			return nil, &NotYetLowerable{Reason: "this outside a lowered class body is a later slice"}
+			return r.plainThisValue()
 		}
 		return ident(r.thisName), nil
 
@@ -1318,7 +1320,11 @@ func (r *Renderer) assignValueProperty(left, right frontend.Node) (ast.Expr, err
 	if err != nil {
 		return nil, err
 	}
+	// The value lands in a property, so a plain function going in would be called with
+	// that object as its this; thisplain.go refuses such a body here.
+	done := r.pushReceiverPosition()
 	rhs, err := r.lowerExpr(right)
+	done()
 	if err != nil {
 		return nil, err
 	}

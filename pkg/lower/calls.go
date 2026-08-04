@@ -913,9 +913,11 @@ func (r *Renderer) restFuncValueArg(argNode frontend.Node, pt frontend.Type) (as
 // function value. call and apply invoke the function with the this argument the source
 // passes and a list of positional arguments, call spelling them inline and apply
 // gathering them in an array; bind fixes this and any leading arguments and yields a
-// new function value. bento's plain functions take no this, since a body that reads
-// this hands back when the function is lowered, so the this argument only sets a
-// receiver the function never reads and drops once its evaluation is known to be pure.
+// new function value. bento's plain functions take no this: a body that reads it reads
+// the undefined a receiver-free call leaves (thisplain.go), so the this argument only
+// sets a receiver the callee cannot see. It drops once its evaluation is known to be
+// pure, and a body that would have read it keeps the argument to null or undefined,
+// which is the same undefined the drop leaves behind.
 // call and apply then lower exactly as the direct call F(args) would, so an invocation
 // through them and a bare call share the same argument bridging. A method other than
 // these three reports ok=false and falls to the non-string handback, a later slice.
@@ -932,6 +934,14 @@ func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, arg
 	}
 	if len(argNodes) > 0 && !r.droppableThisArg(argNodes[0]) {
 		return nil, false, &NotYetLowerable{Reason: method + " with a this argument that is not a plain value is a later slice"}
+	}
+	// A function whose body reads this is no longer receiver-free: dropping the
+	// argument would hand it the undefined a plain call leaves where the source named
+	// a receiver. Strict mode passes null and undefined through untouched, so those
+	// two agree with what the body would read anyway and still drop; anything else is
+	// a real receiver bento has nowhere to put.
+	if len(argNodes) > 0 && !r.nullishThisArg(argNodes[0]) && r.funcValueReadsThis(recvNode) {
+		return nil, false, &NotYetLowerable{Reason: method + " supplying a receiver to a function that reads this is a later slice"}
 	}
 	callArgs, err := r.functionInvokeArgs(method, argNodes)
 	if err != nil {

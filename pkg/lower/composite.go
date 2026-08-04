@@ -1152,7 +1152,12 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "object literal property name is not a Go identifier"}
 		}
+		// The member's value fills a struct field, and o.m() on that field calls it with
+		// nothing bound, so a plain function whose body reads this refuses here the way
+		// objectLiteralMethod refuses the { m() {} } spelling of the same thing.
+		done := r.pushReceiverPosition()
 		val, err := r.lowerExpr(valNode)
+		done()
 		if err != nil {
 			return nil, err
 		}

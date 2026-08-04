@@ -1,2 +1,2 @@
 feature = "implicit-this-helper"
-handback = "this outside a lowered class body is a later slice"
+handback = "this in a non-strict function declaration is the global object, a later slice"
