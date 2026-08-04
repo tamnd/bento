@@ -135,6 +135,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// is read for emission, and the fixpoint inside the pass is what lets one function's
 	// answer feed the next one's.
 	r.collectBoxedSignatures(append([]frontend.Node{entry}, deps...))
+	// A function boxed into a dynamic slot at two sites is one function in the language,
+	// so the two boxes have to be one value. The same pre-pass point records which
+	// bindings hold a single function for the life of the run, which is what makes that
+	// safe; the box sites read the map and share a memo key.
+	r.collectSharedFuncBoxes(append([]frontend.Node{entry}, deps...))
 	// A module reached by require registers its class and enum declarations in the
 	// same shared pre-pass, so each emits a package-level Go type the loader body
 	// constructs and reads. It runs after the entry's collectors so an entry name

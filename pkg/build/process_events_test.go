@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"runtime"
 	"testing"
 )
 
@@ -32,19 +32,6 @@ func buildAndRunFileExit(t *testing.T, name, src string) (string, int) {
 		code = ee.ExitCode()
 	}
 	return string(out), code
-}
-
-// buildFileErr builds an entry and returns the build error, for a shape whose
-// hand-back is the point.
-func buildFileErr(t *testing.T, name, src string) error {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
-	_, err := Build(Options{Entry: path, Output: filepath.Join(dir, "prog")})
-	return err
 }
 
 // Node's process is an EventEmitter and its suite leans on four of its events: exit
@@ -158,16 +145,161 @@ func TestProcessListenerForAnEventNothingRaisesIsQuiet(t *testing.T) {
 	}
 }
 
-// TestProcessSignalListenerHandsBack pins the one event that is refused rather than
-// registered. The host really can deliver a signal, and a listener also suppresses the
-// default disposition, so accepting one and never delivering it would change what the
-// program does.
-func TestProcessSignalListenerHandsBack(t *testing.T) {
-	err := buildFileErr(t, "main.js", "process.on('SIGINT', () => {});\n")
-	if err == nil {
-		t.Fatal("a signal listener built, want a hand-back")
+// skipWithoutSignals skips a test on a platform with no signal to send. Windows has a
+// few signal names and no way to raise one, so a program there registers a listener
+// that can never fire, which is what Node does on windows too.
+func skipWithoutSignals(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("no deliverable signals on windows")
 	}
-	if want := "SIGINT"; !strings.Contains(err.Error(), want) {
-		t.Fatalf("hand-back reason %q does not name %q", err, want)
+}
+
+// TestProcessSignalIsDeliveredOnALoopTurn pins where a signal lands: the loop takes it
+// at the top of a turn, ahead of the timers that turn would run, so a program that
+// signals itself sees the rest of the current statement list first, then the handler,
+// then the timer. The handler is called with the signal's name and its number, the two
+// arguments Node passes. Every line of this was read off node 24.4.1.
+func TestProcessSignalIsDeliveredOnALoopTurn(t *testing.T) {
+	skipWithoutSignals(t)
+	got := buildAndRunFile(t, "main.js",
+		"process.on('SIGUSR2', (name, num) => { console.log('got', name, typeof num); });\n"+
+			"setTimeout(() => { console.log('timer'); }, 50);\n"+
+			"process.kill(process.pid, 'SIGUSR2');\n"+
+			"console.log('after kill');\n")
+	if want := "after kill\ngot SIGUSR2 number\ntimer\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestProcessSignalWithNothingScheduledIsNotDelivered pins the other half of that rule,
+// which is the surprising half: a signal listener does not keep a program alive, so a
+// program whose only remaining reason to run is the listener has already left by the
+// time the signal could be delivered. Node prints exactly this, and only this.
+func TestProcessSignalWithNothingScheduledIsNotDelivered(t *testing.T) {
+	skipWithoutSignals(t)
+	got := buildAndRunFile(t, "main.js",
+		"process.on('SIGUSR2', () => { console.log('got it'); });\n"+
+			"process.kill(process.pid, 'SIGUSR2');\n"+
+			"console.log('after kill');\n")
+	if want := "after kill\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestProcessRemoveAllListenersRestoresTheDefaultDisposition pins that the disarm is
+// real. A listener suppresses what the signal would otherwise do, so taking the last
+// one away has to hand the signal back to the host: after the removal the program is
+// killed by its own SIGINT rather than printing the line after it.
+//
+// The status is not checked as a number because a process killed by a signal has no
+// exit code of its own, only the signal that ended it; that the line after the kill
+// never printed is the same fact and reads the same on every platform.
+func TestProcessRemoveAllListenersRestoresTheDefaultDisposition(t *testing.T) {
+	skipWithoutSignals(t)
+	got, code := buildAndRunFileExit(t, "main.js",
+		"process.on('SIGINT', () => { console.log('handled'); });\n"+
+			"process.removeAllListeners('SIGINT');\n"+
+			"console.log('removed', process.listenerCount('SIGINT'));\n"+
+			"process.kill(process.pid, 'SIGINT');\n"+
+			"console.log('still here');\n")
+	if want := "removed 0\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+	if code == 0 {
+		t.Fatal("the program left cleanly, want it killed by its own SIGINT")
+	}
+}
+
+// TestProcessEmitterSurface pins the emitter methods against what node 24.4.1 prints
+// for the same program: once runs one time and is gone, prependListener puts a listener
+// at the front, off removes what on registered, emit answers whether anything was
+// listening, and listenerCount follows all of it.
+func TestProcessEmitterSurface(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"const a = () => { console.log('a'); };\n"+
+			"const b = () => { console.log('b'); };\n"+
+			"process.on('ping', a);\n"+
+			"process.once('ping', b);\n"+
+			"process.prependListener('ping', () => console.log('first'));\n"+
+			"console.log('count', process.listenerCount('ping'));\n"+
+			"console.log('emit', process.emit('ping'));\n"+
+			"console.log('emit', process.emit('ping'));\n"+
+			"process.off('ping', a);\n"+
+			"console.log('emit', process.emit('ping'));\n"+
+			"console.log('nobody', process.emit('nobody'));\n")
+	want := "count 3\nfirst\na\nb\nemit true\nfirst\na\nemit true\nfirst\nemit true\nnobody false\n"
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestProcessOffFindsAListenerBoxedAtAnotherSite pins the identity that makes removal
+// work at all. The listener is boxed once where it is registered and again where it is
+// removed, and the two have to be the same value for removeListener to find it, which
+// is what the shared box gives a module-level binding.
+func TestProcessOffFindsAListenerBoxedAtAnotherSite(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"const h = () => { console.log('h'); };\n"+
+			"process.on('e', h);\n"+
+			"process.removeListener('e', h);\n"+
+			"console.log('left', process.listenerCount('e'));\n"+
+			"console.log('emit', process.emit('e'));\n")
+	if want := "left 0\nemit false\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestProcessOnAnEventNamedAtRunTime pins that the event name does not have to be a
+// literal. The registration goes through the process object, which reads the name at
+// run time, so a computed name and a symbol both reach the same registry.
+func TestProcessOnAnEventNamedAtRunTime(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"const evName = 'ev' + 1;\n"+
+			"process.on(evName, (x) => { console.log('got', x); });\n"+
+			"const s = Symbol('tag');\n"+
+			"process.on(s, (x) => { console.log('sym', x); });\n"+
+			"process.emit('ev1', 'a');\n"+
+			"process.emit(s, 'b');\n")
+	if want := "got a\nsym b\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestProcessOnRejectsANonFunctionListener pins Node's ERR_INVALID_ARG_TYPE, down to
+// the message: a listener that is not callable is refused where it is registered rather
+// than failing later in an emit that no longer names the registration.
+func TestProcessOnRejectsANonFunctionListener(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"try { process.on('x', 'notafunction'); } catch (e) { console.log(e.code, e.message); }\n")
+	want := "ERR_INVALID_ARG_TYPE The \"listener\" argument must be of type function. " +
+		"Received type string ('notafunction')\n"
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestProcessOnAnUncatchableSignalThrows pins the other refusal Node makes at
+// registration. SIGKILL and SIGSTOP cannot be caught by anyone, so a listener for one
+// would be a promise the platform cannot keep, and Node answers with the libuv error
+// rather than accepting it.
+func TestProcessOnAnUncatchableSignalThrows(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"try { process.on('SIGKILL', () => {}); } catch (e) { console.log(e.code, e.message); }\n"+
+			"console.log('count', process.listenerCount('SIGKILL'));\n")
+	if want := "EINVAL uv_signal_start EINVAL\ncount 0\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// TestProcessKillReportsAnUnknownSignal pins that a misspelled signal name is an error
+// rather than a call that quietly sends nothing, and that signal 0 sends nothing on
+// purpose and answers whether the process is there, which is what a liveness check uses.
+func TestProcessKillReportsAnUnknownSignal(t *testing.T) {
+	got := buildAndRunFile(t, "main.js",
+		"try { process.kill(process.pid, 'SIGFOO'); } catch (e) { console.log(e.code, e.message); }\n"+
+			"console.log('alive', process.kill(process.pid, 0));\n")
+	if want := "ERR_UNKNOWN_SIGNAL Unknown signal: SIGFOO\nalive true\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
 	}
 }

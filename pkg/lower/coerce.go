@@ -2069,13 +2069,26 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 	// when it is written named at the boxing site. An anonymous inline literal stays
 	// anonymous, which is also what the language says: passed straight as an
 	// argument with no name of its own, it never gets one.
+	var boxed ast.Expr = box
 	if name := r.boxedFuncName(src); name != "" {
-		return &ast.CallExpr{
+		boxed = &ast.CallExpr{
 			Fun:  sel("value", "WithName"),
 			Args: []ast.Expr{box, &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(name)}},
+		}
+	}
+	// A reference to a module-level binding is the same function every time it is read,
+	// so its box is memoized under a key rather than built fresh here. That is what
+	// makes `h === h` true across two boxings and what lets process.off find the
+	// listener process.on registered. A reference with no such key, an inline literal or
+	// a call result, keeps its own wrapper, which is right: it is a new function each
+	// time it is evaluated.
+	if key, ok := r.sharedFuncBoxKey(src); ok {
+		return &ast.CallExpr{
+			Fun:  sel("value", "SharedFunc"),
+			Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(key)}, boxed},
 		}, nil
 	}
-	return box, nil
+	return boxed, nil
 }
 
 // boxedFuncName is the name a function value carries into a dynamic slot, the
