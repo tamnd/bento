@@ -129,8 +129,33 @@ func (r *Renderer) referenceMissesFileBinding(n frontend.Node) bool {
 		if d.File().Kind != frontend.FileDTS || frontend.IsBentoAmbientPath(d.File().Path) {
 			return false
 		}
+		if !isLibraryGlobalDecl(d) {
+			return false
+		}
 	}
 	return true
+}
+
+// isLibraryGlobalDecl reports whether a standard library declaration is a global
+// binding rather than a member of some type.
+//
+// This is what separates `name` the DOM global from `log` the Console method. Both
+// resolve to a symbol declared only in a .d.ts, and a walk that looks at every
+// identifier reaches both, since the name in `console.log(x)` is an identifier whose
+// symbol is the method's. Only the first is a name the program's own top-level
+// binding can collide with; the second is a property, and its own file binding a
+// `log` array has nothing to do with it.
+//
+// A global is declared with `declare var`, `declare function` or `declare class`, so
+// the declaration is one of the three statement forms. A member is a property or
+// method signature, which the adapter does not name, so it reads as unknown and is
+// refused here.
+func isLibraryGlobalDecl(d frontend.Node) bool {
+	switch d.Kind() {
+	case frontend.NodeVariableDeclaration, frontend.NodeFunctionDeclaration, frontend.NodeClassDeclaration:
+		return true
+	}
+	return false
 }
 
 // fileBindsName reports whether the file holding n binds n's name at its own top

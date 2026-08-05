@@ -113,3 +113,29 @@ func TestAStaticMemberOnAHostedGlobalStaysStaticThroughTheBoxedPass(t *testing.T
 		t.Fatalf("want the receiver to take the static member path:\n%s", got)
 	}
 }
+
+// TestAMemberNameIsNotACollision pins the other half of the collision test. The name
+// in console.log(x) is an identifier whose symbol is Console's method, declared only
+// in a .d.ts, so a file that also binds a top-level `log` looks like a collision to a
+// walk that reads every identifier. It is not one: a property and a binding of the
+// same spelling are unrelated, and refusing here took seven conformance fixtures down.
+func TestAMemberNameIsNotACollision(t *testing.T) {
+	src := "const log: string[] = [];\n" +
+		"log.push(\"a\");\n" +
+		"console.log(log.join(\",\"));\n"
+	got := renderProgram(t, src)
+	if !strings.Contains(got, "value.ConsoleLog") {
+		t.Fatalf("want the unit to lower rather than hand back:\n%s", got)
+	}
+}
+
+// TestAStaticMemberOnAHostedGlobalStillLowersThroughRenderFunc pins the single-function
+// entry point. It runs no program pre-pass of its own, so without one of its own every
+// global inside the body reads as a value and Number.MAX_VALUE loses the static member
+// path it has always had.
+func TestAStaticMemberOnAHostedGlobalStillLowersThroughRenderFunc(t *testing.T) {
+	got := renderProgram(t, "function f(): number { return Number.MAX_VALUE; }\nconsole.log(f());\n")
+	if !strings.Contains(got, "value.NumberMaxValue") {
+		t.Fatalf("want the static member:\n%s", got)
+	}
+}

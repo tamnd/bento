@@ -49,6 +49,13 @@ func (r *Renderer) hostedGlobalRef(n frontend.Node) bool {
 	if n.Kind() != frontend.NodeIdentifier {
 		return false
 	}
+	// An entry point that never ran the pre-pass cannot tell a receiver from a value,
+	// and answering yes there would take the static member paths away from a caller
+	// that never asked for any of this. No set means no value form, which is what the
+	// lowering did before this file existed.
+	if r.memberReceivers == nil {
+		return false
+	}
 	if !value.HostsGlobal(r.prog.Text(n)) {
 		return false
 	}
