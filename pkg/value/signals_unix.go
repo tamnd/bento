@@ -2,7 +2,10 @@
 
 package value
 
-import "syscall"
+import (
+	"os"
+	"syscall"
+)
 
 // hostSignal reads a signal name the way Node's constants do, on the platforms that
 // have a real signal set. Missing is not an error: a name this platform does not
@@ -51,4 +54,11 @@ var unixSignals = map[string]syscall.Signal{
 func hostSignal(name string) (syscall.Signal, bool) {
 	sig, ok := unixSignals[name]
 	return sig, ok
+}
+
+// sendSignal delivers the signal. Every unix signal number is deliverable, including
+// zero, which sends nothing and reports whether the process is there, so the platform
+// call needs no help.
+func sendSignal(p *os.Process, sig syscall.Signal) error {
+	return p.Signal(sig)
 }

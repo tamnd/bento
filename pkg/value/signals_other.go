@@ -2,7 +2,10 @@
 
 package value
 
-import "syscall"
+import (
+	"os"
+	"syscall"
+)
 
 // hostSignal on the platforms without a unix signal set, which for bento means windows.
 // Go defines a handful of signal values there, and only a couple of them are ever
@@ -31,4 +34,24 @@ var otherSignals = map[string]syscall.Signal{
 func hostSignal(name string) (syscall.Signal, bool) {
 	sig, ok := otherSignals[name]
 	return sig, ok
+}
+
+// sendSignal delivers what windows can deliver, which is not the unix set.
+//
+// Signal zero sends nothing and asks whether the process exists, and on windows the
+// asking already happened: os.FindProcess opens a handle there and fails for a pid that
+// is not running, where on unix it always succeeds.
+//
+// The three signals that end a process end it, which is what Node does on windows: a
+// SIGTERM there is not a request the target can decline, it is a termination. The rest
+// have a name and no way to be raised, so they answer ENOSYS rather than quietly doing
+// nothing, which is libuv's answer too.
+func sendSignal(p *os.Process, sig syscall.Signal) error {
+	switch sig {
+	case 0:
+		return nil
+	case syscall.SIGINT, syscall.SIGKILL, syscall.SIGTERM:
+		return p.Kill()
+	}
+	return errSignalUnsupported
 }

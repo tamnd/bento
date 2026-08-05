@@ -1,6 +1,7 @@
 package value
 
 import (
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -170,13 +171,23 @@ func ProcessKill(args []Value) Value {
 		Throw(NewNodeError("Error", "ESRCH", FromGoString("kill ESRCH")))
 		return Undefined
 	}
-	if serr := p.Signal(sig); serr != nil {
+	if serr := sendSignal(p, sig); serr != nil {
+		if errors.Is(serr, errSignalUnsupported) {
+			Throw(NewNodeError("Error", "ENOSYS", FromGoString("kill ENOSYS")))
+			return Undefined
+		}
 		Throw(NewNodeError("Error", "ESRCH", FromGoString("kill ESRCH")))
 		return Undefined
 	}
 	waitForOwnDeath(int(ToNumber(target)), sig)
 	return True
 }
+
+// errSignalUnsupported is what sendSignal answers for a signal the platform cannot
+// send at all, which is a different thing from a process that is not there. Node
+// reports it as ENOSYS, and libuv answers the same way for the signals windows has a
+// name for and no way to raise.
+var errSignalUnsupported = errors.New("the platform cannot send this signal")
 
 // signalSelfWait is how long a program waits after signalling itself with a signal it
 // does not listen for. Under Node the kill lands before the call returns, so the
