@@ -129,6 +129,26 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// same pre-pass records which arrows are escape-safe so the arrow's declaration
 	// lowers the default away and its call sites fill it, both reading one map.
 	r.collectArrowDefaults(entry)
+	// A file's own top-level bindings are read from the same statement lists, so a
+	// reference to a name the file binds is that binding rather than the library global
+	// of the same name.
+	r.collectFileScopeNames(append([]frontend.Node{entry}, deps...))
+	// A file that binds a name the standard library also declares gets two symbols,
+	// its own for the declaration and the library's for every reference, so the
+	// program says one thing and the checker answers another. Nothing the lowering
+	// does downstream can reconcile that, so the unit hands back here rather than
+	// answer for a binding the program never meant; see fileglobals.go.
+	if r.shadowedGlobal != "" {
+		return Program{}, &NotYetLowerable{Reason: "a top-level binding of " + r.shadowedGlobal +
+			" collides with the standard library's global of that name, which the checker resolves every reference to"}
+	}
+	// Which references read a global as a value, rather than ask it for a member, is
+	// decided from the same trees. It has to be in hand before the boxed-signature pass
+	// below, not only before lowering: that pass asks isBoxedChain about the same
+	// expressions the lowering does, and a global that reads as a box in one and as a
+	// static receiver in the other records a boxed loop variable the loop then emits a
+	// bento string into.
+	r.collectMemberReceivers(append([]frontend.Node{entry}, deps...))
 	// A declared signature a call site hands a box to takes a boxed slot, and a declared
 	// function whose every return is a box answers one. Both are decisions about a
 	// function made from outside its own body, so they settle here, before any signature

@@ -43,7 +43,15 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// Number, Array) is excluded too: those are callable objects in the type system,
 	// but each has its own dedicated lowering below, so the reserved-Call path must
 	// not shadow them. An import binding is excluded for the same reason.
-	if kids[0].Kind() != frontend.NodePropertyAccessExpression && !r.isBuiltinCallee(kids[0]) && r.isCallableObject(r.prog.TypeAt(kids[0])) {
+	// A callee whose slot holds a box is excluded as well. `const S = Symbol` types as
+	// SymbolConstructor, a callable object, while what the binding holds is the
+	// runtime's one interned value, so the call dispatches through value.Call with
+	// boxed arguments rather than through a reserved Call field on a struct bento
+	// never built. Binding the arguments to the checker's signature is what makes the
+	// difference visible: SymbolConstructor's parameter is string | number | undefined,
+	// so the argument would arrive as a tagged union where Call takes a value.Value.
+	if kids[0].Kind() != frontend.NodePropertyAccessExpression && !r.isBuiltinCallee(kids[0]) &&
+		!r.isDynamic(kids[0]) && r.isCallableObject(r.prog.TypeAt(kids[0])) {
 		recv, err := r.lowerExpr(kids[0])
 		if err != nil {
 			return nil, err
@@ -276,6 +284,16 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	// would otherwise decline the name it is declared as an ambient global under.
 	if expr, handled, err := r.hostCalleeCall(kids[0], kids[1:]); handled || err != nil {
 		return expr, err
+	}
+	// A call to an ambient global bento hosts a value form for, whose own direct
+	// lowering above did not claim this call shape, goes through that value: the
+	// runtime behind the name is the same either way, so Object(x) runs what the
+	// value's call body runs rather than refusing for a name bento does host. The
+	// result has to be a box for this to be safe, since the value's Call answers one
+	// whatever the checker types the call, so a call the checker gives a static type
+	// (Array(3) is an any[], a Go slice at the consumer) keeps the refusal below.
+	if r.hostedGlobalRef(kids[0]) && r.isDynamic(n) {
+		return r.dynamicCall(kids[0], kids[1:])
 	}
 	// A bare call to any other ambient global (eval, and the globals whose lowering
 	// is a later slice) is not a user binding and has no generated Go function to

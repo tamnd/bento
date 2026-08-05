@@ -123,9 +123,15 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 			// user binding and has no generated Go function behind its exported name. The
 			// call path lowers the globals bento models and hands the rest back; a bare
 			// value reference has no such path, and capitalizing the name below would emit
-			// an undefined symbol like Eval. Hand back so the unit stays truthful instead
-			// of naming a function the runtime never declared. An indirect eval, var s =
-			// eval, is the shape this catches.
+			// an undefined symbol like Eval. One bento hosts reads as its interned runtime
+			// value instead (globalvalue.go), which calls the same runtime the direct call
+			// lowers to and compares equal to itself wherever the program reaches it. The
+			// rest hand back so the unit stays truthful instead of naming a function the
+			// runtime never declared. An indirect eval, var s = eval, is the shape that
+			// catches.
+			if r.hostedGlobalRef(n) {
+				return r.hostedGlobalExpr(n), nil
+			}
 			if r.isAmbientGlobal(n) {
 				return nil, &NotYetLowerable{Reason: "the ambient global " + r.prog.Text(n) + " used as a value is a later slice"}
 			}
@@ -247,8 +253,14 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// only the unmodeled remainder, including the object read under a member
 		// access like RegExp.length. A built-in error constructor is excluded: it has
 		// a value form (value.ErrorConstructor) the coercion path boxes it into, the
-		// shape assert.throws relies on. Hand back the rest until the global's object
-		// form is modeled, the way the indirect-eval value path does.
+		// shape assert.throws relies on. A global bento hosts is excluded the same way:
+		// it reads as the interned value form the runtime holds for the name
+		// (globalvalue.go), so Symbol handed to a helper is the Symbol every other
+		// reference reaches. Hand back the rest until the global's object form is
+		// modeled, the way the indirect-eval value path does.
+		if r.hostedGlobalRef(n) {
+			return r.hostedGlobalExpr(n), nil
+		}
 		if _, isErrCtor := r.errorConstructorRef(n); !isErrCtor && r.isAmbientGlobal(n) {
 			return nil, &NotYetLowerable{Reason: "the ambient global " + r.prog.Text(n) + " read as a value is a later slice"}
 		}

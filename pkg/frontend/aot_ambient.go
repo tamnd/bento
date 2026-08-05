@@ -40,6 +40,13 @@ func devolume(p string) string {
 // volume.
 func isAmbientPath(p string) bool { return devolume(p) == ambientPath }
 
+// IsBentoAmbientPath reports whether a declaration's file is the synthetic library
+// bento writes itself, as opposed to the TypeScript standard library the checker
+// bundles. Both are .d.ts files, so a consumer that has to tell a global bento
+// declares (process, module, require) from one it merely inherits (name, parseInt,
+// Symbol) asks this rather than reading the path.
+func IsBentoAmbientPath(p string) bool { return isAmbientPath(p) }
+
 // ambientSource declares the Node globals and node: modules the AOT compiler can
 // lower. process is typed any, the same shape module, exports, and require take,
 // because the lowerer backs it with a real package-level process object
