@@ -421,6 +421,17 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.isGlobalRef(n, "console") {
 		return true
 	}
+	// An ambient global bento hosts a value form for is that value, whatever the
+	// standard library types the name. Symbol is a SymbolConstructor and atob is a
+	// (data: string) => string to the checker, shapes with no Go declaration behind
+	// them, while what the name reads as is one interned value.Value. Routing the
+	// reference here is what gives `const S = Symbol` a boxed slot, `a === atob` the
+	// dynamic comparison, and `run(btoa, s)` a boxed argument, instead of a Go
+	// expression naming a function that was never generated. A receiver is excluded by
+	// hostedGlobalRef, so Object.keys(o) still takes the static member path.
+	if r.hostedGlobalValueRef(n) {
+		return true
+	}
 	// A read of a caught error's .message or .name lowers to a bento string
 	// (member.go), so it is not a boxed value even though the checker types the
 	// catch binding any or unknown; keeping it off the dynamic path routes a +

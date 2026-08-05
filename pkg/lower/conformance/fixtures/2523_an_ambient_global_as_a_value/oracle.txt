@@ -1,0 +1,11 @@
+== stdout:
+read true function atob
+global true
+call bento
+passed b2s=
+ctor true function false
+coerce true
+needs new TypeError Constructor Map requires 'new'
+
+== exit:
+0

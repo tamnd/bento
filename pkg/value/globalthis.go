@@ -41,6 +41,14 @@ func GlobalThisValue() Value {
 	defineGlobal(g, "globalThis", g)
 	defineGlobal(g, "process", ProcessValue())
 	defineGlobal(g, "console", ConsoleObject())
+	// The globals with a value form (globalvalue.go) go on by the same rule, and by
+	// the same identity: the entry is the interned value the bare name reads, so
+	// globalThis.atob === atob holds the way globalThis.process === process does. A
+	// program reaching one of them through a run-time key, globalThis[name], is the
+	// shape that needs them here rather than on the bare-name path alone.
+	for _, name := range HostedGlobalNames() {
+		defineGlobal(g, name, GlobalValue(name))
+	}
 	globalObject = g
 	return globalObject
 }

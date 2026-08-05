@@ -346,6 +346,24 @@ type Renderer struct {
 	// lists, where a binding is evaluated once for the life of the run; a binding made
 	// inside a function or a loop is not in here and keeps a wrapper per box site.
 	sharedFuncBoxes map[frontend.Symbol]string
+	// fileScopeNames maps a file's path to the names it binds at its own top level, so
+	// a reference to one of them is read as the file's binding and not as the library
+	// global that shares the name. A CommonJS file's top level is a scope of its own
+	// under Node and the global scope to the checker, and this is what reconciles the
+	// two; see fileglobals.go.
+	fileScopeNames map[string]map[string]bool
+	// shadowedGlobal is the first name a file binds at its own top level whose
+	// references the checker resolved to the standard library instead, the collision
+	// the whole unit hands back on; see fileglobals.go.
+	shadowedGlobal string
+	// memberReceivers is the set of nodes some member access reads a member off. A
+	// hosted global in there is asked for a member rather than read as a value, and the
+	// static member paths keep it; see globalvalue.go.
+	memberReceivers map[frontend.Node]bool
+	// callCallees is the set of nodes some call or new calls. A hosted global in there
+	// is being called, and its call lowering decides what the call produces, so the
+	// reference is not read as a boxed value; see globalvalue.go.
+	callCallees map[frontend.Node]bool
 	// boxedLoopVars is the set of for...of binding symbols that iterate a box, so each
 	// element they take is one. The loop lowering marks the same binding dynBound as it
 	// goes, but that happens long after the pre-pass has decided, so the pass keeps its

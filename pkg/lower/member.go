@@ -1139,6 +1139,14 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			if r.isGlobalRef(n, "console") {
 				return true
 			}
+			// A hosted ambient global is a box for the same reason console is: what the
+			// name reads as is one interned value.Value, not the standard library shape
+			// the checker names. That is what carries the box through a binding, so
+			// `const dec = atob` takes a value.Value slot and dec(s) dispatches through
+			// the runtime call rather than emitting a Go call on a struct.
+			if r.hostedGlobalValueRef(n) {
+				return true
+			}
 			return r.isDynBoundReceiver(n) || r.isBoxedParamRead(n) ||
 				r.isBoxedLoopVar(n) || r.identifierBindsABox(n)
 		case frontend.NodeObjectLiteralExpression, frontend.NodeArrayLiteralExpression:

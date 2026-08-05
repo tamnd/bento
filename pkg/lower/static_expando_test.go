@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -77,6 +78,23 @@ func renderUncheckedJS(t *testing.T, src string) string {
 		t.Fatalf("RenderProgram: %v", err)
 	}
 	return p.Source
+}
+
+// renderUncheckedJSHandBack loads src the way the AOT front door loads a .js entry
+// and asserts the assembler hands the whole program back, returning the reason. It is
+// the handback counterpart of renderUncheckedJS, for the cases a .js root is the only
+// way to reach: a top level that binds a name the standard library declares is a hard
+// redeclaration error in a .ts root and never reaches the renderer at all.
+func renderUncheckedJSHandBack(t *testing.T, src string) string {
+	t.Helper()
+	prog := compileUncheckedJS(t, src)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	var nyl *NotYetLowerable
+	if !errors.As(err, &nyl) {
+		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	}
+	return nyl.Reason
 }
 
 func renderExpandoJS(t *testing.T, src string) string {

@@ -2267,6 +2267,15 @@ func (r *Renderer) flattenCallableBinding(n frontend.Node) ([]ast.Stmt, bool, er
 	if !r.isCallableObject(r.prog.TypeAt(nameNode)) {
 		return nil, false, nil
 	}
+	// A callable object whose initializer is a hosted ambient global is that global's
+	// one interned value, not an object bento can build a struct for. Symbol and Map
+	// are SymbolConstructor and MapConstructor to the checker, callable objects with
+	// properties, so they land here; the ordinary variable path gives the binding a
+	// value.Value slot, which is what keeps `const S = Symbol` equal to Symbol and
+	// calling what Symbol calls.
+	if r.hostedGlobalRef(kids[len(kids)-1]) {
+		return nil, false, nil
+	}
 	name, ok := localName(r.prog.Text(nameNode))
 	if !ok {
 		return nil, true, &NotYetLowerable{Reason: "a callable object bound to a non-identifier name is a later slice"}

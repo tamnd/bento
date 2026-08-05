@@ -23,6 +23,10 @@ import (
 // construct the statement and expression subset does not cover yet, so a caller
 // emits Go only for what lowers soundly.
 func (r *Renderer) RenderFunc(fn frontend.Node) (Decl, error) {
+	// One function is the whole unit here, so the pre-pass the program path runs over
+	// an entry and its dependencies runs over this body instead. Without it every
+	// global reads as a value, and Number.MAX_VALUE loses its static member path.
+	r.collectMemberReceivers([]frontend.Node{fn})
 	decl, err := r.funcDecl(fn)
 	if err != nil {
 		return Decl{}, err
