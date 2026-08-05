@@ -108,7 +108,9 @@ func hostedGlobalCalls() map[string]callFn {
 		"parseInt":   func(a []Value) Value { return Number(ParseInt(ToString(Arg(a, 0)), ToNumber(Arg(a, 1)))) },
 		"parseFloat": func(a []Value) Value { return Number(ParseFloat(ToString(Arg(a, 0)))) },
 		"isNaN":      func(a []Value) Value { return Bool(math.IsNaN(ToNumber(Arg(a, 0)))) },
-		"isFinite":   func(a []Value) Value { return Bool(!math.IsNaN(ToNumber(Arg(a, 0))) && !math.IsInf(ToNumber(Arg(a, 0)), 0)) },
+		"isFinite": func(a []Value) Value {
+			return Bool(!math.IsNaN(ToNumber(Arg(a, 0))) && !math.IsInf(ToNumber(Arg(a, 0)), 0))
+		},
 
 		// The scheduling globals hand a callback to the event loop and answer the handle
 		// that cancels it. A handle is a number here, which is what the ambient
