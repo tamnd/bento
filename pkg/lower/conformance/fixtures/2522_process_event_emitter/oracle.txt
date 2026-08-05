@@ -1,0 +1,10 @@
+== stdout:
+count 2
+saved 1
+once true false
+cleared false 0
+first 1|second 1|first 2|once 3|pre 5|first 5|sym
+same true true
+
+== exit:
+0

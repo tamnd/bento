@@ -340,6 +340,12 @@ type Renderer struct {
 	// one Go declaration, so the one-place condition the whole pass rests on holds, and
 	// the store that boxes it can sit anywhere, including inside a callback.
 	boxedLocals map[frontend.Symbol]bool
+	// sharedFuncBoxes maps a module-level binding to the key its boxed form is memoized
+	// under at run time, so the same function boxed at two sites is one value.Value and
+	// compares equal to itself. It is filled by a pre-pass over the top-level statement
+	// lists, where a binding is evaluated once for the life of the run; a binding made
+	// inside a function or a loop is not in here and keeps a wrapper per box site.
+	sharedFuncBoxes map[frontend.Symbol]string
 	// boxedLoopVars is the set of for...of binding symbols that iterate a box, so each
 	// element they take is one. The loop lowering marks the same binding dynBound as it
 	// goes, but that happens long after the pre-pass has decided, so the pass keeps its

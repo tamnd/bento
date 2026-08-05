@@ -80,12 +80,58 @@ func ProcessValue() Value {
 		processExit(args)
 		return Undefined
 	}))
-	p.Set(FromGoString("on"), NewFunc(func(args []Value) Value {
-		processOn(args)
-		return processObject
-	}))
+	p.Set(FromGoString("kill"), NewFunc(ProcessKill))
 	processObject = p
+	setProcessEmitter(p)
 	return processObject
+}
+
+// setProcessEmitter puts the EventEmitter surface on the process object. Node's process
+// is an emitter, so a program reaches for the whole method set rather than just on:
+// once for a listener that should run one time, off to take one away, listeners to save
+// and restore what is registered, and emit to raise an event of its own.
+//
+// The methods answer process itself where Node's do, so the chained
+// process.on(...).on(...) a test writes works. It is set after the cache is filled
+// because each answer is the cached object, and building it here would recurse.
+func setProcessEmitter(p Value) {
+	on := NewFunc(func(args []Value) Value {
+		return OnProcessEventNamed(Arg(args, 0), Arg(args, 1))
+	})
+	off := NewFunc(func(args []Value) Value {
+		return RemoveProcessListener(Arg(args, 0), Arg(args, 1))
+	})
+	p.Set(FromGoString("on"), on)
+	p.Set(FromGoString("addListener"), on)
+	p.Set(FromGoString("off"), off)
+	p.Set(FromGoString("removeListener"), off)
+	p.Set(FromGoString("once"), NewFunc(func(args []Value) Value {
+		return OnceProcessEvent(Arg(args, 0), Arg(args, 1))
+	}))
+	p.Set(FromGoString("prependListener"), NewFunc(func(args []Value) Value {
+		return PrependProcessListener(Arg(args, 0), Arg(args, 1))
+	}))
+	p.Set(FromGoString("prependOnceListener"), NewFunc(func(args []Value) Value {
+		return PrependOnceProcessListener(Arg(args, 0), Arg(args, 1))
+	}))
+	p.Set(FromGoString("removeAllListeners"), NewFunc(func(args []Value) Value {
+		return RemoveAllProcessListeners(args...)
+	}))
+	p.Set(FromGoString("listeners"), NewFunc(func(args []Value) Value {
+		return ProcessListeners(Arg(args, 0))
+	}))
+	p.Set(FromGoString("listenerCount"), NewFunc(func(args []Value) Value {
+		return Number(ProcessListenerCount(Arg(args, 0)))
+	}))
+	p.Set(FromGoString("eventNames"), NewFunc(func(args []Value) Value {
+		return ProcessEventNames()
+	}))
+	p.Set(FromGoString("emit"), NewFunc(func(args []Value) Value {
+		if len(args) == 0 {
+			return False
+		}
+		return EmitProcessEventNamed(args[0], args[1:]...)
+	}))
 }
 
 // processArgv builds process.argv, the argument vector a program slices to read
@@ -186,23 +232,6 @@ func processExit(args []Value) {
 	}
 	RunExitCallbacksWithCode(code)
 	os.Exit(code)
-}
-
-// processOn registers a process event listener, the runtime behind
-// process.on(event, fn). It routes to the same registry the lowerer's static
-// process.on path uses, so a listener registered either way runs in the one
-// registration order. A signal event throws rather than registering: the host really
-// can raise one, and a listener also suppresses the default disposition, so accepting
-// it and never delivering would change what the program does. Every other event
-// registers; the four a compiled program raises are described in processevents.go and
-// the rest never fire, which is what Node does when nothing raises them.
-func processOn(args []Value) {
-	event := ToString(Arg(args, 0)).ToGoString()
-	if IsSignalEvent(event) {
-		Throw(NewError(FromGoString("process.on('" + event + "') is not implemented in bento yet; a signal listener is a later slice")))
-		return
-	}
-	OnProcessEvent(event, Arg(args, 1))
 }
 
 // nodePlatform maps the Go operating system name to the string Node reports

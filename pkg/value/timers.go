@@ -226,15 +226,23 @@ func TimerRefresh(handle Value) float64 {
 // exits on its own. A program with a live interval it never clears therefore runs
 // forever here exactly as it does under Node, rather than exiting early and losing the
 // callbacks it asked for.
+//
+// A signal that arrived is delivered at the top of a turn, ahead of the timers due in
+// that same turn, which is where Node delivers one. A signal does not keep the loop
+// turning on its own, again matching Node: a program whose only reason to stay is a
+// listener for SIGINT has already left by the time the signal could arrive.
 func RunEventLoop() {
 	RunMicrotasks()
 	for hasPendingWork() {
+		drainSignals()
 		if d := timeUntilNextDue(); d > 0 {
-			time.Sleep(d)
+			waitForWork(d)
+			drainSignals()
 		}
 		runDueTimers()
 		runImmediates()
 	}
+	drainSignals()
 }
 
 // hasPendingWork reports whether anything that keeps the process alive is still
