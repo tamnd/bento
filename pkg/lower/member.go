@@ -1649,7 +1649,7 @@ func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	// not built reads undefined rather than handing back the way the dotted form can:
 	// the bracket form is the run-time-keyed shape, and nothing separates a constant
 	// key from a computed one once the read dispatches. See globalthis.go.
-	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isGlobalThisRef(obj) && !r.isEmptyObjectTopType(r.prog.TypeAt(obj)) && !r.isStringIndexDict(r.prog.TypeAt(obj)) {
+	if key, ok := r.pureConstStringKey(idxNode); ok && !r.isDynBoundReceiver(obj) && !r.isGlobalThisRef(obj) && !r.isObjectTopType(r.prog.TypeAt(obj)) && !r.isStringIndexDict(r.prog.TypeAt(obj)) {
 		objType := r.prog.TypeAt(obj)
 		if objType.Flags&frontend.TypeObject != 0 && !r.isTypedArray(obj) {
 			if _, isArray := r.prog.ElementType(objType); !isArray {

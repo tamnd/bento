@@ -176,6 +176,17 @@ func (r *Renderer) consoleRef() ast.Expr {
 	return ident(bentoConsoleName)
 }
 
+// bufferRef lowers a bare Buffer reference to the runtime's Buffer constructor. Unlike
+// process and console it needs no package-level variable: the constructor is a value the
+// runtime builds once and caches, so a call to it is already the identity every other
+// reference reaches, and globalThis.Buffer and require('buffer').Buffer are that same
+// value. Everything a program does with the name, a static call, a member read, an
+// instanceof, dispatches dynamically off it.
+func (r *Renderer) bufferRef() ast.Expr {
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "BufferConstructor")}
+}
+
 // commonjsModuleDecls returns the package-level declarations that back the module,
 // exports, and require globals, or nil when the program named none of them. The
 // exports object is declared first and the module object holds it under the

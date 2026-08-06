@@ -621,10 +621,10 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.isStringIndexDict(r.prog.TypeAt(n)) {
 		return true
 	}
-	// The empty object type { } lowers to a boxed value.Value too (lower.go
-	// isEmptyObjectTopType): it is the structural top type, not a shape, so a value of
-	// it is dynamic and a narrowed member read dispatches off the box at runtime.
-	if r.isEmptyObjectTopType(r.prog.TypeAt(n)) {
+	// An object top, { } or the `object` keyword, lowers to a boxed value.Value too
+	// (lower.go isObjectTopType): neither is a shape, so a value of one is dynamic
+	// and a narrowed member read dispatches off the box at runtime.
+	if r.isObjectTopType(r.prog.TypeAt(n)) {
 		return true
 	}
 	// A user type guard narrows a { } binding to a concrete shape at a use site, so

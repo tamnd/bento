@@ -42,7 +42,7 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 		// flag and force every read to unwrap the Opt before the box, which the dynamic
 		// member and element paths do not do. The empty object top type { } is the
 		// motivating case, as { } | undefined.
-		if inner.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isEmptyObjectTopType(inner) || r.isStringIndexDict(inner) {
+		if inner.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isObjectTopType(inner) || r.isStringIndexDict(inner) {
 			r.requireImport(valuePkg)
 			return sel("value", "Value"), nil
 		}

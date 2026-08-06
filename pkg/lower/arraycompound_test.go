@@ -38,7 +38,11 @@ console.log(total);
 // recursion establishes.
 func TestCompoundArrayWriteRepeatsIndex(t *testing.T) {
 	skipIfShort(t)
-	const src = `class Buffer {
+	// The class is named Frame rather than Buffer because Buffer is a declared global
+	// now, and a top-level class in a script shares the global scope with it. That is
+	// TypeScript's own rule against @types/node, not a bento restriction: the same
+	// declaration inside a module has its own scope and does not collide.
+	const src = `class Frame {
   data: number[];
   t: number;
   constructor() {
@@ -50,7 +54,7 @@ func TestCompoundArrayWriteRepeatsIndex(t *testing.T) {
     this.data[this.t] -= 1;
   }
 }
-const b = new Buffer();
+const b = new Frame();
 b.bump();
 console.log(b.data[2]);
 console.log(b.data[3]);

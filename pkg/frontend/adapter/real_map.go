@@ -35,6 +35,7 @@ func mapTypeFlags(f shim.TypeFlags) TypeFlags {
 	set(shim.TypeFlagsIntersection, TypeIntersection)
 	set(shim.TypeFlagsTypeParameter, TypeTypeParameter)
 	set(shim.TypeFlagsEnumLike, TypeEnum)
+	set(shim.TypeFlagsNonPrimitive, TypeNonPrimitive)
 	return out
 }
 

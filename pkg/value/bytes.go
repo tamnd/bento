@@ -30,6 +30,13 @@ type Uint8Array struct {
 	length         int
 	lengthTracking bool
 	boxed          *Object // this view's dynamic box, built on the first crossing and kept so two dynamic bindings of one view are the same object
+	// nodeBuffer marks this view a Node Buffer rather than a plain Uint8Array. A Buffer
+	// is a Uint8Array in Node too, the same bytes over the same buffer with a wider
+	// prototype, so the brand is a flag on the one struct rather than a second type:
+	// every index, every write and every typed-array method already works over these
+	// bytes, and the brand only decides the constructor name, the extra member table in
+	// nodebuffer.go, and the <Buffer ..> rendering.
+	nodeBuffer bool
 }
 
 // liveLen is the view's byte length as of this access, clamped against the buffer's

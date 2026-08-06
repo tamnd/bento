@@ -402,6 +402,46 @@ func (c *inspectCtx) sortOutput(output []string) {
 	})
 }
 
+// formatNodeBuffer renders a Buffer, which takes neither of the two shapes the rest of
+// this file lays out. Node writes the bytes as hex inside angle brackets and puts any
+// extra property after them inside the same brackets, "<Buffer 00 00, x: 1>", on one line
+// however long that gets, so the layout is assembled here. The comma is only written when
+// there were bytes for it to follow, which is why an empty buffer carrying a property
+// prints "<Buffer x: 1>" rather than "<Buffer , x: 1>".
+//
+// The run is cut at buffer.INSPECT_MAX_BYTES rather than at maxArrayLength, since node
+// gives a Buffer a limit of its own and passing maxArrayLength to inspect does not move
+// it.
+//
+// One thing here is deliberately not node's. Node's Buffer formatter takes no part in the
+// seen bookkeeping, so a buffer holding a property that points back at the buffer recurses
+// until the stack overflows and the rendering ends mid-word in "Inspection interrupted
+// prematurely". bento's takes part, so the same buffer prints [Circular *1]. Reproducing
+// the overflow would mean crashing a program for printing one of its own values.
+func (c *inspectCtx) formatNodeBuffer(v Value, recurseTimes int) string {
+	o := v.object()
+	run := nodeBufferHexRun(asNodeBuffer(v), bufferInspectMaxBytes)
+	keys := inspectTypedExtraKeys(o, c.showHidden)
+	if len(keys) == 0 {
+		return "<Buffer " + run + ">"
+	}
+
+	recurseTimes++
+	ref := inspectRef(v)
+	c.seen = append(c.seen, ref)
+	c.currentDepth = recurseTimes
+	extras := make([]string, 0, len(keys))
+	for _, k := range keys {
+		extras = append(extras, c.formatProperty(v, recurseTimes, k, kObjectType))
+	}
+	c.seen = c.seen[:len(c.seen)-1]
+
+	if run != "" {
+		run += ", "
+	}
+	return "<Buffer " + run + strings.Join(extras, ", ") + ">"
+}
+
 // formatProxy is Node's formatProxy, what showProxy asks for: the target and the
 // handler side by side rather than the object the proxy stands for. It is the only
 // view that shows a proxy is there at all, which is why a program debugging one
@@ -550,6 +590,14 @@ func (c *inspectCtx) formatRaw(v Value, recurseTimes int) string {
 		keys = inspectObjectKeys(o, c.showHidden)
 		braces = [2]string{prefix + "{", "}"}
 		formatter = func() []string { return c.formatViewSlots(o.jsView, recurseTimes) }
+
+	case asNodeBuffer(v) != nil:
+		// A Buffer renders as its bytes in hex inside angle brackets, "<Buffer 61 62 63>",
+		// not as the bracketed element list its Uint8Array half would take. It is checked
+		// before the typed-array arm because it is one. The layout is built whole rather
+		// than handed to reduceToSingleString, since it is neither of the two shapes that
+		// function lays out.
+		return c.formatNodeBuffer(v, recurseTimes)
 
 	case o.jsTyped != nil:
 		// A typed array renders like an array, in brackets with its elements, and unlike an

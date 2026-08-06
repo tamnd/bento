@@ -1,0 +1,37 @@
+== stdout:
+4 00000000
+ababa 3
+68656c6c6f20776f726c64
+aGVsbG8gd29ybGQ= aGVsbG8gd29ybGQ
+hello
+hello
+hello world
+6 5
+68e96c6c6f
+4 e282ac75
+Hello world Hello world
+6 4 7
+true -1
+007879787900
+ababcd
+deadbeef 3735928559 -559038737
+efbeadde 3735928559
+-2 65534 -257
+bfe0000000000000 -0.5
+010203040506 1108152157446 6618611909121
+ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be >= 0 and <= 4. Received 6
+ERR_INVALID_ARG_TYPE
+true 1
+abcd
+abc
+true true false
+Buffer [object Uint8Array]
+true false
+{"type":"Buffer","data":[97,98,99]} abc
+97 3 3 1
+99 true true
+<Buffer 61 62 63>
+<Buffer >
+true 9007199254740991 536870888
+== exit:
+0

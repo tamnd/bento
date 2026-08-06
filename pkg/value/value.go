@@ -611,6 +611,25 @@ func (v Value) Get(key BStr) Value {
 		// make. A function box with no own properties still climbs its prototype chain
 		// and answers undefined for a miss at the end of it.
 		return v.object().getChained(v, key)
+	case KindNumber:
+		// A number's prototype members are reachable on the dynamic path too, so
+		// n.toString(16) and n.toFixed(2) work off a receiver the checker typed any. The
+		// statically typed receiver never gets here: calls.go lowers those two to the same
+		// formatters this delegates to (primitivemember.go).
+		if val, ok := numberGet(v.AsNumber(), name); ok {
+			return val
+		}
+		return Undefined
+	case KindBool:
+		if val, ok := boolGet(v.AsBool(), name); ok {
+			return val
+		}
+		return Undefined
+	case KindBigInt:
+		if val, ok := bigIntGet(v, name); ok {
+			return val
+		}
+		return Undefined
 	case KindSymbol:
 		// A symbol's only own readable property is its description; every other named
 		// read reaches Symbol.prototype and answers undefined here. A dynamic symbol
@@ -1312,7 +1331,12 @@ func ordinaryToPrimitive(v Value, stringFirst bool) (Value, bool) {
 		if m.kind != KindFunc {
 			continue
 		}
-		res := m.Call(v)
+		// The object is the receiver, not the first argument. A plain Call(v) would put it
+		// in the argument slot, which nothing noticed while every toString the runtime
+		// boxes ignored its arguments, and which breaks the moment one does not: Buffer's
+		// toString reads its first argument as an encoding, so String(buf) would coerce the
+		// buffer to name its own encoding and recur until the stack ran out.
+		res := CallWithThis(m, v)
 		if !isObjectLike(res) {
 			return res, true
 		}

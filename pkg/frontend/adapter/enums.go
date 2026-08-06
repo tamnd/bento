@@ -50,6 +50,10 @@ const (
 	TypeTypeParameter
 	// TypeEnum marks an enum type, lowered per section 18.
 	TypeEnum
+	// TypeNonPrimitive is the `object` keyword: the top over everything that is
+	// not a primitive. It carries no shape, so it is not TypeObject; lowering
+	// gives it the dynamic box the empty object type { } already takes.
+	TypeNonPrimitive
 )
 
 // SymbolFlags classify what a bound name refers to. Like TypeFlags they are bit

@@ -41,6 +41,7 @@ func GlobalThisValue() Value {
 	defineGlobal(g, "globalThis", g)
 	defineGlobal(g, "process", ProcessValue())
 	defineGlobal(g, "console", ConsoleObject())
+	defineGlobal(g, "Buffer", BufferConstructor())
 	// The globals with a value form (globalvalue.go) go on by the same rule, and by
 	// the same identity: the entry is the interned value the bare name reads, so
 	// globalThis.atob === atob holds the way globalThis.process === process does. A

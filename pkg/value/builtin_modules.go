@@ -137,6 +137,8 @@ func buildBuiltinModule(name string) Value {
 		// The two assert specifiers are built together and both registered, since each
 		// module names the other and neither can be finished first.
 		return newAssertModules(name)
+	case "buffer":
+		return newBufferModule()
 	case "module":
 		return newModuleModule()
 	case "os":

@@ -1070,7 +1070,7 @@ func (r *Renderer) objectLiteral(n frontend.Node) (ast.Expr, error) {
 	// dispatches over, so it lowers to the boxed value.NewObject the top type holds, the
 	// same runtime object new Object() and a spread build. A literal contextually typed at
 	// a fixed shape keeps its members and does not reach here, so only a genuine { } does.
-	if r.isEmptyObjectTopType(t) {
+	if r.isObjectTopType(t) {
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "NewObject")}, nil
 	}

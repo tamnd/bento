@@ -2,14 +2,16 @@ package value
 
 import "testing"
 
-// methodObj builds a plain object carrying the given named callable, each reading
-// its this receiver from args[0] the way a boxed method does, so a coercion that
-// looks up the name finds a function it can call with the object as this.
+// methodObj builds a plain object carrying the given named callable as a method, the box
+// the lowerer emits for a function body that reads this, so a coercion that looks up the
+// name finds a function it can call with the object as its receiver. It is a method
+// rather than a plain function because that is what a receiver-reading body compiles to,
+// and because a plain one has no receiver slot: its body would read undefined for this
+// and answer a wrong value rather than refuse.
 func methodObj(name string, fn func(this Value, args []Value) Value) Value {
 	o := NewObject()
-	o.Set(FromGoString(name), NewFunc(func(args []Value) Value {
-		this := Arg(args, 0)
-		return fn(this, args[1:])
+	o.Set(FromGoString(name), NewMethod(func(this Value, args []Value) Value {
+		return fn(this, args)
 	}))
 	return o
 }
