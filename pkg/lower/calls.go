@@ -5265,18 +5265,35 @@ func (r *Renderer) numberCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	}
 }
 
-// booleanCoercion lowers Boolean(x) called as a function over a primitive argument,
-// the third primitive coercion. A number goes through value.NumberToBool (false
-// only at zero or NaN), a string through value.StringToBool (false only when
-// empty), and a boolean passes through unchanged since Boolean(b) on a boolean is
-// the identity. It takes exactly one argument; a different arity, or an argument
-// this slice does not coerce (an object, which is always truthy but whose
-// evaluation this slice does not model), hands back.
+// booleanCoercion lowers Boolean(x) called as a function. Boolean(x) is exactly the
+// ToBoolean a value undergoes standing in boolean position, so past the primitives it
+// is the same lowering an `if (x)` gets and it delegates to lowerTruthy (truthy.go)
+// rather than keeping a second, narrower list of its own.
+//
+// The four primitives stay spelled here because each has a helper that says what it
+// is at the call site. A number goes through value.NumberToBool (false only at zero or
+// NaN), a string through value.StringToBool (false only when empty), a bigint through
+// value.BigIntToBool (false only at 0n), and a boolean passes through unchanged since
+// Boolean(b) on a boolean is the identity.
+//
+// It takes exactly one argument. A wider call still hands back: the extra arguments
+// are evaluated for their side effects in JavaScript and dropped, and this slice does
+// not model that.
 func (r *Renderer) booleanCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	if len(argNodes) != 1 {
 		return nil, &NotYetLowerable{Reason: "Boolean() with this argument count is a later slice"}
 	}
 	arg := argNodes[0]
+	switch {
+	case r.isBool(arg), r.isNumber(arg), r.isString(arg), r.isBigInt(arg):
+	default:
+		// Everything else is ordinary truthiness: a dynamic value reads through
+		// value.ToBoolean, an object the checker proved always truthy collapses to
+		// the constant, an optional tests presence and its inner value, and a
+		// tagged-sum union asks its own ToBoolean method. What lowerTruthy still
+		// refuses it refuses by its own, more specific reason.
+		return r.lowerTruthy(arg)
+	}
 	lowered, err := r.lowerExpr(arg)
 	if err != nil {
 		return nil, err
@@ -5290,12 +5307,10 @@ func (r *Renderer) booleanCoercion(argNodes []frontend.Node) (ast.Expr, error) {
 	case r.isString(arg):
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "StringToBool"), Args: []ast.Expr{lowered}}, nil
-	case r.isBigInt(arg):
+	default:
 		// Boolean(b) is the bigint truthiness: only 0n is false, a sign test.
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "BigIntToBool"), Args: []ast.Expr{lowered}}, nil
-	default:
-		return nil, &NotYetLowerable{Reason: "Boolean() on this argument type is a later slice"}
 	}
 }
 

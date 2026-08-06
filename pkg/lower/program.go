@@ -1376,12 +1376,14 @@ func elidedComputedKey(r *Renderer, n, parent frontend.Node) (frontend.Node, boo
 	return nil, false
 }
 
-// elidedTruthyOperand reports the bare-identifier condition of a control-flow node
-// that lowerTruthy collapses to a constant and drops from the emit. An object in a
-// boolean position (for (; obj; ), while (obj), if (obj), obj ? a : b, obj && x) is
-// always truthy, so lowerTruthy folds it to the Go constant true and never lowers
-// the read, which leaves a var whose only use was that condition declared and not
-// used. Recording the read lets bindingUnused blank the binding the fold orphaned.
+// elidedTruthyOperand reports the bare-identifier condition of a node that
+// lowerTruthy collapses to a constant and drops from the emit. An object in a
+// boolean position (for (; obj; ), while (obj), if (obj), obj ? a : b, obj && x,
+// !obj, Boolean(obj)) is always truthy, so lowerTruthy folds it to the Go constant
+// true and never lowers the read, which leaves a var whose only use was that
+// condition declared and not used. Recording the read lets bindingUnused blank the
+// binding the fold orphaned.
+//
 // The match is the same one lowerTruthy makes: a bare identifier the checker proved
 // always truthy or always falsy and that is repeatable, so its evaluation is safe to
 // drop. A parenthesized condition unwraps to the identifier inside so ((obj)) counts
@@ -1401,6 +1403,29 @@ func elidedTruthyOperand(r *Renderer, n frontend.Node) (frontend.Node, bool) {
 			return nil, false
 		}
 		cond = kids[0]
+	case frontend.NodePrefixUnaryExpression:
+		// !obj negates the same fold (expr.go), so the operand collapses and its read
+		// goes with it. Only ! rides truthiness; the arithmetic prefixes read their
+		// operand for real. The operator is not a child node, so it is read the way
+		// prefixUnary reads it, as the node's text with the operand's text removed.
+		kids := r.prog.Children(n)
+		if len(kids) != 1 {
+			return nil, false
+		}
+		if unaryOpText(r.prog.Text(n), r.prog.Text(kids[0])) != "!" {
+			return nil, false
+		}
+		cond = kids[0]
+	case frontend.NodeCallExpression:
+		// Boolean(obj) is that same truthiness spelled as a call (calls.go), so it
+		// drops the read the same way. The callee has to be the ambient global rather
+		// than a user function of that name, and the call has to be the one-argument
+		// form the coercion covers.
+		kids := r.prog.Children(n)
+		if len(kids) != 2 || r.prog.Text(kids[0]) != "Boolean" || !r.isAmbientGlobal(kids[0]) {
+			return nil, false
+		}
+		cond = kids[1]
 	case frontend.NodeBinaryExpression:
 		// The left operand of && or || rides the same truthiness fold (logical.go),
 		// so an always-truthy object on the left collapses and drops its read.
