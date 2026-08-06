@@ -48,15 +48,23 @@ func TestCollapseLogicalOrObjectLeft(t *testing.T) {
 	}
 }
 
-// TestCollapseImpureConditionKeepsTest pins the boundary: an always-truthy object
-// condition with a side effect keeps its runtime form rather than collapse, since
-// dropping the condition would drop its side effect. Here the object comes from a
-// call, so the ternary condition is not repeatable and does not collapse. The call
-// is over an object return whose truthiness position still hands back, so the whole
-// unit falls back, which is the honest not-yet-lowerable rather than a wrong drop.
-func TestCollapseImpureConditionKeepsTest(t *testing.T) {
-	src := "function make(): { x: number } { return { x: 1 }; }\nfunction f(a: number, b: number): number { return make() ? a : b; }\nconsole.log(f(7, 9));\n"
-	renderProgramHandBack(t, src)
+// TestCollapseImpureConditionKeepsEffect pins the boundary: an always-truthy object
+// condition with a side effect does not collapse the way a repeatable one does, since
+// dropping the condition would drop its effect. Here the object comes from a call, so
+// the condition is not repeatable and the answer is the constant behind the evaluation
+// instead, a func that runs the call, discards what it built, and returns true. This
+// pinned a handback while truthiness over a side-effecting non-primitive had no
+// lowering; the effect and the branch are both proven below.
+func TestCollapseImpureConditionKeepsEffect(t *testing.T) {
+	skipIfShort(t)
+	src := `let calls = 0;
+function make(): { x: number } { calls++; return { x: 1 }; }
+function f(a: number, b: number): number { return make() ? a : b; }
+console.log(f(7, 9), calls);
+`
+	if got := runProgramGo(t, src); got != "7 1\n" {
+		t.Fatalf("make() ? 7 : 9 = %q, want 7 with one call", got)
+	}
 }
 
 // TestCollapseRuns builds and runs the collapsed forms and matches the Node oracle,

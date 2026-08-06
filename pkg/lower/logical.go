@@ -43,16 +43,54 @@ func (r *Renderer) valueLogical(node frontend.Node, opText string, left, right f
 	// the result exactly when (op is ||) matches the left's static truthiness; the
 	// other operand is dropped, which is the short-circuit, so it need not lower. The
 	// left is dropped in the other case, sound only for a side-effect-free operand.
-	if v, known := r.staticTruthy(left); known && r.repeatableOperand(left) {
+	if v, known := r.staticTruthy(left); known {
 		chosen := right
 		if (opText == "||") == v {
 			chosen = left
 		}
-		expr, err := r.lowerExpr(chosen)
+		// The operand that is not chosen disappears. That is free when the chosen one is
+		// the left, since the operator short-circuits and the right genuinely never runs,
+		// and free when the left is repeatable, since dropping it loses no effect. What is
+		// left is a side-effecting left whose value the operator discards, `mk() || x`
+		// over a factory: it still has to run, so it runs inside the func below.
+		if chosen == left || r.repeatableOperand(left) {
+			expr, err := r.lowerExpr(chosen)
+			if err != nil {
+				return nil, false, err
+			}
+			return expr, true, nil
+		}
+		// Only an always-truthy left takes the func, the object, array, or class instance
+		// a factory returns. A left whose type is only null, undefined, or void may lower
+		// to a Go call that returns nothing, which cannot stand on the right of the blank
+		// assignment, so it reports handled=false and keeps whatever the operator table
+		// says about it.
+		if r.prog.TypeAt(left).Flags != frontend.TypeObject {
+			return nil, false, nil
+		}
+		retType, err := r.typeExpr(r.prog.TypeAt(right))
+		if err != nil {
+			return nil, false, nil
+		}
+		effect, err := r.lowerExpr(left)
 		if err != nil {
 			return nil, false, err
 		}
-		return expr, true, nil
+		result, err := r.lowerExpr(right)
+		if err != nil {
+			return nil, false, err
+		}
+		lit := &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{
+				&ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{effect}},
+				&ast.ReturnStmt{Results: []ast.Expr{result}},
+			}},
+		}
+		return &ast.CallExpr{Fun: lit}, true, nil
 	}
 	// Two booleans give a boolean result, which Go's && and || return directly with
 	// the same evaluation order and short-circuit, so that stays on the operator

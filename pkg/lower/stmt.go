@@ -1957,6 +1957,29 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding initialized by a value-returning && or || over a dynamic operand
+		// holds the box value.And or value.Or answers, `const dir = opts.out || os.tmpdir()`
+		// being the everyday shape. The checker types such an expression by the union of
+		// its operands, and when a module binding is one of them it has no type for it at
+		// all, so the binding lands in a value.Value slot and is marked dynamic the same
+		// way the module binding itself did. The guard excludes a clean primitive result,
+		// `name || "anon"` over two strings, which bindingInit below already unboxes into
+		// its own Go slot.
+		if r.isDynamicValueLogical(kids[initIdx]) &&
+			r.prog.TypeAt(kids[0]).Flags&(frontend.TypeNumber|frontend.TypeString|frontend.TypeBoolean) == 0 {
+			logInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{logInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		// new Event(...), new EventTarget(), and new AbortController() build value objects
 		// the runtime reads through the dynamic member and call path, but the checker types
 		// the binding by the standard library's static interfaces, which would route the

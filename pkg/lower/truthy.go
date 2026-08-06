@@ -15,13 +15,19 @@ import (
 // bare Go truth value it does not have.
 //
 // A boolean operand already is the bool the position wants, so it passes through. A
-// number is falsy only at zero and NaN, a string only when empty, and those two
-// tests are the ones a Go comparison does not spell on its own: a bare x != 0 keeps
-// NaN, which is falsy, and a Go string has no direct emptiness idiom for value.BStr.
-// A non-primitive the checker proved always truthy or always falsy (an object is
-// always truthy, a null/undefined/void-only type always falsy) collapses to the Go
-// boolean constant. A union, or a side-effecting non-primitive whose evaluation must
-// still fire, has a falsy rule this slice does not model yet and hands back.
+// number is falsy only at zero and NaN, a string only when empty, a bigint only at 0n,
+// and those tests are the ones a Go comparison does not spell on its own: a bare x != 0
+// keeps NaN, which is falsy, a Go string has no direct emptiness idiom for value.BStr,
+// and a bigint is a *big.Int with no == against a literal. A non-primitive the checker
+// proved always truthy or always falsy (an object is always truthy, a
+// null/undefined/void-only type always falsy) collapses to the Go boolean constant, or
+// to that constant behind the operand's evaluation when the operand has a side effect
+// that must still fire. A tagged-sum union reads its truth through the ToBoolean method
+// the renderer emits for it, which switches the tag to the active arm's falsy rule.
+//
+// What is left is a union whose arms include an object, which has no interned form to
+// switch on yet, and a side-effecting operand whose type is only null, undefined, or
+// void, which may lower to a Go call that returns nothing to discard. Those hand back.
 
 // lowerTruthy lowers an operand standing in boolean position to a Go bool: the
 // operand itself when it is already boolean, and the type's ToBoolean test
@@ -60,6 +66,8 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 		return r.numberTruthy(n)
 	case r.isString(n):
 		return r.stringTruthy(n)
+	case r.isBigInt(n):
+		return r.bigIntTruthy(n)
 	case r.isDynamic(n):
 		// A dynamic operand's kind is only known at runtime, so the whole falsy
 		// set is one call into the value model's ToBoolean, the same test Or and
@@ -89,6 +97,9 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 			return present, nil
 		}
 		get := &ast.CallExpr{Fun: &ast.SelectorExpr{X: opt, Sel: ident("Get")}}
+		if kind == "bigint" {
+			r.requireImport(valuePkg)
+		}
 		return &ast.BinaryExpr{X: present, Op: token.LAND, Y: truthyOfKind(get, kind)}, nil
 	}
 	// A tagged-sum union operand reads its truth through the ToBoolean method the
@@ -104,7 +115,35 @@ func (r *Renderer) lowerTruthy(n frontend.Node) (ast.Expr, error) {
 		}
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: x, Sel: ident("ToBoolean")}}, nil
 	}
-	return nil, &NotYetLowerable{Reason: "truthiness of a union or a side-effecting non-primitive is a later slice"}
+	// A non-primitive the checker proved always truthy but whose evaluation has a side
+	// effect cannot collapse to the Go constant the way the repeatable form above does,
+	// since dropping the operand would drop the effect. It lowers to the constant behind
+	// the evaluation instead, the immediately invoked func the logical path already uses
+	// to hold a statement in expression position: `if (build())` runs build, discards
+	// what it built, and takes the branch, which is what an object in boolean position
+	// means.
+	//
+	// Only the always-truthy half takes this. An operand whose type is only null,
+	// undefined, or void may lower to a Go call that returns nothing, which cannot stand
+	// on the right of the blank assignment, so it keeps the handback below.
+	if val, known := r.staticTruthy(n); known && val {
+		x, err := r.lowerExpr(n)
+		if err != nil {
+			return nil, err
+		}
+		lit := &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: ident("bool")}}},
+			},
+			Body: &ast.BlockStmt{List: []ast.Stmt{
+				&ast.AssignStmt{Lhs: []ast.Expr{ident("_")}, Tok: token.ASSIGN, Rhs: []ast.Expr{x}},
+				&ast.ReturnStmt{Results: []ast.Expr{ident("true")}},
+			}},
+		}
+		return &ast.CallExpr{Fun: lit}, nil
+	}
+	return nil, r.notLowerable(n, "truthiness of a union or a side-effecting non-primitive is a later slice")
 }
 
 // unionTruthy reports whether an operand in boolean position is a tagged-sum union
@@ -120,6 +159,14 @@ func (r *Renderer) unionTruthy(n frontend.Node) (*unionInfo, bool) {
 		return nil, false
 	}
 	info.needsToBoolean = true
+	// A bigint arm's case calls value.BigIntToBool, and a union of a bigint with a
+	// sentinel names nothing else out of the value package, so the import is asked for
+	// here rather than left to whatever else the file happens to reach.
+	for _, a := range info.arms {
+		if a.flag&frontend.TypeBigInt != 0 {
+			r.requireImport(valuePkg)
+		}
+	}
 	return info, true
 }
 
@@ -173,9 +220,9 @@ func staticTruthyIsTrue(f frontend.TypeFlags) bool {
 }
 
 // primitiveTruthyKind maps a primitive type's flags to the kind truthyOfKind spells an
-// inline ToBoolean for: a number, a string, or a boolean. A union (more than one flag
-// past the primitive bit) or any other type reports ok false, so the caller keeps its
-// handback rather than test a shape with no single inline falsy rule.
+// inline ToBoolean for: a number, a string, a boolean, or a bigint. A union (more than
+// one flag past the primitive bit) or any other type reports ok false, so the caller
+// keeps its handback rather than test a shape with no single inline falsy rule.
 func primitiveTruthyKind(f frontend.TypeFlags) (string, bool) {
 	if f&frontend.TypeUnion != 0 {
 		return "", false
@@ -187,6 +234,8 @@ func primitiveTruthyKind(f frontend.TypeFlags) (string, bool) {
 		return "string", true
 	case f&frontend.TypeBoolean != 0:
 		return "bool", true
+	case f&frontend.TypeBigInt != 0:
+		return "bigint", true
 	}
 	return "", false
 }
@@ -253,17 +302,38 @@ func (r *Renderer) stringTruthy(n frontend.Node) (ast.Expr, error) {
 	return truthyOfKind(s, "string"), nil
 }
 
+// bigIntTruthy lowers a bigint in boolean position to its ToBoolean: false only for
+// 0n, true for every other value, negative ones included. It is one call either way,
+// value.BigIntToBool over the *big.Int, so unlike the number and string forms it needs
+// no separate spelling for an operand with a side effect: the operand is named once.
+func (r *Renderer) bigIntTruthy(n frontend.Node) (ast.Expr, error) {
+	b, err := r.lowerExpr(n)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	return truthyOfKind(b, "bigint"), nil
+}
+
 // truthyOfKind builds the inlined ToBoolean test for a Go expression whose kind is
 // already known, the falsy set spelled out for each primitive: a number is truthy
 // when non-zero and not NaN (x != 0 && x == x), a string when non-empty
-// (s.Length() > 0), and a boolean is its own truth. The expression is named more
-// than once in the number form, so a caller passes one it can safely repeat, a
-// literal, an identifier, or a lowered pure operand. It returns nil for a kind
-// without an inline test, which no caller reaches.
+// (s.Length() > 0), a bigint when it is not 0n, and a boolean is its own truth. The
+// expression is named more than once in the number form, so a caller passes one it can
+// safely repeat, a literal, an identifier, or a lowered pure operand. It returns nil
+// for a kind without an inline test, which no caller reaches.
+//
+// The bigint form is a call rather than a comparison because a bigint is a *big.Int and
+// Go has no == against a zero literal for one; value.BigIntToBool is the sign test, and
+// it also answers false for the nil pointer an unset arm carries. A caller that emits
+// this kind asks for the value import, since a union of a bigint with a sentinel names
+// nothing else out of that package.
 func truthyOfKind(x ast.Expr, kind string) ast.Expr {
 	switch kind {
 	case "bool":
 		return x
+	case "bigint":
+		return &ast.CallExpr{Fun: sel("value", "BigIntToBool"), Args: []ast.Expr{x}}
 	case "number":
 		return &ast.BinaryExpr{
 			X:  &ast.BinaryExpr{X: x, Op: token.NEQ, Y: &ast.BasicLit{Kind: token.INT, Value: "0"}},

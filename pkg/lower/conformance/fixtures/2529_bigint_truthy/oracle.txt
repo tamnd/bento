@@ -1,0 +1,14 @@
+== stdout:
+zero-falsy
+true
+true
+true big
+0
+truthy
+falsy
+truthy
+falsy
+true false false
+
+== exit:
+0
