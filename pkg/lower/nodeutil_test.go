@@ -128,14 +128,33 @@ const eq: boolean = isDeepStrictEqual(0, -0);`)
 }
 
 // TestUtilTakesACollection pins that a typed collection reaches util now that it
-// boxes. It used to be the stand-in for an argument with no dynamic form, which is
-// why the hand-back cases below reach for an array of objects instead.
+// boxes. It used to be the stand-in for an argument with no dynamic form, and so did
+// an array of objects after it, which is why the hand-back cases below reach for an
+// array of functions instead: a Go func has no dynamic form and is the last shape
+// left with none.
 func TestUtilTakesACollection(t *testing.T) {
 	got := renderProgram(t, `import { format } from "node:util";
 const m = new Map<string, number>();
 const s: string = format("%s", m);`)
 	if !strings.Contains(got, ".ToValue()") {
 		t.Errorf("a map handed to util.format did not box through ToValue:\n%s", got)
+	}
+}
+
+// TestUtilTakesAnArrayOfObjects pins the shape that used to stand in for the hand-back:
+// an array of plain object shapes boxes element by element now, so format and
+// isDeepStrictEqual both take one. Node prints "[ [Object] ]" for the array under %s,
+// which is the array's own inspect at depth, and the comparison is a deep one.
+func TestUtilTakesAnArrayOfObjects(t *testing.T) {
+	skipIfShort(t)
+	src := `import { format, isDeepStrictEqual } from "node:util";
+const rows = [{ a: 1 }];
+const s: string = format("%s", rows);
+console.log(s);
+console.log(isDeepStrictEqual(rows, rows), isDeepStrictEqual(rows, [{ a: 2 }]));
+`
+	if got := runProgramGo(t, src); got != "[ [Object] ]\ntrue false\n" {
+		t.Fatalf("util over an array of objects printed %q", got)
 	}
 }
 
@@ -163,14 +182,14 @@ const f: any = util.format;`,
 		{
 			"an argument that does not box yet",
 			`import { format } from "node:util";
-const rows = [{ a: 1 }];
+const rows = [() => 1];
 const s: string = format("%s", rows);`,
 			"util.format with an argument that does not box yet",
 		},
 		{
 			"a comparison of a value that does not box yet",
 			`import { isDeepStrictEqual } from "node:util";
-const rows = [{ a: 1 }];
+const rows = [() => 1];
 const eq: boolean = isDeepStrictEqual(rows, rows);`,
 			"util.isDeepStrictEqual with an argument that does not box yet",
 		},

@@ -29,7 +29,7 @@ func (u NumOrNull) JSONArm() any {
 	case NumOrNullNum:
 		return u.num
 	case NumOrNullNull:
-		return nil
+		return value.Null
 	}
 	return nil
 }
@@ -64,7 +64,7 @@ func (u StrOrNull) JSONArm() any {
 	case StrOrNullStr:
 		return u.str
 	case StrOrNullNull:
-		return nil
+		return value.Null
 	}
 	return nil
 }
@@ -92,7 +92,7 @@ func (u BoolOrNull) JSONArm() any {
 	case BoolOrNullBool:
 		return u.bl
 	case BoolOrNullNull:
-		return nil
+		return value.Null
 	}
 	return nil
 }
