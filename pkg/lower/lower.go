@@ -364,6 +364,15 @@ type Renderer struct {
 	// is being called, and its call lowering decides what the call produces, so the
 	// reference is not read as a boxed value; see globalvalue.go.
 	callCallees map[frontend.Node]bool
+	// ctorFuncs is the set of top-level function declaration symbols the program uses
+	// as ES5 constructors, either under new or by reaching for their .prototype. Each
+	// one lowers to a runtime constructor value rather than a Go func, so a reference
+	// to the name, a new of it, and every member off an instance are boxed; see
+	// ctorfunc.go.
+	ctorFuncs map[frontend.Symbol]bool
+	// ctorThisName is the Go name the receiver of the constructor body currently
+	// lowering is bound to, empty outside one. It is what `this` reads as in that body.
+	ctorThisName string
 	// boxedLoopVars is the set of for...of binding symbols that iterate a box, so each
 	// element they take is one. The loop lowering marks the same binding dynBound as it
 	// goes, but that happens long after the pre-pass has decided, so the pass keeps its

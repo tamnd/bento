@@ -31,7 +31,7 @@ func TestReadsOffABoxedBindingRouteAtRunTime(t *testing.T) {
 		"const cfg = JSON.parse('{}') as Cfg;\n"
 	for name, tc := range map[string]struct{ src, want string }{
 		"for of":         {prelude + "for (const x of cfg.list) console.log(x);", "value.Iterate("},
-		"method call":    {prelude + "console.log(cfg.list.join('-'));", "Get(value.FromGoString(\"join\")).Call("},
+		"method call":    {prelude + "console.log(cfg.list.join('-'));", "value.CallMethod(cfg.Get(value.FromGoString(\"list\")), value.FromGoString(\"join\")"},
 		"optional chain": {prelude + "console.log(cfg.a?.b);", "value.OptionalMember("},
 	} {
 		t.Run(name, func(t *testing.T) {

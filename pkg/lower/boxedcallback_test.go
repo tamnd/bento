@@ -33,7 +33,7 @@ func TestANestedCallbackKeepsTheEnclosingBoxedNames(t *testing.T) {
 	if strings.Contains(out, "rows.Filter(") {
 		t.Fatalf("a nested callback lost the enclosing boxed name:\n%s", out)
 	}
-	if !strings.Contains(out, "rows.Get(value.FromGoString(\"filter\")).Call(") {
+	if !strings.Contains(out, "value.CallMethod(rows, value.FromGoString(\"filter\")") {
 		t.Fatalf("a nested read off a captured box did not dispatch dynamically:\n%s", out)
 	}
 }

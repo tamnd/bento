@@ -1,0 +1,12 @@
+== stdout:
+square:4
+9
+square 4 3
+true true false
+function Shape 1
+true
+true
+0
+
+== exit:
+0

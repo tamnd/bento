@@ -24,6 +24,10 @@ import (
 // The chains cover a plain call, a data property read, an index step, and a long
 // chain, since the rule walks the whole chain down to its root rather than looking
 // only at the last step.
+//
+// Either spelling of the runtime read counts. A data property is a Get on the module
+// box, and a method call is the one receiver-preserving CallMethod, which is the same
+// read with the module threaded through as the receiver (ctorfunc.go).
 func TestBindingOffARequiredBuiltinIsABox(t *testing.T) {
 	for _, init := range []string{
 		"os.platform()",
@@ -35,7 +39,7 @@ func TestBindingOffARequiredBuiltinIsABox(t *testing.T) {
 	} {
 		t.Run(init, func(t *testing.T) {
 			got := renderProgram(t, "const os = require('os');\nconst v = "+init+";\nconsole.log(typeof v);\n")
-			if !strings.Contains(got, "v := os.Get(") {
+			if !strings.Contains(got, "v := os.Get(") && !strings.Contains(got, "v := value.CallMethod(os, ") {
 				t.Errorf("const v = %s emitted:\n%s\nwant v bound straight to the runtime read", init, got)
 			}
 		})

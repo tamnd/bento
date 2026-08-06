@@ -1,0 +1,6 @@
+== stdout:
+object
+true
+
+== exit:
+0

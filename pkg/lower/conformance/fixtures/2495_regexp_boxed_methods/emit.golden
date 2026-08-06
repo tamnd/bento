@@ -8,16 +8,16 @@ import (
 
 func main() {
 	r := value.RegExpValue(value.NewRegExpLiteral("a(b+)", ""))
-	value.ConsoleLog(value.ConsoleValue(r.Get(value.FromGoString("test")).Call(value.StringValue(value.FromGoString("zabbbc")))))
-	value.ConsoleLog(value.ConsoleValue(r.Get(value.FromGoString("test")).Call(value.StringValue(value.FromGoString("nope")))))
-	res := r.Get(value.FromGoString("exec")).Call(value.StringValue(value.FromGoString("zabbbc")))
+	value.ConsoleLog(value.ConsoleValue(value.CallMethod(r, value.FromGoString("test"), value.StringValue(value.FromGoString("zabbbc")))))
+	value.ConsoleLog(value.ConsoleValue(value.CallMethod(r, value.FromGoString("test"), value.StringValue(value.FromGoString("nope")))))
+	res := value.CallMethod(r, value.FromGoString("exec"), value.StringValue(value.FromGoString("zabbbc")))
 	value.ConsoleLog(value.ConsoleValue(res.GetIndex(0)))
 	value.ConsoleLog(value.ConsoleValue(res.GetIndex(1)))
 	value.ConsoleLog(value.ConsoleValue(res.Get(value.FromGoString("index"))))
-	value.ConsoleLog(value.ConsoleValue(r.Get(value.FromGoString("exec")).Call(value.StringValue(value.FromGoString("nope")))))
+	value.ConsoleLog(value.ConsoleValue(value.CallMethod(r, value.FromGoString("exec"), value.StringValue(value.FromGoString("nope")))))
 	g := value.RegExpValue(value.NewRegExpLiteral("a", "g"))
-	value.ConsoleLog(value.ConsoleValue(g.Get(value.FromGoString("test")).Call(value.StringValue(value.FromGoString("aaa")))))
+	value.ConsoleLog(value.ConsoleValue(value.CallMethod(g, value.FromGoString("test"), value.StringValue(value.FromGoString("aaa")))))
 	value.ConsoleLog(value.ConsoleValue(g.Get(value.FromGoString("lastIndex"))))
-	value.ConsoleLog(value.ConsoleValue(g.Get(value.FromGoString("test")).Call(value.StringValue(value.FromGoString("aaa")))))
+	value.ConsoleLog(value.ConsoleValue(value.CallMethod(g, value.FromGoString("test"), value.StringValue(value.FromGoString("aaa")))))
 	value.ConsoleLog(value.ConsoleValue(g.Get(value.FromGoString("lastIndex"))))
 }

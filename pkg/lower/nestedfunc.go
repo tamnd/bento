@@ -146,6 +146,19 @@ func (r *Renderer) enterNestedFuncScope(nodes []frontend.Node) (func(), error) {
 		if n.Kind() != frontend.NodeFunctionDeclaration {
 			continue
 		}
+		// A declaration the program uses as an ES5 constructor is not a Go closure at
+		// all: it binds a value.Value holding the runtime constructor, which the
+		// statement path emits at this position with its var hoisted to the top of the
+		// block (ctorfunc.go). It carries no plan, so nothing here registers one, and a
+		// sibling above that would read the binding before the assignment runs hands the
+		// unit back rather than read the zero value.
+		if r.ctorFuncDecl(n) {
+			if err := r.ctorFuncEagerRead(n, nodes, i); err != nil {
+				restore()
+				return noop, err
+			}
+			continue
+		}
 		sym, plan, err := r.nestedFuncLowerable(n, nodes, i)
 		if err != nil {
 			restore()

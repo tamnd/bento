@@ -98,12 +98,17 @@ func (r *Renderer) pushPlainThis(fn frontend.Node) func() {
 		return func() {}
 	}
 	prevClass, prevThis, prevStatic := r.curClass, r.thisName, r.staticClass
-	prevPlain, prevRecv := r.thisPlain, r.recvPos
+	prevPlain, prevRecv, prevCtor := r.thisPlain, r.recvPos, r.ctorThisName
 	r.curClass, r.thisName, r.staticClass = nil, "", nil
 	r.thisPlain, r.recvPos = true, false
+	// A plain function nested in a constructor body gets its own `this`, which is the
+	// undefined a receiver-free call leaves, not the object the enclosing constructor
+	// is building. An arrow does inherit that object, and an arrow never comes through
+	// here, which is what keeps the two apart.
+	r.ctorThisName = ""
 	return func() {
 		r.curClass, r.thisName, r.staticClass = prevClass, prevThis, prevStatic
-		r.thisPlain, r.recvPos = prevPlain, prevRecv
+		r.thisPlain, r.recvPos, r.ctorThisName = prevPlain, prevRecv, prevCtor
 	}
 }
 
@@ -123,6 +128,12 @@ func (r *Renderer) pushReceiverPosition() func() {
 // still the hand-back it was: a static method's `this` is the class constructor and a
 // module's top-level `this` is the exports object, and neither has a value here yet.
 func (r *Renderer) plainThisValue() (ast.Expr, error) {
+	// A constructor body is the one plain function whose receiver is not the caller's
+	// to supply: [[Construct]] made the object and bound it, so `this` is that object
+	// and reads as the Go name it was bound to (ctorfunc.go).
+	if r.ctorThisName != "" {
+		return ident(r.ctorThisName), nil
+	}
 	if !r.thisPlain {
 		return nil, &NotYetLowerable{Reason: "this outside a lowered class body is a later slice"}
 	}

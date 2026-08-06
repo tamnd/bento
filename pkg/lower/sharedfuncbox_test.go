@@ -83,7 +83,7 @@ func TestProcessOnWithARunTimeEventNameLowers(t *testing.T) {
 	src := "const ev = \"pi\" + \"ng\";\n" +
 		"process.on(ev, (x: number) => { console.log(x); });\n"
 	got := renderProgram(t, src)
-	if !strings.Contains(got, `bentoProcess.Get(value.FromGoString("on"))`) {
+	if !strings.Contains(got, `value.CallMethod(bentoProcess, value.FromGoString("on")`) {
 		t.Fatalf("want the on call to go through the process object, got:\n%s", got)
 	}
 }

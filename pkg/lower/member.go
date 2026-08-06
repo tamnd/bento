@@ -1147,8 +1147,22 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			if r.hostedGlobalValueRef(n) {
 				return true
 			}
+			// A constructor function's name holds one runtime constructor value, so the
+			// name is a box and a member off it (F.prototype above all) dispatches rather
+			// than selecting a Go field that was never interned; see ctorfunc.go.
+			if r.ctorFuncRef(n) {
+				return true
+			}
 			return r.isDynBoundReceiver(n) || r.isBoxedParamRead(n) ||
 				r.isBoxedLoopVar(n) || r.identifierBindsABox(n)
+		case frontend.NodeThisKeyword:
+			// Inside a constructor body `this` is the boxed object [[Construct]] made, so
+			// this.x is a dynamic property write and read.
+			return r.ctorThisName != ""
+		case frontend.NodeNewExpression:
+			// new of a constructor function answers the boxed instance value.Construct
+			// built, whatever instance shape the checker inferred for it.
+			return r.ctorFuncNew(n)
 		case frontend.NodeObjectLiteralExpression, frontend.NodeArrayLiteralExpression:
 			return r.literalHoldsBox(n)
 		case frontend.NodeConditionalExpression:
