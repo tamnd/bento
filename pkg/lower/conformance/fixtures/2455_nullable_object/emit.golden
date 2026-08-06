@@ -32,7 +32,7 @@ func (u ObjAOrNull) JSONArm() any {
 	case ObjAOrNullObjA:
 		return u.objA
 	case ObjAOrNullNull:
-		return nil
+		return value.Null
 	}
 	return nil
 }
@@ -64,9 +64,9 @@ func (u ObjAOrUndefOrNull) JSONArm() any {
 	case ObjAOrUndefOrNullObjA:
 		return u.objA
 	case ObjAOrUndefOrNullUndef:
-		return nil
+		return value.Undefined
 	case ObjAOrUndefOrNullNull:
-		return nil
+		return value.Null
 	}
 	return nil
 }

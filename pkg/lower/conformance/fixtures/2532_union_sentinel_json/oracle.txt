@@ -1,0 +1,19 @@
+== stdout:
+[0,null,1]
+[0,null,"s"]
+[1,null,3]
+{"a":null,"b":0}
+{"b":0}
+null 0
+[
+  0,
+  null,
+  1
+]
+{
+ "b": "s"
+}
+[ 0, null, 1 ] [ 0, undefined, 's' ] [ 1, undefined, 3 ]
+
+== exit:
+0

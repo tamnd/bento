@@ -200,15 +200,30 @@ func TestTypeofOptionalEmitsOptToValue(t *testing.T) {
 	}
 }
 
-// TestTypeofOptionalObjectHandsBack pins the zero-fail edge: an optional whose inner is
-// an object shape has no dynamic box, so typeof over it hands back to a later slice
-// rather than fold to a wrong constant or emit a box that would not compile.
-func TestTypeofOptionalObjectHandsBack(t *testing.T) {
+// TestTypeofOptionalObject covers an optional whose inner is an object shape, which
+// boxes now that a plain shape has an element boxer: the present case answers "object"
+// and the absent one "undefined", which is what Node says for both.
+//
+// This used to be the hand-back case, and the shape below took its place.
+func TestTypeofOptionalObject(t *testing.T) {
+	skipIfShort(t)
 	const src = "interface Box { v: number }\n" +
-		"export function k(b: Box | undefined): string { return typeof b; }\n"
+		"function k(b: Box | undefined): string { return typeof b; }\n" +
+		"console.log(k({ v: 1 }), k(undefined));\n"
+	if got := runProgramGo(t, src); got != "object undefined\n" {
+		t.Fatalf("got %q, want %q", got, "object undefined\n")
+	}
+}
+
+// TestTypeofOptionalFunctionHandsBack pins the zero-fail edge: an optional whose inner
+// is a function type still has no dynamic box, since a Go func reads as undefined to the
+// reflection walk, so typeof over it hands back to a later slice rather than fold to a
+// wrong constant or emit a box that would not compile.
+func TestTypeofOptionalFunctionHandsBack(t *testing.T) {
+	const src = "export function k(f: (() => number) | undefined): string { return typeof f; }\n"
 	reason := renderProgramHandBack(t, src)
 	if !strings.Contains(reason, "later slice") {
-		t.Fatalf("typeof over an object optional reason = %q, want a later-slice handback", reason)
+		t.Fatalf("typeof over a function optional reason = %q, want a later-slice handback", reason)
 	}
 }
 

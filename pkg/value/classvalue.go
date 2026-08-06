@@ -78,7 +78,7 @@ func newClassPrototype(name string) *Object {
 // This is that function with the type parameter spelled, so an array of instances boxes
 // with the element boxer inferred from the slice and no closure emitted per class.
 func ClassToValue[T any](x T) Value {
-	return ObjectFromStruct(x)
+	return StructToValue(x)
 }
 
 // classInstance returns the Go instance a class view reads through, and whether this

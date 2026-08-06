@@ -1598,6 +1598,16 @@ func (r *Renderer) boxStaticToDynamic(expr ast.Expr, src frontend.Node) (ast.Exp
 	if r.isThrowable(src) {
 		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
 	}
+	// A tagged-sum union flowing into a dynamic slot boxes through its own ToValue, which
+	// switches the tag to the active arm's box, so a `number | string` handed to a
+	// required module's function crosses as the number or the string it is holding rather
+	// than handing the build back. It routes last because the arms above claim every union
+	// whose lowering is not a sum struct: an optional took value.OptToValue, a union folded
+	// to one primitive took that primitive's own box, and a union of objects is refused
+	// earlier for mixing member kinds.
+	if _, ok := r.unionValueBoxed(r.prog.TypeAt(src)); ok {
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: expr, Sel: ident("ToValue")}}, nil
+	}
 	return nil, &NotYetLowerable{Reason: "boxing this static type into a dynamic value is a later slice"}
 }
 
@@ -1657,11 +1667,12 @@ func (r *Renderer) markClassBoxed(elem frontend.Type) {
 // same way boxOptionalToDynamic passes one to OptToValue.
 //
 // It reports ok=false when the source is not an array, so a non-array type falls on
-// through the boxing chain. An array of a shape with no box of its own, an array of
-// objects or an array of arrays, hands back: boxing those means emitting a closure
-// per element type, which the element boxes above do not need and which the nested
-// case would have to build recursively. A typed array is not an ElementType array,
-// so a Uint8Array does not reach here; it has its own box.
+// through the boxing chain. The element's box is whatever dynValueBox names for it, so
+// an array of objects, of unions, of bigints, of already-boxed values, and of arrays all
+// cross here; what is left handing back is an element type with no box at all, a
+// function-valued element and a shape carrying a callable member among them. A typed
+// array is not an ElementType array, so a Uint8Array does not reach here; it has its own
+// box.
 func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr, bool, error) {
 	elem, ok := r.prog.ElementType(r.prog.TypeAt(src))
 	if !ok {
@@ -1669,7 +1680,7 @@ func (r *Renderer) boxArrayToDynamic(expr ast.Expr, src frontend.Node) (ast.Expr
 	}
 	box := r.dynValueBox(elem)
 	if box == nil {
-		return nil, false, &NotYetLowerable{Reason: "boxing an array of this element type into a dynamic value is a later slice"}
+		return nil, false, r.notLowerable(src, "boxing an array of this element type into a dynamic value is a later slice")
 	}
 	r.requireImport(valuePkg)
 	return &ast.CallExpr{Fun: sel("value", "ArrayValueOf"), Args: []ast.Expr{expr, box}}, true, nil
@@ -1701,9 +1712,12 @@ func (r *Renderer) boxTupleToDynamic(src frontend.Node) (ast.Expr, bool, error) 
 // into a dynamic one, or nil when the type has no such box yet. The two callers both
 // want a boxer they can pass rather than a boxing they can write: an array hands it to
 // value.ArrayValueOf to apply down the slice, and an optional hands it to
-// value.OptToValue to apply to the present case. That is why every arm here is a
-// function reference with no closure around it, and it is why the two share a list
-// rather than each carrying their own copy of it, which is what they did before.
+// value.OptToValue to apply to the present case. Nearly every arm is a plain function
+// reference or a method expression, which is what lets an array of that element type
+// box with nothing emitted per site; only the optional at the bottom needs a closure,
+// because its box takes the inner element's boxer as a second argument. The two callers
+// share this list rather than each carrying their own copy of it, which is what they did
+// before.
 func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 	switch flags := r.primitiveFlagsOfType(elem); {
 	case flags&frontend.TypeNumber != 0:
@@ -1712,6 +1726,17 @@ func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 		return sel("value", "StringValue")
 	case flags&frontend.TypeBoolean != 0:
 		return sel("value", "Bool")
+	case flags&frontend.TypeBigInt != 0:
+		// A bigint's Go shape is a *big.Int, and value.BigIntFromBig is already the
+		// func(*big.Int) value.Value an element boxer wants, the same call the scalar
+		// boxing path emits for a lone bigint.
+		return sel("value", "BigIntFromBig")
+	case r.isDynamicType(elem):
+		// An element that is already a box, the value.Value an any[] holds and the one an
+		// array written with no element type at all (`const a = []`) is given, boxes to
+		// itself. ArrayValueOf applies a boxer to every element with no way to skip one, so
+		// the identity is spelled as a function rather than as an absent boxer.
+		return sel("value", "Identity")
 	case r.isDateType(elem):
 		// A date's box is a method on the date rather than a constructor taking one, so
 		// the wrapper is the method expression (*value.Date).ToValue, which has the same
@@ -1746,6 +1771,36 @@ func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 		// value.ClassToValue with its type argument left to inference from the container,
 		// which is why this needs no closure where an arbitrary element type would.
 		return sel("value", "ClassToValue")
+	case r.isFixedObjectShape(elem) && !r.fixedShapeHasCallableMember(elem, nil):
+		// A plain object shape lowers to a generated struct, so an array of them is a
+		// []*ObjX and each element boxes the way a lone one does, by copying its fields into
+		// a live object. The boxer is value.StructToValue, ObjectFromStruct with its type
+		// parameter spelled so it fits the func(T) value.Value shape. A shape carrying a
+		// function-typed member is excluded for the reason the scalar path excludes it: the
+		// reflection walk reads a Go func as undefined, so the callable would be dropped
+		// silently, and the array's own hand-back names the element type instead.
+		return sel("value", "StructToValue")
+	}
+	// An optional element, the value.Opt[T] a (number | undefined)[] holds, boxes through
+	// value.OptToValue: the inner element's box when present, the undefined singleton when
+	// not. That is the one shape here whose box needs a second argument, so it is the one
+	// arm that emits a closure rather than a name. It is asked before the union below
+	// because an optional is a union in the checker but lowers to an Opt rather than to a
+	// sum struct, and interning it as one would emit a type nothing constructs.
+	if inner, ok := r.optionalInner(r.prog.UnionMembers(elem)); ok && r.isOptionalType(elem) {
+		if innerBox := r.dynValueBox(inner); innerBox != nil {
+			if goType, err := r.typeExpr(elem); err == nil {
+				return optToValueClosure(goType, innerBox)
+			}
+		}
+		return nil
+	}
+	// A tagged-sum union boxes through the ToValue method the renderer emits for it,
+	// which switches the tag to the active arm's own box. Naming it as a method
+	// expression, (NumOrStr).ToValue, gives the func(T) value.Value shape with nothing
+	// emitted per site, the same trick the date and buffer arms use.
+	if info, ok := r.unionValueBoxed(elem); ok {
+		return &ast.SelectorExpr{X: &ast.ParenExpr{X: ident(info.goName)}, Sel: ident("ToValue")}
 	}
 	// A container holding a container boxes through the element's own no-argument box,
 	// the method expression (*value.Map[value.BStr, float64]).ToValue and its Set and
@@ -1760,6 +1815,25 @@ func (r *Renderer) dynValueBox(elem frontend.Type) ast.Expr {
 		return &ast.SelectorExpr{X: &ast.ParenExpr{X: goType}, Sel: ident("ToValue")}
 	}
 	return nil
+}
+
+// optToValueClosure builds the one-argument func an optional element boxer has to be,
+// func(o value.Opt[T]) value.Value { return value.OptToValue(o, inner) }. Every other
+// box in dynValueBox is already a func(T) value.Value that can be named, but
+// OptToValue takes the inner boxer as a second argument, so the only way to present it
+// with the shape ArrayValueOf wants is to close over that argument here. One is emitted
+// per boxing site rather than per element type, which is a few lines of generated Go at
+// a place that was handing the build back.
+func optToValueClosure(optType, innerBox ast.Expr) ast.Expr {
+	return &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("o")}, Type: optType}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.CallExpr{Fun: sel("value", "OptToValue"), Args: []ast.Expr{ident("o"), innerBox}},
+		}}}},
+	}
 }
 
 // boxCollectionToDynamic boxes a Map or a Set into a dynamic value.Value through the

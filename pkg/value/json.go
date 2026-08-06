@@ -264,6 +264,20 @@ func encodeJSON(b *strings.Builder, v any) {
 		// an empty object. The generated type hands back its active arm here, and the
 		// walk serializes that member as the value the union holds.
 		encodeJSON(b, x.JSONArm())
+	case jsonOptional:
+		// An optional's two fields are unexported too, so without this the walk would
+		// write a value.Opt as an empty object. The positions that reach it are the ones
+		// that render an absent optional rather than dropping it: an array element, which
+		// JSON.stringify writes as null the way it does an undefined written straight into
+		// the literal, and a collection value. A struct field never arrives here, since the
+		// field walk drops an absent one and unwraps a present one first, and neither does
+		// the top level, which answers the value undefined through JSONStringifyOpt.
+		inner, present := x.jsonOptField()
+		if !present {
+			b.WriteString("null")
+			return
+		}
+		encodeJSON(b, inner)
 	default:
 		if jsonUndefinedGo(v) {
 			// A top-level function has no JSON form, so JSON.stringify(function(){})
@@ -346,6 +360,20 @@ func jsonUndefinedGo(v any) bool {
 	// a value is required (which would drop an array slot or emit a keyless object entry).
 	if val, ok := v.(Value); ok {
 		return jsonUndefinedValue(val)
+	}
+	// A tagged-sum union is JSON-undefined exactly when the arm its tag selects is, so
+	// a number | string | undefined holding the undefined arm folds to null in an array
+	// and omits its key in an object, the way a bare undefined does. The question has to
+	// be asked through the arm rather than the struct: the struct is a value either way,
+	// and reading it as one would write a keyless entry for the sentinel.
+	if armer, ok := v.(jsonArmer); ok {
+		return jsonUndefinedGo(armer.JSONArm())
+	}
+	// An absent optional is JSON-undefined for the same reason, in the same positions.
+	// A struct field never reaches here, since the field walk drops an absent one first.
+	if opt, ok := v.(jsonOptional); ok {
+		_, present := opt.jsonOptField()
+		return !present
 	}
 	return reflect.ValueOf(v).Kind() == reflect.Func
 }
