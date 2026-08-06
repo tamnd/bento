@@ -1600,7 +1600,12 @@ func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNo
 		return nil, false, err
 	}
 	callee := &ast.SelectorExpr{X: recv, Sel: ident(field)}
-	e, err := r.buildCall(callee, argNodes, call[0].Params, call[0].RestParam, nil, false, false, false)
+	// The field holds a function whose declaration the boxed pass may have given a
+	// dynamic parameter, and the field's Go type says so, so the argument this call
+	// passes has to box the same way. The property's own signature still names the static
+	// type, so it is rewritten here from the same marks the field's type was.
+	sig := r.boxedTypeSig(sp.Type, call[0])
+	e, err := r.buildCall(callee, argNodes, sig.Params, sig.RestParam, nil, false, false, false)
 	if err != nil {
 		return nil, false, err
 	}

@@ -47,6 +47,18 @@ func (r *Renderer) collectArrowDefaults(entry frontend.Node) {
 	unsafe := map[frontend.Symbol]bool{}
 	var walk func(n, parent frontend.Node)
 	walk = func(n, parent frontend.Node) {
+		// An object-literal shorthand, `{ f }`, writes the key and the value with one
+		// identifier, and the symbol at that identifier is the property the member
+		// declares rather than the binding it reads. So the identifier walk below never
+		// sees the escape, and the arrow would drop a default no call site fills:
+		// `const box = { f }; box.f(1)` printed undefined for the defaulted parameter.
+		// Crediting the member to the binding it reads is what closes that, the same
+		// resolution the unused-binding walk already makes for the same spelling.
+		if sym, ok := shorthandValueSymbol(r.prog, n); ok {
+			if _, isCand := candidates[sym]; isCand {
+				unsafe[sym] = true
+			}
+		}
 		if n.Kind() == frontend.NodeIdentifier {
 			if sym, ok := r.prog.SymbolAt(n); ok {
 				if _, isCand := candidates[sym]; isCand && !r.arrowUseIsSafe(n, parent) {
@@ -67,6 +79,138 @@ func (r *Renderer) collectArrowDefaults(entry frontend.Node) {
 		r.arrowDropDefaults[arrow] = true
 		r.arrowCallDefaults[sym] = r.arrowDefaultNodes(arrow)
 	}
+}
+
+// collectClosureDefaultParams marks the closure parameters whose default the callee
+// fills in its own body, which is how a defaulted parameter escapes the handback that
+// made "function parameter with a default value is a later slice" the largest single
+// refusal in the Node compatibility suite.
+//
+// The fill is `if p.IsUndefined() { p = <default> }` at body entry, so the parameter's
+// Go slot has to be able to hold undefined, which means a value.Value. A parameter the
+// checker already types any has one. A parameter with no annotation does not: the
+// checker read its type off the default, so `function f(a, b = 2)` in a plain .js file
+// types b number while its unannotated sibling a is any. That number is an artifact of
+// the default rather than anything the source said, and it is the only thing standing
+// between the parameter and a slot that could hold the undefined an omitted argument
+// binds. So the mark puts it back where its sibling already is.
+//
+// It is spelled as a boxed-parameter mark, the same representation collectBoxedSignatures
+// uses for a parameter a call site hands a box to, because everything downstream already
+// reads that: boxedSig rewrites the type to any at the declaration and at every call
+// site, so the field is a value.Value, the body reads the name through the value model,
+// an argument boxes on the way in, and an omitted one arrives as value.Undefined. Running
+// before the fixpoint lets it propagate, so a body that hands its defaulted parameter on
+// is seen to pass a box.
+//
+// An annotated default (`b: number = 2`) is left alone: there the static type is what the
+// source asked for, and taking it away to serve the default would be the tail wagging the
+// dog. It keeps its handback and is the next slice. A top-level function is left alone
+// too, since it already fills its defaults at the call site and never reached the closure
+// path; only functions that lower as closures are marked, which in a Node program is
+// every function in a required module, that module's body being a closure itself.
+func (r *Renderer) collectClosureDefaultParams(files []frontend.Node) {
+	var walk func(n, parent frontend.Node, inFunc bool)
+	walk = func(n, parent frontend.Node, inFunc bool) {
+		if isFunctionLike(n.Kind()) {
+			if (n.Kind() != frontend.NodeFunctionDeclaration || inFunc) && !isCallArgument(parent) {
+				r.markClosureDefaultParams(n)
+			}
+			inFunc = true
+		}
+		for _, c := range r.prog.Children(n) {
+			walk(c, n, inFunc)
+		}
+	}
+	for _, f := range files {
+		// A required module runs as its own loader function, so even its top-level
+		// declarations lower as closures and take the closure parameter path.
+		_, required := r.requiredLoaders[f.File().Path]
+		walk(f, nil, required)
+	}
+}
+
+// isCallArgument reports whether a node's parent is a call or a construction, which is
+// where a function literal is written inline as a callback. Such a literal's Go func type
+// is not its own to choose: it has to fit the slot the callee declares, `nums.map` taking
+// a func(float64) float64, so making a parameter dynamic there would emit a literal the
+// call cannot pass. Where the callee's slot is itself dynamic the lowering already forces
+// the parameters dynamic on its own (forceCallbackDynParams), scoped to that one call, so
+// a callback needs nothing from this pass either way.
+func isCallArgument(parent frontend.Node) bool {
+	if parent == nil {
+		return false
+	}
+	switch parent.Kind() {
+	case frontend.NodeCallExpression, frontend.NodeNewExpression:
+		return true
+	}
+	return false
+}
+
+// markClosureDefaultParams marks each parameter of one closure whose default the body
+// will fill: it carries a default, it is a plain name with no annotation, and its type is
+// not already any. The mark is both halves of the boxed-parameter representation, the
+// per-function slot boxedSig reads and the per-name entry the parameter field and the
+// boxing wrapper read, so the declaration, the body, and every call site land on the same
+// answer.
+func (r *Renderer) markClosureDefaultParams(fn frontend.Node) {
+	// An escape-safe const-bound arrow already drops its defaults and fills them at each
+	// direct call site, which keeps the parameter's static Go type. That is the better
+	// lowering where it applies, so it wins here.
+	if r.arrowDropDefaults[fn] {
+		return
+	}
+	// A function the program calls with new is a runtime constructor, whose parameters
+	// the construction path binds itself. Rewriting one of its slots here would put the
+	// two paths on different types, so a constructor keeps its handback.
+	if sym, ok := r.prog.SymbolAt(fn); ok && r.ctorFuncs[sym] {
+		return
+	}
+	paramNodes := r.funcParamNodes(fn)
+	var marks []bool
+	for i, pn := range paramNodes {
+		if _, ok := r.paramDefaultNode(paramNodes, i); !ok {
+			continue
+		}
+		pkids := r.prog.Children(pn)
+		if pkids[0].Kind() != frontend.NodeIdentifier || r.paramIsAnnotated(pn) {
+			continue
+		}
+		if r.prog.TypeAt(pkids[0]).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+			continue
+		}
+		if marks == nil {
+			marks = make([]bool, len(paramNodes))
+			copy(marks, r.boxedParams[fn])
+		}
+		marks[i] = true
+		if r.forceDynParams == nil {
+			r.forceDynParams = map[frontend.Node]bool{}
+		}
+		r.forceDynParams[pkids[0]] = true
+	}
+	if marks == nil {
+		return
+	}
+	if r.boxedParams == nil {
+		r.boxedParams = map[frontend.Node][]bool{}
+	}
+	r.boxedParams[fn] = marks
+}
+
+// paramIsAnnotated reports whether a parameter carries a written type annotation. The
+// shim leaves an annotation as an opaque unknown node among the parameter's children,
+// which is the same thing paramDefaultNode skips past to find the default, so the two
+// read the one shape from opposite ends.
+func (r *Renderer) paramIsAnnotated(pn frontend.Node) bool {
+	kids := r.prog.Children(pn)
+	for _, c := range kids[1:] {
+		if c.Kind() == frontend.NodeUnknown {
+			return true
+		}
+	}
+	return false
 }
 
 // arrowDefaultCandidate reports whether a variable declaration binds a plain

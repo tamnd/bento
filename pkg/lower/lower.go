@@ -469,6 +469,21 @@ type Renderer struct {
 	// explicit-undefined trailing argument at the call site, exactly as calleeDefaults
 	// serves a top-level function. It is filled alongside arrowDropDefaults.
 	arrowCallDefaults map[frontend.Symbol][]frontend.Node
+	// paramBodyDefaults maps a closure parameter node whose default the callee fills in
+	// its own body to that default's expression. It is the answer for a defaulted
+	// parameter whose Go slot is a value.Value, which can hold the undefined an omitted
+	// argument binds, so the fill is a plain `if p.IsUndefined() { p = <default> }` at
+	// body entry rather than anything the call site has to know about. That is the
+	// language's own rule, since a default fires for an explicit undefined too, and it
+	// is what lets such a function escape: every caller, a direct Go call or the boxed
+	// wrapper, passes undefined for an argument it does not supply.
+	//
+	// closureParamFields fills it as it builds the field the default rides on, and
+	// paramDestructureBindings reads it at body entry, so both ends of one parameter
+	// agree without threading the function node through. A parameter whose slot is a
+	// static Go type is absent from the map: it cannot hold undefined, so it keeps the
+	// call-site fill the top-level path uses.
+	paramBodyDefaults map[frontend.Node]frontend.Node
 	// closurePadParams maps a function-literal argument node to the contextual target
 	// signature's parameters when the literal declares fewer parameters than the func
 	// type it flows into. JavaScript lets a callback ignore trailing arguments, so a
@@ -898,7 +913,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, paramBodyDefaults: map[frontend.Node]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a
@@ -1522,7 +1537,12 @@ func (r *Renderer) renderFuncType(t frontend.Type) (ast.Expr, bool, error) {
 		}
 		return obj, true, nil
 	}
-	ft, err := r.funcTypeOf(call[0])
+	// A parameter the boxed pass marked reads as any at the declaration, so the Go func
+	// type a slot holding that function takes has to say the same thing: a struct field or
+	// a local typed from the checker's signature would otherwise name the static type the
+	// declaration no longer emits, and the assignment would not compile. The mark is keyed
+	// by the declaration node, so the type is resolved back to it first.
+	ft, err := r.funcTypeOf(r.boxedTypeSig(t, call[0]))
 	if err != nil {
 		return nil, true, err
 	}

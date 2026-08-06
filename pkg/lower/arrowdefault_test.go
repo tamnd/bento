@@ -61,25 +61,37 @@ func TestArrowDefaultExplicitUndefinedRuns(t *testing.T) {
 	}
 }
 
-// TestArrowDefaultEscapeHandsBack pins the escape guard: an arrow whose binding is
-// read as a value, not just called directly, keeps its default handback rather than
-// pass a Go zero value where a default belonged.
-func TestArrowDefaultEscapeHandsBack(t *testing.T) {
+// TestArrowDefaultEscapeFillsInTheBody pins where an escaping arrow goes now. Its
+// binding is read as a value, so no call site is guaranteed to see the arrow and the
+// call-site fill above cannot serve it. The parameter takes a boxed slot instead and the
+// arrow fills the default at body entry, which every way of reaching it agrees with.
+func TestArrowDefaultEscapeFillsInTheBody(t *testing.T) {
 	const src = "const f = (x = 5) => x;\nconst g = f;\nconsole.log(g());\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "parameter with a default value") {
-		t.Fatalf("escaping arrow default handed back with %q, want the default-parameter reason", reason)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "if x.IsUndefined() {") {
+		t.Fatalf("an escaping arrow default emitted:\n%s\nwant an entry fill guarded by IsUndefined", source)
 	}
 }
 
-// TestArrowDefaultReadsEarlierParamHandsBack pins that a default reading an earlier
-// parameter stays a handback, since it is evaluated in the callee's scope where the
-// call site cannot reconstruct it, so the candidate is rejected before the escape
-// analysis runs.
-func TestArrowDefaultReadsEarlierParamHandsBack(t *testing.T) {
-	const src = "const f = (a: number, b = a + 1) => a + b;\nconsole.log(f(2));\n"
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "parameter with a default value") {
-		t.Fatalf("self-reading arrow default handed back with %q, want the default-parameter reason", reason)
+// TestArrowDefaultEscapeRuns runs that shape against the Node oracle, since the point of
+// filling in the callee is that a call through the escaped binding reads the default.
+func TestArrowDefaultEscapeRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const f = (x = 5) => x;\nconst g = f;\nconsole.log(g(), g(3));\n"
+	want := "5 3\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("an escaping arrow default printed %q, want %q", got, want)
+	}
+}
+
+// TestArrowDefaultReadsEarlierParamRuns pins the default no call site could fill. It is
+// evaluated in the callee's scope, where the parameter it reads is bound, so the body
+// entry is the one place it can be filled.
+func TestArrowDefaultReadsEarlierParamRuns(t *testing.T) {
+	skipIfShort(t)
+	const src = "const f = (a: number, b = a + 1) => a + b;\nconsole.log(f(2), f(2, 10));\n"
+	want := "5 12\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("a default reading an earlier parameter printed %q, want %q", got, want)
 	}
 }

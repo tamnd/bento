@@ -2022,6 +2022,129 @@ func (r *Renderer) boxOptionalToDynamic(expr ast.Expr, src frontend.Node) (ast.E
 	return &ast.CallExpr{Fun: sel("value", "OptToValue"), Args: []ast.Expr{expr, box}}, true, nil
 }
 
+// selfDefaultingTail reports whether every optional parameter of a function fills its
+// own default at body entry, the shape closureParamFields gives a defaulted parameter
+// whose Go slot is a value.Value. Such a function takes the full parameter count in Go
+// and reads an omitted argument as undefined, which is exactly what value.Arg hands the
+// wrapper for a position the boxed call did not supply, so the wrapper bridges it with
+// no arity work of its own and the callee's own body puts the default in.
+//
+// It reads the source nodes rather than the map closureParamFields fills, so the answer
+// does not depend on whether the function has been lowered yet: a hoisted declaration
+// can be boxed by a statement that stands above it.
+//
+// The tail also has to be one the wrapper passes through untouched. A slot the wrapper
+// coerces on the way in is no good here: the coercion turns the missing argument into a
+// stand-in of the static type, and the body's fill never sees the undefined it tests
+// for. That is the same question the argument loop below asks, so both ask it once,
+// through wrapperPassesArg.
+func (r *Renderer) selfDefaultingTail(sig frontend.Signature, paramNodes []frontend.Node) bool {
+	if len(paramNodes) != len(sig.Params) {
+		return false
+	}
+	for i := sig.MinArgs; i < len(sig.Params); i++ {
+		if !r.wrapperPassesArg(sig, paramNodes, i) {
+			return false
+		}
+		if _, ok := r.paramDefaultNode(paramNodes, i); !ok {
+			return false
+		}
+		pkids := r.prog.Children(paramNodes[i])
+		if len(pkids) == 0 || !r.dynamicDefaultSlot(pkids[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+// wrapperPassesArg reports whether boxFuncToDynamic's wrapper hands the boxed argument
+// at this position straight to the lowered func rather than coercing it to the static
+// type the signature names. A parameter the checker already calls any or unknown holds
+// the box as it is, and so does one the box rewrite forced dynamic, whose Go slot is a
+// value.Value whatever the signature still says.
+func (r *Renderer) wrapperPassesArg(sig frontend.Signature, paramNodes []frontend.Node, i int) bool {
+	if sig.Params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+		return true
+	}
+	return r.paramForcedDyn(paramNodes, i)
+}
+
+// boxedFuncParamNodes returns the parameter nodes of the function a value is being boxed
+// from, in declaration order.
+func (r *Renderer) boxedFuncParamNodes(src frontend.Node) []frontend.Node {
+	fn, ok := r.boxedFuncSrcNode(src)
+	if !ok {
+		return nil
+	}
+	return r.funcParamNodes(fn)
+}
+
+// boxedFuncSrcNode resolves the node a function value is being boxed from to the
+// function-like node that declares it, so a caller can read the parameter list off the
+// AST. The boxing site is handed the expression whose type carries the call signature,
+// which is the literal itself when the function is written inline and a reference to it
+// otherwise, so a reference has to be followed to its declaration the way a callee is.
+//
+// The binding is not always the one the identifier's own symbol names. An object-literal
+// shorthand, `module.exports = { f }`, writes the key and the value with one identifier,
+// and the symbol there is the property the member declares rather than the function it
+// reads. So a reference that resolves to no function falls back on the symbol its type
+// was declared by, which for a function type is the function itself.
+func (r *Renderer) boxedFuncSrcNode(src frontend.Node) (frontend.Node, bool) {
+	if src == nil {
+		return nil, false
+	}
+	switch src.Kind() {
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction:
+		return src, true
+	}
+	if sym, ok := r.prog.SymbolAt(src); ok {
+		if fn, ok := r.symFuncDeclNode(r.derefAlias(sym)); ok {
+			return fn, true
+		}
+	}
+	return r.typeFuncDeclNode(r.prog.TypeAt(src))
+}
+
+// typeFuncDeclNode resolves a function type back to the function-like node that declares
+// it, which is what lets a decision keyed by the declaration be read where only the type
+// is in hand. A function type's symbol is the function itself, so following it is the
+// same step boxedFuncSrcNode's last resort makes.
+func (r *Renderer) typeFuncDeclNode(t frontend.Type) (frontend.Node, bool) {
+	sym, ok := r.prog.TypeSymbol(t)
+	if !ok {
+		return nil, false
+	}
+	return r.symFuncDeclNode(sym)
+}
+
+// boxedTypeSig applies the boxed pass's decision to a call signature read off a type
+// rather than off a declaration node, which is where a slot holding a function and a call
+// through such a slot both get their shape. Both have to agree with what the declaration
+// emits, so both ask the same question through the one node the marks are keyed by.
+func (r *Renderer) boxedTypeSig(t frontend.Type, sig frontend.Signature) frontend.Signature {
+	fn, ok := r.typeFuncDeclNode(t)
+	if !ok {
+		return sig
+	}
+	return r.boxedSig(fn, sig)
+}
+
+// symFuncDeclNode returns the function-like node a symbol declares, whether it is a
+// function declaration of its own or a binding whose value is a function.
+func (r *Renderer) symFuncDeclNode(sym frontend.Symbol) (frontend.Node, bool) {
+	for _, d := range r.prog.Declarations(sym) {
+		switch d.Kind() {
+		case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction:
+			return d, true
+		}
+		if fn, ok := r.declValueFunc(d); ok {
+			return fn, true
+		}
+	}
+	return nil, false
+}
+
 // boxFuncToDynamic wraps a lowered function value in a callable value.Value, the
 // box a static function takes when it flows into a dynamic slot so a dynamic call
 // site can invoke it through value.Call. The wrapper is a value.NewFunc closure
@@ -2030,26 +2153,29 @@ func (r *Renderer) boxOptionalToDynamic(expr ast.Expr, src frontend.Node) (ast.E
 // back into a value.Value. Coercion and boxing reuse the same dynamic-boundary
 // rules an argument and a return crossing that boundary already take, so the
 // boxed call behaves as the direct call would. A shape the wrapper cannot bridge
-// (a rest parameter, an optional parameter, a parameter or result type with no
-// coercion yet) hands back rather than emit a wrapper that would not compile.
+// (a rest parameter, an optional parameter the callee does not default itself, a
+// parameter or result type with no coercion yet) hands back rather than emit a
+// wrapper that would not compile.
 func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src frontend.Node) (ast.Expr, error) {
 	if sig.RestParam != nil {
 		return nil, &NotYetLowerable{Reason: "boxing a function with a rest parameter into a dynamic value is a later slice"}
 	}
-	if sig.MinArgs != len(sig.Params) {
-		return nil, &NotYetLowerable{Reason: "boxing a function with an optional parameter into a dynamic value is a later slice"}
-	}
-	r.requireImport(valuePkg)
 	// A parameter forceCallbackDynParams marked dynamic already lowered to a value.Value
 	// field, so the wrapper hands it the boxed argument straight through rather than
 	// coercing to the static type the signature still names. paramNodes maps a parameter
 	// index to its source node so the forced set, keyed by the name node, is consulted.
-	paramNodes := r.funcParamNodes(src)
+	// It resolves through a reference, since a function boxed by name arrives here as the
+	// identifier that reads it rather than as its declaration.
+	paramNodes := r.boxedFuncParamNodes(src)
+	if sig.MinArgs != len(sig.Params) && !r.selfDefaultingTail(sig, paramNodes) {
+		return nil, &NotYetLowerable{Reason: "boxing a function with an optional parameter into a dynamic value is a later slice"}
+	}
+	r.requireImport(valuePkg)
 	const argsName = "__a"
 	callArgs := make([]ast.Expr, 0, len(sig.Params))
 	for i, p := range sig.Params {
 		at := &ast.CallExpr{Fun: sel("value", "Arg"), Args: []ast.Expr{ident(argsName), &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}}}
-		if p.Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.paramForcedDyn(paramNodes, i) {
+		if r.wrapperPassesArg(sig, paramNodes, i) {
 			// A dynamic parameter takes the boxed argument as-is; the body already reads
 			// a value.Value there, so no coercion is needed.
 			callArgs = append(callArgs, at)
@@ -3604,7 +3730,11 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	// dynamic here too, the same pairing the argument bridge takes. Returning
 	// Object.values(m)[0] from a function declared to answer a Row used to hand the box
 	// over as if it were the struct.
-	srcDyn := r.isDynamic(srcNode) || r.isBoxedChain(srcNode)
+	// A sum with a boxed operand lowers to value.Add, which answers a box whatever the
+	// checker calls the sum. `return a + b` where the boxed pass gave b the value slot is
+	// the shape: the checker still types the sum number, so without this the box would be
+	// handed straight back as a float64 and the Go would not compile.
+	srcDyn := r.isDynamic(srcNode) || r.isBoxedChain(srcNode) || r.isDynamicValueAdd(srcNode)
 	tgtDyn := r.retType.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 || r.isNarrowableBoxType(r.retType)
 	switch {
 	case srcDyn && !tgtDyn:

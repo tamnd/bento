@@ -154,6 +154,12 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// such a function is a runtime value everywhere, so a pass that read it as a Go func
 	// would record a slot the lowering then fills with a box.
 	r.collectCtorFuncs(append([]frontend.Node{entry}, deps...))
+	// A closure cannot fill a defaulted parameter at its call sites the way a top-level
+	// function does, so it fills the default in its own body, which needs a slot that can
+	// hold the undefined an omitted argument binds. The mark that gives it one is a boxed
+	// parameter, so it is recorded here, just above the boxed pass, and propagates through
+	// that fixpoint like any other.
+	r.collectClosureDefaultParams(append([]frontend.Node{entry}, deps...))
 	// A declared signature a call site hands a box to takes a boxed slot, and a declared
 	// function whose every return is a box answers one. Both are decisions about a
 	// function made from outside its own body, so they settle here, before any signature

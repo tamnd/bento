@@ -1368,7 +1368,10 @@ func (r *Renderer) calleeFuncNode(n frontend.Node) (frontend.Node, bool) {
 			return fn, true
 		}
 	}
-	return nil, false
+	// A binding whose initializer is another name, `const g = f`, declares no function
+	// of its own, so the chain is followed through the type instead: a function type's
+	// symbol is the function it came from, however many bindings it passed through.
+	return r.typeFuncDeclNode(r.prog.TypeAt(kids[0]))
 }
 
 // calleeMethodNode resolves a call's member callee, `s.take(...)`, to the method
